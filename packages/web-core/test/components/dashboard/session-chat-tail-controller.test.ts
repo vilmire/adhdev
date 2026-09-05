@@ -995,6 +995,120 @@ describe('SessionChatTailController registry', () => {
     expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(2)
   })
 
+  /**
+   * (SEAM) The identity cursor names the OLDEST message of the live window —
+   * the boundary history must page strictly older than. Sent alongside the
+   * count so a daemon that cannot resolve it degrades to today's behavior
+   * instead of mis-seaming.
+   */
+  it('sends the identity of the OLDEST live message as the history boundary', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 50,
+    })
+    const tail = [
+      { role: 'user', content: 'oldest', providerUnitKey: 'v3:unit-oldest', timestamp: 1 },
+      { role: 'assistant', content: 'middle', providerUnitKey: 'v3:unit-middle', timestamp: 2 },
+      { role: 'assistant', content: 'newest', providerUnitKey: 'v3:unit-newest', timestamp: 3 },
+    ] as any
+    const loadHistory = vi.fn().mockResolvedValue({ messages: [], hasMore: true })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: tail,
+      syncMode: 'full',
+      totalMessages: tail.length,
+      lastMessageSignature: buildLastMessageSignature(tail[tail.length - 1]),
+    }))
+    await controller.loadHistoryPage(loadHistory)
+
+    // The OLDEST, not the newest — paging older than the newest would re-fetch
+    // the whole live window and render every one of its rows twice.
+    expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({
+      excludeFromIdentity: 'unit:v3:unit-oldest',
+    }))
+  })
+
+  /**
+   * (SEAM, mixed-version) A transcript whose messages carry no stable identity —
+   * legacy mirror rows, the PTY path, or a pre-widening daemon — must yield an
+   * EMPTY cursor, not a fabricated one. The daemon reads empty as "unknown" and
+   * uses the count path; a fabricated cursor that resolved to nothing (or worse,
+   * to position 0) would page from the start of the conversation.
+   */
+  it('sends an empty cursor when the live tail carries no stable identity', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 50,
+    })
+    const tail = [
+      { role: 'user', content: 'legacy-1', timestamp: 1 },
+      { role: 'assistant', content: 'legacy-2', timestamp: 2 },
+    ] as any
+    const loadHistory = vi.fn().mockResolvedValue({ messages: [], hasMore: true })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: tail,
+      syncMode: 'full',
+      totalMessages: tail.length,
+      lastMessageSignature: buildLastMessageSignature(tail[tail.length - 1]),
+    }))
+    await controller.loadHistoryPage(loadHistory)
+
+    expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({
+      excludeFromIdentity: '',
+      excludeRecentCount: tail.length,
+    }))
+  })
+
+  /** `sequence` is the wire's per-message ordinal — usable when richer keys are absent. */
+  it('falls back to sequence when no providerUnitKey/bubbleId is present', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 50,
+    })
+    const tail = [
+      { role: 'user', content: 'a', sequence: 41, timestamp: 1 },
+      { role: 'assistant', content: 'b', sequence: 42, timestamp: 2 },
+    ] as any
+    const loadHistory = vi.fn().mockResolvedValue({ messages: [], hasMore: true })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: tail,
+      syncMode: 'full',
+      totalMessages: tail.length,
+      lastMessageSignature: buildLastMessageSignature(tail[tail.length - 1]),
+    }))
+    await controller.loadHistoryPage(loadHistory)
+
+    expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({
+      excludeFromIdentity: 'seq:41',
+    }))
+  })
+
   it('passes the currently hydrated live tail length when loading older history', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
@@ -1027,6 +1141,10 @@ describe('SessionChatTailController registry', () => {
     expect(loadHistory).toHaveBeenCalledWith({
       offset: 0,
       excludeRecentCount: 1000,
+      // (SEAM) The identity cursor rides ALONGSIDE the count, never instead of
+      // it — these fixture messages carry no stable identity, so it is empty and
+      // the daemon falls back to the count path.
+      excludeFromIdentity: '',
     })
   })
 
@@ -1054,6 +1172,7 @@ describe('SessionChatTailController registry', () => {
     expect(loadHistory).toHaveBeenCalledWith({
       offset: 0,
       excludeRecentCount: 50,
+      excludeFromIdentity: '',
     })
   })
 

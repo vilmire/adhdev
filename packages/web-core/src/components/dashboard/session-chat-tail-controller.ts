@@ -56,6 +56,48 @@ export interface SessionChatTailSnapshot {
 export interface SessionChatHistoryPageRequest {
   offset: number
   excludeRecentCount: number
+  /**
+   * (SEAM) Identity of the OLDEST message in the live window — the boundary
+   * history must page strictly older than.
+   *
+   * `excludeRecentCount` is counted in this window's BUBBLE space but the daemon
+   * subtracts it from COLLAPSED-RECORD space. Those differ whenever collapse
+   * shrinks the set (empty content dropped, same-signature neighbours merged,
+   * consecutive assistant turns collapsed), and the overshoot makes the
+   * in-between messages permanently unreachable — a silent hole.
+   *
+   * Empty string when this window's oldest message carries no stable identity
+   * (legacy transcripts, the PTY path). The daemon then uses the count path
+   * unchanged, so an old browser and a new daemon still interoperate.
+   */
+  excludeFromIdentity: string
+}
+
+/**
+ * (SEAM) The identity string the daemon resolves a history boundary against.
+ *
+ * ★ This MUST stay byte-identical to `buildHistoryMessageIdentity` in
+ * daemon-core's `config/chat-history.ts` — same preference order, same prefixes.
+ * The two are a matched pair across the wire: a key minted here is compared by
+ * string equality there, so a divergence does not throw, it just silently stops
+ * resolving and falls back to the buggy count path.
+ *
+ * `_turnKey` is deliberately NOT a candidate: it is turn-grained, so it would
+ * resolve the boundary to an arbitrary bubble within the turn.
+ */
+export function buildHistoryBoundaryIdentity(message?: DashboardMessage): string {
+  if (!message) return ''
+  const record = message as DashboardMessage & {
+    providerUnitKey?: string
+    bubbleId?: string
+    sequence?: number
+  }
+  if (record.providerUnitKey) return `unit:${record.providerUnitKey}`
+  if (record.bubbleId) return `bubble:${record.bubbleId}`
+  if (typeof record.sequence === 'number' && Number.isFinite(record.sequence)) {
+    return `seq:${record.sequence}`
+  }
+  return ''
 }
 
 export interface SessionChatTailControllerOptions {
@@ -775,6 +817,12 @@ export class SessionChatTailController {
         const result = await loader({
           offset: this.snapshot.historyOffset,
           excludeRecentCount,
+          // The boundary is the OLDEST message of the live window — history pages
+          // strictly older than it. Sent alongside the count, never instead of
+          // it: the daemon falls back to the count whenever it cannot resolve
+          // this identity, so a mixed-version fleet degrades to today's behavior
+          // rather than mis-seaming.
+          excludeFromIdentity: buildHistoryBoundaryIdentity(this.snapshot.liveMessages[0]),
         })
         const nextMessages = Array.isArray(result.messages) ? result.messages : []
         const shouldKeepHistoryOpen = !hadLiveSnapshot
@@ -1305,7 +1353,7 @@ export function useSessionChatTailController(
 
   const loadHistoryPage = useCallback(async () => {
     if (!controller || !daemonId || !sessionId) return
-    await controller.loadHistoryPage(async ({ offset, excludeRecentCount }) => {
+    await controller.loadHistoryPage(async ({ offset, excludeRecentCount, excludeFromIdentity }) => {
       const agentType = activeConv.agentType
       const raw = await sendCommand(daemonId, 'chat_history', {
         agentType,
@@ -1314,6 +1362,9 @@ export function useSessionChatTailController(
         targetSessionId: sessionId,
         historySessionId,
         excludeRecentCount,
+        // Omitted when empty so the payload an old browser sends and the payload
+        // a new browser sends for an identity-less transcript are the same shape.
+        ...(excludeFromIdentity ? { excludeFromIdentity } : {}),
       })
       const result = raw && typeof raw === 'object' && 'result' in (raw as Record<string, unknown>)
         ? (raw as { result?: { messages?: DashboardMessage[]; hasMore?: boolean } }).result || {}

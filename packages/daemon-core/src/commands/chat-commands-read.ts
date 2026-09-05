@@ -968,6 +968,8 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     offset: number;
     limit: number;
     excludeRecentCount: number;
+    /** (SEAM) See handleChatHistory — identity cursor, preferred over the count. */
+    excludeFromIdentity?: string;
     historyBehavior?: ProviderModule['historyBehavior'];
     scripts?: ProviderScripts;
     excludeInProgressTurn?: boolean;
@@ -1052,6 +1054,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         offset: args.offset,
         limit: args.limit,
         excludeRecentCount: args.excludeRecentCount,
+        excludeFromIdentity: args.excludeFromIdentity,
         historyBehavior: args.historyBehavior,
         scripts: args.scripts as any,
         excludeInProgressTurn: args.excludeInProgressTurn,
@@ -1200,6 +1203,14 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             const visibleCount = getCliVisibleTranscriptCount(adapter);
             if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
         }
+        // (SEAM) Identity of the oldest message in the browser's live window.
+        // Preferred over `excludeRecentCount` — that count is measured in bubble
+        // space but subtracted from collapsed-record space, so it overshoots
+        // whenever collapse shrinks the set and leaves a silent hole. Absent from
+        // older browsers, in which case the count path is used unchanged.
+        const excludeFromIdentity = typeof args?.excludeFromIdentity === 'string' && args.excludeFromIdentity
+            ? args.excludeFromIdentity
+            : undefined;
         const workspace = typeof args?.workspace === 'string'
             ? args.workspace
             : typeof (h.currentSession as any)?.workspace === 'string'
@@ -1231,6 +1242,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 offset: offset || 0,
                 limit: limit || 30,
                 excludeRecentCount,
+                excludeFromIdentity,
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
@@ -1246,6 +1258,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 offset: offset || 0,
                 limit: limit || 30,
                 excludeRecentCount,
+                excludeFromIdentity,
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
             });
