@@ -54652,6 +54652,79 @@ ${lines.join("\n")}
         CAT = "EvtTrace";
       }
     });
+    function isMeshCoordinatorEvent(eventName) {
+      return typeof eventName === "string" && MESH_COORDINATOR_EVENTS.has(eventName);
+    }
+    function shouldForceInjectMeshEvent(eventName) {
+      return typeof eventName === "string" && MESH_FORCE_INJECT_EVENTS.has(eventName);
+    }
+    function isMeshApprovalEvent(eventName) {
+      return typeof eventName === "string" && MESH_APPROVAL_EVENTS.has(eventName);
+    }
+    var MESH_COORDINATOR_EVENTS;
+    var EVENT_TO_LEDGER_KIND;
+    var MESH_FORCE_INJECT_EVENTS;
+    var MESH_APPROVAL_EVENTS;
+    var init_mesh_event_classify = __esm2({
+      "src/mesh/mesh-event-classify.ts"() {
+        "use strict";
+        MESH_COORDINATOR_EVENTS = /* @__PURE__ */ new Set([
+          "agent:generating_started",
+          "agent:generating_completed",
+          "agent:waiting_approval",
+          // A worker parked on an AskUserQuestion multi-choice prompt. DISTINCT from
+          // agent:waiting_approval (a yes/no tool-consent modal): a question is answered
+          // with mesh_answer_question, never mesh_approve (mission f1d25e11). Carries the
+          // full InteractivePrompt payload so the coordinator can render + answer.
+          "agent:waiting_choice",
+          "agent:stopped",
+          "agent:ready",
+          "monitor:no_progress",
+          "refine:accepted",
+          "refine:completed",
+          "refine:failed",
+          "worktree_bootstrap_complete",
+          "worktree_bootstrap_failed",
+          // G3: mission-hygiene nudge. Emitted once when all of a mission's tasks first
+          // become terminal — a "consider closing this mission" hint for the coordinator.
+          // Purely informational: NOT force-injected (no blocked coordinator waits on it)
+          // and NOT an approval; it never drives a mission status transition on its own.
+          "mission_close_candidate"
+        ]);
+        EVENT_TO_LEDGER_KIND = {
+          "agent:generating_completed": "task_completed",
+          "agent:waiting_approval": "task_approval_needed",
+          "agent:waiting_choice": "task_question_pending",
+          "agent:stopped": "task_failed",
+          "monitor:no_progress": "task_stalled"
+        };
+        MESH_FORCE_INJECT_EVENTS = /* @__PURE__ */ new Set([
+          "agent:generating_completed",
+          "agent:stopped",
+          "agent:waiting_approval",
+          // A worker's question (waiting_choice) is real-time and the coordinator may be
+          // generating when it arrives; force-inject it like approval so the busy coordinator
+          // learns it must answer (mesh_answer_question) rather than the nudge sitting in the
+          // adapter's outbound queue until the coordinator idles on its own (mission f1d25e11).
+          "agent:waiting_choice",
+          "refine:completed",
+          "refine:failed",
+          "worktree_bootstrap_complete",
+          "worktree_bootstrap_failed"
+        ]);
+        MESH_APPROVAL_EVENTS = /* @__PURE__ */ new Set([
+          "agent:waiting_approval",
+          // agent:waiting_choice (a worker's AskUserQuestion) shares the approval class's
+          // real-time-nudge / level-backed contract: its authoritative state is recorded at
+          // LEVEL the moment it is processed (task_question_pending → mesh_status
+          // awaiting_choice), so the pending event is only a NUDGE and can be delivered to a
+          // busy coordinator's inbox (and dropped) without data loss — the level state
+          // re-derives it. It is therefore exempt from the idle-edge hold completions require,
+          // exactly like an approval nudge (mission f1d25e11).
+          "agent:waiting_choice"
+        ]);
+      }
+    });
     function isSupportedMeshProtocolVersion(value) {
       return typeof value === "string" && SUPPORTED_MESH_PROTOCOL_VERSIONS.includes(value);
     }
@@ -55204,12 +55277,22 @@ ${lines.join("\n")}
     }
     function prunePendingMeshCoordinatorEventsRetention() {
       try {
-        const { drainedExpired, undrainedExpired, undrainedRows } = MeshRuntimeStore.getInstance().prunePendingEvents({
+        const { drainedExpired, undrainedExpired, undrainedRows, terminalExempt } = MeshRuntimeStore.getInstance().prunePendingEvents({
           drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
-          undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS
+          undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS,
+          // TERMINAL-NEVER-EXPIRES: a terminal event's worker output exists only in
+          // this row — the sweep must never destroy it, at any age.
+          neverExpireEvents: PENDING_RETENTION_NEVER_EXPIRE_EVENTS
         });
         pendingRetentionCounters.drainedExpired += drainedExpired;
         pendingRetentionCounters.undrainedExpired += undrainedExpired;
+        pendingRetentionCounters.terminalExempt += terminalExempt;
+        if (terminalExempt > 0) {
+          LOG.info(
+            "MeshEvents",
+            `Pending-event retention KEPT ${terminalExempt} terminal event(s) past the undrained window (never expired \u2014 their worker output exists only in these rows). They remain queued and deliverable.`
+          );
+        }
         if (undrainedRows.length > 0) {
           for (const row of undrainedRows) {
             ledgerRecordExpiredUndrainedEvent(row);
@@ -55560,6 +55643,7 @@ ${lines.join("\n")}
     var STALE_TASK_TERMINAL_STATUSES;
     var PENDING_EVENTS_DRAINED_RETENTION_MS;
     var PENDING_EVENTS_UNDRAINED_RETENTION_MS;
+    var PENDING_RETENTION_NEVER_EXPIRE_EVENTS;
     var PENDING_RETENTION_EXPIRED_HOLD_REASON;
     var pendingRetentionCounters;
     var init_mesh_events_pending = __esm2({
@@ -55573,6 +55657,7 @@ ${lines.join("\n")}
         init_mesh_turn_presentation();
         init_mesh_events_utils();
         init_mesh_event_trace();
+        init_mesh_event_classify();
         init_dist();
         init_contracts();
         REFINE_TERMINAL_EVENTS = /* @__PURE__ */ new Set(["refine:completed", "refine:failed"]);
@@ -55624,6 +55709,7 @@ ${lines.join("\n")}
         STALE_TASK_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
         PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
         PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
+        PENDING_RETENTION_NEVER_EXPIRE_EVENTS = MESH_FORCE_INJECT_EVENTS;
         PENDING_RETENTION_EXPIRED_HOLD_REASON = "pending_retention_expired";
         pendingRetentionCounters = {
           /** Already-drained rows deleted past the 7-day dedup-useful window. Not a drop. */
@@ -55638,7 +55724,14 @@ ${lines.join("\n")}
           undrainedExpiredMirrorFailed: 0,
           /** How many times the sweep has run and found nothing to prune (0 in both
            *  windows). Purely diagnostic — confirms the sweep is actually firing. */
-          sweepsNoop: 0
+          sweepsNoop: 0,
+          /** TERMINAL-NEVER-EXPIRES: undrained rows past the 30-day window that were KEPT
+           *  because they are terminal (PENDING_RETENTION_NEVER_EXPIRE_EVENTS). Every
+           *  increment is a worker output the sweep would otherwise have destroyed, so a
+           *  non-zero count is the exemption doing its job — NOT a drop and NOT a backlog
+           *  warning on its own. It does, however, mean a coordinator identity has an
+           *  undelivered completion older than 30 days, which is worth an operator look. */
+          terminalExempt: 0
         };
       }
     });
@@ -71627,6 +71720,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            *     these are orphaned events for a coordinator identity that never drained
            *     them. Kept wide so a genuinely-offline-but-returning coordinator still
            *     receives its backlog; only genuinely unrecoverable orphans are swept.
+           *     TERMINAL events named in `neverExpireEvents` are exempt from this window
+           *     outright — see that option's doc below.
            *
            * Both windows key off `queued_at` (always present) — `drained_at` can be NULL on
            * legacy rows. Returns the number of rows deleted, split by which window matched:
@@ -71644,10 +71739,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const now = Date.now();
             const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
             const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
+            const neverExpire = opts.neverExpireEvents;
             const undrainedSelectRows = this.db.prepare(
               "SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?"
             ).all(undrainedCutoff);
-            const undrainedRows = undrainedSelectRows.map((r) => ({
+            const expirableRows = [];
+            let terminalExempt = 0;
+            for (const r of undrainedSelectRows) {
+              if (neverExpire?.has(r.event)) terminalExempt++;
+              else expirableRows.push(r);
+            }
+            const undrainedRows = expirableRows.map((r) => ({
               id: r.id,
               meshId: r.mesh_id,
               event: r.event,
@@ -71662,10 +71764,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const drainedExpired = this.db.prepare(
               "DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?"
             ).run(drainedCutoff).changes;
-            const undrainedExpired = this.db.prepare(
-              "DELETE FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?"
-            ).run(undrainedCutoff).changes;
-            return { drainedExpired, undrainedExpired, undrainedRows };
+            let undrainedExpired = 0;
+            for (let i = 0; i < undrainedRows.length; i += 500) {
+              const chunk = undrainedRows.slice(i, i + 500);
+              undrainedExpired += this.db.prepare(
+                `DELETE FROM mesh_pending_events WHERE id IN (${chunk.map(() => "?").join(",")})`
+              ).run(...chunk.map((r) => r.id)).changes;
+            }
+            return { drainedExpired, undrainedExpired, undrainedRows, terminalExempt };
           }
           // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
           /**
@@ -77695,79 +77801,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         LOCAL_SESSION_STALE_MS = 12e4;
         IDLE_REMINDER_DEBOUNCE_MS = 3e5;
         MISSION_LIST_CAP = 10;
-      }
-    });
-    function isMeshCoordinatorEvent(eventName) {
-      return typeof eventName === "string" && MESH_COORDINATOR_EVENTS.has(eventName);
-    }
-    function shouldForceInjectMeshEvent(eventName) {
-      return typeof eventName === "string" && MESH_FORCE_INJECT_EVENTS.has(eventName);
-    }
-    function isMeshApprovalEvent(eventName) {
-      return typeof eventName === "string" && MESH_APPROVAL_EVENTS.has(eventName);
-    }
-    var MESH_COORDINATOR_EVENTS;
-    var EVENT_TO_LEDGER_KIND;
-    var MESH_FORCE_INJECT_EVENTS;
-    var MESH_APPROVAL_EVENTS;
-    var init_mesh_event_classify = __esm2({
-      "src/mesh/mesh-event-classify.ts"() {
-        "use strict";
-        MESH_COORDINATOR_EVENTS = /* @__PURE__ */ new Set([
-          "agent:generating_started",
-          "agent:generating_completed",
-          "agent:waiting_approval",
-          // A worker parked on an AskUserQuestion multi-choice prompt. DISTINCT from
-          // agent:waiting_approval (a yes/no tool-consent modal): a question is answered
-          // with mesh_answer_question, never mesh_approve (mission f1d25e11). Carries the
-          // full InteractivePrompt payload so the coordinator can render + answer.
-          "agent:waiting_choice",
-          "agent:stopped",
-          "agent:ready",
-          "monitor:no_progress",
-          "refine:accepted",
-          "refine:completed",
-          "refine:failed",
-          "worktree_bootstrap_complete",
-          "worktree_bootstrap_failed",
-          // G3: mission-hygiene nudge. Emitted once when all of a mission's tasks first
-          // become terminal — a "consider closing this mission" hint for the coordinator.
-          // Purely informational: NOT force-injected (no blocked coordinator waits on it)
-          // and NOT an approval; it never drives a mission status transition on its own.
-          "mission_close_candidate"
-        ]);
-        EVENT_TO_LEDGER_KIND = {
-          "agent:generating_completed": "task_completed",
-          "agent:waiting_approval": "task_approval_needed",
-          "agent:waiting_choice": "task_question_pending",
-          "agent:stopped": "task_failed",
-          "monitor:no_progress": "task_stalled"
-        };
-        MESH_FORCE_INJECT_EVENTS = /* @__PURE__ */ new Set([
-          "agent:generating_completed",
-          "agent:stopped",
-          "agent:waiting_approval",
-          // A worker's question (waiting_choice) is real-time and the coordinator may be
-          // generating when it arrives; force-inject it like approval so the busy coordinator
-          // learns it must answer (mesh_answer_question) rather than the nudge sitting in the
-          // adapter's outbound queue until the coordinator idles on its own (mission f1d25e11).
-          "agent:waiting_choice",
-          "refine:completed",
-          "refine:failed",
-          "worktree_bootstrap_complete",
-          "worktree_bootstrap_failed"
-        ]);
-        MESH_APPROVAL_EVENTS = /* @__PURE__ */ new Set([
-          "agent:waiting_approval",
-          // agent:waiting_choice (a worker's AskUserQuestion) shares the approval class's
-          // real-time-nudge / level-backed contract: its authoritative state is recorded at
-          // LEVEL the moment it is processed (task_question_pending → mesh_status
-          // awaiting_choice), so the pending event is only a NUDGE and can be delivered to a
-          // busy coordinator's inbox (and dropped) without data loss — the level state
-          // re-derives it. It is therefore exempt from the idle-edge hold completions require,
-          // exactly like an approval nudge (mission f1d25e11).
-          "agent:waiting_choice"
-        ]);
       }
     });
     function normalizeInputEnvelope(input) {
@@ -89540,6 +89573,9 @@ ${cleanBody}`;
     function resolvePendingHeldDrainEscalateMs() {
       return resolveTunedReconcileMs("MESH_PENDING_HELD_DRAIN_ESCALATE_MS", DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS, 4e3, 5 * 6e4);
     }
+    function resolvePendingHeldCeilingMs() {
+      return resolveTunedReconcileMs("MESH_PENDING_HELD_CEILING_MS", DEFAULT_PENDING_HELD_CEILING_MS, 12e3, 30 * 6e4);
+    }
     function resolveReconcileIntervalMs() {
       const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
       if (raw) {
@@ -89552,6 +89588,7 @@ ${cleanBody}`;
     var DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
     var DEFAULT_AUTO_PRUNE_INTERVAL_MS;
     var DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS;
+    var DEFAULT_PENDING_HELD_CEILING_MS;
     var init_mesh_reconcile_config = __esm2({
       "src/mesh/mesh-reconcile-config.ts"() {
         "use strict";
@@ -89561,6 +89598,7 @@ ${cleanBody}`;
         DEFAULT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 6e4;
         DEFAULT_AUTO_PRUNE_INTERVAL_MS = 6e4;
         DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS = 12e3;
+        DEFAULT_PENDING_HELD_CEILING_MS = 12e4;
       }
     });
     function warnOnce3(message) {
@@ -93054,6 +93092,65 @@ ${cleanBody}`;
       }
       return maxAge;
     }
+    function surfaceCeilingExceededHeldEvents(meshId, drainDaemonIds, ceilingMs, heldForCoordinatorCount) {
+      let pending;
+      try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch {
+        return 0;
+      }
+      const now = Date.now();
+      let surfaced = 0;
+      for (const event of pending) {
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const queuedAt = typeof event.queuedAt === "number" ? event.queuedAt : now;
+        if (now - queuedAt < ceilingMs) continue;
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key2 = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ""}::${event.queuedAt}`}`;
+        if (holdCeilingLedgerRecorded.has(key2)) continue;
+        holdCeilingLedgerRecorded.add(key2);
+        const heldMs = now - queuedAt;
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+          appendLedgerEntry3(meshId, {
+            kind: "event_held",
+            ...event.nodeId ? { nodeId: event.nodeId } : {},
+            payload: {
+              event: event.event,
+              reason: HOLD_CEILING_EXCEEDED_HOLD_REASON,
+              recoverable: true,
+              // How long the PTY hold lasted before we stopped waiting on it, and
+              // the bound it crossed — the two numbers an operator needs to tell a
+              // one-off settle from a structurally-parked coordinator.
+              heldMs,
+              ceilingMs,
+              heldForCoordinators: heldForCoordinatorCount,
+              // Names why this is surfaced rather than injected, so the entry is not
+              // misread as a delivery failure or as a force-inject having occurred.
+              surfacedOutOfBand: true,
+              nodeLabel: event.nodeLabel,
+              ...event.workspace ? { workspace: event.workspace } : {},
+              targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+              queuedAt: event.queuedAt,
+              ...fingerprint ? { fingerprint } : {},
+              ...finalSummary ? { finalSummary } : {},
+              // Full event, matching every other event_held feeder, so
+              // mesh_requeue_held_events can restore it losslessly.
+              heldEvent: event
+            }
+          });
+          surfaced++;
+          LOG.warn(
+            "MeshReconcile",
+            `Hold ceiling exceeded: ${event.event} for mesh ${meshId} has been held ${Math.round(heldMs / 1e3)}s (\u2265 ${Math.round(ceilingMs / 1e3)}s) because no coordinator PTY ever re-confirmed idle \u2014 surfacing it OUT-OF-BAND via the ledger (pendingCoordinatorEvents / mesh_review_inbox). The event stays queued and will still deliver normally when the PTY idles; no force-inject was performed.`
+          );
+        } catch (e) {
+          holdCeilingLedgerRecorded.delete(key2);
+          LOG.warn("MeshReconcile", `Failed to ledger-record hold-ceiling ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+      }
+      return surfaced;
+    }
     function reconfirmGenuinelyIdleCoordinators(generating) {
       const out = [];
       for (const c of generating) {
@@ -93216,6 +93313,8 @@ ${cleanBody}`;
     var coordinatorModalParkState;
     var DISK_RETENTION_INTERVAL_MS;
     var heldEventLedgerRecorded;
+    var HOLD_CEILING_EXCEEDED_HOLD_REASON;
+    var holdCeilingLedgerRecorded;
     var STRICT_SESSION_MATCH_TTL_MS;
     var init_mesh_reconcile_coordinator_drain = __esm2({
       "src/mesh/mesh-reconcile-coordinator-drain.ts"() {
@@ -93233,6 +93332,8 @@ ${cleanBody}`;
         coordinatorModalParkState = /* @__PURE__ */ new Map();
         DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
         heldEventLedgerRecorded = /* @__PURE__ */ new Set();
+        HOLD_CEILING_EXCEEDED_HOLD_REASON = "hold_ceiling_exceeded";
+        holdCeilingLedgerRecorded = /* @__PURE__ */ new Set();
         STRICT_SESSION_MATCH_TTL_MS = 6e4;
       }
     });
@@ -95726,6 +95827,12 @@ ${cleanBody}`;
                 meshId,
                 drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId ? [localDaemonId] : [],
                 "generating_no_idle_coordinator",
+                generatingCoordinators.length
+              );
+              surfaceCeilingExceededHeldEvents(
+                meshId,
+                drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId ? [localDaemonId] : [],
+                resolvePendingHeldCeilingMs(),
                 generatingCoordinators.length
               );
             }
