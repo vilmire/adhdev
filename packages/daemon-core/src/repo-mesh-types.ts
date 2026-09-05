@@ -1738,6 +1738,10 @@ export interface MeshPendingRetentionCounters {
     undrainedExpired: number;
     undrainedExpiredMirrorFailed: number;
     sweepsNoop: number;
+    /** TERMINAL-NEVER-EXPIRES: undrained rows past the window KEPT because they are
+     *  terminal (a completion/stop/approval/refine-outcome). Not a drop — the
+     *  exemption preventing one. */
+    terminalExempt: number;
 }
 
 /** T6 (B3c) live v2 enforce/observability counters (see RepoMeshStatus.meshProtocolV2Counters). */

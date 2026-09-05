@@ -50,7 +50,12 @@ const DAY = 24 * 60 * 60 * 1000;
 function seedUndrainedEvent(meshId: string, ageMs: number, over: Partial<PendingMeshCoordinatorEvent> = {}): PendingMeshCoordinatorEvent {
     const queuedAt = Date.now() - ageMs;
     const event: PendingMeshCoordinatorEvent = {
-        event: 'agent:generating_completed',
+        // A LIFECYCLE event: the retention window's actual subject. Terminal events
+        // (agent:generating_completed & co.) are exempt from expiry entirely — see
+        // the TERMINAL-NEVER-EXPIRES suite in
+        // mesh-events-pending-terminal-never-expires.test.ts — so seeding one here
+        // would test a path that no longer exists.
+        event: 'refine:accepted',
         meshId,
         nodeLabel: "Node 'node_bf91'",
         nodeId: 'node_bf91',
@@ -112,7 +117,7 @@ describe('pending-event retention sweep — drop observability', () => {
         expect(payload.reason).toBe(PENDING_RETENTION_EXPIRED_HOLD_REASON);
         expect(payload.reason).not.toBe('pending_trim_dropped');
         expect(payload.recoverable).toBe(true);
-        expect(payload.event).toBe('agent:generating_completed');
+        expect(payload.event).toBe('refine:accepted');
         expect(payload.heldEvent?.metadataEvent?.taskId).toBe('task_retention_1');
 
         // The ledger entry's own timestamp is the drop time — set by appendLedgerEntry

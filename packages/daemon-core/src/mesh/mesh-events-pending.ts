@@ -6,6 +6,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
 import { traceMeshEventDrop } from './mesh-event-trace.js';
+import { MESH_FORCE_INJECT_EVENTS } from './mesh-event-classify.js';
 import { daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import {
     assertPendingMeshCoordinatorEventV2,
@@ -1001,6 +1002,31 @@ function reconcilePendingMeshCoordinatorEvents(meshId: string, events: PendingMe
 const PENDING_EVENTS_DRAINED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 const PENDING_EVENTS_UNDRAINED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/**
+ * TERMINAL-NEVER-EXPIRES. Event names the undrained retention window must NEVER
+ * expire, at any age. This is the force-inject (terminal) class — the events a
+ * coordinator is actively blocked waiting on: a completion, a stop, an approval /
+ * question nudge, a refine outcome, a worktree bootstrap result.
+ *
+ * Why an exemption rather than a longer window: the undrained sweep exists to bound
+ * a table that a coordinator identity abandoned, and for a LIFECYCLE event
+ * (`agent:ready`, `agent:generating_started`, `refine:accepted`) that is pure
+ * hygiene — the information is re-derivable from level state or simply obsolete. A
+ * terminal event is categorically different: its finalSummary / worker result exists
+ * ONLY in this row (that is the very reason the reconcile loop holds it at the idle
+ * edge instead of drain-without-inject), so expiring it destroys the single copy of
+ * a worker's output. Mirroring it to `event_held` first makes it *recoverable*, but
+ * recovery is a manual operator step — it is not a substitute for simply never
+ * destroying it. Any window long enough to be "safe" for a terminal event is long
+ * enough that the growth bound it buys is meaningless, and terminal rows are
+ * naturally bounded anyway (one per dispatched task, not a per-tick stream).
+ *
+ * Derived from MESH_FORCE_INJECT_EVENTS rather than re-listed, so a new terminal
+ * event added to that set is automatically protected here and cannot be silently
+ * expired by a future contributor who did not know this list existed.
+ */
+export const PENDING_RETENTION_NEVER_EXPIRE_EVENTS: ReadonlySet<string> = MESH_FORCE_INJECT_EVENTS;
+
 /** Reason stamped on an `event_held` entry produced by the retention sweep below —
  *  the SQLite-era successor to the retired JSONL trim's `pending_trim_dropped`. Kept
  *  as its own string (not reusing that literal) because the trigger is genuinely
@@ -1029,6 +1055,13 @@ const pendingRetentionCounters = {
     /** How many times the sweep has run and found nothing to prune (0 in both
      *  windows). Purely diagnostic — confirms the sweep is actually firing. */
     sweepsNoop: 0,
+    /** TERMINAL-NEVER-EXPIRES: undrained rows past the 30-day window that were KEPT
+     *  because they are terminal (PENDING_RETENTION_NEVER_EXPIRE_EVENTS). Every
+     *  increment is a worker output the sweep would otherwise have destroyed, so a
+     *  non-zero count is the exemption doing its job — NOT a drop and NOT a backlog
+     *  warning on its own. It does, however, mean a coordinator identity has an
+     *  undelivered completion older than 30 days, which is worth an operator look. */
+    terminalExempt: 0,
 };
 
 /** Observability accessor for the pending-event retention counters. Surfaced via
@@ -1102,13 +1135,25 @@ function ledgerRecordExpiredUndrainedEvent(row: { id: string; meshId: string; ev
  */
 export function prunePendingMeshCoordinatorEventsRetention(): number {
     try {
-        const { drainedExpired, undrainedExpired, undrainedRows } = MeshRuntimeStore.getInstance().prunePendingEvents({
+        const { drainedExpired, undrainedExpired, undrainedRows, terminalExempt } = MeshRuntimeStore.getInstance().prunePendingEvents({
             drainedOlderThanMs: PENDING_EVENTS_DRAINED_RETENTION_MS,
             undrainedOlderThanMs: PENDING_EVENTS_UNDRAINED_RETENTION_MS,
+            // TERMINAL-NEVER-EXPIRES: a terminal event's worker output exists only in
+            // this row — the sweep must never destroy it, at any age.
+            neverExpireEvents: PENDING_RETENTION_NEVER_EXPIRE_EVENTS,
         });
 
         pendingRetentionCounters.drainedExpired += drainedExpired;
         pendingRetentionCounters.undrainedExpired += undrainedExpired;
+        pendingRetentionCounters.terminalExempt += terminalExempt;
+
+        if (terminalExempt > 0) {
+            LOG.info(
+                'MeshEvents',
+                `Pending-event retention KEPT ${terminalExempt} terminal event(s) past the undrained window `
+                + `(never expired — their worker output exists only in these rows). They remain queued and deliverable.`,
+            );
+        }
 
         if (undrainedRows.length > 0) {
             for (const row of undrainedRows) {
