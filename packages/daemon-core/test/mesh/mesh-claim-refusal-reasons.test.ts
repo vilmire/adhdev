@@ -118,10 +118,15 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
   it('difficulty_floor_unmet — a difficult task against a session allowed only easy work', () => {
     const meshId = `mesh_refuse_difficulty_${randomUUID().slice(0, 8)}`
     try {
-      enqueueTask(meshId, 'hard work', { taskMode: 'code_change', difficulty: 'difficult' })
+      const enqueued = enqueueTask(meshId, 'hard work', { taskMode: 'code_change', difficulty: 'difficult' })
       const { task, refusal } = claim(meshId, { allowedTaskDifficulties: ['easy'] })
       expect(task).toBeNull()
       expect(refusal.reason).toBe('difficulty_floor_unmet')
+      // Structural id/difficulty (not just the free-form `detail` string) — the claim-path
+      // difficulty-floor pager (mesh-queue-assignment.ts tryAssignQueueTask) needs the real
+      // taskId to call handleDifficultyFloorSkip without parsing it out of prose.
+      expect(refusal.taskId).toBe(enqueued.id)
+      expect(refusal.difficulty).toBe('difficult')
     } finally {
       cleanup(meshId)
     }

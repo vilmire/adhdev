@@ -1240,10 +1240,18 @@ export class MeshRuntimeStore {
     ): MeshWorkQueueEntry | null {
         return this.transaction(() => {
             this.ensureLegacyQueueMigrated(meshId);
-            const refuse = (reason: MeshClaimRefusalReason, detail?: string): null => {
+            const refuse = (reason: MeshClaimRefusalReason, detail?: string, deepest?: MeshWorkQueueEntry): null => {
                 if (opts?.outRefusal) {
                     opts.outRefusal.reason = reason;
                     if (detail) opts.outRefusal.detail = detail;
+                    // Structural id/difficulty alongside the free-form `detail` string, so a
+                    // caller (LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤ — the difficulty-floor claim-path
+                    // pager) can act on WHICH task was refused without parsing "closest
+                    // candidate <id> of <n>" back out of prose.
+                    if (deepest) {
+                        opts.outRefusal.taskId = deepest.id;
+                        if (deepest.difficulty) opts.outRefusal.difficulty = deepest.difficulty;
+                    }
                 }
                 return null;
             };
@@ -1469,7 +1477,8 @@ export class MeshRuntimeStore {
             if (!selected.entry) {
                 if (!candidates.length) return refuse('no_pending_candidates');
                 return refuse(selected.reason, selected.deepest
-                    ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : undefined);
+                    ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : undefined,
+                    selected.deepest);
             }
             const entry = selected.entry;
 

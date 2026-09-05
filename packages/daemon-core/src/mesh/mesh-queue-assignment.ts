@@ -53,6 +53,7 @@ import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quo
 import {
     sweepAutoLaunchOrphanSessions,
     autoLaunchWriteWouldClobberWinner,
+    autoLaunchWriteWouldClobberDifficultyFloorWaitClock,
     driveExpiredAwaitClaim,
     autoLaunchAwaitClaimBackoff,
     awaitClaimWindowMs,
@@ -63,7 +64,7 @@ import {
     __clearAwaitClaimBackoffForTests,
     __resetAutoLaunchOrphanNotifiedForTests,
 } from './mesh-autolaunch-integrity.js';
-import { allowedClassifiedDifficultiesForSession, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel } from './mesh-difficulty-floor.js';
+import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloorRefusal, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import {
@@ -1166,7 +1167,7 @@ export function tryAssignQueueTask(
         // Qualify the ranking written at the top of this function so it can no longer be
         // misread as evidence that a task was dispatched to this node.
         recordLastQuotaRankingOutcome(nodeId, 'refused', refusalReason);
-        return false;
+        handleClaimPathDifficultyFloorRefusal({ meshId, nodeId, refusalReason, claimRefusal, coordinatorDaemonId: localCoordinatorDaemonId() }); return false;
     }
     // A claim succeeded — drop any refusal fingerprint so a later genuine re-entry into
     // the same gate is reported again rather than suppressed as an unchanged verdict, and
@@ -1618,7 +1619,7 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
     if (difficultyFloorSkip) {
         handleDifficultyFloorSkip({ meshId, taskId, reason: reason!, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId() });
-    } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS)) {
+    } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
         recordTaskAutoLaunch(meshId, taskId, {
             status: args.status,
             reason,

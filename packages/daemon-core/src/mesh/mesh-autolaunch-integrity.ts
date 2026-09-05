@@ -38,6 +38,7 @@ import { LOG } from '../logging/logger.js';
 import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { isDifficultyFloorWaitReason } from './mesh-difficulty-floor.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, recordAutoLaunchEvent } from './mesh-queue-observability.js';
@@ -258,6 +259,18 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     if (sessionIdsEquivalent(readNonEmptyString(args.sessionId), heldSessionId)) return false;
     LOG.info('MeshQueue', `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
     return true;
+}
+
+// LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤ clobber guard, same shape as the winner guard above: a
+// session-pinned task is re-skipped 'target_session_constraint' by the auto-launch scanner
+// on EVERY tick, which — being a non-floor reason — would otherwise unconditionally reset
+// the difficulty-floor wait clock's `updatedAt` each time, starving the claim path's
+// bounded-wait pager (mesh-queue-assignment.ts tryAssignQueueTask) of the elapsed time it needs.
+export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: string, taskId: string, status: string): boolean {
+    if (status !== 'skipped') return false;
+    let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
+    try { existing = getQueue(meshId).find(t => t.id === taskId)?.autoLaunch; } catch { return false; }
+    return existing?.status === 'skipped' && isDifficultyFloorWaitReason(existing.reason);
 }
 
 

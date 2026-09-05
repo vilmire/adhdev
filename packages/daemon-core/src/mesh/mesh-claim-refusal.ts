@@ -61,6 +61,16 @@ export interface MeshClaimRefusal {
     /** Free-form context (e.g. which candidate got furthest). Ids/counts only — never task
      *  or chat CONTENT, since this reaches logs and the ledger. */
     detail?: string;
+    /** The deepest candidate's id, structurally — not parsed out of `detail`. Populated
+     *  alongside `reason` whenever a candidate got at least as far as `selectClaimCandidate`.
+     *  Lets a caller (e.g. the difficulty-floor timeout pager) act on WHICH task was refused
+     *  without string-parsing free-form diagnostic text. */
+    taskId?: string;
+    /** The deepest candidate's difficulty, when the refusal reason is `difficulty_floor_unmet` —
+     *  mirrors what the auto-launch path already threads through its own skip reason. Typed as
+     *  the row's own loose `string | undefined` (not the narrow `MeshTaskDifficulty`) because the
+     *  queue entry itself stores it unvalidated; the consumer treats it as diagnostic text only. */
+    difficulty?: string;
 }
 
 /**
