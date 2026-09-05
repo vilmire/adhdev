@@ -149388,6 +149388,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     init_snapshot3();
     init_runtime_defaults();
+    init_transcript_publisher();
     var DEFAULT_GIT_REFRESH_CONCURRENCY = 2;
     var DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS = 700;
     var PUSH_TOPICS = ["machine.runtime", "session_host.diagnostics", "session.modal", "daemon.metadata"];
@@ -149741,6 +149742,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       markChatOutputActivity(sessionId) {
         const cfg = this.opts.chatTail;
         if (!sessionId || !(cfg?.isCliSession?.(sessionId) ?? false)) return;
+        markTranscriptSessionDirty(sessionId);
         this.chatOutputActiveAt.set(sessionId, this.now());
         if (this.chatOutputFlushTimer) return;
         if (cfg?.scheduleGate && !cfg.scheduleGate()) return;
