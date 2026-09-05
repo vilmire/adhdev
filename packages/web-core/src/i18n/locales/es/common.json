@@ -1417,7 +1417,7 @@
         "openPanelHint": "Abre el panel del agente o la vista de chat en la app que estés usando para empezar a ver los mensajes",
         "noMessagesYet": "Aún no hay mensajes",
         "loadingChat": "Cargando chat...",
-        "replicaOmittedBefore": "Se omitieron mensajes anteriores en esta vista — mostrando solo lo más reciente.",
+        "replicaOmittedBefore": "Mostrando solo los mensajes más recientes — usa «Cargar mensajes anteriores» arriba para ver los anteriores.",
         "openPanel": "Abrir panel de {{label}}",
         "switchingPanel": "Cambiando...",
         "openingPanel": "Abriendo..."
