@@ -10,6 +10,7 @@ import {
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
+import { recordTranscriptReplicaFallbackForDiagnostics } from './transcript-fallback-diagnostics'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 
 
@@ -51,6 +52,27 @@ export interface SessionChatTailSnapshot {
   omittedBefore: boolean
   /** A replica-sourced tail whose freshness gate did not hold (design §5.5's "stale idle UI"). False for every legacy update. */
   stale: boolean
+  /**
+   * (§8 unit 9) ★ This session was being served by the replica and REGRESSED to
+   * legacy. The signal behind the user-visible degradation notice.
+   *
+   * ── Why this is not `transcriptReadSource === 'legacy'` ────────────────────
+   * That condition is true for the overwhelming majority of healthy sessions:
+   * every session on a `shadow`-mode daemon (the default) is legacy and always
+   * was, and nothing is wrong with it. Alarming on it would put a permanent
+   * warning on a working product — which is precisely how the retired
+   * "이전 내용 생략" banner failed (it fired when nothing was wrong, was twice
+   * reported as a defect, and had to be removed).
+   *
+   * So this is strictly the TRANSITION: false until a verified replica snapshot
+   * has landed at least once, and true only after a fallback follows it. A
+   * session that never reached the replica can never set it, by construction —
+   * `everHadHealthyReplica` gates the assignment.
+   *
+   * Cleared when the replica recovers, so the notice disappears on its own
+   * rather than latching for the rest of the session.
+   */
+  transcriptReplicaDegraded: boolean
 }
 
 export interface SessionChatHistoryPageRequest {
@@ -203,6 +225,7 @@ function buildEmptySnapshot(tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailSnap
     transcriptReadSource: 'legacy',
     omittedBefore: false,
     stale: false,
+    transcriptReplicaDegraded: false,
   }
 }
 
@@ -628,6 +651,20 @@ export class SessionChatTailController {
    * re-subscribing to legacy on every pane reset.
    */
   private replicaHealthy = false
+  /**
+   * (§8 unit 9) Has a verified replica snapshot EVER landed on this session?
+   *
+   * ★ This is the strictness gate for the degradation notice, and the whole
+   * reason it cannot fire on a healthy legacy-only session. `replicaHealthy`
+   * alone cannot distinguish "the replica broke" from "there has never been a
+   * replica here" — both read false, and the second is the normal state for
+   * every session on a `shadow`-mode daemon. Only a session that once had a
+   * working replica can be said to have DEGRADED.
+   *
+   * Never cleared while the controller lives (a lane that worked once is
+   * expected to work again); reset by `dispose()` alongside `replicaHealthy`.
+   */
+  private everHadHealthyReplica = false
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -711,11 +748,26 @@ export class SessionChatTailController {
     this.replicaHealthy = false
     if (wasHealthy || !this.transportSubscription) this.syncLegacySubscription()
 
-    if (this.snapshot.transcriptReadSource === 'legacy' && this.snapshot.transcriptFallbackReason === reason) return
+    // (§8 unit 9) ★ Make the regression VISIBLE — but only for a session that
+    // actually had a working replica. A session that never reached the replica
+    // is not degraded, it is simply a legacy session, and marking it would put
+    // a permanent warning on every session of a `shadow`-mode daemon.
+    //
+    // ★ Counted BEFORE the dedup return below, for the same reason the re-arm
+    // is: the diagnostic must not miss a repeat report.
+    const degraded = this.everHadHealthyReplica
+    if (degraded && wasHealthy) recordTranscriptReplicaFallbackForDiagnostics(reason)
+
+    if (
+      this.snapshot.transcriptReadSource === 'legacy'
+      && this.snapshot.transcriptFallbackReason === reason
+      && this.snapshot.transcriptReplicaDegraded === degraded
+    ) return
     this.snapshot = {
       ...this.snapshot,
       transcriptReadSource: 'legacy',
       transcriptFallbackReason: reason,
+      transcriptReplicaDegraded: degraded,
     }
     this.emit()
   }
@@ -805,7 +857,16 @@ export class SessionChatTailController {
     // claims. A lane that stops delivering reports a fallback and re-arms.
     if (!this.replicaHealthy) {
       this.replicaHealthy = true
+      this.everHadHealthyReplica = true
       this.syncLegacySubscription()
+    }
+
+    // (§8 unit 9) The lane is serving again — retract the degradation notice.
+    // Recovery clears it rather than latching, so the notice describes CURRENT
+    // health and disappears on its own once the replica is back.
+    if (this.snapshot.transcriptReplicaDegraded) {
+      this.snapshot = { ...this.snapshot, transcriptReplicaDegraded: false }
+      this.emit()
     }
   }
 
@@ -1074,6 +1135,10 @@ export class SessionChatTailController {
     // feeding it: a permanently empty pane. Health must be re-earned by an
     // actual snapshot after every dispose.
     this.replicaHealthy = false
+    // ★ Reset the degradation gate too. A recycled controller has no lane, so
+    // it has no history of one either — otherwise the next fallback on a fresh
+    // controller would claim a regression that never happened here.
+    this.everHadHealthyReplica = false
   }
 
   private emit(): void {
