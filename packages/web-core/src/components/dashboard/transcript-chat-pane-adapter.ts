@@ -62,11 +62,29 @@ import type { DashboardMessage } from './types'
  * `fallbackReason` / `stale` are OMITTED rather than emitted empty: absence is
  * meaningful. A session that never attempted the replica has no reason at all,
  * which must not be confused with one that fell back for an unrecorded reason.
+ *
+ * ── Why `omittedBefore` is here and NOT a visible banner ────────────────────
+ * A ring-eviction discontinuity used to render as the "showing latest only"
+ * banner in ChatPane. It was retired as user-facing chrome (owner decision):
+ * "Load older messages" already sits directly above the tail and is gated
+ * independently of this flag — `ChatMessageList.tsx:491,512` render it on
+ * `(hiddenLiveCount > 0 || hasMoreHistory) && !isLoadingMore`, which never
+ * reads `omittedBefore`. So the banner restated an affordance the user could
+ * already see, and it read as a data-loss warning when nothing was lost
+ * (provider-native/ADHDev JSONL history is untouched; `chat_history` still
+ * reaches it). It was twice reported as a defect — once when it was a false
+ * positive, once when it was CORRECT. A signal that alarms even when accurate
+ * has failed as UI.
+ *
+ * The detection is still sound and stays armed — only its surface moved. Do
+ * not "restore" the banner; if this needs to be user-visible again, that is a
+ * product/copy decision, not a bug fix.
  */
 export function buildTranscriptReadSourceAttributes(state: {
     transcriptReadSource: 'replica' | 'legacy'
     transcriptFallbackReason?: string
     stale?: boolean
+    omittedBefore?: boolean
 }): Record<string, string> {
     return {
         'data-transcript-read-source': state.transcriptReadSource,
@@ -74,6 +92,7 @@ export function buildTranscriptReadSourceAttributes(state: {
             ? { 'data-transcript-fallback-reason': state.transcriptFallbackReason }
             : {}),
         ...(state.stale ? { 'data-transcript-stale': 'true' } : {}),
+        ...(state.omittedBefore ? { 'data-transcript-omitted-before': 'true' } : {}),
     }
 }
 
