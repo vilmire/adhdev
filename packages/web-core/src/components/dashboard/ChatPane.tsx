@@ -480,12 +480,14 @@ export default function ChatPane({
                 ring's in-flight/older rows; the live tail restarts from whatever the
                 next verified-complete revision carries. This is a UI cache-reset
                 signal, not data loss (provider-native/ADHDev JSONL history is
-                untouched) — "Load older" still reaches it via chat_history. */}
-            {chatTailState.omittedBefore && (
-                <div className="px-3 py-1.5 text-2xs text-center opacity-60 border-b border-[var(--border-color,rgba(255,255,255,0.08))]">
-                    {t('chatPane.replicaOmittedBefore')}
-                </div>
-            )}
+                untouched) — "Load older" still reaches it via chat_history.
+
+                That is exactly why it no longer renders a banner here: the
+                "Load older messages" button below is gated independently of
+                `omittedBefore`, so the banner named a control the user could
+                already see and framed a recoverable cache reset as loss. The
+                signal now rides the pane's `data-transcript-omitted-before`
+                attribute instead — see `buildTranscriptReadSourceAttributes`. */}
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}

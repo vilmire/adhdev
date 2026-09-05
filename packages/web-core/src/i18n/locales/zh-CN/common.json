@@ -1412,7 +1412,6 @@
         "openPanelHint": "在你正在使用的应用中打开代理面板或聊天视图以开始查看消息",
         "noMessagesYet": "尚无消息",
         "loadingChat": "正在加载聊天...",
-        "replicaOmittedBefore": "仅显示最新消息 — 可通过上方的“加载较早的消息”查看更早内容。",
         "openPanel": "打开 {{label}} 面板",
         "switchingPanel": "正在切换...",
         "openingPanel": "正在打开..."
