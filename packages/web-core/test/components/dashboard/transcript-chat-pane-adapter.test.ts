@@ -58,8 +58,13 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
     expect(update.omittedBefore).toBe(false)
     expect(update.stale).toBe(false)
     expect(update.messages).toHaveLength(2)
-    expect(update.messages[0]).toMatchObject({ role: 'user', content: 'hi', bubbleId: 'turn-1' })
-    expect(update.messages[1]).toMatchObject({ role: 'assistant', content: 'hello', bubbleId: 'turn-2' })
+    // `_turnKey` only — `bubbleId` is deliberately NOT populated from turnKey.
+    // turnKey is turn-grained, so using it as per-bubble identity collapsed every
+    // bubble of one turn onto a single React key (see
+    // transcript-adapter-bubble-identity.test.ts).
+    expect(update.messages[0]).toMatchObject({ role: 'user', content: 'hi', _turnKey: 'turn-1' })
+    expect(update.messages[1]).toMatchObject({ role: 'assistant', content: 'hello', _turnKey: 'turn-2' })
+    expect(update.messages[0]).not.toHaveProperty('bubbleId')
   })
 
   it('reconstructs a narrow {selected} messageSource from the allow-listed scalar', () => {
@@ -266,7 +271,7 @@ describe('SessionChatTailController transcript replica integration', () => {
     expect(controller.getSnapshot().liveMessages[0]).toMatchObject({ content: 'mine' })
   })
 
-  it('carries turnKey→bubbleId and messageSource so the native-history force-apply gate can fire on a shrinking tail', () => {
+  it('carries turnKey→_turnKey and messageSource so the native-history force-apply gate can fire on a shrinking tail', () => {
     // Guards the D6 force-apply path. A native-history [user, assistant] tail
     // that is SHORTER than the rendered busy tail must still be applied.
     //
@@ -275,11 +280,13 @@ describe('SessionChatTailController transcript replica integration', () => {
     // defense rejects the corrective tail (3 stale messages instead of 2).
     // messageSource is therefore behaviorally load-bearing here.
     //
-    // The turnKey→bubbleId assertion below is a STRUCTURAL guard only. It feeds
+    // The turnKey→_turnKey assertion below is a STRUCTURAL guard only. It feeds
     // lastSubstantiveAssistantIdentity, but in this scenario force-apply keys on
-    // the role transition alone, so removing bubbleId does NOT change the
-    // outcome of this particular case — the explicit assertion is what catches
-    // that projection. Don't read this test as proving bubbleId gates the gate.
+    // the role transition alone, so removing it does NOT change the outcome of
+    // this particular case — the explicit assertion is what catches that
+    // projection. Don't read this test as proving it gates the gate.
+    // (Was `bubbleId` until the per-bubble identity fix: turnKey is turn-grained
+    // and must never be assigned to a per-bubble field.)
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -320,7 +327,7 @@ describe('SessionChatTailController transcript replica integration', () => {
     )
     // Both projections must be present for the gate to be reachable at all.
     expect(corrective.messageSource).toEqual({ selected: 'native-history' })
-    expect(corrective.messages[1]).toMatchObject({ bubbleId: 'a1' })
+    expect(corrective.messages[1]).toMatchObject({ _turnKey: 'a1' })
 
     manager.publish(corrective)
 

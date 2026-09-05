@@ -77,10 +77,14 @@ export function buildTranscriptReadSourceAttributes(state: {
     }
 }
 
-/** One roster-mapped message. `turnKey` (the allow-listed "stable message key",
- * §2.4) stands in for the richer `bubbleId`/`providerUnitKey`/`id` fields a
- * live `read_chat` message carries, since the wire allow-list has only one
- * stable-identity field. */
+/** One roster-mapped message.
+ *
+ * ★ Identity mapping is deliberately NARROW. `turnKey` goes to `_turnKey` only —
+ * it is TURN-grained (one value per user message, shared by every bubble of the
+ * turn) and must never be assigned to the per-BUBBLE `bubbleId`, or all bubbles
+ * of a turn collapse onto one React key. `sequence` (allow-listed, a monotonic
+ * per-session integer) IS per-message and carries through. `providerUnitKey`
+ * stays off the wire on purpose: it embeds a content hash. */
 function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): DashboardMessage {
     const mapped: ChatMessage = {
         role: message.role,
@@ -92,9 +96,16 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Dashboard
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState
     if (message.senderName !== null) mapped.senderName = message.senderName
     if (message.turnKey !== null) {
-        mapped.bubbleId = message.turnKey
+        // `_turnKey` ONLY. `turnKey` is TURN-grained — the producer increments it
+        // once per user message, so every bubble of a multi-bubble turn (prompt →
+        // tool → output → answer) shares one value. Assigning it to `bubbleId`
+        // (a per-BUBBLE field) made all N bubbles collide on a single React key,
+        // because `getChatMessageStableKey` ranks `_turnKey`/`bubbleId` above the
+        // content-hash fallback. Leaving `bubbleId` unset lets that fallback
+        // distinguish bubbles by their own content, which is correct-by-default.
         mapped._turnKey = message.turnKey
     }
+    if (typeof message.sequence === 'number') mapped.sequence = message.sequence
     return mapped as DashboardMessage
 }
 

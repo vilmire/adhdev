@@ -108,7 +108,12 @@ describe('mapTranscriptSnapshotToReadChatPayload', () => {
         // `totalMessages` is the FULL observed count, not the returned tail length.
         expect(payload.totalMessages).toBe(5);
         expect(payload.messages).toHaveLength(2);
-        expect(payload.messages[0]).toMatchObject({ role: 'user', content: 'hi', bubbleId: 'turn-1', _turnKey: 'turn-1' });
+        // `_turnKey` only — `bubbleId` is deliberately not populated from the
+        // turn-grained `turnKey` (it would make every bubble of one turn share
+        // an identity). See transcript-adapter-bubble-identity.test.ts in
+        // web-core for the invariant this protects.
+        expect(payload.messages[0]).toMatchObject({ role: 'user', content: 'hi', _turnKey: 'turn-1' });
+        expect(payload.messages[0]).not.toHaveProperty('bubbleId');
         expect(payload.transcriptReadSource).toBe('replica');
         expect(payload.replicaRevision).toBe(7);
         expect(payload.omittedBefore).toBe(true);
