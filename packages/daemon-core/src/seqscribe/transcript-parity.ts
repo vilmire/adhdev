@@ -67,6 +67,43 @@ export interface TranscriptParityCounters {
     persistentMismatches: number;
     /** Comparisons run since process start. */
     runs: number;
+
+    // ── Recurrence observability (§5.6 gate condition 4) ────────────────────
+    // ★ `runs` alone cannot answer whether the gate's remaining condition —
+    // `persistent mismatch 0` — is even DECIDABLE. `missing_complete_revision`
+    // is promoted to persistent only when the SAME session key is compared a
+    // second time (see the header's recurrence rule), and the only non-test
+    // caller of `compareTranscriptRevision` is `transcript-publish-runtime.ts`'s
+    // per-append self-check. So `runs = 2` across two DIFFERENT sessions means
+    // the promotion path was never exercised at all, and a persistent count of 0
+    // proves nothing. The two counters below make that distinction visible.
+    /** Distinct session keys compared at least once since process start. */
+    sessionsObserved: number;
+    /**
+     * Distinct session keys compared at least TWICE since process start — i.e.
+     * the ones for which the recurrence rule could actually fire. If this is 0,
+     * `persistentMismatches === 0` is UNDECIDED, not clean.
+     */
+    sessionsRepeated: number;
+    /**
+     * Times a session already sitting in the pending-missing grace set was
+     * compared again — the direct count of recurrence-rule evaluations for the
+     * repairable class. Counts BOTH outcomes: a revisit that found the revision
+     * (repair confirmed) and one that missed again (persistent promotion).
+     */
+    pendingMissingRevisits: number;
+    /** Session keys currently in the pending-missing grace set. */
+    pendingMissingOpen: number;
+    /**
+     * `Date.now()` at module load — effectively daemon process start.
+     *
+     * ★ Every counter above is PROCESS-LOCAL and resets to 0 on daemon restart.
+     * Without this stamp an observer cannot tell "no mismatches ever" from
+     * "restarted a minute ago", and reading a freshly-reset 0 as evidence of
+     * parity is exactly the mistake this gate already made once. Exposed
+     * alongside the counters so the zero is always dated.
+     */
+    since: number;
 }
 
 const counters: TranscriptParityCounters = {
@@ -80,7 +117,20 @@ const counters: TranscriptParityCounters = {
     mismatches: 0,
     persistentMismatches: 0,
     runs: 0,
+    sessionsObserved: 0,
+    sessionsRepeated: 0,
+    pendingMissingRevisits: 0,
+    pendingMissingOpen: 0,
+    since: Date.now(),
 };
+
+/**
+ * How many times each session key has been compared this process. Bounded the
+ * only way this map can be: by the number of live sessions the publisher
+ * appends for — the same population `pendingMissing` below already tracks
+ * unbounded, so this adds no new growth class. Keys only, never values.
+ */
+const observedSessions = new Map<string, number>();
 
 /**
  * Session keys reported `missing_complete_revision` by a PREVIOUS sweep and
@@ -162,6 +212,15 @@ export function compareTranscriptRevision(
 ): TranscriptParityMismatch[] {
     counters.runs++;
     counters.compared++;
+    // Recurrence bookkeeping BEFORE the comparison — a session's second visit is
+    // what makes the missing_complete_revision promotion reachable at all, and
+    // the observer needs that fact whichever branch below runs.
+    const seen = (observedSessions.get(sessionKey) ?? 0) + 1;
+    observedSessions.set(sessionKey, seen);
+    if (seen === 1) counters.sessionsObserved++;
+    else if (seen === 2) counters.sessionsRepeated++;
+    if (pendingMissing.has(sessionKey)) counters.pendingMissingRevisits++;
+
     const redacted = redactSessionId(sessionKey);
     const mismatches: TranscriptParityMismatch[] = [];
 
@@ -225,7 +284,7 @@ export function compareTranscriptRevision(
 
 /** Snapshot of the parity counters. */
 export function transcriptParityCounters(): TranscriptParityCounters {
-    return { ...counters };
+    return { ...counters, pendingMissingOpen: pendingMissing.size };
 }
 
 /** Reset counters. TESTS ONLY. */
@@ -240,5 +299,11 @@ export function __resetTranscriptParityForTests(): void {
     counters.mismatches = 0;
     counters.persistentMismatches = 0;
     counters.runs = 0;
+    counters.sessionsObserved = 0;
+    counters.sessionsRepeated = 0;
+    counters.pendingMissingRevisits = 0;
+    counters.pendingMissingOpen = 0;
+    counters.since = Date.now();
     pendingMissing.clear();
+    observedSessions.clear();
 }

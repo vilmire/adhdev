@@ -121,6 +121,91 @@ describe('compareTranscriptRevision (design §5.3/§5.4)', () => {
     });
 });
 
+/**
+ * ★ §5.6 gate condition 4 (`persistent mismatch 0`) is only DECIDABLE if the
+ * recurrence rule was actually reachable.
+ *
+ * `runs` cannot say. `missing_complete_revision` is promoted to persistent only
+ * on a session key's SECOND comparison, and the sole non-test caller
+ * (`transcript-publish-runtime.ts`) compares once per append — so two appends on
+ * two different sessions give `runs: 2, persistentMismatches: 0` while the
+ * promotion path never ran once. These counters separate that "undecided" zero
+ * from a genuinely clean one.
+ */
+describe('★transcript parity recurrence observability (§5.6 decidability)', () => {
+    beforeEach(() => {
+        __resetTranscriptParityForTests();
+    });
+
+    it('runs=2 over two DISTINCT sessions leaves the recurrence rule unexercised', () => {
+        const snap = encodeTranscriptSnapshot(candidate());
+        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
+        compareTranscriptRevision('daemon-a:sess-2', snap, { status: 'missing' });
+
+        const c = transcriptParityCounters();
+        expect(c.runs).toBe(2);
+        expect(c.persistentMismatches).toBe(0);
+        // ...and THIS is what says the zero above proves nothing.
+        expect(c.sessionsObserved).toBe(2);
+        expect(c.sessionsRepeated).toBe(0);
+        expect(c.pendingMissingRevisits).toBe(0);
+        expect(c.pendingMissingOpen).toBe(2);
+    });
+
+    it('runs=2 over the SAME session does exercise it, and says so', () => {
+        const snap = encodeTranscriptSnapshot(candidate());
+        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
+        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
+
+        const c = transcriptParityCounters();
+        expect(c.runs).toBe(2);
+        expect(c.sessionsObserved).toBe(1);
+        expect(c.sessionsRepeated).toBe(1);
+        expect(c.pendingMissingRevisits).toBe(1);
+        expect(c.persistentMismatches).toBe(1);
+    });
+
+    it('counts a revisit that REPAIRS as an evaluation too, and closes the grace slot', () => {
+        const snap = encodeTranscriptSnapshot(candidate());
+        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'missing' });
+        compareTranscriptRevision('daemon-a:sess-1', snap, { status: 'found', snapshot: snap });
+
+        const c = transcriptParityCounters();
+        // The rule fired and answered "repaired" — a clean 0 that is DECIDED,
+        // which is exactly the state the distinct-sessions case above lacks.
+        expect(c.pendingMissingRevisits).toBe(1);
+        expect(c.sessionsRepeated).toBe(1);
+        expect(c.persistentMismatches).toBe(0);
+        expect(c.pendingMissingOpen).toBe(0);
+    });
+
+    it('exposes the full six-class split and the compared total', () => {
+        compareTranscriptRevision(
+            'k',
+            encodeTranscriptSnapshot(candidate({ sessionId: 'sess-1' })),
+            { status: 'found', snapshot: encodeTranscriptSnapshot(candidate({ sessionId: 'sess-OTHER' })) },
+        );
+        const c = transcriptParityCounters();
+        expect(c.compared).toBe(1);
+        expect(c.wrongSession).toBe(1);
+        expect(c.missingCompleteRevision).toBe(0);
+        expect(c.fieldMismatch).toBe(0);
+        expect(c.extraMessage).toBe(0);
+        expect(c.wrongOwner).toBe(0);
+        expect(c.digestMismatch).toBe(0);
+    });
+
+    it('★dates the zero — `since` is a real process stamp, so a restart is not read as parity', () => {
+        // Without this an observer cannot tell "counted for an hour, nothing
+        // wrong" from "restarted a second ago, counted nothing". Reading a
+        // freshly-reset 0 as clean is the exact mistake this gate already made.
+        const c = transcriptParityCounters();
+        expect(c.since).toBeGreaterThan(1_600_000_000_000);
+        expect(c.since).toBeLessThanOrEqual(Date.now());
+        expect(c.runs).toBe(0);
+    });
+});
+
 describe('redactSessionId', () => {
     it('truncates long ids and passes short ones through', () => {
         expect(redactSessionId('abc')).toBe('abc');

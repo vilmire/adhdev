@@ -242,6 +242,55 @@ export interface SeqscribeStatusSummary {
         /** Keyed by `MeshReadFallbackReason` — a fixed enum, never a mesh id. */
         fallbacks: Record<string, number>;
     };
+    /**
+     * §8 unit 2 transcript parity, RAW and undecimated — the numbers §5.6's
+     * remaining gate condition (`persistent mismatch 0`) actually needs.
+     *
+     * ★ Why the bucketed `transcriptParity*Bucket` fields above are not enough.
+     * They answer "did anything run" and "roughly how bad", which cannot
+     * distinguish a clean run from an UNDECIDED one. `missing_complete_revision`
+     * is promoted to persistent only when the SAME session key is compared
+     * twice, and the only non-test caller is a per-append self-check — so
+     * `transcriptParityRan === true` with two appends on two different sessions
+     * means the promotion path never fired and `persistent === 0` is evidence of
+     * nothing. `sessionsRepeated` / `pendingMissingRevisits` are what make the
+     * condition decidable, and the six-class split says which axis is dirty.
+     *
+     * ★ `since` is the process-start stamp. Every value here is process-local
+     * and returns to 0 on daemon restart; without a date on the zero an observer
+     * reads a fresh restart as "no mismatches". Never drop it.
+     *
+     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting`:
+     * these are raw monotonic counters that would defeat the status-frame dedup,
+     * and the server has no use for them. `buildCloudSeqscribeSummary`
+     * (status/reporter.ts) is a fixed-key allow-list that does not list this key;
+     * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
+     * The shape carries integers only — no session key, redacted or otherwise.
+     */
+    transcriptParityDetail?: {
+        runs: number;
+        compared: number;
+        mismatches: number;
+        persistentMismatches: number;
+        missingCompleteRevision: number;
+        fieldMismatch: number;
+        extraMessage: number;
+        wrongSession: number;
+        wrongOwner: number;
+        digestMismatch: number;
+        /** Distinct session keys compared at least once. */
+        sessionsObserved: number;
+        /** Distinct session keys compared at least twice — recurrence reachable. */
+        sessionsRepeated: number;
+        /** Comparisons that revisited a session already in the grace set. */
+        pendingMissingRevisits: number;
+        /** Session keys still sitting in the grace set. */
+        pendingMissingOpen: number;
+        /** `Date.now()` when this process began counting. */
+        since: number;
+        /** Milliseconds counted so far — `since` expressed as an age. */
+        uptimeMs: number;
+    };
 }
 
 export interface SummarizeOptions {
@@ -274,11 +323,32 @@ export interface SummarizeOptions {
         oversized: number;
         dropped: number;
     };
-    /** §8 unit 2 transcript parity counters. Omitted → reported as never-run. */
+    /**
+     * §8 unit 2 transcript parity counters. Omitted → reported as never-run.
+     *
+     * The three fields above the line feed the BUCKETS (which the cloud summary
+     * may forward). Everything below feeds `transcriptParityDetail` and is read
+     * ONLY when `includeLocalDiagnostics` is set — pass
+     * `transcriptParityCounters()` whole from a local surface, or just the three
+     * required fields from the status reporter.
+     */
     transcriptParity?: {
         runs: number;
         mismatches: number;
         persistentMismatches?: number;
+        // ── raw detail, local-only ─────────────────────────────────────────
+        compared?: number;
+        missingCompleteRevision?: number;
+        fieldMismatch?: number;
+        extraMessage?: number;
+        wrongSession?: number;
+        wrongOwner?: number;
+        digestMismatch?: number;
+        sessionsObserved?: number;
+        sessionsRepeated?: number;
+        pendingMissingRevisits?: number;
+        pendingMissingOpen?: number;
+        since?: number;
     };
     /**
      * Include the LOCAL-ONLY P22/P24 diagnostics (applyRejects, stalledStreams,
@@ -364,9 +434,36 @@ export function summarizeSeqscribeStats(
         // Copy the counters rather than aliasing the module's live maps, so a
         // later read cannot mutate a snapshot a caller is still holding.
         const routing = opts.readRouting;
+        const tp = opts.transcriptParity;
+        // `since` defaults to now rather than 0 when a caller passes only the
+        // three bucket fields: a 0 stamp would render as a 1970 date and read as
+        // "counting for 56 years", the opposite of the honesty this field is for.
+        const tpSince = tp?.since ?? Date.now();
         localDiagnostics = {
             applyRejects,
             stalledStreams,
+            ...(tp
+                ? {
+                      transcriptParityDetail: {
+                          runs: tp.runs,
+                          compared: tp.compared ?? 0,
+                          mismatches: tp.mismatches,
+                          persistentMismatches: tp.persistentMismatches ?? 0,
+                          missingCompleteRevision: tp.missingCompleteRevision ?? 0,
+                          fieldMismatch: tp.fieldMismatch ?? 0,
+                          extraMessage: tp.extraMessage ?? 0,
+                          wrongSession: tp.wrongSession ?? 0,
+                          wrongOwner: tp.wrongOwner ?? 0,
+                          digestMismatch: tp.digestMismatch ?? 0,
+                          sessionsObserved: tp.sessionsObserved ?? 0,
+                          sessionsRepeated: tp.sessionsRepeated ?? 0,
+                          pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
+                          pendingMissingOpen: tp.pendingMissingOpen ?? 0,
+                          since: tpSince,
+                          uptimeMs: Math.max(0, Date.now() - tpSince),
+                      },
+                  }
+                : {}),
             ...(routing
                 ? {
                       readRouting: {

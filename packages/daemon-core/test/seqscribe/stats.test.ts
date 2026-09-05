@@ -279,4 +279,97 @@ describe('summarizeSeqscribeStats', () => {
             expect(summary.readRouting?.fromReplica).toBe(1);
         });
     });
+
+    /**
+     * ★ §8 unit 2 transcript parity, RAW — the numbers §5.6's last open gate
+     * condition (`persistent mismatch 0`) needs in order to be DECIDABLE at all.
+     *
+     * The bucketed `transcriptParity*Bucket` fields cannot decide it. Promotion
+     * to persistent for `missing_complete_revision` requires a session key's
+     * SECOND comparison, and the only non-test caller is a per-append self-check
+     * — so a daemon can report `transcriptParityRan: true` with
+     * `transcriptParityPersistentMismatchBucket: 0` having never once evaluated
+     * the recurrence rule. `sessionsRepeated`/`pendingMissingRevisits` are what
+     * make "clean" separable from "undecided", and `since`/`uptimeMs` keep a
+     * restart-reset 0 from being read as clean.
+     */
+    describe('★transcript parity raw detail (§5.6 gate decidability)', () => {
+        const counters = {
+            runs: 9,
+            compared: 9,
+            mismatches: 3,
+            persistentMismatches: 1,
+            missingCompleteRevision: 2,
+            fieldMismatch: 1,
+            extraMessage: 0,
+            wrongSession: 0,
+            wrongOwner: 0,
+            digestMismatch: 0,
+            sessionsObserved: 4,
+            sessionsRepeated: 3,
+            pendingMissingRevisits: 2,
+            pendingMissingOpen: 1,
+            since: 1_700_000_000_000,
+        };
+
+        it('surfaces the raw counters, the six-class split and the recurrence axes', () => {
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptParity: counters },
+            );
+
+            const detail = summary.transcriptParityDetail;
+            expect(detail).toBeDefined();
+            expect(detail?.compared).toBe(9);
+            expect(detail?.missingCompleteRevision).toBe(2);
+            expect(detail?.fieldMismatch).toBe(1);
+            expect(detail?.digestMismatch).toBe(0);
+            // The decidability pair — without these, persistentMismatches: 1 (or
+            // 0) is a number with no interpretation.
+            expect(detail?.sessionsRepeated).toBe(3);
+            expect(detail?.pendingMissingRevisits).toBe(2);
+            expect(detail?.pendingMissingOpen).toBe(1);
+        });
+
+        it('★dates the counters so a restart-reset zero is distinguishable', () => {
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptParity: counters },
+            );
+            expect(summary.transcriptParityDetail?.since).toBe(1_700_000_000_000);
+            expect(summary.transcriptParityDetail?.uptimeMs).toBeGreaterThan(0);
+        });
+
+        it('defaults `since` to now rather than 0 when a caller passes only the bucket fields', () => {
+            // A 0 stamp renders as 1970 and would read as "counting for 56
+            // years" — the opposite of the honesty this field exists for.
+            const before = Date.now();
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                {
+                    authorityEnabled: true,
+                    includeLocalDiagnostics: true,
+                    transcriptParity: { runs: 1, mismatches: 0 },
+                },
+            );
+            expect(summary.transcriptParityDetail?.since).toBeGreaterThanOrEqual(before);
+            expect(summary.transcriptParityDetail?.uptimeMs).toBe(0);
+        });
+
+        it('omits the detail unless local diagnostics are requested', () => {
+            // The status reporter shares this projection. These are RAW
+            // monotonic counters — on the deduped status frame they would make
+            // every heartbeat unique and turn an idle daemon into a constant
+            // transmitter, the same reason readRouting is gated above.
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, transcriptParity: counters },
+            );
+            expect(summary).not.toHaveProperty('transcriptParityDetail');
+            // The bucketed fields still come through — the gate withholds the
+            // raw detail only, not the existing cloud-facing evidence.
+            expect(summary.transcriptParityRan).toBe(true);
+            expect(summary.transcriptParityPersistentMismatchBucket).toBeGreaterThan(0);
+        });
+    });
 });
