@@ -32,7 +32,7 @@ import {
     getCoordinatorRoutingHint,
 } from './conversation-selectors';
 import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils'
-import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
+import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
@@ -182,7 +182,9 @@ export default function ChatPane({
         tailLimit: defaultChatTailHydrateLimit,
     }))
 
-    const [visibleLiveCount, setVisibleLiveCount] = useState(defaultVisibleLiveMessages);
+    const [visibleLiveCount, setVisibleLiveCount] = useState(
+        () => getRememberedVisibleLiveCount(activeConv.tabKey, defaultVisibleLiveMessages),
+    );
     const [showActivityMessages, setShowActivityMessages] = useState(() => readChatActivityVisiblePreference());
 
     const tabKey = activeConv.tabKey;
@@ -192,8 +194,12 @@ export default function ChatPane({
     const liveMessages = getConversationLiveMessages(activeConv, chatTailState);
     const activityToggleCount = filterChatActivityMessages(liveMessages).length;
 
+    // (CHAT-TAB-SWITCH-STALE-FALLBACK ②) Restore this tab's remembered expanded
+    // window instead of collapsing to the default. Switching to a DIFFERENT tab
+    // still re-reads for THAT tab's key, so a fresh session opens at its default
+    // — the memory is per-tab, never carried across sessions.
     useEffect(() => {
-        setVisibleLiveCount(defaultVisibleLiveMessages);
+        setVisibleLiveCount(getRememberedVisibleLiveCount(tabKey, defaultVisibleLiveMessages));
     }, [defaultVisibleLiveMessages, tabKey]);
     const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
     const panelLabel = getConversationDisplayLabel(activeConv)
@@ -234,10 +240,11 @@ export default function ChatPane({
     const handleLoadMore = useCallback(async () => {
         if (isLoadingMore) return;
         if (liveMessages.length > visibleLiveCount) {
-            setVisibleLiveCount((current) => Math.min(
-                liveMessages.length,
-                current + LIVE_MESSAGE_PAGE_SIZE,
-            ));
+            setVisibleLiveCount((current) => {
+                const next = Math.min(liveMessages.length, current + LIVE_MESSAGE_PAGE_SIZE);
+                rememberVisibleLiveCount(tabKey, next);
+                return next;
+            });
             return;
         }
         setIsLoadingMore(true);
@@ -246,7 +253,7 @@ export default function ChatPane({
         } finally {
             setIsLoadingMore(false);
         }
-    }, [chatTailState, isLoadingMore, liveMessages.length, visibleLiveCount]);
+    }, [chatTailState, isLoadingMore, liveMessages.length, tabKey, visibleLiveCount]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
         const visibleMessages = buildVisibleConversationMessages({
