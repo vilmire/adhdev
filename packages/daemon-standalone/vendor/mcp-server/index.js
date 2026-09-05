@@ -159065,9 +159065,31 @@ data: ${JSON.stringify(msg.data)}
         }
         const snap = opts.throughput;
         const routing = opts.readRouting;
+        const tp = opts.transcriptParity;
+        const tpSince = tp?.since ?? Date.now();
         localDiagnostics = {
           applyRejects,
           stalledStreams,
+          ...tp ? {
+            transcriptParityDetail: {
+              runs: tp.runs,
+              compared: tp.compared ?? 0,
+              mismatches: tp.mismatches,
+              persistentMismatches: tp.persistentMismatches ?? 0,
+              missingCompleteRevision: tp.missingCompleteRevision ?? 0,
+              fieldMismatch: tp.fieldMismatch ?? 0,
+              extraMessage: tp.extraMessage ?? 0,
+              wrongSession: tp.wrongSession ?? 0,
+              wrongOwner: tp.wrongOwner ?? 0,
+              digestMismatch: tp.digestMismatch ?? 0,
+              sessionsObserved: tp.sessionsObserved ?? 0,
+              sessionsRepeated: tp.sessionsRepeated ?? 0,
+              pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
+              pendingMissingOpen: tp.pendingMissingOpen ?? 0,
+              since: tpSince,
+              uptimeMs: Math.max(0, Date.now() - tpSince)
+            }
+          } : {},
           ...routing ? {
             readRouting: {
               fromReplica: routing.fromReplica,
@@ -159616,8 +159638,14 @@ data: ${JSON.stringify(msg.data)}
       digestMismatch: 0,
       mismatches: 0,
       persistentMismatches: 0,
-      runs: 0
+      runs: 0,
+      sessionsObserved: 0,
+      sessionsRepeated: 0,
+      pendingMissingRevisits: 0,
+      pendingMissingOpen: 0,
+      since: Date.now()
     };
+    var observedSessions = /* @__PURE__ */ new Map();
     var pendingMissing2 = /* @__PURE__ */ new Set();
     function redactSessionId2(id) {
       return id.length <= 8 ? id : `${id.slice(0, 8)}\u2026(${id.length})`;
@@ -159660,6 +159688,11 @@ data: ${JSON.stringify(msg.data)}
     function compareTranscriptRevision(sessionKey2, expected, actual) {
       counters5.runs++;
       counters5.compared++;
+      const seen = (observedSessions.get(sessionKey2) ?? 0) + 1;
+      observedSessions.set(sessionKey2, seen);
+      if (seen === 1) counters5.sessionsObserved++;
+      else if (seen === 2) counters5.sessionsRepeated++;
+      if (pendingMissing2.has(sessionKey2)) counters5.pendingMissingRevisits++;
       const redacted = redactSessionId2(sessionKey2);
       const mismatches = [];
       if (actual.status === "missing") {
@@ -159709,7 +159742,7 @@ data: ${JSON.stringify(msg.data)}
       return mismatches;
     }
     function transcriptParityCounters() {
-      return { ...counters5 };
+      return { ...counters5, pendingMissingOpen: pendingMissing2.size };
     }
     function __resetTranscriptParityForTests() {
       counters5.compared = 0;
@@ -159722,7 +159755,13 @@ data: ${JSON.stringify(msg.data)}
       counters5.mismatches = 0;
       counters5.persistentMismatches = 0;
       counters5.runs = 0;
+      counters5.sessionsObserved = 0;
+      counters5.sessionsRepeated = 0;
+      counters5.pendingMissingRevisits = 0;
+      counters5.pendingMissingOpen = 0;
+      counters5.since = Date.now();
       pendingMissing2.clear();
+      observedSessions.clear();
     }
     init_native_history_executor();
     init_logger();
@@ -160411,11 +160450,24 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
               // reporter.ts / daemon-status.ts — passed here so
               // `get_status_metadata` can serve the Phase 4 promotion
               // gate, and dropped before the status frame leaves.
-              transcriptParity: {
-                runs: transcriptParity.runs,
-                mismatches: transcriptParity.mismatches,
-                persistentMismatches: transcriptParity.persistentMismatches
-              }
+              //
+              // ★ The WHOLE counter object, not a three-field slice. §5.6's
+              // remaining condition is `persistent mismatch 0`, and the
+              // slice could not decide it: `missing_complete_revision` is
+              // promoted to persistent only on a session key's SECOND
+              // comparison, and the sole non-test caller is the per-append
+              // self-check in transcript-publish-runtime.ts. So `runs=2`
+              // over two different sessions leaves `persistentMismatches=0`
+              // meaning "never evaluated", indistinguishable from "clean".
+              // `sessionsRepeated`/`pendingMissingRevisits` remove that
+              // ambiguity and `since` dates the zero across restarts.
+              //
+              // Only the three bucketed fields survive the projection into
+              // the cloud frame; the rest land on `transcriptParityDetail`,
+              // which summarizeSeqscribeStats gates behind
+              // `includeLocalDiagnostics` and buildCloudSeqscribeSummary
+              // (a fixed-key allow-list) never lists.
+              transcriptParity
             });
           } catch (error48) {
             LOG.warn(
