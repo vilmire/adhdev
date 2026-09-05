@@ -12,11 +12,14 @@
  * daemon replica store"), exactly as transcript-revision-codec.ts's header
  * says for the assembler half. `configureTranscriptProjection` is therefore
  * NOT called from `boot/daemon-lifecycle.ts` in this unit: there is nothing
- * true to wire it to yet. The call sites this unit DOES add (the choke point
- * in `commands/read-chat-presentation.ts`, the dirty trigger in
+ * true to wire it to yet. (That is no longer the state of the tree — a later
+ * unit did wire it; `configureTranscriptProjection` is now called from
+ * `boot/daemon-lifecycle.ts`. The call sites below are live, not inert.)
+ * The call sites this unit DOES add (the choke point in
+ * `commands/read-chat-presentation.ts`, the dirty trigger in
  * `subscriptions/topic-registry.ts#markChatOutputActivity`) are safe no-ops
- * until a later unit configures a real service instance — the same
- * incremental pattern unit 1 used for `TranscriptTopicClaimRegistry`.
+ * while unconfigured — the same incremental pattern unit 1 used for
+ * `TranscriptTopicClaimRegistry`.
  *
  * ── Coalescing (design §5.2) ────────────────────────────────────────────────
  * "publisher는 read hot path를 block하지 않는 bounded per-session queue를 쓰되,
@@ -38,11 +41,20 @@
  * call arriving while one is in flight replaces (never queues) the pending
  * work — "매 commit 전체 교체다. delta merge가 아니다" (§3.4) applies just as
  * much to what the publisher itself coalesces as to what a subscriber does.
- * PTY output uses a separate leading+trailing throttle: the first byte pulls
- * immediately, while the rest of a paint burst is collapsed into at most one
- * pull per window. Status/finalization/post-chat callers continue to use the
- * immediate `markDirty` path, so completion and approval transitions are not
- * delayed by the throughput guard.
+ * That `inFlight` coalescing merges CONCURRENT work only. It does nothing for
+ * a serial stream: a chunk arriving after the previous pull has settled starts
+ * a full new pull, and each pull re-encodes the WHOLE snapshot (§3.4 — "매
+ * commit 전체 교체다"), not a delta. Measured, 20 serial PTY callbacks produce
+ * 20 full reparses. Do not treat `inFlight` as a burst guard; it is not one.
+ *
+ * PTY output therefore uses a separate leading+trailing throttle
+ * (`markPtyOutputActivity`): the first byte pulls immediately, while the rest
+ * of a paint burst is collapsed into at most one pull per
+ * `TRANSCRIPT_PTY_DIRTY_THROTTLE_MS` window. The trailing pull is not optional
+ * — a provider may append its JSONL record just after the terminal write, so
+ * dropping it loses the tail of every burst. Status/finalization/post-chat
+ * callers continue to use the immediate `markDirty` path, so completion and
+ * approval transitions are not delayed by the throughput guard.
  *
  * ── Dedup / empty-guard / oversize (design §3.4, §7.2 item 3) ──────────────
  * See `transcript-observation.ts#hashTranscriptObservation` for why the dedup
@@ -77,8 +89,18 @@ export const MAX_TRACKED_SESSIONS = 512;
 
 /**
  * PTY paint bursts commonly deliver one callback per small terminal chunk.
- * Keep this below the existing 700ms chat-tail UI debounce while leaving enough
- * room to collapse the dozens/hundreds of chunks emitted by one repaint.
+ * Keep this below the legacy 700ms chat-tail UI debounce — so the replica lane
+ * is still faster than what it replaced — while leaving enough room to collapse
+ * the dozens/hundreds of chunks emitted by one repaint into a single reparse.
+ */
+export const TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
+
+/**
+ * Safety net only, NOT the latency path. Picks up transcript writes that
+ * produced no PTY callback (external edits, a provider that flushes its JSONL
+ * out of band). The first observed tick is discarded to establish a baseline
+ * signature, so a change is seen at worst two intervals after it lands —
+ * which is exactly why the PTY trigger above must stay wired.
  */
 export const TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3000;
 
@@ -147,6 +169,8 @@ export interface TranscriptProjectionCounters {
     collectorUnavailable: number;
     /** `collectObservation` returned `null` (source not ready — safety-net poll found nothing new). */
     sourcePending: number;
+    /** PTY dirty triggers collapsed behind the per-session throttle window. */
+    ptyDirtyCoalesced: number;
 }
 
 function freshCounters(): TranscriptProjectionCounters {
@@ -159,6 +183,7 @@ function freshCounters(): TranscriptProjectionCounters {
         dropped: 0,
         collectorUnavailable: 0,
         sourcePending: 0,
+        ptyDirtyCoalesced: 0,
     };
 }
 
@@ -184,6 +209,9 @@ export class TranscriptProjectionService {
     private readonly inFlight = new Set<string>();
     private readonly pendingObservation = new Map<string, TranscriptObservation>();
     private readonly pendingPull = new Set<string>();
+    /** PTY-only leading+trailing throttle state; direct dirty triggers bypass it. */
+    private readonly ptyDirtyTimers = new Map<string, NodeJS.Timeout>();
+    private readonly ptyDirtyTrailing = new Set<string>();
     private readonly pollingSessions = new Set<string>();
     private readonly knownPaths = new Map<string, string>();
     private readonly lastSignatures = new Map<string, string>();
@@ -228,6 +256,52 @@ export class TranscriptProjectionService {
         }
         if (!this.admitSession(sessionId)) return;
         void this.runPull(sessionId);
+    }
+
+    /**
+     * PTY-output trigger. Pull the leading edge immediately, then collapse all
+     * repaint chunks in the window into one trailing pull. The trailing pull is
+     * mandatory even for a single byte because providers may append their JSONL
+     * record just after writing the corresponding terminal output — without it
+     * the last chunk of a burst is silently never observed.
+     */
+    markPtyOutputActivity(sessionId: string): void {
+        if (!sessionId) return;
+        if (this.mode() === 'off') return;
+        if (!this.deps.collectObservation) {
+            this.counters.collectorUnavailable++;
+            return;
+        }
+
+        if (this.ptyDirtyTimers.has(sessionId)) {
+            this.ptyDirtyTrailing.add(sessionId);
+            this.counters.ptyDirtyCoalesced++;
+            return;
+        }
+
+        // Leading edge remains immediate for live transcript consumers.
+        this.markDirty(sessionId);
+        // Always retain one trailing refresh: the native transcript write can
+        // lag the first PTY byte even when the burst contains only one callback.
+        this.ptyDirtyTrailing.add(sessionId);
+        this.armPtyDirtyTimer(sessionId);
+    }
+
+    private armPtyDirtyTimer(sessionId: string): void {
+        const timer = setTimeout(() => {
+            if (!this.ptyDirtyTrailing.delete(sessionId)) {
+                this.ptyDirtyTimers.delete(sessionId);
+                return;
+            }
+
+            // Keep the cooldown armed before pulling so output arriving during
+            // the read cannot start another leading-edge parse concurrently.
+            this.ptyDirtyTimers.delete(sessionId);
+            this.armPtyDirtyTimer(sessionId);
+            this.markDirty(sessionId);
+        }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
+        timer.unref?.();
+        this.ptyDirtyTimers.set(sessionId, timer);
     }
 
     startPolling(sessionId: string): void {
@@ -424,6 +498,10 @@ export class TranscriptProjectionService {
         this.pollingSessions.clear();
         this.knownPaths.clear();
         this.lastSignatures.clear();
+        // Stop deferred PTY work when the singleton is replaced or disarmed.
+        for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
+        this.ptyDirtyTimers.clear();
+        this.ptyDirtyTrailing.clear();
     }
 }
 
@@ -451,9 +529,18 @@ export function notifyTranscriptObservation(sessionId: string, observation: Tran
     activeService?.observe(sessionId, observation);
 }
 
-/** Safe no-op when unconfigured — see markChatOutputActivity in subscriptions/topic-registry.ts. */
+/** Safe no-op when unconfigured — the immediate path, for status/finalization/post-chat. */
 export function markTranscriptSessionDirty(sessionId: string): void {
     activeService?.markDirty(sessionId);
+}
+
+/**
+ * PTY-only throughput guard; status/finalization/post-chat callers stay
+ * immediate. Safe no-op when unconfigured — see markChatOutputActivity in
+ * subscriptions/topic-registry.ts.
+ */
+export function markTranscriptPtyOutputActivity(sessionId: string): void {
+    activeService?.markPtyOutputActivity(sessionId);
 }
 
 export function startTranscriptStatPolling(sessionId: string): void {

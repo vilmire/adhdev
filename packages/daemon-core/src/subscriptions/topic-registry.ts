@@ -114,7 +114,7 @@ import {
 } from '../runtime-defaults.js';
 import type { SessionModalState } from '../providers/provider-instance.js';
 import type { DebugTraceEvent } from '../logging/debug-trace.js';
-import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
+import { markTranscriptPtyOutputActivity } from '../seqscribe/transcript-publisher.js';
 
 /**
  * Transport sink injected by each daemon. The registry never sees WS framing
@@ -672,24 +672,28 @@ export class TopicSubscriptionRegistry {
     markChatOutputActivity(sessionId: string): void {
         const cfg = this.opts.chatTail;
         if (!sessionId || !(cfg?.isCliSession?.(sessionId) ?? false)) return;
-        // §8 unit 2 dirty trigger (design §5.2): "no-subscriber 상태에서도 live
-        // production이 멈추지 않게 기존 markChatOutputActivity ... 가
-        // TranscriptProjectionService.markDirty(sessionId)를 호출한다." Safe
-        // no-op until a later unit configures a service — see
-        // seqscribe/transcript-publisher.ts's header.
+        // Fires the replica lane's transcript dirty trigger, throttled: the
+        // first chunk pulls immediately, the rest of the paint burst collapses
+        // into one trailing pull per 350ms window
+        // (TRANSCRIPT_PTY_DIRTY_THROTTLE_MS). Then records output-activity and
+        // arms the legacy chat_tail debounce, below.
         //
-        // This call is the replica lane's ONLY streaming-rate trigger. The stat
-        // poll (TRANSCRIPT_STAT_POLL_INTERVAL_MS, 3000ms, first tick discarded)
-        // is a safety net, not a latency path; the other two dirty triggers fire
-        // on status transitions (status/reporter.ts) and once post-chat
-        // (commands/router.ts), never per streamed token. While the legacy
-        // session.chat_tail PUSH still ran it carried the fast path at its 700ms
-        // debounce and this gap was invisible — §8 unit 9 retired legacy, so
-        // without this call a streaming reply is only observed on the next stat
-        // tick (worst case ~6s). Bursts do not stampede the publisher: markDirty
-        // collapses through the per-session inFlight/pendingPull guards
-        // (transcript-publisher.ts), which replace rather than queue.
-        markTranscriptSessionDirty(sessionId);
+        // This is the replica lane's ONLY streaming-rate trigger. Its other two
+        // dirty triggers fire on status transitions (status/reporter.ts) and
+        // once post-chat (commands/router.ts), never per streamed token, and
+        // the 3000ms stat poll is a safety net whose first tick is discarded
+        // (worst case ~6s).
+        //
+        // History, because this line has been removed once already: 172ec64f
+        // dropped it in favour of that stat poll, which was survivable only
+        // while the legacy session.chat_tail PUSH still carried the fast path
+        // on its 700ms debounce. §8 unit 9 (e48165c9) retired legacy and the
+        // lane lost its low-latency observer — user-visible as slow chat. It
+        // returns THROTTLED rather than raw: a raw markDirty per chunk costs a
+        // full snapshot re-encode each time (measured 20 events → 20 reparses;
+        // the publisher's inFlight guard merges concurrent work only, never a
+        // serial stream), which is the cost 172ec64f was right to avoid.
+        markTranscriptPtyOutputActivity(sessionId);
         this.chatOutputActiveAt.set(sessionId, this.now());
         if (this.chatOutputFlushTimer) return;
         if (cfg?.scheduleGate && !cfg.scheduleGate()) return;
