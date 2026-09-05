@@ -1414,7 +1414,8 @@
         "loadingChat": "チャットを読み込み中...",
         "openPanel": "{{label}} パネルを開く",
         "switchingPanel": "切り替え中...",
-        "openingPanel": "オープン中..."
+        "openingPanel": "オープン中...",
+        "replicaDegraded": "リアルタイム同期に問題が発生しているため、以前の方式で表示しています"
     },
     "chatInput": {
         "attachImage": "画像を添付",

@@ -1414,7 +1414,8 @@
         "loadingChat": "채팅 불러오는 중...",
         "openPanel": "{{label}} 패널 열기",
         "switchingPanel": "전환 중...",
-        "openingPanel": "여는 중..."
+        "openingPanel": "여는 중...",
+        "replicaDegraded": "실시간 동기화에 문제가 있어 이전 방식으로 표시 중입니다"
     },
     "chatInput": {
         "attachImage": "이미지 첨부",

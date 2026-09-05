@@ -1414,7 +1414,8 @@
         "loadingChat": "正在加载聊天...",
         "openPanel": "打开 {{label}} 面板",
         "switchingPanel": "正在切换...",
-        "openingPanel": "正在打开..."
+        "openingPanel": "正在打开...",
+        "replicaDegraded": "实时同步出现问题，正在以先前的方式显示消息"
     },
     "chatInput": {
         "attachImage": "附加图片",

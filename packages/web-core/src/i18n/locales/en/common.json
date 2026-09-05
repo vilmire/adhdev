@@ -1414,7 +1414,8 @@
         "loadingChat": "Loading chat...",
         "openPanel": "Open {{label}} Panel",
         "switchingPanel": "Switching...",
-        "openingPanel": "Opening..."
+        "openingPanel": "Opening...",
+        "replicaDegraded": "Live sync is having trouble — showing messages the previous way"
     },
     "chatInput": {
         "attachImage": "Attach image",

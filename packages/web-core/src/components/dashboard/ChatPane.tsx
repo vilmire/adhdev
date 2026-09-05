@@ -488,6 +488,33 @@ export default function ChatPane({
                 already see and framed a recoverable cache reset as loss. The
                 signal now rides the pane's `data-transcript-omitted-before`
                 attribute instead — see `buildTranscriptReadSourceAttributes`. */}
+            {/* (§8 unit 9) ★ The replica lane REGRESSED — the one transcript
+                condition that is worth a visible notice.
+
+                Read the contrast with the retired `omittedBefore` banner
+                directly above, because it is the whole design constraint. That
+                banner fired when nothing was wrong, was twice reported as a
+                defect, and had to be removed. This one is gated on
+                `transcriptReplicaDegraded`, which the controller sets ONLY when
+                a session that HAD a working replica lost it — never on a
+                session that was legacy all along, which is the normal state on
+                a `shadow`-mode daemon and is not a fault. So if this is on
+                screen, something genuinely broke.
+
+                Without it, unit 9's auto-re-arm would be a silent-failure
+                machine: the pane keeps working, the replica stays broken, and
+                nobody finds out — which would defeat running the replica on
+                preview to learn whether it works. It clears itself when the
+                replica recovers. */}
+            {chatTailState.transcriptReplicaDegraded && (
+                <div
+                    className="px-3 py-1.5 text-2xs text-amber-400/90 bg-amber-500/10 border-b border-amber-500/20"
+                    role="status"
+                    data-testid="transcript-replica-degraded-notice"
+                >
+                    {t('chatPane.replicaDegraded')}
+                </div>
+            )}
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
