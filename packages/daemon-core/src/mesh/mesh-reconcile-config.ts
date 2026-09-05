@@ -61,6 +61,39 @@ export function resolvePendingHeldDrainEscalateMs(): number {
     return resolveTunedReconcileMs('MESH_PENDING_HELD_DRAIN_ESCALATE_MS', DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS, 4_000, 5 * 60_000);
 }
 
+// HOLD-CEILING. Hard upper bound on how long a terminal completion may sit in the
+// `generating_no_idle_coordinator` hold before it is surfaced OUT-OF-BAND.
+//
+// The age-escape above has no ceiling of its own: it re-fires every tick once the
+// event passes the 12s escalate threshold, but every one of those attempts is gated
+// on reconfirmGenuinelyIdleCoordinators() reading the coordinator's RAW PTY as idle.
+// A coordinator that is conversationally idle — parked waiting on an owner answer —
+// still holds an OPEN PTY turn, so getDrainStatus() reads 'generating' and the escape
+// is refused on every tick, forever. Measured worst case: a terminal completion held
+// 873s (14m33s).
+//
+// This ceiling does NOT loosen that gate. Injecting into a genuinely-generating PTY
+// is the data-loss path that was deliberately removed and stays removed. Instead,
+// past the ceiling the loop stops treating PTY injection as the only delivery route
+// and records the event to the out-of-band surface (an `event_held` ledger entry with
+// reason `hold_ceiling_exceeded`), which mesh_status already projects through
+// `pendingCoordinatorEvents` on the coordinator's very next tool call — a path that
+// does not depend on PTY state at all. The event itself stays queued and still
+// delivers normally the moment the PTY genuinely idles; the surface is ADDITIVE.
+//
+// Default 120s = 10× the escalate threshold: long enough that an ordinary mid-turn
+// hold or a brief owner round-trip is never escalated, short enough that a
+// conversationally-parked coordinator surfaces the completion in the same working
+// session rather than a quarter-hour later.
+export const DEFAULT_PENDING_HELD_CEILING_MS = 120_000;
+
+export function resolvePendingHeldCeilingMs(): number {
+    // Floor 12s (the escalate default) so the ceiling can never precede the ordinary
+    // escape and pre-empt a normal settle; ceiling 30min so it cannot be tuned into
+    // the unbounded hold this exists to eliminate.
+    return resolveTunedReconcileMs('MESH_PENDING_HELD_CEILING_MS', DEFAULT_PENDING_HELD_CEILING_MS, 12_000, 30 * 60_000);
+}
+
 export function resolveReconcileIntervalMs(): number {
     const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
     if (raw) {

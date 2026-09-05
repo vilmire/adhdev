@@ -431,6 +431,119 @@ export function oldestHeldTerminalEventAgeMs(meshId: string, drainDaemonIds: str
     return maxAge;
 }
 
+// ─── HOLD-CEILING: out-of-band surfacing past the hard hold bound ────────────
+// Ledger reason stamped on a terminal event whose `generating_no_idle_coordinator`
+// hold has exceeded the hard ceiling (resolvePendingHeldCeilingMs). Distinct from
+// the ordinary `generating_no_idle_coordinator` audit reason so an operator — and
+// the coordinator reading mesh_status — can tell "held, normal" apart from "held so
+// long that PTY delivery is no longer being waited on".
+export const HOLD_CEILING_EXCEEDED_HOLD_REASON = 'hold_ceiling_exceeded';
+
+// Ceiling-surfacing dedup, separate from heldEventLedgerRecorded above: an event is
+// audited under BOTH reasons over its lifetime (generating_no_idle_coordinator when
+// the hold starts, hold_ceiling_exceeded when it passes the bound), and a shared set
+// would let the first suppress the second. Per-process, like its sibling.
+const holdCeilingLedgerRecorded = new Set<string>();
+
+/** Test helper: clear the per-process ceiling dedup so a test starts clean. */
+export function __resetHoldCeilingDedupForTests(): void {
+    holdCeilingLedgerRecorded.clear();
+}
+
+/**
+ * HOLD-CEILING. Record every still-held terminal event whose age has passed the hard
+ * ceiling to the out-of-band surface, so it reaches the coordinator on its next tool
+ * call regardless of PTY state.
+ *
+ * This does NOT inject, drain, or mark anything delivered — the force-inject safety
+ * contract (never raw-write into a generating PTY) is untouched, and the event stays
+ * queued at drained=0 so normal PTY delivery still happens the moment the coordinator
+ * genuinely idles. What it adds is a second, PTY-independent route: an `event_held`
+ * ledger entry carrying the full event, which mesh_status/mesh_review_inbox surface
+ * and mesh_requeue_held_events can restore.
+ *
+ * The motivating case is a coordinator parked on an owner question: conversationally
+ * idle, but its PTY turn is open, so reconfirmGenuinelyIdleCoordinators() refuses the
+ * age-escape on every tick and the hold has no upper bound (measured: 873s). Past the
+ * ceiling we stop treating the PTY as the only delivery route.
+ *
+ * Returns the number of events newly surfaced this tick (0 when none crossed the
+ * ceiling or all were already surfaced). Best-effort: a peek/ledger failure never
+ * throws into the reconcile tick.
+ */
+export function surfaceCeilingExceededHeldEvents(
+    meshId: string,
+    drainDaemonIds: string[],
+    ceilingMs: number,
+    heldForCoordinatorCount: number,
+): number {
+    let pending: readonly PendingMeshCoordinatorEvent[];
+    try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
+    } catch {
+        return 0; // best-effort — never let a peek failure break the tick
+    }
+    const now = Date.now();
+    let surfaced = 0;
+    for (const event of pending) {
+        // Only terminal/force-inject events carry irreplaceable worker output. A
+        // lifecycle event re-drains harmlessly and needs no out-of-band route.
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const queuedAt = typeof event.queuedAt === 'number' ? event.queuedAt : now;
+        if (now - queuedAt < ceilingMs) continue;
+
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ''}::${event.queuedAt}`}`;
+        if (holdCeilingLedgerRecorded.has(key)) continue;
+        holdCeilingLedgerRecorded.add(key);
+
+        const heldMs = now - queuedAt;
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'event_held',
+                ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+                payload: {
+                    event: event.event,
+                    reason: HOLD_CEILING_EXCEEDED_HOLD_REASON,
+                    recoverable: true,
+                    // How long the PTY hold lasted before we stopped waiting on it, and
+                    // the bound it crossed — the two numbers an operator needs to tell a
+                    // one-off settle from a structurally-parked coordinator.
+                    heldMs,
+                    ceilingMs,
+                    heldForCoordinators: heldForCoordinatorCount,
+                    // Names why this is surfaced rather than injected, so the entry is not
+                    // misread as a delivery failure or as a force-inject having occurred.
+                    surfacedOutOfBand: true,
+                    nodeLabel: event.nodeLabel,
+                    ...(event.workspace ? { workspace: event.workspace } : {}),
+                    targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+                    queuedAt: event.queuedAt,
+                    ...(fingerprint ? { fingerprint } : {}),
+                    ...(finalSummary ? { finalSummary } : {}),
+                    // Full event, matching every other event_held feeder, so
+                    // mesh_requeue_held_events can restore it losslessly.
+                    heldEvent: event,
+                },
+            });
+            surfaced++;
+            LOG.warn(
+                'MeshReconcile',
+                `Hold ceiling exceeded: ${event.event} for mesh ${meshId} has been held ${Math.round(heldMs / 1000)}s `
+                + `(≥ ${Math.round(ceilingMs / 1000)}s) because no coordinator PTY ever re-confirmed idle — surfacing it `
+                + `OUT-OF-BAND via the ledger (pendingCoordinatorEvents / mesh_review_inbox). The event stays queued and `
+                + `will still deliver normally when the PTY idles; no force-inject was performed.`,
+            );
+        } catch (e: any) {
+            // Failed to persist — drop the marker so the next tick retries.
+            holdCeilingLedgerRecorded.delete(key);
+            LOG.warn('MeshReconcile', `Failed to ledger-record hold-ceiling ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+    }
+    return surfaced;
+}
+
 // PTY-OVERTRUST-DRAIN (Defect B, fix B). Re-confirm, on the RAW adapter (mask-stripped),
 // which of the held-as-generating coordinators is GENUINELY idle right now. A coordinator
 // whose getDrainStatus() reads 'idle' is a real drain target the time-based escape may

@@ -69,6 +69,7 @@ import {
     DEFAULT_AUTO_PRUNE_INTERVAL_MS,
     resolveAutoPruneMinAgeMs,
     resolvePendingHeldDrainEscalateMs,
+    resolvePendingHeldCeilingMs,
     resolveReconcileIntervalMs,
 } from './mesh-reconcile-config.js';
 import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
@@ -96,6 +97,7 @@ import {
     recordHeldTerminalEventsToLedger,
     oldestHeldTerminalEventAgeMs,
     reconfirmGenuinelyIdleCoordinators,
+    surfaceCeilingExceededHeldEvents,
     holdOrExpireStrictUnmatchedEvent,
 } from './mesh-reconcile-coordinator-drain.js';
 import {
@@ -916,6 +918,26 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                         meshId,
                         drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
                         'generating_no_idle_coordinator',
+                        generatingCoordinators.length,
+                    );
+                    // ── HOLD-CEILING: hard upper bound on this hold ──────────────────
+                    // The age-escape above re-fires every tick past 12s, but each attempt
+                    // is gated on the coordinator's RAW PTY reading idle. A coordinator
+                    // parked waiting on an owner answer is conversationally idle while its
+                    // PTY turn stays OPEN, so that gate refuses forever and the hold has no
+                    // bound (measured: 873s / 14m33s on a terminal completion).
+                    //
+                    // Past the ceiling we stop treating PTY injection as the only delivery
+                    // route and surface the event OUT-OF-BAND instead. This deliberately
+                    // does NOT relax the re-confirmation gate: raw-writing into a
+                    // generating PTY remains the removed data-loss path. The event stays
+                    // queued (drained=0) and still delivers normally on a genuine idle
+                    // tick — the ledger entry is an ADDITIVE surface that mesh_status
+                    // projects on the coordinator's next tool call, PTY state irrelevant.
+                    surfaceCeilingExceededHeldEvents(
+                        meshId,
+                        drainDaemonIds.length > 0 ? drainDaemonIds : (localDaemonId ? [localDaemonId] : []),
+                        resolvePendingHeldCeilingMs(),
                         generatingCoordinators.length,
                     );
                 }
