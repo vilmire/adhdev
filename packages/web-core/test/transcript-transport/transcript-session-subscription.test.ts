@@ -242,10 +242,99 @@ describe('subscribeSessionTranscript (live worker feed)', () => {
             expect(seen).toHaveLength(1)
             expect(seen[0].revision).toBe(3)
             expect(seen[0].content).toBe('newest')
-            // The gap banner must ride on the revision actually rendered, not
-            // on an older one that a later emission would have replaced.
-            expect(seen[0].omittedBefore).toBe(true)
+            // The ring here holds all 9 rows (3 revisions x begin/chunk/commit)
+            // starting at the writer's seq 1, so nothing was actually omitted —
+            // this reset is only "the subscription just started". The banner
+            // belongs to the eviction case below, not to this one.
+            expect(seen[0].omittedBefore).toBe(false)
             expect(sub.latest()?.snapshot.revision).toBe(3)
+            sub.close()
+        } finally {
+            await r.close()
+        }
+    })
+
+    // ── The "이전 내용 생략" banner must mean something ──────────────────────
+    // seqscribe SNAP-resets a FRESH subscription exactly as it does one that
+    // fell out of retention (`vendor/seqscribe/src/subs.ts:178-180`), so the
+    // raw `reset` bit raised the banner on every first subscription. These two
+    // cases are a matched pair and must be read together: the first pins that
+    // a complete ring shows NO banner, the second that an evicted one still
+    // DOES. Without the second, "the banner was deleted" would pass just as
+    // happily as "the banner was fixed".
+    it('does not claim omitted content when the ring still holds the session start', async () => {
+        const r = await rig()
+        try {
+            const seen: boolean[] = []
+            await publishRevision(r.producer, snapshotFixture(1, 'first'))
+            await publishRevision(r.producer, snapshotFixture(2, 'second'))
+
+            const sub = subscribeSessionTranscript(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                ownerWriterId: PRODUCER_WRITER,
+                onSnapshot: ({ omittedBefore }) => seen.push(omittedBefore),
+            })
+
+            await waitFor(() => seen.length > 0)
+            // The ring's first row IS the writer's seq 1, so the whole session
+            // is on screen and a banner would be a lie.
+            expect(seen[0]).toBe(false)
+
+            // A steady-state DELTA after the clean SNAP stays clean too.
+            await publishRevision(r.producer, snapshotFixture(3, 'third'))
+            await waitFor(() => seen.length > 1)
+            expect(seen[1]).toBe(false)
+            sub.close()
+        } finally {
+            await r.close()
+        }
+    })
+
+    it('does claim omitted content when the ring evicted the session start', async () => {
+        const r = await rig()
+        try {
+            // Overflow the 500-slot ring before subscribing: 180 revisions x 3
+            // rows = 540 rows, so the oldest 40 are evicted and the tail now
+            // starts at seq 41 — the writer's seq 1 is gone for good.
+            for (let i = 1; i <= 180; i++) await publishRevision(r.producer, snapshotFixture(i, `m${i}`))
+
+            const seen: { revision: number; omittedBefore: boolean }[] = []
+            const sub = subscribeSessionTranscript(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                ownerWriterId: PRODUCER_WRITER,
+                onSnapshot: ({ snapshot, omittedBefore }) =>
+                    seen.push({ revision: snapshot.revision, omittedBefore }),
+            })
+
+            await waitFor(() => seen.length > 0)
+            // Real loss: earlier revisions existed and are no longer reachable.
+            expect(seen[0].omittedBefore).toBe(true)
+            // Still the A안 contract — one emission, carrying the newest.
+            expect(seen[0].revision).toBe(180)
+            sub.close()
+        } finally {
+            await r.close()
+        }
+    }, 120_000)
+
+    it('keeps the banner armed when the owner writer id is unknown', async () => {
+        const r = await rig()
+        try {
+            const seen: boolean[] = []
+            await publishRevision(r.producer, snapshotFixture(1, 'only'))
+
+            // No `ownerWriterId`: coverage cannot be established, so the
+            // subscription must not silently claim the session is complete.
+            const sub = subscribeSessionTranscript(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                onSnapshot: ({ omittedBefore }) => seen.push(omittedBefore),
+            })
+
+            await waitFor(() => seen.length > 0)
+            expect(seen[0]).toBe(true)
             sub.close()
         } finally {
             await r.close()
