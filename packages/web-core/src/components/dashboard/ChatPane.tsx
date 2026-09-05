@@ -65,6 +65,34 @@ export interface ChatPaneProps {
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
+/**
+ * (CHAT-TAB-SWITCH-STALE-FALLBACK ①) Build the chat-tail controller options for
+ * a pane, splitting SUBSCRIPTION lifetime from REFRESH gating.
+ *
+ * `isVisible` is dockview PANEL visibility — it flips on every session-tab
+ * switch, not only when the browser tab is backgrounded. Gating `enabled` on it
+ * tore the controller down, which emptied the live snapshot
+ * (`hasLiveSnapshot: false`) and made `getConversationLiveMessages` fall back to
+ * the stale status-meta `conversation.messages` list for a beat before the
+ * re-pull caught up. The subscription therefore stays up while hidden (it is
+ * refcounted and shared through the module-level controller registry, so a
+ * hidden pane normally rides an instance the warm-controller pass already
+ * retains) and only the authoritative re-pull is gated on visibility.
+ *
+ * Exported for the regression test: this is the whole of the decision.
+ */
+export function buildChatPaneTailControllerOptions(options: {
+    sessionId?: string;
+    isVisible: boolean;
+    tailLimit: number;
+}): { enabled: boolean; refreshEnabled: boolean; tailLimit: number } {
+    return {
+        enabled: !!options.sessionId,
+        refreshEnabled: options.isVisible,
+        tailLimit: options.tailLimit,
+    };
+}
+
 export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>): string | null {
     if (conversation.status === 'no_progress' || conversation.status === 'long_generating') {
         return 'Agent shows no progress.'
@@ -138,10 +166,21 @@ export default function ChatPane({
     const defaultChatTailHydrateLimit = getDefaultChatTailHydrateLimit({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
     })
-    const chatTailState = useSessionChatTailController(activeConv, {
-        enabled: isVisible && !!activeConv.sessionId,
+    // (CHAT-TAB-SWITCH-STALE-FALLBACK) `isVisible` here is DOCKVIEW PANEL
+    // visibility, not browser-tab visibility — it flips on every session-tab
+    // switch. It must not gate `enabled`: dropping the controller empties the
+    // live snapshot, and the pane then renders the stale status-meta
+    // `conversation.messages` fallback for a beat before the re-pull catches up
+    // (the reported "old messages, then it catches up, feels jumpy"). Keep the
+    // subscription — it is refcounted and shared through the module-level
+    // controller registry, so a hidden pane usually rides an instance
+    // `useWarmSessionChatTailControllers` already retains — and gate only the
+    // per-visibility authoritative re-pull.
+    const chatTailState = useSessionChatTailController(activeConv, buildChatPaneTailControllerOptions({
+        sessionId: activeConv.sessionId,
+        isVisible,
         tailLimit: defaultChatTailHydrateLimit,
-    })
+    }))
 
     const [visibleLiveCount, setVisibleLiveCount] = useState(defaultVisibleLiveMessages);
     const [showActivityMessages, setShowActivityMessages] = useState(() => readChatActivityVisiblePreference());
