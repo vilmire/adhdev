@@ -194,21 +194,42 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 if (!text) return { success: false, error: 'text required for PTY send' };
                 await waitOnceForFreshHermesCliStart(adapter, _log);
                 const forceSend = args?.force === true || args?.forceSend === true;
+                let sendResult: { status: 'queued' | 'delivered' } | void;
                 if (forceSend && typeof adapter.forceSendMessage === 'function') {
-                    await adapter.forceSendMessage(text);
+                    sendResult = await adapter.forceSendMessage(text);
                 } else if (forceSend) {
-                    await adapter.sendMessage(text, { force: true });
+                    sendResult = await adapter.sendMessage(text, { force: true });
                 } else {
-                    await adapter.sendMessage(text);
+                    sendResult = await adapter.sendMessage(text);
                 }
+                // QUEUED-SEND-LOSS: a `queued` result means the body is parked in
+                // the driver's in-memory FIFO and has NOT been written to the PTY.
+                // It does not survive a driver shutdown or daemon restart, so it
+                // must not be reported with the same shape as a real submit.
+                const queued = sendResult?.status === 'queued';
                 const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+                // The transcript ack still runs for a queued send, deliberately.
+                // It is what renders the owner's own bubble, and it carries a
+                // 60s content-keyed dedup window — deferring it until the queue
+                // drains (observed at 35.5s, and unbounded in principle) would
+                // risk the bubble never appearing at all. The ordering defect it
+                // causes — bubble before submit — is real but is a UI-surface
+                // concern, and is out of scope here; the daemon now reports the
+                // distinction so the UI can act on it.
                 if (target?.category === 'cli'
                     && target.type === adapter.cliType
                     && typeof target.recordAcknowledgedUserInput === 'function') {
                     target.recordAcknowledgedUserInput(input);
                 }
+                if (queued) {
+                    _log(`send queued (not yet submitted) for ${adapter.cliType}`);
+                }
                 return {
                     ..._logSendSuccess(`${transport}-adapter`, adapter.cliType),
+                    // `sent` distinguishes submitted from merely accepted; the
+                    // command still succeeds, because queueing is the correct
+                    // behaviour while the agent is generating.
+                    ...(queued ? { sent: false, queued: true, submitted: false } : { submitted: true }),
                     ...(forceSend ? { forceSent: true } : {}),
                 };
             } catch (e: any) {

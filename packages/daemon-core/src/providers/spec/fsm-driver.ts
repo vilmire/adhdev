@@ -76,6 +76,22 @@ export type DashboardCommand =
     | { kind: 'cancel' }
     | { kind: 'shutdown' };
 
+/**
+ * QUEUED-SEND-LOSS: what actually happened to a send_message, as opposed to
+ * whether the daemon accepted it.
+ *
+ * `delivered` means the body was written to the PTY. `queued` means it is
+ * sitting in the in-memory `pendingSends` FIFO because the machine could not
+ * take it yet — it has NOT been submitted, and it does not survive a driver
+ * shutdown or a daemon restart. Collapsing the two into one "success" is what
+ * let owner input go missing silently: the dashboard cleared the draft on an
+ * ack that only meant "accepted for later".
+ */
+export type SendDisposition =
+    | { status: 'delivered' }
+    | { status: 'queued'; queueDepth: number; reason: string }
+    | { status: 'duplicate' };
+
 export interface DriverHistoryEntry {
     stateId: string;
     label: string;
@@ -132,6 +148,14 @@ export interface ISpecDriver {
      * landed (mesh_approve → SpecCliAdapter.resolveModalMatched) can observe a miss.
      */
     clickModalButton(index: number): boolean;
+    /**
+     * QUEUED-SEND-LOSS: send a message and report whether it reached the PTY or
+     * was only queued. Same behaviour as `dispatch({kind:'send_message'})`, which
+     * remains the fire-and-forget form; callers that must not report "sent" for
+     * a body still sitting in memory use this instead. Optional so test doubles
+     * implementing ISpecDriver need not provide it.
+     */
+    sendMessageWithDisposition?(text: string, bracketedPaste?: boolean): SendDisposition;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -821,6 +845,11 @@ export class FsmDriver implements ISpecDriver {
         }
     }
 
+    /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
+    sendMessageWithDisposition(text: string, bracketedPaste?: boolean): SendDisposition {
+        return this.handleSendMessage(text, bracketedPaste);
+    }
+
     /** Forward runtime metadata to the terminal transport so mesh binding
      *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
      *  the session registry. Not a DashboardCommand — this is a control-plane
@@ -874,6 +903,22 @@ export class FsmDriver implements ISpecDriver {
         // SEND-OVERLAP: drop the queued-send drain and its backlog — a torn-down
         // driver must never write a queued body into a dead PTY.
         if (this.pendingSendDrainTimer) { clearTimeout(this.pendingSendDrainTimer); this.pendingSendDrainTimer = null; }
+        // QUEUED-SEND-LOSS: discarding the backlog is correct, doing it silently
+        // is not. `pendingSends` is a memory-only FIFO, and the daemon already
+        // told the dashboard the send succeeded — so a driver torn down while a
+        // body is queued loses owner input that the UI has, by then, cleared
+        // from the draft box. Nobody finds out. This log is the only record that
+        // it happened. Content-free by construction: lengths and a count, never
+        // the prompt bodies (they are user data, and this is an ordinary
+        // shutdown path that runs on every session teardown).
+        if (this.pendingSends.length > 0) {
+            const lengths = this.pendingSends.map(s => s.text.length);
+            LOG.warn(
+                'FsmDriver',
+                `[${this.specTag()}] DISCARDING ${this.pendingSends.length} queued send(s) on shutdown — `
+                + `owner input accepted but never submitted (session=${this.opts.sessionId || 'unknown'}, lengths=[${lengths.join(',')}])`,
+            );
+        }
         this.pendingSends.length = 0;
         this.specWatcher?.close();
         this.adapter.kill();
@@ -1576,24 +1621,26 @@ export class FsmDriver implements ISpecDriver {
      * on top of a still-generating turn, braiding the two bodies in the composer
      * (see the SEND-OVERLAP note above the constants).
      */
-    private handleSendMessage(text: string, bracketedPaste?: boolean): void {
+    private handleSendMessage(text: string, bracketedPaste?: boolean): SendDisposition {
         // A resend of text we are already in the middle of delivering is dropped
         // outright rather than queued: queueing it would just submit the same
         // prompt a second time once the turn ends, which is the duplicate-bubble
         // symptom in a slower disguise.
         if (this.isDuplicateResend(text)) {
             LOG.info('FsmDriver', `[${this.specTag()}] send suppressed — duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
-            return;
+            return { status: 'duplicate' };
         }
         if (!this.canSendNow()) {
             this.pendingSends.push({ text, bracketedPaste });
+            const reason = this.sendBlockedReason();
             LOG.info(
                 'FsmDriver',
-                `[${this.specTag()}] send queued — ${this.sendBlockedReason()} (len=${text.length}, queued=${this.pendingSends.length})`,
+                `[${this.specTag()}] send queued — ${reason} (len=${text.length}, queued=${this.pendingSends.length})`,
             );
-            return;
+            return { status: 'queued', queueDepth: this.pendingSends.length, reason };
         }
         this.beginSend(text, bracketedPaste);
+        return { status: 'delivered' };
     }
 
     /** True when a send can be written to the PTY right now. */

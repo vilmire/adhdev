@@ -1,6 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
+import { StringDecoder } from 'string_decoder';
 import type {
   SessionHostEvent,
   SessionHostRequest,
@@ -66,10 +67,28 @@ function serializeEnvelope(envelope: SessionHostWireEnvelope): string {
   return `${JSON.stringify(envelope)}\n`;
 }
 
+/**
+ * UTF8-CHUNK-BOUNDARY: decode the socket stream, never the individual chunk.
+ *
+ * This used to call `chunk.toString()` on every Buffer independently. A socket
+ * hands us arbitrary byte slices — a multi-byte UTF-8 sequence straddling two
+ * chunks gets decoded as two truncated sequences, and each half becomes U+FFFD.
+ * The damage is silent by construction: the replacement character is valid JSON
+ * string content, so the envelope still parses and only the *value* is wrong.
+ * A pasted 11,994-char Korean prompt lost exactly one character that way — the
+ * `도` beginning at wire offset 8190, split across the 8192-byte chunk boundary,
+ * arrived as `�착`.
+ *
+ * StringDecoder holds an incomplete trailing sequence back until the bytes that
+ * finish it arrive, which is the only correct way to turn a byte stream into
+ * text. String chunks bypass it: they are already decoded, and feeding them
+ * through `Buffer.from` would re-encode text the caller never asked us to touch.
+ */
 function createLineParser(onEnvelope: (envelope: SessionHostWireEnvelope) => void) {
   let buffer = '';
-  return (chunk: Buffer | string) => {
-    buffer += chunk.toString();
+  const decoder = new StringDecoder('utf8');
+  const parser = (chunk: Buffer | string) => {
+    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
     let newlineIndex = buffer.indexOf('\n');
     while (newlineIndex >= 0) {
       const rawLine = buffer.slice(0, newlineIndex).trim();
@@ -80,6 +99,24 @@ function createLineParser(onEnvelope: (envelope: SessionHostWireEnvelope) => voi
       newlineIndex = buffer.indexOf('\n');
     }
   };
+  /**
+   * Flush at EOF, returning whatever text never formed a complete line.
+   *
+   * `decoder.end()` releases any bytes still held back as an incomplete UTF-8
+   * sequence; without it those bytes vanish with the decoder. What is left in
+   * the buffer is by definition a partial line — envelopes are newline-framed,
+   * so an unterminated tail is a truncated transmission, not a message. It is
+   * therefore RETURNED for the caller to log rather than parsed: calling
+   * JSON.parse on a half-written envelope inside a socket EOF handler would
+   * raise an uncaught exception in the daemon, turning a peer that died
+   * mid-write into a crash of the process observing it.
+   */
+  parser.end = (): string => {
+    const remainder = buffer + decoder.end();
+    buffer = '';
+    return remainder;
+  };
+  return parser;
 }
 
 export interface SessionHostClientOptions {
