@@ -97,6 +97,23 @@ export function resetDifficultyFloorReportsForTests(): void {
     difficultyFloorTimeoutReported.clear();
 }
 
+// LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤: the claim path (tryAssignQueueTask) refuses an
+// already-running session with the store's 'difficulty_floor_unmet' literal — a case
+// markAutoLaunch's handleDifficultyFloorSkip call never covers, since that path is never
+// reached for a session that already exists. One-line call site in the frozen
+// mesh-queue-assignment.ts; the actual logic lives here instead.
+export function handleClaimPathDifficultyFloorRefusal(args: {
+    meshId: string; nodeId: string; refusalReason: string;
+    claimRefusal: { taskId?: string; difficulty?: string }; coordinatorDaemonId?: string;
+}): void {
+    if (args.refusalReason !== 'difficulty_floor_unmet' || !args.claimRefusal.taskId) return;
+    handleDifficultyFloorSkip({
+        meshId: args.meshId, taskId: args.claimRefusal.taskId, nodeId: args.nodeId,
+        coordinatorDaemonId: args.coordinatorDaemonId,
+        reason: `task_difficulty_floor_unavailable:${args.claimRefusal.difficulty || 'classified'}`,
+    });
+}
+
 /** Persist the first floor-wait timestamp and page once after the bounded wait. */
 export function handleDifficultyFloorSkip(args: {
     meshId: string;
