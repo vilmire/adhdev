@@ -97,6 +97,20 @@ export { default as ChatPane } from './components/dashboard/ChatPane'
 export { default as CliTerminalPane } from './components/dashboard/CliTerminalPane'
 export { default as SpecDebugPanel } from './components/dashboard/SpecDebugPanel'
 export { default as ConnectionBanner } from './components/dashboard/ConnectionBanner'
+export { default as ShellFreshnessBanner } from './components/ShellFreshnessBanner'
+export type { ShellFreshnessBannerProps } from './components/ShellFreshnessBanner'
+export {
+    useShellFreshness,
+    isShellStale,
+    readRunningBuildInfo,
+    SHELL_FRESHNESS_POLL_MS,
+    SHELL_FRESHNESS_MIN_CHECK_INTERVAL_MS,
+} from './hooks/useShellFreshness'
+export type {
+    ShellBuildInfo,
+    ShellFreshnessState,
+    UseShellFreshnessOptions,
+} from './hooks/useShellFreshness'
 export { default as DashboardHeader } from './components/dashboard/DashboardHeader'
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
 export { default as ToastContainer } from './components/dashboard/ToastContainer'
