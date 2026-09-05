@@ -29,6 +29,10 @@
  * revision keeps displaying until a new one verifies, and the discontinuity
  * surfaces as `omittedBefore` — ChatPane's "이전 내용 생략" banner. So a reset
  * here only sets a flag; it never clears `latest`.
+ *
+ * A SNAP also carries the whole ring tail oldest-first, so it must resolve to a
+ * SINGLE atomic swap to the newest verifiable revision — see the long note in
+ * `ingest` below for why replaying each one is a user-visible regression.
  */
 import { TranscriptRevisionAssembler, type TranscriptRevisionRow } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec';
 import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection';
@@ -60,7 +64,12 @@ export interface TranscriptSessionSubscriptionOptions {
      * codec's own identity checks still apply.
      */
     readonly ownerWriterId?: string;
-    /** Fires for each verified-complete revision, in arrival order. */
+    /**
+     * Fires for each verified-complete revision, in arrival order — with one
+     * deliberate collapse: a SNAP reset delivers the whole ring tail at once,
+     * and fires ONCE with the newest verifiable revision in it (design §3.7's
+     * atomic swap), not once per historical revision the ring still holds.
+     */
     onSnapshot(update: TranscriptSessionUpdate): void;
     /**
      * A row was rejected. Reason is the codec's closed union — surfaced so the
@@ -131,6 +140,27 @@ export function subscribeSessionTranscript(
         // reset followed by rows that never complete keeps the flag armed.
         if (reset) pendingOmittedBefore = true;
 
+        // ── Why a reset collapses to ONE emission ──────────────────────────
+        // A SNAP hands over the WHOLE ring tail, oldest-first. Since one
+        // transcript revision is only `begin + N chunks + commit` rows, a
+        // 500-slot ring holds well over a hundred PAST revisions. Emitting
+        // each one as it reassembles replays the session's history forward
+        // through the pane — the user watches a correct view snap back to an
+        // old message. Nothing downstream catches it: the assembler's
+        // `complete` is overwritten unconditionally, `handleUpdate` never
+        // reads `seq`, and the pane's shrink guard only fires when the new
+        // message list is SHORTER — oldest-first replay grows monotonically,
+        // so it is structurally blind to this direction.
+        //
+        // Design §3.7 already specifies the correct behaviour: "SNAP은 tail
+        // rows 전체에서 가장 새로운 검증 가능한 complete revision을 찾는다"
+        // and swaps ONCE, atomically. So on a reset we reassemble every row
+        // but publish only the highest-revision complete snapshot.
+        //
+        // DELTA (`reset === false`) is untouched: those rows are sequential
+        // steady-state upserts and each one is a genuine new revision.
+        let best: ReplicatedTranscriptSnapshotV1 | null = null;
+
         for (const row of rows) {
             const revisionRow = toRevisionRow(row);
             if (!revisionRow) continue;
@@ -140,6 +170,13 @@ export function subscribeSessionTranscript(
                 continue;
             }
             if (result.status !== 'complete') continue;
+            if (reset) {
+                // Keep the newest. `>=` (not `>`) so that when a publisher
+                // restart legitimately resets the counter, the later-arriving
+                // rows — which are the newer ones in ring order — still win.
+                if (!best || result.snapshot.revision >= best.revision) best = result.snapshot;
+                continue;
+            }
             const update: TranscriptSessionUpdate = {
                 snapshot: result.snapshot,
                 omittedBefore: pendingOmittedBefore,
@@ -148,6 +185,17 @@ export function subscribeSessionTranscript(
             latest = update;
             options.onSnapshot(update);
         }
+
+        if (!best) return;
+        // `omittedBefore` rides on THIS emission — the one the consumer
+        // actually renders. Attaching it to the first replayed revision (as
+        // the per-row path did) meant the "이전 내용 생략" banner was consumed
+        // by a revision that a later one immediately replaced, so the gap the
+        // user needed to see disappeared before they could see it.
+        const update: TranscriptSessionUpdate = { snapshot: best, omittedBefore: pendingOmittedBefore };
+        pendingOmittedBefore = false;
+        latest = update;
+        options.onSnapshot(update);
     };
 
     const subscription: Subscription = node.subscribe(options.peer, { view: 'tail', params: { topic } });
