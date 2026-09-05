@@ -52,6 +52,23 @@ export interface ReplicatedTranscriptMessageV1 {
     readonly receivedAt: number | null;
     readonly timestamp: number | null;
     readonly turnKey: string | null;
+    /**
+     * Monotonic per-(session, source) integer (`providers/transcript-v2.ts`
+     * A2.3) — the ONE per-MESSAGE identity field on this wire.
+     *
+     * Why it is here: `turnKey` is turn-grained, so it cannot distinguish the
+     * bubbles inside a turn, and consumers that needed per-message identity had
+     * to fall back to a content hash. `sequence` is a bare integer — no content,
+     * no path, no session-derived hash — so it carries none of the content-class
+     * risk that keeps `providerUnitKey` (a content hash) deliberately off this
+     * wire.
+     *
+     * `null` means UNKNOWN, never 0: a pre-widening producer omits the field
+     * entirely, and a consumer that read absence as 0 would mis-order or
+     * mis-seam a mixed-version fleet. Consumers must treat null as "no ordinal
+     * available" and fall back, not as an ordinal.
+     */
+    readonly sequence: number | null;
     readonly bubbleState: TranscriptMessageBubbleState | null;
     readonly senderName: string | null;
     readonly toolName: string | null;
@@ -313,6 +330,9 @@ export function encodeTranscriptMessage(candidate: TranscriptSnapshotCandidateMe
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         turnKey: stringField(candidate.turnKey) ?? stringField(candidate._turnKey),
+        // Absent/non-numeric → null (UNKNOWN), never 0. See the field's doc on
+        // `ReplicatedTranscriptMessageV1`.
+        sequence: numberField(candidate.sequence),
         bubbleState: bubbleStateField(candidate.bubbleState),
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),

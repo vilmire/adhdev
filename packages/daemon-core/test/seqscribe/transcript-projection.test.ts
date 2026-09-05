@@ -105,6 +105,53 @@ describe('encodeTranscriptSnapshot — allow-list (design §2.4)', () => {
     });
 });
 
+/**
+ * `sequence` on the wire — the ONE per-MESSAGE identity field.
+ *
+ * `turnKey` is turn-grained and so cannot distinguish bubbles within a turn;
+ * `providerUnitKey` is deliberately withheld because it embeds a content hash.
+ * `sequence` is a bare integer, which is why it is the field that crosses.
+ *
+ * The `null`-means-UNKNOWN rule is the mixed-version contract: a pre-widening
+ * producer omits the field, and a consumer that read absence as `0` would treat
+ * every legacy message as ordinal zero — silently mis-ordering or mis-seaming a
+ * fleet running two daemon versions.
+ */
+describe('encodeTranscriptMessage — sequence (per-message ordinal)', () => {
+    const withMessage = (message: Record<string, unknown>): TranscriptSnapshotCandidate => ({
+        ...BASE_CANDIDATE,
+        messages: [{ content: 'x', ...message } as TranscriptSnapshotCandidate['messages'][number]],
+    });
+
+    it('carries a numeric sequence through to the wire', () => {
+        const encoded = encodeTranscriptSnapshot(withMessage({ sequence: 42 }));
+        expect(encoded.messages[0].sequence).toBe(42);
+    });
+
+    it('encodes a MISSING sequence as null (unknown), never 0', () => {
+        const encoded = encodeTranscriptSnapshot(withMessage({}));
+        // The distinction that matters: `null` is "this producer told us
+        // nothing", `0` would be a real ordinal. Collapsing them makes a legacy
+        // daemon's messages all claim position zero.
+        expect(encoded.messages[0].sequence).toBeNull();
+        expect(encoded.messages[0].sequence).not.toBe(0);
+    });
+
+    it('encodes a non-numeric sequence as null rather than coercing it', () => {
+        for (const bogus of ['7', true, {}, [], NaN]) {
+            const encoded = encodeTranscriptSnapshot(withMessage({ sequence: bogus }));
+            expect(encoded.messages[0].sequence).toBeNull();
+        }
+    });
+
+    it('preserves a legitimate sequence of 0', () => {
+        // 0 is a valid ordinal when the producer actually asserts it — the
+        // null/0 distinction must not degrade into "falsy means unknown".
+        const encoded = encodeTranscriptSnapshot(withMessage({ sequence: 0 }));
+        expect(encoded.messages[0].sequence).toBe(0);
+    });
+});
+
 describe('canonicalizeTranscriptSnapshot / hashTranscriptSnapshot — determinism (design §3.4)', () => {
     it('is deterministic: encoding the same candidate twice yields the same hash', () => {
         const a = encodeTranscriptSnapshot(BASE_CANDIDATE);
@@ -155,8 +202,14 @@ describe('canonicalizeTranscriptSnapshot / hashTranscriptSnapshot — determinis
         const encoded = encodeTranscriptSnapshot(fixed);
         // Pinned so an accidental future change to field order, defaulting, or
         // the canonicalizer itself is caught even if no other assertion notices.
+        //
+        // Re-pinned when `sequence` joined the message allow-list (per-message
+        // ordinal, `null` here since this fixture supplies none). A digest change
+        // is the CORRECT signal for a wire-shape change — it must only ever be
+        // updated alongside a deliberate allow-list edit, never to "make the test
+        // pass".
         expect(hashTranscriptSnapshot(encoded)).toBe(
-            '32b48d3a3e113ab10d982fba404740b3d5c6603ef3b3de5d33333e0ff9d4257f',
+            '856b51baf1d31f9ad0118fc1a18469b05d66975a85da8a3a7af79d1ba7a25836',
         );
     });
 });
