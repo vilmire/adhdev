@@ -1222,6 +1222,68 @@ function normalizePaginationNumber(value: number, fallback: number, min: number)
     return Number.isFinite(numeric) ? Math.max(min, numeric) : fallback;
 }
 
+/**
+ * (SEAM) Identity of the oldest message currently rendered in the live window.
+ *
+ * ── Why a cursor and not a count ───────────────────────────────────────────
+ * `excludeRecentCount` is COUNTED IN THE CALLER'S BUBBLE SPACE but subtracted
+ * from `collapsed.length`, which is a DIFFERENT space: three stages shrink the
+ * record set before the slice — `sanitizeHistoryMessage` drops empty content,
+ * `dedupeAdjacentHistoryMessages` merges same-signature neighbours (its
+ * signature omits `receivedAt`, so two identical texts collapse), and
+ * `collapseReplayAssistantTurns` drops consecutive prose assistant turns when
+ * the provider enables it. When N bubbles map to M < N records, subtracting N
+ * from M overshoots and the (N - M) messages between the two windows become
+ * permanently unreachable — rendered as a silent hole, never as an error.
+ *
+ * Resolving the boundary by IDENTITY removes the arithmetic entirely: we find
+ * WHERE that message actually sits in collapsed space and page strictly older
+ * than it, regardless of how much the collapse shrank.
+ *
+ * ── Degradation is explicit, never silent ──────────────────────────────────
+ * Returns -1 when the cursor is absent or cannot be located (legacy mirror
+ * records that never carried identity, the PTY path which has none, a
+ * mixed-version daemon, or a cursor whose message the collapse legitimately
+ * dropped). The caller then falls back to the count path — the pre-existing
+ * behavior, bug included. That is the correct direction to fail: a cursor that
+ * silently resolved to 0 would page from the very start of the conversation.
+ */
+function findCollapsedIndexByIdentity(collapsed: HistoryMessage[], cursor: string): number {
+    if (!cursor) return -1;
+    for (let i = collapsed.length - 1; i >= 0; i -= 1) {
+        if (buildHistoryMessageIdentity(collapsed[i]) === cursor) return i;
+    }
+    return -1;
+}
+
+/**
+ * The identity a history record advertises to the seam, most authoritative
+ * first — deliberately the same preference order (and the same `kind:` prefixes)
+ * `getChatMessageStableKey` uses in web-core, so a key minted on either side of
+ * the wire resolves against the other.
+ *
+ * `providerUnitKey`/`bubbleId`/`_turnKey`/`sequence` live on these objects as
+ * untyped casts (see `normalizeProviderNativeHistoryRecords`'s A2.3 passthrough)
+ * — they are real at runtime but absent from the `HistoryMessage` interface,
+ * hence the casts here.
+ */
+export function buildHistoryMessageIdentity(message: HistoryMessage): string {
+    const record = message as HistoryMessage & {
+        providerUnitKey?: string;
+        bubbleId?: string;
+        _turnKey?: string;
+        sequence?: number;
+    };
+    if (record.providerUnitKey) return `unit:${record.providerUnitKey}`;
+    if (record.bubbleId) return `bubble:${record.bubbleId}`;
+    if (typeof record.sequence === 'number' && Number.isFinite(record.sequence)) {
+        return `seq:${record.sequence}`;
+    }
+    // NOT `_turnKey`: it is turn-grained, so it cannot identify a single record
+    // and would resolve the boundary to an arbitrary bubble within the turn.
+    return '';
+}
+
 function pageHistoryRecords(
     agentType: string,
     records: HistoryMessage[],
@@ -1229,6 +1291,7 @@ function pageHistoryRecords(
     limit: number = 30,
     excludeRecentCount: number = 0,
     historyBehavior?: ProviderHistoryBehavior,
+    excludeFromIdentity?: string,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     const allMessages = records
         .map((message) => sanitizeHistoryMessage(agentType, message))
@@ -1238,10 +1301,17 @@ function pageHistoryRecords(
     const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
     const boundedLimit = normalizePaginationNumber(limit, 30, 1);
     const boundedOffset = normalizePaginationNumber(offset, 0, 0);
-    const boundedExclude = Math.min(
-        normalizePaginationNumber(excludeRecentCount, 0, 0),
-        collapsed.length,
-    );
+    // (SEAM) Prefer the identity cursor. Resolving the live window's oldest
+    // message to its ACTUAL position in collapsed space makes the boundary
+    // immune to the N-bubbles -> M-records shrink that the count arithmetic
+    // below gets wrong. Falls back to the count when the cursor is absent or
+    // unresolvable — see findCollapsedIndexByIdentity.
+    const cursorIndex = excludeFromIdentity
+        ? findCollapsedIndexByIdentity(collapsed, excludeFromIdentity)
+        : -1;
+    const boundedExclude = cursorIndex >= 0
+        ? collapsed.length - cursorIndex
+        : Math.min(normalizePaginationNumber(excludeRecentCount, 0, 0), collapsed.length);
     const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
     const startInclusive = Math.max(0, endExclusive - boundedLimit);
     const sliced = collapsed.slice(startInclusive, endExclusive);
@@ -1573,6 +1643,7 @@ export function readChatHistory(
     historySessionId?: string,
     excludeRecentCount: number = 0,
     historyBehavior?: ProviderHistoryBehavior,
+    excludeFromIdentity?: string,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1586,7 +1657,7 @@ export function readChatHistory(
 
         if (bounded) {
             const fileSignatures = buildSavedHistoryFileSignatureMap(dir, files);
-            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}`;
+            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${excludeFromIdentity || ''}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}`;
             const signature = buildSavedHistoryCacheSignature(files, fileSignatures);
             const cached = readBoundedTailCache(cacheKey, signature);
             if (cached) return cached;
@@ -1599,7 +1670,7 @@ export function readChatHistory(
             const numericExclude = Math.max(0, Number(excludeRecentCount));
             const needed = numericLimit + numericOffset + numericExclude + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
             const { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
-            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior);
+            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
             // If we read every file, the conversation is fully represented in the
             // window and pageHistoryRecords' hasMore is authoritative. If we
             // stopped early there are older messages we never read, so hasMore
@@ -1630,7 +1701,7 @@ export function readChatHistory(
             }
         }
 
-        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior);
+        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
     } catch {
         return { messages: [], hasMore: false };
     }
@@ -1991,6 +2062,14 @@ export function readProviderChatHistory(
         offset?: number;
         limit?: number;
         excludeRecentCount?: number;
+        /**
+         * (SEAM) Identity of the oldest message in the caller's live window.
+         * Preferred over `excludeRecentCount`, which is a count in a DIFFERENT
+         * coordinate space than the one it is subtracted from. Ignored when it
+         * cannot be resolved, falling back to the count — see
+         * `findCollapsedIndexByIdentity`.
+         */
+        excludeFromIdentity?: string;
         historyBehavior?: ProviderHistoryBehavior;
         scripts?: ProviderNativeHistoryScripts;
         excludeInProgressTurn?: boolean;
@@ -2038,7 +2117,7 @@ export function readProviderChatHistory(
             };
         }
         return {
-            ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
+            ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
             source: 'provider-native',
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
@@ -2055,7 +2134,7 @@ export function readProviderChatHistory(
         };
     }
     return {
-        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior),
+        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
         source: 'adhdev-mirror',
     };
 }
