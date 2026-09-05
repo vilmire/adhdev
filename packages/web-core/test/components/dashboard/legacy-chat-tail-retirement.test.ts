@@ -28,13 +28,22 @@
  * actually running / actually stopped" a claim about the transport instead of
  * about bookkeeping.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
+import { buildTranscriptReadSourceAttributes } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
+import {
+  __resetTranscriptFallbackDiagnosticsForTests,
+  transcriptFallbackDiagnostics,
+} from '../../../src/components/dashboard/transcript-fallback-diagnostics'
+
+beforeEach(() => {
+  __resetTranscriptFallbackDiagnosticsForTests()
+})
 
 const DAEMON = 'daemon-1'
 const SESSION = 'session-1'
@@ -439,5 +448,162 @@ describe('★ unit 9 ④: read_chat and chat_history survive on a retired sessio
     const after = controller.getSnapshot()
     expect(after.historyMessages.map((m) => m.content)).toEqual(['older question', 'older answer'])
     expect(after.hasMoreHistory).toBe(false)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// ⑤⑥⑦ ★ FALLBACK VISIBILITY — the auto-re-arm must not be a silent failure.
+//
+// Unit 9's re-arm makes an empty pane impossible, and on its own that is also a
+// silent-failure machine: the replica breaks, the pane quietly returns to
+// legacy, nobody learns the replica is broken. Running the replica on preview
+// exists precisely to find that out, so the regression has to be visible.
+//
+// ★ The hard part is NOT showing it — it is not showing it the rest of the
+// time. The retired "이전 내용 생략" banner fired when nothing was wrong, was
+// twice reported as a defect, and had to be removed. A warning that alarms on a
+// healthy product has failed as UI. So ⑤ and ⑦ (the silence cases) carry more
+// weight here than ⑥, and are asserted on the SAME signal the pane renders.
+// ───────────────────────────────────────────────────────────────────────────
+describe('★ unit 9 ⑤⑥⑦: a replica regression is visible, and nothing else is', () => {
+  // ⑦ — the case that must stay silent forever: the fleet majority.
+  it('⑦ ★ a session that NEVER had a replica is never marked degraded — no warning on a shadow-mode daemon', () => {
+    const { manager, controller } = setup()
+    controller.retain()
+    publishLegacy(manager, 1, ['q', 'a'])
+
+    // This is the normal state for every session whose daemon runs the default
+    // `shadow` mode. It is legacy, it always was, and nothing is wrong with it.
+    expect(controller.getSnapshot().transcriptReadSource).toBe('legacy')
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .not.toHaveProperty('data-transcript-replica-degraded')
+    expect(transcriptFallbackDiagnostics().regressions).toBe(0)
+  })
+
+  it('⑦ ★ even an explicit fallback on a never-replicated session stays silent', () => {
+    const { controller } = setup()
+    controller.retain()
+
+    // A fallback CAN be reported for a session that never had a replica — e.g.
+    // `stopTranscriptHost` reports `no_node` across every session of interest.
+    // That is not a regression for this session: it never had a lane to lose,
+    // so the pane must not accuse the product of breaking.
+    controller.reportTranscriptReplicaFallback('no_node')
+
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('no_node')
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .not.toHaveProperty('data-transcript-replica-degraded')
+    // ★ And it is not counted — otherwise the diagnostic would report a fleet
+    // of "regressions" that are just ordinary legacy sessions.
+    expect(transcriptFallbackDiagnostics().regressions).toBe(0)
+  })
+
+  // ⑤ — the healthy-replica case must also stay silent.
+  it('⑤ ★ a healthy replica session shows no warning', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+
+    expect(controller.getSnapshot().transcriptReadSource).toBe('replica')
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .not.toHaveProperty('data-transcript-replica-degraded')
+    expect(transcriptFallbackDiagnostics().regressions).toBe(0)
+  })
+
+  it('⑤ ★ repeated healthy replica updates never raise the warning', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'a'), { omittedBefore: false })
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'a', 'b'), { omittedBefore: false })
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(4, 'a', 'b', 'c'), { omittedBefore: false })
+
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+    expect(transcriptFallbackDiagnostics().regressions).toBe(0)
+  })
+
+  // ⑥ — the case that must fire.
+  it('⑥ ★ a replica → legacy regression IS marked, surfaced and counted', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+
+    controller.reportTranscriptReplicaFallback('no_node')
+
+    // The snapshot flag the pane renders from.
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
+    // The DOM attribute an operator can read without devtools scripting.
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .toHaveProperty('data-transcript-replica-degraded', 'true')
+    // The counter an operator can read after the fact, without having watched.
+    const diag = transcriptFallbackDiagnostics()
+    expect(diag.regressions).toBe(1)
+    expect(diag.byReason).toEqual({ no_node: 1 })
+    expect(diag.lastReason).toBe('no_node')
+  })
+
+  it('⑥ every fallback reason produces a counted, visible regression', () => {
+    for (const reason of ['authority_unavailable', 'no_complete_revision', 'projection_oversize', 'revision_invalid']) {
+      __resetTranscriptFallbackDiagnosticsForTests()
+      const { controller } = setup()
+      controller.retain()
+      controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+      controller.reportTranscriptReplicaFallback(reason)
+
+      expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
+      expect(transcriptFallbackDiagnostics().byReason).toEqual({ [reason]: 1 })
+    }
+  })
+
+  it('★ the warning RETRACTS when the replica recovers — it describes current health, not history', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.reportTranscriptReplicaFallback('no_node')
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(true)
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(5, 'replica answer', 'replica is back'), {
+      omittedBefore: false,
+    })
+
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+    expect(buildTranscriptReadSourceAttributes(controller.getSnapshot()))
+      .not.toHaveProperty('data-transcript-replica-degraded')
+    // ★ The counter does NOT retract — the regression really happened, and an
+    // operator asking "did this break today" must still get yes.
+    expect(transcriptFallbackDiagnostics().regressions).toBe(1)
+  })
+
+  it('★ a disposed controller does not inherit a regression claim', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'replica answer'), { omittedBefore: false })
+    controller.dispose()
+
+    controller.retain()
+    controller.reportTranscriptReplicaFallback('no_node')
+
+    // The recycled controller has no lane and therefore no history of one.
+    expect(controller.getSnapshot().transcriptReplicaDegraded).toBe(false)
+  })
+
+  it('★ the diagnostics counter is content-free — integers and closed-union reasons only', () => {
+    const { controller } = setup()
+    controller.retain()
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'a secret user message'), { omittedBefore: false })
+    controller.reportTranscriptReplicaFallback('no_node')
+
+    // ★ Server content boundary (CLAUDE.md): these counters are browser-local
+    // and must never carry ids or content. Freeze the shape so a future field
+    // addition is a deliberate decision rather than a silent leak.
+    const diag = transcriptFallbackDiagnostics()
+    expect(Object.keys(diag).sort()).toEqual(['byReason', 'lastReason', 'regressions', 'since'])
+    const serialized = JSON.stringify(diag)
+    expect(serialized).not.toContain(SESSION)
+    expect(serialized).not.toContain(DAEMON)
+    expect(serialized).not.toContain('a secret user message')
   })
 })
