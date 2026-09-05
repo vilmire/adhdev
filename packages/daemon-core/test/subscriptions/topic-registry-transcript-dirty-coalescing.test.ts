@@ -85,13 +85,17 @@ describe('Transcript stat polling instead of PTY', () => {
         await flushProjection();
         expect(collectorCalls).toBe(0);
 
-        // 6. PTY 출력을 아무리 발생시켜도 runPull 이 0회임을 확인.
+        // 6. PTY output now drives the dirty trigger directly (§8 unit 9 retired
+        // the legacy chat_tail push that used to carry the fast path), so each
+        // output event pulls. Polling below is the safety net, not the latency
+        // path — see topic-registry-transcript-pty-dirty-trigger.test.ts.
         const outputEvents = 20;
         for (let i = 0; i < outputEvents; i += 1) {
             topicRegistry.markChatOutputActivity(sessionId);
             await flushProjection();
         }
-        expect(collectorCalls).toBe(0);
+        expect(collectorCalls).toBe(outputEvents);
+        collectorCalls = 0;
 
         // ★ observe나 markDirty 가 한 번도 안 불려도, 폴링 루프가 lazy resolve 로 경로를 찾는다.
         // 1. 파일이 안 변하면 폴링이 돌아도 runPull이 불리지 않는다.
