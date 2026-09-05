@@ -64,6 +64,8 @@ describe('stampTranscriptObservation', () => {
             receivedAt: null,
             timestamp: null,
             turnKey: null,
+            // Per-message ordinal; null = UNKNOWN (this fixture supplies none).
+            sequence: null,
             bubbleState: null,
             senderName: null,
             toolName: null,

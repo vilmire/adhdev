@@ -55,6 +55,11 @@ function flattenMessage(message: ChatMessage): TranscriptObservation['messages']
         receivedAt: message.receivedAt,
         timestamp: message.timestamp,
         turnKey: message._turnKey,
+        // Per-MESSAGE ordinal. This map is an explicit field-by-field narrowing,
+        // so widening the downstream encoder's allow-list alone is NOT enough —
+        // the field has to survive here first or the encoder only ever sees
+        // undefined.
+        sequence: message.sequence,
         bubbleState: message.bubbleState,
         senderName: message.senderName,
         toolName: undefined,
