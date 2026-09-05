@@ -209,6 +209,49 @@ describe('subscribeSessionTranscript (live worker feed)', () => {
         }
     })
 
+    // The owner-visible defect: "화면이 갑자기 이전 메세지로 툭하고 전부 변경된다".
+    // A SNAP reset hands over the WHOLE ring tail oldest-first, and the ring
+    // holds ~160 past revisions (3 rows each in a 500-slot ring). Emitting one
+    // snapshot per reassembled revision replays the session's history through
+    // the pane. Design §3.7 requires the opposite: find the newest verifiable
+    // complete revision in the tail and swap ONCE.
+    it('a reset SNAP carrying several past revisions emits once, with the newest', async () => {
+        const r = await rig()
+        try {
+            // Fill the ring BEFORE anyone subscribes, so the subscription's
+            // first SNAP replays all three at once — the real reset shape.
+            await publishRevision(r.producer, snapshotFixture(1, 'oldest'))
+            await publishRevision(r.producer, snapshotFixture(2, 'middle'))
+            await publishRevision(r.producer, snapshotFixture(3, 'newest'))
+
+            const seen: { revision: number; content: string; omittedBefore: boolean }[] = []
+            const sub = subscribeSessionTranscript(r.consumer, {
+                sessionId: SESSION_ID,
+                peer: r.consumerPeer,
+                ownerWriterId: PRODUCER_WRITER,
+                onSnapshot: ({ snapshot, omittedBefore }) =>
+                    seen.push({ revision: snapshot.revision, content: snapshot.messages[0].content, omittedBefore }),
+            })
+
+            await waitFor(() => seen.length > 0)
+            // Give any extra (incorrect) replay emissions time to land before
+            // asserting the count, so this fails on N-emissions rather than
+            // racing past them.
+            await new Promise((res) => setTimeout(res, 150))
+
+            expect(seen).toHaveLength(1)
+            expect(seen[0].revision).toBe(3)
+            expect(seen[0].content).toBe('newest')
+            // The gap banner must ride on the revision actually rendered, not
+            // on an older one that a later emission would have replaced.
+            expect(seen[0].omittedBefore).toBe(true)
+            expect(sub.latest()?.snapshot.revision).toBe(3)
+            sub.close()
+        } finally {
+            await r.close()
+        }
+    })
+
     it('rejects a revision written by a writer that is not the declared owner', async () => {
         const r = await rig()
         try {
