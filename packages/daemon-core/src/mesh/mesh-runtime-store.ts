@@ -2978,6 +2978,8 @@ export class MeshRuntimeStore {
      *     these are orphaned events for a coordinator identity that never drained
      *     them. Kept wide so a genuinely-offline-but-returning coordinator still
      *     receives its backlog; only genuinely unrecoverable orphans are swept.
+     *     TERMINAL events named in `neverExpireEvents` are exempt from this window
+     *     outright — see that option's doc below.
      *
      * Both windows key off `queued_at` (always present) — `drained_at` can be NULL on
      * legacy rows. Returns the number of rows deleted, split by which window matched:
@@ -2991,14 +2993,40 @@ export class MeshRuntimeStore {
      * and the SQLite-only cutover left open. Best-effort / idempotent: running it
      * repeatedly with nothing to prune is a cheap no-op.
      */
-    prunePendingEvents(opts: { drainedOlderThanMs: number; undrainedOlderThanMs: number }): {
+    prunePendingEvents(opts: {
+        drainedOlderThanMs: number;
+        undrainedOlderThanMs: number;
+        /**
+         * TERMINAL-NEVER-EXPIRES. Event names that are EXEMPT from the undrained
+         * window entirely — never age-expired, however old they get. Caller-supplied
+         * (the store must not own mesh event taxonomy) and matched by exact event
+         * name, never by prefix/substring: a substring match would be a silent
+         * over-match the moment a new event name happens to contain one of these.
+         *
+         * The undrained window exists to sweep orphans whose information is
+         * re-derivable — a `refine:*` lifecycle marker, an `agent:ready` — for a
+         * coordinator identity that never returned. A terminal completion is the
+         * opposite: its finalSummary/worker result exists ONLY in this row, so
+         * expiring it destroys the single copy of a worker's output. Bounding table
+         * growth is not worth that, and terminal rows are naturally bounded anyway
+         * (one per dispatched task, not a per-tick lifecycle stream). Exempt rows are
+         * excluded from the delete AND from `undrainedRows`, so they are neither
+         * deleted nor mirrored — they simply stay queued and deliverable.
+         */
+        neverExpireEvents?: ReadonlySet<string>;
+    }): {
         drainedExpired: number;
         undrainedExpired: number;
         undrainedRows: Array<{ id: string; meshId: string; event: string; payload: unknown }>;
+        /** Undrained rows past the window that were KEPT because their event name is
+         *  in `neverExpireEvents`. Observability only — a non-zero value means the
+         *  terminal exemption actively prevented a data-destroying expiry. */
+        terminalExempt: number;
     } {
         const now = Date.now();
         const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
         const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
+        const neverExpire = opts.neverExpireEvents;
 
         // Capture the undrained-expired rows BEFORE deleting them — these never
         // reached a coordinator, so deleting them is a silent drop unless the caller
@@ -3006,7 +3034,19 @@ export class MeshRuntimeStore {
         const undrainedSelectRows = this.db.prepare(
             'SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
         ).all(undrainedCutoff) as Array<{ id: string; mesh_id: string; event: string; payload: string }>;
-        const undrainedRows = undrainedSelectRows.map(r => ({
+
+        // Split the window's rows into "may expire" and "terminal — exempt". The
+        // delete below is then driven by the explicit expirable id list rather than
+        // by the age predicate alone, so an exempt row cannot be deleted even if the
+        // two ever disagreed.
+        const expirableRows: typeof undrainedSelectRows = [];
+        let terminalExempt = 0;
+        for (const r of undrainedSelectRows) {
+            if (neverExpire?.has(r.event)) terminalExempt++;
+            else expirableRows.push(r);
+        }
+
+        const undrainedRows = expirableRows.map(r => ({
             id: r.id,
             meshId: r.mesh_id,
             event: r.event,
@@ -3016,10 +3056,17 @@ export class MeshRuntimeStore {
         const drainedExpired = this.db.prepare(
             'DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?'
         ).run(drainedCutoff).changes;
-        const undrainedExpired = this.db.prepare(
-            'DELETE FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
-        ).run(undrainedCutoff).changes;
-        return { drainedExpired, undrainedExpired, undrainedRows };
+
+        // Delete by explicit id (chunked to stay under SQLite's variable limit) rather
+        // than by the age predicate, so the exempt rows are structurally unreachable.
+        let undrainedExpired = 0;
+        for (let i = 0; i < undrainedRows.length; i += 500) {
+            const chunk = undrainedRows.slice(i, i + 500);
+            undrainedExpired += this.db.prepare(
+                `DELETE FROM mesh_pending_events WHERE id IN (${chunk.map(() => '?').join(',')})`
+            ).run(...chunk.map(r => r.id)).changes;
+        }
+        return { drainedExpired, undrainedExpired, undrainedRows, terminalExempt };
     }
 
     // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
