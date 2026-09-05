@@ -189,6 +189,51 @@ const CHAT_TAIL_LIVENESS_BUSY_QUIET_MS = 20_000
  */
 const CHAT_TAIL_LIVENESS_IDLE_QUIET_MS = 120_000
 /**
+ * (LEASE) How long a session may go without an APPLIED replica revision before
+ * `replicaHealthy` expires and the legacy transport is brought back.
+ *
+ * ── Why a lease at all ────────────────────────────────────────────────────
+ * `replicaHealthy` was a one-shot latch: the first verified snapshot set it
+ * true, legacy stood down, and nothing ever re-examined it. A replica that then
+ * stopped advancing — the host wedged, the producer stalled, revisions simply
+ * stopped — kept reading "healthy" forever, because health was never a function
+ * of revision AGE or ADVANCEMENT. With legacy retired and no browser poll, the
+ * pane froze indefinitely. The watchdog added earlier cannot rescue this case
+ * either: `shouldRefreshForLiveness` refuses outright while `replicaHealthy` is
+ * true (a legacy read_chat landing after a newer replica revision is the
+ * last-writer-wins hazard). So the latch had to become a lease.
+ *
+ * ── Why this value ────────────────────────────────────────────────────────
+ * Deliberately the SAME 20s the watchdog uses for a busy session
+ * (CHAT_TAIL_LIVENESS_BUSY_QUIET_MS), because it answers the identical
+ * question about the identical situation: "this session claims to be generating
+ * but has produced nothing — how long is that still plausible?" The two paths
+ * differ only in which transport is silent, and giving them different numbers
+ * would mean a session's stall is detected at 20s or at some other time purely
+ * by which lane happened to be serving it. Expressed as a reference to that
+ * constant rather than a second literal so the two cannot drift apart.
+ */
+const CHAT_TAIL_REPLICA_LEASE_BUSY_MS = CHAT_TAIL_LIVENESS_BUSY_QUIET_MS
+
+/**
+ * (B) What `handleUpdate` did with an update.
+ *
+ * `handleUpdate` was `void`, which made every caller unable to distinguish "the
+ * pane now shows this" from "this was dropped". The replica path used it as if
+ * it meant the former and set `replicaHealthy = true` regardless — so a snapshot
+ * that arrived but was deferred/no-op'd/refused could retire the legacy
+ * transport without ever putting replica content on screen.
+ *
+ *  - `applied`  — the snapshot is now the rendered live window.
+ *  - `deferred` — arrived and was well-formed, but the shrink-defense / busy
+ *                 deferral kept the existing content. Lane is alive; screen
+ *                 unchanged.
+ *  - `noop`     — arrived and was identical to what is already rendered. Lane is
+ *                 alive; screen unchanged, and correctly so.
+ *  - `rejected` — not for this session, or an error frame. Tells us nothing.
+ */
+type ChatTailUpdateOutcome = 'applied' | 'deferred' | 'noop' | 'rejected'
+/**
  * Upper bound on retained history messages from "Load older" paging.
  *
  * Each "Load older" page prepends into `historyMessages` with no prior cap, so a
@@ -716,6 +761,41 @@ export class SessionChatTailController {
    * expected to work again); reset by `dispose()` alongside `replicaHealthy`.
    */
   private everHadHealthyReplica = false
+  /**
+   * (LEASE) Wall-clock of the last moment the replica lane demonstrably MOVED
+   * for this session — a snapshot whose revision was higher than the previous
+   * one. This is the lease clock, and it is deliberately stamped on
+   * ADVANCEMENT rather than on arrival: a lane re-delivering the same revision
+   * forever is precisely the stall this exists to detect, so counting those
+   * deliveries as health would renew the lease off the very symptom.
+   */
+  private lastReplicaAdvanceAt = 0
+  /**
+   * (LEASE) Highest replica revision seen for this session, the comparison
+   * basis for "did it advance". Replica revisions are monotonic within one
+   * producer epoch (transcript-chat-pane-adapter.ts maps `snapshot.revision`),
+   * which is the only ordering property this needs — it never orders replica
+   * against legacy, and must not be confused with the seq-ordering that
+   * `applyTranscriptReplicaSnapshot` documents as deliberately absent.
+   */
+  private lastReplicaRevision = 0
+  /**
+   * (LEASE) Wall-clock of the last replica snapshot that reported a BUSY status,
+   * which is the activity signal that arms lease expiry at all.
+   *
+   * ★ Without this the lease is actively harmful. A session whose agent is
+   * genuinely idle produces no new revisions BY DESIGN — that is the correct
+   * steady state of every settled session on the dashboard. Expiring the lease
+   * on quiet alone would therefore revive the legacy subscription on every idle
+   * session in the workspace, permanently, manufacturing exactly the transport
+   * load unit 9 removed and doing it worst on the sessions that need it least.
+   *
+   * So the lease only expires for a session the replica ITSELF last described as
+   * generating: the lane asserted work was in progress, then stopped reporting
+   * on it. That is a contradiction the replica cannot explain, and the only
+   * shape of silence that is evidence of a stall rather than of calm.
+   */
+  private lastReplicaBusyAt = 0
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -886,13 +966,29 @@ export class SessionChatTailController {
       this.reportTranscriptReplicaFallback('revision_invalid')
       return
     }
-    this.handleUpdate(
+    const outcome = this.handleUpdate(
       mapTranscriptSnapshotToChatTailUpdate(snapshot, {
         subscriptionKey: this.subscriptionKey,
         omittedBefore: options.omittedBefore,
         stale: options.stale === true,
       }),
     )
+
+    // (LEASE) Renew on ADVANCEMENT, before the health gate below. A revision
+    // that moved forward is the lane demonstrating it is still producing, which
+    // is the one fact the lease measures. Revisions that repeat or regress
+    // deliberately do NOT renew: re-delivery of a frozen revision is the stall
+    // itself, and letting it renew would make the lease unexpirable.
+    const revision = typeof snapshot.revision === 'number' ? snapshot.revision : 0
+    const advanced = revision > this.lastReplicaRevision
+    if (advanced) {
+      this.lastReplicaRevision = revision
+      this.lastReplicaAdvanceAt = this.now()
+    }
+    // (LEASE) Arm expiry only while the replica itself says work is in progress.
+    // See `lastReplicaBusyAt` — an idle session's silence is correct, and
+    // expiring on it would revive legacy across every settled session.
+    if (isBusyChatTailStatus(snapshot.status)) this.lastReplicaBusyAt = this.now()
 
     // (§8 unit 9) ★ Suppress legacy only AFTER a verified snapshot has actually
     // been applied — never on arrival, and never before the structural refusal
@@ -901,14 +997,24 @@ export class SessionChatTailController {
     // empty pane, so the transport is stood down only once this session has
     // real replica content on screen.
     //
-    // `handleUpdate` may still legitimately DEFER this update (the shrink
-    // defense / busy deferral). That is fine and deliberately not special-cased:
-    // a deferral means the pane keeps the content it already had, and the lane
-    // is demonstrably alive and delivering — which is exactly what this flag
-    // claims. A lane that stops delivering reports a fallback and re-arms.
-    if (!this.replicaHealthy) {
+    // (B) ★ "Applied" means APPLIED. This gate previously fired on arrival,
+    // treating a `deferred`/`noop`/`rejected` outcome as proof of health on the
+    // reasoning that delivery alone shows the lane is alive. That reasoning is
+    // right about the LANE and wrong about the SCREEN, and this flag controls
+    // the screen: it retires the only other transport feeding the pane. The
+    // dangerous case is the FIRST snapshot — arriving during a busy-deferral
+    // window it is held, nothing replica-authored is rendered, and legacy is
+    // nonetheless torn down, leaving the pane on whatever legacy last put there
+    // with no source able to correct it. A deferred snapshot keeps legacy
+    // running; the next one that actually lands earns the retirement.
+    if (!this.replicaHealthy && outcome === 'applied') {
       this.replicaHealthy = true
       this.everHadHealthyReplica = true
+      // (LEASE) Seed the lease clock at the moment health is granted. A first
+      // snapshot that applied without advancing a revision (revision 0, or a
+      // re-applied same revision) would otherwise start life with
+      // `lastReplicaAdvanceAt === 0` and be judged instantly stale.
+      if (this.lastReplicaAdvanceAt === 0) this.lastReplicaAdvanceAt = this.now()
       this.syncLegacySubscription()
     }
 
@@ -1094,7 +1200,50 @@ export class SessionChatTailController {
    *      gone silent is anomalous), long while idle (silence is the normal
    *      and correct state).
    */
+  /**
+   * (LEASE) Expire `replicaHealthy` when the replica lane has stopped advancing
+   * on a session it last described as busy, re-arming legacy in its place.
+   *
+   * ── Why the busy gate is load-bearing, not a refinement ───────────────────
+   * The hard part of this defect is not detecting silence — it is telling a
+   * STALLED replica apart from an IDLE agent, because both look identical from
+   * here: no new revisions. Idle is the steady state of nearly every session on
+   * the dashboard, so a lease that expires on quiet alone would resubscribe
+   * legacy for all of them and never stop, which is a worse and much broader
+   * regression than the freeze it set out to fix.
+   *
+   * `lastReplicaBusyAt` is the discriminator. It is sourced from the replica's
+   * OWN last reported status, which makes the expiry condition a
+   * self-contradiction rather than an inference: the lane said "generating" and
+   * then went silent about it. An idle session never arms it, so an idle
+   * session's lease never expires and its legacy transport stays retired.
+   *
+   * ★ The busy stamp deliberately is NOT refreshed by the passage of time — it
+   * ages out with the same lease window. A session that was busy long ago and
+   * has since been quiet is not "still busy"; requiring the busy report to be
+   * recent keeps this from firing once on every session that ever generated.
+   */
+  private expireStaleReplicaLease(): void {
+    if (!this.replicaHealthy) return
+    if (this.lastReplicaBusyAt === 0) return
+    const nowMs = this.now()
+    // Never armed for this window — the last busy report is itself older than
+    // the lease, so treat the session as settled rather than stalled.
+    if ((nowMs - this.lastReplicaBusyAt) > CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
+    if ((nowMs - this.lastReplicaAdvanceAt) < CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
+    // Route through the existing fallback path rather than clearing the flag
+    // inline: it re-arms legacy, records the diagnostic and surfaces the
+    // degradation notice, all of which apply verbatim to a stalled lane.
+    this.reportTranscriptReplicaFallback('replica_lease_expired')
+  }
+
   shouldRefreshForLiveness(): boolean {
+    // (LEASE) Evaluated on the watchdog's existing 5s tick — the lease needs no
+    // timer of its own, and this is the same cadence that already decides pane
+    // staleness. Runs FIRST so a lease that expires on this tick also releases
+    // the `replicaHealthy` refusal below, letting the authoritative re-pull that
+    // rescues the frozen pane happen on the very same tick instead of the next.
+    this.expireStaleReplicaLease()
     if (this.lastInboundAt === 0) return false
     if (this.authoritativeRefreshPromise) return false
     // ★ Replica is authoritative and self-pushing — a legacy read_chat here
@@ -1256,19 +1405,26 @@ export class SessionChatTailController {
     // it has no history of one either — otherwise the next fallback on a fresh
     // controller would claim a regression that never happened here.
     this.everHadHealthyReplica = false
+    // (LEASE) Reset the lease clocks with the health they measure. A recycled
+    // controller inherits no revision history — keeping the old high-water
+    // revision would make the next lane's first snapshots read as "not
+    // advancing" and expire a perfectly healthy lease.
+    this.lastReplicaAdvanceAt = 0
+    this.lastReplicaRevision = 0
+    this.lastReplicaBusyAt = 0
   }
 
   private emit(): void {
     this.listeners.forEach((listener) => listener(this.snapshot))
   }
 
-  private handleUpdate(update: SessionChatTailUpdate): void {
-    if (update.error) return
+  private handleUpdate(update: SessionChatTailUpdate): ChatTailUpdateOutcome {
+    if (update.error) return 'rejected'
     const updateSessionId = readUpdateStringField(update, 'sessionId')
-    if (updateSessionId && updateSessionId !== this.sessionId) return
+    if (updateSessionId && updateSessionId !== this.sessionId) return 'rejected'
 
     const updateHistorySessionId = readUpdateStringField(update, 'historySessionId')
-    if (updateHistorySessionId && this.historySessionId && updateHistorySessionId !== this.historySessionId) return
+    if (updateHistorySessionId && this.historySessionId && updateHistorySessionId !== this.historySessionId) return 'rejected'
 
     const nextMessages = readChatTailUpdateMessages(update)
     const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
@@ -1307,7 +1463,7 @@ export class SessionChatTailController {
       !forceApplyNativeAssistant
       && decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow) !== 'apply'
     ) {
-      return
+      return 'deferred'
     }
     const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
     // Fold the last-substantive-assistant identity into the no-op check so a
@@ -1319,7 +1475,7 @@ export class SessionChatTailController {
       && lastSubstantiveAssistantIdentity(this.snapshot.liveMessages)
         === lastSubstantiveAssistantIdentity(nextMessages)
       && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
-    if (unchanged) return
+    if (unchanged) return 'noop'
     this.lastAppliedAt = updateTime
     this.snapshot = {
       ...this.snapshot,
@@ -1342,6 +1498,7 @@ export class SessionChatTailController {
         : {}),
     }
     this.emit()
+    return 'applied'
   }
 }
 
