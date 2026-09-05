@@ -85,6 +85,7 @@ export function buildTranscriptReadSourceAttributes(state: {
     transcriptFallbackReason?: string
     stale?: boolean
     omittedBefore?: boolean
+    transcriptReplicaDegraded?: boolean
 }): Record<string, string> {
     return {
         'data-transcript-read-source': state.transcriptReadSource,
@@ -93,6 +94,12 @@ export function buildTranscriptReadSourceAttributes(state: {
             : {}),
         ...(state.stale ? { 'data-transcript-stale': 'true' } : {}),
         ...(state.omittedBefore ? { 'data-transcript-omitted-before': 'true' } : {}),
+        // (§8 unit 9) ★ Emitted ONLY on a genuine replica→legacy regression, not
+        // on every legacy read. `data-transcript-read-source="legacy"` is the
+        // normal state for a `shadow`-mode daemon and says nothing is wrong;
+        // this attribute is the one that means a lane BROKE. Absent (not
+        // "false") when healthy, so its presence alone is the assertion.
+        ...(state.transcriptReplicaDegraded ? { 'data-transcript-replica-degraded': 'true' } : {}),
     }
 }
 
