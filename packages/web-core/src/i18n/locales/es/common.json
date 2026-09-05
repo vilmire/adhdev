@@ -1419,7 +1419,8 @@
         "loadingChat": "Cargando chat...",
         "openPanel": "Abrir panel de {{label}}",
         "switchingPanel": "Cambiando...",
-        "openingPanel": "Abriendo..."
+        "openingPanel": "Abriendo...",
+        "replicaDegraded": "La sincronización en vivo tiene problemas: se muestran los mensajes del modo anterior"
     },
     "chatInput": {
         "attachImage": "Adjuntar imagen",
