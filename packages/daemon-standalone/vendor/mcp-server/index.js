@@ -46886,6 +46886,7 @@ child.on('exit', () => process.exit(0));
       CANONICAL_MESH_TOOL_COUNT: () => CANONICAL_MESH_TOOL_COUNT2,
       CANONICAL_MESH_TOOL_NAMES: () => CANONICAL_MESH_TOOL_NAMES2,
       CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX: () => CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
+      CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX: () => CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
       CLI_SLOT_RECIPES: () => CLI_SLOT_RECIPES2,
       DAEMON_TO_SERVER_WS_MSGS: () => DAEMON_TO_SERVER_WS_MSGS,
       DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
@@ -47647,6 +47648,7 @@ child.on('exit', () => process.exit(0));
     var DAEMON_TO_SERVER_WS_MSGS;
     var SERVER_TO_DAEMON_WS_MSGS;
     var CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX;
+    var CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
         "use strict";
@@ -47937,6 +47939,7 @@ child.on('exit', () => process.exit(0));
           "beacon_vectors_result"
         ];
         CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX = "Claude TUI review page is not focused";
+        CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX = "Claude TUI answer delivered but not confirmed";
       }
     });
     async function runAsyncBatch(items, worker, options = {}) {
@@ -108344,7 +108347,12 @@ ${text}` : text;
                 }
               }
               if (!completedWithoutReview) {
-                await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                try {
+                  await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                } catch (error48) {
+                  if (error48 instanceof _SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal) return;
+                  throw error48;
+                }
                 if (!this.activeInteractivePrompt) return;
                 if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
                   throw new Error("Claude TUI active interactive prompt changed before review submission");
@@ -109227,12 +109235,41 @@ ${text}` : text;
               screenText = this.readClaudeTuiSnapshotForAnswer();
             }
           }
+          /**
+           * Internal control-flow signal, never surfaced to a caller.
+           *
+           * assertFocusedClaudeTuiReview can discover — via the native tool_result —
+           * that the answer already completed even though no review page rendered. It
+           * must then stop setInteractivePromptResponse from writing the final Enter,
+           * because focus no longer belongs to our question. Throwing this instead of
+           * returning normally keeps that "do not press Enter" decision in one place;
+           * setInteractivePromptResponse catches it and returns success.
+           */
+          static ClaudeTuiAnswerDeliveredSignal = class extends Error {
+            constructor() {
+              super("claude-tui answer already delivered");
+              this.name = "ClaudeTuiAnswerDeliveredSignal";
+            }
+          };
           async assertFocusedClaudeTuiReview(prompt, allowsFreeform) {
             const screenText = await this.snapshotSettledClaudeTuiReview(prompt, allowsFreeform);
             if (screenText === null) return;
             const focused = readFocusedClaudeTuiQuestion(screenText);
             if (focused || !isClaudeTuiReviewScreen(screenText)) {
               const observed = focused?.question ? `; focused question is "${focused.question}"` : "";
+              const boundQuestionStillFocused = !!focused && prompt.questions.some((question) => this.claudeTuiQuestionMatches(question, focused));
+              if (boundQuestionStillFocused) {
+                if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
+                  LOG.info("SpecAdapter", `[${this.cliType}] review page unsettled but native tool_result confirms delivery \u2014 accepting (allowsFreeform=${allowsFreeform})`);
+                  this.activeInteractivePrompt = null;
+                  this.interactivePromptTransport = null;
+                  this.interactivePromptLostAt = null;
+                  this.statusCallback?.();
+                  throw new _SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
+                }
+                LOG.warn("SpecAdapter", `[${this.cliType}] review page did not settle within budget while our own bound question stayed focused \u2014 answer delivered, confirmation unavailable (allowsFreeform=${allowsFreeform})${observed}`);
+                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} \u2014 the answer keys reached the terminal but the review page did not settle in time${observed}`);
+              }
               LOG.warn("SpecAdapter", `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
               throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
             }
