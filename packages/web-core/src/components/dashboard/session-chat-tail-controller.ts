@@ -493,6 +493,35 @@ function isBusyChatTailStatus(status: unknown): boolean {
 }
 
 /**
+ * (D1) Status-lane events that mean the agent has STOPPED producing for now.
+ *
+ * These are the only events allowed to bypass the `replicaHealthy` refusal in
+ * `shouldRefreshForLiveness`, so the membership of this set is the safety
+ * argument, not a convenience list:
+ *
+ *  - `agent:generating_completed` / `agent:stopped` — the turn is over.
+ *  - `agent:waiting_approval` / `agent:waiting_choice` — the agent is parked on
+ *    a human decision. It is not generating, and this is precisely the moment
+ *    the user needs the tail (the modal text is the thing being decided).
+ *
+ * `agent:generating_started` is deliberately ABSENT: mid-generation is exactly
+ * the window where a legacy `read_chat` can land behind a newer replica
+ * revision, which is the last-writer-wins hazard the veto exists for. The
+ * monitor:* events are absent for the same reason — `no_progress` /
+ * `long_generating` describe a session that is still nominally generating.
+ */
+const TERMINAL_STATUS_EVENTS = new Set([
+  'agent:generating_completed',
+  'agent:stopped',
+  'agent:waiting_approval',
+  'agent:waiting_choice',
+])
+
+export function isTerminalChatTailStatusEvent(event: unknown): boolean {
+  return typeof event === 'string' && TERMINAL_STATUS_EVENTS.has(event)
+}
+
+/**
  * Shrink-defer gate (NOT a "busy" predicate). Returns true for every status that
  * keeps a session warm/active, i.e. every member of
  * WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES, which crucially includes
@@ -751,10 +780,17 @@ export class SessionChatTailController {
   private lastAppliedAt = 0
   /**
    * (LIVENESS) Wall-clock of the last inbound update of any kind, applied or
-   * not. The watchdog measures quiet against THIS, not `lastAppliedAt`: a
-   * session that is pushing updates we correctly discard as no-ops is a
-   * HEALTHY session, and re-pulling it would be pure waste. Only total silence
-   * is evidence that the push lane has dropped.
+   * not. It means "the push lane is alive", and it is stamped before the apply
+   * decision precisely so a correctly-discarded no-op still counts.
+   *
+   * ★ (D3) It is NO LONGER the watchdog's quiet clock — that is `lastAppliedAt`.
+   * The original reasoning ("a session pushing no-ops is healthy, re-pulling it
+   * is waste") is right about the LANE and wrong about the SCREEN, and the
+   * watchdog guards the screen: a producer re-emitting one frozen revision is
+   * inbound traffic on every tick, which pinned quiet at zero forever and
+   * disarmed the watchdog on the exact failure it exists for. This field still
+   * gates the "nothing has ever arrived" check, where its meaning is the one
+   * required.
    */
   private lastInboundAt = 0
   /**
@@ -763,6 +799,40 @@ export class SessionChatTailController {
    * one. Starts undefined ("nothing seen yet"), which is treated as idle.
    */
   private lastKnownStatus: unknown = undefined
+  /**
+   * (D1) A terminal/settled status event arrived and the authoritative tail has
+   * not been re-pulled since. One-shot: consumed by the next
+   * `shouldRefreshForLiveness` that answers true.
+   *
+   * ── Why the status lane is the rescue signal ──────────────────────────────
+   * The replica lane and the status lane are SIBLING handlers on the same P2P
+   * DataChannel (`p2p-manager.ts` `onSnapshot` / `onStatusEvent`). When the
+   * replica lane wedges, the status lane keeps delivering — observed live: the
+   * completion toast fires while the transcript stays frozen. So the surviving
+   * lane can vouch for the dead one.
+   *
+   * That matters because the controller cannot otherwise tell a wedged replica
+   * from a healthy one: `expireStaleReplicaLease` only arms on
+   * `lastReplicaBusyAt`, which is stamped ONLY from an inbound replica snapshot
+   * (see `applyTranscriptReplicaSnapshot`). A lane that dies takes the evidence
+   * of its own death with it — the lease never arms, and the `replicaHealthy`
+   * refusal is never released. This latch is the out-of-band evidence.
+   */
+  private terminalStatusRefreshPending = false
+  /**
+   * (D3) Wall-clock of the last COMPLETED authoritative re-pull, successful or
+   * not. Backoff only — it is not evidence of anything about the lane.
+   *
+   * Needed because the quiet window now measures `lastAppliedAt` (rendered
+   * content) rather than `lastInboundAt` (lane traffic). A re-pull that returns
+   * nothing new does not advance `lastAppliedAt` — correctly, since the screen
+   * did not change — so without a separate backoff stamp a genuinely dead lane
+   * would satisfy the quiet threshold on every 5s tick and the watchdog would
+   * degenerate into the fixed-interval poll it exists to avoid. The old code got
+   * this for free by stamping `lastInboundAt`; that shortcut is unavailable now
+   * precisely because the two meanings have been separated.
+   */
+  private lastLivenessAttemptAt = 0
   /**
    * (§8 unit 9) True once THIS session has applied a verified replica snapshot
    * and has not fallen back since. It is the sole gate on the legacy
@@ -1234,7 +1304,10 @@ export class SessionChatTailController {
    *      read_chat here is the last-writer-wins hazard called out in review:
    *      a legacy tail landing after a newer replica revision would overwrite
    *      current content with older content. Refuse outright.
-   *   4. Quiet period not yet elapsed, measured against `lastInboundAt` and
+   *   3b. (D1) …UNLESS a terminal status event arrived on the sibling status
+   *      lane. That is the one sanctioned bypass of check 3 — see
+   *      `noteTerminalStatusEvent`.
+   *   4. Quiet period not yet elapsed, measured against `lastAppliedAt` and
    *      scaled by status — short while busy (a generating session that has
    *      gone silent is anomalous), long while idle (silence is the normal
    *      and correct state).
@@ -1276,6 +1349,22 @@ export class SessionChatTailController {
     this.reportTranscriptReplicaFallback('replica_lease_expired')
   }
 
+  /**
+   * (D1) Record that the STATUS lane reported this session settled.
+   *
+   * Non-terminal events are ignored outright, so the bypass below can never be
+   * armed mid-generation — see `isTerminalChatTailStatusEvent`.
+   *
+   * This deliberately does NOT touch `lastInboundAt`, `lastAppliedAt` or
+   * `lastKnownStatus`: those describe the CHAT TAIL lane, and letting a status
+   * event write them would make a healthy status lane mask a dead transcript
+   * lane — the same self-referential trap that leaves the lease unarmed.
+   */
+  noteTerminalStatusEvent(event: unknown): void {
+    if (!isTerminalChatTailStatusEvent(event)) return
+    this.terminalStatusRefreshPending = true
+  }
+
   shouldRefreshForLiveness(options: { visible?: boolean } = {}): boolean {
     // (LEASE) Evaluated on the watchdog's existing 5s tick — the lease needs no
     // timer of its own, and this is the same cadence that already decides pane
@@ -1285,10 +1374,58 @@ export class SessionChatTailController {
     this.expireStaleReplicaLease()
     if (this.lastInboundAt === 0) return false
     if (this.authoritativeRefreshPromise) return false
+
+    // (D1) ★ The one sanctioned bypass of the `replicaHealthy` refusal below.
+    //
+    // Placed AFTER the single-flight guard and BEFORE the health veto, which is
+    // the entire point: a terminal status event is out-of-band proof that this
+    // session settled, delivered by a lane that is still alive when the replica
+    // lane is not. Without it, a wedged replica is indistinguishable from a
+    // healthy one (its silence removes the very evidence `expireStaleReplicaLease`
+    // needs) and the pane stays frozen forever.
+    //
+    // ★ Why bypassing is safe HERE and nowhere else: the veto guards against a
+    // legacy `read_chat` landing behind a newer replica revision. At a terminal
+    // event the replica is BY DEFINITION not producing — the turn is over or the
+    // agent is parked on a human decision — so that race window is closed. This
+    // is a bypass for one instant, not a standing exemption: the latch is
+    // consumed here and the veto resumes on the next tick.
+    //
+    // ★ It also deliberately does not consult the quiet window. The quiet
+    // thresholds exist to guess whether a lane has stopped; a terminal event is
+    // not a guess, and waiting 20-120s to act on it would leave the pane frozen
+    // for exactly the interval the user is staring at it. `refreshAuthoritativeTail`
+    // still applies its own 750ms debounce and single-flight, which bounds the
+    // cost of a burst of terminal events.
+    if (this.terminalStatusRefreshPending) {
+      this.terminalStatusRefreshPending = false
+      return true
+    }
+
     // ★ Replica is authoritative and self-pushing — a legacy read_chat here
     // could regress the pane to older content (last-writer-wins).
     if (this.replicaHealthy) return false
-    const quietMs = this.now() - this.lastInboundAt
+    // (D3) Quiet is measured against `lastAppliedAt` — when the RENDERED CONTENT
+    // last changed — not `lastInboundAt`, which stamps on every inbound update
+    // before the apply decision.
+    //
+    // Both fields are correct about different things and the watchdog needs the
+    // other one. `lastInboundAt` answers "is the lane alive", and for a lane
+    // that is merely idle it is exactly right. But this watchdog exists to
+    // detect a FROZEN SCREEN, and a lane can be provably alive while the screen
+    // is stuck: a producer re-emitting one frozen revision, or shipping tails
+    // the shrink-defense correctly rejects, keeps resetting `lastInboundAt` to
+    // now and holds the quiet clock at zero permanently. The watchdog then never
+    // fires on the one failure mode where nothing else will rescue the pane.
+    //
+    // `lastInboundAt` is left untouched and still gates the "nothing has ever
+    // arrived" check above, where its meaning is the one required.
+    //
+    // `lastLivenessAttemptAt` is folded in as pure BACKOFF, not as evidence:
+    // it stops a dead lane from re-qualifying on every tick once the quiet
+    // threshold is crossed.
+    const quietSince = Math.max(this.lastAppliedAt, this.lastLivenessAttemptAt)
+    const quietMs = this.now() - quietSince
     const statusThreshold = isBusyChatTailStatus(this.lastKnownStatus)
       ? CHAT_TAIL_LIVENESS_BUSY_QUIET_MS
       : CHAT_TAIL_LIVENESS_IDLE_QUIET_MS
@@ -1340,12 +1477,14 @@ export class SessionChatTailController {
         // the RPC storm this design exists to avoid. `handleUpdate` already
         // stamped it when an update did arrive; this covers the empty case.
         this.lastInboundAt = this.now()
+        this.lastLivenessAttemptAt = this.now()
       } catch {
         // Best-effort self-heal — a failed re-pull just leaves the existing
         // snapshot untouched; the next focus/reconnect retries.
         // (LIVENESS) Reset the quiet clock on failure too. An offline or erroring
         // daemon must back off to one attempt per quiet period, not one per tick.
         this.lastInboundAt = this.now()
+        this.lastLivenessAttemptAt = this.now()
       }
     })().finally(() => {
       this.authoritativeRefreshPromise = null
@@ -1635,6 +1774,43 @@ export function applyTranscriptReplicaSnapshotToControllers(
     applied += 1
   }
   return applied
+}
+
+/**
+ * (D1) Route a daemon status event to every warm controller for this session.
+ *
+ * Prefix-matched for the same reason `applyTranscriptReplicaSnapshotToControllers`
+ * is: one session can have a pane controller and a warm inbox controller alive
+ * at once, and a frozen transcript is equally wrong in both.
+ *
+ * ── Why the status lane is wired to the transcript watchdog at all ─────────
+ * `onStatusEvent` and `onSnapshot` are sibling handlers on the SAME P2P
+ * DataChannel (`p2p-manager.ts`). Observed live: the completion toast fires off
+ * the first while the transcript rendered by the second stays frozen. That makes
+ * the status lane the only in-band signal that survives a wedged replica — and
+ * `expireStaleReplicaLease` cannot substitute for it, because the stamp it arms
+ * on comes from the replica lane itself.
+ *
+ * Non-terminal events are dropped inside `noteTerminalStatusEvent`; this
+ * function is intentionally a dumb fan-out so the terminal-only rule has exactly
+ * one definition. Returns how many controllers were notified; 0 is normal (an
+ * event for a session nobody is reading).
+ */
+export function noteTerminalStatusEventForControllers(
+  daemonId: string,
+  sessionId: string,
+  event: unknown,
+): number {
+  if (!daemonId || !sessionId) return 0
+  if (!isTerminalChatTailStatusEvent(event)) return 0
+  const prefix = `${daemonId}::${sessionId}::`
+  let notified = 0
+  for (const [key, controller] of controllerRegistry.entries()) {
+    if (!key.startsWith(prefix)) continue
+    controller.noteTerminalStatusEvent(event)
+    notified += 1
+  }
+  return notified
 }
 
 /**
