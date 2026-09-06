@@ -137,7 +137,7 @@ function preventContextMenuButtonFocus(event: React.MouseEvent<HTMLButtonElement
     event.preventDefault()
 }
 
-function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
+export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
     const ctx = useDashboardDockviewContext()
     const terminalRef = useRef<CliTerminalHandle>(null)
     const [isPanelInputActive, setIsPanelInputActive] = useState(() => getDockviewPanelInputActive(api))
@@ -210,6 +210,8 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                 handleSendChat={cmds.handleSendChat}
                 handleForceSendChat={cmds.handleForceSendChat}
                 isSendingChat={cmds.isSendingChat}
+                sendFeedbackMessage={cmds.sendFeedbackMessage}
+                pendingLocalMessage={cmds.pendingLocalMessage}
                 handleFocusAgent={cmds.handleFocusAgent}
                 isFocusingAgent={cmds.isFocusingAgent}
                 actionLogs={activeActionLogs}
