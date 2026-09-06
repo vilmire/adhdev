@@ -455,6 +455,37 @@ describe('cloud status seqscribe boundary', () => {
                 pendingMissingRevisits: 2, pendingMissingOpen: 1,
                 since: 1_700_000_000_000, uptimeMs: 3_600_000,
             },
+            // Transcript trigger attribution + daemon-side stage latencies.
+            // Local-only for the dedup reason: per-source raw counters and raw
+            // millisecond p50/p95/max would make every heartbeat hash
+            // differently. The keys here are a fixed trigger-source enum, never
+            // a session id — but the values still must not ride the frame.
+            transcriptLatencyDetail: {
+                bySource: {
+                    pty_output: { triggered: 91, admitted: 41, coalesced: 50, published: 37 },
+                    stat_poll: { triggered: 12, admitted: 12, coalesced: 0, published: 3 },
+                    status_event: { triggered: 8, admitted: 8, coalesced: 0, published: 6 },
+                    post_chat: { triggered: 4, admitted: 4, coalesced: 0, published: 4 },
+                    watchdog: { triggered: 0, admitted: 0, coalesced: 0, published: 0 },
+                    lease_expiry: { triggered: 0, admitted: 0, coalesced: 0, published: 0 },
+                    seed: { triggered: 2, admitted: 2, coalesced: 0, published: 2 },
+                    unspecified: { triggered: 5, admitted: 5, coalesced: 0, published: 1 },
+                },
+                stages: {
+                    trigger_to_collect: { count: 60, p50: 11.5, p95: 48.25, max: 133.75 },
+                    collect_to_publish: { count: 53, p50: 3.5, p95: 9.5, max: 21.5 },
+                    trigger_to_publish: { count: 53, p50: 15.5, p95: 57.75, max: 152.25 },
+                },
+                triggerToPublishBySource: {
+                    pty_output: { count: 37, p50: 12.5, p95: 44.75, max: 121.25 },
+                    stat_poll: { count: 3, p50: 3007.5, p95: 3019.5, max: 3019.5 },
+                },
+                notMeasurable: [
+                    { stage: 'publish_to_worker_onsnapshot', reason: 'unsynchronized clocks' },
+                ],
+                since: 1_700_000_555_000,
+                uptimeMs: 7_200_000,
+            },
         } as any);
 
         expect(payload.seqscribe).toEqual(healthy);
@@ -465,6 +496,7 @@ describe('cloud status seqscribe boundary', () => {
             'syncHotspots',
             'readRouting',
             'transcriptParityDetail',
+            'transcriptLatencyDetail',
         ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
         }
@@ -480,6 +512,17 @@ describe('cloud status seqscribe boundary', () => {
         expect(wire).not.toContain('1700000000000');
         expect(wire).not.toContain('sessionsRepeated');
         expect(wire).not.toContain('pendingMissingRevisits');
+        // Same belt-and-braces for the latency block, under ANY key a future
+        // refactor might rename it to. `1700000555000` is its own `since` stamp,
+        // and the p95 values are distinctive enough that finding one anywhere in
+        // the serialized frame means the distributions leaked.
+        expect(wire).not.toContain('1700000555000');
+        expect(wire).not.toContain('triggerToPublishBySource');
+        expect(wire).not.toContain('pty_output');
+        expect(wire).not.toContain('stat_poll');
+        expect(wire).not.toContain('trigger_to_publish');
+        expect(wire).not.toContain('3019.5');
+        expect(wire).not.toContain('notMeasurable');
     });
 });
 

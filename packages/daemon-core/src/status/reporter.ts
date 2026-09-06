@@ -698,7 +698,7 @@ export class DaemonStatusReporter {
         // is exactly the kind of change that can happen with no new PTY output
         // byte, so `markChatOutputActivity`'s trigger alone would miss it.
         // Safe no-op until configureTranscriptProjection is armed.
-        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId);
+        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId, 'status_event');
         // Dashboard delivery is P2P-only, but the server still receives the event
         // for push notifications, webhook dispatch, and audit-side effects.
         this.deps.p2p?.sendStatusEvent(serverEvent);
