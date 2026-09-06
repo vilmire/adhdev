@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useTranslation } from 'react-i18next'
-import { CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX } from '@adhdev/mesh-shared'
+import {
+  CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
+  CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
+} from '@adhdev/mesh-shared'
 
 import { useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
@@ -100,9 +103,25 @@ export function useInteractivePrompt(
       setDismissedPromptId(promptSession.prompt.promptId)
     } catch (error) {
       let msg = error instanceof Error ? error.message : String(error)
+      // DELIVERED-BUT-UNCONFIRMED (live defect 2026-09-06). The daemon reaches
+      // this class only AFTER writing every answer keystroke to the terminal,
+      // with our own bound question still on screen — so the answer did land.
+      // The old copy called that "verification failed" and told the user to
+      // "try again", which resends an answer the agent has already acted on.
+      // Report it as unconfirmed, and dismiss the modal: leaving it open is
+      // itself a resubmit invitation.
+      if (msg.includes(CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX)) {
+        setDismissedPromptId(promptSession.prompt.promptId)
+        setResponseError(t('interactivePrompt.errorReviewUnconfirmed', {
+          defaultValue: 'Your answer was sent, but the terminal did not confirm it in time. Check the terminal screen before answering again — resending may submit it twice.'
+        }))
+        throw error
+      }
       if (msg.includes(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX)) {
+        // Genuinely wrong screen: nothing was submitted into our question, so
+        // retrying is both safe and the correct next step.
         msg = t('interactivePrompt.errorReviewPageNotFocused', {
-          defaultValue: 'The input was delivered but verification failed — check the terminal screen or close this and try again.'
+          defaultValue: 'The terminal is showing a different screen, so the answer was not submitted — check the terminal screen or close this and try again.'
         })
       }
       setResponseError(msg)
