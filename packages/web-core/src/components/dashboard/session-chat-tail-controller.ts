@@ -189,6 +189,37 @@ const CHAT_TAIL_LIVENESS_BUSY_QUIET_MS = 20_000
  */
 const CHAT_TAIL_LIVENESS_IDLE_QUIET_MS = 120_000
 /**
+ * (LIVENESS) Floor on the quiet period for a HIDDEN pane, applied on top of the
+ * status-scaled window above (the effective threshold is the MAX of the two).
+ *
+ * ── Why the hidden case needs its own floor ───────────────────────────────
+ * The watchdog is armed on `enabled` (session identity), not `refreshEnabled`
+ * (panel visibility), because a backstop that switches off exactly when no edge
+ * can fire is not a backstop — see the effect in `useSessionChatTailController`.
+ * That is correct for recovery but changes the LOAD shape, in two ways that do
+ * not apply to a visible pane:
+ *
+ *   1. CARDINALITY. Visible panes are bounded by screen real estate — a handful.
+ *      Hidden controllers are retained for every warm session in the workspace
+ *      (`useWarmSessionChatTailControllers`), so the armed population becomes
+ *      "every session" rather than "every pane the user can see". The per-
+ *      controller cost is unchanged; the number of controllers is not.
+ *   2. URGENCY. A visible pane's staleness is being read RIGHT NOW, which is why
+ *      a busy one is worth checking at 20s. A hidden pane is not being read at
+ *      all; its staleness only has to be gone by the time the user looks at it,
+ *      and re-entering the pane fires the mount/visibility edge anyway. So the
+ *      deadline that matters is "before it is next shown", not "within 20s".
+ *
+ * The floor is therefore set to the BUSY case's benefit: it collapses the busy
+ * window (20s → 60s) where the asymmetry is largest, while leaving the idle
+ * window (120s) already above it and untouched. A hidden lane that is genuinely
+ * dead costs one read_chat per 60s at worst, versus three under the visible
+ * window — and the backoff in `refreshAuthoritativeTail` (which stamps
+ * `lastInboundAt` on empty and failed pulls alike) is what makes "at worst"
+ * hold, rather than one request per 5s tick.
+ */
+const CHAT_TAIL_LIVENESS_HIDDEN_QUIET_FLOOR_MS = 60_000
+/**
  * (LEASE) How long a session may go without an APPLIED replica revision before
  * `replicaHealthy` expires and the legacy transport is brought back.
  *
@@ -1180,6 +1211,14 @@ export class SessionChatTailController {
    * user's own workaround (bounce to another view and back) is just them
    * manufacturing the `refreshEnabled` false→true edge by hand.
    *
+   * ★ This is why the watchdog is armed on `enabled`, NOT on `refreshEnabled`:
+   * a backstop for "no edge will fire" cannot itself be gated on the edge it
+   * exists to compensate for. Gated, it switched off for exactly the pane that
+   * needed it (hidden, missing pushes) and only came back once the user had
+   * already produced the edge that would have healed the pane anyway — it could
+   * never fire on a path where it was the thing doing the rescuing.
+   * `visible` scales the quiet window instead of silencing the timer.
+   *
    * ── Why this is not simply a poll ─────────────────────────────────────────
    * Polling every visible pane on a fixed short interval would multiply
    * read_chat traffic by (open panes × session lifetime) for a defect that
@@ -1237,7 +1276,7 @@ export class SessionChatTailController {
     this.reportTranscriptReplicaFallback('replica_lease_expired')
   }
 
-  shouldRefreshForLiveness(): boolean {
+  shouldRefreshForLiveness(options: { visible?: boolean } = {}): boolean {
     // (LEASE) Evaluated on the watchdog's existing 5s tick — the lease needs no
     // timer of its own, and this is the same cadence that already decides pane
     // staleness. Runs FIRST so a lease that expires on this tick also releases
@@ -1250,9 +1289,18 @@ export class SessionChatTailController {
     // could regress the pane to older content (last-writer-wins).
     if (this.replicaHealthy) return false
     const quietMs = this.now() - this.lastInboundAt
-    const threshold = isBusyChatTailStatus(this.lastKnownStatus)
+    const statusThreshold = isBusyChatTailStatus(this.lastKnownStatus)
       ? CHAT_TAIL_LIVENESS_BUSY_QUIET_MS
       : CHAT_TAIL_LIVENESS_IDLE_QUIET_MS
+    // (LIVENESS) A hidden pane still needs the backstop — that is the whole
+    // point of arming on `enabled` rather than `refreshEnabled` — but it does
+    // not need it as URGENTLY, and there are far more hidden controllers than
+    // visible ones. Raise the floor instead of switching the watchdog off.
+    // Defaults to the hidden (more conservative) window when the caller does not
+    // say, so a new call site cannot silently opt into the tighter one.
+    const threshold = options.visible === true
+      ? statusThreshold
+      : Math.max(statusThreshold, CHAT_TAIL_LIVENESS_HIDDEN_QUIET_FLOOR_MS)
     return quietMs >= threshold
   }
 
@@ -1756,6 +1804,31 @@ export function buildWarmSessionChatTailDescriptorState(
   }
 }
 
+/**
+ * (F4) Arming decision for the liveness watchdog, split out as a pure function
+ * so the GATE itself is testable — the defect this closes was never in
+ * `shouldRefreshForLiveness`, it was in which effect the timer lived in, and a
+ * controller-level test cannot see that. Mirrors the pattern of
+ * `buildChatPaneTailControllerOptions` in ChatPane.tsx.
+ *
+ * ★ `refreshEnabled` is deliberately absent from the arming condition and
+ * present only as the quiet-window selector. Re-adding it to `armed` reproduces
+ * the original bug: the backstop for "this pane gets no edges" switching itself
+ * off for exactly the panes that get no edges.
+ */
+export function buildChatTailLivenessWatchdogPlan(input: {
+  hasController: boolean
+  enabled: boolean
+  daemonId?: string
+  sessionId?: string
+  refreshEnabled: boolean
+}): { armed: boolean; visible: boolean } {
+  return {
+    armed: !!(input.hasController && input.enabled && input.daemonId && input.sessionId),
+    visible: input.refreshEnabled,
+  }
+}
+
 export function useSessionChatTailController(
   activeConv: ActiveConversation,
   options?: { enabled?: boolean; tailLimit?: number; refreshEnabled?: boolean },
@@ -1935,30 +2008,64 @@ export function useSessionChatTailController(
       lastConnected = connectedNow
     }, 2_000)
 
-    // (LIVENESS) Watchdog for the continuously-visible pane. Every existing
-    // trigger above is an edge — mount, hidden→visible, focus, reconnect — so a
-    // pane that never changes visibility has no recovery path and stays stale
-    // forever once it misses a push. This tick is only a boolean check; the
-    // controller decides (single-flight, replica-safe, status-scaled quiet
-    // period) and answers false in every healthy case, so it costs no RPC
-    // unless the lane has actually gone silent.
-    const livenessTimer = setInterval(() => {
-      if (!controller.shouldRefreshForLiveness()) return
-      void refreshAuthoritativeTail()
-    }, CHAT_TAIL_LIVENESS_TICK_MS)
-
     return () => {
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisible)
       }
       clearInterval(reconnectTimer)
-      clearInterval(livenessTimer)
     }
     // refreshAuthoritativeTail is stable across renders for a given session
     // identity; excluded to keep this a mount/session-scoped effect rather than
     // re-running on every meta append.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller, daemonId, enabled, refreshEnabled, sessionId, historySessionId])
+
+  // (LIVENESS) Watchdog — deliberately a SEPARATE effect from the edge triggers
+  // above, and deliberately NOT gated on `refreshEnabled`.
+  //
+  // ★ The bug this shape fixes: the watchdog used to live inside the effect
+  // above, so `refreshEnabled === false` (a hidden Dockview panel) returned
+  // early and tore the timer down along with the edge listeners. But the
+  // watchdog's stated purpose is to back up panes that get no edges — so it was
+  // disarmed in precisely the situation it was written for, and only re-armed
+  // once the user manually produced the hidden→visible edge, which already
+  // triggers a pull on its own. It could therefore never be the thing that
+  // rescued a pane; it was structurally dead weight.
+  //
+  // It is armed on `enabled` instead, which is the SUBSCRIPTION axis
+  // (`ChatPane.tsx` `buildChatPaneTailControllerOptions`: `enabled` = a session
+  // exists, `refreshEnabled` = the panel is visible). That matches what the
+  // watchdog guards: the push lane the controller is still subscribed to while
+  // hidden. Load is bounded by the raised hidden quiet floor
+  // (CHAT_TAIL_LIVENESS_HIDDEN_QUIET_FLOOR_MS) plus the pre-existing
+  // single-flight/debounce/backoff guards, not by stopping the timer.
+  //
+  // The mount pull and the `visibilitychange` listener stay in the gated effect
+  // above: those ARE edge-driven and visibility is the correct gate for them.
+  const watchdogPlan = buildChatTailLivenessWatchdogPlan({
+    hasController: !!controller,
+    enabled,
+    daemonId,
+    sessionId,
+    refreshEnabled,
+  })
+  useEffect(() => {
+    if (!controller || !watchdogPlan.armed) return
+    const livenessTimer = setInterval(() => {
+      // Only a boolean check per tick; the controller answers false in every
+      // healthy case (single-flight, replica-safe, status-scaled quiet period),
+      // so a healthy lane costs no RPC at all.
+      if (!controller.shouldRefreshForLiveness({ visible: watchdogPlan.visible })) return
+      void refreshAuthoritativeTail()
+    }, CHAT_TAIL_LIVENESS_TICK_MS)
+    return () => {
+      clearInterval(livenessTimer)
+    }
+    // Same rationale as above: `refreshAuthoritativeTail` is stable for a given
+    // session identity. `watchdogPlan.visible` (i.e. `refreshEnabled`) IS a dep
+    // here — it selects the quiet window, but never whether the timer runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller, watchdogPlan.armed, watchdogPlan.visible, sessionId, historySessionId])
 
   return useMemo(
     () => buildControllerHandle(snapshot, loadHistoryPage),
