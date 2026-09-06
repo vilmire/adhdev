@@ -74,6 +74,32 @@ const PaneGroupContent = memo(function PaneGroupContent({
             }
             : activeConv
     )
+    // Shared between the pty layout's chat sub-pane (toggled against the
+    // terminal sub-pane via `chatPaneVisible`) and the non-pty layout (always
+    // locally visible, `paneVisible`) — the only real difference between the
+    // two call sites is which visibility flag applies, so it stays a parameter
+    // rather than being duplicated. A prop present on one ChatPane call but
+    // not the other previously drifted silently because every command prop
+    // here is optional (no compiler error on omission) — see :170-189 memo
+    // comparator, which already tracks all of them.
+    const renderChatPane = (visible: boolean) => (
+        <ChatPane
+            activeConv={effectiveConv}
+            ideEntry={ideEntry}
+            handleSendChat={handleSendChat}
+            handleForceSendChat={handleForceSendChat}
+            isSendingChat={isSendingChat}
+            sendFeedbackMessage={sendFeedbackMessage}
+            pendingLocalMessage={pendingLocalMessage}
+            handleFocusAgent={handleFocusAgent}
+            isFocusingAgent={isFocusingAgent}
+            actionLogs={actionLogs}
+            userName={userName}
+            scrollToBottomRequestNonce={scrollToBottomRequestNonce}
+            isInputActive={isInputActive && visible}
+            isVisible={visible}
+        />
+    )
     return (
         <>
             <ApprovalBanner activeConv={effectiveConv} onModalButton={handleModalButton} />
@@ -130,41 +156,10 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             pointerEvents: showChatPane ? 'auto' : 'none',
                         }}
                     >
-                        <ChatPane
-                            activeConv={effectiveConv}
-                            ideEntry={ideEntry}
-                            handleSendChat={handleSendChat}
-                            isSendingChat={isSendingChat}
-                            sendFeedbackMessage={sendFeedbackMessage}
-                            pendingLocalMessage={pendingLocalMessage}
-                            handleFocusAgent={handleFocusAgent}
-                            isFocusingAgent={isFocusingAgent}
-                            actionLogs={actionLogs}
-                            userName={userName}
-                            scrollToBottomRequestNonce={scrollToBottomRequestNonce}
-                            isInputActive={isInputActive && chatPaneVisible}
-                            isVisible={chatPaneVisible}
-                        />
+                        {renderChatPane(chatPaneVisible)}
                     </div>
                 </div>
-            ) : (
-                <ChatPane
-                    activeConv={effectiveConv}
-                    ideEntry={ideEntry}
-                    handleSendChat={handleSendChat}
-                    handleForceSendChat={handleForceSendChat}
-                    isSendingChat={isSendingChat}
-                    sendFeedbackMessage={sendFeedbackMessage}
-                    pendingLocalMessage={pendingLocalMessage}
-                    handleFocusAgent={handleFocusAgent}
-                    isFocusingAgent={isFocusingAgent}
-                    actionLogs={actionLogs}
-                    userName={userName}
-                    scrollToBottomRequestNonce={scrollToBottomRequestNonce}
-                    isInputActive={isInputActive && paneVisible}
-                    isVisible={paneVisible}
-                />
-            )}
+            ) : renderChatPane(paneVisible)}
         </>
     )
 }, (prev, next) => (
