@@ -91714,6 +91714,159 @@ ${cleanBody}`;
         init_dist2();
       }
     });
+    function percentile(sortedAscending, q) {
+      if (sortedAscending.length === 0) return 0;
+      const rank = Math.ceil(q * sortedAscending.length);
+      const index = Math.min(sortedAscending.length - 1, Math.max(0, rank - 1));
+      return round1(sortedAscending[index]);
+    }
+    function round1(value) {
+      return Math.round(value * 10) / 10;
+    }
+    function freshTriggerCounts() {
+      return { triggered: 0, admitted: 0, coalesced: 0, published: 0 };
+    }
+    var TRANSCRIPT_TRIGGER_SOURCES;
+    var SAMPLE_CAPACITY;
+    var LatencySamples;
+    var TRANSCRIPT_LATENCY_STAGES;
+    var NOT_MEASURABLE;
+    var TranscriptLatencyRecorder;
+    var init_transcript_latency = __esm2({
+      "src/seqscribe/transcript-latency.ts"() {
+        "use strict";
+        TRANSCRIPT_TRIGGER_SOURCES = [
+          "pty_output",
+          "stat_poll",
+          "status_event",
+          "post_chat",
+          "watchdog",
+          "lease_expiry",
+          "seed",
+          "unspecified"
+        ];
+        SAMPLE_CAPACITY = 256;
+        LatencySamples = class {
+          values = new Float64Array(SAMPLE_CAPACITY);
+          next = 0;
+          filled = 0;
+          maxSeen = 0;
+          record(ms) {
+            if (!Number.isFinite(ms) || ms < 0) return;
+            this.values[this.next] = ms;
+            this.next = (this.next + 1) % SAMPLE_CAPACITY;
+            if (this.filled < SAMPLE_CAPACITY) this.filled++;
+            if (ms > this.maxSeen) this.maxSeen = ms;
+          }
+          get count() {
+            return this.filled;
+          }
+          distribution() {
+            if (this.filled === 0) return null;
+            const sorted = Array.from(this.values.subarray(0, this.filled)).sort((a, b) => a - b);
+            return {
+              count: this.filled,
+              p50: percentile(sorted, 0.5),
+              p95: percentile(sorted, 0.95),
+              max: round1(this.maxSeen)
+            };
+          }
+        };
+        TRANSCRIPT_LATENCY_STAGES = [
+          "trigger_to_collect",
+          "collect_to_publish",
+          "trigger_to_publish"
+        ];
+        NOT_MEASURABLE = [
+          {
+            stage: "publish_to_worker_onsnapshot",
+            reason: "crosses the daemon\u2192browser process boundary; the two wall clocks are unsynchronized, so a difference of their stamps measures skew, not latency"
+          },
+          {
+            stage: "worker_onsnapshot_to_controller_apply",
+            reason: "both ends share the browser clock and are measurable in principle, but they live in the web packages, not on this daemon diagnostic surface"
+          }
+        ];
+        TranscriptLatencyRecorder = class {
+          bySource;
+          stages = /* @__PURE__ */ new Map();
+          perSource = /* @__PURE__ */ new Map();
+          since = Date.now();
+          clock;
+          /** `clock` is injected for tests; defaults to the monotonic timer. Never a
+           * wall clock — a wall-clock elapsed can go negative across an NTP step. */
+          constructor(clock = () => Number(process.hrtime.bigint() / 1000000n)) {
+            this.clock = clock;
+            this.bySource = {
+              pty_output: freshTriggerCounts(),
+              stat_poll: freshTriggerCounts(),
+              status_event: freshTriggerCounts(),
+              post_chat: freshTriggerCounts(),
+              watchdog: freshTriggerCounts(),
+              lease_expiry: freshTriggerCounts(),
+              seed: freshTriggerCounts(),
+              unspecified: freshTriggerCounts()
+            };
+          }
+          now() {
+            return this.clock();
+          }
+          recordTriggered(source) {
+            this.bySource[source].triggered++;
+          }
+          recordAdmitted(source) {
+            this.bySource[source].admitted++;
+          }
+          recordCoalesced(source) {
+            this.bySource[source].coalesced++;
+          }
+          recordPublished(source) {
+            this.bySource[source].published++;
+          }
+          recordStage(stage, elapsedMs) {
+            let samples = this.stages.get(stage);
+            if (!samples) {
+              samples = new LatencySamples();
+              this.stages.set(stage, samples);
+            }
+            samples.record(elapsedMs);
+          }
+          recordTriggerToPublish(source, elapsedMs) {
+            this.recordStage("trigger_to_publish", elapsedMs);
+            let samples = this.perSource.get(source);
+            if (!samples) {
+              samples = new LatencySamples();
+              this.perSource.set(source, samples);
+            }
+            samples.record(elapsedMs);
+          }
+          detail() {
+            const stages = {};
+            for (const stage of TRANSCRIPT_LATENCY_STAGES) {
+              const dist = this.stages.get(stage)?.distribution();
+              if (dist) stages[stage] = dist;
+            }
+            const triggerToPublishBySource = {};
+            for (const source of TRANSCRIPT_TRIGGER_SOURCES) {
+              const dist = this.perSource.get(source)?.distribution();
+              if (dist) triggerToPublishBySource[source] = dist;
+            }
+            const bySource = {};
+            for (const source of TRANSCRIPT_TRIGGER_SOURCES) {
+              bySource[source] = { ...this.bySource[source] };
+            }
+            return {
+              bySource,
+              stages,
+              triggerToPublishBySource,
+              notMeasurable: NOT_MEASURABLE,
+              since: this.since,
+              uptimeMs: Math.max(0, Date.now() - this.since)
+            };
+          }
+        };
+      }
+    });
     function freshCounters() {
       return {
         published: 0,
@@ -91741,8 +91894,8 @@ ${cleanBody}`;
     function notifyTranscriptObservation(sessionId, observation) {
       activeService?.observe(sessionId, observation);
     }
-    function markTranscriptSessionDirty(sessionId) {
-      activeService?.markDirty(sessionId);
+    function markTranscriptSessionDirty(sessionId, source = "unspecified") {
+      activeService?.markDirty(sessionId, source);
     }
     function markTranscriptPtyOutputActivity(sessionId) {
       activeService?.markPtyOutputActivity(sessionId);
@@ -91770,6 +91923,7 @@ ${cleanBody}`;
         init_transcript_projection();
         init_transcript_observation();
         init_transcript_mode();
+        init_transcript_latency();
         MAX_TRACKED_SESSIONS = 512;
         TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
         TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3e3;
@@ -91784,6 +91938,20 @@ ${cleanBody}`;
           inFlight = /* @__PURE__ */ new Set();
           pendingObservation = /* @__PURE__ */ new Map();
           pendingPull = /* @__PURE__ */ new Set();
+          /**
+           * Trigger attribution + stage timings for the CURRENT in-flight unit of
+           * work, keyed by session. Held here rather than threaded through the
+           * `runObserve`/`runPull`/`settle` signatures because `settle()` re-enters
+           * that cycle for coalesced work, and the attribution must survive the
+           * re-entry: a pull that was queued by `pty_output` and finally published by
+           * `settle()` is still a `pty_output` refresh, and its latency is still
+           * measured from when that PTY byte arrived.
+           */
+          triggerContext = /* @__PURE__ */ new Map();
+          /** Attribution for work coalesced while a session was busy — replaces, never
+           * queues, matching `pendingObservation`/`pendingPull`'s latest-wins rule. */
+          pendingContext = /* @__PURE__ */ new Map();
+          latency = new TranscriptLatencyRecorder();
           /** PTY-only leading+trailing throttle state; direct dirty triggers bypass it. */
           ptyDirtyTimers = /* @__PURE__ */ new Map();
           ptyDirtyTrailing = /* @__PURE__ */ new Set();
@@ -91804,29 +91972,48 @@ ${cleanBody}`;
             if (this.mode() === "off") return;
             if (this.inFlight.has(sessionId)) {
               this.pendingObservation.set(sessionId, observation);
+              if (!this.pendingContext.has(sessionId) && !this.triggerContext.has(sessionId)) {
+                this.pendingContext.set(sessionId, { source: "unspecified", startedAt: this.latency.now() });
+              }
               return;
             }
             if (!this.admitSession(sessionId)) return;
+            this.beginTrigger(sessionId, "unspecified");
             const sourcePath = observation.provenance?.transcriptProvenance?.sourcePath;
             if (typeof sourcePath === "string" && sourcePath) {
               this.knownPaths.set(sessionId, sourcePath);
             }
             void this.runObserve(sessionId, observation);
           }
-          /** PULL trigger — output-activity/status-change hooks that lack a fresh observation. */
-          markDirty(sessionId) {
+          /**
+           * PULL trigger — output-activity/status-change hooks that lack a fresh
+           * observation. `source` attributes the refresh on the latency diagnostic
+           * surface; it defaults to `unspecified` so a caller that has no meaningful
+           * label is counted honestly rather than being silently folded into whatever
+           * source happens to be listed first.
+           */
+          markDirty(sessionId, source = "unspecified") {
             if (!sessionId) return;
             if (this.mode() === "off") return;
+            this.latency.recordTriggered(source);
             if (!this.deps.collectObservation) {
               this.counters.collectorUnavailable++;
               return;
             }
             if (this.inFlight.has(sessionId)) {
               this.pendingPull.add(sessionId);
+              this.latency.recordCoalesced(source);
+              this.pendingContext.set(sessionId, { source, startedAt: this.latency.now() });
               return;
             }
             if (!this.admitSession(sessionId)) return;
+            this.beginTrigger(sessionId, source);
+            this.latency.recordAdmitted(source);
             void this.runPull(sessionId);
+          }
+          /** Stamp the attribution + start time for a unit of work about to run. */
+          beginTrigger(sessionId, source) {
+            this.triggerContext.set(sessionId, { source, startedAt: this.latency.now() });
           }
           /**
            * PTY-output trigger. Pull the leading edge immediately, then collapse all
@@ -91839,15 +92026,18 @@ ${cleanBody}`;
             if (!sessionId) return;
             if (this.mode() === "off") return;
             if (!this.deps.collectObservation) {
+              this.latency.recordTriggered("pty_output");
               this.counters.collectorUnavailable++;
               return;
             }
             if (this.ptyDirtyTimers.has(sessionId)) {
               this.ptyDirtyTrailing.add(sessionId);
               this.counters.ptyDirtyCoalesced++;
+              this.latency.recordTriggered("pty_output");
+              this.latency.recordCoalesced("pty_output");
               return;
             }
-            this.markDirty(sessionId);
+            this.markDirty(sessionId, "pty_output");
             this.ptyDirtyTrailing.add(sessionId);
             this.armPtyDirtyTimer(sessionId);
           }
@@ -91859,7 +92049,7 @@ ${cleanBody}`;
               }
               this.ptyDirtyTimers.delete(sessionId);
               this.armPtyDirtyTimer(sessionId);
-              this.markDirty(sessionId);
+              this.markDirty(sessionId, "pty_output");
             }, TRANSCRIPT_PTY_DIRTY_THROTTLE_MS);
             timer.unref?.();
             this.ptyDirtyTimers.set(sessionId, timer);
@@ -91898,7 +92088,7 @@ ${cleanBody}`;
                 if (sig !== lastSig) {
                   this.lastSignatures.set(sessionId, sig);
                   if (lastSig !== void 0) {
-                    this.markDirty(sessionId);
+                    this.markDirty(sessionId, "stat_poll");
                   }
                 }
               } catch {
@@ -91906,7 +92096,7 @@ ${cleanBody}`;
                 if (lastSig !== "missing") {
                   this.lastSignatures.set(sessionId, "missing");
                   if (lastSig !== void 0) {
-                    this.markDirty(sessionId);
+                    this.markDirty(sessionId, "stat_poll");
                   }
                 }
               }
@@ -91919,7 +92109,7 @@ ${cleanBody}`;
            * name documents INTENT at call sites, not a different mechanism.
            */
           seedSession(sessionId) {
-            this.markDirty(sessionId);
+            this.markDirty(sessionId, "seed");
           }
           admitSession(sessionId) {
             if (this.inFlight.size >= MAX_TRACKED_SESSIONS && !this.sessionState.has(sessionId)) {
@@ -91941,6 +92131,8 @@ ${cleanBody}`;
             try {
               const collector = this.deps.collectObservation;
               const collected = collector ? await collector(sessionId) : null;
+              const ctx = this.triggerContext.get(sessionId);
+              if (ctx) this.latency.recordStage("trigger_to_collect", this.latency.now() - ctx.startedAt);
               if (collected) {
                 await this.publishObservation(sessionId, collected.observation, collected.verifiedClear ?? false);
               } else {
@@ -91955,14 +92147,32 @@ ${cleanBody}`;
             const next = this.pendingObservation.get(sessionId);
             if (next !== void 0) {
               this.pendingObservation.delete(sessionId);
+              this.promotePendingContext(sessionId);
               await this.runObserve(sessionId, next);
               return;
             }
             if (this.pendingPull.delete(sessionId)) {
+              this.promotePendingContext(sessionId);
               await this.runPull(sessionId);
               return;
             }
             this.inFlight.delete(sessionId);
+            this.triggerContext.delete(sessionId);
+            this.pendingContext.delete(sessionId);
+          }
+          /**
+           * Hand the coalesced trigger's attribution to the follow-up run. When there
+           * is no pending context — the common case, where a pull's own nested
+           * `observe()` is what got queued — the ORIGINAL context is kept, so the
+           * latency of a `pty_output`-triggered publish is still measured from that
+           * PTY byte rather than restarting at the internal re-entry.
+           */
+          promotePendingContext(sessionId) {
+            const pending = this.pendingContext.get(sessionId);
+            if (!pending) return;
+            this.pendingContext.delete(sessionId);
+            this.triggerContext.set(sessionId, pending);
+            this.latency.recordAdmitted(pending.source);
           }
           async publishObservation(sessionId, observation, verifiedClear) {
             const mode = this.mode();
@@ -92000,9 +92210,16 @@ ${cleanBody}`;
             }
             this.sessionState.set(sessionId, { revision, hash: contentHash });
             if (mode === "shadow" || mode === "primary") {
+              const encodedAt = this.latency.now();
               try {
                 await this.deps.publishRevision(sessionId, { begin: encoded.begin, chunks: encoded.chunks, commit: encoded.commit });
                 this.counters.published++;
+                const ctx = this.triggerContext.get(sessionId);
+                this.latency.recordStage("collect_to_publish", this.latency.now() - encodedAt);
+                if (ctx) {
+                  this.latency.recordPublished(ctx.source);
+                  this.latency.recordTriggerToPublish(ctx.source, this.latency.now() - ctx.startedAt);
+                }
               } catch (error48) {
                 this.counters.publishFailed++;
                 LOG.warn(
@@ -92014,6 +92231,19 @@ ${cleanBody}`;
           }
           getCounters() {
             return { ...this.counters };
+          }
+          /**
+           * Trigger attribution + daemon-side stage latencies.
+           *
+           * ★ LOCAL-ONLY. Raw counters and raw millisecond distributions — on the
+           * deduped status frame these would change every tick and turn an idle
+           * daemon into a permanent transmitter, the exact failure stats.ts's bucket
+           * discipline exists to prevent. `buildCloudSeqscribeSummary`
+           * (status/reporter.ts) is a fixed-key allow-list that does not name this,
+           * and `test/status/cloud-status-content-boundary.test.ts` keeps it out.
+           */
+          getLatencyDetail() {
+            return this.latency.detail();
           }
           /** Test/diagnostic helper — sessions currently tracked (published at least once). */
           get trackedSessionCount() {
@@ -92029,6 +92259,8 @@ ${cleanBody}`;
             for (const timer of this.ptyDirtyTimers.values()) clearTimeout(timer);
             this.ptyDirtyTimers.clear();
             this.ptyDirtyTrailing.clear();
+            this.triggerContext.clear();
+            this.pendingContext.clear();
           }
         };
         activeService = null;
@@ -137904,7 +138136,7 @@ ${e?.stderr || ""}`;
               });
               if (CHAT_COMMANDS.includes(cmd)) {
                 const dirtySessionId = typeof normalizedArgs?.targetSessionId === "string" ? normalizedArgs.targetSessionId.trim() : "";
-                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId);
+                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId, "post_chat");
                 this.deps.onPostChatCommand?.();
               }
               return handlerResult;
@@ -150740,7 +150972,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         LOG.info("StatusEvent", `${event.event} (${event.providerType || event.ideType || ""})`);
         const serverEvent = this.buildServerStatusEvent(event);
         if (!serverEvent) return;
-        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId);
+        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId, "status_event");
         this.deps.p2p?.sendStatusEvent(serverEvent);
         this.deps.serverConn?.sendMessage("status_event", serverEvent);
       }
@@ -159354,6 +159586,9 @@ data: ${JSON.stringify(msg.data)}
               uptimeMs: Math.max(0, Date.now() - tpSince)
             }
           } : {},
+          // Deep-copied by the recorder's own `detail()`, so a caller holding
+          // this cannot see it mutate on the next trigger.
+          ...opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {},
           ...routing ? {
             readRouting: {
               fromReplica: routing.fromReplica,
@@ -160682,6 +160917,14 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
               // reason is the only surface that says WHICH readiness
               // condition is holding a mesh on the ledger.
               readRouting: meshReadRoutingCounters(),
+              // Transcript trigger attribution + daemon-side stage
+              // latencies. Local-only for the same reason as readRouting
+              // directly above — raw counters and raw millisecond
+              // distributions would defeat the status-frame dedup — and
+              // this is the surface the "is the replica lane fast enough"
+              // question is answered from. The daemon-cloud status-report
+              // supplier deliberately does NOT pass this.
+              transcriptLatency: transcriptService?.getLatencyDetail() ?? null,
               dualWrite: {
                 active: isMeshDualWriteActive(),
                 failed: dual.failed,
