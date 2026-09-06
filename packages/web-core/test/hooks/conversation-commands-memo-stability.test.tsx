@@ -114,7 +114,7 @@ describe('useDashboardConversationCommands reference stability (memo contract)',
         // A new handler identity would break the memo just as surely as a new
         // container object, so the useCallback deps are pinned here too.
         expect(after.handleSendChat).toBe(before.handleSendChat)
-        expect(after.handleForceSendChat).toBe(before.handleForceSendChat)
+        expect(after.handleSendNowQueued).toBe(before.handleSendNowQueued)
         expect(after.handleRelaunch).toBe(before.handleRelaunch)
         expect(after.handleModalButton).toBe(before.handleModalButton)
         expect(after.handleFocusAgent).toBe(before.handleFocusAgent)
@@ -148,7 +148,7 @@ describe('useDashboardConversationCommands reference stability (memo contract)',
             'pendingLocalMessage',
             'isFocusingAgent',
             'handleSendChat',
-            'handleForceSendChat',
+            'handleSendNowQueued',
             'handleRelaunch',
             'handleModalButton',
             'handleFocusAgent',

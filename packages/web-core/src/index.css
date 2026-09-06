@@ -1150,6 +1150,53 @@
         flex: 0 0 auto;
     }
 
+    /* SEND-NOW: queued state + its escape hatch, rendered INSIDE the optimistic
+       user bubble so every layout (desktop dockview, mobile panes, mobile chat
+       room, remote dialog, standalone, cloud) picks it up from one place.
+       `flex-wrap` because the mobile bubble is narrow enough that the label and
+       the button do not fit on one line. */
+    .chat-bubble-queued {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+        padding-top: 6px;
+        border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    }
+
+    .chat-bubble-queued-label {
+        font-size: var(--chat-header-font-size);
+        opacity: 0.7;
+        line-height: 1.3;
+    }
+
+    .chat-bubble-send-now {
+        flex: 0 0 auto;
+        /* 28px keeps the tap target usable on touch without inflating the
+           bubble on desktop. */
+        min-height: 28px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+        background: color-mix(in srgb, currentColor 12%, transparent);
+        color: inherit;
+        font-size: var(--chat-header-font-size);
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+    }
+
+    .chat-bubble-send-now:hover:not(:disabled) {
+        background: color-mix(in srgb, currentColor 22%, transparent);
+    }
+
+    .chat-bubble-send-now:disabled {
+        opacity: 0.55;
+        cursor: default;
+    }
+
     .chat-copy-btn {
         display: inline-flex;
         align-items: center;

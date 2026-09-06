@@ -80249,7 +80249,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms) => new Promise((resolve33) => setTimeout(resolve33, ms)));
+      const sleep4 = opts.sleep ?? ((ms) => new Promise((resolve33) => setTimeout(resolve33, ms)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready = false;
@@ -80260,7 +80260,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
         if (ready) return true;
         if (now() >= deadline) break;
-        await sleep3(pollMs);
+        await sleep4(pollMs);
       }
       LOG.warn("MeshQueue", `Remote auto-launched session ${sessionId} on node ${nodeId} (mesh ${meshId}) did not report agent:ready within ${timeoutMs}ms; proceeding optimistically \u2014 unchanged behavior, the claim still fires via the normal event/reconcile path`);
       return false;
@@ -112629,8 +112629,8 @@ ${buttons.join("\n")}`;
           // was injected/attached (attachMeshAssignment). The injected task counts as having
           // genuinely entered generating only once a turn STARTS after this moment
           // (currentTurnStartedAt > meshTaskInjectedAt) — because currentTurnStartedAt
-          // persists from the PRIOR turn and forceSendMessage pre-binds currentTurnTaskId at
-          // inject time, so neither alone distinguishes "injected but not yet generating"
+          // persists from the PRIOR turn and the mesh inject path pre-binds currentTurnTaskId
+          // at inject time, so neither alone distinguishes "injected but not yet generating"
           // from "genuinely generating". This timestamp is that discriminator. 0 = no task
           // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
           meshTaskInjectedAt = 0;
@@ -114192,8 +114192,8 @@ ${buttons.join("\n")}`;
            * FAIL for a reused-idle session:
            *  - `currentTurnStartedAt > 0` alone: it persists from the PRIOR turn, so it is
            *    already > 0 the instant a new task is injected (pre-onTurnStarted).
-           *  - `currentTurnTaskId === meshActiveTaskId` alone: forceSendMessage (the mesh
-           *    inject path) pre-binds currentTurnTaskId to the new taskId at inject time,
+           *  - `currentTurnTaskId === meshActiveTaskId` alone: the mesh inject path
+           *    pre-binds currentTurnTaskId to the new taskId at inject time,
            *    BEFORE the turn starts, so this matches prematurely too.
            * The robust discriminator is TEMPORAL: the producing turn must have STARTED AFTER
            * the injection — `currentTurnStartedAt > meshTaskInjectedAt`. Only then has the
@@ -116507,6 +116507,73 @@ ${rawInput}` : rawInput;
         "use strict";
       }
     });
+    function readStatus(adapter) {
+      try {
+        return adapter.getStatus()?.status;
+      } catch {
+        return void 0;
+      }
+    }
+    function sleep2(ms) {
+      return new Promise((resolve33) => setTimeout(resolve33, ms));
+    }
+    async function waitForIdleAfterInterrupt(adapter, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS) {
+      const deadline = Date.now() + timeoutMs;
+      for (; ; ) {
+        const status = readStatus(adapter);
+        if (status !== void 0 && !BUSY_STATUSES2.has(status)) return true;
+        if (Date.now() >= deadline) return false;
+        await sleep2(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+      }
+    }
+    async function interruptAndDeliver(adapter, text, options) {
+      if (typeof adapter.interruptTurn !== "function") {
+        return {
+          ok: false,
+          reason: "interrupt_not_implemented",
+          message: `Provider '${adapter.cliType}' runs on an adapter that cannot interrupt a turn. The message stays queued and will be delivered when the agent finishes on its own.`
+        };
+      }
+      const interrupted = await adapter.interruptTurn();
+      if (!interrupted.ok) {
+        LOG.warn("SendNow", `[${adapter.cliType}] interrupt refused: ${interrupted.reason}`);
+        return { ok: false, reason: interrupted.reason, message: interrupted.message };
+      }
+      const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs);
+      if (!wentIdle) {
+        LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms`);
+        return {
+          ok: false,
+          reason: "idle_timeout",
+          message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. It is still queued; try again in a moment.`
+        };
+      }
+      const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0);
+      const queued = sendResult?.status === "queued";
+      LOG.info(
+        "SendNow",
+        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) \u2192 idle \u2192 ${queued ? "requeued" : "delivered"}`
+      );
+      return {
+        ok: true,
+        delivered: !queued,
+        queued,
+        keyName: interrupted.keyName,
+        confidence: interrupted.confidence
+      };
+    }
+    var INTERRUPT_IDLE_TIMEOUT_MS;
+    var INTERRUPT_IDLE_POLL_MS;
+    var BUSY_STATUSES2;
+    var init_interrupt_and_deliver = __esm2({
+      "src/commands/interrupt-and-deliver.ts"() {
+        "use strict";
+        init_logger();
+        INTERRUPT_IDLE_TIMEOUT_MS = 8e3;
+        INTERRUPT_IDLE_POLL_MS = 120;
+        BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
+      }
+    });
     function hashSignatureParts(parts) {
       let hash2 = 2166136261;
       for (const part of parts) {
@@ -117316,6 +117383,7 @@ ${rawInput}` : rawInput;
         init_logger();
         init_hosted_runtime_restore();
         init_mesh_stop_task_scope();
+        init_interrupt_and_deliver();
         init_chat_commands_shared();
         init_auto_approve_modes();
         init_model_launch_args();
@@ -118412,6 +118480,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                       };
                     }
                   }
+                  let interruptRequeued = false;
                   try {
                     if (hasStructuredParts) {
                       const structuredTarget = this.deps.getInstanceManager()?.getInstance(key2);
@@ -118419,11 +118488,14 @@ Run 'adhdev doctor' for detailed diagnostics.`
                         throw new Error(`No provider instance for session '${key2}' \u2014 cannot deliver multipart input for agent '${agentType}'`);
                       }
                       structuredTarget.onEvent("send_message", { input });
-                    } else if (forceSend && typeof adapter.forceSendMessage === "function") {
-                      if (meshTaskId) await adapter.forceSendMessage(message, meshTaskId);
-                      else await adapter.forceSendMessage(message);
                     } else if (forceSend) {
-                      await adapter.sendMessage(message, meshTaskId ? { force: true, meshTaskId } : { force: true });
+                      const outcome = await interruptAndDeliver(
+                        adapter,
+                        message,
+                        meshTaskId ? { meshTaskId } : void 0
+                      );
+                      if (!outcome.ok) throw new Error(outcome.message);
+                      interruptRequeued = outcome.queued;
                     } else if (meshTaskId) {
                       await adapter.sendMessage(message, { meshTaskId });
                     } else {
@@ -118439,7 +118511,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     success: true,
                     status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : "generating",
                     ...BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: "agent_runtime_busy" } : {},
-                    ...forceSend ? { forceSent: true, queued: false } : {}
+                    ...forceSend ? { forceSent: true, interrupted: true, queued: interruptRequeued } : {}
                   };
                 } else if (action === "clear_history") {
                   if (typeof adapter.clearHistory === "function") adapter.clearHistory();
@@ -136545,7 +136617,7 @@ ${e?.stderr || ""}`;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs57.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms) => new Promise((resolve33) => setTimeout(resolve33, ms));
+      const sleep4 = (ms) => new Promise((resolve33) => setTimeout(resolve33, ms));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -136560,7 +136632,7 @@ ${e?.stderr || ""}`;
             break;
           }
         }
-        await sleep3(150 * (attempt + 1));
+        await sleep4(150 * (attempt + 1));
       }
       return fs57.existsSync(dir) ? { removed: false, residue: true, error: String(lastErr?.message || lastErr || "unknown rm error") } : { removed: true, residue: false };
     }
@@ -146680,6 +146752,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_provider_input_support();
     init_approval_utils();
     init_logger();
+    init_interrupt_and_deliver();
     init_chat_commands_shared();
     var RECENT_SEND_WINDOW_MS = 1200;
     var HERMES_CLI_STARTING_SEND_SETTLE_MS = 2e3;
@@ -146692,7 +146765,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function getSendChatInputEnvelope(args) {
       return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
     }
-    function sleep2(ms) {
+    function sleep22(ms) {
       return new Promise((resolve33) => setTimeout(resolve33, ms));
     }
     async function waitOnceForFreshHermesCliStart(adapter, log) {
@@ -146700,7 +146773,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const status = typeof adapter.getStatus === "function" ? adapter.getStatus()?.status : void 0;
       if (status !== "starting") return;
       log(`Hermes CLI is still starting; waiting ${HERMES_CLI_STARTING_SEND_SETTLE_MS}ms before first send`);
-      await sleep2(HERMES_CLI_STARTING_SEND_SETTLE_MS);
+      await sleep22(HERMES_CLI_STARTING_SEND_SETTLE_MS);
     }
     function callLegacyTextScript(script, text) {
       if (typeof script !== "function") return null;
@@ -146814,15 +146887,31 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             assertTextOnlyInput(provider, input);
             if (!text) return { success: false, error: "text required for PTY send" };
             await waitOnceForFreshHermesCliStart(adapter, _log);
-            const forceSend = args?.force === true || args?.forceSend === true;
-            let sendResult;
-            if (forceSend && typeof adapter.forceSendMessage === "function") {
-              sendResult = await adapter.forceSendMessage(text);
-            } else if (forceSend) {
-              sendResult = await adapter.sendMessage(text, { force: true });
-            } else {
-              sendResult = await adapter.sendMessage(text);
+            const wantsInterrupt = args?.interrupt === true || args?.force === true || args?.forceSend === true;
+            if (wantsInterrupt) {
+              const outcome = await interruptAndDeliver(adapter, text);
+              if (!outcome.ok) {
+                return {
+                  success: false,
+                  sent: false,
+                  interrupted: false,
+                  reason: outcome.reason,
+                  error: outcome.message
+                };
+              }
+              const target2 = getTargetInstance(h, args);
+              if (target2?.category === "cli" && target2.type === adapter.cliType && typeof target2.recordAcknowledgedUserInput === "function") {
+                target2.recordAcknowledgedUserInput(input);
+              }
+              return {
+                ..._logSendSuccess(`${transport}-adapter-interrupt`, adapter.cliType),
+                interrupted: true,
+                interruptKey: outcome.keyName,
+                interruptConfidence: outcome.confidence,
+                ...outcome.queued ? { sent: false, queued: true, submitted: false } : { submitted: true }
+              };
             }
+            const sendResult = await adapter.sendMessage(text);
             const queued = sendResult?.status === "queued";
             const target = getTargetInstance(h, args);
             if (target?.category === "cli" && target.type === adapter.cliType && typeof target.recordAcknowledgedUserInput === "function") {
@@ -146836,8 +146925,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               // `sent` distinguishes submitted from merely accepted; the
               // command still succeeds, because queueing is the correct
               // behaviour while the agent is generating.
-              ...queued ? { sent: false, queued: true, submitted: false } : { submitted: true },
-              ...forceSend ? { forceSent: true } : {}
+              ...queued ? { sent: false, queued: true, submitted: false } : { submitted: true }
             };
           } catch (e) {
             return { success: false, error: `${transport} send failed: ${e.message}` };
@@ -154307,7 +154395,7 @@ async (params) => {
       if (!adapter) return null;
       return { target, instance, adapter };
     }
-    function sleep22(ms) {
+    function sleep3(ms) {
       return new Promise((resolve33) => setTimeout(resolve33, ms));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
@@ -154324,7 +154412,7 @@ async (params) => {
             return bundle;
           }
         }
-        await sleep22(100);
+        await sleep3(100);
       }
       return getCliTargetBundle(ctx, type2, instanceId);
     }
@@ -154380,7 +154468,7 @@ async (params) => {
             const message = String(lastLaunchError.message || "");
             const retryable = /ECONNREFUSED|session-host|Session host/i.test(message);
             if (!retryable || attempt === 2) break;
-            await sleep22(1e3);
+            await sleep3(1e3);
           }
         }
         if (!launched) {
@@ -154443,16 +154531,16 @@ async (params) => {
         const modal = debug?.activeModal || trace?.activeModal || null;
         noteStatus(status);
         if (resolveActiveModalIfNeeded(status, modal)) {
-          await sleep22(150);
+          await sleep3(150);
           continue;
         }
         const startupParseGate = !!debug?.startupParseGate;
         if (status === "idle" && !startupParseGate) break;
-        await sleep22(150);
+        await sleep3(150);
       }
       ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text });
       while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
-        await sleep22(150);
+        await sleep3(150);
         bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
         if (!bundle) {
           throw new Error("CLI instance disappeared during exercise");

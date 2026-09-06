@@ -45,7 +45,12 @@ describe('ChatInputBar send-state copy', () => {
     expect(shouldDisableChatSendButton({ hasDraft: true, isBusy: false })).toBe(false)
   })
 
-  it('renders an explicit force-send control when generation is busy but force is supported', () => {
+  // SEND-NOW: the composer's "Force" button is gone. It acted on the DRAFT,
+  // not on the parked message, and it called handleForceSendChat →
+  // adapter.forceSendMessage, which had no src implementation at all. The
+  // affordance now lives inside the queued bubble (ChatMessageRow), where the
+  // message it acts on is actually visible.
+  it('no longer renders a composer force-send control', () => {
     const html = renderToStaticMarkup(
       React.createElement(ChatInputBar, {
         contextKey: 'tab-1',
@@ -54,15 +59,12 @@ describe('ChatInputBar send-state copy', () => {
         isBusy: false,
         statusMessage: 'Agent is generating.',
         onSend: vi.fn(async () => true),
-        onForceSend: vi.fn(async () => true),
-        canForceSend: true,
         isActive: true,
       }),
     )
 
     expect(html).toContain('Agent is generating.')
-    expect(html).toContain('aria-label="Force send message now"')
-    expect(html).toContain('title="Force send message now"')
+    expect(html).not.toContain('Force send message now')
   })
 
   it('collapses the input surface and marks it aria-hidden when isActive is false', () => {

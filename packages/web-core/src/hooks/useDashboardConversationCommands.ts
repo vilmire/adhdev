@@ -32,7 +32,17 @@ export interface DashboardConversationCommands {
     pendingLocalMessage: PendingLocalMessage | null
     isFocusingAgent: boolean
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
-    handleForceSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
+    /**
+     * SEND-NOW: interrupt the agent's turn in flight so the already-queued
+     * optimistic bubble is delivered as a genuine new turn. Takes no message —
+     * it re-sends the parked body the bubble is showing.
+     *
+     * Replaced `handleForceSendChat`, whose daemon-side implementation
+     * (`forceSendMessage`) never existed: the type declared it, two call sites
+     * invoked it, and every adapter fell through to a plain send. The button was
+     * wired to nothing.
+     */
+    handleSendNowQueued: () => Promise<boolean>
     handleRelaunch: () => void
     handleModalButton: (button: string) => void
     handleFocusAgent: () => Promise<void>
@@ -193,11 +203,11 @@ function buildSendChatPayload(
     message: string,
     attachments: ImageAttachment[] | undefined,
     activeConv: ActiveConversation,
-    options: { force?: boolean } = {},
+    options: { interrupt?: boolean } = {},
 ): Record<string, unknown> {
     const providerArgs = getProviderArgs(activeConv)
     if (!attachments || attachments.length === 0) {
-        return { message, ...(options.force ? { force: true } : {}), ...providerArgs }
+        return { message, ...(options.interrupt ? { interrupt: true } : {}), ...providerArgs }
     }
 
     // Structured input envelope — matches daemon's normalizeInputEnvelope contract
@@ -217,7 +227,7 @@ function buildSendChatPayload(
             parts,
             textFallback: message,
         },
-        ...(options.force ? { force: true } : {}),
+        ...(options.interrupt ? { interrupt: true } : {}),
         ...providerArgs,
     }
 }
@@ -238,6 +248,13 @@ export function useDashboardConversationCommands({
     const [pendingLocalMessage, setPendingLocalMessage] = useState<PendingLocalMessage | null>(null)
     const sendInFlightRef = useRef(false)
     const lastSendRef = useRef<RecentSendAttempt | null>(null)
+    // SEND-NOW reads the parked bubble through a ref rather than closing over
+    // the state, so `handleSendNowQueued` keeps a stable identity across the
+    // queued flip. The bubble's memo comparator compares the handler by
+    // reference (chatMessageBubbles.tsx), so a new function every render would
+    // re-render every row on every tick.
+    const pendingLocalMessageRef = useRef<PendingLocalMessage | null>(null)
+    pendingLocalMessageRef.current = pendingLocalMessage
 
     useEffect(() => {
         setSendFeedbackMessage(null)
@@ -368,56 +385,71 @@ export function useDashboardConversationCommands({
         }
     }, [activeConv, sendDaemonCommand])
 
-    const handleForceSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
+    /**
+     * SEND-NOW. The message is already PARKED in the daemon's driver FIFO
+     * (`pendingLocalMessage.queued`); the user pressed the button inside that
+     * bubble to stop waiting for the agent to finish on its own.
+     *
+     * ★ This does NOT write the body into the generating PTY. That path was
+     * retired after measured data loss (oss 6cca365b): the bytes are never
+     * consumed as a turn while the caller is told the send succeeded. The
+     * daemon's `interrupt` flag runs the only supported sequence — press the
+     * provider's own stop key, wait for busy→idle, then deliver as a genuine
+     * new turn. The turn in flight is DISCARDED, which is inherent to steering
+     * a running agent and is stated on the button itself.
+     *
+     * Takes no message argument on purpose: it re-sends the body the bubble is
+     * already showing, so the two can never disagree.
+     */
+    const handleSendNowQueued = useCallback(async (): Promise<boolean> => {
         if (!activeConv) return false
         if (sendInFlightRef.current) return false
+        const pending = pendingLocalMessageRef.current
+        if (!pending || !pending.queued) return false
 
-        const message = rawMessage.trim()
-        if (!message && (!attachments || attachments.length === 0)) return false
-
-        const now = Date.now()
-        const attempt: RecentSendAttempt = {
-            tabKey: activeConv.tabKey,
-            message: `force:${message}`,
-            timestamp: now,
-        }
-        if (shouldSuppressRecentDuplicateSend(lastSendRef.current, attempt)) {
-            setSendFeedbackMessage(null)
-            return true
-        }
+        const message = pending.content.trim()
+        if (!message) return false
 
         sendInFlightRef.current = true
         setIsSendingChat(true)
         setSendFeedbackMessage(null)
-        setLastSendQueued(false)
-        lastSendRef.current = attempt
 
-        // Mirrors handleSendChat: the optimistic bubble is appended BEFORE the
-        // await, not after. A force send is issued precisely when the agent is
-        // busy — the round trip is at its slowest exactly then — so deferring
-        // the echo leaves the composer looking inert and invites the repeated
-        // presses this path was reported for.
-        setPendingLocalMessage({ content: message, sentAt: now })
-
+        // The bubble deliberately STAYS mounted and STAYS queued for the whole
+        // round trip. It is the same body the user is looking at; removing it
+        // and re-adding it would flicker, and leaving it un-queued would hide
+        // the state we are still in until the daemon answers.
         try {
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) {
-                lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-                // Nothing was sent, so no echo will ever retire the bubble.
-                setPendingLocalMessage(null)
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
 
-            const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(message, attachments, activeConv, { force: true }))
+            // ★ The recent-duplicate record is NOT consulted or cleared here.
+            // The body is intentionally the same text as the original send —
+            // that is the whole feature — so the dedup guard that protects
+            // against double-typing would suppress every send-now if applied,
+            // and clearing it would let a subsequent retry double-park.
+            const raw = await sendDaemonCommand(
+                routeTarget,
+                'send_chat',
+                buildSendChatPayload(message, undefined, activeConv, { interrupt: true }),
+            )
             const res = unwrapCommandResult(raw)
 
-            // ★ ORDER MATTERS — same contract as handleSendChat. A queued result
-            // carries `sent:false`, so the throw below would report a body the
-            // daemon ACCEPTED as a send failure, and clearRecentSendOnFailure in
-            // the catch would drop the dedup record so the user's retry parks a
-            // second copy. That triple-send is the reported defect; the queued
-            // branch must be checked first and must NOT clear the attempt.
+            // A failed interrupt means the body was NOT written — the daemon
+            // refuses rather than guessing (no stop key, session not
+            // generating, or idle never observed). Keep the bubble queued so
+            // the ordinary drain still delivers it, and say why.
+            if (res?.success === false) {
+                setSendFeedbackMessage(getInlineSendFailureMessage(new Error(res?.error || 'Send now failed')))
+                return false
+            }
+
+            // An interrupt can still end re-parked (the session re-entered busy
+            // between the idle observation and the write). Report that honestly
+            // rather than clearing the queued badge on a delivery that did not
+            // happen.
             if (isQueuedSendResult(res)) {
                 setLastSendQueued(true)
                 setPendingLocalMessage(prev => (prev ? { ...prev, queued: true } : prev))
@@ -425,17 +457,14 @@ export function useDashboardConversationCommands({
                 return true
             }
 
-            if (res?.success === false || res?.sent === false) {
-                throw new Error(res?.error || 'Send failed')
-            }
+            // Delivered as a real turn: drop the queued badge. The bubble stays
+            // until the daemon's echo retires it, exactly as a normal send.
             setLastSendQueued(false)
+            setPendingLocalMessage(prev => (prev ? { ...prev, queued: false } : prev))
             setSendFeedbackMessage(null)
             return true
         } catch (e) {
-            console.warn('Force send blocked/failed', e)
-            lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-            // The send failed, so the daemon will never echo this text back.
-            setPendingLocalMessage(null)
+            console.warn('Send now blocked/failed', e)
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
@@ -532,7 +561,7 @@ export function useDashboardConversationCommands({
         pendingLocalMessage,
         isFocusingAgent,
         handleSendChat,
-        handleForceSendChat,
+        handleSendNowQueued,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,
@@ -543,7 +572,7 @@ export function useDashboardConversationCommands({
         pendingLocalMessage,
         isFocusingAgent,
         handleSendChat,
-        handleForceSendChat,
+        handleSendNowQueued,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,

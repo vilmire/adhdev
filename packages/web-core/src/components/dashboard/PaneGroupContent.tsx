@@ -55,7 +55,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
         handleModalButton,
         handleRelaunch,
         handleSendChat,
-        handleForceSendChat,
+        handleSendNowQueued,
         isSendingChat,
         sendFeedbackMessage,
         pendingLocalMessage,
@@ -93,7 +93,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
             activeConv={effectiveConv}
             ideEntry={ideEntry}
             handleSendChat={handleSendChat}
-            handleForceSendChat={handleForceSendChat}
+            handleSendNowQueued={handleSendNowQueued}
             isSendingChat={isSendingChat}
             sendFeedbackMessage={sendFeedbackMessage}
             pendingLocalMessage={pendingLocalMessage}

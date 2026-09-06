@@ -96,6 +96,14 @@ export interface ChatMessageListProps {
     scrollToBottomRequestNonce?: number;
     /** Whether this chat pane is currently visible to the user. Hidden-but-mounted panes re-scroll on reveal. */
     isVisible?: boolean;
+    /**
+     * SEND-NOW: interrupt the agent's turn in flight so the queued optimistic
+     * bubble is delivered as a real turn. Rendered only on the queued bubble
+     * itself (ChatMessageRow), so a read-only host that omits it loses nothing.
+     */
+    onSendNow?: () => void;
+    /** True while a send-now request is in flight; disables the button. */
+    isSendingNow?: boolean;
 }
 
 export interface ChatMessageListRef {
@@ -109,7 +117,7 @@ export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage)
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -579,6 +587,8 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         userName={userName}
                         isCliMode={isCliMode}
                         isTextExpanded={isTextExpanded}
+                        onSendNow={onSendNow}
+                        isSendingNow={isSendingNow}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);
                             isTextExpanded ? next.delete(expandKey) : next.add(expandKey);

@@ -6,9 +6,10 @@
  * new prompt into its PTY. A raw write into a mid-generation TUI is not consumed
  * as a new turn: the bytes sit in the input buffer, the LLM never reads them,
  * and yet the caller gets a success signal (see the NOTIF-SURFACE-LOCAL RCA in
- * mesh-reconcile-loop.ts). That is why the force-inject path was retired and the
- * `force` option is inert on the spec path (SpecCliAdapter.sendMessage ignores
- * its opts; forceSendMessage is not implemented here at all).
+ * mesh-reconcile-loop.ts). That is why the force-inject path was retired: the
+ * `forceSendMessage` adapter method is gone entirely, and `force` now ALIASES to
+ * the interrupt path below (commands/interrupt-and-deliver.ts) rather than
+ * meaning "write anyway".
  *
  * The only honest way to change a running session's trajectory is to INTERRUPT:
  * press the CLI's own stop control, let the FSM observe busy→idle, and let the

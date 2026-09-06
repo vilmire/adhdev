@@ -17,7 +17,14 @@ function makeAdapter(workingDir: string) {
     workingDir,
     spawn: vi.fn(async () => {}),
     sendMessage,
-    forceSendMessage: vi.fn(async () => {}),
+    // SEND-NOW: `force` now routes through interrupt → busy→idle → ordinary
+    // send. The mock flips the reported status to idle, which is what the
+    // real FSM does once the stop key lands; without it the helper's idle
+    // wait would (correctly) time out.
+    interruptTurn: vi.fn(async () => {
+      adapterStatus = 'idle'
+      return { ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared' as const }
+    }),
     getStatus: vi.fn(() => ({ status: 'idle', activeModal: null, messages: [] })),
     getScriptParsedStatus: vi.fn(() => ({ status: 'idle', activeModal: null, messages: [] })),
     getPartialResponse: vi.fn(() => ''),

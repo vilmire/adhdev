@@ -6,6 +6,11 @@ function createManager(adapterStatus = 'idle', options: {
   parsedStatus?: string
   pending?: boolean
   parsedMessages?: any[]
+  /** Omit interruptTurn entirely, modelling an adapter with NO interrupt
+   *  support (the legacy/non-spec path). Used by the rejection tests, which
+   *  exist precisely to prove such an adapter is refused rather than treated
+   *  as a silent success. */
+  noInterruptSupport?: boolean
 } = {}) {
   const sendMessage = vi.fn(async () => {})
   const adapter = {
@@ -14,7 +19,16 @@ function createManager(adapterStatus = 'idle', options: {
     workingDir: '/repo',
     spawn: vi.fn(async () => {}),
     sendMessage,
-    forceSendMessage: vi.fn(async () => {}),
+    // SEND-NOW: `force` now routes through interrupt → busy→idle → ordinary
+    // send. The mock flips the reported status to idle, which is what the
+    // real FSM does once the stop key lands; without it the helper's idle
+    // wait would (correctly) time out.
+    ...(options.noInterruptSupport ? {} : {
+      interruptTurn: vi.fn(async () => {
+        adapterStatus = 'idle'
+        return { ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared' as const }
+      }),
+    }),
     getStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
     getScriptParsedStatus: vi.fn(() => ({
       status: options.parsedStatus || adapterStatus,
@@ -80,10 +94,18 @@ describe('DaemonCliManager agent_command', () => {
       success: true,
       status: 'generating',
       forceSent: true,
+      interrupted: true,
       queued: false,
     })
-    expect(sendMessage).not.toHaveBeenCalled()
-    expect(adapter.forceSendMessage).toHaveBeenCalledWith('urgent follow-up')
+    // SEND-NOW: the body is delivered by the ORDINARY send, and only AFTER the
+    // stop key landed and the session was observed idle. A send without a prior
+    // interrupt would be the retired force-inject path.
+    expect(adapter.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(sendMessage).toHaveBeenCalledWith('urgent follow-up', undefined)
+    // Order is the contract: the stop key must land BEFORE the body is written.
+    // A send that precedes the interrupt is the retired force-inject defect.
+    expect(adapter.interruptTurn.mock.invocationCallOrder[0])
+      .toBeLessThan(sendMessage.mock.invocationCallOrder[0])
   })
 
   it('dispatches send_chat when the target runtime is idle', async () => {
@@ -233,7 +255,7 @@ describe('DaemonCliManager agent_command', () => {
   // interrupt gets a clear 'unsupported' answer, not a crash or a false positive.
   describe('interrupt_capability / interrupt_turn on an adapter with no interrupt support', () => {
     it('interrupt_capability reports unsupported, not an exception', async () => {
-      const { manager } = createManager('generating')
+      const { manager } = createManager('generating', { noInterruptSupport: true })
 
       const result = await manager.handleCliCommand('agent_command', {
         targetSessionId: 'session-1',
@@ -251,7 +273,7 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     it('interrupt_turn is REJECTED, not silently treated as success', async () => {
-      const { manager, sendMessage } = createManager('generating')
+      const { manager, sendMessage } = createManager('generating', { noInterruptSupport: true })
 
       const result = await manager.handleCliCommand('agent_command', {
         targetSessionId: 'session-1',
@@ -293,7 +315,7 @@ describe('DaemonCliManager agent_command', () => {
         workingDir: '/repo',
         spawn: vi.fn(async () => {}),
         sendMessage,
-        forceSendMessage: vi.fn(async () => {}),
+        interruptTurn,
         getStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
         getScriptParsedStatus: vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] })),
         getPartialResponse: vi.fn(() => ''),

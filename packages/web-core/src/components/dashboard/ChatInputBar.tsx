@@ -32,8 +32,6 @@ interface ChatInputBarProps {
      */
     inlineStatusMessage?: string | null;
     onSend: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
-    onForceSend?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
-    canForceSend?: boolean;
     isActive?: boolean;
     showControlsToggle?: boolean;
     animateVisibility?: boolean;
@@ -89,8 +87,6 @@ const ChatInputBar = memo(function ChatInputBar({
     statusMessage = null,
     inlineStatusMessage = null,
     onSend,
-    onForceSend,
-    canForceSend = false,
     isActive = true,
     showControlsToggle = false,
     animateVisibility = true,
@@ -175,25 +171,6 @@ const ChatInputBar = memo(function ChatInputBar({
             submitLockRef.current = false;
         }
     }, [draftInput, attachments, isBusy, onSend]);
-
-    const forceSubmitDraft = useCallback(async () => {
-        if (!canForceSend || !onForceSend) return;
-        const message = draftInput.trim();
-        if ((!message && attachments.length === 0)) return;
-        if (submitLockRef.current) return;
-        submitLockRef.current = true;
-        const currentAttachments = attachments.length > 0 ? [...attachments] : undefined;
-        try {
-            const accepted = await onForceSend(message, currentAttachments);
-            if (accepted !== false) {
-                setDraftInput('');
-                setAttachments([]);
-                setAttachError(null);
-            }
-        } finally {
-            submitLockRef.current = false;
-        }
-    }, [attachments, canForceSend, draftInput, onForceSend]);
 
     const handleDragOver = useCallback((e: React.DragEvent) => {
         if (!canAttachImages) return;
@@ -381,22 +358,6 @@ const ChatInputBar = memo(function ChatInputBar({
                         <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                     </svg>
                 </button>
-                {canForceSend && (
-                    <button
-                        type="button"
-                        onClick={() => { void forceSubmitDraft(); }}
-                        disabled={!hasDraft}
-                        className={`h-10 px-3 rounded-full text-2xs font-medium border border-border-subtle shrink-0 transition-colors ${
-                            hasDraft
-                                ? 'bg-bg-secondary text-text-primary hover:bg-[var(--surface-tertiary)]'
-                                : 'bg-bg-secondary text-text-muted cursor-default opacity-60'
-                        }`}
-                        aria-label="Force send message now"
-                        title="Force send message now"
-                    >
-                        Force
-                    </button>
-                )}
             </div>
 
             {/* Attach error / drag hint */}

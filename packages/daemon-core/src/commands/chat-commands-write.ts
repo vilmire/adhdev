@@ -10,6 +10,7 @@ import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type P
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
+import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -193,15 +194,44 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
                 await waitOnceForFreshHermesCliStart(adapter, _log);
-                const forceSend = args?.force === true || args?.forceSend === true;
-                let sendResult: { status: 'queued' | 'delivered' } | void;
-                if (forceSend && typeof adapter.forceSendMessage === 'function') {
-                    sendResult = await adapter.forceSendMessage(text);
-                } else if (forceSend) {
-                    sendResult = await adapter.sendMessage(text, { force: true });
-                } else {
-                    sendResult = await adapter.sendMessage(text);
+                // SEND-NOW: `interrupt` asks to abort the turn in flight and
+                // deliver this body as a genuine new turn. `force`/`forceSend`
+                // are the retired force-inject spelling and are accepted as
+                // aliases so older dashboards keep working — but they now route
+                // to the SAME interrupt path. There is deliberately no branch
+                // left that writes the body into a generating PTY (oss 6cca365b:
+                // the bytes are never consumed and the caller is told they were).
+                const wantsInterrupt = args?.interrupt === true || args?.force === true || args?.forceSend === true;
+                if (wantsInterrupt) {
+                    const outcome = await interruptAndDeliver(adapter as unknown as InterruptibleAdapter, text);
+                    if (!outcome.ok) {
+                        // The body was NOT written. Report failure rather than a
+                        // phantom success so the pane keeps the bubble queued.
+                        return {
+                            success: false,
+                            sent: false,
+                            interrupted: false,
+                            reason: outcome.reason,
+                            error: outcome.message,
+                        };
+                    }
+                    const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+                    if (target?.category === 'cli'
+                        && target.type === adapter.cliType
+                        && typeof target.recordAcknowledgedUserInput === 'function') {
+                        target.recordAcknowledgedUserInput(input);
+                    }
+                    return {
+                        ..._logSendSuccess(`${transport}-adapter-interrupt`, adapter.cliType),
+                        interrupted: true,
+                        interruptKey: outcome.keyName,
+                        interruptConfidence: outcome.confidence,
+                        ...(outcome.queued
+                            ? { sent: false, queued: true, submitted: false }
+                            : { submitted: true }),
+                    };
                 }
+                const sendResult: { status: 'queued' | 'delivered' } | void = await adapter.sendMessage(text);
                 // QUEUED-SEND-LOSS: a `queued` result means the body is parked in
                 // the driver's in-memory FIFO and has NOT been written to the PTY.
                 // It does not survive a driver shutdown or daemon restart, so it
@@ -230,7 +260,6 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     // command still succeeds, because queueing is the correct
                     // behaviour while the agent is generating.
                     ...(queued ? { sent: false, queued: true, submitted: false } : { submitted: true }),
-                    ...(forceSend ? { forceSent: true } : {}),
                 };
             } catch (e: any) {
                 return { success: false, error: `${transport} send failed: ${e.message}` };

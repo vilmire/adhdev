@@ -39,7 +39,7 @@ const hookResult = {
     handleModalButton: vi.fn(),
     handleRelaunch: vi.fn(),
     handleSendChat: vi.fn(async () => true),
-    handleForceSendChat: vi.fn(async () => true),
+    handleSendNowQueued: vi.fn(async () => true),
     isSendingChat: false,
     sendFeedbackMessage: SENTINEL_FEEDBACK,
     lastSendQueued: false,
