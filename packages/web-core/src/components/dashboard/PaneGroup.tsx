@@ -228,15 +228,7 @@ export default function PaneGroup({
                         isCliTerminal={!!isCliTerminal}
                         ideEntry={activeIdeEntry}
                         terminalRef={terminalRef}
-                        handleModalButton={cmds.handleModalButton}
-                        handleRelaunch={cmds.handleRelaunch}
-                        handleSendChat={cmds.handleSendChat}
-                        handleForceSendChat={cmds.handleForceSendChat}
-                        isSendingChat={cmds.isSendingChat}
-                        sendFeedbackMessage={cmds.sendFeedbackMessage}
-                        pendingLocalMessage={cmds.pendingLocalMessage}
-                        handleFocusAgent={cmds.handleFocusAgent}
-                        isFocusingAgent={cmds.isFocusingAgent}
+                        commands={cmds}
                         actionLogs={activeActionLogs}
                         userName={userName}
                         isInputActive={!isSplitMode || !!isFocused}

@@ -6,10 +6,9 @@ import type { CliTerminalHandle } from '../CliTerminal'
 import ApprovalBanner from './ApprovalBanner'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
-import type { PendingLocalMessage } from './conversation-message-snapshot'
 import { IconWarning } from '../Icons'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
-import type { ImageAttachment } from './ChatInputBar'
+import type { DashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
@@ -17,17 +16,19 @@ interface PaneGroupContentProps {
     isCliTerminal: boolean
     ideEntry?: DaemonData
     terminalRef: RefObject<CliTerminalHandle | null>
-    handleModalButton: (button: string) => void
-    handleRelaunch: () => void
-    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
-    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
-    isSendingChat: boolean
-    sendFeedbackMessage?: string | null
-    pendingLocalMessage?: PendingLocalMessage | null
-    handleFocusAgent: () => void
-    isFocusingAgent: boolean
+    /**
+     * ★ The whole conversation-command surface as ONE required prop. Previously
+     * these were 11 loose optional props, so a newly added field silently
+     * defaulted at any call site that forgot it — a runtime defect the compiler
+     * could not catch. Required + bundled means omitting the wiring is a build
+     * error. Pass the `useDashboardConversationCommands` return value directly.
+     */
+    commands: DashboardConversationCommands
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     userName?: string
+    // ★ Layout concerns, NOT command wiring — these legitimately differ per
+    // surface (dockview tracks panel visibility/focus; mobile renders one pane
+    // at a time), so they stay optional and are not part of `commands`.
     scrollToBottomRequestNonce?: number
     isInputActive?: boolean
     isVisible?: boolean
@@ -43,21 +44,24 @@ const PaneGroupContent = memo(function PaneGroupContent({
     isCliTerminal,
     ideEntry,
     terminalRef,
-    handleModalButton,
-    handleRelaunch,
-    handleSendChat,
-    handleForceSendChat,
-    isSendingChat,
-    sendFeedbackMessage = null,
-    pendingLocalMessage = null,
-    handleFocusAgent,
-    isFocusingAgent,
+    commands,
     actionLogs,
     userName,
     scrollToBottomRequestNonce,
     isInputActive = true,
     isVisible = true,
 }: PaneGroupContentProps) {
+    const {
+        handleModalButton,
+        handleRelaunch,
+        handleSendChat,
+        handleForceSendChat,
+        isSendingChat,
+        sendFeedbackMessage,
+        pendingLocalMessage,
+        handleFocusAgent,
+        isFocusingAgent,
+    } = commands
     const showTerminalPane = isCliTerminal
     const showChatPane = !isCliTerminal
     const terminalPaneVisible = getPaneGroupContentChildVisibility(isVisible, showTerminalPane)
@@ -79,9 +83,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
     // locally visible, `paneVisible`) — the only real difference between the
     // two call sites is which visibility flag applies, so it stays a parameter
     // rather than being duplicated. A prop present on one ChatPane call but
-    // not the other previously drifted silently because every command prop
-    // here is optional (no compiler error on omission) — see :170-189 memo
-    // comparator, which already tracks all of them.
+    // not the other previously drifted silently because ChatPane's own command
+    // props are all optional (no compiler error on omission); this single
+    // closure removes the second site the drift needed. The `commands` bundle
+    // guards the inbound half of the same defect — together they mean a command
+    // can neither arrive unwired nor reach only one of the two panes.
     const renderChatPane = (visible: boolean) => (
         <ChatPane
             activeConv={effectiveConv}
@@ -167,15 +173,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.isCliTerminal === next.isCliTerminal
     && prev.ideEntry === next.ideEntry
     && prev.terminalRef === next.terminalRef
-    && prev.handleModalButton === next.handleModalButton
-    && prev.handleRelaunch === next.handleRelaunch
-    && prev.handleSendChat === next.handleSendChat
-    && prev.handleForceSendChat === next.handleForceSendChat
-    && prev.isSendingChat === next.isSendingChat
-    && prev.sendFeedbackMessage === next.sendFeedbackMessage
-    && prev.pendingLocalMessage === next.pendingLocalMessage
-    && prev.handleFocusAgent === next.handleFocusAgent
-    && prev.isFocusingAgent === next.isFocusingAgent
+    // ★ One reference check replaces the 9 hand-enumerated command fields. This
+    // is only equivalent because `useDashboardConversationCommands` memoizes its
+    // return on exactly those fields — if that `useMemo` is ever removed, this
+    // comparison fails every render and the pane re-renders constantly.
+    && prev.commands === next.commands
     && prev.actionLogs === next.actionLogs
     && prev.userName === next.userName
     && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce

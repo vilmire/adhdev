@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
 import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
@@ -6,6 +6,37 @@ import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-
 import { isConversationGenerating } from '../components/dashboard/DashboardMobileChatShared'
 import type { PendingLocalMessage } from '../components/dashboard/conversation-message-snapshot'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
+
+/**
+ * The full conversation-command surface, passed to render sites as ONE required
+ * prop rather than spread into loose optional props.
+ *
+ * ★ Why this is a single object: every field here was previously an individual
+ * optional (`?`) prop on `PaneGroupContent`, so adding one meant threading it
+ * through up to 7 hand-written call sites with NO compile-time check that any of
+ * them was updated. A missed site was a silent runtime defect, not a build
+ * error — which is exactly how `pendingLocalMessage` reached only 6 of 7 sites.
+ * Bundling makes the wiring a single required prop the compiler can enforce.
+ *
+ * ★ Deliberately NOT included: `isVisible`, `isInputActive` and
+ * `scrollToBottomRequestNonce`. Those are layout concerns that legitimately
+ * differ per surface (dockview tracks panel visibility/focus; mobile shows one
+ * pane at a time), not command wiring, and they stay optional props.
+ */
+export interface DashboardConversationCommands {
+    isSendingChat: boolean
+    sendFeedbackMessage: string | null
+    /** True when the last send was PARKED by the daemon rather than submitted. */
+    lastSendQueued: boolean
+    /** Optimistic local bubble; feed to `withPendingLocalMessage`. */
+    pendingLocalMessage: PendingLocalMessage | null
+    isFocusingAgent: boolean
+    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
+    handleForceSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
+    handleRelaunch: () => void
+    handleModalButton: (button: string) => void
+    handleFocusAgent: () => Promise<void>
+}
 
 interface UseDashboardConversationCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -459,12 +490,18 @@ export function useDashboardConversationCommands({
         }
     }, [activeConv, isFocusingAgent, sendDaemonCommand])
 
-    return {
+    // ★ MUST stay memoized. Render sites take this whole object as ONE prop and
+    // compare it by reference in `React.memo`. A fresh object literal every
+    // render would fail that comparison unconditionally, defeating the memo and
+    // re-rendering the chat pane on every parent render — the one performance
+    // hazard this bundling introduces.
+    //
+    // The five handlers below are already `useCallback`-stable, so this memo
+    // recomputes only when a value the consumers actually render changes.
+    return useMemo<DashboardConversationCommands>(() => ({
         isSendingChat,
         sendFeedbackMessage,
-        /** True when the last send was PARKED by the daemon rather than submitted. */
         lastSendQueued,
-        /** Optimistic local bubble; feed to `withPendingLocalMessage`. */
         pendingLocalMessage,
         isFocusingAgent,
         handleSendChat,
@@ -472,5 +509,16 @@ export function useDashboardConversationCommands({
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,
-    }
+    }), [
+        isSendingChat,
+        sendFeedbackMessage,
+        lastSendQueued,
+        pendingLocalMessage,
+        isFocusingAgent,
+        handleSendChat,
+        handleForceSendChat,
+        handleRelaunch,
+        handleModalButton,
+        handleFocusAgent,
+    ])
 }
