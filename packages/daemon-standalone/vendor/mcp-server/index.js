@@ -160397,11 +160397,14 @@ data: ${JSON.stringify(msg.data)}
           );
         }
         const log = node.node.log(activation.topic);
-        await log.append(TRANSCRIPT_REVISION_BEGIN_KIND, envelope.begin);
+        const appends = [
+          log.append(TRANSCRIPT_REVISION_BEGIN_KIND, envelope.begin)
+        ];
         for (const chunk of envelope.chunks) {
-          await log.append(TRANSCRIPT_REVISION_CHUNK_KIND, chunk);
+          appends.push(log.append(TRANSCRIPT_REVISION_CHUNK_KIND, chunk));
         }
-        await log.append(TRANSCRIPT_REVISION_COMMIT_KIND, envelope.commit);
+        appends.push(log.append(TRANSCRIPT_REVISION_COMMIT_KIND, envelope.commit));
+        await Promise.all(appends);
         try {
           const expected = decodeOwnEnvelope(node.writerId, envelope);
           if (expected.status !== "complete") {

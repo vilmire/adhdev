@@ -78,13 +78,27 @@ export function createLiveTranscriptPublisher(
 
         const log = node.node.log(activation.topic);
         // Single current-owner writer appends begin/chunks/commit IN ORDER
-        // (design §3.3) — sequential awaits, not Promise.all, so a partial
-        // failure never lands chunks/commit out of order relative to begin.
-        await log.append(TRANSCRIPT_REVISION_BEGIN_KIND, envelope.begin as unknown as JsonValue);
+        // (design §3.3). Order comes from ISSUE order, not await order: every
+        // `append` call enqueues synchronously (seqscribe log.ts `push`), the
+        // group-commit `flush` drains that queue FIFO, and `processAppend`
+        // assigns `seq = head.contigSeq + 1` sequentially as it walks the
+        // batch. So issuing all N+2 appends before awaiting preserves
+        // begin→chunks→commit exactly, while collapsing what used to be N+2
+        // separate GROUP_COMMIT_MS timer waits into (usually) one commit.
+        //
+        // Failure semantics are unchanged-or-better: a flush aborts its whole
+        // transaction and rejects every item in the batch, and `Promise.all`
+        // rejects on the first of those — where sequential awaits would stop
+        // at the first failure having already durably landed the rows before
+        // it. Batched, those rows roll back with the transaction.
+        const appends: Promise<unknown>[] = [
+            log.append(TRANSCRIPT_REVISION_BEGIN_KIND, envelope.begin as unknown as JsonValue),
+        ];
         for (const chunk of envelope.chunks) {
-            await log.append(TRANSCRIPT_REVISION_CHUNK_KIND, chunk as unknown as JsonValue);
+            appends.push(log.append(TRANSCRIPT_REVISION_CHUNK_KIND, chunk as unknown as JsonValue));
         }
-        await log.append(TRANSCRIPT_REVISION_COMMIT_KIND, envelope.commit as unknown as JsonValue);
+        appends.push(log.append(TRANSCRIPT_REVISION_COMMIT_KIND, envelope.commit as unknown as JsonValue));
+        await Promise.all(appends);
 
         try {
             const expected = decodeOwnEnvelope(node.writerId, envelope);
