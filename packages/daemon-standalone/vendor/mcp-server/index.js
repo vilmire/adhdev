@@ -101027,6 +101027,80 @@ ${marker}`,
         );
       }
     });
+    function normalizeClaudeTuiIdentity(text) {
+      return text.replace(/\s+/g, " ").trim();
+    }
+    function claudeTuiQuestionMatches(expected, focused) {
+      const expectedQuestion = normalizeClaudeTuiIdentity(expected.question);
+      const focusedQuestion = normalizeClaudeTuiIdentity(focused.question);
+      return !!expectedQuestion && expectedQuestion === focusedQuestion;
+    }
+    function claudeTuiQuestionTextAppears(expected, screenText) {
+      const expectedQuestion = normalizeClaudeTuiIdentity(expected.question);
+      const focusedPickerRegion = readFocusedClaudeTuiPickerRegion(screenText);
+      return !!expectedQuestion && focusedPickerRegion !== null && normalizeClaudeTuiIdentity(focusedPickerRegion).includes(expectedQuestion);
+    }
+    function claudeTuiPagesLookLikeSameQuestion(landed, reread) {
+      const landedQuestion = readFocusedClaudeTuiQuestion(landed.screenText);
+      const rereadQuestion = readFocusedClaudeTuiQuestion(reread);
+      if (!landedQuestion || !rereadQuestion) return true;
+      return normalizeClaudeTuiIdentity(landedQuestion.question) === normalizeClaudeTuiIdentity(rereadQuestion.question);
+    }
+    function readClaudeTuiHeaders(screenText) {
+      const lines = screenText.split(/\r?\n/);
+      let navLine;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        if (lines[index].includes("\u2714 Submit") && /[☐☒]/.test(lines[index])) {
+          navLine = lines[index];
+          break;
+        }
+      }
+      if (!navLine) return [];
+      const headers = [];
+      for (const match of navLine.matchAll(/[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g)) {
+        const header = match[1]?.trim();
+        if (header) headers.push(header);
+      }
+      return headers;
+    }
+    function claudeAskUserQuestionPromptsMatch(expected, observed) {
+      if (expected.questions.length !== observed.questions.length) return false;
+      return expected.questions.every((expectedQuestion, index) => {
+        const observedQuestion = observed.questions[index];
+        if (!observedQuestion || normalizeClaudeTuiIdentity(expectedQuestion.question) !== normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
+        const observedHeader = normalizeClaudeTuiIdentity(observedQuestion.header || "");
+        if (observedHeader && normalizeClaudeTuiIdentity(expectedQuestion.header || "") !== observedHeader) return false;
+        const expectedLabels = expectedQuestion.options.map((option) => normalizeClaudeTuiIdentity(option.label)).filter((label) => !/^(?:Type something\.?|Chat about this)$/i.test(label));
+        const observedLabels = observedQuestion.options.map((option) => normalizeClaudeTuiIdentity(option.label));
+        return expectedLabels.length === observedLabels.length && expectedLabels.every((label, optionIndex) => label === observedLabels[optionIndex]);
+      });
+    }
+    function readClaudeToolResultIds(value) {
+      if (!value || typeof value !== "object") return [];
+      const record2 = value;
+      const blocks = [];
+      if (Array.isArray(record2.content)) blocks.push(...record2.content);
+      const message = record2.message;
+      if (message && typeof message === "object" && Array.isArray(message.content)) {
+        blocks.push(...message.content);
+      }
+      if (record2.type === "tool_result") blocks.push(record2);
+      const ids = [];
+      for (const block2 of blocks) {
+        if (!block2 || typeof block2 !== "object") continue;
+        const candidate = block2;
+        if (candidate.type !== "tool_result") continue;
+        const id = typeof candidate.tool_use_id === "string" ? candidate.tool_use_id.trim() : "";
+        if (id) ids.push(id);
+      }
+      return ids;
+    }
+    var init_claude_tui_helpers = __esm2({
+      "src/providers/spec/claude-tui-helpers.ts"() {
+        "use strict";
+        init_interactive_prompt();
+      }
+    });
     var pty_transport_exports = {};
     __export2(pty_transport_exports, {
       NodePtyTransportFactory: () => NodePtyTransportFactory,
@@ -107676,7 +107750,7 @@ ${text}` : text;
       }
       if (latestIdx < 0 || !latestPrompt) return null;
       for (let i = latestIdx + 1; i < records.length; i++) {
-        if (readClaudeToolResultIds(records[i]).includes(latestPrompt.promptId)) return null;
+        if (readClaudeToolResultIds2(records[i]).includes(latestPrompt.promptId)) return null;
       }
       const createdAt = readRecordTimestamp(records[latestIdx]);
       if (createdAt) latestPrompt.createdAt = createdAt;
@@ -107689,7 +107763,7 @@ ${text}` : text;
     function applyClaudeFreeformEscape(prompt) {
       for (const question of prompt.questions) question.allowFreeform = true;
     }
-    function readClaudeToolResultIds(record2) {
+    function readClaudeToolResultIds2(record2) {
       if (!record2 || typeof record2 !== "object") return [];
       const r = record2;
       const blocks = [];
@@ -107781,17 +107855,25 @@ ${text}` : text;
       }
       return null;
     }
+    var ANSI_OSC_DCS_RE;
+    var ANSI_CSI_RE;
+    var init_kimi_auth_billing = __esm2({
+      "src/providers/spec/kimi-auth-billing.ts"() {
+        "use strict";
+        ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+        ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+      }
+    });
     function delay(ms) {
       return new Promise((resolve33) => setTimeout(resolve33, ms));
     }
     var fs37;
     var import_node_crypto4;
-    var ANSI_OSC_DCS_RE;
-    var ANSI_CSI_RE;
     var SpecCliAdapter;
     var init_cli_adapter = __esm2({
       "src/providers/spec/cli-adapter.ts"() {
         "use strict";
+        init_claude_tui_helpers();
         init_fsm_driver();
         init_evaluator();
         init_native_history_executor();
@@ -107808,8 +107890,7 @@ ${text}` : text;
         init_kimi_pending_question();
         init_claude_pending_question();
         init_dist();
-        ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
-        ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+        init_kimi_auth_billing();
         SpecCliAdapter = class _SpecCliAdapter {
           cliType;
           cliName;
@@ -108925,7 +109006,7 @@ ${text}` : text;
               }
             }
             const identifiableQuestions = this.activeInteractivePrompt.questions.filter((q) => !!q.question?.trim());
-            const stillOnScreen = identifiableQuestions.length > 0 ? identifiableQuestions.some((q) => this.claudeTuiQuestionTextAppears(q, screenText)) : screenText.includes("Enter to select");
+            const stillOnScreen = identifiableQuestions.length > 0 ? identifiableQuestions.some((q) => claudeTuiQuestionTextAppears(q, screenText)) : screenText.includes("Enter to select");
             if (stillOnScreen) {
               this.interactivePromptLostAt = null;
               return "held";
@@ -108966,49 +109047,17 @@ ${text}` : text;
               let resolved = false;
               for (const record2 of readJsonlLines(history.sourcePath)) {
                 const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record2, this.cliType);
-                if (observedPrompt && (observedPrompt.promptId === prompt.promptId || this.claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
+                if (observedPrompt && (observedPrompt.promptId === prompt.promptId || claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
                   boundToolUseId = observedPrompt.promptId;
                   resolved = false;
                 }
                 if (!boundToolUseId) continue;
-                if (this.readClaudeToolResultIds(record2).includes(boundToolUseId)) resolved = true;
+                if (readClaudeToolResultIds(record2).includes(boundToolUseId)) resolved = true;
               }
               return resolved;
             } catch {
               return false;
             }
-          }
-          claudeAskUserQuestionPromptsMatch(expected, observed) {
-            if (expected.questions.length !== observed.questions.length) return false;
-            return expected.questions.every((expectedQuestion, index) => {
-              const observedQuestion = observed.questions[index];
-              if (!observedQuestion || this.normalizeClaudeTuiIdentity(expectedQuestion.question) !== this.normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
-              const observedHeader = this.normalizeClaudeTuiIdentity(observedQuestion.header || "");
-              if (observedHeader && this.normalizeClaudeTuiIdentity(expectedQuestion.header || "") !== observedHeader) return false;
-              const expectedLabels = expectedQuestion.options.map((option) => this.normalizeClaudeTuiIdentity(option.label)).filter((label) => !/^(?:Type something\.?|Chat about this)$/i.test(label));
-              const observedLabels = observedQuestion.options.map((option) => this.normalizeClaudeTuiIdentity(option.label));
-              return expectedLabels.length === observedLabels.length && expectedLabels.every((label, optionIndex) => label === observedLabels[optionIndex]);
-            });
-          }
-          readClaudeToolResultIds(value) {
-            if (!value || typeof value !== "object") return [];
-            const record2 = value;
-            const blocks = [];
-            if (Array.isArray(record2.content)) blocks.push(...record2.content);
-            const message = record2.message;
-            if (message && typeof message === "object" && Array.isArray(message.content)) {
-              blocks.push(...message.content);
-            }
-            if (record2.type === "tool_result") blocks.push(record2);
-            const ids = [];
-            for (const block2 of blocks) {
-              if (!block2 || typeof block2 !== "object") continue;
-              const candidate = block2;
-              if (candidate.type !== "tool_result") continue;
-              const id = typeof candidate.tool_use_id === "string" ? candidate.tool_use_id.trim() : "";
-              if (id) ids.push(id);
-            }
-            return ids;
           }
           /**
            * Read the pending AskUserQuestion off claude's native JSONL transcript, or
@@ -109060,7 +109109,7 @@ ${text}` : text;
               this.statusCallback?.();
               return;
             }
-            const headers = this.readClaudeTuiHeaders(screenText);
+            const headers = readClaudeTuiHeaders(screenText);
             if (headers.length === 0) {
               const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
                 // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
@@ -109123,30 +109172,17 @@ ${text}` : text;
             if (questions.length === 1) {
               if (questions[0].multiSelect) return;
               const focused2 = readFocusedClaudeTuiQuestion(screenText);
-              if (!focused2 || !this.claudeTuiQuestionMatches(questions[0], focused2) || !focused2.multiSelect) return;
+              if (!focused2 || !claudeTuiQuestionMatches(questions[0], focused2) || !focused2.multiSelect) return;
               questions[0].multiSelect = true;
               this.statusCallback?.();
               return;
             }
             const focused = readFocusedClaudeTuiQuestion(screenText);
             if (!focused || !focused.multiSelect) return;
-            const match = questions.find((q) => this.claudeTuiQuestionMatches(q, focused));
+            const match = questions.find((q) => claudeTuiQuestionMatches(q, focused));
             if (!match || match.multiSelect) return;
             match.multiSelect = true;
             this.statusCallback?.();
-          }
-          normalizeClaudeTuiIdentity(text) {
-            return text.replace(/\s+/g, " ").trim();
-          }
-          claudeTuiQuestionMatches(expected, focused) {
-            const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
-            const focusedQuestion = this.normalizeClaudeTuiIdentity(focused.question);
-            return !!expectedQuestion && expectedQuestion === focusedQuestion;
-          }
-          claudeTuiQuestionTextAppears(expected, screenText) {
-            const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
-            const focusedPickerRegion = readFocusedClaudeTuiPickerRegion(screenText);
-            return !!expectedQuestion && focusedPickerRegion !== null && this.normalizeClaudeTuiIdentity(focusedPickerRegion).includes(expectedQuestion);
           }
           readClaudeTuiSnapshotForAnswer() {
             try {
@@ -109160,13 +109196,13 @@ ${text}` : text;
             const deadline = Date.now() + settleTimeoutMs;
             let screenText = this.readClaudeTuiSnapshotForAnswer();
             let focused = readFocusedClaudeTuiQuestion(screenText);
-            while (Date.now() < deadline && !(focused && this.claudeTuiQuestionMatches(expected, focused))) {
+            while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
               await new Promise((resolve33) => setTimeout(resolve33, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               screenText = this.readClaudeTuiSnapshotForAnswer();
               focused = readFocusedClaudeTuiQuestion(screenText);
             }
             if (focused) {
-              if (this.claudeTuiQuestionMatches(expected, focused)) return "focused";
+              if (claudeTuiQuestionMatches(expected, focused)) return "focused";
               throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);
             }
             const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
@@ -109205,7 +109241,7 @@ ${text}` : text;
               let classification;
               let directSubmitted = false;
               if (focused) {
-                const boundQuestion = prompt.questions.some((question) => this.claudeTuiQuestionMatches(question, focused));
+                const boundQuestion = prompt.questions.some((question) => claudeTuiQuestionMatches(question, focused));
                 classification = boundQuestion ? "bound_question" : "foreign_question";
               } else if (review) {
                 classification = "review";
@@ -109257,7 +109293,7 @@ ${text}` : text;
             const focused = readFocusedClaudeTuiQuestion(screenText);
             if (focused || !isClaudeTuiReviewScreen(screenText)) {
               const observed = focused?.question ? `; focused question is "${focused.question}"` : "";
-              const boundQuestionStillFocused = !!focused && prompt.questions.some((question) => this.claudeTuiQuestionMatches(question, focused));
+              const boundQuestionStillFocused = !!focused && prompt.questions.some((question) => claudeTuiQuestionMatches(question, focused));
               if (boundQuestionStillFocused) {
                 if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
                   LOG.info("SpecAdapter", `[${this.cliType}] review page unsettled but native tool_result confirms delivery \u2014 accepting (allowsFreeform=${allowsFreeform})`);
@@ -109273,28 +109309,11 @@ ${text}` : text;
               LOG.warn("SpecAdapter", `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
               throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
             }
-            const expectedHeaders = prompt.questions.map((q) => q.header && this.normalizeClaudeTuiIdentity(q.header)).filter((header) => !!header);
+            const expectedHeaders = prompt.questions.map((q) => q.header && normalizeClaudeTuiIdentity(q.header)).filter((header) => !!header);
             if (expectedHeaders.length === 0) return;
-            const reviewHeaders = this.readClaudeTuiHeaders(screenText).map((header) => this.normalizeClaudeTuiIdentity(header));
+            const reviewHeaders = readClaudeTuiHeaders(screenText).map((header) => normalizeClaudeTuiIdentity(header));
             if (expectedHeaders.every((header) => reviewHeaders.includes(header))) return;
             throw new Error("Claude TUI review page does not match the active interactive prompt headers");
-          }
-          readClaudeTuiHeaders(screenText) {
-            const lines = screenText.split(/\r?\n/);
-            let navLine;
-            for (let index = lines.length - 1; index >= 0; index -= 1) {
-              if (lines[index].includes("\u2714 Submit") && /[☐☒]/.test(lines[index])) {
-                navLine = lines[index];
-                break;
-              }
-            }
-            if (!navLine) return [];
-            const headers = [];
-            for (const match of navLine.matchAll(/[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g)) {
-              const header = match[1]?.trim();
-              if (header) headers.push(header);
-            }
-            return headers;
           }
           /**
            * Snapshot the currently-focused claude TUI page, polling until its
@@ -109318,48 +109337,6 @@ ${text}` : text;
             }
             return screenText;
           }
-          /**
-           * Is `reread` a re-render of the SAME picker page as `landed`?
-           *
-           * Guards the return-pass screenText swap in captureClaudeTuiPrompt, which
-           * replaces a page's entire raw screen and therefore must never be handed a
-           * frame belonging to a different question.
-           *
-           * WHAT WE COMPARE — the question line, via the same parser the capture
-           * itself uses (readFocusedClaudeTuiQuestion). Rationale:
-           *  - The question text is the one field that is per-page, always rendered
-           *    (it is the parse anchor — a page without it yields no question at all),
-           *    and stable across the redraw we are waiting on. The redraw races the
-           *    option-row GLYPH COLUMN, not the question line.
-           *  - The header is NOT usable on its own: on the headered variant every page
-           *    renders the identical nav line, and `page.header` is assigned by index
-           *    from that shared line rather than read from the page body — so it is
-           *    equal across pages by construction and would accept any frame.
-           *  - The option-label set is rejected as the primary key: it is drawn in the
-           *    very region that is mid-redraw, and rows can be clipped or scrolled out
-           *    of the captured frame (the same truncation that forced the headerless
-           *    parser to stop requiring the freeform escape hatch). Comparing it would
-           *    reject legitimate repairs — exactly the frames this pass exists to fix.
-           *
-           * STRICTNESS — deliberately asymmetric, because the two error directions are
-           * not equally costly. Wrongly ALLOWING a swap corrupts a question into a
-           * duplicate of another (the reported user-visible defect). Wrongly BLOCKING
-           * one merely leaves the forward-pass capture in place — at worst a
-           * multi-select page stays flagged single-select, which the live status-tick
-           * upgrade (maybeUpgradeClaudeTuiMultiSelect) then repairs anyway. So this
-           * blocks only on POSITIVE EVIDENCE of a different page: if either side fails
-           * to parse we return true and defer to the pre-existing glyph gate, keeping
-           * behaviour identical to before for every frame whose identity we cannot
-           * read. Comparison is whitespace-normalised so a reflow or trailing-pad
-           * difference does not read as a different question.
-           */
-          claudeTuiPagesLookLikeSameQuestion(landed, reread) {
-            const landedQuestion = readFocusedClaudeTuiQuestion(landed.screenText);
-            const rereadQuestion = readFocusedClaudeTuiQuestion(reread);
-            if (!landedQuestion || !rereadQuestion) return true;
-            const normalize7 = (text) => text.replace(/\s+/g, " ").trim();
-            return normalize7(landedQuestion.question) === normalize7(rereadQuestion.question);
-          }
           async captureClaudeTuiPrompt(firstScreen, headers) {
             if (this.claudeTuiCaptureSuppressed) return;
             const pages = [{ screenText: firstScreen, header: headers[0] }];
@@ -109375,7 +109352,7 @@ ${text}` : text;
               await new Promise((resolve33) => setTimeout(resolve33, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               const reread = await this.snapshotSettledClaudeTuiPage();
               const landed = pages[index - 1];
-              if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && this.claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
+              if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
                 landed.screenText = reread;
               }
             }
