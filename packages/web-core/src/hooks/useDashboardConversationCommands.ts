@@ -389,26 +389,53 @@ export function useDashboardConversationCommands({
         sendInFlightRef.current = true
         setIsSendingChat(true)
         setSendFeedbackMessage(null)
+        setLastSendQueued(false)
         lastSendRef.current = attempt
+
+        // Mirrors handleSendChat: the optimistic bubble is appended BEFORE the
+        // await, not after. A force send is issued precisely when the agent is
+        // busy — the round trip is at its slowest exactly then — so deferring
+        // the echo leaves the composer looking inert and invites the repeated
+        // presses this path was reported for.
+        setPendingLocalMessage({ content: message, sentAt: now })
 
         try {
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                // Nothing was sent, so no echo will ever retire the bubble.
+                setPendingLocalMessage(null)
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
 
             const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(message, attachments, activeConv, { force: true }))
             const res = unwrapCommandResult(raw)
+
+            // ★ ORDER MATTERS — same contract as handleSendChat. A queued result
+            // carries `sent:false`, so the throw below would report a body the
+            // daemon ACCEPTED as a send failure, and clearRecentSendOnFailure in
+            // the catch would drop the dedup record so the user's retry parks a
+            // second copy. That triple-send is the reported defect; the queued
+            // branch must be checked first and must NOT clear the attempt.
+            if (isQueuedSendResult(res)) {
+                setLastSendQueued(true)
+                setPendingLocalMessage(prev => (prev ? { ...prev, queued: true } : prev))
+                setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
+                return true
+            }
+
             if (res?.success === false || res?.sent === false) {
                 throw new Error(res?.error || 'Send failed')
             }
+            setLastSendQueued(false)
             setSendFeedbackMessage(null)
             return true
         } catch (e) {
             console.warn('Force send blocked/failed', e)
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+            // The send failed, so the daemon will never echo this text back.
+            setPendingLocalMessage(null)
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
