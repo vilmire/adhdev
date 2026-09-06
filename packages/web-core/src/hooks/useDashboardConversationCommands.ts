@@ -3,6 +3,7 @@ import type { ActiveConversation } from '../components/dashboard/types'
 import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
 import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
 import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
+import { isConversationGenerating } from '../components/dashboard/DashboardMobileChatShared'
 import type { PendingLocalMessage } from '../components/dashboard/conversation-message-snapshot'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
@@ -93,6 +94,43 @@ export function isQueuedSendResult(res: any): boolean {
     return res.queued === true
 }
 
+/**
+ * (QUEUED-SEND-STICKY) Should the parked-send notice be released?
+ *
+ * `sendFeedbackMessage` is written once, at the moment the daemon parks a send,
+ * and until now it was cleared by exactly two things: the next send attempt, and
+ * a tab switch. Neither happens when the agent simply finishes — so the notice
+ * outlived the condition it describes and an idle session kept telling the owner
+ * "the agent is still working". That is the defect: the message was CORRECT when
+ * shown, and never released.
+ *
+ * The release condition is the live session status, read through the same
+ * `isConversationGenerating` predicate every other surface uses, so a status the
+ * predicate counts as working (`finalizing`/`starting`, added in oss df900791)
+ * keeps the notice up rather than flashing it away mid-turn.
+ *
+ * ★ Deliberately scoped to the QUEUED notice only. `sendFeedbackMessage` also
+ * carries send FAILURES, which describe a past event, not a live condition — an
+ * agent going idle does not make a failed send succeed, so those must stay until
+ * the user acts. Releasing on idle unconditionally would silently swallow them.
+ *
+ * ★ Not a timeout. The notice is bound to the state that justifies it; there is
+ * no duration at which a still-generating agent should stop being reported.
+ */
+export function shouldReleaseQueuedSendFeedback({
+    feedbackMessage,
+    lastSendQueued,
+    isGenerating,
+}: {
+    feedbackMessage: string | null
+    lastSendQueued: boolean
+    isGenerating: boolean
+}): boolean {
+    if (!lastSendQueued) return false
+    if (feedbackMessage !== QUEUED_SEND_MESSAGE) return false
+    return !isGenerating
+}
+
 function getErrorMessage(error: unknown): string {
     if (error instanceof Error) return error.message
     return String(error || '')
@@ -177,6 +215,22 @@ export function useDashboardConversationCommands({
         // typed in and must not follow the user to another session.
         setPendingLocalMessage(null)
     }, [activeConv?.tabKey])
+
+    // (QUEUED-SEND-STICKY) Release the parked-send notice when the agent stops
+    // generating. Subscribes to the live status so BOTH surfaces that render
+    // `sendFeedbackMessage` — the input placeholder and the line below it —
+    // clear together; they read the same state, so neither can go stale alone.
+    const isActiveConvGenerating = activeConv ? isConversationGenerating(activeConv) : false
+    useEffect(() => {
+        setSendFeedbackMessage(prev => (
+            shouldReleaseQueuedSendFeedback({
+                feedbackMessage: prev,
+                lastSendQueued,
+                isGenerating: isActiveConvGenerating,
+            }) ? null : prev
+        ))
+        if (!isActiveConvGenerating && lastSendQueued) setLastSendQueued(false)
+    }, [isActiveConvGenerating, lastSendQueued])
 
     const handleSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
         if (!activeConv) return false
