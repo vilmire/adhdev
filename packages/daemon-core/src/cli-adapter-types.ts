@@ -131,7 +131,22 @@ export interface CliAdapter {
     _acpInstance?: AcpAdapterHandle;
     spawn(): Promise<void>;
     sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
-    forceSendMessage?(text: string, meshTaskId?: string): Promise<{ status: 'queued' | 'delivered' } | void>;
+    /**
+     * Abort the turn currently in flight by writing the provider's OWN stop key,
+     * so the caller can wait for busy→idle and then deliver a new prompt as a
+     * genuine turn (SEND-NOW / delivery mode 'interrupt').
+     *
+     * This replaced `forceSendMessage`, which wrote the body straight into a
+     * generating PTY: the bytes were never consumed as a turn and the caller was
+     * still told the send succeeded (retired in oss 6cca365b after measured data
+     * loss). Optional because only the spec-driven adapter implements it; callers
+     * must typeof-guard and report `interrupt_not_implemented` rather than
+     * silently falling back to a write.
+     */
+    interruptTurn?(): Promise<
+        | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
+        | { ok: false; reason: string; message: string }
+    >;
     getStatus(options?: { allowParse?: boolean }): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
     getDebugSnapshot?(): unknown;

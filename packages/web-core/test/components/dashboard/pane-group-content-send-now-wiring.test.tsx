@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// (PANE-GROUP-CONTENT-FORCE-SEND-DRIFT) PaneGroupContent used to render two
+// (PANE-GROUP-CONTENT-SEND-NOW-DRIFT) PaneGroupContent used to render two
 // near-identical ChatPane call sites — one for the pty transport's chat
 // sub-pane, one for every other transport — and commit 3cb9e4d0 wired
 // pendingLocalMessage/sendFeedbackMessage into 6 of 7 call sites across the
 // codebase but missed the pty ChatPane here. Because every command prop on
 // ChatPane is optional, the omission compiled cleanly and only showed up as
-// "force-send doesn't work when a CLI/PTY session is viewed in chat mode".
+// "send-now doesn't work when a CLI/PTY session is viewed in chat mode".
 //
 // The two call sites are now unified into one `renderChatPane(visible)`
 // closure (see PaneGroupContent.tsx), so this test both guards against a
@@ -76,7 +76,7 @@ afterEach(() => {
     container.remove()
 })
 
-const HANDLE_FORCE_SEND = vi.fn(async () => true)
+const HANDLE_SEND_NOW = vi.fn(async () => true)
 const HANDLE_SEND = vi.fn(async () => true)
 
 // The command surface arrives as ONE required `commands` object rather than N
@@ -88,7 +88,7 @@ function makeCommands() {
         handleModalButton: vi.fn(),
         handleRelaunch: vi.fn(),
         handleSendChat: HANDLE_SEND,
-        handleForceSendChat: HANDLE_FORCE_SEND,
+        handleSendNowQueued: HANDLE_SEND_NOW,
         isSendingChat: false,
         sendFeedbackMessage: null,
         lastSendQueued: false,
@@ -115,20 +115,20 @@ function renderPane(overrides: { transport: 'pty' | 'acp' | undefined; isCliTerm
 }
 
 describe('PaneGroupContent — ChatPane call-site prop parity', () => {
-    it('★ forwards handleForceSendChat to the pty transport\'s chat sub-pane', () => {
+    it('★ forwards handleSendNowQueued to the pty transport\'s chat sub-pane', () => {
         renderPane({ transport: 'pty', isCliTerminal: false })
 
         expect(chatPaneSpy).toHaveBeenCalledTimes(1)
         const props = chatPaneSpy.mock.calls[0][0]
-        expect(props.handleForceSendChat).toBe(HANDLE_FORCE_SEND)
+        expect(props.handleSendNowQueued).toBe(HANDLE_SEND_NOW)
     })
 
-    it('forwards handleForceSendChat to the non-pty ChatPane (regression guard)', () => {
+    it('forwards handleSendNowQueued to the non-pty ChatPane (regression guard)', () => {
         renderPane({ transport: 'acp', isCliTerminal: false })
 
         expect(chatPaneSpy).toHaveBeenCalledTimes(1)
         const props = chatPaneSpy.mock.calls[0][0]
-        expect(props.handleForceSendChat).toBe(HANDLE_FORCE_SEND)
+        expect(props.handleSendNowQueued).toBe(HANDLE_SEND_NOW)
     })
 
     it('preserves the one real difference: pty chat sub-pane visibility follows chatPaneVisible (off when terminal sub-pane is active)', () => {

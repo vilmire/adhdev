@@ -63,7 +63,7 @@ describe('CliProviderInstance — ANTIGRAVITY-PREMATURE-COMPLETION gate', () => 
     const instance = makeAntigravityInstance({
       meshTaskInjectedAt: 10_000,
       currentTurnStartedAt: 2_000, // prior turn's start — no new turn yet
-      currentTurnTaskId: 'task-new', // forceSendMessage pre-binds this at inject time
+      currentTurnTaskId: 'task-new', // pre-bound at inject time by the mesh dispatch path
       meshActiveTaskId: 'task-new',
       externalMessages: PRIOR_TURN_ASSISTANT,
     })

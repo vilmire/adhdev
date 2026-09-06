@@ -38,6 +38,7 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
+import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
 // MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
 // deduplicated by the SAME signature on both routes rather than by two divergent rules.
 import { buildSendInputSignature } from './chat-commands-shared.js';
@@ -2147,6 +2148,7 @@ export class DaemonCliManager {
                     // Preserve the exact prior call shape when there is no taskId (plain
                     // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
                     // present, so existing non-mesh callers and their contracts are unchanged.
+                    let interruptRequeued = false;
                     try {
                         if (hasStructuredParts) {
                             // MESH-IMAGE-DISPATCH: multipart input goes to the provider INSTANCE
@@ -2165,11 +2167,25 @@ export class DaemonCliManager {
                                 throw new Error(`No provider instance for session '${key}' — cannot deliver multipart input for agent '${agentType}'`);
                             }
                             structuredTarget.onEvent('send_message', { input });
-                        } else if (forceSend && typeof (adapter as any).forceSendMessage === 'function') {
-                            if (meshTaskId) await (adapter as any).forceSendMessage(message, meshTaskId);
-                            else await (adapter as any).forceSendMessage(message);
                         } else if (forceSend) {
-                            await adapter.sendMessage(message, meshTaskId ? { force: true, meshTaskId } : { force: true });
+                            // SEND-NOW: `force` no longer means "write into the
+                            // generating PTY" — that path was retired in oss
+                            // 6cca365b after measured data loss. It now routes
+                            // through the supported sequence: press the
+                            // provider's own stop key, wait for busy→idle, then
+                            // deliver as a genuine new turn.
+                            const outcome = await interruptAndDeliver(
+                                adapter as unknown as InterruptibleAdapter,
+                                message,
+                                meshTaskId ? { meshTaskId } : undefined,
+                            );
+                            if (!outcome.ok) throw new Error(outcome.message);
+                            // An interrupt can still end with the body parked in
+                            // the driver FIFO (the session re-entered busy between
+                            // the idle observation and the write). Report that
+                            // instead of the blanket `queued: false` the retired
+                            // force path used to claim.
+                            interruptRequeued = outcome.queued;
                         } else if (meshTaskId) {
                             await adapter.sendMessage(message, { meshTaskId });
                         } else {
@@ -2190,7 +2206,7 @@ export class DaemonCliManager {
                         success: true,
                         status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
                         ...(BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: 'agent_runtime_busy' } : {}),
-                        ...(forceSend ? { forceSent: true, queued: false } : {}),
+                        ...(forceSend ? { forceSent: true, interrupted: true, queued: interruptRequeued } : {}),
                     };
                 } else if (action === 'clear_history') {
                     if (typeof adapter.clearHistory === 'function') adapter.clearHistory();

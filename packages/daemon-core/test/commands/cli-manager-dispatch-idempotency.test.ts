@@ -16,7 +16,14 @@ function createManager(adapterStatus = 'idle') {
     workingDir: '/repo',
     spawn: vi.fn(async () => {}),
     sendMessage,
-    forceSendMessage: vi.fn(async () => {}),
+    // SEND-NOW: `force` now routes through interrupt → busy→idle → ordinary
+    // send. The mock flips the reported status to idle, which is what the
+    // real FSM does once the stop key lands; without it the helper's idle
+    // wait would (correctly) time out.
+    interruptTurn: vi.fn(async () => {
+      adapterStatus = 'idle'
+      return { ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared' as const }
+    }),
     getStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
     getScriptParsedStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
     getPartialResponse: vi.fn(() => ''),
@@ -133,8 +140,8 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
     const forced = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true })
 
-    expect(forced).toMatchObject({ success: true, forceSent: true })
-    expect(adapter.forceSendMessage).toHaveBeenCalledTimes(1)
+    expect(forced).toMatchObject({ success: true, forceSent: true, interrupted: true })
+    expect(adapter.interruptTurn).toHaveBeenCalledTimes(1)
   })
 
   it('ad-hoc chat without meshContext is never guarded (no taskId → no suppression)', async () => {

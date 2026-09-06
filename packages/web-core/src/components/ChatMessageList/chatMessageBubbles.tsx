@@ -228,6 +228,24 @@ export interface ChatMessageRowProps {
     isCliMode: boolean;
     isTextExpanded: boolean;
     onToggleTextExpanded: () => void;
+    /**
+     * SEND-NOW: interrupt the agent's current turn so this queued body is
+     * delivered as a real turn. Optional — read-only viewers (SessionShare)
+     * pass nothing and the affordance simply does not render.
+     */
+    onSendNow?: () => void;
+    /** True while a send-now request for this row is in flight. */
+    isSendingNow?: boolean;
+}
+
+/**
+ * Whether this row is the optimistic local bubble that the daemon has ACCEPTED
+ * but not yet written to the PTY (`{status:'queued'}`). Written by
+ * withPendingLocalMessage; see conversation-message-snapshot.ts.
+ */
+function isQueuedPendingLocal(message: ChatMessage): boolean {
+    const meta = message.meta as (Record<string, unknown> | undefined);
+    return meta?.pendingLocal === true && meta?.queued === true;
 }
 
 /**
@@ -269,6 +287,12 @@ export function buildChatMessageRowSignature(message: ChatMessage): string {
         meta ? String(meta.label ?? '') : '',
         meta ? String(meta.isRunning ?? '') : '',
         meta ? String(meta.renderMode ?? '') : '',
+        // SEND-NOW: the optimistic bubble flips `queued` false→true on the SAME
+        // content and sentAt, so without these the signature is identical and the
+        // memo suppresses the re-render — the queued badge and its Send now
+        // button would never appear.
+        meta ? String(meta.pendingLocal ?? '') : '',
+        meta ? String(meta.queued ?? '') : '',
     ].join('');
 }
 
@@ -280,7 +304,10 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     isCliMode: _isCliMode,
     isTextExpanded,
     onToggleTextExpanded,
+    onSendNow,
+    isSendingNow,
 }: ChatMessageRowProps) {
+    const isQueued = isQueuedPendingLocal(message);
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
     const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
@@ -429,6 +456,34 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                             {isTextExpanded ? 'Collapse ↑' : `Show more (${Math.round(displayContent.length / 100) * 100} chars) ↓`}
                         </button>
                     )}
+                    {/* SEND-NOW: the queued state and its escape hatch live INSIDE
+                        the bubble, so every layout that renders chat bubbles
+                        (desktop dockview, mobile panes, mobile chat room, remote
+                        dialog, standalone and cloud) gets them from this one
+                        place. `onSendNow` is optional so the read-only share
+                        viewer renders the badge-free bubble unchanged. */}
+                    {isQueued && (
+                        <div className="chat-bubble-queued" data-chat-queued-row="true">
+                            <span className="chat-bubble-queued-label" aria-label="Waiting to send">
+                                Waiting to send — the agent is still working.
+                            </span>
+                            {onSendNow && (
+                                <button
+                                    type="button"
+                                    onClick={onSendNow}
+                                    disabled={isSendingNow}
+                                    className="chat-bubble-send-now"
+                                    aria-label="Send now by interrupting the agent's current turn"
+                                    // The interrupt DISCARDS the turn in flight — that is
+                                    // inherent to steering a running agent, not a defect,
+                                    // so it is stated up front rather than after the fact.
+                                    title="Interrupt the agent's current turn and send this message now. The turn in progress will be lost."
+                                >
+                                    {isSendingNow ? 'Sending…' : 'Send now'}
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -444,4 +499,8 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     && prev.userName === next.userName
     && prev.isCliMode === next.isCliMode
     && prev.isTextExpanded === next.isTextExpanded
+    // SEND-NOW: the button's disabled/label state and its handler identity must
+    // reach the row, or pressing it would call a stale closure.
+    && prev.isSendingNow === next.isSendingNow
+    && prev.onSendNow === next.onSendNow
 ));

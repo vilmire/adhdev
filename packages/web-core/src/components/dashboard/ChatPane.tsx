@@ -49,7 +49,12 @@ export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ideEntry?: DaemonData;
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
-    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
+    /**
+     * SEND-NOW: interrupt the agent's turn in flight so the queued optimistic
+     * bubble is delivered as a real turn. Rendered inside that bubble by
+     * ChatMessageRow, which is why every layout gets it from this one prop.
+     */
+    handleSendNowQueued?: () => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
     /** (OPTIMISTIC-USER-BUBBLE) Locally-rendered message awaiting its daemon echo. */
@@ -111,7 +116,7 @@ export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConvers
 export default function ChatPane({
     activeConv, ideEntry,
     handleSendChat,
-    handleForceSendChat,
+    handleSendNowQueued,
     isSendingChat = false,
     sendFeedbackMessage = null,
     pendingLocalMessage = null,
@@ -552,6 +557,8 @@ export default function ChatPane({
                 emptyState={emptyState}
                 scrollToBottomRequestNonce={scrollToBottomRequestNonce}
                 isVisible={isVisible}
+                onSendNow={handleSendNowQueued}
+                isSendingNow={isSendingChat}
             />
 
             <ChatControlsSection
@@ -576,8 +583,6 @@ export default function ChatPane({
                     statusMessage={chatInputStatusMessage}
                     inlineStatusMessage={inlineStatusMessage}
                     onSend={handleSendChat}
-                    onForceSend={handleForceSendChat}
-                    canForceSend={!!handleForceSendChat && viewStates.isGenerating && !isChatInputBlocked}
                     isActive={isInputActive}
                     showControlsToggle={visibleBarControls.length > 0}
                     onControlsToggle={handleControlsToggleDebugGesture}

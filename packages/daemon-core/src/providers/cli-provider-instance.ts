@@ -420,8 +420,8 @@ export class CliProviderInstance implements ProviderInstance {
     // was injected/attached (attachMeshAssignment). The injected task counts as having
     // genuinely entered generating only once a turn STARTS after this moment
     // (currentTurnStartedAt > meshTaskInjectedAt) — because currentTurnStartedAt
-    // persists from the PRIOR turn and forceSendMessage pre-binds currentTurnTaskId at
-    // inject time, so neither alone distinguishes "injected but not yet generating"
+    // persists from the PRIOR turn and the mesh inject path pre-binds currentTurnTaskId
+    // at inject time, so neither alone distinguishes "injected but not yet generating"
     // from "genuinely generating". This timestamp is that discriminator. 0 = no task
     // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
     private meshTaskInjectedAt = 0;
@@ -2439,8 +2439,8 @@ export class CliProviderInstance implements ProviderInstance {
      * FAIL for a reused-idle session:
      *  - `currentTurnStartedAt > 0` alone: it persists from the PRIOR turn, so it is
      *    already > 0 the instant a new task is injected (pre-onTurnStarted).
-     *  - `currentTurnTaskId === meshActiveTaskId` alone: forceSendMessage (the mesh
-     *    inject path) pre-binds currentTurnTaskId to the new taskId at inject time,
+     *  - `currentTurnTaskId === meshActiveTaskId` alone: the mesh inject path
+     *    pre-binds currentTurnTaskId to the new taskId at inject time,
      *    BEFORE the turn starts, so this matches prematurely too.
      * The robust discriminator is TEMPORAL: the producing turn must have STARTED AFTER
      * the injection — `currentTurnStartedAt > meshTaskInjectedAt`. Only then has the
