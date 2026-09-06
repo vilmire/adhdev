@@ -292,12 +292,7 @@ export default function DashboardMobileChatMode({
                     selectedIdeEntry={selectedIdeEntry}
                     actionLogs={actionLogs}
                     userName={userName}
-                    isSendingChat={cmds.isSendingChat}
-                    sendFeedbackMessage={cmds.sendFeedbackMessage}
-                    pendingLocalMessage={cmds.pendingLocalMessage}
-                    isFocusingAgent={cmds.isFocusingAgent}
-                    handleModalButton={cmds.handleModalButton}
-                    handleRelaunch={cmds.handleRelaunch}
+                    commands={cmds}
                     onBack={navigation.backFromConversation}
                     onOpenNativeConversation={navigation.openNativeConversation}
                     onOpenMachine={navigation.openConversationMachine}
@@ -315,9 +310,6 @@ export default function DashboardMobileChatMode({
                             setCliViewModeOverrides,
                         })
                     }}
-                    handleSendChat={cmds.handleSendChat}
-                    handleForceSendChat={cmds.handleForceSendChat}
-                    handleFocusAgent={cmds.handleFocusAgent}
                 />
             ) : screen === 'machine' && selectedMachineEntry ? (
                 <DashboardMobileMachineScreen

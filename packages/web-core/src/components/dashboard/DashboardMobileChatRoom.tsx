@@ -4,8 +4,7 @@ import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
-import type { ImageAttachment } from './ChatInputBar'
-import type { PendingLocalMessage } from './conversation-message-snapshot'
+import type { DashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
@@ -18,10 +17,8 @@ interface DashboardMobileChatRoomProps {
     selectedIdeEntry?: DaemonData
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     userName?: string
-    isSendingChat: boolean
-    sendFeedbackMessage?: string | null
-    pendingLocalMessage?: PendingLocalMessage | null
-    isFocusingAgent: boolean
+    /** ★ Forwarded verbatim to `PaneGroupContent`; see that prop's contract. */
+    commands: DashboardConversationCommands
     onBack: () => void
     onOpenNativeConversation: (conversation: ActiveConversation) => void
     onOpenMachine: (conversation: ActiveConversation) => void
@@ -31,11 +28,6 @@ interface DashboardMobileChatRoomProps {
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
-    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
-    handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
-    handleFocusAgent: () => Promise<void>
-    handleModalButton: (button: string) => void
-    handleRelaunch: () => void
 }
 
 export default function DashboardMobileChatRoom({
@@ -45,10 +37,7 @@ export default function DashboardMobileChatRoom({
     selectedIdeEntry,
     actionLogs,
     userName,
-    isSendingChat,
-    sendFeedbackMessage = null,
-    pendingLocalMessage = null,
-    isFocusingAgent,
+    commands,
     onBack,
     onOpenNativeConversation,
     onOpenMachine,
@@ -58,11 +47,6 @@ export default function DashboardMobileChatRoom({
     onStopCli,
     cliViewMode,
     onSetCliViewMode,
-    handleSendChat,
-    handleForceSendChat,
-    handleFocusAgent,
-    handleModalButton,
-    handleRelaunch,
 }: DashboardMobileChatRoomProps) {
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     const isCli = isCliConv(selectedConversation) && !isAcp
@@ -145,15 +129,7 @@ export default function DashboardMobileChatRoom({
                     isCliTerminal={isCliTerminal}
                     ideEntry={selectedIdeEntry}
                     terminalRef={terminalRef}
-                    handleModalButton={handleModalButton}
-                    handleRelaunch={handleRelaunch}
-                    handleSendChat={handleSendChat}
-                    handleForceSendChat={handleForceSendChat}
-                    isSendingChat={isSendingChat}
-                    sendFeedbackMessage={sendFeedbackMessage}
-                    pendingLocalMessage={pendingLocalMessage}
-                    handleFocusAgent={handleFocusAgent}
-                    isFocusingAgent={isFocusingAgent}
+                    commands={commands}
                     actionLogs={actionLogs}
                     userName={userName}
                 />

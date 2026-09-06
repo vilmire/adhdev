@@ -79,6 +79,25 @@ afterEach(() => {
 const HANDLE_FORCE_SEND = vi.fn(async () => true)
 const HANDLE_SEND = vi.fn(async () => true)
 
+// The command surface arrives as ONE required `commands` object rather than N
+// loose optional props. The assertions below are unchanged in intent — they
+// still check what ChatPane actually receives — but the props are now built the
+// way every real call site builds them.
+function makeCommands() {
+    return {
+        handleModalButton: vi.fn(),
+        handleRelaunch: vi.fn(),
+        handleSendChat: HANDLE_SEND,
+        handleForceSendChat: HANDLE_FORCE_SEND,
+        isSendingChat: false,
+        sendFeedbackMessage: null,
+        lastSendQueued: false,
+        pendingLocalMessage: null,
+        handleFocusAgent: vi.fn(),
+        isFocusingAgent: false,
+    }
+}
+
 function renderPane(overrides: { transport: 'pty' | 'acp' | undefined; isCliTerminal: boolean; isVisible?: boolean }) {
     act(() => {
         root.render(
@@ -87,13 +106,7 @@ function renderPane(overrides: { transport: 'pty' | 'acp' | undefined; isCliTerm
                 clearToken: 0,
                 isCliTerminal: overrides.isCliTerminal,
                 terminalRef: { current: null },
-                handleModalButton: vi.fn(),
-                handleRelaunch: vi.fn(),
-                handleSendChat: HANDLE_SEND,
-                handleForceSendChat: HANDLE_FORCE_SEND,
-                isSendingChat: false,
-                handleFocusAgent: vi.fn(),
-                isFocusingAgent: false,
+                commands: makeCommands(),
                 actionLogs: [],
                 isVisible: overrides.isVisible ?? true,
             } as any),

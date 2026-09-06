@@ -33,18 +33,23 @@ vi.mock('../../../src/components/dashboard/PaneGroupContent', () => ({
     },
 }))
 
+// One stable object, mirroring the real hook — which memoizes its return so
+// that `PaneGroupContent`'s memo comparator can compare it by reference.
+const hookResult = {
+    handleModalButton: vi.fn(),
+    handleRelaunch: vi.fn(),
+    handleSendChat: vi.fn(async () => true),
+    handleForceSendChat: vi.fn(async () => true),
+    isSendingChat: false,
+    sendFeedbackMessage: SENTINEL_FEEDBACK,
+    lastSendQueued: false,
+    pendingLocalMessage: SENTINEL_PENDING,
+    handleFocusAgent: vi.fn(),
+    isFocusingAgent: false,
+}
+
 vi.mock('../../../src/hooks/useDashboardConversationCommands', () => ({
-    useDashboardConversationCommands: () => ({
-        handleModalButton: vi.fn(),
-        handleRelaunch: vi.fn(),
-        handleSendChat: vi.fn(async () => true),
-        handleForceSendChat: vi.fn(async () => true),
-        isSendingChat: false,
-        sendFeedbackMessage: SENTINEL_FEEDBACK,
-        pendingLocalMessage: SENTINEL_PENDING,
-        handleFocusAgent: vi.fn(),
-        isFocusingAgent: false,
-    }),
+    useDashboardConversationCommands: () => hookResult,
 }))
 
 // Imported AFTER the mocks above so the module graph picks them up.
@@ -131,12 +136,29 @@ function renderPanel() {
 }
 
 describe('desktop Dockview panel — optimistic bubble prop wiring', () => {
+    // The command surface now reaches PaneGroupContent as ONE required
+    // `commands` object rather than N loose optional props, so the assertion
+    // reads through that bundle. The intent is unchanged and is still the whole
+    // point of this file: the values the hook produces must actually arrive at
+    // the render site. What changed is that omitting them is now a compile
+    // error (`commands` is required) instead of a silent runtime drop — this
+    // test guards the wiring, the type guards the omission.
     it('★ forwards pendingLocalMessage and sendFeedbackMessage from the hook to PaneGroupContent', () => {
         renderPanel()
 
         expect(paneGroupContentSpy).toHaveBeenCalledTimes(1)
         const props = paneGroupContentSpy.mock.calls[0][0]
-        expect(props.pendingLocalMessage).toBe(SENTINEL_PENDING)
-        expect(props.sendFeedbackMessage).toBe(SENTINEL_FEEDBACK)
+        expect(props.commands.pendingLocalMessage).toBe(SENTINEL_PENDING)
+        expect(props.commands.sendFeedbackMessage).toBe(SENTINEL_FEEDBACK)
+    })
+
+    it('forwards the hook object itself, so a newly added command field cannot be dropped in transit', () => {
+        renderPanel()
+
+        // The structural half of the same guarantee: the panel passes the hook's
+        // return through as one value, so a field added to the hook reaches this
+        // render site without a per-field edit here.
+        const props = paneGroupContentSpy.mock.calls[0][0]
+        expect(props.commands).toBe(hookResult)
     })
 })
