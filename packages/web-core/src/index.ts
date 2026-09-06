@@ -122,9 +122,15 @@ export { buildConversations } from './components/dashboard/buildConversations'
 // sessions are actually being displayed, so it can declare exactly those as
 // transcript interest. Derived from the same registry the delivery above
 // targets, so the grant and the delivery cannot drift apart.
+// (D1) …and the status lane, for the same reason in the opposite failure mode:
+// when the replica lane wedges, the sibling status handler on the same
+// DataChannel is the only thing still reporting, so it is what tells the frozen
+// pane to re-pull.
 export {
     applyTranscriptReplicaSnapshotToControllers,
     collectRetainedTranscriptSessionInterest,
+    isTerminalChatTailStatusEvent,
+    noteTerminalStatusEventForControllers,
     reportTranscriptReplicaFallbackForSession,
     subscribeTranscriptSessionInterest,
 } from './components/dashboard/session-chat-tail-controller'

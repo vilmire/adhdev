@@ -234,22 +234,41 @@ describe('chat tail liveness watchdog', () => {
     expect(controller.shouldRefreshForLiveness()).toBe(false)
   })
 
-  it('treats discarded no-op updates as proof the lane is ALIVE', () => {
-    // A session pushing updates we correctly discard (unchanged signature) is
-    // healthy. Measuring quiet against "last APPLIED" instead of "last inbound"
-    // would re-pull it needlessly, forever.
+  it('★ (D3) discarded no-op updates prove the LANE is alive but do NOT postpone the watchdog', () => {
+    // ── This assertion was deliberately INVERTED (D3) ──────────────────────
+    // It used to require that a discarded no-op update reset the quiet clock,
+    // on the reasoning that a session still pushing updates is healthy. That
+    // reasoning is right about the LANE and wrong about the SCREEN, and this
+    // watchdog guards the screen.
+    //
+    // The failure it created: a producer re-emitting one frozen revision — or
+    // shipping tails the shrink-defense correctly rejects — is inbound traffic
+    // on every tick, so the quiet clock sat at zero permanently and the
+    // watchdog could never fire. That is precisely the frozen-pane case where
+    // nothing else can rescue the user, since the replica lane's silence also
+    // removes the evidence `expireStaleReplicaLease` needs to arm.
+    //
+    // `lastInboundAt` keeps its "lane is alive" meaning — asserted below, and
+    // still what gates the "nothing has ever arrived" check. Quiet is now
+    // measured against `lastAppliedAt`: when the rendered content last moved.
     const { controller, deliver, advance } = createHarness()
     deliver({ status: 'idle' })
+    const firstApply = controller.getLivenessStateForTest().lastAppliedAt
     advance(IDLE_QUIET_MS - 1)
 
     // Identical payload — handleUpdate discards it as unchanged.
     deliver({ status: 'idle' })
-    const applied = controller.getLivenessStateForTest()
+    const state = controller.getLivenessStateForTest()
     advance(2)
 
-    // Still within quiet of the (discarded) inbound update.
-    expect(controller.shouldRefreshForLiveness()).toBe(false)
-    expect(applied.lastInboundAt).toBeGreaterThan(0)
+    // The lane demonstrably IS alive, and the field that carries that meaning
+    // says so — this half of the original intent is unchanged.
+    expect(state.lastInboundAt).toBeGreaterThan(firstApply)
+    // ★ …but the screen has not moved since the first update, so the pane is
+    // owed a re-pull. Under the old `lastInboundAt` clock this was false and
+    // the pane stayed frozen.
+    expect(state.lastAppliedAt).toBe(firstApply)
+    expect(controller.shouldRefreshForLiveness()).toBe(true)
   })
 
   it('★ never re-pulls while the transcript replica lane is healthy', () => {
