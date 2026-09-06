@@ -274,14 +274,25 @@ describe('messageSource projection — behavioural injection through the control
     expect(rendered[rendered.length - 1]).toMatchObject({ role: 'assistant', content: 'the real answer' })
   })
 
-  it('★ removed → force-apply never fires, the shrink-defense wins, and the user is left on the STALE tail', () => {
+  it('★ removed → the replica bypass still delivers the answer (defense in depth)', () => {
     // The injection: same snapshot, but the provenance scalar is gone (as it
     // would be if the projection stopped carrying messageSource).
     const rendered = renderCorrectiveTail({ messageSource: null, transcriptProvenance: null })
 
-    // ★ 3 stale messages instead of 2 — the assistant's real answer is NOT shown.
-    expect(rendered).toHaveLength(3)
-    expect(rendered.some((m) => m.content === 'the real answer')).toBe(false)
+    // (REPLICA-PROVENANCE-SCALAR-LOSS) This assertion is INVERTED from what it
+    // originally documented. It used to assert the stranding — 3 stale messages,
+    // answer not shown — as the observable cost of losing the provenance scalar.
+    // That cost was real and shipped: the scalar WAS being lost (the producer's
+    // object collapsed to null in `stringField`), and the pane wedged live.
+    //
+    // The fix has two layers, and this test now pins the SECOND one. Even with
+    // provenance entirely absent, `shouldDeferBusyTailUpdate` no longer submits
+    // an authoritative replica snapshot to the v1 count heuristic, so the answer
+    // reaches the screen anyway. Restoring the old expectation would mean
+    // re-asserting that a lost provenance field must strand the user — which is
+    // exactly the failure class this branch exists to make impossible.
+    expect(rendered).toHaveLength(2)
+    expect(rendered.some((m) => m.content === 'the real answer')).toBe(true)
   })
 })
 

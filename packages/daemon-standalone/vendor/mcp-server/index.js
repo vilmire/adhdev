@@ -91620,9 +91620,16 @@ ${cleanBody}`;
         omittedBefore: booleanField(candidate.omittedBefore) ?? false
       };
     }
+    function messageSourceField(value) {
+      if (typeof value === "string") return value;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return stringField(value.selected);
+      }
+      return null;
+    }
     function encodeTranscriptProvenance(candidate) {
       return {
-        messageSource: stringField(candidate?.messageSource),
+        messageSource: messageSourceField(candidate?.messageSource),
         transcriptProvenance: stringField(candidate?.transcriptProvenance)
       };
     }

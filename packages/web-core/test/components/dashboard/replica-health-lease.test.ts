@@ -322,19 +322,25 @@ describe('★ A②: a genuinely idle session never revives legacy', () => {
 // ③ ★ B — legacy is retired only by a snapshot that was ACTUALLY APPLIED.
 // ───────────────────────────────────────────────────────────────────────────
 describe('★ B: a snapshot that never reached the screen cannot retire legacy', () => {
-  it('★ a DEFERRED first snapshot leaves replicaHealthy false and legacy running', () => {
+  it('★ a NON-APPLIED first snapshot leaves replicaHealthy false and legacy running', () => {
     const { sendData, manager, controller } = setup()
     controller.retain()
 
-    // Legacy has hydrated a full window on a busy session. The shrink-defense
-    // is now armed: a shorter tail arriving while active is held, not applied.
+    // Legacy has hydrated a full window on a busy session.
     publishLegacy(manager, 1, 'generating', ['q1', 'a1', 'q2', 'a2', 'q3', 'a3'])
     expect(controller.getSnapshot().liveMessages).toHaveLength(6)
     expect(unsubscribeFrames(sendData)).toHaveLength(0)
 
-    // The first replica snapshot arrives SHORT, during the active window — the
-    // exact shape `handleUpdate` defers.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'only one'), {
+    // (REPLICA-PROVENANCE-SCALAR-LOSS) This case used to be driven by a SHORT
+    // replica snapshot during the active window, because back then the
+    // shrink-defense's count heuristic deferred every replica snapshot — that
+    // was the wedge, not a contract. A replica snapshot is authoritative and now
+    // always reaches the screen, so a structurally-invalid snapshot (rejected
+    // before it can apply) is the correct vehicle for "never reached the screen".
+    // The INVARIANT under test is unchanged: only an APPLIED snapshot retires legacy.
+    const broken = { ...healthySnapshot(2, 'generating', 'only one') }
+    delete (broken as Record<string, unknown>).activeModal
+    controller.applyTranscriptReplicaSnapshot(broken as ReplicatedTranscriptSnapshotV1, {
       omittedBefore: false,
     })
 
@@ -347,13 +353,31 @@ describe('★ B: a snapshot that never reached the screen cannot retire legacy',
     expect(subscribeFrames(sendData)).toHaveLength(1)
   })
 
+  it('★ a SHORT replica snapshot during generation now APPLIES (wedge regression)', () => {
+    // The converse of the case above, pinned here so the two cannot be confused
+    // again: shortness alone is not grounds to withhold an authoritative snapshot.
+    const { manager, controller } = setup()
+    controller.retain()
+    publishLegacy(manager, 1, 'generating', ['q1', 'a1', 'q2', 'a2', 'q3', 'a3'])
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'only one'), {
+      omittedBefore: false,
+    })
+
+    expect(controller.getSnapshot().liveMessages.map((m) => m.content)).toEqual(['only one'])
+  })
+
   it('the NEXT snapshot that genuinely applies does retire legacy', () => {
     // The deferral must delay retirement, not prevent it forever.
     const { sendData, manager, controller } = setup()
     controller.retain()
     publishLegacy(manager, 1, 'generating', ['q1', 'a1', 'q2', 'a2', 'q3', 'a3'])
 
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'only one'), {
+    // Non-applied for the same reason as the case above: rejected on validation,
+    // so it cannot retire legacy.
+    const broken = { ...healthySnapshot(2, 'generating', 'only one') }
+    delete (broken as Record<string, unknown>).activeModal
+    controller.applyTranscriptReplicaSnapshot(broken as ReplicatedTranscriptSnapshotV1, {
       omittedBefore: false,
     })
     expect(unsubscribeFrames(sendData)).toHaveLength(0)

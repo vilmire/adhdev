@@ -285,7 +285,7 @@ describe('★ unit 9 ②: any replica fallback re-arms the legacy transport', ()
    * A plain "report the same reason twice" does NOT reach it: the first report
    * relabels the pane, so by the second one the transport is already back.
    *
-   * The reachable case is a DEFERRED replica snapshot. `handleUpdate` may
+   * The reachable case is a DEFERRED tail update. `handleUpdate` may
    * decline to apply an update (shrink defense on an active session) — the
    * label then stays `legacy` with the previous reason while the lane is
    * demonstrably alive, so `replicaHealthy` flips true and legacy stands down.
@@ -294,7 +294,7 @@ describe('★ unit 9 ②: any replica fallback re-arms the legacy transport', ()
    * and the pane would be stranded with no transport at all — the exact silent
    * freeze this unit must not introduce.
    */
-  it('★ a fallback after a DEFERRED replica snapshot still re-arms (dedup must not skip the re-arm)', () => {
+  it('★ a fallback after a DEFERRED tail update still re-arms (dedup must not skip the re-arm)', () => {
     const { sendData, manager, controller } = setup()
     controller.retain()
 
@@ -320,10 +320,26 @@ describe('★ unit 9 ②: any replica fallback re-arms the legacy transport', ()
     controller.reportTranscriptReplicaFallback('no_node')
     expect(controller.getSnapshot().transcriptFallbackReason).toBe('no_node')
 
-    // A replica snapshot arrives but SHRINKS the tail on an active session, so
+    // An update arrives but SHRINKS the tail on an active session, so
     // `handleUpdate` defers it: the label stays legacy/no_node, yet the lane is
     // alive so legacy stands down.
-    controller.applyTranscriptReplicaSnapshot(healthySnapshot(9, 'only one message'), { omittedBefore: false })
+    //
+    // (REPLICA-PROVENANCE-SCALAR-LOSS) This was a short REPLICA snapshot until the
+    // count heuristic stopped judging replica snapshots — deferring an
+    // authoritative snapshot was the wedge itself, never a contract. A short
+    // LEGACY tail still defers by design and reaches the identical
+    // `handleUpdate` decline path with the lane demonstrably alive, which is the
+    // precondition this test actually needs.
+    manager.publish({
+      topic: 'session.chat_tail',
+      key: SUBSCRIPTION_KEY,
+      sessionId: SESSION,
+      seq: 9,
+      timestamp: 0,
+      status: 'generating',
+      messages: [{ role: 'user', kind: 'standard', content: 'only one message', receivedAt: 5, timestamp: 5 }],
+    } as never)
+    expect(controller.getSnapshot().liveMessages).toHaveLength(4)
     expect(controller.getSnapshot().transcriptReadSource).toBe('legacy')
     expect(controller.getSnapshot().transcriptFallbackReason).toBe('no_node')
 

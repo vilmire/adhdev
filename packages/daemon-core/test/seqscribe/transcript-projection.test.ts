@@ -63,7 +63,27 @@ describe('encodeTranscriptSnapshot — allow-list (design §2.4)', () => {
                 },
             ],
             provenance: {
-                messageSource: 'assistant_text',
+                // (REPLICA-PROVENANCE-SCALAR-LOSS) The REAL shape. This fixture
+                // used to pass the string 'assistant_text', which no producer
+                // ever emits — `buildCliMessageSourceProvenance`
+                // (commands/read-chat-source-decision.ts) returns an OBJECT.
+                // That fiction is precisely why the production case, where the
+                // object collapsed to null through `stringField`, was never
+                // caught here. Keep this an object.
+                messageSource: {
+                    selected: 'native-history',
+                    provider: 'claude-cli',
+                    providerType: 'claude-cli',
+                    identityStatus: 'safe',
+                    ptyStatusApprovalOnly: true,
+                    // Path/workspace keys live on the producer object and must
+                    // NOT survive the projection.
+                    sourcePath: CANARY,
+                    sessionWorkspace: CANARY,
+                    nativeHandle: CANARY,
+                    staleness: { sourceMtimeMs: 1, sourceMtimeAgeMs: 2, freshEnough: true },
+                    coverage: { nativeMessageCount: 1, ptyMessageCount: 0, returnedMessageCount: 1 },
+                },
                 transcriptProvenance: 'provider-native',
                 sourcePath: CANARY,
                 workspace: CANARY,
@@ -77,8 +97,42 @@ describe('encodeTranscriptSnapshot — allow-list (design §2.4)', () => {
         // Sanity: the allow-listed content this test DID intend to carry is present,
         // proving the canary's absence is the allow-list at work, not an empty output.
         expect(json).toContain('hello world');
-        expect(json).toContain('assistant_text');
         expect(json).toContain('provider-native');
+        // The one scalar extracted from the producer's object survives...
+        expect(encoded.provenance.messageSource).toBe('native-history');
+        // ...as a STRING. Widening the wire type to carry the object would
+        // violate §2.4 and smuggle sourcePath/workspace across the boundary.
+        expect(typeof encoded.provenance.messageSource).toBe('string');
+    });
+
+    it('★ extracts messageSource.selected from the producer OBJECT, never null (REPLICA-PROVENANCE-SCALAR-LOSS)', () => {
+        // Regression: `stringField` returned null for the object, wiping the one
+        // field the consumer shrink-defense reads and wedging the chat pane
+        // mid-generation. See transcript-projection.ts `messageSourceField`.
+        const encoded = encodeTranscriptSnapshot({
+            ...BASE_CANDIDATE,
+            provenance: {
+                messageSource: { selected: 'pty-parser', fallbackReason: 'native_history_not_checked' },
+                transcriptProvenance: 'pty',
+            },
+        });
+        expect(encoded.provenance.messageSource).toBe('pty-parser');
+    });
+
+    it('keeps the plain-string messageSource form working', () => {
+        const encoded = encodeTranscriptSnapshot({
+            ...BASE_CANDIDATE,
+            provenance: { messageSource: 'native-history', transcriptProvenance: null },
+        });
+        expect(encoded.provenance.messageSource).toBe('native-history');
+    });
+
+    it('yields null for an object with no usable `selected`', () => {
+        const encoded = encodeTranscriptSnapshot({
+            ...BASE_CANDIDATE,
+            provenance: { messageSource: { provider: 'claude-cli' }, transcriptProvenance: null },
+        });
+        expect(encoded.provenance.messageSource).toBeNull();
     });
 
     it('normalizes an absent/invalid enum to a safe default rather than passing it through', () => {

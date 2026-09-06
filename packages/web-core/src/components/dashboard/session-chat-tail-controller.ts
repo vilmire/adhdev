@@ -10,6 +10,17 @@ import {
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
+import {
+  WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES,
+  isBusyChatTailStatus,
+  isTerminalChatTailStatusEvent,
+  shouldGuardTailShrinkForStatus,
+} from './chat-tail-status-classification'
+
+// Barrel-preserving re-export: `src/index.ts` and existing importers resolve
+// `isTerminalChatTailStatusEvent` through this module. See the pure-move note in
+// `chat-tail-status-classification.ts`.
+export { isTerminalChatTailStatusEvent }
 import { recordTranscriptReplicaFallbackForDiagnostics } from './transcript-fallback-diagnostics'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 
@@ -277,13 +288,6 @@ type ChatTailUpdateOutcome = 'applied' | 'deferred' | 'noop' | 'rejected'
  */
 const DEFAULT_MAX_RETAINED_HISTORY_MESSAGES = 500
 const DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS = 120_000
-const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
-  'generating',
-  'waiting_approval',
-  'starting',
-  'streaming',
-  'working',
-])
 const controllerRegistry = new Map<string, SessionChatTailController>()
 
 // Bumped whenever a controller is added to / removed from the registry. Lets
@@ -450,15 +454,27 @@ function tailDeliversNewAssistantAnswer(
 }
 
 /**
- * True when `messageSource.selected` is the daemon's locked native transcript.
- * Native-history is authoritative; a native tail that adds an assistant answer the
- * current view lacks is real forward progress even after the shrink-defense
- * transition window has lapsed.
+ * (REPLICA-PROVENANCE-SCALAR-LOSS) Accept BOTH messageSource shapes: the legacy
+ * lane ships the producer's full object, the replica lane a bare `selected`
+ * scalar (§2.4) that the adapter re-wraps. Reading the string too means a
+ * producer skipping that re-wrap still gets the provenance escape hatches below
+ * instead of silently falling onto the count heuristic — the failure mode that
+ * wedged the chat pane mid-generation.
  */
-function isNativeHistorySource(messageSource: Record<string, unknown> | undefined): boolean {
-  return !!messageSource
-    && typeof messageSource === 'object'
-    && (messageSource as { selected?: unknown }).selected === 'native-history'
+function normalizeMessageSource(
+  messageSource: Record<string, unknown> | string | undefined,
+): Record<string, unknown> | undefined {
+  return typeof messageSource === 'string' ? { selected: messageSource } : messageSource
+}
+
+/**
+ * True when `selected` is the daemon's locked native transcript — authoritative,
+ * so a native tail adding an assistant answer the view lacks is forward progress
+ * even after the shrink-defense transition window has lapsed.
+ */
+function isNativeHistorySource(messageSource: Record<string, unknown> | string | undefined): boolean {
+  const normalized = normalizeMessageSource(messageSource)
+  return !!normalized && (normalized as { selected?: unknown }).selected === 'native-history'
 }
 
 /**
@@ -481,65 +497,10 @@ function isNativeHistorySource(messageSource: Record<string, unknown> | undefine
 function shouldForceApplyNativeAssistantTail(
   snapshot: SessionChatTailSnapshot,
   nextMessages: DashboardMessage[],
-  messageSource: Record<string, unknown> | undefined,
+  messageSource: Record<string, unknown> | string | undefined,
 ): boolean {
   if (!isNativeHistorySource(messageSource)) return false
   return tailDeliversNewAssistantAnswer(snapshot, nextMessages)
-}
-
-function isBusyChatTailStatus(status: unknown): boolean {
-  const value = typeof status === 'string' ? status.toLowerCase() : ''
-  return value === 'generating' || value === 'no_progress' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
-}
-
-/**
- * (D1) Status-lane events that mean the agent has STOPPED producing for now.
- *
- * These are the only events allowed to bypass the `replicaHealthy` refusal in
- * `shouldRefreshForLiveness`, so the membership of this set is the safety
- * argument, not a convenience list:
- *
- *  - `agent:generating_completed` / `agent:stopped` — the turn is over.
- *  - `agent:waiting_approval` / `agent:waiting_choice` — the agent is parked on
- *    a human decision. It is not generating, and this is precisely the moment
- *    the user needs the tail (the modal text is the thing being decided).
- *
- * `agent:generating_started` is deliberately ABSENT: mid-generation is exactly
- * the window where a legacy `read_chat` can land behind a newer replica
- * revision, which is the last-writer-wins hazard the veto exists for. The
- * monitor:* events are absent for the same reason — `no_progress` /
- * `long_generating` describe a session that is still nominally generating.
- */
-const TERMINAL_STATUS_EVENTS = new Set([
-  'agent:generating_completed',
-  'agent:stopped',
-  'agent:waiting_approval',
-  'agent:waiting_choice',
-])
-
-export function isTerminalChatTailStatusEvent(event: unknown): boolean {
-  return typeof event === 'string' && TERMINAL_STATUS_EVENTS.has(event)
-}
-
-/**
- * Shrink-defer gate (NOT a "busy" predicate). Returns true for every status that
- * keeps a session warm/active, i.e. every member of
- * WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES, which crucially includes
- * `waiting_approval`.
- *
- * `isBusyChatTailStatus` intentionally EXCLUDES `waiting_approval` (and other
- * warm states like `starting`) because its callers rely on the strict "busy"
- * meaning. But the chat-tail shrink-defense must protect the approval window
- * too: during `waiting_approval` the daemon can emit a short partial tail (e.g.
- * only the user prompt, assistant bubble briefly missing) that — without this
- * guard — replaces the longer hydrated `liveMessages` and makes the assistant
- * bubble transiently disappear/return (CHATFLICKER on approve). We widen ONLY
- * this shrink-defer gate to WARM_ACTIVE membership; `isBusyChatTailStatus` keeps
- * its existing busy semantics untouched.
- */
-function shouldGuardTailShrinkForStatus(status: unknown): boolean {
-  const value = typeof status === 'string' ? status.trim().toLowerCase() : ''
-  return WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES.has(value)
 }
 
 function getExistingVisibleMessageCount(snapshot: SessionChatTailSnapshot, fallbackRecentCount: number): number {
@@ -554,8 +515,9 @@ function shouldDeferBusyTailUpdate(
   fallbackRecentCount: number,
   nextMessages: DashboardMessage[],
   status: unknown,
-  messageSource: Record<string, unknown> | undefined,
+  messageSource: Record<string, unknown> | string | undefined,
   withinRecentActiveWindow: boolean,
+  transcriptReadSource: 'replica' | 'legacy',
 ): boolean {
   // Engage the shrink-defense for any warm/active status (incl. waiting_approval)
   // OR any strictly-busy status (no_progress/long_generating are busy but not in
@@ -610,9 +572,10 @@ function shouldDeferBusyTailUpdate(
   // native transcript (don't defer) or a PTY substitute (defer until
   // native catches up). v1 had to infer this from message count, which
   // misfired whenever PTY ran ahead of native legitimately.
-  if (messageSource && typeof messageSource === 'object') {
-    const selected = (messageSource as { selected?: unknown }).selected
-    const fallbackReason = (messageSource as { fallbackReason?: unknown }).fallbackReason
+  const normalizedMessageSource = normalizeMessageSource(messageSource)
+  if (normalizedMessageSource) {
+    const selected = normalizedMessageSource.selected
+    const fallbackReason = normalizedMessageSource.fallbackReason
     // Native-history is authoritative — never defer.
     if (selected === 'native-history') return false
     // Provider declined native ('provider_native_transcript_not_supported',
@@ -628,6 +591,15 @@ function shouldDeferBusyTailUpdate(
     // to the count heuristic — native is expected but transiently behind.
   }
 
+  // (REPLICA-PROVENANCE-SCALAR-LOSS — defense in depth) A replica snapshot is
+  // NEVER judged by the count heuristic below: it is hash-verified and
+  // monotonically revisioned, so a shorter tail is a legitimate bubble merge
+  // during generation, not the stale/partial shrink that heuristic defends
+  // against. This is the CLASS defense — if a future provenance field is lost on
+  // the wire the way `messageSource` was, the pane still updates instead of
+  // silently wedging. The legacy lane keeps the heuristic unchanged.
+  if (transcriptReadSource === 'replica') return false
+
   // Legacy heuristic for v1 daemons or v1-only producers that do not emit a
   // ChatSourceMachine decision. Doomed once the v1 vocabulary is removed.
   return nextMessages.length < existingCount
@@ -637,7 +609,7 @@ function isTransientUnavailableEmptyTail(
   snapshot: SessionChatTailSnapshot,
   fallbackRecentCount: number,
   nextMessages: DashboardMessage[],
-  messageSource: Record<string, unknown> | undefined,
+  messageSourceInput: Record<string, unknown> | string | undefined,
 ): boolean {
   if (nextMessages.length !== 0) return false
   const existingCount = getExistingVisibleMessageCount(snapshot, fallbackRecentCount)
@@ -647,7 +619,8 @@ function isTransientUnavailableEmptyTail(
   // live snapshot. Do not resurrect fallback rows after that.
   if (snapshot.hasLiveSnapshot && snapshot.liveMessages.length === 0) return false
 
-  if (!messageSource || typeof messageSource !== 'object') return false
+  const messageSource = normalizeMessageSource(messageSourceInput)
+  if (!messageSource) return false
   const selected = messageSource.selected
   const fallbackReason = messageSource.fallbackReason
   const nativeSource = messageSource.nativeSource
@@ -693,10 +666,11 @@ function decideChatTailUpdate(
   fallbackRecentCount: number,
   nextMessages: DashboardMessage[],
   status: unknown,
-  messageSource: Record<string, unknown> | undefined,
+  messageSource: Record<string, unknown> | string | undefined,
   withinRecentActiveWindow: boolean,
+  transcriptReadSource: 'replica' | 'legacy',
 ): ChatTailUpdateDecision {
-  if (shouldDeferBusyTailUpdate(snapshot, fallbackRecentCount, nextMessages, status, messageSource, withinRecentActiveWindow)) {
+  if (shouldDeferBusyTailUpdate(snapshot, fallbackRecentCount, nextMessages, status, messageSource, withinRecentActiveWindow, transcriptReadSource)) {
     return 'defer-busy-shrink'
   }
   if (isTransientUnavailableEmptyTail(snapshot, fallbackRecentCount, nextMessages, messageSource)) {
@@ -1342,11 +1316,21 @@ export class SessionChatTailController {
     // Never armed for this window — the last busy report is itself older than
     // the lease, so treat the session as settled rather than stalled.
     if ((nowMs - this.lastReplicaBusyAt) > CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
-    if ((nowMs - this.lastReplicaAdvanceAt) < CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
+    // (REPLICA-PROVENANCE-SCALAR-LOSS — observability) The lease measured LANE
+    // advance only, which is why this defect ran silent: snapshots kept arriving
+    // (~29.5/min) so the lane looked healthy, while every one was deferred and
+    // the SCREEN never moved. Measure the screen too — a busy session whose
+    // rendered content is frozen past the same window is wedged whatever the
+    // cause, and routes through the identical fallback path. A class detector,
+    // deliberately not specific to the bug fixed above.
+    const laneStalled = (nowMs - this.lastReplicaAdvanceAt) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
+    const screenStalled = this.lastAppliedAt > 0
+      && (nowMs - this.lastAppliedAt) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
+    if (!laneStalled && !screenStalled) return
     // Route through the existing fallback path rather than clearing the flag
     // inline: it re-arms legacy, records the diagnostic and surfaces the
     // degradation notice, all of which apply verbatim to a stalled lane.
-    this.reportTranscriptReplicaFallback('replica_lease_expired')
+    this.reportTranscriptReplicaFallback(laneStalled ? 'replica_lease_expired' : 'replica_screen_stalled')
   }
 
   /**
@@ -1614,7 +1598,7 @@ export class SessionChatTailController {
     if (updateHistorySessionId && this.historySessionId && updateHistorySessionId !== this.historySessionId) return 'rejected'
 
     const nextMessages = readChatTailUpdateMessages(update)
-    const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> }).messageSource
+    const incomingMessageSource = (update as SessionChatTailUpdate & { messageSource?: Record<string, unknown> | string }).messageSource
 
     // (CHAT-DISAPPEAR-REAPPEAR) Compute the generating→idle transition window using
     // the PREVIOUS active-status stamp, then refresh the stamp for THIS update if it
@@ -1648,7 +1632,10 @@ export class SessionChatTailController {
 
     if (
       !forceApplyNativeAssistant
-      && decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow) !== 'apply'
+      // The read-source of the INCOMING update, not the snapshot's — the gate is
+      // judging this update's authority, and the snapshot may still be labelled
+      // 'legacy' from a prior lane.
+      && decideChatTailUpdate(this.snapshot, this.fallbackRecentCount, nextMessages, update.status, incomingMessageSource, withinRecentActiveWindow, readUpdateTranscriptReadSource(update)) !== 'apply'
     ) {
       return 'deferred'
     }
@@ -1670,8 +1657,9 @@ export class SessionChatTailController {
       hasLiveSnapshot: true,
       cursor: nextCursor,
       // (A3) Track latest source decision for the debug badge / SourceTimeline.
-      // Read-only consumption; daemon is source of truth.
-      messageSource: incomingMessageSource,
+      // Read-only consumption; daemon is source of truth. Normalized so the
+      // PUBLIC snapshot type stays one shape for consumers.
+      messageSource: normalizeMessageSource(incomingMessageSource),
       // (§8 unit 5) A legacy `session.chat_tail`/`read_chat` update never sets
       // these three fields, so they default to the "legacy, no discontinuity"
       // reading — only a mapped transcript-replica update

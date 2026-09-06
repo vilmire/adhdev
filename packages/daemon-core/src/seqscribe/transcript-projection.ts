@@ -362,11 +362,39 @@ export function encodeTranscriptCoverage(
     };
 }
 
+/**
+ * (REPLICA-PROVENANCE-SCALAR-LOSS) The producer of `messageSource` —
+ * `buildCliMessageSourceProvenance` (commands/read-chat-source-decision.ts) —
+ * returns an OBJECT ({selected, provider, fallbackReason, staleness, coverage,
+ * ...}), not a string. Passing it straight to `stringField` silently collapsed
+ * the entire provenance to null on every replica snapshot, which stripped the
+ * one field the consumer's shrink-defense escape hatch reads
+ * (`session-chat-tail-controller.ts` shouldDeferBusyTailUpdate) and dropped it
+ * onto the doomed v1 count heuristic — freezing the pane mid-generation.
+ *
+ * The wire type stays `string | null` (§2.4 scalar-only): we do NOT widen it to
+ * carry the object. We extract the single scalar the gate needs.
+ *
+ * ── Content boundary ───────────────────────────────────────────────────────
+ * `selected` is a closed ENUM ('native-history' | 'pty-parser') — an identifier,
+ * not free text authored by the user or the agent. Every other key on the
+ * producer's object (sourcePath, workspaces, nativeHandle, staleness, coverage)
+ * is DELIBERATELY left behind: this is an allow-list of one field by name, not a
+ * deny-list of the rest.
+ */
+function messageSourceField(value: unknown): string | null {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return stringField((value as Record<string, unknown>).selected);
+    }
+    return null;
+}
+
 export function encodeTranscriptProvenance(
     candidate: TranscriptSnapshotCandidateProvenance | undefined,
 ): ReplicatedTranscriptProvenanceV1 {
     return {
-        messageSource: stringField(candidate?.messageSource),
+        messageSource: messageSourceField(candidate?.messageSource),
         transcriptProvenance: stringField(candidate?.transcriptProvenance),
     };
 }
