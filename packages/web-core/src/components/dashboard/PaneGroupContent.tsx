@@ -6,6 +6,7 @@ import type { CliTerminalHandle } from '../CliTerminal'
 import ApprovalBanner from './ApprovalBanner'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
+import type { PendingLocalMessage } from './conversation-message-snapshot'
 import { IconWarning } from '../Icons'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import type { ImageAttachment } from './ChatInputBar'
@@ -22,6 +23,7 @@ interface PaneGroupContentProps {
     handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     isSendingChat: boolean
     sendFeedbackMessage?: string | null
+    pendingLocalMessage?: PendingLocalMessage | null
     handleFocusAgent: () => void
     isFocusingAgent: boolean
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -47,6 +49,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     handleForceSendChat,
     isSendingChat,
     sendFeedbackMessage = null,
+    pendingLocalMessage = null,
     handleFocusAgent,
     isFocusingAgent,
     actionLogs,
@@ -133,6 +136,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             handleSendChat={handleSendChat}
                             isSendingChat={isSendingChat}
                             sendFeedbackMessage={sendFeedbackMessage}
+                            pendingLocalMessage={pendingLocalMessage}
                             handleFocusAgent={handleFocusAgent}
                             isFocusingAgent={isFocusingAgent}
                             actionLogs={actionLogs}
@@ -151,6 +155,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     handleForceSendChat={handleForceSendChat}
                     isSendingChat={isSendingChat}
                     sendFeedbackMessage={sendFeedbackMessage}
+                    pendingLocalMessage={pendingLocalMessage}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
                     actionLogs={actionLogs}
@@ -173,6 +178,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.handleForceSendChat === next.handleForceSendChat
     && prev.isSendingChat === next.isSendingChat
     && prev.sendFeedbackMessage === next.sendFeedbackMessage
+    && prev.pendingLocalMessage === next.pendingLocalMessage
     && prev.handleFocusAgent === next.handleFocusAgent
     && prev.isFocusingAgent === next.isFocusingAgent
     && prev.actionLogs === next.actionLogs

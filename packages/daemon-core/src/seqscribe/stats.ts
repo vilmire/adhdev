@@ -338,6 +338,41 @@ export interface SeqscribeStatusSummary {
      * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
      */
     transcriptLatencyDetail?: TranscriptLatencyDetail;
+    /**
+     * The transcript publisher counters that the bucketed `transcript*Bucket`
+     * fields do NOT carry.
+     *
+     * ★ Why this exists. `TranscriptProjectionCounters` has nine fields, and the
+     * status projection hand-picked five of them (published / publishFailed /
+     * deduped / oversized / dropped). The other four — `ptyDirtyCoalesced`,
+     * `emptyGuarded`, `collectorUnavailable`, `sourcePending` — were counted on
+     * every daemon and then read by nobody, on any surface. `getCounters()` was
+     * always public and always wired; the loss was in the projection, one layer
+     * later, which is why it looked like an accessor gap.
+     *
+     * `ptyDirtyCoalesced` is the load-bearing one: it is the ONLY signal that
+     * says whether the per-session PTY throttle is actually collapsing bursts.
+     * Without it the throttle window cannot be tuned with evidence — the
+     * published count alone cannot distinguish "the throttle merged 200 triggers
+     * into 3 publishes" from "only 3 triggers ever fired".
+     *
+     * ★★ LOCAL-ONLY, for the same reason as `transcriptLatencyDetail` directly
+     * above: these are raw monotonic counters that would change on every tick
+     * and defeat the status-frame dedup. Fixed keys, numeric values, no session
+     * id / topic name / peer id — but the cloud allow-list
+     * (`buildCloudSeqscribeSummary`) deliberately does not name this key, and
+     * `test/status/cloud-status-content-boundary.test.ts` keeps it out.
+     */
+    transcriptCounterDetail?: {
+        /** PTY dirty triggers collapsed behind the per-session throttle window. */
+        ptyDirtyCoalesced: number;
+        /** Transient-empty observations that did not clobber a prior non-empty revision. */
+        emptyGuarded: number;
+        /** `markDirty` calls with no collector configured. */
+        collectorUnavailable: number;
+        /** Collector returned null — source not ready. */
+        sourcePending: number;
+    };
 }
 
 export interface SummarizeOptions {
@@ -361,7 +396,13 @@ export interface SummarizeOptions {
         extraInShadow?: number;
         fieldMismatch?: number;
     };
-    /** §8 unit 2 transcript publisher counters. Omitted → reported as inactive/zero. */
+    /**
+     * §8 unit 2 transcript publisher counters. Omitted → reported as inactive/zero.
+     *
+     * The four optional fields feed `transcriptCounterDetail` and are read only
+     * under `includeLocalDiagnostics`; pass `getCounters()` whole from a local
+     * surface, or just the required fields from the status reporter.
+     */
     transcript?: {
         active: boolean;
         published: number;
@@ -369,6 +410,10 @@ export interface SummarizeOptions {
         deduped: number;
         oversized: number;
         dropped: number;
+        ptyDirtyCoalesced?: number;
+        emptyGuarded?: number;
+        collectorUnavailable?: number;
+        sourcePending?: number;
     };
     /**
      * §8 unit 2 transcript parity counters. Omitted → reported as never-run.
@@ -522,6 +567,22 @@ export function summarizeSeqscribeStats(
             // Deep-copied by the recorder's own `detail()`, so a caller holding
             // this cannot see it mutate on the next trigger.
             ...(opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {}),
+            // Emitted only when the caller passed the full counter object. A
+            // status-reporter caller supplying just the five bucket fields
+            // leaves these undefined, and the key is then omitted entirely
+            // rather than reported as a fabricated zero — "not measured" and
+            // "measured zero" are different answers to "is the throttle
+            // coalescing?", and only one of them is honest here.
+            ...(opts.transcript && typeof opts.transcript.ptyDirtyCoalesced === 'number'
+                ? {
+                      transcriptCounterDetail: {
+                          ptyDirtyCoalesced: opts.transcript.ptyDirtyCoalesced,
+                          emptyGuarded: opts.transcript.emptyGuarded ?? 0,
+                          collectorUnavailable: opts.transcript.collectorUnavailable ?? 0,
+                          sourcePending: opts.transcript.sourcePending ?? 0,
+                      },
+                  }
+                : {}),
             ...(routing
                 ? {
                       readRouting: {

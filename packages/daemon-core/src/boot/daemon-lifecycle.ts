@@ -839,6 +839,23 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                                   deduped: transcriptCounters.deduped,
                                   oversized: transcriptCounters.oversized,
                                   dropped: transcriptCounters.dropped,
+                                  // ★ The remaining four counters, which the
+                                  // five-field slice above dropped on the floor.
+                                  // They land on `transcriptCounterDetail`,
+                                  // which summarizeSeqscribeStats gates behind
+                                  // `includeLocalDiagnostics` and the cloud
+                                  // allow-list never names — so this is a local
+                                  // diagnostic surface only, exactly like
+                                  // transcriptLatencyDetail beside it.
+                                  //
+                                  // `ptyDirtyCoalesced` is the reason: it is the
+                                  // only evidence that the per-session PTY
+                                  // throttle is collapsing bursts, and it was
+                                  // unobservable on every surface until now.
+                                  ptyDirtyCoalesced: transcriptCounters.ptyDirtyCoalesced,
+                                  emptyGuarded: transcriptCounters.emptyGuarded,
+                                  collectorUnavailable: transcriptCounters.collectorUnavailable,
+                                  sourcePending: transcriptCounters.sourcePending,
                               },
                           }
                         : {}),

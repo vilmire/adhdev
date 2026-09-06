@@ -5,6 +5,7 @@ import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
 import type { ImageAttachment } from './ChatInputBar'
+import type { PendingLocalMessage } from './conversation-message-snapshot'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
@@ -19,6 +20,7 @@ interface DashboardMobileChatRoomProps {
     userName?: string
     isSendingChat: boolean
     sendFeedbackMessage?: string | null
+    pendingLocalMessage?: PendingLocalMessage | null
     isFocusingAgent: boolean
     onBack: () => void
     onOpenNativeConversation: (conversation: ActiveConversation) => void
@@ -45,6 +47,7 @@ export default function DashboardMobileChatRoom({
     userName,
     isSendingChat,
     sendFeedbackMessage = null,
+    pendingLocalMessage = null,
     isFocusingAgent,
     onBack,
     onOpenNativeConversation,
@@ -148,6 +151,7 @@ export default function DashboardMobileChatRoom({
                     handleForceSendChat={handleForceSendChat}
                     isSendingChat={isSendingChat}
                     sendFeedbackMessage={sendFeedbackMessage}
+                    pendingLocalMessage={pendingLocalMessage}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
                     actionLogs={actionLogs}

@@ -35,7 +35,7 @@ import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../..
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
-import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
+import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessage, type PendingLocalMessage } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
@@ -52,6 +52,8 @@ export interface ChatPaneProps {
     handleForceSendChat?: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
+    /** (OPTIMISTIC-USER-BUBBLE) Locally-rendered message awaiting its daemon echo. */
+    pendingLocalMessage?: PendingLocalMessage | null;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
     actionLogs: { routeId: string; text: string; timestamp: number }[];
@@ -112,6 +114,7 @@ export default function ChatPane({
     handleForceSendChat,
     isSendingChat = false,
     sendFeedbackMessage = null,
+    pendingLocalMessage = null,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     scrollToBottomRequestNonce,
     isInputActive = true,
@@ -191,7 +194,22 @@ export default function ChatPane({
     const historyMessages = chatTailState.historyMessages;
     const hasMoreHistory = chatTailState.hasMoreHistory;
     const loadError = chatTailState.historyError;
-    const liveMessages = getConversationLiveMessages(activeConv, chatTailState);
+    // (OPTIMISTIC-USER-BUBBLE) Layer the owner's just-sent message on top of the
+    // live tail so it appears immediately instead of after the daemon round trip
+    // (which, on a busy agent, waits for the send queue to drain). It is retired
+    // the moment a matching user bubble arrives in the tail — see
+    // `withPendingLocalMessage` for the dedup contract.
+    //
+    // ★ Applied HERE rather than inside the controller deliberately: the
+    // controller's window is a single-authority, last-writer-wins projection of
+    // the daemon's transcript, and injecting a client-authored row into it would
+    // be wiped by the next update AND would corrupt the shrink-defense/dedup
+    // signatures computed over it. This is a render-time overlay, so the
+    // controller's contract is untouched.
+    const liveMessages = withPendingLocalMessage(
+        getConversationLiveMessages(activeConv, chatTailState),
+        pendingLocalMessage,
+    );
     const activityToggleCount = filterChatActivityMessages(liveMessages).length;
 
     // (CHAT-TAB-SWITCH-STALE-FALLBACK ②) Restore this tab's remembered expanded
