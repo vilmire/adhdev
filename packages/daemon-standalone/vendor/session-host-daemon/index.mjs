@@ -727,23 +727,44 @@ var SessionHostServer = class extends EventEmitter {
     }
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
+      const parser = createLineParser((envelope) => {
+        if (envelope.kind !== "request") return;
+        void this.handleIncomingRequest(socket, envelope);
+      });
+      const flushParser = () => {
+        let remainder = "";
+        try {
+          remainder = parser.end();
+        } catch {
+          return;
+        }
+        if (!remainder.trim()) return;
+        this.recordHostLog(
+          "warn",
+          `session host discarded ${remainder.length} bytes of an incomplete IPC frame at EOF`
+        );
+      };
       const removeSocket = () => {
         this.sockets.delete(socket);
         this.socketSessions.delete(socket);
       };
-      socket.on("close", removeSocket);
-      socket.on("end", removeSocket);
+      socket.on("close", () => {
+        flushParser();
+        removeSocket();
+      });
+      socket.on("end", () => {
+        flushParser();
+        removeSocket();
+      });
       socket.on("error", () => {
+        flushParser();
         removeSocket();
         try {
           socket.destroy();
         } catch {
         }
       });
-      socket.on("data", createLineParser((envelope) => {
-        if (envelope.kind !== "request") return;
-        void this.handleIncomingRequest(socket, envelope);
-      }));
+      socket.on("data", parser);
     });
     await new Promise((resolve2, reject) => {
       this.ipcServer?.once("listening", () => resolve2());

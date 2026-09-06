@@ -3483,7 +3483,7 @@ var require_dist = __commonJS({
           this.disconnectListeners.delete(listener);
         };
       }
-      handleDisconnect(socket, reason, error48) {
+      handleDisconnect(socket, reason, error48, droppedTailBytes = 0) {
         if (this.disconnectedSockets.has(socket)) return;
         this.disconnectedSockets.add(socket);
         const wasEstablished = establishedSockets.has(socket);
@@ -3515,7 +3515,8 @@ var require_dist = __commonJS({
           reason,
           endpointPath: this.endpoint.path,
           pendingRequests,
-          error: error48
+          error: error48,
+          droppedTailBytes
         };
         for (const listener of this.disconnectListeners) {
           try {
@@ -3535,7 +3536,7 @@ var require_dist = __commonJS({
         }
         const socket = net.createConnection(this.endpoint.path);
         this.socket = socket;
-        socket.on("data", createLineParser((envelope) => {
+        const parser = createLineParser((envelope) => {
           if (envelope.kind === "response") {
             const waiter = this.requestWaiters.get(envelope.requestId);
             if (waiter) {
@@ -3547,15 +3548,24 @@ var require_dist = __commonJS({
           if (envelope.kind === "event") {
             for (const listener of this.eventListeners) listener(envelope.event);
           }
-        }));
+        });
+        socket.on("data", parser);
+        const flushParser = () => {
+          try {
+            return parser.end();
+          } catch {
+            return "";
+          }
+        };
         socket.on("error", (error48) => {
-          this.handleDisconnect(socket, "error", error48);
+          const remainder = flushParser();
+          this.handleDisconnect(socket, "error", error48, remainder.length);
         });
         socket.on("close", () => {
-          this.handleDisconnect(socket, "closed");
+          this.handleDisconnect(socket, "closed", void 0, flushParser().length);
         });
         socket.on("end", () => {
-          this.handleDisconnect(socket, "ended");
+          this.handleDisconnect(socket, "ended", void 0, flushParser().length);
         });
         await new Promise((resolve3, reject) => {
           socket.once("connect", () => {
@@ -159589,6 +159599,20 @@ data: ${JSON.stringify(msg.data)}
           // Deep-copied by the recorder's own `detail()`, so a caller holding
           // this cannot see it mutate on the next trigger.
           ...opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {},
+          // Emitted only when the caller passed the full counter object. A
+          // status-reporter caller supplying just the five bucket fields
+          // leaves these undefined, and the key is then omitted entirely
+          // rather than reported as a fabricated zero — "not measured" and
+          // "measured zero" are different answers to "is the throttle
+          // coalescing?", and only one of them is honest here.
+          ...opts.transcript && typeof opts.transcript.ptyDirtyCoalesced === "number" ? {
+            transcriptCounterDetail: {
+              ptyDirtyCoalesced: opts.transcript.ptyDirtyCoalesced,
+              emptyGuarded: opts.transcript.emptyGuarded ?? 0,
+              collectorUnavailable: opts.transcript.collectorUnavailable ?? 0,
+              sourcePending: opts.transcript.sourcePending ?? 0
+            }
+          } : {},
           ...routing ? {
             readRouting: {
               fromReplica: routing.fromReplica,
@@ -160950,7 +160974,24 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
                   publishFailed: transcriptCounters.publishFailed,
                   deduped: transcriptCounters.deduped,
                   oversized: transcriptCounters.oversized,
-                  dropped: transcriptCounters.dropped
+                  dropped: transcriptCounters.dropped,
+                  // ★ The remaining four counters, which the
+                  // five-field slice above dropped on the floor.
+                  // They land on `transcriptCounterDetail`,
+                  // which summarizeSeqscribeStats gates behind
+                  // `includeLocalDiagnostics` and the cloud
+                  // allow-list never names — so this is a local
+                  // diagnostic surface only, exactly like
+                  // transcriptLatencyDetail beside it.
+                  //
+                  // `ptyDirtyCoalesced` is the reason: it is the
+                  // only evidence that the per-session PTY
+                  // throttle is collapsing bursts, and it was
+                  // unobservable on every surface until now.
+                  ptyDirtyCoalesced: transcriptCounters.ptyDirtyCoalesced,
+                  emptyGuarded: transcriptCounters.emptyGuarded,
+                  collectorUnavailable: transcriptCounters.collectorUnavailable,
+                  sourcePending: transcriptCounters.sourcePending
                 }
               } : {},
               // persistentMismatches is LOCAL-ONLY by the allow-lists in
