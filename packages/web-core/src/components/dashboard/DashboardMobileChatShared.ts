@@ -1,6 +1,20 @@
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
-import type { RecentSessionBucket } from '@adhdev/daemon-core'
+import type { ManagedStatus, RecentSessionBucket } from '@adhdev/daemon-core'
+import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+
+/**
+ * Wire-only legacy synonyms that `conversation.status` can carry but that
+ * `normalizeManagedStatus` (daemon-core `status/normalize.ts`) does NOT fold
+ * into `generating` — its `WORKING_STATUSES` set covers `streaming`/`loading`/
+ * `thinking`/`active` but not these two ('no_progress' is the renamed form of
+ * legacy 'long_generating'; both are stall-monitor labels, not reducer/FSM
+ * output). Confirmed by direct probe against the built normalizer: both
+ * currently resolve to `idle`, not `generating`. This alias step exists so
+ * fixing the `finalizing`/`starting` blind spot does not regress these two —
+ * they must keep counting as generating exactly as before this fix.
+ */
+const LEGACY_GENERATING_STATUS_ALIASES: ReadonlySet<string> = new Set(['no_progress', 'long_generating'])
 
 export interface MobileConversationListItem {
     conversation: ActiveConversation
@@ -105,14 +119,42 @@ function normalizeInboxState(source: InboxSurfaceStateSource) {
     }
 }
 
+/**
+ * Exhaustive classification of every `ManagedStatus` value into "is this
+ * conversation actively working" (true) or not (false). Keyed as a `Record`
+ * over the full `ManagedStatus` union so that TypeScript raises a compile
+ * error here the moment a new status is added to the reducer's output type —
+ * this is the "isGenerating doesn't know what the reducer emits" bug class
+ * (`finalizing`/`starting` were silently missing from a hand-maintained list)
+ * made structurally impossible to repeat silently.
+ */
+const MANAGED_STATUS_IS_WORKING: Record<ManagedStatus, boolean> = {
+    idle: false,
+    generating: true,
+    starting: true,
+    finalizing: true,
+    waiting_approval: false,
+    waiting_choice: false,
+    error: false,
+    stopped: false,
+    panel_hidden: false,
+    not_monitored: false,
+    disconnected: false,
+}
+
 export function getConversationViewStates(conversation: { status?: string, connectionState?: string }) {
     const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
-    const isGenerating = conversation.status === 'generating'
-        || conversation.status === 'no_progress'
-        || conversation.status === 'long_generating'
-        || conversation.status === 'streaming'
-    const isWaiting = conversation.status === 'waiting_approval'
+    // Route through the canonical normalizer for everything the reducer/FSM
+    // actually emits, so this file stays in sync with `ManagedStatus` by
+    // construction. The two legacy wire-only synonyms it does NOT cover are
+    // aliased first (see LEGACY_GENERATING_STATUS_ALIASES) so they keep
+    // resolving to `generating` as before.
+    const managedStatus = LEGACY_GENERATING_STATUS_ALIASES.has(conversation.status || '')
+        ? 'generating'
+        : normalizeManagedStatus(conversation.status)
+    const isGenerating = MANAGED_STATUS_IS_WORKING[managedStatus]
+    const isWaiting = managedStatus === 'waiting_approval'
     return { isReconnecting, isConnecting, isGenerating, isWaiting }
 }
 
