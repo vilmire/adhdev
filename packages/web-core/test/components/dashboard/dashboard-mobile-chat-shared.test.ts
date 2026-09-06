@@ -85,12 +85,39 @@ describe('DashboardMobileChatShared', () => {
     expect(getConversationViewStates({ status: 'streaming' }).isGenerating).toBe(true)
   })
 
+  /**
+   * Regression for the turn-reducer statuses (`starting`/`finalizing`) that the
+   * hand-maintained isGenerating list silently omitted: the reducer emits them
+   * on `session_status`/`read_chat` (mesh-turn-presentation.ts) while a session
+   * is genuinely mid-turn, so a dashboard that doesn't recognize them renders a
+   * working agent as idle. Un-commenting either branch in
+   * `MANAGED_STATUS_IS_WORKING` (DashboardMobileChatShared.ts) must turn this
+   * red — that's the injection-red proof the omission is actually caught.
+   */
+  it('treats reducer-emitted starting and finalizing statuses as working states', () => {
+    expect(getConversationViewStates({ status: 'starting' }).isGenerating).toBe(true)
+    expect(getConversationViewStates({ status: 'finalizing' }).isGenerating).toBe(true)
+    expect(isConversationGenerating(createConversation({ status: 'starting' }))).toBe(true)
+    expect(isConversationGenerating(createConversation({ status: 'finalizing' }))).toBe(true)
+  })
+
   it('centralizes the generating predicate across the full status set (desktop hidden indicator uses this)', () => {
-    for (const status of ['generating', 'no_progress', 'long_generating', 'streaming']) {
+    for (const status of ['generating', 'no_progress', 'long_generating', 'streaming', 'starting', 'finalizing']) {
       expect(isConversationGenerating(createConversation({ status }))).toBe(true)
     }
-    expect(isConversationGenerating(createConversation({ status: 'idle' }))).toBe(false)
-    expect(isConversationGenerating(createConversation({ status: 'waiting_approval' }))).toBe(false)
+  })
+
+  /**
+   * Negative-direction guard: without this, flipping MANAGED_STATUS_IS_WORKING
+   * to mark everything `true` would still pass every "X counts as generating"
+   * assertion above. Every non-working ManagedStatus must read false so the
+   * predicate can't be satisfied by a blanket true.
+   */
+  it('does NOT treat genuinely idle/non-working statuses as generating', () => {
+    for (const status of ['idle', 'waiting_approval', 'waiting_choice', 'error', 'stopped', 'panel_hidden', 'not_monitored', 'disconnected']) {
+      expect(isConversationGenerating(createConversation({ status }))).toBe(false)
+      expect(getConversationViewStates({ status }).isGenerating).toBe(false)
+    }
   })
 
   it('counts generating conversations for collapsed/hidden surfaces', () => {
@@ -99,8 +126,10 @@ describe('DashboardMobileChatShared', () => {
       createConversation({ status: 'streaming' }),
       createConversation({ status: 'idle' }),
       createConversation({ status: 'no_progress' }),
+      createConversation({ status: 'starting' }),
+      createConversation({ status: 'finalizing' }),
     ]
-    expect(countGeneratingConversations(conversations)).toBe(3)
+    expect(countGeneratingConversations(conversations)).toBe(5)
     expect(countGeneratingConversations([])).toBe(0)
     expect(countGeneratingConversations([createConversation({ status: 'idle' })])).toBe(0)
   })
