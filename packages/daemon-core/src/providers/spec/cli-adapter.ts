@@ -18,6 +18,15 @@
  */
 'use strict';
 
+import {
+    normalizeClaudeTuiIdentity,
+    claudeTuiQuestionMatches,
+    claudeTuiQuestionTextAppears,
+    claudeTuiPagesLookLikeSameQuestion,
+    readClaudeTuiHeaders,
+    claudeAskUserQuestionPromptsMatch,
+    readClaudeToolResultIds,
+} from './claude-tui-helpers.js';
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
 import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
@@ -70,137 +79,13 @@ import {
 } from '@adhdev/mesh-shared';
 
 
-// See the matching helper in cli-adapters/provider-cli-shared.ts for the full
-// rationale. Kept as a separate copy deliberately: `check:boundaries` forbids a
-// value import between providers/ and cli-adapters/, so sharing it would mean
-// breaking a layer boundary to save a few lines.
-// eslint-disable-next-line no-control-regex
-const ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
-// eslint-disable-next-line no-control-regex
-const ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+import {
+    detectKimiAuthBillingFailure,
+    stripAnsi,
+    type KimiAuthBillingFailure,
+} from './kimi-auth-billing.js';
 
-/**
- * Strip ANSI escape sequences. Byte-for-byte identical to the previous
- * three-pass chain. The CSI pass stays last and separate because deleting an
- * OSC/DCS can leave a dangling `ESC[` newly adjacent to following text, which
- * only a fresh scan will then match; a fused alternation advances past that
- * position and never revisits it.
- */
-function stripAnsi(text: string): string {
-    const s = String(text || '');
-    if (s.indexOf('\x1B') === -1) return s;
-    return s.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
-}
-
-export interface KimiAuthBillingFailure {
-    errorReason: 'auth_failed' | 'billing_failed' | 'quota_exceeded';
-    failureKind: 'auth' | 'billing' | 'quota';
-    message: string;
-}
-
-/**
- * KIMI-AUTH-BILLING-LIVE: classify only strong Kimi CLI failure markers.
- *
- * Spec-backed CLIs run inside one PTY, so stdout and stderr are intentionally
- * merged by node-pty. The live adapter therefore retains a small output tail
- * and applies this classifier both as chunks arrive and when the process exits.
- * A bare 403 is deliberately absent, and so is a bare `[provider.auth_error]`
- * tag: Kimi answers 403 for managed-usage exhaustion as well as for real
- * authorization faults, so the verdict comes from the accompanying entitlement
- * wording, exactly as the quota fetcher decides it from the response body. That
- * is why the live line "[provider.auth_error] 403 You've reached your 5-hour
- * usage limit" classifies as QUOTA exhaustion rather than billing or auth —
- * misreading it as auth would send an operator to re-login against a credential
- * that is actually fine, and misreading it as billing (an incident fixed
- * 2026-08-29: the classifier folded quota wording into the billing bucket and
- * told the operator to "renew the subscription" when the account was current
- * and merely rate-limited by usage) suppresses automatic recovery FOREVER for a
- * condition that heals on its own once the window resets. Billing stays a
- * separate, genuinely non-retryable bucket for wording that names the account
- * itself as the problem (expired/cancelled subscription, payment required,
- * insufficient credits) rather than a spent usage window.
- * Canonical messages never echo the raw PTY tail (which may contain credentials
- * or user data).
- */
-/**
- * True when the tail carries a machine-emitted provider failure envelope, as
- * opposed to prose that merely mentions limits. This is the live-PTY stand-in
- * for the quota fetcher's "we already know this is a 403" precondition: it is
- * what separates the incident line "[provider.auth_error] 403 You've reached
- * your 5-hour usage limit" from an agent narrating the quota source file.
- */
-function hasProviderFailureEnvelope(text: string): boolean {
-    return /\bprovider\.[a-z_]*error\b/.test(text)
-        || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text)
-        || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
-}
-
-export function detectKimiAuthBillingFailure(output: string, _exitCode?: number): KimiAuthBillingFailure | null {
-    const text = stripAnsi(output).replace(/\s+/g, ' ').trim().toLowerCase();
-    if (!text) return null;
-
-    // Entitlement EXHAUSTION — the account is fine, the usage window is spent.
-    // The wording mirrors the quota fetcher's USAGE_LIMIT_BODY_PATTERN
-    // (quota/fetchers/kimi.ts) so the live path and the polled path agree on
-    // what "the plan is spent" looks like, but it is NOT reused verbatim: the
-    // fetcher matches an HTTP error body already known to be a 403, whereas
-    // this scans merged PTY output from a coding agent that frequently
-    // *discusses* quota code ("reading kimi.ts to understand the usage limit
-    // pattern"). Bare limit wording is therefore not sufficient — it must be
-    // carried by an actual provider failure envelope (a provider error tag or
-    // an HTTP 403/402 status), which is the structural equivalent of the
-    // fetcher's status precondition.
-    //
-    // Kimi states the limit as a rolling window ("your 5-hour usage limit") as
-    // well as per cycle ("usage limit for this billing cycle"), and the
-    // qualifier sits between the noun and "limit", so the reached/exceeded verb
-    // stays optional after it. This bucket is checked BEFORE billing so a
-    // usage-limit envelope never falls through into the non-retryable bucket
-    // below — the incident this file exists to prevent.
-    const quota = hasProviderFailureEnvelope(text) && [
-        /\b(?:usage|quota|credit)\s+limit\b/,
-        /\bquota\s*(?:exhausted|refresh)/,
-        /\bbilling\s+cycle\b/,
-    ].some(pattern => pattern.test(text));
-    if (quota) {
-        return {
-            errorReason: 'quota_exceeded',
-            failureKind: 'quota',
-            message: 'Kimi usage quota reached — the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets.',
-        };
-    }
-
-    const billing = [
-        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
-        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
-        /\bpayment_required\b/,
-        /\binsufficient\s+(?:balance|credits?)\b/,
-    ].some(pattern => pattern.test(text));
-    if (billing) {
-        return {
-            errorReason: 'billing_failed',
-            failureKind: 'billing',
-            message: 'Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying.',
-        };
-    }
-
-    const auth = [
-        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
-        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
-        /\b(?:token_expired|invalid_token)\b/,
-        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
-        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
-    ].some(pattern => pattern.test(text));
-    if (auth) {
-        return {
-            errorReason: 'auth_failed',
-            failureKind: 'auth',
-            message: 'Kimi authentication failed (the access token is expired or rejected). Run "kimi login" in this environment before retrying.',
-        };
-    }
-    return null;
-}
+export { detectKimiAuthBillingFailure, type KimiAuthBillingFailure };
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -1628,7 +1513,7 @@ export class SpecCliAdapter implements CliAdapter {
         // Empty questions are not emitted by a real capture, but retaining the
         // footer fallback keeps defensive/manual prompt fixtures compatible.
         const stillOnScreen = identifiableQuestions.length > 0
-            ? identifiableQuestions.some(q => this.claudeTuiQuestionTextAppears(q, screenText))
+            ? identifiableQuestions.some(q => claudeTuiQuestionTextAppears(q, screenText))
             : screenText.includes('Enter to select');
         if (stillOnScreen) {
             // Prompt reappeared / never left — reset the hysteresis timer.
@@ -1685,12 +1570,12 @@ export class SpecCliAdapter implements CliAdapter {
                 const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record, this.cliType);
                 if (observedPrompt
                     && (observedPrompt.promptId === prompt.promptId
-                        || this.claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
+                        || claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
                     boundToolUseId = observedPrompt.promptId;
                     resolved = false;
                 }
                 if (!boundToolUseId) continue;
-                if (this.readClaudeToolResultIds(record).includes(boundToolUseId)) resolved = true;
+                if (readClaudeToolResultIds(record).includes(boundToolUseId)) resolved = true;
             }
             return resolved;
         } catch {
@@ -1700,52 +1585,7 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
-    private claudeAskUserQuestionPromptsMatch(expected: InteractivePrompt, observed: InteractivePrompt): boolean {
-        if (expected.questions.length !== observed.questions.length) return false;
-        return expected.questions.every((expectedQuestion, index) => {
-            const observedQuestion = observed.questions[index];
-            if (!observedQuestion
-                || this.normalizeClaudeTuiIdentity(expectedQuestion.question)
-                    !== this.normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
 
-            const observedHeader = this.normalizeClaudeTuiIdentity(observedQuestion.header || '');
-            if (observedHeader
-                && this.normalizeClaudeTuiIdentity(expectedQuestion.header || '') !== observedHeader) return false;
-
-            // Claude's native tool input omits the synthetic TUI escape rows.
-            // Compare its complete option list against the captured picker
-            // after removing only those known synthetic labels.
-            const expectedLabels = expectedQuestion.options
-                .map(option => this.normalizeClaudeTuiIdentity(option.label))
-                .filter(label => !/^(?:Type something\.?|Chat about this)$/i.test(label));
-            const observedLabels = observedQuestion.options
-                .map(option => this.normalizeClaudeTuiIdentity(option.label));
-            return expectedLabels.length === observedLabels.length
-                && expectedLabels.every((label, optionIndex) => label === observedLabels[optionIndex]);
-        });
-    }
-
-    private readClaudeToolResultIds(value: unknown): string[] {
-        if (!value || typeof value !== 'object') return [];
-        const record = value as Record<string, unknown>;
-        const blocks: unknown[] = [];
-        if (Array.isArray(record.content)) blocks.push(...record.content);
-        const message = record.message;
-        if (message && typeof message === 'object' && Array.isArray((message as Record<string, unknown>).content)) {
-            blocks.push(...((message as Record<string, unknown>).content as unknown[]));
-        }
-        if (record.type === 'tool_result') blocks.push(record);
-
-        const ids: string[] = [];
-        for (const block of blocks) {
-            if (!block || typeof block !== 'object') continue;
-            const candidate = block as Record<string, unknown>;
-            if (candidate.type !== 'tool_result') continue;
-            const id = typeof candidate.tool_use_id === 'string' ? candidate.tool_use_id.trim() : '';
-            if (id) ids.push(id);
-        }
-        return ids;
-    }
 
     /**
      * Read the pending AskUserQuestion off claude's native JSONL transcript, or
@@ -1834,7 +1674,7 @@ export class SpecCliAdapter implements CliAdapter {
             return;
         }
 
-        const headers = this.readClaudeTuiHeaders(screenText);
+        const headers = readClaudeTuiHeaders(screenText);
         if (headers.length === 0) {
             // Headerless (single-question) capture parses the CURRENT screen
             // only and injects no keys — always safe, even while the owner is
@@ -1916,7 +1756,7 @@ export class SpecCliAdapter implements CliAdapter {
         if (questions.length === 1) {
             if (questions[0].multiSelect) return;
             const focused = readFocusedClaudeTuiQuestion(screenText);
-            if (!focused || !this.claudeTuiQuestionMatches(questions[0], focused) || !focused.multiSelect) return;
+            if (!focused || !claudeTuiQuestionMatches(questions[0], focused) || !focused.multiSelect) return;
             questions[0].multiSelect = true;
             this.statusCallback?.();
             return;
@@ -1927,39 +1767,14 @@ export class SpecCliAdapter implements CliAdapter {
         // one. Never demote — a settled non-multi page is left as captured.
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (!focused || !focused.multiSelect) return;
-        const match = questions.find(q => this.claudeTuiQuestionMatches(q, focused));
+        const match = questions.find(q => claudeTuiQuestionMatches(q, focused));
         if (!match || match.multiSelect) return;
         match.multiSelect = true;
         this.statusCallback?.();
     }
 
-    private normalizeClaudeTuiIdentity(text: string): string {
-        return text.replace(/\s+/g, ' ').trim();
-    }
 
-    private claudeTuiQuestionMatches(
-        expected: InteractivePrompt['questions'][number],
-        focused: { question: string; header?: string },
-    ): boolean {
-        const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
-        const focusedQuestion = this.normalizeClaudeTuiIdentity(focused.question);
-        // The question line is always present when the focused-page parser
-        // succeeds. Do not accept a header-only match: headers such as Model or
-        // Approach are reusable across unrelated pickers, while a false match
-        // here would authorize keystrokes against the wrong widget.
-        return !!expectedQuestion && expectedQuestion === focusedQuestion;
-    }
 
-    private claudeTuiQuestionTextAppears(
-        expected: InteractivePrompt['questions'][number],
-        screenText: string,
-    ): boolean {
-        const expectedQuestion = this.normalizeClaudeTuiIdentity(expected.question);
-        const focusedPickerRegion = readFocusedClaudeTuiPickerRegion(screenText);
-        return !!expectedQuestion
-            && focusedPickerRegion !== null
-            && this.normalizeClaudeTuiIdentity(focusedPickerRegion).includes(expectedQuestion);
-    }
 
     private readClaudeTuiSnapshotForAnswer(): string {
         try {
@@ -2001,7 +1816,7 @@ export class SpecCliAdapter implements CliAdapter {
         const deadline = Date.now() + settleTimeoutMs;
         let screenText = this.readClaudeTuiSnapshotForAnswer();
         let focused = readFocusedClaudeTuiQuestion(screenText);
-        while (Date.now() < deadline && !(focused && this.claudeTuiQuestionMatches(expected, focused))) {
+        while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
             // Either a stale/foreign page or no picker at all. Both can be
             // mid-repaint, and the no-picker case is separately resolved as
             // 'completed' below — so keep sampling rather than deciding on a
@@ -2011,7 +1826,7 @@ export class SpecCliAdapter implements CliAdapter {
             focused = readFocusedClaudeTuiQuestion(screenText);
         }
         if (focused) {
-            if (this.claudeTuiQuestionMatches(expected, focused)) return 'focused';
+            if (claudeTuiQuestionMatches(expected, focused)) return 'focused';
             throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);
         }
 
@@ -2062,7 +1877,7 @@ export class SpecCliAdapter implements CliAdapter {
             let directSubmitted = false;
 
             if (focused) {
-                const boundQuestion = prompt.questions.some(question => this.claudeTuiQuestionMatches(question, focused));
+                const boundQuestion = prompt.questions.some(question => claudeTuiQuestionMatches(question, focused));
                 classification = boundQuestion ? 'bound_question' : 'foreign_question';
             } else if (review) {
                 classification = 'review';
@@ -2163,7 +1978,7 @@ export class SpecCliAdapter implements CliAdapter {
             // no finite budget bounds an arbitrarily slow remote repaint. This
             // instead makes the OUTCOME correct at whatever budget we have.
             const boundQuestionStillFocused = !!focused
-                && prompt.questions.some(question => this.claudeTuiQuestionMatches(question, focused));
+                && prompt.questions.some(question => claudeTuiQuestionMatches(question, focused));
 
             if (boundQuestionStillFocused) {
                 // Authoritative delivery oracle: if Claude's native JSONL already
@@ -2200,32 +2015,15 @@ export class SpecCliAdapter implements CliAdapter {
         // prompt has headers, require the focused review nav to carry them so
         // a second AskUserQuestion review page cannot borrow the final Enter.
         const expectedHeaders = prompt.questions
-            .map(q => q.header && this.normalizeClaudeTuiIdentity(q.header))
+            .map(q => q.header && normalizeClaudeTuiIdentity(q.header))
             .filter((header): header is string => !!header);
         if (expectedHeaders.length === 0) return;
-        const reviewHeaders = this.readClaudeTuiHeaders(screenText)
-            .map(header => this.normalizeClaudeTuiIdentity(header));
+        const reviewHeaders = readClaudeTuiHeaders(screenText)
+            .map(header => normalizeClaudeTuiIdentity(header));
         if (expectedHeaders.every(header => reviewHeaders.includes(header))) return;
         throw new Error('Claude TUI review page does not match the active interactive prompt headers');
     }
 
-    private readClaudeTuiHeaders(screenText: string): string[] {
-        const lines = screenText.split(/\r?\n/);
-        let navLine: string | undefined;
-        for (let index = lines.length - 1; index >= 0; index -= 1) {
-            if (lines[index].includes('✔ Submit') && /[☐☒]/.test(lines[index])) {
-                navLine = lines[index];
-                break;
-            }
-        }
-        if (!navLine) return [];
-        const headers: string[] = [];
-        for (const match of navLine.matchAll(/[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g)) {
-            const header = match[1]?.trim();
-            if (header) headers.push(header);
-        }
-        return headers;
-    }
 
     /**
      * Snapshot the currently-focused claude TUI page, polling until its
@@ -2250,49 +2048,6 @@ export class SpecCliAdapter implements CliAdapter {
         return screenText;
     }
 
-    /**
-     * Is `reread` a re-render of the SAME picker page as `landed`?
-     *
-     * Guards the return-pass screenText swap in captureClaudeTuiPrompt, which
-     * replaces a page's entire raw screen and therefore must never be handed a
-     * frame belonging to a different question.
-     *
-     * WHAT WE COMPARE — the question line, via the same parser the capture
-     * itself uses (readFocusedClaudeTuiQuestion). Rationale:
-     *  - The question text is the one field that is per-page, always rendered
-     *    (it is the parse anchor — a page without it yields no question at all),
-     *    and stable across the redraw we are waiting on. The redraw races the
-     *    option-row GLYPH COLUMN, not the question line.
-     *  - The header is NOT usable on its own: on the headered variant every page
-     *    renders the identical nav line, and `page.header` is assigned by index
-     *    from that shared line rather than read from the page body — so it is
-     *    equal across pages by construction and would accept any frame.
-     *  - The option-label set is rejected as the primary key: it is drawn in the
-     *    very region that is mid-redraw, and rows can be clipped or scrolled out
-     *    of the captured frame (the same truncation that forced the headerless
-     *    parser to stop requiring the freeform escape hatch). Comparing it would
-     *    reject legitimate repairs — exactly the frames this pass exists to fix.
-     *
-     * STRICTNESS — deliberately asymmetric, because the two error directions are
-     * not equally costly. Wrongly ALLOWING a swap corrupts a question into a
-     * duplicate of another (the reported user-visible defect). Wrongly BLOCKING
-     * one merely leaves the forward-pass capture in place — at worst a
-     * multi-select page stays flagged single-select, which the live status-tick
-     * upgrade (maybeUpgradeClaudeTuiMultiSelect) then repairs anyway. So this
-     * blocks only on POSITIVE EVIDENCE of a different page: if either side fails
-     * to parse we return true and defer to the pre-existing glyph gate, keeping
-     * behaviour identical to before for every frame whose identity we cannot
-     * read. Comparison is whitespace-normalised so a reflow or trailing-pad
-     * difference does not read as a different question.
-     */
-    private claudeTuiPagesLookLikeSameQuestion(landed: ClaudeInteractiveTuiPage, reread: string): boolean {
-        const landedQuestion = readFocusedClaudeTuiQuestion(landed.screenText);
-        const rereadQuestion = readFocusedClaudeTuiQuestion(reread);
-        // Unparseable on either side → no evidence of a mismatch; fail open.
-        if (!landedQuestion || !rereadQuestion) return true;
-        const normalize = (text: string): string => text.replace(/\s+/g, ' ').trim();
-        return normalize(landedQuestion.question) === normalize(rereadQuestion.question);
-    }
 
     private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
         // Owner typed between detection and capture start — bail before any
@@ -2333,7 +2088,7 @@ export class SpecCliAdapter implements CliAdapter {
                 // separately (by nav-line index) it stays correct, producing the
                 // observed symptom — question N-1 rendered with its own header but
                 // question N's title, body and checkboxes.
-                && this.claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
+                && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
                 landed.screenText = reread;
             }
         }
