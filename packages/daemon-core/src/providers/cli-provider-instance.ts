@@ -1040,13 +1040,37 @@ export class CliProviderInstance implements ProviderInstance {
         const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
         const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
         const dirName = workingDirBasename(this.workingDir);
+        // TURN-PRESENTATION (Stage 6): the session.modal lane is the LAST status
+        // surface that still published the raw provider FSM. PaneGroupContent
+        // overlays this status on top of ActiveConversation.status — which was
+        // already reducer-authoritative via status/builders.ts
+        // resolveSessionStatusUnified — so a projection-blind value here wins in
+        // the UI and re-introduces exactly the disagreement Stage 6 removed
+        // everywhere else (observed as the `legacy_idle_turn_active` shadow
+        // divergence: reducer `starting`, this lane `idle`).
+        //
+        // The overlay itself is correct and stays: it exists for FRESHNESS (the
+        // status lane is push-only and self-heals on resubscribe — see the
+        // useSessionModalSubscription header). Freshness and authority are
+        // different axes; this makes the fresh value also the authoritative one
+        // rather than deleting the freshness path.
+        //
+        // `visibleStatus` (incl. the auto-approve mask) remains the legacy/shadow
+        // input, so with no mesh attempt the resolver passes it through unchanged
+        // and ordinary non-mesh CLI chat behaves exactly as before.
+        const presentedStatus = resolveSessionTurnPresentation({
+            sessionId: sessionId ?? this.instanceId,
+            legacyStatus: visibleStatus,
+            providerType: this.type,
+            surface: 'session_modal',
+        }).status;
         return {
             // Honor the caller-supplied sessionId — InstanceMgr rejects the
             // projection when projected.id !== requested sessionId, and
             // this.instanceId is the manager's internal key, not the public
             // sessionId the dashboard subscribes by.
             id: sessionId ?? this.instanceId,
-            status: visibleStatus,
+            status: presentedStatus,
             title: dirName,
             activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : adapterStatus.activeModal,
         };

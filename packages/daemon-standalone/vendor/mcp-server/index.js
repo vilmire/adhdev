@@ -112286,6 +112286,7 @@ ${buttons.join("\n")}`;
         init_debug_config();
         init_mesh_event_trace();
         init_mesh_events_utils();
+        init_mesh_turn_presentation();
         init_runtime_defaults();
         init_mesh_task_attachment();
         init_control_effects();
@@ -113039,13 +113040,19 @@ ${buttons.join("\n")}`;
             const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === "idle";
             const visibleStatus = autoApproveActive || autoApproveHoldIdle ? "generating" : adapterStatus.status;
             const dirName = workingDirBasename(this.workingDir);
+            const presentedStatus = resolveSessionTurnPresentation({
+              sessionId: sessionId ?? this.instanceId,
+              legacyStatus: visibleStatus,
+              providerType: this.type,
+              surface: "session_modal"
+            }).status;
             return {
               // Honor the caller-supplied sessionId — InstanceMgr rejects the
               // projection when projected.id !== requested sessionId, and
               // this.instanceId is the manager's internal key, not the public
               // sessionId the dashboard subscribes by.
               id: sessionId ?? this.instanceId,
-              status: visibleStatus,
+              status: presentedStatus,
               title: dirName,
               activeModal: autoApproveActive || autoApproveHoldIdle ? null : adapterStatus.activeModal
             };
