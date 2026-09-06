@@ -55,6 +55,7 @@ export type TurnPresentationAuthority = 'turn_reducer' | 'provider_fsm_fallback'
 export type TurnPresentationSurface =
     | 'read_chat'
     | 'session_status'
+    | 'session_modal'
     | 'mesh_status'
     | 'active_work'
     | 'dashboard'
