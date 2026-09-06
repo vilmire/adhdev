@@ -1167,7 +1167,7 @@ export class DaemonCommandRouter {
                 const dirtySessionId = typeof normalizedArgs?.targetSessionId === 'string'
                     ? normalizedArgs.targetSessionId.trim()
                     : '';
-                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId);
+                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId, 'post_chat');
                 this.deps.onPostChatCommand?.();
             }
 

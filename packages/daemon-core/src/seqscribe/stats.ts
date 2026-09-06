@@ -31,6 +31,7 @@
 
 import type { NodeStats } from 'seqscribe';
 import type { SeqscribeThroughputSnapshot } from './throughput-collector.js';
+import type { TranscriptLatencyDetail } from './transcript-latency.js';
 
 /**
  * Finality staleness buckets, in hours. With a 1h issuance cadence, "fresh" is
@@ -306,6 +307,37 @@ export interface SeqscribeStatusSummary {
         /** Milliseconds counted so far — `since` expressed as an age. */
         uptimeMs: number;
     };
+    /**
+     * Which trigger drove each transcript refresh, and how long the daemon-side
+     * leg took (count/p50/p95/max per source).
+     *
+     * ★ Why this is separate from `transcriptParityDetail` above. That field
+     * counts THROUGHPUT — runs, comparisons, mismatch classes. It cannot answer
+     * "is the replica lane fast", because it has no timing axis at all and no
+     * notion of which of the six dirty-trigger sources fired. Six triggers with
+     * cadences two orders of magnitude apart (a leading-edge PTY byte vs. the 3s
+     * safety-net stat poll) feed the same publisher, so without attribution a
+     * slow lane and a lane being driven only by its slowest trigger look
+     * identical from here. That ambiguity has already produced one wrong tuning
+     * call.
+     *
+     * ★ `notMeasurable` is part of the payload on purpose. The daemon→browser
+     * legs are absent because the two clocks are unsynchronized, NOT because
+     * they are instant, and an observer reading a truncated chain needs that
+     * distinction stated where they are looking. See seqscribe/transcript-
+     * latency.ts.
+     *
+     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting` and
+     * `transcriptParityDetail`: raw monotonic counters and raw millisecond
+     * distributions would make every status frame hash differently and turn an
+     * idle daemon into a permanent transmitter, and the server has no routing
+     * use for them. The keys are a FIXED trigger-source enum and a fixed stage
+     * enum — never a session id, topic name, or peer id — and every value is a
+     * number. `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
+     * allow-list that does not name this key, and
+     * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
+     */
+    transcriptLatencyDetail?: TranscriptLatencyDetail;
 }
 
 export interface SummarizeOptions {
@@ -394,6 +426,14 @@ export interface SummarizeOptions {
         fromLedger: number;
         fallbacks: Record<string, number>;
     } | null;
+    /**
+     * Transcript trigger attribution + stage latencies
+     * (`transcriptLatencyDetail()` from seqscribe/transcript-publisher.ts). Only
+     * read when `includeLocalDiagnostics` is set — see the
+     * `transcriptLatencyDetail` field for why this must not ride the deduped
+     * status frame.
+     */
+    transcriptLatency?: TranscriptLatencyDetail | null;
 }
 
 export function summarizeSeqscribeStats(
@@ -479,6 +519,9 @@ export function summarizeSeqscribeStats(
                       },
                   }
                 : {}),
+            // Deep-copied by the recorder's own `detail()`, so a caller holding
+            // this cannot see it mutate on the next trigger.
+            ...(opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {}),
             ...(routing
                 ? {
                       readRouting: {

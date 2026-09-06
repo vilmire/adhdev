@@ -804,6 +804,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     // reason is the only surface that says WHICH readiness
                     // condition is holding a mesh on the ledger.
                     readRouting: meshReadRoutingCounters(),
+                    // Transcript trigger attribution + daemon-side stage
+                    // latencies. Local-only for the same reason as readRouting
+                    // directly above — raw counters and raw millisecond
+                    // distributions would defeat the status-frame dedup — and
+                    // this is the surface the "is the replica lane fast enough"
+                    // question is answered from. The daemon-cloud status-report
+                    // supplier deliberately does NOT pass this.
+                    transcriptLatency: transcriptService?.getLatencyDetail() ?? null,
                     dualWrite: {
                         active: isMeshDualWriteActive(),
                         failed: dual.failed,
