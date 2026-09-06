@@ -294,6 +294,7 @@ export default function DashboardMobileChatMode({
                     userName={userName}
                     isSendingChat={cmds.isSendingChat}
                     sendFeedbackMessage={cmds.sendFeedbackMessage}
+                    pendingLocalMessage={cmds.pendingLocalMessage}
                     isFocusingAgent={cmds.isFocusingAgent}
                     handleModalButton={cmds.handleModalButton}
                     handleRelaunch={cmds.handleRelaunch}

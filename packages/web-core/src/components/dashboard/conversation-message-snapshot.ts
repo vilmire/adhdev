@@ -24,6 +24,111 @@ export function getConversationLiveMessages(
     return Array.isArray(conversation.messages) ? conversation.messages : []
 }
 
+/**
+ * (OPTIMISTIC-USER-BUBBLE) A locally-appended user bubble, shown between the
+ * moment the owner hits send and the moment the daemon's echo arrives.
+ *
+ * WHY: `send_chat` only resolves after a full round trip, and when the agent is
+ * busy the daemon parks the body in a FIFO and answers `queued` — the echo then
+ * lands whenever the queue drains (observed at 35.5s, unbounded in principle).
+ * Until then the owner's own message was simply not on screen, which reads as
+ * "my message was lost" and provokes a resend.
+ */
+export interface PendingLocalMessage {
+    /** Exact text submitted, used both to render and to match the echo. */
+    content: string
+    /** `Date.now()` at submit — orders the bubble and bounds its lifetime. */
+    sentAt: number
+    /** True when the daemon reported `queued` (parked, not yet written to the PTY). */
+    queued?: boolean
+}
+
+/**
+ * Upper bound on how long an unmatched optimistic bubble may linger.
+ *
+ * Not a correctness mechanism — the echo match below is. This only stops a
+ * bubble whose echo never arrives at all (send failed after the daemon accepted
+ * it, session torn down mid-queue) from being pinned to the pane forever. Set
+ * well above the 35.5s queue drain actually observed, since dropping a real
+ * pending message early is the worse failure.
+ */
+export const PENDING_LOCAL_MESSAGE_MAX_AGE_MS = 120_000
+
+function normalizeForEchoMatch(value: unknown): string {
+    if (typeof value === 'string') return value.trim()
+    if (value == null) return ''
+    try {
+        return JSON.stringify(value)
+    } catch {
+        return String(value)
+    }
+}
+
+/**
+ * ★ DUPLICATE PREVENTION — the whole risk of the optimistic bubble.
+ *
+ * The daemon ALREADY renders the owner's bubble: `recordAcknowledgedUserInput`
+ * (cli-provider-instance.ts) appends a `runtime_input_ack` user message and it
+ * arrives through the normal transcript lane. So the optimistic bubble is a
+ * *stand-in* for that echo, never an addition to it — if both rendered, the
+ * owner would see their message twice, which is worse than seeing it late.
+ *
+ * The match is on trimmed CONTENT and role, deliberately, not on an id: the
+ * client cannot know the id the daemon will mint, and the daemon's own 60s
+ * dedup window (USER_INPUT_ACK_DEDUP_WINDOW_MS) is likewise content-keyed, so
+ * content is the only identity the two sides share.
+ *
+ * Suppression is one-directional and conservative: ANY matching user bubble in
+ * the live tail retires the pending one. A false match (the owner sent the same
+ * text twice in quick succession) collapses to one bubble — the same behaviour
+ * the daemon's own content-keyed window already produces for a redelivery, so
+ * this does not introduce a new class of loss.
+ */
+export function hasEchoedPendingMessage(
+    liveMessages: DashboardMessage[],
+    pending: PendingLocalMessage,
+): boolean {
+    const target = pending.content.trim()
+    if (!target) return true
+    for (let i = liveMessages.length - 1; i >= 0; i -= 1) {
+        const message = liveMessages[i]
+        if (String(message.role || '').toLowerCase() !== 'user') continue
+        if (normalizeForEchoMatch(message.content) === target) return true
+    }
+    return false
+}
+
+/**
+ * Append the optimistic bubble to the live tail, unless it has been echoed,
+ * has expired, or is empty.
+ *
+ * Returns the input array unchanged in every no-op case so React reference
+ * equality still short-circuits renders on the common path.
+ */
+export function withPendingLocalMessage(
+    liveMessages: DashboardMessage[],
+    pending: PendingLocalMessage | null | undefined,
+    now: number = Date.now(),
+): DashboardMessage[] {
+    if (!pending || !pending.content.trim()) return liveMessages
+    if (now - pending.sentAt > PENDING_LOCAL_MESSAGE_MAX_AGE_MS) return liveMessages
+    if (hasEchoedPendingMessage(liveMessages, pending)) return liveMessages
+    const bubble = {
+        id: `pending-local:${pending.sentAt}`,
+        role: 'user',
+        kind: 'standard',
+        content: pending.content,
+        senderName: 'User',
+        timestamp: pending.sentAt,
+        receivedAt: pending.sentAt,
+        // Read by the renderer to show a "sending"/"queued" affordance. The
+        // bubble is real text the owner typed, so it renders as a normal user
+        // message; only the affordance distinguishes it.
+        meta: { pendingLocal: true, queued: pending.queued === true },
+    } as unknown as DashboardMessage
+    return [...liveMessages, bubble]
+}
+
 function isConversationAnchorMessage(message: DashboardMessage): boolean {
     const role = String(message.role || '').toLowerCase()
     if (role !== 'user' && role !== 'assistant') return false

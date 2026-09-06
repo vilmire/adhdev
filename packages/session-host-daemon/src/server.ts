@@ -90,13 +90,52 @@ export class SessionHostServer extends EventEmitter {
 
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
+      // PARSER-EOF-FLUSH: hold the parser reference so `end()` is reachable.
+      // Passing `createLineParser(...)` inline to `socket.on('data', ...)` threw
+      // the handle away, which left the decoder's EOF flush permanently
+      // unreachable — bytes held back as an incomplete UTF-8 sequence when the
+      // peer disconnected simply vanished with the decoder.
+      const parser = createLineParser((envelope) => {
+        if (envelope.kind !== 'request') return;
+        void this.handleIncomingRequest(socket, envelope);
+      });
+      const flushParser = () => {
+        // The remainder is by definition a PARTIAL line — envelopes are
+        // newline-framed, so an unterminated tail is a truncated transmission,
+        // not a message. It is logged, never parsed: JSON.parse on a
+        // half-written envelope inside a socket-close handler would raise an
+        // uncaught exception and turn a peer that died mid-write into a crash
+        // of the daemon observing it. That refusal is the original author's
+        // design, preserved here.
+        let remainder = '';
+        try {
+          remainder = parser.end();
+        } catch {
+          return;
+        }
+        if (!remainder.trim()) return;
+        this.recordHostLog(
+          'warn',
+          `session host discarded ${remainder.length} bytes of an incomplete IPC frame at EOF`,
+        );
+      };
       const removeSocket = () => {
         this.sockets.delete(socket);
         this.socketSessions.delete(socket);
       };
-      socket.on('close', removeSocket);
-      socket.on('end', removeSocket);
+      // Flush before the socket bookkeeping so the remainder is reported even
+      // if a later handler throws. `end()` clears its own buffer, so the
+      // close-after-end sequence flushes once and then sees an empty tail.
+      socket.on('close', () => {
+        flushParser();
+        removeSocket();
+      });
+      socket.on('end', () => {
+        flushParser();
+        removeSocket();
+      });
       socket.on('error', () => {
+        flushParser();
         removeSocket();
         try {
           socket.destroy();
@@ -104,10 +143,7 @@ export class SessionHostServer extends EventEmitter {
           // noop
         }
       });
-      socket.on('data', createLineParser((envelope) => {
-        if (envelope.kind !== 'request') return;
-        void this.handleIncomingRequest(socket, envelope);
-      }));
+      socket.on('data', parser);
     });
 
     await new Promise<void>((resolve, reject) => {

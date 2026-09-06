@@ -3,6 +3,7 @@ import type { ActiveConversation } from '../components/dashboard/types'
 import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
 import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
 import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
+import type { PendingLocalMessage } from '../components/dashboard/conversation-message-snapshot'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
 interface UseDashboardConversationCommandsOptions {
@@ -57,6 +58,39 @@ export function unwrapCommandResult(raw: any): any {
     if (!raw || typeof raw !== 'object') return raw
     if (raw.result && typeof raw.result === 'object') return raw.result
     return raw
+}
+
+/**
+ * (QUEUED-SEND-LOSS consumer) Did the daemon PARK this send instead of
+ * submitting it?
+ *
+ * The daemon reports the distinction precisely — `chat-commands-write.ts`
+ * answers `{sent:false, queued:true, submitted:false}` when the driver's
+ * in-memory FIFO took the body, and `cli-manager.ts` adds
+ * `{queued:true, queuedReason:'agent_runtime_busy'}` on the mesh path. Until
+ * now NOTHING on the web side read either field, so that contract was dead and
+ * the user-visible defect it was meant to fix was still live.
+ *
+ * ★ `queued` is NOT a failure. The command succeeded; the body is accepted and
+ * will be written when the agent stops generating. It must not be routed into
+ * the error path — that would show a send failure for a send that is going to
+ * happen. It only means "do not tell the user this is delivered yet".
+ *
+ * ★ Read `sent === false` as well as `queued`. A queued result carries both,
+ * and treating a bare `sent:false` as an error is what the pre-existing
+ * `res?.sent === false` throw below did — which would have turned every queued
+ * send into a spurious "Send failed" the moment the daemon started reporting
+ * it truthfully.
+ */
+/**
+ * Shown while a send is parked. Phrased as a state, not a failure — the message
+ * IS accepted; it is waiting for the agent to stop generating.
+ */
+export const QUEUED_SEND_MESSAGE = 'Waiting to send — the agent is still working.'
+
+export function isQueuedSendResult(res: any): boolean {
+    if (!res || typeof res !== 'object') return false
+    return res.queued === true
 }
 
 function getErrorMessage(error: unknown): string {
@@ -128,11 +162,20 @@ export function useDashboardConversationCommands({
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
     const [isSendingChat, setIsSendingChat] = useState(false)
     const [sendFeedbackMessage, setSendFeedbackMessage] = useState<string | null>(null)
+    const [lastSendQueued, setLastSendQueued] = useState(false)
+    // (OPTIMISTIC-USER-BUBBLE) The owner's message, rendered locally from the
+    // moment it is submitted until the daemon's echo carries it back. See
+    // `withPendingLocalMessage` for the dedup contract that retires it.
+    const [pendingLocalMessage, setPendingLocalMessage] = useState<PendingLocalMessage | null>(null)
     const sendInFlightRef = useRef(false)
     const lastSendRef = useRef<RecentSendAttempt | null>(null)
 
     useEffect(() => {
         setSendFeedbackMessage(null)
+        setLastSendQueued(false)
+        // Scoped per conversation: a pending bubble belongs to the tab it was
+        // typed in and must not follow the user to another session.
+        setPendingLocalMessage(null)
     }, [activeConv?.tabKey])
 
     const handleSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
@@ -164,12 +207,22 @@ export function useDashboardConversationCommands({
         sendInFlightRef.current = true
         setIsSendingChat(true)
         setSendFeedbackMessage(null)
+        setLastSendQueued(false)
         lastSendRef.current = attempt
+
+        // ★ Optimistic append happens HERE — before the await, not after it.
+        // That is the entire point: `sendDaemonCommand` resolves only after a
+        // full round trip, and on a busy agent the daemon parks the body and
+        // the echo waits for the queue to drain. Appending after the await
+        // would reproduce exactly the latency this fixes.
+        setPendingLocalMessage({ content: message, sentAt: now })
 
         try {
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                // Nothing was sent, so no echo will ever retire the bubble.
+                setPendingLocalMessage(null)
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
@@ -182,6 +235,23 @@ export function useDashboardConversationCommands({
                 return true
             }
 
+            // ★ ORDER MATTERS: the queued check must precede `sent === false`.
+            // A queued result carries `sent:false` by contract, so the throw
+            // below would classify a successfully-parked message as a send
+            // failure — showing an error for a message that is going to be
+            // delivered, and clearing the tracked attempt so the user's retry
+            // sends it twice.
+            // The optimistic bubble deliberately STAYS for a queued send — the
+            // body is accepted and will be written, so the owner should keep
+            // seeing it. It carries the queued flag so the pane can mark it as
+            // waiting rather than delivered.
+            if (isQueuedSendResult(res)) {
+                setLastSendQueued(true)
+                setPendingLocalMessage(prev => (prev ? { ...prev, queued: true } : prev))
+                setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
+                return true
+            }
+
             if (res?.sent === false) {
                 throw new Error(res?.error || 'Send failed')
             }
@@ -190,6 +260,7 @@ export function useDashboardConversationCommands({
                 throw new Error(res?.error || 'Send failed')
             }
 
+            setLastSendQueued(false)
             setSendFeedbackMessage(null)
             return true
         } catch (e) {
@@ -200,6 +271,10 @@ export function useDashboardConversationCommands({
                 console.warn('Send blocked/failed', e)
             }
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+            // The send failed, so the daemon will never echo this text back.
+            // Leaving the optimistic bubble would show a message that was never
+            // delivered as though it had been.
+            setPendingLocalMessage(null)
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
@@ -333,6 +408,10 @@ export function useDashboardConversationCommands({
     return {
         isSendingChat,
         sendFeedbackMessage,
+        /** True when the last send was PARKED by the daemon rather than submitted. */
+        lastSendQueued,
+        /** Optimistic local bubble; feed to `withPendingLocalMessage`. */
+        pendingLocalMessage,
         isFocusingAgent,
         handleSendChat,
         handleForceSendChat,

@@ -145,6 +145,16 @@ export interface SessionHostDisconnectInfo {
   /** In-flight requests abandoned by this disconnect (they were rejected). */
   pendingRequests: number;
   error?: Error;
+  /**
+   * Bytes discarded from a newline-unterminated frame at EOF (0 when the peer
+   * hung up on a clean frame boundary, which is the normal case).
+   *
+   * Non-zero means the peer was cut off MID-WRITE — diagnostic context that
+   * distinguishes "the host exited" from "the host died with a frame in
+   * flight". Before the parser's `end()` was reachable this was unknowable:
+   * the bytes were dropped with the decoder and no counter existed.
+   */
+  droppedTailBytes: number;
 }
 
 export class SessionHostClient {
@@ -180,7 +190,12 @@ export class SessionHostClient {
     };
   }
 
-  private handleDisconnect(socket: net.Socket, reason: SessionHostDisconnectReason, error?: Error): void {
+  private handleDisconnect(
+    socket: net.Socket,
+    reason: SessionHostDisconnectReason,
+    error?: Error,
+    droppedTailBytes = 0,
+  ): void {
     if (this.disconnectedSockets.has(socket)) return;
     this.disconnectedSockets.add(socket);
 
@@ -221,6 +236,7 @@ export class SessionHostClient {
       endpointPath: this.endpoint.path,
       pendingRequests,
       error,
+      droppedTailBytes,
     };
     for (const listener of this.disconnectListeners) {
       // A throwing observer must not suppress the remaining ones, and must not
@@ -241,7 +257,12 @@ export class SessionHostClient {
     const socket = net.createConnection(this.endpoint.path);
     this.socket = socket;
 
-    socket.on('data', createLineParser((envelope) => {
+    // PARSER-EOF-FLUSH: keep the parser handle so its EOF flush is reachable.
+    // Inlining `createLineParser(...)` into the 'data' registration discarded
+    // the only reference to `end()`, so bytes held back by the StringDecoder as
+    // an incomplete UTF-8 sequence were lost with the decoder when the host
+    // disconnected.
+    const parser = createLineParser((envelope) => {
       if (envelope.kind === 'response') {
         const waiter = this.requestWaiters.get(envelope.requestId);
         if (waiter) {
@@ -254,10 +275,32 @@ export class SessionHostClient {
       if (envelope.kind === 'event') {
         for (const listener of this.eventListeners) listener(envelope.event);
       }
-    }));
+    });
+    socket.on('data', parser);
+
+    /**
+     * Drain the parser at EOF. The remainder is a partial, newline-unterminated
+     * frame — a truncated transmission rather than a message — so it is NOT
+     * parsed. Feeding a half-written envelope to JSON.parse here would throw
+     * inside a socket event handler with no catch above it, converting a host
+     * that died mid-write into an uncaught exception in this process. That is
+     * exactly the failure the parser's contract set out to avoid.
+     *
+     * Reported through the existing disconnect surface rather than a new one:
+     * a non-empty tail means the peer was cut off mid-frame, which is
+     * diagnostic context for the disconnect that is about to be emitted.
+     */
+    const flushParser = (): string => {
+      try {
+        return parser.end();
+      } catch {
+        return '';
+      }
+    };
 
     socket.on('error', (error) => {
-      this.handleDisconnect(socket, 'error', error);
+      const remainder = flushParser();
+      this.handleDisconnect(socket, 'error', error, remainder.length);
     });
 
     // 'close'/'end' are the clean-FIN counterparts of 'error'. The host server
@@ -265,10 +308,10 @@ export class SessionHostClient {
     // side handled neither, so host death was observable only if it happened to
     // surface as a socket error.
     socket.on('close', () => {
-      this.handleDisconnect(socket, 'closed');
+      this.handleDisconnect(socket, 'closed', undefined, flushParser().length);
     });
     socket.on('end', () => {
-      this.handleDisconnect(socket, 'ended');
+      this.handleDisconnect(socket, 'ended', undefined, flushParser().length);
     });
 
     await new Promise<void>((resolve, reject) => {
