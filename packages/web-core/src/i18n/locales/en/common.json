@@ -3537,7 +3537,8 @@
         "other": "Other",
         "answersRequired_one": "{{count}} question still needs an answer",
         "answersRequired_other": "{{count}} questions still need answers",
-        "errorReviewPageNotFocused": "The input was delivered but verification failed — check the terminal screen or close this and try again."
+        "errorReviewPageNotFocused": "The terminal is showing a different screen, so the answer was not submitted — check the terminal screen or close this and try again.",
+        "errorReviewUnconfirmed": "Your answer was sent, but the terminal did not confirm it in time. Check the terminal screen before answering again — resending may submit it twice."
     },
     "git": {
         "changeList": {

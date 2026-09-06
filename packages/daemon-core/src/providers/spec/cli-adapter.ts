@@ -64,7 +64,10 @@ import {
 } from '../kimi-pending-question.js';
 import { detectClaudePendingQuestion } from '../claude-pending-question.js';
 import type { InteractivePrompts } from './fsm-types.js';
-import { CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX } from '@adhdev/mesh-shared';
+import {
+    CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
+    CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
+} from '@adhdev/mesh-shared';
 
 
 // See the matching helper in cli-adapters/provider-cli-shared.ts for the full
@@ -948,7 +951,17 @@ export class SpecCliAdapter implements CliAdapter {
                 }
             }
             if (!completedWithoutReview) {
-                await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                try {
+                    await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                } catch (error) {
+                    // The review gate proved (via native tool_result) that the
+                    // answer already landed with no review page to confirm. It has
+                    // already released the held prompt; return success WITHOUT the
+                    // final Enter, which would now go to whatever the provider
+                    // rendered next. Every other error propagates unchanged.
+                    if (error instanceof SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal) return;
+                    throw error;
+                }
                 // Claude Code >=2.1.220 completes AskUserQuestion immediately after
                 // the final choice. In that direct-submit path the settle poll
                 // clears the bound prompt and there is no review page to confirm.
@@ -2095,12 +2108,83 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
+    /**
+     * Internal control-flow signal, never surfaced to a caller.
+     *
+     * assertFocusedClaudeTuiReview can discover — via the native tool_result —
+     * that the answer already completed even though no review page rendered. It
+     * must then stop setInteractivePromptResponse from writing the final Enter,
+     * because focus no longer belongs to our question. Throwing this instead of
+     * returning normally keeps that "do not press Enter" decision in one place;
+     * setInteractivePromptResponse catches it and returns success.
+     */
+    private static readonly ClaudeTuiAnswerDeliveredSignal = class extends Error {
+        constructor() {
+            super('claude-tui answer already delivered');
+            this.name = 'ClaudeTuiAnswerDeliveredSignal';
+        }
+    };
+
     private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<void> {
         const screenText = await this.snapshotSettledClaudeTuiReview(prompt, allowsFreeform);
         if (screenText === null) return;
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
             const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
+
+            // DELIVERED-BUT-UNCONFIRMED vs WRONG-SCREEN (live defect 2026-09-06,
+            // sixth recurrence of this class: f1720f8e, 6db3527e, 50bfe16d,
+            // d476f356, 60bd7614, and the 2026-09-02 per-keystroke poll).
+            //
+            // By the time this gate runs, every answer keystroke has ALREADY been
+            // written to the PTY by setInteractivePromptResponse's key loop — only
+            // the final review Enter is outstanding. So a timeout here never means
+            // "the answer did not arrive"; the owner's 2026-09-06 report is exactly
+            // this: the modal said verification failed while the coordinator had
+            // received the answer and already dispatched work from it.
+            //
+            // Two outcomes have to be told apart, and the previous code collapsed
+            // them into one hard failure:
+            //
+            //   WRONG SCREEN — a FOREIGN question is focused, or the screen is some
+            //     other widget entirely. We must not press Enter into something we
+            //     do not own. Keep failing closed; this is the guard that stops a
+            //     stale response from operating another picker.
+            //
+            //   UNCONFIRMED — our OWN bound question is still the focused page. The
+            //     picker simply has not advanced within the settle budget. The
+            //     input is delivered and the screen is ours, so reporting "failed"
+            //     is a false negative, and inviting a retry is actively harmful:
+            //     replaying the keystroke sequence double-submits into a picker
+            //     that may have advanced in the meantime.
+            //
+            // Every prior fix in this class widened a timeout, and the race
+            // resurfaced on the next slower link. Widening cannot terminate:
+            // no finite budget bounds an arbitrarily slow remote repaint. This
+            // instead makes the OUTCOME correct at whatever budget we have.
+            const boundQuestionStillFocused = !!focused
+                && prompt.questions.some(question => this.claudeTuiQuestionMatches(question, focused));
+
+            if (boundQuestionStillFocused) {
+                // Authoritative delivery oracle: if Claude's native JSONL already
+                // carries a tool_result for this AskUserQuestion, the answer landed
+                // and the terminal completed it — the missing review page is purely
+                // a rendering lag. Treat that as success and release the prompt the
+                // same way the direct-submit path does.
+                if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
+                    LOG.info('SpecAdapter', `[${this.cliType}] review page unsettled but native tool_result confirms delivery — accepting (allowsFreeform=${allowsFreeform})`);
+                    this.activeInteractivePrompt = null;
+                    this.interactivePromptTransport = null;
+                    this.interactivePromptLostAt = null;
+                    this.statusCallback?.();
+                    throw new SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
+                }
+                // Delivered, still unconfirmed. Distinct error class so the UI can
+                // say "could not confirm" instead of "failed", and suppress retry.
+                LOG.warn('SpecAdapter', `[${this.cliType}] review page did not settle within budget while our own bound question stayed focused — answer delivered, confirmation unavailable (allowsFreeform=${allowsFreeform})${observed}`);
+                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys reached the terminal but the review page did not settle in time${observed}`);
+            }
+
             // Log here, not just throw: the caller (mesh-events.ts
             // interactive_prompt_response handler) returns this over the P2P
             // command response as a plain { success: false } object with no

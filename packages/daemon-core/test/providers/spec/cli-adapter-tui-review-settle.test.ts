@@ -128,10 +128,16 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         expect(snapshots.n).toBe(1)
     })
 
-    it('still fails closed when the screen never becomes the review page', async () => {
+    // RECLASSIFIED 2026-09-06: QUESTION_SCREEN is our OWN bound question, so a
+    // budget exhaustion here is delivered-but-unconfirmed, not a wrong screen —
+    // the answer keys were already written before this gate runs. The
+    // wrong-screen fail-closed contract is unchanged and is asserted against
+    // FOREIGN_QUESTION_SCREEN below and in
+    // cli-adapter-tui-review-unconfirmed.test.ts.
+    it('reports unconfirmed (not a hard failure) when our own question never leaves the screen', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
-            .rejects.toThrow(/review page is not focused/)
+            .rejects.toThrow(/delivered but not confirmed/)
     })
 
     it('still fails closed when the review page carries foreign headers', async () => {
@@ -306,10 +312,14 @@ describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) allowsFr
         REVIEW_SCREEN,
     ]
 
-    it('RED: the plain budget fails closed on a slow freeform-shaped repaint', async () => {
+    it('RED: the plain budget does not observe the late review frame', async () => {
+        // Still proves the budget is too narrow — the review page is missed. The
+        // class is now "unconfirmed" rather than "not focused" (see the
+        // reclassification note above): these frames show our own question, and
+        // the answer keys have already been delivered.
         const { adapter } = makeAdapter(SLOW_FREEFORM_FRAMES)
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
-            .rejects.toThrow(/review page is not focused/)
+            .rejects.toThrow(/delivered but not confirmed/)
     })
 
     it('GREEN: allowsFreeform=true widens the budget enough to observe the late review frame', async () => {
@@ -318,8 +328,14 @@ describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) allowsFr
         expect(snapshots.n).toBeGreaterThan(6)
     })
 
-    it('still fails closed under the widened budget when the screen never becomes the review page', async () => {
+    it('reports unconfirmed under the widened budget when our own question never leaves', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
+        await expect(adapter.assertFocusedClaudeTuiReview(prompt, true))
+            .rejects.toThrow(/delivered but not confirmed/)
+    })
+
+    it('still fails closed under the widened budget on a screen we do not own', async () => {
+        const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
         await expect(adapter.assertFocusedClaudeTuiReview(prompt, true))
             .rejects.toThrow(/review page is not focused/)
     })
