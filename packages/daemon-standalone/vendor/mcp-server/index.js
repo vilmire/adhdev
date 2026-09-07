@@ -92289,6 +92289,20 @@ ${cleanBody}`;
     function shouldPreserveReadChatPayloadField(key2) {
       return key2 === "messageSource" || key2 === "transcriptProvenance";
     }
+    function resolveReadChatProviderHint(payload, args, h, sessionIdHint) {
+      if (typeof args?.cliType === "string" && args.cliType) return args.cliType;
+      if (typeof args?.providerType === "string" && args.providerType) return args.providerType;
+      if (typeof args?.agentType === "string" && args.agentType) return args.agentType;
+      const fromPayload = payload?.debugReadChat?.provider;
+      if (typeof fromPayload === "string" && fromPayload) return fromPayload;
+      if (sessionIdHint) {
+        const session = h?.ctx?.sessionRegistry?.get?.(sessionIdHint);
+        if (typeof session?.providerType === "string" && session.providerType) return session.providerType;
+      }
+      const current = h?.currentSession?.providerType;
+      if (typeof current === "string" && current) return current;
+      return "";
+    }
     function updateMessageSourceReturnedCount(value, returnedMessageCount) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
       const record2 = value;
@@ -92383,7 +92397,7 @@ ${cleanBody}`;
       let validatedPayload;
       const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === "object" ? payload.debugReadChat : void 0;
       const presentationSessionIdHint = typeof args?.targetSessionId === "string" && args.targetSessionId.trim() ? args.targetSessionId.trim() : typeof args?.sessionId === "string" && args.sessionId.trim() ? args.sessionId.trim() : typeof h?.currentSession?.sessionId === "string" ? String(h.currentSession.sessionId) : "";
-      const providerHint = typeof args?.cliType === "string" ? args.cliType : typeof args?.providerType === "string" ? args.providerType : typeof args?.agentType === "string" ? args.agentType : "";
+      const providerHint = resolveReadChatProviderHint(payload, args, h, presentationSessionIdHint);
       const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
       const turnPresentation = resolveSessionTurnPresentation({
         sessionId: presentationSessionIdHint || void 0,

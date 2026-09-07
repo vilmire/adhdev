@@ -27,6 +27,47 @@ function shouldPreserveReadChatPayloadField(key: string): boolean {
     return key === 'messageSource' || key === 'transcriptProvenance';
 }
 
+/**
+ * Resolve the provider identity for this read, in the same order the upstream
+ * pipeline already uses (`chat-commands-read.ts`: explicit args > session
+ * registry > current session). The args-only form this used to have was a
+ * silent trap: `buildTranscriptObservationFromReadChat` returns null on an
+ * empty providerType, so any caller that has a session id but no provider name
+ * built NO transcript observation at all — and the choke point below is
+ * fire-and-forget, so it failed without a log line.
+ *
+ * The caller that hits that gap is the transcript projection's own collector
+ * (`boot/daemon-lifecycle.ts`), which re-enters read_chat with only
+ * `{ targetSessionId }`. Dashboard reads pass `agentType` and were unaffected,
+ * which is why this only ever showed up on the replica lane: a session whose
+ * live streaming depends on the internal pull — e.g. one that selected
+ * `native-history`, where PTY bubbles are suppressed as a content source —
+ * published zero revisions while its message count climbed.
+ *
+ * `payload.debugReadChat.provider` is the already-resolved `adapter.cliType`
+ * from the read that produced this payload, so it is preferred over the
+ * registry lookup and makes the resolution work even without helpers.
+ */
+function resolveReadChatProviderHint(
+    payload: Record<string, any>,
+    args: any,
+    h: CommandHelpers | undefined,
+    sessionIdHint: string,
+): string {
+    if (typeof args?.cliType === 'string' && args.cliType) return args.cliType;
+    if (typeof args?.providerType === 'string' && args.providerType) return args.providerType;
+    if (typeof args?.agentType === 'string' && args.agentType) return args.agentType;
+    const fromPayload = payload?.debugReadChat?.provider;
+    if (typeof fromPayload === 'string' && fromPayload) return fromPayload;
+    if (sessionIdHint) {
+        const session = (h?.ctx as any)?.sessionRegistry?.get?.(sessionIdHint);
+        if (typeof session?.providerType === 'string' && session.providerType) return session.providerType;
+    }
+    const current = (h?.currentSession as any)?.providerType;
+    if (typeof current === 'string' && current) return current;
+    return '';
+}
+
 function updateMessageSourceReturnedCount(value: unknown, returnedMessageCount: number): unknown {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
     const record = value as Record<string, unknown>;
@@ -187,10 +228,7 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
         : typeof args?.sessionId === 'string' && args.sessionId.trim()
             ? args.sessionId.trim()
             : typeof (h?.currentSession as any)?.sessionId === 'string' ? String((h!.currentSession as any).sessionId) : '';
-    const providerHint = typeof args?.cliType === 'string' ? args.cliType
-        : typeof args?.providerType === 'string' ? args.providerType
-        : typeof args?.agentType === 'string' ? args.agentType
-        : '';
+    const providerHint = resolveReadChatProviderHint(payload, args, h, presentationSessionIdHint);
     const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
     const turnPresentation = resolveSessionTurnPresentation({
         sessionId: presentationSessionIdHint || undefined,
