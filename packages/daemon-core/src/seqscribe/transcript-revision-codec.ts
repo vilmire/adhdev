@@ -82,6 +82,23 @@ function base64ToBytes(base64: string): Uint8Array {
     return bytes;
 }
 
+/**
+ * ★ Module-scoped, not per-`ingestCommit`. Constructing a `TextDecoder` is a
+ * real allocation on the browser hot path (one per commit, and a SNAP replays
+ * a whole ring tail of them). It is stateless across `decode()` calls when
+ * `stream` is not used — which it is not here, every call decodes one complete
+ * buffer — so a single shared instance is byte-identical to a fresh one.
+ *
+ * `ignoreBOM: false` is explicit, not decorative: DOM's `TextDecoderOptions`
+ * makes it optional, but `@cloudflare/workers-types`' `TextDecoderConstructorOptions`
+ * (what `packages/server`'s DOM-less `lib: ["ES2022"]` tsconfig resolves
+ * `TextDecoder` from, since this file became reachable from that package's
+ * typecheck via §8 unit 2's `transcript-publisher.ts` import chain) requires
+ * it. Omitting it type-checks fine under a DOM lib and fails only under the
+ * Workers lib — exactly the asymmetry that let it ship unnoticed in unit 1.
+ */
+const SNAPSHOT_TEXT_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
+
 function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
     const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
     const out = new Uint8Array(total);
@@ -248,6 +265,43 @@ export type TranscriptRevisionIngestResult =
 
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
+/**
+ * Body-vs-envelope validation for a decoded snapshot, shared by the full decode
+ * path and the re-decode short-circuit in `ingestCommit` so BOTH apply exactly
+ * the same rules. Returns the rejection reason, or null when the body is valid
+ * for this identity.
+ *
+ * Extracted (rather than inlined twice) precisely because it must not drift: it
+ * is the check the short-circuit is NOT allowed to skip.
+ */
+function validateSnapshotBody(
+    parsed: unknown,
+    identity: TranscriptRevisionIdentity,
+): TranscriptRevisionRejectReason | null {
+    const snapshot = parsed as Partial<ReplicatedTranscriptSnapshotV1> | null;
+    if (!snapshot || snapshot.schemaVersion !== 1) return 'schema_version_unsupported';
+    if (snapshot.sessionId !== identity.sessionId) return 'wrong_session';
+    // Unlike the begin/commit envelope pairing in `ingestCommit`, the snapshot
+    // BODY's `producerDaemonId` is populated by the publisher's observation
+    // builder (§8 unit 2), a separate call site from whatever stamped the
+    // envelope identity at `encodeTranscriptRevision` time. Two "resolve my own
+    // daemon id" call sites in one producer process is exactly the cross-path
+    // variance `daemonIdsEquivalent` exists for (see fleet-status-peer-view.ts:157
+    // for the same pattern: wire-embedded daemonId vs. a separately-tracked
+    // identity) — a raw `!==` here would reject a legitimate revision merely
+    // because one side used `mach_X` and the other `daemon_mach_X` for the same
+    // machine.
+    if (
+        !daemonIdsEquivalent(snapshot.producerDaemonId, identity.producerDaemonId) ||
+        snapshot.producerWriterId !== identity.producerWriterId ||
+        snapshot.producerEpoch !== identity.producerEpoch ||
+        snapshot.revision !== identity.revision
+    ) {
+        return 'wrong_owner';
+    }
+    return null;
+}
+
 interface InFlightRevision {
     identity: TranscriptRevisionIdentity;
     totalChunks: number;
@@ -271,6 +325,13 @@ export class TranscriptRevisionAssembler {
     private inFlight: InFlightRevision | null = null;
     private complete: { snapshot: ReplicatedTranscriptSnapshotV1; identity: TranscriptRevisionIdentity } | null =
         null;
+    /**
+     * SHA-256 of the JSON behind `complete`, for the re-decode short-circuit in
+     * `ingestCommit`. Kept beside `complete` (rather than re-derived) because it
+     * is the ONE value that proves a re-delivered revision carries byte-identical
+     * content to what is already held.
+     */
+    private completeSha256: string | null = null;
 
     constructor(private readonly expectedOwnerWriterId?: string) {}
 
@@ -415,6 +476,46 @@ export class TranscriptRevisionAssembler {
             return { status: 'rejected', reason: 'missing_chunk' };
         }
 
+        // ★ Re-decode short-circuit (perf only — never a behaviour change).
+        //
+        // A frozen lane re-sends the same revision, and every SNAP replays the
+        // whole ring tail, so the SAME snapshot bytes are routinely reassembled
+        // over and over. When the committed `snapshotSha256` equals the hash of
+        // the complete snapshot already held, the five-stage tail below
+        // (concat → UTF-8 decode → SHA-256 → JSON.parse → body validation) is
+        // guaranteed to reproduce an object equal to `this.complete.snapshot`,
+        // so it is skipped and the held one returned.
+        //
+        // ── Why this cannot skip a revision that actually CHANGED ────────────
+        // The gate is content-addressed, not counter-addressed: it keys on the
+        // snapshot hash, never on `revision`. Different snapshot bytes yield a
+        // different SHA-256 (absent a preimage collision), so a genuinely new
+        // revision never matches and always takes the full path. The reverse —
+        // equal hashes, different content — is exactly the SHA-256 collision the
+        // verification below is already trusting not to exist, so this adds no
+        // new assumption.
+        //
+        // The envelope-consistency checks ABOVE (identity pairing, chunk/byte
+        // counts, chunk completeness) deliberately run FIRST and unchanged, so a
+        // spliced or truncated envelope is still rejected with exactly the same
+        // reason it was before — the short-circuit only replaces work whose
+        // outcome is already determined, never a check.
+        //
+        // ★ Only the DECODE is skipped, never a CHECK. The body-vs-envelope
+        // validation below is re-run against the cached snapshot through the
+        // shared `validateSnapshotBody` helper, because it compares the snapshot
+        // BODY to THIS commit's identity — a pairing that is a property of the
+        // delivery, not of the bytes. Skipping it would let identical bytes
+        // committed under a different `producerEpoch`/`revision` be accepted
+        // where the full path returns `wrong_owner`.
+        const cached = this.complete;
+        if (cached && this.completeSha256 === inFlight.snapshotSha256) {
+            const rejection = validateSnapshotBody(cached.snapshot, inFlight.identity);
+            if (rejection) return { status: 'rejected', reason: rejection };
+            this.complete = { snapshot: cached.snapshot, identity: inFlight.identity };
+            return { status: 'complete', snapshot: cached.snapshot, identity: inFlight.identity };
+        }
+
         const ordered: Uint8Array[] = [];
         for (let index = 0; index < inFlight.totalChunks; index++) {
             const buf = inFlight.chunkBuffers.get(index);
@@ -428,16 +529,7 @@ export class TranscriptRevisionAssembler {
 
         let json: string;
         try {
-            // ★ `ignoreBOM: false` is explicit, not decorative: DOM's
-            // `TextDecoderOptions` makes it optional, but `@cloudflare/workers-types`'
-            // `TextDecoderConstructorOptions` (what `packages/server`'s
-            // DOM-less `lib: ["ES2022"]` tsconfig resolves `TextDecoder` from,
-            // since this file became reachable from that package's typecheck
-            // via §8 unit 2's `transcript-publisher.ts` import chain) requires
-            // it. Omitting it type-checks fine under a DOM lib and fails only
-            // under the Workers lib — exactly the asymmetry that let it ship
-            // unnoticed in unit 1.
-            json = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(combined);
+            json = SNAPSHOT_TEXT_DECODER.decode(combined);
         } catch {
             return { status: 'rejected', reason: 'invalid_utf8' };
         }
@@ -453,33 +545,13 @@ export class TranscriptRevisionAssembler {
             return { status: 'rejected', reason: 'invalid_json' };
         }
 
-        const snapshot = parsed as Partial<ReplicatedTranscriptSnapshotV1> | null;
-        if (!snapshot || snapshot.schemaVersion !== 1) {
-            return { status: 'rejected', reason: 'schema_version_unsupported' };
-        }
-        if (snapshot.sessionId !== inFlight.identity.sessionId) {
-            return { status: 'rejected', reason: 'wrong_session' };
-        }
-        // Unlike the begin/commit envelope pairing above, the snapshot BODY's
-        // `producerDaemonId` is populated by the publisher's observation
-        // builder (§8 unit 2), a separate call site from whatever stamped the
-        // envelope identity at `encodeTranscriptRevision` time. Two "resolve my
-        // own daemon id" call sites in one producer process is exactly the
-        // cross-path variance `daemonIdsEquivalent` exists for (see
-        // fleet-status-peer-view.ts:157 for the same pattern: wire-embedded
-        // daemonId vs. a separately-tracked identity) — a raw `!==` here would
-        // reject a legitimate revision merely because one side used
-        // `mach_X` and the other `daemon_mach_X` for the same machine.
-        if (
-            !daemonIdsEquivalent(snapshot.producerDaemonId, inFlight.identity.producerDaemonId) ||
-            snapshot.producerWriterId !== inFlight.identity.producerWriterId ||
-            snapshot.producerEpoch !== inFlight.identity.producerEpoch ||
-            snapshot.revision !== inFlight.identity.revision
-        ) {
-            return { status: 'rejected', reason: 'wrong_owner' };
-        }
+        const rejection = validateSnapshotBody(parsed, inFlight.identity);
+        if (rejection) return { status: 'rejected', reason: rejection };
 
-        this.complete = { snapshot: snapshot as ReplicatedTranscriptSnapshotV1, identity: inFlight.identity };
+        this.complete = { snapshot: parsed as ReplicatedTranscriptSnapshotV1, identity: inFlight.identity };
+        // Verified equal to `inFlight.snapshotSha256` by the hash check above —
+        // this is what arms the short-circuit for the next identical delivery.
+        this.completeSha256 = inFlight.snapshotSha256;
         return { status: 'complete', snapshot: this.complete.snapshot, identity: inFlight.identity };
     }
 }

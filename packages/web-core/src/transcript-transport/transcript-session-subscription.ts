@@ -38,7 +38,13 @@
  * SINGLE atomic swap to the newest verifiable revision — see the long note in
  * `ingest` below for why replaying each one is a user-visible regression.
  */
-import { TranscriptRevisionAssembler, type TranscriptRevisionRow } from '@adhdev/daemon-core/seqscribe/transcript-revision-codec';
+import {
+    TRANSCRIPT_REVISION_BEGIN_KIND,
+    TRANSCRIPT_REVISION_CHUNK_KIND,
+    TRANSCRIPT_REVISION_COMMIT_KIND,
+    TranscriptRevisionAssembler,
+    type TranscriptRevisionRow,
+} from '@adhdev/daemon-core/seqscribe/transcript-revision-codec';
 import type { ReplicatedTranscriptSnapshotV1 } from '@adhdev/daemon-core/seqscribe/transcript-projection';
 import type { PeerHandle, Row, Subscription } from 'seqscribe';
 import { sessionTranscriptPolicy, sessionTranscriptTopic } from './topic-addressing.js';
@@ -131,6 +137,65 @@ function toRevisionRow(row: Row): TranscriptRevisionRow | null {
  * the first `begin`), coverage cannot be established, so this returns false and
  * the caller keeps the banner: unknown resolves toward warning, not silence.
  */
+/**
+ * (PERF) The highest `revision` any COMMIT row in this SNAP tail claims, or null
+ * when the tail holds no parseable commit.
+ *
+ * ── Why a pre-scan ──────────────────────────────────────────────────────────
+ * A SNAP carries the whole ring tail, which holds well over a hundred PAST
+ * revisions. The emission rule below already discards all but the newest — but
+ * it discovered which was newest only AFTER fully decoding each one
+ * (base64 → concat → UTF-8 → SHA-256 → JSON.parse over the entire snapshot).
+ * Every revision but one was decoded purely to be thrown away.
+ *
+ * A commit envelope states its own `revision` in cleartext, so the winner can
+ * be identified from metadata alone, and only that revision's rows need the
+ * expensive path. This reads the SAME field the assembler reads and changes no
+ * wire format.
+ *
+ * ★ Advisory ONLY — it selects which rows to decode, it never decides validity.
+ * A commit naming a high revision it cannot back up (missing chunks, bad hash,
+ * foreign writer) is still rejected by the assembler exactly as before; the
+ * fallback below then replays the tail in full rather than trusting this hint.
+ */
+function maxCommittedRevision(rows: readonly Row[]): number | null {
+    let max: number | null = null;
+    for (const row of rows) {
+        if (row.kind !== TRANSCRIPT_REVISION_COMMIT_KIND) continue;
+        const parsed = toRevisionRow(row);
+        if (!parsed) continue;
+        const revision = (parsed.payload as { revision?: unknown } | null)?.revision;
+        if (typeof revision !== 'number') continue;
+        if (max === null || revision >= max) max = revision;
+    }
+    return max;
+}
+
+/**
+ * (PERF) Does this row belong to `revision`, or is it a non-revision row that
+ * must still be offered to the assembler?
+ *
+ * begin/chunk/commit all carry `revision` on their payload, so a row of a
+ * different revision can be skipped without decoding its snapshot. Anything
+ * whose revision cannot be read is NOT skipped — unknown resolves toward doing
+ * the work, so the assembler keeps seeing every row it would have seen.
+ */
+function rowIsForRevision(row: Row, revision: number): boolean {
+    const kind = row.kind;
+    if (
+        kind !== TRANSCRIPT_REVISION_BEGIN_KIND &&
+        kind !== TRANSCRIPT_REVISION_CHUNK_KIND &&
+        kind !== TRANSCRIPT_REVISION_COMMIT_KIND
+    ) {
+        return true;
+    }
+    const parsed = toRevisionRow(row);
+    if (!parsed) return true;
+    const rowRevision = (parsed.payload as { revision?: unknown } | null)?.revision;
+    if (typeof rowRevision !== 'number') return true;
+    return rowRevision === revision;
+}
+
 function ringCoversWriterStart(rows: readonly Row[], ownerWriterId: string | undefined): boolean {
     if (ownerWriterId === undefined) return false;
     for (const row of rows) {
@@ -219,30 +284,63 @@ export function subscribeSessionTranscript(
         // steady-state upserts and each one is a genuine new revision.
         let best: ReplicatedTranscriptSnapshotV1 | null = null;
 
-        for (const row of rows) {
-            const revisionRow = toRevisionRow(row);
-            if (!revisionRow) continue;
-            const result = assembler.ingestRow(revisionRow);
-            if (result.status === 'rejected') {
-                options.onRejected?.(result.reason);
-                continue;
+        // ── (PERF) SNAP two-pass: decide the winner from metadata, decode once ──
+        // Pass 1 reads the commit envelopes' cleartext `revision` to find which
+        // revision this tail would have ended up publishing anyway; pass 2 (the
+        // loop below) then hands the assembler only that revision's rows, so the
+        // ~100+ superseded revisions in the ring are never base64-decoded,
+        // hashed or JSON-parsed. On a DELTA nothing is filtered — those rows are
+        // sequential steady-state upserts, each a genuine new revision.
+        //
+        // `targetRevision === null` (no parseable commit in the tail) leaves the
+        // filter off entirely, which is the pre-existing full replay.
+        const targetRevision = reset ? maxCommittedRevision(rows) : null;
+        // Rows already offered to the assembler, so the fallback replay does not
+        // report the SAME row's rejection twice. Rows the filter skipped were
+        // never offered, so their rejections are reported for the first time on
+        // the replay — the net set of reported reasons therefore matches the
+        // unfiltered behaviour, just possibly in a different order.
+        const offered = new Set<Row>();
+        const scan = (candidateRows: readonly Row[], filterToRevision: number | null): void => {
+            for (const row of candidateRows) {
+                if (filterToRevision !== null && !rowIsForRevision(row, filterToRevision)) continue;
+                const revisionRow = toRevisionRow(row);
+                if (!revisionRow) continue;
+                const alreadyOffered = offered.has(row);
+                offered.add(row);
+                const result = assembler.ingestRow(revisionRow);
+                if (result.status === 'rejected') {
+                    if (!alreadyOffered) options.onRejected?.(result.reason);
+                    continue;
+                }
+                if (result.status !== 'complete') continue;
+                if (reset) {
+                    // Keep the newest. `>=` (not `>`) so that when a publisher
+                    // restart legitimately resets the counter, the later-arriving
+                    // rows — which are the newer ones in ring order — still win.
+                    if (!best || result.snapshot.revision >= best.revision) best = result.snapshot;
+                    continue;
+                }
+                const update: TranscriptSessionUpdate = {
+                    snapshot: result.snapshot,
+                    omittedBefore: pendingOmittedBefore,
+                };
+                pendingOmittedBefore = false;
+                latest = update;
+                options.onSnapshot(update);
             }
-            if (result.status !== 'complete') continue;
-            if (reset) {
-                // Keep the newest. `>=` (not `>`) so that when a publisher
-                // restart legitimately resets the counter, the later-arriving
-                // rows — which are the newer ones in ring order — still win.
-                if (!best || result.snapshot.revision >= best.revision) best = result.snapshot;
-                continue;
-            }
-            const update: TranscriptSessionUpdate = {
-                snapshot: result.snapshot,
-                omittedBefore: pendingOmittedBefore,
-            };
-            pendingOmittedBefore = false;
-            latest = update;
-            options.onSnapshot(update);
-        }
+        };
+
+        scan(rows, targetRevision);
+
+        // ★ Fail-open, never fail-quiet. The pre-scan is a HINT: the highest
+        // committed revision can fail verification (missing chunks after ring
+        // eviction, a foreign writer, a corrupt envelope), in which case the
+        // pane must still get the newest revision that DOES verify — exactly
+        // what the unfiltered replay produced before. Falling back costs the
+        // full old cost only in the rare case that used to be the every-time
+        // cost.
+        if (reset && !best && targetRevision !== null) scan(rows, null);
 
         if (!best) return;
         // `omittedBefore` rides on THIS emission — the one the consumer

@@ -5,6 +5,7 @@ import type { ActiveConversation, DashboardMessage } from './types'
 import {
   isMappableTranscriptSnapshot,
   mapTranscriptSnapshotToChatTailUpdate,
+  type TranscriptChatTailUpdate,
 } from './transcript-chat-pane-adapter'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
@@ -772,6 +773,19 @@ export class SessionChatTailController {
    */
   private lastKnownStatus: unknown = undefined
   /**
+   * (PERF) The last replica snapshot whose mapping this controller already ran
+   * AND which resolved to `noop` — the key for the map-skip in
+   * `applyTranscriptReplicaSnapshot`. Held by REFERENCE, never deep-compared:
+   * the assembler reuses one frozen object across repeat deliveries of a
+   * revision, so `===` is a sound "provably unchanged" test and a new revision
+   * is always a new object. Cleared on any non-`noop` outcome so a deferral or
+   * an apply can never be replayed as a skip.
+   */
+  private lastMappedRevisionSnapshot: ReplicatedTranscriptSnapshotV1 | null = null
+  /** (PERF) Caller-decided delivery flags the map-skip key above is scoped to. */
+  private lastMappedOmittedBefore = false
+  private lastMappedStale = false
+  /**
    * (D1) A terminal/settled status event arrived and the authoritative tail has
    * not been re-pulled since. One-shot: consumed by the next
    * `shouldRefreshForLiveness` that answers true.
@@ -928,6 +942,11 @@ export class SessionChatTailController {
       ...buildEmptySnapshot(this.snapshot.cursor.tailLimit),
       hasLiveSnapshot: true,
     }
+    // (PERF) ★ The map-skip key asserts "re-delivering this snapshot would
+    // change nothing on screen". Blanking the screen invalidates exactly that,
+    // so the next delivery of the SAME revision must map and re-apply rather
+    // than be skipped into a permanently empty pane.
+    this.lastMappedRevisionSnapshot = null
     this.emit()
   }
 
@@ -1033,19 +1052,89 @@ export class SessionChatTailController {
    */
   applyTranscriptReplicaSnapshot(
     snapshot: ReplicatedTranscriptSnapshotV1,
-    options: { omittedBefore: boolean; stale?: boolean },
+    options: {
+      omittedBefore: boolean
+      stale?: boolean
+      /**
+       * (PERF) A mapping of THIS snapshot+options that the caller already
+       * computed, to be reused instead of recomputed. Optional and purely an
+       * optimization: omitting it produces an identical result. Only
+       * `applyTranscriptReplicaSnapshotToControllers` passes it, and only
+       * because every controller it fans out to derives the same
+       * `subscriptionKey` from the same `(daemonId, sessionId)`.
+       */
+      mapped?: TranscriptChatTailUpdate
+    },
   ): void {
     if (!isMappableTranscriptSnapshot(snapshot)) {
       this.reportTranscriptReplicaFallback('revision_invalid')
       return
     }
-    const outcome = this.handleUpdate(
-      mapTranscriptSnapshotToChatTailUpdate(snapshot, {
-        subscriptionKey: this.subscriptionKey,
-        omittedBefore: options.omittedBefore,
-        stale: options.stale === true,
-      }),
-    )
+
+    // ── (PERF) Skip the O(N) mapping for a re-delivered identical revision ────
+    // `mapTranscriptSnapshotToChatTailUpdate` allocates a new object per message
+    // (`snapshot.messages.map`), and it ran BEFORE `handleUpdate` could discover
+    // the update changes nothing. A frozen lane re-sends the same revision on
+    // every heartbeat and a SNAP replays the ring, so this was the dominant
+    // per-message cost on screens that were not changing at all.
+    //
+    // The gate is deliberately NARROW — the same `(revision, snapshot object)`
+    // pair this controller already mapped and resolved to `noop`. Identity
+    // (`===`) on the snapshot, not a deep compare: the assembler hands the SAME
+    // frozen object to every controller for a repeat revision (see the codec's
+    // re-decode short-circuit), so reference equality is exactly the "nothing
+    // could have changed" proof, and a genuinely new revision is a new object
+    // that never matches.
+    //
+    // ★ `omittedBefore`/`stale` are part of the key. They are the CALLER's
+    // per-delivery decision, not a property of the snapshot, and they land in
+    // the applied snapshot — so a delivery that flips either must NOT be
+    // short-circuited even though the revision repeats.
+    const mapSkippable = this.lastMappedRevisionSnapshot === snapshot
+      && this.lastMappedOmittedBefore === options.omittedBefore
+      && this.lastMappedStale === (options.stale === true)
+
+    let outcome: ChatTailUpdateOutcome
+    if (mapSkippable) {
+      // ★ Reproduce the `noop` path's side effects EXACTLY. `handleUpdate`
+      // stamps these before any apply/discard decision, deliberately: a stream
+      // of correctly-discarded no-op updates still counts as lane liveness and
+      // must not trip the watchdog. Dropping them here would turn a healthy
+      // frozen-but-alive lane into a watchdog re-pull storm — which is why this
+      // is a duplicated stamp rather than an early `return`.
+      const updateTime = this.now()
+      this.lastInboundAt = updateTime
+      this.lastKnownStatus = snapshot.status
+      if (shouldGuardTailShrinkForStatus(snapshot.status) || isBusyChatTailStatus(snapshot.status)) {
+        this.lastActiveStatusAt = updateTime
+      }
+      outcome = 'noop'
+    } else {
+      // (PERF) `options.mapped` is the fan-out's shared mapping — see
+      // `applyTranscriptReplicaSnapshotToControllers`. Absent (direct callers,
+      // tests) this maps as before; the two are the same value by construction,
+      // since every controller in one fan-out shares a `subscriptionKey`.
+      outcome = this.handleUpdate(
+        options.mapped
+          ?? mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+            subscriptionKey: this.subscriptionKey,
+            omittedBefore: options.omittedBefore,
+            stale: options.stale === true,
+          }),
+      )
+      // Arm the skip only for an outcome that provably left the screen alone.
+      // `applied` changed the snapshot, and `deferred`/`rejected` mean the next
+      // delivery of these same bytes may legitimately decide differently (the
+      // busy window lapses, a force-apply becomes eligible) — so neither may be
+      // short-circuited into a silent `noop`.
+      if (outcome === 'noop') {
+        this.lastMappedRevisionSnapshot = snapshot
+        this.lastMappedOmittedBefore = options.omittedBefore
+        this.lastMappedStale = options.stale === true
+      } else {
+        this.lastMappedRevisionSnapshot = null
+      }
+    }
 
     // (LEASE) Renew on ADVANCEMENT, before the health gate below. A revision
     // that moved forward is the lane demonstrating it is still producing, which
@@ -1581,6 +1670,9 @@ export class SessionChatTailController {
     this.lastReplicaAdvanceAt = 0
     this.lastReplicaRevision = 0
     this.lastReplicaBusyAt = 0
+    // (PERF) A recycled controller renders from a blank snapshot, so no prior
+    // mapping describes its screen — see `clearLiveSnapshot` for the same rule.
+    this.lastMappedRevisionSnapshot = null
   }
 
   private emit(): void {
@@ -1753,10 +1845,31 @@ export function applyTranscriptReplicaSnapshotToControllers(
 ): number {
   if (!daemonId || !sessionId) return 0
   const prefix = `${daemonId}::${sessionId}::`
+  // (PERF) Map ONCE for the whole fan-out. A session routinely has two warm
+  // controllers alive (the pane's, keyed by historySessionId, and the mobile
+  // inbox's, keyed by sessionId) and each was running the same O(messages)
+  // mapping over the same snapshot.
+  //
+  // ★ Sharing is sound because the mapped update depends only on
+  // `(snapshot, subscriptionKey, omittedBefore, stale)`, and every controller
+  // here derives `subscriptionKey` as `daemon:${daemonId}:session:${sessionId}`
+  // from the SAME pair this function was called with — the registry key differs
+  // between them only in `historySessionId`, which the mapping does not read.
+  //
+  // Built lazily so a fan-out that matches no warm controller (the common case:
+  // a snapshot for a session nobody is looking at) does no mapping work at all.
+  let mapped: TranscriptChatTailUpdate | undefined
   let applied = 0
   for (const [key, controller] of controllerRegistry.entries()) {
     if (!key.startsWith(prefix)) continue
-    controller.applyTranscriptReplicaSnapshot(snapshot, options)
+    if (!mapped && isMappableTranscriptSnapshot(snapshot)) {
+      mapped = mapTranscriptSnapshotToChatTailUpdate(snapshot, {
+        subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
+        omittedBefore: options.omittedBefore,
+        stale: options.stale === true,
+      })
+    }
+    controller.applyTranscriptReplicaSnapshot(snapshot, { ...options, mapped })
     applied += 1
   }
   return applied

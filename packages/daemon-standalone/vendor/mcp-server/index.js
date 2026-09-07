@@ -91401,12 +91401,22 @@ ${cleanBody}`;
       };
       return { ok: true, begin, chunks, commit };
     }
+    function validateSnapshotBody(parsed, identity) {
+      const snapshot = parsed;
+      if (!snapshot || snapshot.schemaVersion !== 1) return "schema_version_unsupported";
+      if (snapshot.sessionId !== identity.sessionId) return "wrong_session";
+      if (!daemonIdsEquivalent4(snapshot.producerDaemonId, identity.producerDaemonId) || snapshot.producerWriterId !== identity.producerWriterId || snapshot.producerEpoch !== identity.producerEpoch || snapshot.revision !== identity.revision) {
+        return "wrong_owner";
+      }
+      return null;
+    }
     var TRANSCRIPT_REVISION_BEGIN_KIND;
     var TRANSCRIPT_REVISION_CHUNK_KIND;
     var TRANSCRIPT_REVISION_COMMIT_KIND;
     var TRANSCRIPT_REVISION_CHUNK_BYTES;
     var MAX_TRANSCRIPT_REVISION_ROWS;
     var MAX_TRANSCRIPT_REVISION_CHUNKS;
+    var SNAPSHOT_TEXT_DECODER;
     var BASE64_RE;
     var TranscriptRevisionAssembler;
     var init_transcript_revision_codec = __esm2({
@@ -91420,6 +91430,7 @@ ${cleanBody}`;
         TRANSCRIPT_REVISION_CHUNK_BYTES = 36 * 1024;
         MAX_TRANSCRIPT_REVISION_ROWS = 240;
         MAX_TRANSCRIPT_REVISION_CHUNKS = MAX_TRANSCRIPT_REVISION_ROWS - 2;
+        SNAPSHOT_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
         BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
         TranscriptRevisionAssembler = class {
           constructor(expectedOwnerWriterId) {
@@ -91427,6 +91438,13 @@ ${cleanBody}`;
           }
           inFlight = null;
           complete = null;
+          /**
+           * SHA-256 of the JSON behind `complete`, for the re-decode short-circuit in
+           * `ingestCommit`. Kept beside `complete` (rather than re-derived) because it
+           * is the ONE value that proves a re-delivered revision carries byte-identical
+           * content to what is already held.
+           */
+          completeSha256 = null;
           /** The last verified complete revision, or null if none has landed yet. */
           getLatestComplete() {
             return this.complete;
@@ -91517,6 +91535,13 @@ ${cleanBody}`;
             if (inFlight2.chunkBuffers.size !== inFlight2.totalChunks) {
               return { status: "rejected", reason: "missing_chunk" };
             }
+            const cached5 = this.complete;
+            if (cached5 && this.completeSha256 === inFlight2.snapshotSha256) {
+              const rejection2 = validateSnapshotBody(cached5.snapshot, inFlight2.identity);
+              if (rejection2) return { status: "rejected", reason: rejection2 };
+              this.complete = { snapshot: cached5.snapshot, identity: inFlight2.identity };
+              return { status: "complete", snapshot: cached5.snapshot, identity: inFlight2.identity };
+            }
             const ordered = [];
             for (let index = 0; index < inFlight2.totalChunks; index++) {
               const buf = inFlight2.chunkBuffers.get(index);
@@ -91529,7 +91554,7 @@ ${cleanBody}`;
             }
             let json3;
             try {
-              json3 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(combined);
+              json3 = SNAPSHOT_TEXT_DECODER.decode(combined);
             } catch {
               return { status: "rejected", reason: "invalid_utf8" };
             }
@@ -91542,17 +91567,10 @@ ${cleanBody}`;
             } catch {
               return { status: "rejected", reason: "invalid_json" };
             }
-            const snapshot = parsed;
-            if (!snapshot || snapshot.schemaVersion !== 1) {
-              return { status: "rejected", reason: "schema_version_unsupported" };
-            }
-            if (snapshot.sessionId !== inFlight2.identity.sessionId) {
-              return { status: "rejected", reason: "wrong_session" };
-            }
-            if (!daemonIdsEquivalent4(snapshot.producerDaemonId, inFlight2.identity.producerDaemonId) || snapshot.producerWriterId !== inFlight2.identity.producerWriterId || snapshot.producerEpoch !== inFlight2.identity.producerEpoch || snapshot.revision !== inFlight2.identity.revision) {
-              return { status: "rejected", reason: "wrong_owner" };
-            }
-            this.complete = { snapshot, identity: inFlight2.identity };
+            const rejection = validateSnapshotBody(parsed, inFlight2.identity);
+            if (rejection) return { status: "rejected", reason: rejection };
+            this.complete = { snapshot: parsed, identity: inFlight2.identity };
+            this.completeSha256 = inFlight2.snapshotSha256;
             return { status: "complete", snapshot: this.complete.snapshot, identity: inFlight2.identity };
           }
         };
