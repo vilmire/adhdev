@@ -73,6 +73,13 @@ import {
     type DashboardDockviewContextValue,
 } from './dockviewWorkspaceContext'
 
+/**
+ * Stable empty array for the no-active-conversation case. A fresh `[]` literal
+ * is a new reference on every render, which would defeat the very memo the
+ * `activeActionLogs` useMemo below exists to preserve.
+ */
+const EMPTY_ACTION_LOGS: { routeId: string; text: string; timestamp: number }[] = []
+
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
     clearedTabs: Record<string, number>
@@ -173,10 +180,16 @@ export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<Dash
         () => activeConv ? ctx.ides.find(ide => ide.id === activeConv.routeId) : undefined,
         [ctx.ides, activeConv],
     )
+    // Depend on `activeConv?.tabKey` — the ONLY field this filter reads — not on
+    // the `activeConv` object. The conversation object is rebuilt on every status
+    // tick, so keying on it recomputed the filter and produced a fresh array each
+    // tick, invalidating `PaneGroupContent`'s memo (via the `actionLogs` prop) on
+    // ticks where neither the logs nor the active tab actually changed.
+    const activeConvTabKey = activeConv?.tabKey
     const activeActionLogs = useMemo(() => {
-        if (!activeConv) return []
-        return ctx.actionLogs.filter(log => log.routeId === activeConv.tabKey)
-    }, [ctx.actionLogs, activeConv])
+        if (!activeConvTabKey) return EMPTY_ACTION_LOGS
+        return ctx.actionLogs.filter(log => log.routeId === activeConvTabKey)
+    }, [ctx.actionLogs, activeConvTabKey])
 
     if (!activeConv) {
         return (

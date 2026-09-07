@@ -105,6 +105,33 @@ const ActionsCtx = createContext<BaseDaemonActions>({
     getIdes: () => [],
 })
 
+/**
+ * Slow-changing identity slice, split out of `BaseDaemonContextValue` (which is
+ * dominated by `ides` — a fresh array on EVERY status tick).
+ *
+ * Consumers that read ONLY these fields subscribe here instead, so a status tick
+ * no longer re-renders them. Following the `ActionsCtx` precedent above.
+ *
+ * NOTE this is deliberately narrower than a full volatile/stable partition: the
+ * large majority of `useBaseDaemons()` consumers destructure `ides` alongside
+ * whatever else they need, so they stay on the volatile context by necessity and
+ * a wider split would move no additional consumer off the hot path. `useBaseDaemons`
+ * remains a complete, unchanged facade — every existing call site keeps working.
+ */
+export interface BaseDaemonIdentityValue {
+    userName?: string
+    setUserName?: (name: string) => void
+    userRole?: string
+    usesP2P?: boolean
+}
+
+const IdentityCtx = createContext<BaseDaemonIdentityValue>({
+    userName: undefined,
+    setUserName: () => {},
+    userRole: undefined,
+    usesP2P: true,
+})
+
 // ─── Helpers ──────────────────────────────────────────
 // The richness-aware merge engine (reconcileIdes + helpers) lives in
 // ./ides-reconcile. Only Provider/compact-expansion code remains below.
@@ -527,17 +554,37 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         userName,
     ])
 
+    // Identity slice — memoized on ONLY its own fields, so it keeps a stable
+    // reference across the status ticks that churn `ides`/`toasts`/connection maps.
+    const identityValue = useMemo<BaseDaemonIdentityValue>(() => ({
+        userName,
+        setUserName,
+        userRole: co?.userRole,
+        usesP2P: co?.usesP2P ?? true,
+    }), [userName, setUserName, co?.userRole, co?.usesP2P])
+
     return (
         <ActionsCtx.Provider value={actions}>
-            <BaseDaemonCtx.Provider value={contextValue}>
-                {children}
-            </BaseDaemonCtx.Provider>
+            <IdentityCtx.Provider value={identityValue}>
+                <BaseDaemonCtx.Provider value={contextValue}>
+                    {children}
+                </BaseDaemonCtx.Provider>
+            </IdentityCtx.Provider>
         </ActionsCtx.Provider>
     )
 }
 
 export function useBaseDaemons() {
     return useContext(BaseDaemonCtx)
+}
+
+/**
+ * Subscribe to ONLY the slow-changing identity fields. Prefer this over
+ * `useBaseDaemons()` in components that need none of the per-tick state — it
+ * skips re-renders driven by `ides` churn.
+ */
+export function useBaseDaemonIdentity() {
+    return useContext(IdentityCtx)
 }
 
 export function useBaseDaemonActions() {

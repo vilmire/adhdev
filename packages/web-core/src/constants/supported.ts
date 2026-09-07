@@ -885,7 +885,3 @@ export const SUPPORTED_CLI_AGENTS = BUILTIN_CLI_AGENTS
  * @deprecated Use BUILTIN_EXTENSIONS instead.
  */
 export const SUPPORTED_EXTENSIONS = BUILTIN_EXTENSIONS
-/**
- * @deprecated Use BUILTIN_ACP_COUNT instead.
- */
-export const SUPPORTED_ACP_COUNT = BUILTIN_ACP_COUNT

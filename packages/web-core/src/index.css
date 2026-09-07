@@ -1493,16 +1493,6 @@
         margin-left: 8px;
     }
 
-    .chat-tool-badge {
-        font-size: 10px;
-        font-family: var(--chat-tool-font-family);
-        color: var(--chat-tool-accent);
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-subtle);
-        border-radius: 4px;
-        padding: 2px 7px;
-    }
-
     .chat-typing-wrapper {
         max-width: 90%;
         background: var(--chat-typing-bg);
@@ -2305,7 +2295,6 @@
         flex: 0 1 auto;
     }
 
-    .header-subtitle-copy,
     .header-subtitle-status {
         min-width: 0;
         overflow: hidden;
@@ -2316,10 +2305,6 @@
     .header-subtitle-status {
         font-size: 10px;
         opacity: 0.88;
-    }
-
-    .header-subtitle-dot {
-        margin-top: 1px;
     }
 
     .dashboard-header-actions-group {
@@ -2852,19 +2837,6 @@
         border-color: var(--border-default);
         box-shadow: var(--shadow-glow), 0 4px 16px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
         transform: translateY(-1px);
-    }
-
-    .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-    }
-
-    .card-title {
-        font-size: 16px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
     }
 
     /* ── Buttons ───────────────────────────────────── */
@@ -4143,12 +4115,6 @@
         font-style: italic;
     }
 
-    .playground-toolbar {
-        display: flex;
-        gap: 6px;
-        margin-top: 8px;
-    }
-
     .playground-tool-btn {
         padding: 4px 10px;
         border-radius: 6px;
@@ -4165,37 +4131,6 @@
         border-color: var(--accent-primary);
         color: var(--accent-primary-light);
         background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
-    }
-
-    /* API Key card improvements */
-    .apikey-card {
-        background: var(--bg-glass);
-        border: 1px solid var(--border-subtle);
-        border-radius: 14px;
-        padding: 18px 20px;
-        transition: all 0.2s;
-    }
-
-    .apikey-card:hover {
-        border-color: var(--border-default);
-        background: var(--bg-glass-hover);
-    }
-
-    .apikey-scope-tag {
-        font-size: 11px;
-        padding: 3px 10px;
-        border-radius: 6px;
-        font-weight: 500;
-        display: inline-block;
-    }
-
-    .apikey-created-banner {
-        background: rgba(34, 197, 94, 0.08);
-        border: 1px solid rgba(34, 197, 94, 0.3);
-        border-radius: 14px;
-        padding: 20px;
-        margin-bottom: 20px;
-        animation: fadeIn 0.3s ease-out;
     }
 
     /* History panel */

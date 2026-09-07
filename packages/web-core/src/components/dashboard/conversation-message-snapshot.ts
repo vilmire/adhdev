@@ -246,6 +246,25 @@ function getConversationAnchorMessages(
  * relative order instead of being reordered or dropped.
  */
 function sortMessagesChronologically(messages: DashboardMessage[]): DashboardMessage[] {
+    // Fast path: the input is ALREADY in the exact order this sort produces, so
+    // return the same array reference and let downstream `useMemo`/memo
+    // comparisons short-circuit on reference equality instead of diffing a
+    // freshly allocated array with identical contents. The common live-tail case
+    // (chronological daemon transcript, no native-history interleave) hits this.
+    //
+    // Semantics are preserved exactly: the comparator's keys are (timestamp,
+    // original index), so a non-descending timestamp sequence is already at its
+    // unique sorted position under that stable tie-break — the sort would return
+    // these same messages in this same order. Note `>` (not `>=`): equal
+    // timestamps are ordered by original index, which ascending input satisfies.
+    let isSorted = true
+    for (let i = 1; i < messages.length; i += 1) {
+        if (getMessageTimestamp(messages[i - 1]) > getMessageTimestamp(messages[i])) {
+            isSorted = false
+            break
+        }
+    }
+    if (isSorted) return messages
     return messages
         .map((message, index) => ({ message, index, ts: getMessageTimestamp(message) }))
         .sort((a, b) => (a.ts - b.ts) || (a.index - b.index))

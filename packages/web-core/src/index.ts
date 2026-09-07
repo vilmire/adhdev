@@ -27,6 +27,7 @@ export {
     BaseDaemonProvider,
     useBaseDaemons,
     useBaseDaemonActions,
+    useBaseDaemonIdentity,
     reconcileIdes,
     expandCompactDaemons,
 } from './context/BaseDaemonContext'
@@ -188,7 +189,6 @@ export {
     SUPPORTED_IDES,
     SUPPORTED_CLI_AGENTS,
     SUPPORTED_EXTENSIONS,
-    SUPPORTED_ACP_COUNT,
 } from './constants/supported'
 export type { SupportedEntry, ProviderVerification, ProviderVerificationStatus, VerificationCandidate } from './constants/supported'
 
@@ -232,8 +232,6 @@ export { default as LanguageSelector } from './components/LanguageSelector'
 // ── Settings (shared) ──
 export { ToggleRow } from './components/settings/ToggleRow'
 export type { ToggleRowProps } from './components/settings/ToggleRow'
-export { BrowserNotificationSettings } from './components/settings/BrowserNotificationSettings'
-export { ConnectedMachinesSection } from './components/settings/ConnectedMachinesSection'
 export { default as CoordinatorPromptsSection } from './components/settings/CoordinatorPromptsSection'
 export { GeneralThemeSection } from './components/settings/GeneralThemeSection'
 export { ChatThemeSection, initChatTheme, getChatTheme, setChatTheme, CHAT_THEMES } from './components/settings/ChatThemeSection'
@@ -359,7 +357,6 @@ export type { BuildGitSystemBubbleOptions } from './components/dashboard/git-sys
 // ── Mesh onboarding (shared by the mesh page and the setup wizard) ──
 export { default as MeshCreateForm, isMeshCreateDisabled } from './components/mesh-onboarding/MeshCreateForm'
 export type { MeshCreateFormProps } from './components/mesh-onboarding/MeshCreateForm'
-export { default as MeshWorkspacePicker, PlanStatus as MeshPlanStatus } from './components/mesh-onboarding/WorkspacePicker'
 export type { WorkspaceOption as MeshWorkspaceOption } from './components/mesh-onboarding/WorkspacePicker'
 
 // ── Setup Wizard ──

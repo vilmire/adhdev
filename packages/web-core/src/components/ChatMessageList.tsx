@@ -45,7 +45,7 @@ import {
     ActionLogRow,
     ChatMessageRow,
 } from './ChatMessageList/chatMessageBubbles';
-import { classifyChatMessageForDisplay, filterChatMessagesForDefaultTranscript, filterChatActivityMessages, mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
+import { classifyChatMessageForDisplay, mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
 
 // ─── Types ────────────────────────────────────
 
@@ -195,8 +195,19 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     // Visible chat transcript hides internal provider/coordinator activity rows.
     // The daemon/read_chat transcript still preserves these messages for debug/export paths.
     const visibleMessages = useMemo(() => {
-        const chatMessages = filterChatMessagesForDefaultTranscript(messages);
-        const activityMessages = filterChatActivityMessages(messages);
+        // Single classification pass. `filterChatMessagesForDefaultTranscript` and
+        // `filterChatActivityMessages` each walked the full list calling
+        // `classifyChatMessageForDisplay` per message; the two predicates are
+        // mutually exclusive branches of that ONE classification, so partition in
+        // one pass instead of classifying every message twice. The helpers remain
+        // exported and unchanged for their other callers.
+        const chatMessages: ChatMessage[] = [];
+        const activityMessages: ChatMessage[] = [];
+        for (const message of (Array.isArray(messages) ? messages : [])) {
+            const classification = classifyChatMessageForDisplay(message);
+            if (classification.isUserFacing) chatMessages.push(message);
+            else if (classification.isActivityFacing) activityMessages.push(message);
+        }
         // Collapse back-to-back identical bubbles (history↔live seam duplicate, or a
         // native transcript replaying a finalized turn) before rendering — this is
         // adjacent-only, so the intentional non-adjacent history/live overlap is

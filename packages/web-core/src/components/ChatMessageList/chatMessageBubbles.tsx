@@ -263,7 +263,37 @@ function isQueuedPendingLocal(message: ChatMessage): boolean {
  * we append the remaining render-driving fields (kind, sender, and the meta /
  * visibility flags consumed by the activity/thought/terminal/markdown branches).
  */
+/**
+ * Signature cache keyed by message object identity.
+ *
+ * Every input to `buildChatMessageRowSignature` is read off the message object
+ * itself, and transcript messages are immutable snapshots — the pipeline
+ * replaces a message with a NEW object whenever any field changes (including
+ * `meta.pendingLocal` / `meta.queued`, which `withPendingLocalMessage` applies
+ * as a render-time overlay producing a fresh object). So object identity fully
+ * determines the signature, and caching on it cannot go stale: a changed field
+ * arrives as a different key.
+ *
+ * Why this matters: the `ChatMessageRow` memo comparator below runs for EVERY
+ * row on EVERY tick and hashed BOTH `prev` and `next` — and the hash walks the
+ * whole `JSON.stringify(content)` (chat-signatures FNV-1a). With N rows that is
+ * O(2N) full-content hashes per tick; each message object now hashes once and
+ * is reused across every subsequent comparison it participates in.
+ *
+ * WeakMap (not Map) so evicted/scrolled-off messages are garbage collected with
+ * no eviction bookkeeping.
+ */
+const rowSignatureCache = new WeakMap<ChatMessage, string>();
+
 export function buildChatMessageRowSignature(message: ChatMessage): string {
+    const cached = rowSignatureCache.get(message);
+    if (cached !== undefined) return cached;
+    const signature = computeChatMessageRowSignature(message);
+    rowSignatureCache.set(message, signature);
+    return signature;
+}
+
+function computeChatMessageRowSignature(message: ChatMessage): string {
     const meta = message.meta as (Record<string, unknown> | undefined);
     return [
         buildChatMessageSignature(message),
