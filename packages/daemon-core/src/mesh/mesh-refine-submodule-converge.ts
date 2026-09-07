@@ -19,8 +19,29 @@ import * as fs from 'fs';
 import { resolve as pathResolve } from 'path';
 import { execFileSync } from 'node:child_process';
 
+import { gitChildEnv } from '../git/git-locale.js';
 import type { GitAncestryProbe } from './mesh-refine-gitlink-utils.js';
 import { GIT, ensureSubmoduleCommitLocal, probeGitAncestry, readChangedGitlinkPaths, readTreeObject, submoduleCommitPresent } from './mesh-refine-gitlink-utils.js';
+
+/**
+ * ★ Every `execFileSync` below is SYNCHRONOUS: it blocks the daemon's entire
+ * event loop for its whole duration — heartbeat, status reporting and the WS
+ * bridge included. Node's default `timeout: 0` means "no bound", so a single
+ * unreachable remote (a blackhole IP that neither answers nor resets) freezes
+ * the daemon indefinitely and the coordinator marks a LIVE node dead.
+ * Reproduced in exactly that shape: a blackhole `git fetch` had not returned
+ * after 25s with `timeout: 0` and fired ZERO of the 30 expected 100ms heartbeat
+ * ticks, while the same call with a timeout returned at its bound.
+ *
+ * Values mirror the async sibling call sites in `mesh-fast-forward.ts`
+ * (`timeoutMs: 30_000` for network operations, `15_000` for local ones).
+ * `gitChildEnv()` is applied for the same reason every other git call site in
+ * this package applies it: an inherited `GIT_DIR` overrides both `-C` and `cwd`,
+ * so these commands would silently report — and rebase/checkout — a DIFFERENT
+ * repository (see `../git/git-locale.ts`).
+ */
+const GIT_NETWORK_TIMEOUT_MS = 30_000;
+const GIT_LOCAL_TIMEOUT_MS = 15_000;
 
 /**
  * Classification of a changed gitlink pair, used by the diverged-converge path.
@@ -57,26 +78,26 @@ function classifySubmoduleDivergence(
     if (baseCommit === branchCommit) return 'not_diverged';
     try {
         if (!fs.existsSync(submoduleRepoPath)) return 'undeterminable';
-        execFileSync(GIT, ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
-        execFileSync(GIT, ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['cat-file', '-e', `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        execFileSync(GIT, ['cat-file', '-e', `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
     } catch {
         // One of the commits is not available locally — we cannot judge divergence.
         return 'undeterminable';
     }
     // base ancestor-of branch ⇒ pure fast-forward, not a sibling divergence.
     try {
-        execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return 'not_diverged';
     } catch { /* not a fast-forward → keep checking */ }
     // branch ancestor-of base ⇒ branch is strictly behind (base already contains
     // it); no branch-side commits to replay, not our case.
     try {
-        execFileSync(GIT, ['merge-base', '--is-ancestor', branchCommit, baseCommit], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['merge-base', '--is-ancestor', branchCommit, baseCommit], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return 'not_diverged';
     } catch { /* neither ancestor of the other → genuine divergence */ }
     // Require a real shared merge base so the rebase has a sane replay range.
     try {
-        const mb = execFileSync(GIT, ['merge-base', baseCommit, branchCommit], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+        const mb = execFileSync(GIT, ['merge-base', baseCommit, branchCommit], { cwd: submoduleRepoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         // No shared merge base = unrelated histories; there is no sane replay
         // range, so this is not a convergeable sibling divergence.
         return mb ? 'diverged' : 'not_diverged';
@@ -105,12 +126,12 @@ function isSubmoduleDivergedSibling(submoduleRepoPath: string, baseCommit: strin
  */
 function resolveSubmoduleRemoteMainRef(submoduleRepoPath: string): string | undefined {
     try {
-        const sym = execFileSync(GIT, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+        const sym = execFileSync(GIT, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         if (sym) return sym;
     } catch { /* no origin/HEAD symref */ }
     for (const branch of ['main', 'master']) {
         try {
-            execFileSync(GIT, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'] });
+            execFileSync(GIT, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
             return `refs/remotes/origin/${branch}`;
         } catch { /* try the next conventional name */ }
     }
@@ -146,22 +167,24 @@ export function findEquivalentPublishedSubmoduleCommit(
     try {
         const mergeTreeOut = execFileSync(GIT, ['merge-tree', '--write-tree', baseCommit, branchCommit], {
             cwd: submoduleRepoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
         });
         const mergedTree = mergeTreeOut.trim().split(/\s+/)[0] || '';
         if (!mergedTree) return undefined;
         const candidates = execFileSync(GIT, ['rev-list', '--max-count=100', remoteRef, '--not', baseCommit], {
             cwd: submoduleRepoPath, encoding: 'utf8',
+            timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
         }).split('\n').map(s => s.trim()).filter(Boolean);
         for (const candidate of candidates) {
             // The published commit must descend from the base side, or converging
             // the gitlink to it would break the linear history the downstream
             // patch-equivalence gate relies on.
             try {
-                execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, candidate], { cwd: submoduleRepoPath, stdio: 'ignore' });
+                execFileSync(GIT, ['merge-base', '--is-ancestor', baseCommit, candidate], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
             } catch {
                 continue;
             }
-            const tree = execFileSync(GIT, ['rev-parse', `${candidate}^{tree}`], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+            const tree = execFileSync(GIT, ['rev-parse', `${candidate}^{tree}`], { cwd: submoduleRepoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
             if (tree === mergedTree) return candidate;
         }
     } catch { /* conflicted merge-tree / missing objects → no equivalence evidence */ }
@@ -315,6 +338,7 @@ function submoduleHasOriginRemote(submoduleRepoPath: string): boolean {
             cwd: submoduleRepoPath,
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
         });
         return !!url.trim();
     } catch {
@@ -447,7 +471,7 @@ export function convergeDivergedSubmoduleGitlinks(
         const originConfigured = submoduleHasOriginRemote(submoduleRepoPath);
         let remoteFetched = true;
         try {
-            execFileSync(GIT, ['-c', 'protocol.file.allow=always', 'fetch', '-q', 'origin'], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] });
+            execFileSync(GIT, ['-c', 'protocol.file.allow=always', 'fetch', '-q', 'origin'], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'], timeout: GIT_NETWORK_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         } catch {
             // Offline / auth / remote gone → no published-equivalence evidence. When
             // there is no origin at all this is expected and carries no uncertainty.
@@ -458,7 +482,7 @@ export function convergeDivergedSubmoduleGitlinks(
             ? findEquivalentPublishedSubmoduleCommit(submoduleRepoPath, baseCommit, branchCommit, remoteMainRef)
             : undefined;
         if (publishedEquivalent) {
-            try { execFileSync(GIT, ['checkout', '-q', '--detach', publishedEquivalent], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] }); } catch { /* the root rebase re-detaches when resolving the gitlink */ }
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', publishedEquivalent], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* the root rebase re-detaches when resolving the gitlink */ }
             gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit: publishedEquivalent, action: 'converged_to_published' });
             resolutions.push({ path, baseCommit, branchCommit, rebasedCommit: publishedEquivalent });
             continue;
@@ -506,6 +530,7 @@ export function convergeDivergedSubmoduleGitlinks(
             try {
                 execFileSync(GIT, ['merge-tree', '--write-tree', baseCommit, branchCommit], {
                     cwd: submoduleRepoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+                    timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
                 });
                 return false;
             } catch {
@@ -560,12 +585,12 @@ export function convergeDivergedSubmoduleGitlinks(
         // restores the submodule checkout to the branch-side commit.
         let rebasedCommit: string | undefined;
         try {
-            execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'] });
-            execFileSync(GIT, ['rebase', baseCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'] });
-            rebasedCommit = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8' }).trim();
+            execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            execFileSync(GIT, ['rebase', baseCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            rebasedCommit = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         } catch {
-            try { execFileSync(GIT, ['rebase', '--abort'], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
-            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
+            try { execFileSync(GIT, ['rebase', '--abort'], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
             gitlinks.push({ path, baseCommit, branchCommit, action: 'rebase_conflict' });
             // Real submodule content conflict → do NOT converge; caller keeps blocked_review.
             return { converged: false, reason: 'rebase_conflict', resolutions: [], gitlinks };
@@ -603,6 +628,7 @@ export function convergeDivergedSubmoduleGitlinks(
             try {
                 const replayed = execFileSync(GIT, ['rev-list', '--count', `${baseCommit}..${rebasedCommit}`], {
                     cwd: submoduleRepoPath, encoding: 'utf8',
+                    timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
                 }).trim();
                 return Number.parseInt(replayed, 10) > 0;
             } catch {
@@ -611,7 +637,7 @@ export function convergeDivergedSubmoduleGitlinks(
         })();
         if (!branchWorkSurvived) {
             // Restore the submodule checkout to the branch side; converge nothing.
-            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore' }); } catch { /* ignore */ }
+            try { execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
             gitlinks.push({ path, baseCommit, branchCommit, rebasedCommit, action: 'rebase_dropped_branch_commits' });
             return { converged: false, reason: 'rebase_dropped_branch_commits', resolutions: [], gitlinks };
         }
@@ -819,8 +845,12 @@ export function rootRebaseResolvingGitlinks(
             execFileSync(GIT, args, {
                 cwd: worktreeRoot,
                 stdio: ['ignore', 'pipe', 'pipe'],
+                timeout: GIT_LOCAL_TIMEOUT_MS,
+                windowsHide: true,
                 // A rebase editor prompt would hang; keep it non-interactive.
-                env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+                // Built on `gitChildEnv()` — not raw `process.env` — so an inherited
+                // `GIT_DIR` cannot redirect this REBASE at a different repository.
+                env: { ...gitChildEnv(), GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
             });
             return { ok: true };
         } catch {
@@ -830,7 +860,7 @@ export function rootRebaseResolvingGitlinks(
 
     const unmergedPaths = (): string[] => {
         try {
-            return execFileSync(GIT, ['diff', '--name-only', '--diff-filter=U'], { cwd: worktreeRoot, encoding: 'utf8' })
+            return execFileSync(GIT, ['diff', '--name-only', '--diff-filter=U'], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() })
                 .split('\n').map(s => s.trim()).filter(Boolean);
         } catch {
             return [];
@@ -838,7 +868,7 @@ export function rootRebaseResolvingGitlinks(
     };
 
     const abort = (reason: string, conflictPaths?: string[]): RootRebaseGitlinkResolveResult => {
-        try { execFileSync(GIT, ['rebase', '--abort'], { cwd: worktreeRoot, stdio: 'ignore' }); } catch { /* ignore */ }
+        try { execFileSync(GIT, ['rebase', '--abort'], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
         return { ok: false, reason, conflictPaths };
     };
 
@@ -859,7 +889,7 @@ export function rootRebaseResolvingGitlinks(
             // 160000 for a gitlink at any conflict stage.
             const unresolvableGitlink = unresolvable.some(p => {
                 try {
-                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8' });
+                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
                     return /^160000\s/m.test(staged);
                 } catch {
                     return false;
@@ -867,7 +897,7 @@ export function rootRebaseResolvingGitlinks(
             });
             const allGitlink = unresolvable.every(p => {
                 try {
-                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8' });
+                    const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
                     return /^160000\s/m.test(staged);
                 } catch {
                     return false;
@@ -882,10 +912,10 @@ export function rootRebaseResolvingGitlinks(
         for (const p of conflicts) {
             const commit = resolveByPath.get(p)!;
             try {
-                execFileSync(GIT, ['checkout', '-q', '--detach', commit], { cwd: pathResolve(worktreeRoot, p), stdio: 'ignore' });
+                execFileSync(GIT, ['checkout', '-q', '--detach', commit], { cwd: pathResolve(worktreeRoot, p), stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
             } catch { /* the checkout is best-effort; the `add` below stamps the index either way */ }
             try {
-                execFileSync(GIT, ['add', p], { cwd: worktreeRoot, stdio: 'ignore' });
+                execFileSync(GIT, ['add', p], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
             } catch {
                 return abort('rebase_error', conflicts);
             }
@@ -895,7 +925,7 @@ export function rootRebaseResolvingGitlinks(
 
     let branchHead: string | undefined;
     try {
-        branchHead = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: worktreeRoot, encoding: 'utf8' }).trim();
+        branchHead = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
     } catch { /* leave undefined */ }
     return { ok: true, branchHead };
 }

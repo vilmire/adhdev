@@ -37,6 +37,8 @@ import { resolve as pathResolve } from 'path';
 
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 
+import { gitChildEnv } from '../git/git-locale.js';
+
 import {
     GIT,
     REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -87,6 +89,19 @@ export type MeshRefineSubmoduleReachabilityPreflight = {
     durationMs: number;
 };
 
+/**
+ * The ONE way this module runs git. Every call site goes through here so none can
+ * silently drop the four things a git child in the daemon must have: a `timeout`
+ * (an unreachable remote must not hang the refine job forever), `windowsHide`,
+ * a `maxBuffer`, and `gitChildEnv()`.
+ *
+ * ★ The env is not cosmetic. An inherited `GIT_DIR` overrides BOTH `-C` and the
+ * child's `cwd`, so a call that bypasses this helper reports another repository's
+ * state — verified in this exact shape: with `GIT_DIR` pointing at repo A,
+ * `git rev-parse HEAD` run with `cwd: B` returned A's SHA, while the same call
+ * with the stripped env returned B's. A preflight that reads the wrong repo's SHA
+ * decides reachability against the wrong history. See `../git/git-locale.ts`.
+ */
 const runGit = async (cwd: string, args: string[]): Promise<string> => {
     const { stdout } = await execFileAsync(GIT, args, {
         cwd,
@@ -94,6 +109,7 @@ const runGit = async (cwd: string, args: string[]): Promise<string> => {
         timeout: 30_000,
         maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
         windowsHide: true,
+        env: gitChildEnv(),
     });
     return String(stdout || '');
 };
@@ -193,18 +209,18 @@ export async function runMeshRefineSubmoduleReachabilityPreflight(args: {
 export async function resolveRefinePlanBaseRef(repoRoot: string): Promise<string> {
     let baseBranch = 'main';
     try {
-        const { stdout } = await execFileAsync(GIT, ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
+        const stdout = await runGit(repoRoot, ['branch', '--show-current']);
         if (stdout.trim()) baseBranch = stdout.trim();
     } catch { /* fall back to main */ }
     try {
-        await execFileAsync(GIT, ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8' });
-    } catch { /* offline / no remote — fall through to local refs */ }
+        await runGit(repoRoot, ['fetch', 'origin', baseBranch]);
+    } catch { /* offline / no remote / fetch timed out — fall through to local refs */ }
     try {
-        const { stdout } = await execFileAsync(GIT, ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8' });
+        const stdout = await runGit(repoRoot, ['rev-parse', `origin/${baseBranch}`]);
         if (stdout.trim()) return stdout.trim();
     } catch { /* fall through to HEAD */ }
     try {
-        const { stdout } = await execFileAsync(GIT, ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+        const stdout = await runGit(repoRoot, ['rev-parse', 'HEAD']);
         if (stdout.trim()) return stdout.trim();
     } catch { /* keep HEAD */ }
     return 'HEAD';
@@ -235,13 +251,13 @@ export async function planMeshRefineNodeSubmodulePreflight(args: {
     if (!repoRoot) return undefined;
     let branch = typeof node.worktreeBranch === 'string' ? node.worktreeBranch : '';
     try {
-        const { stdout } = await execFileAsync(GIT, ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' });
+        const stdout = await runGit(workspace, ['branch', '--show-current']);
         if (stdout.trim()) branch = stdout.trim();
     } catch { /* use the stored worktreeBranch */ }
     if (!branch) return undefined;
     let branchRef = branch;
     try {
-        const { stdout } = await execFileAsync(GIT, ['rev-parse', branch], { cwd: workspace, encoding: 'utf8' });
+        const stdout = await runGit(workspace, ['rev-parse', branch]);
         branchRef = stdout.trim() || branch;
     } catch { /* use the branch name */ }
     const baseRef = await resolveRefinePlanBaseRef(repoRoot);

@@ -91535,13 +91535,6 @@ ${cleanBody}`;
             if (inFlight2.chunkBuffers.size !== inFlight2.totalChunks) {
               return { status: "rejected", reason: "missing_chunk" };
             }
-            const cached5 = this.complete;
-            if (cached5 && this.completeSha256 === inFlight2.snapshotSha256) {
-              const rejection2 = validateSnapshotBody(cached5.snapshot, inFlight2.identity);
-              if (rejection2) return { status: "rejected", reason: rejection2 };
-              this.complete = { snapshot: cached5.snapshot, identity: inFlight2.identity };
-              return { status: "complete", snapshot: cached5.snapshot, identity: inFlight2.identity };
-            }
             const ordered = [];
             for (let index = 0; index < inFlight2.totalChunks; index++) {
               const buf = inFlight2.chunkBuffers.get(index);
@@ -91560,6 +91553,13 @@ ${cleanBody}`;
             }
             if (sha256HexUtf8(json3) !== inFlight2.snapshotSha256) {
               return { status: "rejected", reason: "hash_mismatch" };
+            }
+            const cached5 = this.complete;
+            if (cached5 && this.completeSha256 === inFlight2.snapshotSha256) {
+              const cachedRejection = validateSnapshotBody(cached5.snapshot, inFlight2.identity);
+              if (cachedRejection) return { status: "rejected", reason: cachedRejection };
+              this.complete = { snapshot: cached5.snapshot, identity: inFlight2.identity };
+              return { status: "complete", snapshot: cached5.snapshot, identity: inFlight2.identity };
             }
             let parsed;
             try {
@@ -128665,23 +128665,23 @@ ${tail}`;
       if (baseCommit === branchCommit) return "not_diverged";
       try {
         if (!fs50.existsSync(submoduleRepoPath)) return "undeterminable";
-        (0, import_node_child_process8.execFileSync)(GIT2, ["cat-file", "-e", `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore" });
-        (0, import_node_child_process8.execFileSync)(GIT2, ["cat-file", "-e", `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore" });
+        (0, import_node_child_process8.execFileSync)(GIT2, ["cat-file", "-e", `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        (0, import_node_child_process8.execFileSync)(GIT2, ["cat-file", "-e", `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
       } catch {
         return "undeterminable";
       }
       try {
-        (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: "ignore" });
+        (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", baseCommit, branchCommit], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return "not_diverged";
       } catch {
       }
       try {
-        (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", branchCommit, baseCommit], { cwd: submoduleRepoPath, stdio: "ignore" });
+        (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", branchCommit, baseCommit], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return "not_diverged";
       } catch {
       }
       try {
-        const mb = (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", baseCommit, branchCommit], { cwd: submoduleRepoPath, encoding: "utf8" }).trim();
+        const mb = (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", baseCommit, branchCommit], { cwd: submoduleRepoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         return mb ? "diverged" : "not_diverged";
       } catch {
         return "not_diverged";
@@ -128689,13 +128689,13 @@ ${tail}`;
     }
     function resolveSubmoduleRemoteMainRef(submoduleRepoPath) {
       try {
-        const sym = (0, import_node_child_process8.execFileSync)(GIT2, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"], { cwd: submoduleRepoPath, encoding: "utf8" }).trim();
+        const sym = (0, import_node_child_process8.execFileSync)(GIT2, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"], { cwd: submoduleRepoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         if (sym) return sym;
       } catch {
       }
       for (const branch of ["main", "master"]) {
         try {
-          (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}`], { cwd: submoduleRepoPath, stdio: ["ignore", "pipe", "pipe"] });
+          (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}`], { cwd: submoduleRepoPath, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           return `refs/remotes/origin/${branch}`;
         } catch {
         }
@@ -128707,21 +128707,27 @@ ${tail}`;
         const mergeTreeOut = (0, import_node_child_process8.execFileSync)(GIT2, ["merge-tree", "--write-tree", baseCommit, branchCommit], {
           cwd: submoduleRepoPath,
           encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"]
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          windowsHide: true,
+          env: gitChildEnv()
         });
         const mergedTree = mergeTreeOut.trim().split(/\s+/)[0] || "";
         if (!mergedTree) return void 0;
         const candidates = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-list", "--max-count=100", remoteRef, "--not", baseCommit], {
           cwd: submoduleRepoPath,
-          encoding: "utf8"
+          encoding: "utf8",
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          windowsHide: true,
+          env: gitChildEnv()
         }).split("\n").map((s2) => s2.trim()).filter(Boolean);
         for (const candidate of candidates) {
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", baseCommit, candidate], { cwd: submoduleRepoPath, stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["merge-base", "--is-ancestor", baseCommit, candidate], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
             continue;
           }
-          const tree = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", `${candidate}^{tree}`], { cwd: submoduleRepoPath, encoding: "utf8" }).trim();
+          const tree = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", `${candidate}^{tree}`], { cwd: submoduleRepoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
           if (tree === mergedTree) return candidate;
         }
       } catch {
@@ -128733,7 +128739,10 @@ ${tail}`;
         const url2 = (0, import_node_child_process8.execFileSync)(GIT2, ["remote", "get-url", "origin"], {
           cwd: submoduleRepoPath,
           encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"]
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          windowsHide: true,
+          env: gitChildEnv()
         });
         return !!url2.trim();
       } catch {
@@ -128784,7 +128793,7 @@ ${tail}`;
         const originConfigured = submoduleHasOriginRemote(submoduleRepoPath);
         let remoteFetched = true;
         try {
-          (0, import_node_child_process8.execFileSync)(GIT2, ["-c", "protocol.file.allow=always", "fetch", "-q", "origin"], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"] });
+          (0, import_node_child_process8.execFileSync)(GIT2, ["-c", "protocol.file.allow=always", "fetch", "-q", "origin"], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"], timeout: GIT_NETWORK_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         } catch {
           remoteFetched = false;
         }
@@ -128792,7 +128801,7 @@ ${tail}`;
         const publishedEquivalent = remoteMainRef ? findEquivalentPublishedSubmoduleCommit(submoduleRepoPath, baseCommit, branchCommit, remoteMainRef) : void 0;
         if (publishedEquivalent) {
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", publishedEquivalent], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"] });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", publishedEquivalent], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           gitlinks.push({ path: path66, baseCommit, branchCommit, rebasedCommit: publishedEquivalent, action: "converged_to_published" });
@@ -128807,7 +128816,10 @@ ${tail}`;
             (0, import_node_child_process8.execFileSync)(GIT2, ["merge-tree", "--write-tree", baseCommit, branchCommit], {
               cwd: submoduleRepoPath,
               encoding: "utf8",
-              stdio: ["ignore", "pipe", "pipe"]
+              stdio: ["ignore", "pipe", "pipe"],
+              timeout: GIT_LOCAL_TIMEOUT_MS,
+              windowsHide: true,
+              env: gitChildEnv()
             });
             return false;
           } catch {
@@ -128837,16 +128849,16 @@ ${tail}`;
         }
         let rebasedCommit;
         try {
-          (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"] });
-          (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", baseCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "pipe", "pipe"] });
-          rebasedCommit = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: submoduleRepoPath, encoding: "utf8" }).trim();
+          (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+          (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", baseCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+          rebasedCommit = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: submoduleRepoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         } catch {
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", "--abort"], { cwd: submoduleRepoPath, stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", "--abort"], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           gitlinks.push({ path: path66, baseCommit, branchCommit, action: "rebase_conflict" });
@@ -128859,7 +128871,10 @@ ${tail}`;
           try {
             const replayed = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-list", "--count", `${baseCommit}..${rebasedCommit}`], {
               cwd: submoduleRepoPath,
-              encoding: "utf8"
+              encoding: "utf8",
+              timeout: GIT_LOCAL_TIMEOUT_MS,
+              windowsHide: true,
+              env: gitChildEnv()
             }).trim();
             return Number.parseInt(replayed, 10) > 0;
           } catch {
@@ -128868,7 +128883,7 @@ ${tail}`;
         })();
         if (!branchWorkSurvived) {
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           gitlinks.push({ path: path66, baseCommit, branchCommit, rebasedCommit, action: "rebase_dropped_branch_commits" });
@@ -128928,8 +128943,12 @@ ${tail}`;
           (0, import_node_child_process8.execFileSync)(GIT2, args, {
             cwd: worktreeRoot,
             stdio: ["ignore", "pipe", "pipe"],
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
             // A rebase editor prompt would hang; keep it non-interactive.
-            env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" }
+            // Built on `gitChildEnv()` — not raw `process.env` — so an inherited
+            // `GIT_DIR` cannot redirect this REBASE at a different repository.
+            env: { ...gitChildEnv(), GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" }
           });
           return { ok: true };
         } catch {
@@ -128938,14 +128957,14 @@ ${tail}`;
       };
       const unmergedPaths = () => {
         try {
-          return (0, import_node_child_process8.execFileSync)(GIT2, ["diff", "--name-only", "--diff-filter=U"], { cwd: worktreeRoot, encoding: "utf8" }).split("\n").map((s2) => s2.trim()).filter(Boolean);
+          return (0, import_node_child_process8.execFileSync)(GIT2, ["diff", "--name-only", "--diff-filter=U"], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).split("\n").map((s2) => s2.trim()).filter(Boolean);
         } catch {
           return [];
         }
       };
       const abort = (reason, conflictPaths) => {
         try {
-          (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", "--abort"], { cwd: worktreeRoot, stdio: "ignore" });
+          (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", "--abort"], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         } catch {
         }
         return { ok: false, reason, conflictPaths };
@@ -128962,7 +128981,7 @@ ${tail}`;
         if (unresolvable.length > 0) {
           const unresolvableGitlink = unresolvable.some((p) => {
             try {
-              const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8" });
+              const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
               return /^160000\s/m.test(staged);
             } catch {
               return false;
@@ -128970,7 +128989,7 @@ ${tail}`;
           });
           const allGitlink = unresolvable.every((p) => {
             try {
-              const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8" });
+              const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
               return /^160000\s/m.test(staged);
             } catch {
               return false;
@@ -128981,11 +129000,11 @@ ${tail}`;
         for (const p of conflicts) {
           const commit = resolveByPath.get(p);
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", commit], { cwd: (0, import_path19.resolve)(worktreeRoot, p), stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", commit], { cwd: (0, import_path19.resolve)(worktreeRoot, p), stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["add", p], { cwd: worktreeRoot, stdio: "ignore" });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["add", p], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           } catch {
             return abort("rebase_error", conflicts);
           }
@@ -128994,7 +129013,7 @@ ${tail}`;
       }
       let branchHead;
       try {
-        branchHead = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: worktreeRoot, encoding: "utf8" }).trim();
+        branchHead = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
       } catch {
       }
       return { ok: true, branchHead };
@@ -129002,6 +129021,8 @@ ${tail}`;
     var fs50;
     var import_path19;
     var import_node_child_process8;
+    var GIT_NETWORK_TIMEOUT_MS;
+    var GIT_LOCAL_TIMEOUT_MS;
     var SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION;
     var SUBMODULE_PUBLICATION_UNDETERMINABLE_RECOMMENDED_ACTION;
     var init_mesh_refine_submodule_converge = __esm2({
@@ -129010,7 +129031,10 @@ ${tail}`;
         fs50 = __toESM2(require("fs"));
         import_path19 = require("path");
         import_node_child_process8 = require("child_process");
+        init_git_locale();
         init_mesh_refine_gitlink_utils();
+        GIT_NETWORK_TIMEOUT_MS = 3e4;
+        GIT_LOCAL_TIMEOUT_MS = 15e3;
         SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION = "Publish the branch-side submodule commit(s) to submodule origin main, then rerun mesh_refine_node. Do NOT retry the rebase: the branch was intentionally left unrewritten because a rebase here would mint a submodule commit the reachability gate must reject.";
         SUBMODULE_PUBLICATION_UNDETERMINABLE_RECOMMENDED_ACTION = "Restore access to the submodule remote (the publication check could not be run), then rerun mesh_refine_node. Do NOT publish and do NOT retry the rebase on this evidence: it is unknown whether the branch-side commit is already on origin, so minting or pushing here can synthesize a redundant twin of a published commit.";
       }
@@ -130189,21 +130213,21 @@ ${mergeTreeErr?.stderr || ""}`;
     async function resolveRefinePlanBaseRef(repoRoot) {
       let baseBranch = "main";
       try {
-        const { stdout } = await execFileAsync4(GIT2, ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8" });
+        const stdout = await runGit2(repoRoot, ["branch", "--show-current"]);
         if (stdout.trim()) baseBranch = stdout.trim();
       } catch {
       }
       try {
-        await execFileAsync4(GIT2, ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8" });
+        await runGit2(repoRoot, ["fetch", "origin", baseBranch]);
       } catch {
       }
       try {
-        const { stdout } = await execFileAsync4(GIT2, ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8" });
+        const stdout = await runGit2(repoRoot, ["rev-parse", `origin/${baseBranch}`]);
         if (stdout.trim()) return stdout.trim();
       } catch {
       }
       try {
-        const { stdout } = await execFileAsync4(GIT2, ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+        const stdout = await runGit2(repoRoot, ["rev-parse", "HEAD"]);
         if (stdout.trim()) return stdout.trim();
       } catch {
       }
@@ -130219,14 +130243,14 @@ ${mergeTreeErr?.stderr || ""}`;
       if (!repoRoot) return void 0;
       let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
       try {
-        const { stdout } = await execFileAsync4(GIT2, ["branch", "--show-current"], { cwd: workspace, encoding: "utf8" });
+        const stdout = await runGit2(workspace, ["branch", "--show-current"]);
         if (stdout.trim()) branch = stdout.trim();
       } catch {
       }
       if (!branch) return void 0;
       let branchRef = branch;
       try {
-        const { stdout } = await execFileAsync4(GIT2, ["rev-parse", branch], { cwd: workspace, encoding: "utf8" });
+        const stdout = await runGit2(workspace, ["rev-parse", branch]);
         branchRef = stdout.trim() || branch;
       } catch {
       }
@@ -130289,6 +130313,7 @@ ${mergeTreeErr?.stderr || ""}`;
         import_node_util5 = require("util");
         import_path21 = require("path");
         init_dist();
+        init_git_locale();
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_gates();
         init_worktree_bootstrap_config();
@@ -130299,7 +130324,8 @@ ${mergeTreeErr?.stderr || ""}`;
             encoding: "utf8",
             timeout: 3e4,
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-            windowsHide: true
+            windowsHide: true,
+            env: gitChildEnv()
           });
           return String(stdout || "");
         };
@@ -134393,7 +134419,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         return { state: "no_origin" };
       }
       try {
-        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: env2 });
+        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: env2, timeout: 3e4 });
       } catch (e) {
         const fetchError = e?.message || String(e);
         return { state: "undeterminable", reason: `git fetch origin ${baseBranch} failed: ${fetchError}`, fetchError };
@@ -135004,7 +135030,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       const baseBranch = baseBranchStdout.trim();
       let fetchWarning;
       try {
-        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+        await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
       } catch (e) {
         fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
       }
@@ -135882,7 +135908,7 @@ ${e?.stderr || ""}`;
       if (!requireApprovalForPush) {
         const pushStarted = Date.now();
         try {
-          await execFileAsync8("git", ["push", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          await execFileAsync8("git", ["push", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
           pushResult = { pushed: true, remote: "origin", branch: baseBranch, durationMs: Date.now() - pushStarted };
           recordMeshRefineStage(refineStages, "push", "passed", pushStarted, pushResult);
         } catch (e) {
@@ -136146,7 +136172,7 @@ ${e?.stderr || ""}`;
         }
         let baseRef = "HEAD";
         try {
-          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
         } catch {
         }
         try {

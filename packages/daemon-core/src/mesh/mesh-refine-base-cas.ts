@@ -126,7 +126,12 @@ export async function probeRefineBaseCas(params: {
     }
 
     try {
-        await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env });
+        // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`.
+        // Without it an unreachable remote leaves the base-CAS check awaiting
+        // forever; with it the hang becomes an ordinary fetch failure, which the
+        // catch below already converts into the correct `undeterminable` verdict
+        // ("we could not learn the live base head") rather than a false comparison.
+        await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env, timeout: 30_000 });
     } catch (e: any) {
         // The remote was never reached, so `refs/remotes/origin/<base>` is stale or
         // absent. Comparing against it would read off state the remote never

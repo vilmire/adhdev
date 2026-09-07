@@ -480,11 +480,11 @@ export class TranscriptRevisionAssembler {
         //
         // A frozen lane re-sends the same revision, and every SNAP replays the
         // whole ring tail, so the SAME snapshot bytes are routinely reassembled
-        // over and over. When the committed `snapshotSha256` equals the hash of
-        // the complete snapshot already held, the five-stage tail below
-        // (concat → UTF-8 decode → SHA-256 → JSON.parse → body validation) is
-        // guaranteed to reproduce an object equal to `this.complete.snapshot`,
-        // so it is skipped and the held one returned.
+        // over and over. When the RECEIVED bytes hash to the same
+        // `snapshotSha256` as the complete snapshot already held, re-running
+        // `JSON.parse` on them is guaranteed to reproduce an object equal to
+        // `this.complete.snapshot`, so that one stage is skipped and the held
+        // object returned instead.
         //
         // ── Why this cannot skip a revision that actually CHANGED ────────────
         // The gate is content-addressed, not counter-addressed: it keys on the
@@ -495,27 +495,32 @@ export class TranscriptRevisionAssembler {
         // verification below is already trusting not to exist, so this adds no
         // new assumption.
         //
-        // The envelope-consistency checks ABOVE (identity pairing, chunk/byte
-        // counts, chunk completeness) deliberately run FIRST and unchanged, so a
-        // spliced or truncated envelope is still rejected with exactly the same
-        // reason it was before — the short-circuit only replaces work whose
-        // outcome is already determined, never a check.
+        // The envelope-consistency checks ABOVE (identity pairing, declared
+        // chunk/byte counts, chunk completeness) and the received-byte checks
+        // BELOW (byte count, UTF-8, SHA-256) all run FIRST and unchanged, so a
+        // spliced, truncated or tampered envelope is still rejected with exactly
+        // the same reason it was before — the short-circuit only replaces work
+        // whose outcome is already determined, never a check.
         //
-        // ★ Only the DECODE is skipped, never a CHECK. The body-vs-envelope
-        // validation below is re-run against the cached snapshot through the
-        // shared `validateSnapshotBody` helper, because it compares the snapshot
-        // BODY to THIS commit's identity — a pairing that is a property of the
-        // delivery, not of the bytes. Skipping it would let identical bytes
-        // committed under a different `producerEpoch`/`revision` be accepted
-        // where the full path returns `wrong_owner`.
-        const cached = this.complete;
-        if (cached && this.completeSha256 === inFlight.snapshotSha256) {
-            const rejection = validateSnapshotBody(cached.snapshot, inFlight.identity);
-            if (rejection) return { status: 'rejected', reason: rejection };
-            this.complete = { snapshot: cached.snapshot, identity: inFlight.identity };
-            return { status: 'complete', snapshot: cached.snapshot, identity: inFlight.identity };
-        }
-
+        // ★ Only the DECODE is skipped, never a CHECK — and "the decode" means
+        // exactly `JSON.parse`, nothing earlier. Every integrity check the cold
+        // path runs on the RECEIVED bytes (chunk completeness, byte count,
+        // UTF-8 well-formedness, SHA-256) therefore runs BELOW, unconditionally,
+        // before the cache is consulted. An earlier revision of this gate
+        // consulted the cache first, which let a delivery that merely DECLARED
+        // the cached hash while carrying tampered chunk bytes be accepted by a
+        // warm assembler and rejected (`byte_count_mismatch`) by a cold one —
+        // integrity that depends on cache residency is not integrity. The
+        // short-circuit is only allowed to skip work whose OUTCOME is already
+        // determined by a verified-equal hash: `JSON.parse` of a byte string
+        // proven identical to the cached one.
+        //
+        // The body-vs-envelope validation is likewise re-run against the cached
+        // snapshot through the shared `validateSnapshotBody` helper, because it
+        // compares the snapshot BODY to THIS commit's identity — a pairing that
+        // is a property of the delivery, not of the bytes. Skipping it would let
+        // identical bytes committed under a different `producerEpoch`/`revision`
+        // be accepted where the full path returns `wrong_owner`.
         const ordered: Uint8Array[] = [];
         for (let index = 0; index < inFlight.totalChunks; index++) {
             const buf = inFlight.chunkBuffers.get(index);
@@ -536,6 +541,18 @@ export class TranscriptRevisionAssembler {
 
         if (sha256HexUtf8(json) !== inFlight.snapshotSha256) {
             return { status: 'rejected', reason: 'hash_mismatch' };
+        }
+
+        // Bytes are now proven to hash to `inFlight.snapshotSha256`. If the held
+        // snapshot was parsed from a byte string with that same hash, `JSON.parse`
+        // here is guaranteed to reproduce an equal object, so it — and only it —
+        // is skipped.
+        const cached = this.complete;
+        if (cached && this.completeSha256 === inFlight.snapshotSha256) {
+            const cachedRejection = validateSnapshotBody(cached.snapshot, inFlight.identity);
+            if (cachedRejection) return { status: 'rejected', reason: cachedRejection };
+            this.complete = { snapshot: cached.snapshot, identity: inFlight.identity };
+            return { status: 'complete', snapshot: cached.snapshot, identity: inFlight.identity };
         }
 
         let parsed: unknown;
