@@ -102,28 +102,108 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         : (ctx.deps.statusInstanceId || undefined);
                     const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
                     const hadAggregateCache = ctx.aggregateMeshStatusCache.has(meshId);
+                    // The never-cached, process-live extras. The live path strips these
+                    // out of the cacheable snapshot (see the destructure below the
+                    // statusResult build) and re-attaches them to what it returns, so a
+                    // cache/stale serve must do the SAME re-attach — otherwise a served
+                    // snapshot would carry no pending events at all. Built lazily
+                    // because the cold path recomputes them further down anyway.
+                    const attachLiveOnlyExtras = async (snapshot: any) => {
+                        const pendingCoordinatorEvents = getPendingMeshCoordinatorEvents(meshId, peekScope);
+                        // asyncRefineJobs is DERIVED from the pending events (plus a
+                        // kind-filtered ledger read) — both cheap, neither involving the
+                        // peer probe that makes the full rebuild slow. When events ARE
+                        // pending we must recompute, not reuse the cached copy: a
+                        // `refine:completed` that just landed is exactly the state change
+                        // an operator opened the overview to see, and serving the cached
+                        // (still-'accepted') copy would hide it.
+                        //
+                        // With NO pending events the cached copy is kept instead. The
+                        // terminal status of a refine job lives in the event, not in the
+                        // ledger (which only carries task_dispatched for an in-flight
+                        // job), so recomputing from an empty pending set would walk a
+                        // finished job BACK to 'accepted' the moment the coordinator
+                        // drains it. Reusing the cache preserves the folded-in terminal
+                        // status — the same thing the pre-existing live path does.
+                        const asyncRefineJobs = pendingCoordinatorEvents.length > 0
+                            ? await (async () => {
+                                try {
+                                    const { readLedgerEntriesByKind } = await import('../../mesh/mesh-ledger.js');
+                                    return buildMeshAsyncRefineJobs({
+                                        meshId,
+                                        ledgerEntries: readLedgerEntriesByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed']),
+                                        pendingEvents: [...pendingCoordinatorEvents],
+                                    });
+                                } catch {
+                                    // Ledger unavailable — fall back to whatever the cached
+                                    // snapshot held rather than dropping the field entirely.
+                                    return Array.isArray(snapshot?.asyncRefineJobs) ? snapshot.asyncRefineJobs : [];
+                                }
+                            })()
+                            : (Array.isArray(snapshot?.asyncRefineJobs) ? snapshot.asyncRefineJobs : []);
+                        // Fold the recomputed jobs back into the held snapshot. The live
+                        // path caches this field, so without the write-back the very next
+                        // call — after the coordinator drains the event — would find the
+                        // pre-event copy and the finished job would disappear. This keeps
+                        // the cache as coherent as a live rebuild would have left it.
+                        if (pendingCoordinatorEvents.length > 0) {
+                            const held = ctx.aggregateMeshStatusCache.get(meshId);
+                            if (held?.snapshot) {
+                                if (asyncRefineJobs.length > 0) held.snapshot.asyncRefineJobs = asyncRefineJobs;
+                                else delete held.snapshot.asyncRefineJobs;
+                            }
+                        }
+                        const { asyncRefineJobs: _cachedAsyncRefineJobs, ...rest } = snapshot ?? {};
+                        return {
+                            ...rest,
+                            ...(asyncRefineJobs.length > 0 ? { asyncRefineJobs } : {}),
+                            ...(pendingCoordinatorEvents.length > 0 ? { pendingCoordinatorEvents } : {}),
+                            ...((): Record<string, unknown> => {
+                                const unroutableDeliveries = getRecentUnroutableDeliveries();
+                                return unroutableDeliveries.length > 0 ? { unroutableDeliveries } : {};
+                            })(),
+                            meshProtocolV2Counters: {
+                                enforce: isMeshProtocolV2EnforceEnabled(),
+                                drain: { ...getMeshV2DrainCounters() },
+                                backstop: { ...getMeshV2BackstopCounters() },
+                            } satisfies MeshProtocolV2Counters,
+                            pendingRetentionCounters: { ...getPendingRetentionCounters() } satisfies MeshPendingRetentionCounters,
+                            turnPresentationCounters: getTurnPresentationMetrics(),
+                        };
+                    };
+                    // Strict serve requires a fully fresh snapshot AND no undrained
+                    // coordinator events — a coordinator that has events waiting gets at
+                    // least the SWR path below, which re-attaches them fresh.
                     if (!refreshRequested && !verboseMissions && pendingCoordinatorEventCount === 0) {
                         const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                         if (cachedStatus) {
+                            const returned = await attachLiveOnlyExtras(cachedStatus);
                             logRepoMeshStatusDebug('return_cached', {
                                 meshId,
                                 command: 'mesh_status',
                                 refreshRequested,
                                 durationMs: Date.now() - startedAtMs,
-                                summary: summarizeRepoMeshStatusDebug(cachedStatus),
+                                summary: summarizeRepoMeshStatusDebug(returned),
                             });
-                            return cachedStatus;
+                            return returned;
                         }
-                        // SWR stale-serve: the strict serve above missed only because
-                        // some node still has a pending peer-git probe (the
-                        // shouldRefreshStalePendingAggregate gate). Rather than block
-                        // this interactive detail-open on a full synchronous live
-                        // rebuild, serve the held (slightly stale) snapshot instantly
-                        // and kick ONE coalesced background freshen whose result
-                        // repopulates the cache for the next poll/subscription push.
-                        // allowStalePending relaxes ONLY the pending-git freshness gate;
-                        // getCachedAggregateMeshStatus still enforces the queueRevision
-                        // guard, so a genuine queue/identity mutation is never stale-served.
+                    }
+                    // SWR stale-serve: the strict serve above missed (or was skipped
+                    // because undrained coordinator events are pending). Rather than block
+                    // this interactive detail-open on a full synchronous live rebuild —
+                    // whose per-node peer probe can hold the aggregate for tens of seconds
+                    // on a dead/relayed peer — serve the held (slightly stale) snapshot
+                    // instantly and kick ONE coalesced background freshen whose result
+                    // repopulates the cache for the next poll/subscription push.
+                    //
+                    // Serving stale while events are pending is correct because pending
+                    // events are NEVER part of the cached snapshot: they are stripped
+                    // before caching and re-attached at return time (attachLiveOnlyExtras
+                    // above), so the caller gets STALE NODE HEALTH + FRESH pending events.
+                    // allowStalePending relaxes ONLY the pending-git freshness gate;
+                    // getCachedAggregateMeshStatus still enforces the queueRevision
+                    // guard, so a genuine queue mutation is never stale-served.
+                    if (!refreshRequested && !verboseMissions) {
                         const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
                             requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
                             allowStalePending: true,
@@ -145,14 +225,16 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                     .catch(() => {})
                                     .finally(() => { ctx.swrRefreshInFlight.delete(meshId); });
                             }
+                            const returned = await attachLiveOnlyExtras(staleStatus);
                             logRepoMeshStatusDebug('return_stale_swr', {
                                 meshId,
                                 command: 'mesh_status',
                                 refreshRequested,
+                                pendingCoordinatorEventCount,
                                 durationMs: Date.now() - startedAtMs,
-                                summary: summarizeRepoMeshStatusDebug(staleStatus),
+                                summary: summarizeRepoMeshStatusDebug(returned),
                             });
-                            return staleStatus;
+                            return returned;
                         }
                     }
                     const refreshReason = refreshRequested
