@@ -372,6 +372,12 @@ export interface SeqscribeStatusSummary {
         collectorUnavailable: number;
         /** Collector returned null — source not ready. */
         sourcePending: number;
+        /**
+         * Collector threw. Kept separate from `sourcePending` because the
+         * internal collector returns null on its healthy path too, so without
+         * this a collect leg that fails every tick reads as an idle session.
+         */
+        collectFailed: number;
     };
 }
 
@@ -414,6 +420,7 @@ export interface SummarizeOptions {
         emptyGuarded?: number;
         collectorUnavailable?: number;
         sourcePending?: number;
+        collectFailed?: number;
     };
     /**
      * §8 unit 2 transcript parity counters. Omitted → reported as never-run.
@@ -580,6 +587,7 @@ export function summarizeSeqscribeStats(
                           emptyGuarded: opts.transcript.emptyGuarded ?? 0,
                           collectorUnavailable: opts.transcript.collectorUnavailable ?? 0,
                           sourcePending: opts.transcript.sourcePending ?? 0,
+                          collectFailed: opts.transcript.collectFailed ?? 0,
                       },
                   }
                 : {}),

@@ -856,6 +856,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                                   emptyGuarded: transcriptCounters.emptyGuarded,
                                   collectorUnavailable: transcriptCounters.collectorUnavailable,
                                   sourcePending: transcriptCounters.sourcePending,
+                                  collectFailed: transcriptCounters.collectFailed,
                               },
                           }
                         : {}),
@@ -1104,10 +1105,28 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                 collectObservation: async (sessionId: string) => {
                     try {
                         await commandHandler.handle('read_chat', { targetSessionId: sessionId });
-                    } catch {
-                        /* best-effort pull — a failed internal read_chat just means
-                           this markDirty tick found nothing fresh */
+                    } catch (error: any) {
+                        // A throw here is NOT the same thing as "nothing fresh". The
+                        // nested-push design means this collector returns null on the
+                        // healthy path too (see the comment on the returned null below),
+                        // so swallowing the throw made a permanently failing internal
+                        // read indistinguishable from a normal idle daemon — both just
+                        // bumped `sourcePending`. Log it and rethrow: `runPull` counts
+                        // a throwing collector as `collectFailed` (never `sourcePending`)
+                        // and still settles, so this stays best-effort for the pull loop
+                        // while becoming visible in the counters.
+                        LOG.warn(
+                            'Seqscribe',
+                            `transcript projection internal read_chat failed session=${sessionId.length <= 8 ? sessionId : `${sessionId.slice(0, 8)}…`}: ${error?.message || String(error)}`,
+                        );
+                        throw error;
                     }
+                    // Returning null is correct on BOTH paths: on success the read's
+                    // own choke point has already pushed the observation nested (the
+                    // OWN in-flight guard queues it into `pendingObservation`, which
+                    // `settle()` publishes right after this pull returns), and on
+                    // failure there is nothing to hand back. `runPull` distinguishes
+                    // the two via the failure counter it stamps from this signal.
                     return null;
                 },
                 onOversize: (sessionId) => {

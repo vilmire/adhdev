@@ -40,7 +40,7 @@ function topic(over: Partial<NodeStats['topics'][string]> = {}): NodeStats['topi
 
 const STATS: NodeStats = { topics: { 'assistant.journal': topic() }, peers: [] };
 
-/** The full nine-field shape `getCounters()` returns. */
+/** The full shape `getCounters()` returns. */
 const FULL_COUNTERS = {
     active: true,
     published: 12,
@@ -52,6 +52,7 @@ const FULL_COUNTERS = {
     emptyGuarded: 3,
     collectorUnavailable: 2,
     sourcePending: 5,
+    collectFailed: 7,
 };
 
 describe('transcript counter observability', () => {
@@ -80,6 +81,7 @@ describe('transcript counter observability', () => {
             emptyGuarded: 3,
             collectorUnavailable: 2,
             sourcePending: 5,
+            collectFailed: 7,
         });
     });
 
@@ -127,6 +129,7 @@ describe('transcript counter observability', () => {
         });
         const detail = summary.transcriptCounterDetail!;
         expect(Object.keys(detail).sort()).toEqual([
+            'collectFailed',
             'collectorUnavailable',
             'emptyGuarded',
             'ptyDirtyCoalesced',

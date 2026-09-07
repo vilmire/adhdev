@@ -124,3 +124,80 @@ describe('native-history session — internal collector publishes transcript rev
         expect(service.getCounters().deduped).toBe(5);
     });
 });
+
+/**
+ * Companion regression for the FAILURE branch of the same collector.
+ *
+ * The collector in `boot/daemon-lifecycle.ts` used to swallow a throwing
+ * internal `read_chat` in a bare `catch {}` whose comment claimed the throw
+ * "just means this markDirty tick found nothing fresh". That equivalence was
+ * false: because the collector returns null on its HEALTHY path too, both
+ * outcomes landed on `sourcePending`, so a collect leg failing on every tick
+ * was indistinguishable from a normal idle daemon — and with no log line
+ * either, it was unobservable on every surface.
+ *
+ * Injection check: delete the `throw error;` from the lifecycle collector's
+ * catch (or revert the `!collectThrew` guard in `runPull`) and the first case
+ * below goes red — `collectFailed` falls to 0 and `sourcePending` rises
+ * instead.
+ */
+function setupThrowing(fail: () => boolean) {
+    const published: Published[] = [];
+    const service = configureTranscriptProjection({
+        daemonId: () => 'daemon_test',
+        writerId: () => 'writer_test',
+        epoch: 'epoch_test',
+        // The lifecycle collector's real shape AFTER the fix: log-and-rethrow
+        // rather than swallow, so the publisher can count the failure.
+        collectObservation: async (sessionId: string) => {
+            if (fail()) throw new Error('internal read_chat failed');
+            buildReadChatCommandResult(
+                {
+                    status: 'generating',
+                    messages: [msg('recovered')],
+                    debugReadChat: { provider: 'claude-cli' },
+                    messageSource: { selected: 'native-history', coverage: { ptyMessagesSuppressed: true } },
+                },
+                { targetSessionId: sessionId },
+            );
+            return null;
+        },
+        publishRevision: async (sessionId, encoded) => {
+            published.push({ sessionId, revision: encoded.begin.revision });
+        },
+    } as any);
+    return { service: service!, published };
+}
+
+describe('native-history session — internal collector FAILURE is observable (real path)', () => {
+    it('★ a failing internal read_chat counts as collectFailed, never as sourcePending', async () => {
+        const { service, published } = setupThrowing(() => true);
+
+        service.markDirty('sess-collect-fail', 'pty_output');
+        await settle();
+
+        const counters = service.getCounters();
+        expect(counters.collectFailed).toBe(1);
+        expect(counters.sourcePending).toBe(0);
+        expect(published).toHaveLength(0);
+    });
+
+    it('★ recovers: a later healthy tick still publishes after a failed one', async () => {
+        let failing = true;
+        const { service, published } = setupThrowing(() => failing);
+
+        service.markDirty('sess-collect-recover', 'pty_output');
+        await settle();
+        expect(service.getCounters().collectFailed).toBe(1);
+        expect(published).toHaveLength(0);
+
+        // The failure must not wedge the session: `runPull`'s `finally` still
+        // reaches `settle()`, clearing `inFlight` so the next trigger is admitted.
+        failing = false;
+        service.markDirty('sess-collect-recover', 'pty_output');
+        await settle();
+
+        expect(published).toHaveLength(1);
+        expect(service.getCounters().collectFailed).toBe(1);
+    });
+});

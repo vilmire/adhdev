@@ -174,6 +174,16 @@ export interface TranscriptProjectionCounters {
     collectorUnavailable: number;
     /** `collectObservation` returned `null` (source not ready — safety-net poll found nothing new). */
     sourcePending: number;
+    /**
+     * `collectObservation` threw. Split out of `sourcePending` deliberately:
+     * that counter conflates "collector ran fine and had nothing new" with the
+     * healthy nested-push path (the internal collector returns null even on
+     * success), so a collector failing on EVERY tick was indistinguishable from
+     * a normal idle daemon. Only this counter rising means the collect leg is
+     * actually broken. Mirrors how `publishFailed` is kept separate from
+     * `published`.
+     */
+    collectFailed: number;
     /** PTY dirty triggers collapsed behind the per-session throttle window. */
     ptyDirtyCoalesced: number;
 }
@@ -188,6 +198,7 @@ function freshCounters(): TranscriptProjectionCounters {
         dropped: 0,
         collectorUnavailable: 0,
         sourcePending: 0,
+        collectFailed: 0,
         ptyDirtyCoalesced: 0,
     };
 }
@@ -440,7 +451,24 @@ export class TranscriptProjectionService {
     private async runPull(sessionId: string): Promise<void> {
         try {
             const collector = this.deps.collectObservation;
-            const collected = collector ? await collector(sessionId) : null;
+            let collected: TranscriptObservationCollectResult | null = null;
+            let collectThrew = false;
+            if (collector) {
+                try {
+                    collected = await collector(sessionId);
+                } catch (error: any) {
+                    // A throwing collector is a distinct condition from an empty
+                    // one — see `collectFailed`. Swallowing it into `sourcePending`
+                    // made a permanently broken collect leg look like an idle
+                    // session. Still non-fatal: the `finally` below must settle.
+                    collectThrew = true;
+                    this.counters.collectFailed++;
+                    LOG.warn(
+                        'Seqscribe',
+                        `transcript projection collect failed session=${redactSessionId(sessionId)}: ${error?.message || String(error)}`,
+                    );
+                }
+            }
             // Stamped whether or not the collector produced anything: the
             // collect leg is the file read + normalization, and its cost is the
             // same work regardless of whether it found a new revision. Recording
@@ -450,7 +478,9 @@ export class TranscriptProjectionService {
             if (ctx) this.latency.recordStage('trigger_to_collect', this.latency.now() - ctx.startedAt);
             if (collected) {
                 await this.publishObservation(sessionId, collected.observation, collected.verifiedClear ?? false);
-            } else {
+            } else if (!collectThrew) {
+                // Only a clean "nothing new" bumps sourcePending; the failure case
+                // was already counted as collectFailed above.
                 this.counters.sourcePending++;
             }
         } finally {
