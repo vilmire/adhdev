@@ -102166,6 +102166,21 @@ ${marker}`,
           sendMessageWithDisposition(text, bracketedPaste) {
             return this.handleSendMessage(text, bracketedPaste);
           }
+          /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
+          claimQueuedSends(text) {
+            const before = this.pendingSends.length;
+            if (before === 0) return 0;
+            this.pendingSends = this.pendingSends.filter((s2) => s2.text !== text);
+            const claimed = before - this.pendingSends.length;
+            if (claimed > 0) {
+              this.recentSendHashes.delete(hashSendText(text));
+              LOG.info(
+                "FsmDriver",
+                `[${this.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery (len=${text.length}, remaining=${this.pendingSends.length})`
+              );
+            }
+            return claimed;
+          }
           /** Forward runtime metadata to the terminal transport so mesh binding
            *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
            *  the session registry. Not a DashboardCommand — this is a control-plane
@@ -108055,6 +108070,15 @@ ${text}` : text;
               return { status: "delivered" };
             }
             this.driver.dispatch({ kind: "send_message", text, bracketedPaste: _opts?.bracketedPaste });
+          }
+          /**
+           * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
+           * FIFO so this caller becomes its only delivery route. See
+           * ISpecDriver.claimQueuedSends for why the interrupt path needs it.
+           */
+          claimQueuedSends(text) {
+            if (typeof this.driver.claimQueuedSends !== "function") return 0;
+            return this.driver.claimQueuedSends(text);
           }
           getStatus(_options) {
             const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
@@ -116517,12 +116541,20 @@ ${rawInput}` : rawInput;
     function sleep2(ms) {
       return new Promise((resolve33) => setTimeout(resolve33, ms));
     }
-    async function waitForIdleAfterInterrupt(adapter, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS) {
-      const deadline = Date.now() + timeoutMs;
+    async function waitForIdleAfterInterrupt(adapter, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
+      const startedAt = Date.now();
+      const deadline = startedAt + timeoutMs;
+      const secondPressAt = options?.secondPress ? startedAt + (options.secondPressAfterMs ?? INTERRUPT_SECOND_PRESS_DELAY_MS) : Number.POSITIVE_INFINITY;
+      let pressed = false;
       for (; ; ) {
         const status = readStatus(adapter);
         if (status !== void 0 && !BUSY_STATUSES2.has(status)) return true;
-        if (Date.now() >= deadline) return false;
+        const now = Date.now();
+        if (now >= deadline) return false;
+        if (!pressed && now >= secondPressAt) {
+          pressed = true;
+          options?.secondPress?.();
+        }
         await sleep2(Math.min(pollMs, Math.max(0, deadline - Date.now())));
       }
     }
@@ -116539,20 +116571,29 @@ ${rawInput}` : rawInput;
         LOG.warn("SendNow", `[${adapter.cliType}] interrupt refused: ${interrupted.reason}`);
         return { ok: false, reason: interrupted.reason, message: interrupted.message };
       }
-      const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs);
+      const claimed = typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
+      if (claimed > 0) {
+        LOG.info("SendNow", `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body \u2014 this call is now its only delivery route`);
+      }
+      const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+        secondPress: interrupted.confidence === "proven" ? () => {
+          void adapter.interruptTurn?.();
+        } : void 0,
+        secondPressAfterMs: options?.secondPressAfterMs
+      });
       if (!wentIdle) {
-        LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms`);
+        LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
         return {
           ok: false,
           reason: "idle_timeout",
-          message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. It is still queued; try again in a moment.`
+          message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. Nothing was sent \u2014 send it again when the agent settles.`
         };
       }
       const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0);
       const queued = sendResult?.status === "queued";
       LOG.info(
         "SendNow",
-        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) \u2192 idle \u2192 ${queued ? "requeued" : "delivered"}`
+        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) \u2192 idle \u2192 ${queued ? "requeued" : "delivered"} (claimed=${claimed})`
       );
       return {
         ok: true,
@@ -116564,13 +116605,15 @@ ${rawInput}` : rawInput;
     }
     var INTERRUPT_IDLE_TIMEOUT_MS;
     var INTERRUPT_IDLE_POLL_MS;
+    var INTERRUPT_SECOND_PRESS_DELAY_MS;
     var BUSY_STATUSES2;
     var init_interrupt_and_deliver = __esm2({
       "src/commands/interrupt-and-deliver.ts"() {
         "use strict";
         init_logger();
-        INTERRUPT_IDLE_TIMEOUT_MS = 8e3;
+        INTERRUPT_IDLE_TIMEOUT_MS = 15e3;
         INTERRUPT_IDLE_POLL_MS = 120;
+        INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
         BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
       }
     });

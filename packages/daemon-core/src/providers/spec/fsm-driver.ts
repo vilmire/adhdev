@@ -156,6 +156,24 @@ export interface ISpecDriver {
      * implementing ISpecDriver need not provide it.
      */
     sendMessageWithDisposition?(text: string, bracketedPaste?: boolean): SendDisposition;
+    /**
+     * SEND-NOW-DOUBLE-SEND: remove every queued copy of `text` from the
+     * pendingSends FIFO and report how many were taken out, so exactly ONE
+     * path can still write that body.
+     *
+     * Exists because the interrupt path (commands/interrupt-and-deliver.ts) is a
+     * second delivery route for a body the driver may ALREADY hold queued: the
+     * dashboard's "Send now" is pressed on a bubble that got there by being
+     * queued in the first place. Measured live (2026-09-07): interruptAndDeliver
+     * timed out waiting for busy→idle and reported "not delivered, still
+     * queued", and 995ms later drainPendingSends wrote that very body — the
+     * caller was told to retry a message that had in fact been sent.
+     *
+     * Claiming the body up front makes the two routes one: whatever
+     * interruptAndDeliver reports is the whole truth about that text. Optional
+     * so test doubles implementing ISpecDriver need not provide it.
+     */
+    claimQueuedSends?(text: string): number;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -848,6 +866,27 @@ export class FsmDriver implements ISpecDriver {
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
     sendMessageWithDisposition(text: string, bracketedPaste?: boolean): SendDisposition {
         return this.handleSendMessage(text, bracketedPaste);
+    }
+
+    /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
+    claimQueuedSends(text: string): number {
+        const before = this.pendingSends.length;
+        if (before === 0) return 0;
+        this.pendingSends = this.pendingSends.filter(s => s.text !== text);
+        const claimed = before - this.pendingSends.length;
+        if (claimed > 0) {
+            // Also clear the pre-write duplicate gate for this body. The claimer
+            // is about to re-send the SAME text, and isDuplicateResend would
+            // otherwise suppress it as a redelivery of the copy we just removed —
+            // turning the claim into silent data loss instead of a fix.
+            this.recentSendHashes.delete(hashSendText(text));
+            LOG.info(
+                'FsmDriver',
+                `[${this.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery `
+                + `(len=${text.length}, remaining=${this.pendingSends.length})`,
+            );
+        }
+        return claimed;
     }
 
     /** Forward runtime metadata to the terminal transport so mesh binding
