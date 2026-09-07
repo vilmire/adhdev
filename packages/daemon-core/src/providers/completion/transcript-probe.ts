@@ -10,6 +10,7 @@
  * must never wedge status or completion.
  */
 
+import * as os from 'os';
 import * as fs from 'fs';
 import { getDatabaseSync } from '../cli-provider-status-helpers.js';
 
@@ -78,6 +79,58 @@ export function querySqliteSessionId(
         return sessionId || null;
     } catch {
         closeSqliteProbeCache(cache);
+        return null;
+    }
+}
+
+/** The narrow surface of CliProviderInstance the session-id probe reads. */
+export interface SessionIdProbeHost {
+    workingDir: string;
+    startedAt: number;
+    sqliteProbeCache: ReturnType<typeof createSqliteProbeCache>;
+}
+
+/**
+ * Resolve this session's provider session id by querying the provider's own
+ * SQLite store (verbatim move out of CliProviderInstance — M-FILE-SIZE-DEBT
+ * decomposition). Scoped to rows created in this workspace at/after this
+ * instance's start (minus a 60s skew allowance) so a sibling session's row is
+ * never adopted. Fails closed to null on any miss or throw.
+ */
+export function probeSessionIdFromConfig(host: SessionIdProbeHost, probe: {
+    dbPath: string;
+    query: string;
+    timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
+}): string | null {
+    const resolvedDbPath = probe.dbPath.replace(/^~/, os.homedir());
+    // Skip existsSync if we already confirmed DB is missing (cache for 10s)
+    const now = Date.now();
+    if (host.sqliteProbeCache.missingUntil > now) return null;
+    if (!fs.existsSync(resolvedDbPath)) {
+        host.sqliteProbeCache.missingUntil = now + 10_000;
+        return null;
+    }
+
+    const directories = probeDirectoriesFor(host.workingDir);
+    const minCreatedAt = Math.max(0, host.startedAt - 60_000);
+    const tsFormat = probe.timestampFormat || 'unix_ms';
+
+    let timestampParam: string | number;
+    if (tsFormat === 'unix_s') {
+        timestampParam = Math.floor(minCreatedAt / 1000);
+    } else if (tsFormat === 'iso') {
+        timestampParam = new Date(minCreatedAt).toISOString().slice(0, 19).replace('T', ' ');
+    } else {
+        timestampParam = minCreatedAt;
+    }
+
+    // Build query: replace {dirs} with SQL placeholder list
+    const placeholders = sqlPlaceholderList(directories.length);
+    const query = probe.query.replace('{dirs}', placeholders);
+
+    try {
+        return querySqliteSessionId(host.sqliteProbeCache, resolvedDbPath, query, [...directories, timestampParam]);
+    } catch {
         return null;
     }
 }

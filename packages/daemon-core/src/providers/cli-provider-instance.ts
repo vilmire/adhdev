@@ -5,13 +5,11 @@
  * collectCliData() + status transition logic from daemon-status.ts moved here.
  */
 
-import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import * as fs from 'fs';
 import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
-import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
+import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
 import {
@@ -44,40 +42,32 @@ import type { SignalSnapshot } from './spec/signal-envelope.js';
 import { createCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
-import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
+import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
-import { traceMeshEventStage, traceMeshEventDrop } from '../mesh/mesh-event-trace.js';
 import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
 import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
-import { mergePendingMeshTaskAttachment, meshTaskAttachments, popCompletedMeshTaskAttachment, pushMeshTaskAttachment, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
+import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
-import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, looksLikeActiveApprovalPromptText, normalizeApprovalLabel } from './approval-utils.js';
+import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, normalizeApprovalLabel } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
-import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
-import { normalizeProviderSessionId } from './provider-session-id.js';
 import {
     antigravityOwnerToken,
-    claimAntigravityConversation,
     releaseAntigravityOwner,
 } from './native-history/antigravity-claim-registry.js';
 import {
     releaseTranscriptOwner,
     transcriptClaimOwnerToken,
 } from './native-history/transcript-claim-registry.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, readChatMessageTimestampMs } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, readChatMessageTimestampMs } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
-import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
 import {
-    isIdleStatus,
-    getMessageTime,
-    hasNonEmptyCliModalButtons,
     isCliGeneratingLikeStatus,
     computeTurnAnchoredDurationMs,
     getDatabaseSync,
@@ -85,23 +75,20 @@ import {
     waitForCliAdapterReady,
 } from './cli-provider-status-helpers.js';
 import {
-    STATUS_HYDRATION_TAIL_LIMIT,
     COMPLETED_FINALIZATION_RETRY_MS,
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
     MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
     NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
-    ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_HARD_CAP_MS,
     TERMINAL_BLOCK_HARD_CAP_MS,
     BACKGROUND_TASK_HOLD_MAX_MS,
     USER_INPUT_ACK_DEDUP_WINDOW_MS,
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
-    TERMINAL_MESH_EVENTS,
 } from './cli-provider-instance-types.js';
-import { decideCompletionPreflight, decideCompletionVerdict, evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader, type EvidenceSource } from './completion/completion-engine.js';
-import { closeSqliteProbeCache, createSqliteProbeCache, probeDirectoriesFor, querySqliteSessionId, sqlPlaceholderList } from './completion/transcript-probe.js';
+import { evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader } from './completion/completion-engine.js';
+import { closeSqliteProbeCache, createSqliteProbeCache, probeSessionIdFromConfig, type SessionIdProbeHost } from './completion/transcript-probe.js';
 import { resetMeshStallEpisode, runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
 import * as approvalGate from './completion/approval-gate.js';
 import type { ApprovalGateHost } from './completion/approval-gate.js';
@@ -123,10 +110,16 @@ import type {
     CompletionFinalAssistantEvidence,
     ExternalTranscriptProbe,
 } from './cli-provider-instance-types.js';
-import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
-import { getEffectDedupKey, formatApprovalRequestMessage, formatMarkerTimestamp } from './cli-provider-effect-format.js';
+import { formatApprovalRequestMessage, formatMarkerTimestamp } from './cli-provider-effect-format.js';
 import { resolveProviderAutoApproveMode, type ResolvedAutoApproveMode } from './auto-approve-modes.js';
+import * as historySync from './cli-provider-history-sync.js';
+import * as completionDiagnostics from './completion/completion-diagnostics.js';
+import * as runtimeMessages from './cli-provider-runtime-messages.js';
+import * as stateProjection from './cli-provider-state-projection.js';
+import * as providerEvents from './cli-provider-events.js';
+import * as completionFlush from './completion/completion-flush.js';
+import * as meshAssignment from './cli-provider-mesh-assignment.js';
 
 // Re-export moved public symbols so existing importers (index.ts, tests) keep
 // their `./cli-provider-instance.js` path. Pure move — no behavior change.
@@ -690,317 +683,11 @@ export class CliProviderInstance implements ProviderInstance {
         query: string;
         timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
     }): string | null {
-        const resolvedDbPath = probe.dbPath.replace(/^~/, os.homedir());
-        // Skip existsSync if we already confirmed DB is missing (cache for 10s)
-        const now = Date.now();
-        if (this.sqliteProbeCache.missingUntil > now) return null;
-        if (!fs.existsSync(resolvedDbPath)) {
-            this.sqliteProbeCache.missingUntil = now + 10_000;
-            return null;
-        }
-
-        const directories = probeDirectoriesFor(this.workingDir);
-        const minCreatedAt = Math.max(0, this.startedAt - 60_000);
-        const tsFormat = probe.timestampFormat || 'unix_ms';
-
-        let timestampParam: string | number;
-        if (tsFormat === 'unix_s') {
-            timestampParam = Math.floor(minCreatedAt / 1000);
-        } else if (tsFormat === 'iso') {
-            timestampParam = new Date(minCreatedAt).toISOString().slice(0, 19).replace('T', ' ');
-        } else {
-            timestampParam = minCreatedAt;
-        }
-
-        // Build query: replace {dirs} with SQL placeholder list
-        const placeholders = sqlPlaceholderList(directories.length);
-        const query = probe.query.replace('{dirs}', placeholders);
-
-        try {
-            return querySqliteSessionId(this.sqliteProbeCache, resolvedDbPath, query, [...directories, timestampParam]);
-        } catch {
-            return null;
-        }
+        return probeSessionIdFromConfig(this as unknown as SessionIdProbeHost, probe);
     }
 
     getState(): ProviderState {
-        // TODO(phase5-sandbox): JS override scripts (detectStatus, parseApproval,
-        // parseSession) are currently invoked by CliScriptRunner.invoke() via direct
-        // function calls — the scripts run in the daemon process with full Node.js
-        // access and no resource limits.
-        //
-        // When Phase 5 lands, CliScriptRunner should route these calls through a
-        // SandboxedScriptRunner (see providers/sdk/v1/sandbox/script-runner.ts) so
-        // that each call gets a fresh isolated-vm context with a 50 ms CPU limit and
-        // a 32 MB memory cap.  The execution path to change is:
-        //   CliScriptRunner.invoke() → SandboxedScriptRunner.run(scriptSource, context)
-        //
-        // This getState() call-site is NOT where the change goes — the wiring belongs
-        // in cli-script-runner.ts (CliScriptRunner.detectStatus / parseApproval /
-        // parseSession), with provider-loader.ts updated to store script source strings
-        // alongside the loaded function references for extended-legacy providers.
-        // AUTOAPPROVE-FLAP-INBOX-MISSING: apply the same sticky-approval overlay the
-        // FSM path uses so the status this getState() surfaces to the mesh probe (and
-        // thus mesh_active_work → the pending-approval inbox) stays waiting_approval
-        // across a busy flap frame, instead of momentarily reading generating (count:0).
-        const adapterStatus = this.stabilizeFlappingApprovalStatus(this.adapter.getStatus());
-        if (Object.prototype.hasOwnProperty.call(adapterStatus, 'activeInteractivePrompt')) {
-            this.activeInteractivePrompt = adapterStatus.activeInteractivePrompt ?? null;
-        }
-        let parsedStatus: any = null;
-        let parseErrorMessage: string | undefined;
-        if (typeof this.adapter.getScriptParsedStatus === 'function') {
-            try {
-                parsedStatus = this.adapter.getScriptParsedStatus() || null;
-                const parsedErrorMessage = typeof parsedStatus?.errorMessage === 'string' && parsedStatus.errorMessage.trim()
-                    ? parsedStatus.errorMessage.trim()
-                    : undefined;
-                const parsedErrorReason = typeof parsedStatus?.errorReason === 'string' && parsedStatus.errorReason.trim()
-                    ? parsedStatus.errorReason.trim() as ProviderErrorReason
-                    : undefined;
-                this.errorMessage = parsedErrorMessage;
-                this.errorReason = parsedErrorReason;
-            } catch (error: any) {
-                parseErrorMessage = error?.message || String(error);
-                this.errorMessage = parseErrorMessage;
-                this.errorReason = 'parse_error';
-            }
-        } else {
-            this.errorMessage = undefined;
-            this.errorReason = undefined;
-        }
-        const adapterProviderSessionId = normalizeProviderSessionId(
-            this.provider,
-            typeof adapterStatus?.providerSessionId === 'string' ? adapterStatus.providerSessionId : '',
-        );
-        const nowMs = Date.now();
-        // STATUS-MISMATCH: maybeAutoApproveStatus still runs for its side effects (settle gate,
-        // resolveModal fire), but the SURFACE mask is dropped once the episode has stalled past
-        // AUTO_APPROVE_MASK_STALL_MS — otherwise a never-settling auto-approve hides the worker's
-        // waiting_approval + modal from read_chat/mesh_status/dashboard forever.
-        const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, nowMs)
-            && !this.autoApproveMaskStalled(nowMs);
-        const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
-        let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
-            ? 'error'
-            : (autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status);
-        // getState() must agree with the status the FSM-driven detectStatusTransition()
-        // already committed to lastStatus. The adapter's own status is authoritative; we do
-        // not second-guess it with native-transcript shape. Only reconcile a generating-like
-        // read down to idle when our own lastStatus has already flipped idle (avoids a
-        // perpetual dashboard spinner during the brief window before the next getStatus()).
-        if (isCliGeneratingLikeStatus(visibleStatus) && this.lastStatus === 'idle') {
-            visibleStatus = 'idle';
-        }
-        const runtime = this.adapter.getRuntimeMetadata();
-        this.maybeAppendRuntimeRecoveryMessage(runtime);
-        let parsedMessages = Array.isArray(parsedStatus?.messages)
-            ? parsedStatus.messages
-            : [];
-        const parsedProviderSessionId = normalizeProviderSessionId(
-            this.provider,
-            typeof parsedStatus?.providerSessionId === 'string' ? parsedStatus.providerSessionId : '',
-        );
-        const suppressFreshLaunchStartupReplay = this.shouldSuppressFreshLaunchStartupReplay(
-            parsedMessages,
-            parsedStatus,
-            adapterStatus,
-            parsedProviderSessionId,
-        );
-        if (adapterProviderSessionId && !suppressFreshLaunchStartupReplay) {
-            this.promoteProviderSessionId(adapterProviderSessionId);
-        }
-        if (parsedProviderSessionId && !suppressFreshLaunchStartupReplay) {
-            this.promoteProviderSessionId(parsedProviderSessionId);
-        }
-        if (suppressFreshLaunchStartupReplay) {
-            parsedMessages = [];
-        }
-        // Adapter runtime metadata is transport-owned and is not guaranteed to
-        // identify this conversation. Spec adapters historically exposed the
-        // provider spec id (for example "codex-cli") as runtimeId, which made
-        // concurrent sessions share one activeChat identity until their native
-        // provider session ids were discovered.
-        const activeChatId = this.providerSessionId || this.instanceId;
-        const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
-            ? Math.max(0, Number(parsedStatus.historyMessageCount))
-            : null;
-        if (historyMessageCount !== null) {
-            parsedMessages = historyMessageCount > 0
-                ? parsedMessages.slice(-historyMessageCount)
-                : [];
-        }
-        const mergedMessages = mergeConversationMessages(this.runtimeMessages, this.parsedIngestTimestamps.stamp(parsedMessages));
-        const canonicalBackedHistory = this.shouldHydrateExistingProviderHistory()
-            ? this.syncCanonicalSavedHistoryIfNeeded()
-            : false;
-        const statusMessages: any[] = canonicalBackedHistory && this.lastPersistedHistoryMessages.length > 0
-            ? this.lastPersistedHistoryMessages.map((message) => ({
-                role: message.role,
-                content: message.content,
-                kind: message.kind,
-                senderName: message.senderName,
-                receivedAt: message.receivedAt,
-            }))
-            : mergedMessages;
-
-        // purpose: 'display-tail' (zero-read) — Dashboard-tail repair (native-source
-        // providers, e.g. antigravity): the assistant answer lives only in native-history,
-        // so the PTY-parsed statusMessages end on the user prompt / auto-approve system
-        // lines and the snapshot's preview / lastMessageRole / completionMarker never see
-        // the answer — the session looks stuck on the user turn. We already cached the
-        // real final assistant summary at completion time (lastCompletionSummary), so
-        // append it as the trailing assistant bubble when the current tail has no
-        // assistant message at/after it. Purely additive to the status view; no per-tick
-        // native read, no effect on providers whose PTY carries the assistant (they
-        // surface it themselves and the guard below is a no-op).
-        //
-        // authority-ok: this is a DISPLAY-ONLY tail repair, never a completion/stall/
-        // redrive verdict — it reads the pre-cached summary (zero native read) and only
-        // paints the status view. It keys off the adapter's runtime chatMessagesOwnedExternally
-        // capability (not a class predicate); a completion decision is never taken here.
-        const adapterOwnsMessagesElsewhereForTail = (this.adapter as any)?.chatMessagesOwnedExternally === true;
-        if (adapterOwnsMessagesElsewhereForTail && this.lastCompletionSummary) {
-            const summary = this.lastCompletionSummary;
-            let hasTrailingAssistant = false;
-            for (let i = statusMessages.length - 1; i >= 0; i -= 1) {
-                const m = statusMessages[i] as { role?: string; kind?: string; receivedAt?: number };
-                const role = typeof m?.role === 'string' ? m.role : '';
-                if (role === 'system') continue;
-                if (typeof m?.kind === 'string' && m.kind === 'tool') continue;
-                // First non-system/non-tool message from the tail: if it's already an
-                // assistant reply not older than our cached summary, the tail is fine.
-                hasTrailingAssistant = role === 'assistant'
-                    && typeof m?.receivedAt === 'number'
-                    && m.receivedAt >= summary.receivedAt - 1000;
-                break;
-            }
-            if (!hasTrailingAssistant) {
-                statusMessages.push({
-                    role: 'assistant',
-                    content: summary.content,
-                    kind: 'standard',
-                    receivedAt: summary.receivedAt,
-                });
-            }
-        }
-
-        const dirName = workingDirBasename(this.workingDir);
-        const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
-            ? parsedStatus.status.trim()
-            : undefined;
-        const suppressStaleParsedBusyStatus = this.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus);
-
-        if (parsedMessages.length > 0) {
-            const shouldSkipReplayPersist =
-                this.suppressIdleHistoryReplay
-                && adapterStatus.status === 'idle'
-                && parsedStatus?.status === 'idle';
-            let messagesToSave = parsedMessages;
-            if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'no_progress' || parsedChatStatus === 'long_generating')) {
-                const lastIdx = messagesToSave.length - 1;
-                if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
-                    messagesToSave = messagesToSave.slice(0, lastIdx);
-                }
-            }
-            const normalizedMessagesToSave = messagesToSave.map((message: PersistableCliHistoryMessage & { timestamp?: number }) => ({
-                role: message.role,
-                content: flattenContent(message.content),
-                kind: typeof message.kind === 'string' ? message.kind : undefined,
-                senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
-                receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
-            }));
-            if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
-                const incrementalMessages = buildIncrementalHistoryAppendMessages(this.lastPersistedHistoryMessages, normalizedMessagesToSave);
-                if (incrementalMessages.length > 0) {
-                    this.historyWriter.appendNewMessages(
-                        this.type,
-                        incrementalMessages,
-                        parsedStatus?.title || dirName,
-                        this.instanceId,
-                        this.providerSessionId,
-                    );
-                }
-            }
-            if (!canonicalBackedHistory) {
-                this.lastPersistedHistoryMessages = normalizedMessagesToSave;
-            }
-        }
-
-        this.applyProviderResponse(
-            suppressFreshLaunchStartupReplay && parsedStatus && typeof parsedStatus === 'object'
-                ? { ...parsedStatus, providerSessionId: undefined }
-                : parsedStatus,
-            { phase: 'immediate' },
-        );
-        const surface = resolveProviderStateSurface({
-            summaryMetadata: this.summaryMetadata as any,
-            controlValues: this.controlValues,
-        });
-        const activeChatStatus = parseErrorMessage
-            ? 'error'
-            : (autoApproveActive && parsedStatus?.status === 'waiting_approval') || autoApproveHoldIdle
-            ? 'generating'
-            : (adapterStatus.status !== 'idle'
-                ? visibleStatus
-                : (suppressStaleParsedBusyStatus ? visibleStatus : (parsedChatStatus || visibleStatus)));
-
-        // If an AskUserQuestion prompt is awaiting user input, overlay status as
-        // waiting_choice. This is distinct from waiting_approval (tool-use consent)
-        // — the engine's isWaitingForResponse state is unchanged, so completion
-        // tracking continues normally once the user responds.
-        const hasInteractivePrompt = !!this.activeInteractivePrompt;
-        const finalStatus = hasInteractivePrompt ? 'waiting_choice' : visibleStatus;
-        const finalChatStatus = hasInteractivePrompt ? 'waiting_choice' : activeChatStatus;
-
-        return {
-            type: this.type,
-            name: this.provider.name,
-            category: 'cli',
-            status: finalStatus,
-            mode: this.presentationMode,
-            activeChat: {
-                id: activeChatId,
-                title: parsedStatus?.title || dirName,
-                status: finalChatStatus,
-                messages: statusMessages,
-                activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                inputContent: '',
-            },
-            activeInteractivePrompt: this.activeInteractivePrompt,
-            workspace: this.workingDir,
-            instanceId: this.instanceId,
-            providerSessionId: this.providerSessionId,
-            lastUpdated: Date.now(),
-            settings: this.settings,
-            pendingEvents: this.flushEvents(),
-            runtime: runtime ? {
-                runtimeId: runtime.runtimeId,
-                runtimeKey: runtime.runtimeKey,
-                displayName: runtime.displayName,
-                workspaceLabel: runtime.workspaceLabel,
-                lifecycle: runtime.lifecycle ?? null,
-                surfaceKind: runtime.surfaceKind,
-                writeOwner: runtime.writeOwner || null,
-                attachedClients: runtime.attachedClients || [],
-                restoredFromStorage: runtime.restoredFromStorage === true,
-                recoveryState: runtime.recoveryState ?? null,
-            } : undefined,
-            resume: this.provider.resume,
-            controlValues: surface.controlValues,
-            providerControls: this.provider.controls,
-            messageInput: getEffectiveMessageInputSupport(this.provider),
-            summaryMetadata: surface.summaryMetadata as any,
-            errorMessage: this.errorMessage,
-            errorReason: this.errorReason,
-            // Restart idle-gate (mesh-restart collectBlockingSessions): a queued
-            // outbound coordinator message is restart-blocking, so the count must
-            // reach the daemon-wide state collection.
-            pendingOutboundCount: typeof adapterStatus.pendingOutboundCount === 'number'
-                ? adapterStatus.pendingOutboundCount
-                : undefined,
-        };
+        return stateProjection.buildProviderState(this as unknown as stateProjection.ProviderStateHost);
     }
 
     setPresentationMode(mode: 'terminal' | 'chat'): void {
@@ -1115,90 +802,11 @@ export class CliProviderInstance implements ProviderInstance {
      * match against.
      */
     attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
-        if (!assignment?.meshId) return;
-        // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
-        // attach so injectedTaskHasStartedGenerating() can require the producing turn to
-        // START after this point (rejecting the prior turn's stale native-history tail
-        // that would otherwise fire generating_completed before generating_started).
-        if (assignment.taskId && assignment.taskId.trim()) {
-            this.meshTaskInjectedAt = Date.now();
-            if (isWorkerMcpEnabled()) { this.meshTaskAttachmentHistory = meshTaskAttachments(this.meshTaskAttachmentHistory); const { droppedTaskId } = pushMeshTaskAttachment(this.meshTaskAttachmentHistory, { taskId: assignment.taskId, attemptId: assignment.attemptId, dispatchNonce: assignment.dispatchNonce, injectedAt: this.meshTaskInjectedAt }); if (droppedTaskId) LOG.warn('MeshTaskAttach', `[${this.instanceId}] turn-aware attachment history exceeded cap — dropped task ${droppedTaskId}.`); } // WORKER-MCP T2 precursor — mesh-task-attachment.ts
-        }
-        this.settings = {
-            ...this.settings,
-            meshNodeFor: assignment.meshId,
-            // WTCLAIM (A): track the bound node id under BOTH the active marker
-            // (meshNodeId, cleared on detach) and a sticky marker (meshLastNodeId,
-            // preserved across detach). The sticky marker lets a detached but still
-            // coordinator-owned session be re-picked ONLY for the SAME node it served
-            // — never auto-adopted for a sibling node (e.g. a cloned worktree) that
-            // shares this daemon. See isMeshOwnedDelegateSession's post-detach gate.
-            ...(assignment.nodeId ? { meshNodeId: assignment.nodeId, meshLastNodeId: assignment.nodeId } : {}),
-            ...(assignment.taskId ? { meshActiveTaskId: assignment.taskId } : {}),
-            // REDRIVE-DUP: task-level dispatch nonce, echoed on generating_started so the
-            // coordinator can reject a stale (reclaimed) dispatch. Cleared with meshActiveTaskId
-            // on detach so a subsequent unrelated turn never re-echoes a prior task's nonce.
-            ...(typeof assignment.dispatchNonce === 'number' ? { meshActiveDispatchNonce: assignment.dispatchNonce } : {}),
-            // TURN-LEDGER (Stage 5): the opaque attempt identity for this dispatch, echoed
-            // on lifecycle events so the coordinator's reducer correlates ACKs/completion
-            // proposals to (taskId, attemptId, session). Cleared with meshActiveTaskId on
-            // detach so a later unrelated turn never re-echoes a prior attempt.
-            ...(assignment.attemptId ? { meshActiveAttemptId: assignment.attemptId } : {}),
-            ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
-            // Session-level routing anchor: the originating coordinator session, so this
-            // worker's completion events route back to the exact session that dispatched it.
-            ...(assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}),
-        };
-        this.adapter.updateRuntimeSettings?.(this.settings);
+        meshAssignment.attachMeshAssignment(this as unknown as meshAssignment.MeshAssignmentHost, assignment);
     }
 
-    /**
-     * Clear a previously-attached mesh assignment after the task reaches a
-     * terminal state. Leaving meshNodeFor pinned would route this session's
-     * subsequent unrelated turns (e.g. ad-hoc dashboard chats) to the
-     * coordinator as if they were task completions.
-     *
-     * MESHID-DROP-ON-DETACH (Fix C): a coordinator-LAUNCHED worker session
-     * (launchedByCoordinator) holds its mesh membership (meshNodeFor / meshNodeId /
-     * meshCoordinatorDaemonId) at the SESSION level — set once at launch
-     * (mesh_launch_session / queue auto-launch), independent of any single task.
-     * The original detach wiped meshNodeFor + meshNodeId together with the
-     * task-level meshActiveTaskId, so the FIRST task completion stripped the
-     * membership and EVERY subsequent completion forwarded with meshId absent —
-     * resolveWorkerDelegateRouting fell to mesh_unresolved and the coordinator
-     * rejected the forward "meshId required". For a launched member we therefore
-     * clear ONLY the task-level marker (meshActiveTaskId) and preserve the
-     * session-level membership so its next task's completion still resolves.
-     * A task-less ad-hoc turn on a preserved-membership session is NOT misrouted:
-     * its completion carries no taskId and the session holds no active assignment,
-     * so the forwarder's WARMUPGAP guard skips the dispatch-row flip (it only
-     * injects a benign task-less notification). A NON-launched session (a plain CLI
-     * session adopted by mesh_send_task --direct, launchedByCoordinator falsy)
-     * keeps the original full clear so an ad-hoc session is never left pinned.
-     */
-    detachMeshAssignment(): void { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): restores a still-pending attachment onto the scalar; flag off is a no-op.
-        const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(this.meshTaskAttachmentHistory)) : undefined; if (!this.settings.meshNodeFor && !this.settings.meshActiveTaskId && !this.settings.meshNodeId) return;
-        // Session-level member: keep membership, drop only the task-level markers.
-        if (this.settings.launchedByCoordinator === true) {
-            if (!this.settings.meshActiveTaskId) return;
-            // REDRIVE-DUP: clear the task-level dispatch nonce with the task marker.
-            const { meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = this.settings;
-            void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
-            this.settings = mergePendingMeshTaskAttachment(rest, pending);
-            this.adapter.updateRuntimeSettings?.(this.settings);
-            return;
-        }
-        const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = this.settings;
-        void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
-        // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id
-        // (meshLastNodeId) so a later sessionless dispatch can re-adopt this idle
-        // session ONLY for the node it last served. Carry the id being cleared, or
-        // keep an already-present sticky marker if meshNodeId was absent.
-        const lastNodeId = (typeof meshNodeId === 'string' && meshNodeId.trim())
-            ? meshNodeId.trim()
-            : (typeof rest.meshLastNodeId === 'string' && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : undefined);
-        this.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
-        this.adapter.updateRuntimeSettings?.(this.settings);
+    detachMeshAssignment(): void {
+        meshAssignment.detachMeshAssignment(this as unknown as meshAssignment.MeshAssignmentHost);
     }
 
     /**
@@ -1927,145 +1535,26 @@ export class CliProviderInstance implements ProviderInstance {
         pending: CompletedDebouncePending;
         emittedAfterFinalizationTimeout: boolean;
     }): Record<string, unknown> {
-        let parsed: any = null;
-        let parseError: string | undefined;
-        try {
-            parsed = this.adapter.getScriptParsedStatus();
-        } catch (error: any) {
-            parseError = error?.message || String(error);
-        }
-
-        // FALSE-IDLE Defect 1c: turn-scope the diagnostic's evidence probe too. Passing
-        // pending.turnStartedAt makes completionHasFinalAssistantMessage reject a stale
-        // mid-turn bubble (predating the turn) just as the finalization gate did, so the
-        // diagnostic cannot credit finalAssistantPresent (or clear missing_final_assistant)
-        // off a bubble the gate already rejected. With no boundary this is unchanged.
-        const evidence = this.completionFinalAssistantEvidence(parsed?.messages, args.pending.turnStartedAt);
-        if (evidence.source === 'external-native') {
-            this.recordPendingTranscriptProbe(args.pending);
-        }
-        const visibleMessages = (Array.isArray(evidence.messages) ? evidence.messages : [])
-            .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
-        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
-        const lastVisibleRole = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : null;
-        const lastVisibleKind = typeof (lastVisible as any)?.kind === 'string' ? (lastVisible as any).kind : null;
-        const lastVisibleContentLength = lastVisible ? flattenContent(lastVisible.content).trim().length : 0;
-
-        // NOTIF Defect-B: when the live evidence probe momentarily yields no in-turn
-        // final assistant (source='unavailable'/external-native with present=false) but
-        // a prior poll already parsed and CACHED the real answer for this turn
-        // (lastCompletionSummary — the same value mesh_read_chat.summary surfaces),
-        // credit the cache as evidence. This flips finalAssistantPresent to true and
-        // records the cached source so the completion notification carries
-        // completion_diagnostic=present with the summary, instead of
-        // missing_final_assistant with an empty payload. Only ever UPGRADES a
-        // point-sample miss — a genuine present=true is unchanged, and an empty cache
-        // leaves the missing-evidence diagnostic exactly as before.
-        const cachedSummary = evidence.present ? '' : this.cachedInTurnCompletionSummaryContent(args.pending.turnStartedAt);
-        const creditedFromCache = !evidence.present && cachedSummary.length > 0;
-        const finalAssistantPresent = evidence.present || creditedFromCache;
-        const finalAssistantEvidenceSource = evidence.present
-            ? evidence.source
-            : (creditedFromCache ? 'cached-summary' : evidence.source);
-        // When the cached summary rescues the evidence, the turn is no longer
-        // "missing final assistant" — clear that blockReason so isMissingFinalAssistant‑
-        // Diagnostic()/isWeakCompletionEvidence() no longer flag it (both key off
-        // blockReason='missing_final_assistant' independently of finalAssistantPresent)
-        // and the coordinator log's formatCompletionMetadata reads
-        // completion_diagnostic=present (empty blockReason → 'present'). The ORIGINAL
-        // reason is preserved under originalBlockReason for diagnostics.
-        const clearMissingBlock = creditedFromCache && args.blockReason === 'missing_final_assistant';
-        const effectiveBlockReason = clearMissingBlock ? undefined : args.blockReason;
-
-        return {
-            providerType: this.type,
-            sessionId: this.instanceId,
-            providerSessionId: this.providerSessionId || null,
-            workspace: this.workingDir,
-            ...(effectiveBlockReason ? { blockReason: effectiveBlockReason } : {}),
-            ...(clearMissingBlock ? { originalBlockReason: args.blockReason } : {}),
-            emittedAfterFinalizationTimeout: args.emittedAfterFinalizationTimeout,
-            waitedMs: args.waitedMs,
-            maxWaitMs: COMPLETED_FINALIZATION_MAX_WAIT_MS,
-            adapterStatus: typeof args.latestStatus?.status === 'string' ? args.latestStatus.status : null,
-            latestVisibleStatus: args.latestVisibleStatus,
-            parsedStatus: typeof parsed?.status === 'string' ? parsed.status : (parseError ? 'parse_error' : 'unknown'),
-            parseError: parseError || undefined,
-            finalAssistantPresent,
-            finalAssistantFromCachedSummary: !evidence.present && cachedSummary.length > 0,
-            finalAssistantEvidenceSource,
-            visibleMessageCount: visibleMessages.length,
-            lastVisibleRole,
-            lastVisibleKind,
-            lastVisibleContentLength,
-            pendingStartedAt: this.generatingStartedAt || null,
-            pendingFirstObservedAt: args.pending.firstObservedAt,
-            pendingTimestamp: args.pending.timestamp,
-            pendingDurationSec: args.pending.duration,
-            previousBlockReason: args.pending.loggedBlockReason || null,
-            transcriptProbeHistory: args.pending.transcriptProbeHistory || [],
-        };
+        return completionDiagnostics.buildCompletedFinalizationDiagnostic(
+            this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
+            args,
+        );
     }
 
     private hasAdapterPendingResponse(): boolean {
-        const adapterAny = this.adapter as any;
-        if (adapterAny?.isWaitingForResponse === true) return true;
-        if (adapterAny?.currentTurnScope) return true;
-        try {
-            if (typeof this.adapter.isProcessing === 'function' && this.adapter.isProcessing()) return true;
-        } catch { /* defensive: status rendering must not fail because of adapter diagnostics */ }
-        try {
-            const partial = typeof this.adapter.getPartialResponse === 'function'
-                ? this.adapter.getPartialResponse()
-                : '';
-            if (typeof partial === 'string' && partial.trim()) return true;
-        } catch { /* defensive: missing partial means no pending response evidence */ }
-        return false;
+        return completionDiagnostics.hasAdapterPendingResponse(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
     }
 
-    // (ANTIGRAVITY-30S-CAP-PREMATURE) Discriminator gating the 30s-cap release of an antigravity
-    // `holdForTranscript` block. Antigravity's idle verdict is PTY-screen-derived but its assistant
-    // answer lands in native-history, which can legitimately lag past COMPLETED_FINALIZATION_MAX_WAIT_MS
-    // (30s) on a long turn. The cap releases on elapsed time, not proof-of-idle, so it force-emitted a
-    // premature weak completion WHILE THE PTY WAS STILL GENERATING. Returns true when the PTY is still
-    // active — i.e. the adapter reports a pending response OR raw PTY output arrived within the last
-    // ANTIGRAVITY_HOLD_QUIET_DWELL_MS — meaning the 30s cap must KEEP HOLDING (the turn is not proven
-    // over). Returns false when the PTY is genuinely quiescent (no pending response AND no recent
-    // output), so a real tool-only turn with no assistant bubble still force-emits a weak completion
-    // rather than wedging. The absolute ANTIGRAVITY_HOLD_HARD_CAP_MS bound is enforced at the call site
-    // so a runaway PTY that never falls quiet still eventually releases. Fails OPEN (returns false =
-    // allow release) when lastOutputAt is unreadable, so the gate can never wedge a session.
     private antigravityHoldPtyStillActive(): boolean {
-        if (this.hasAdapterPendingResponse()) return true;
-        try {
-            const outStatus = this.adapter.getStatus({ allowParse: false }) as any;
-            const lastOutputAt = typeof outStatus?.lastOutputAt === 'number' && Number.isFinite(outStatus.lastOutputAt)
-                ? outStatus.lastOutputAt as number
-                : undefined;
-            if (typeof lastOutputAt === 'number') {
-                const quietMs = Date.now() - lastOutputAt;
-                if (quietMs < ANTIGRAVITY_HOLD_QUIET_DWELL_MS) return true;
-            }
-        } catch { /* defensive: dwell read is best-effort — fall through to allow release */ }
-        return false;
+        return completionDiagnostics.antigravityHoldPtyStillActive(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
     }
 
     private shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
-        const parsedRawStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status.trim() : '';
-        const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
-        if (!isCliGeneratingLikeStatus(parsedRawStatus)) return false;
-        if (adapterRawStatus !== 'idle') return false;
-        if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
-        if (this.hasAdapterPendingResponse()) return false;
-        // Do not suppress when the adapter's raw response buffer is still non-empty.
-        // This catches the case where isWaitingForResponse has already flipped to false
-        // (so getPartialResponse() returns '') but the provider's native parser still
-        // reports generating because it's parsing buffered content. Suppressing the
-        // finalization block here would emit a false completion event while the provider
-        // session is still actively processing its response stream.
-        const adapterAny = this.adapter as any;
-        if (typeof adapterAny?.responseBuffer === 'string' && adapterAny.responseBuffer.trim()) return false;
-        return true;
+        return completionDiagnostics.shouldSuppressStaleParsedBusyStatus(
+            this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
+            parsedStatus,
+            adapterStatus,
+        );
     }
 
     /**
@@ -2083,44 +1572,15 @@ export class CliProviderInstance implements ProviderInstance {
         return block as CompletedFinalizationBlock | null;
     }
 
-    // (FALSEIDLE-a) Positive, structural proof that the latest approval entry was resolved
-    // through ADHDev. resolveModal() — driven by auto-approve, dashboard/mesh_approve, and
-    // dev-cli-debug alike — advances the engine's lastResolvedEntrySeq to the current
-    // approvalEntrySeq. So `lastResolvedEntrySeq >= approvalEntrySeq` (with a real entry,
-    // approvalEntrySeq > 0) means the modal we last saw was actually answered. Absence of this
-    // evidence after a waiting_approval→idle transition means the idle is suspect: the spec's
-    // text-based approval→idle rule false-tripped while the modal is still unresolved.
-    // Fails OPEN (returns true) when the seq fields are unavailable, so the gate can never wedge
-    // a session on a provider/adapter that does not surface the counters.
     private hasApprovalResolutionEvidence(): boolean {
-        try {
-            const status = this.adapter.getStatus({ allowParse: false }) as any;
-            const entrySeq = typeof status?.approvalEntrySeq === 'number' ? status.approvalEntrySeq : 0;
-            if (entrySeq <= 0) return true;
-            const resolvedSeq = typeof status?.lastResolvedEntrySeq === 'number' ? status.lastResolvedEntrySeq : undefined;
-            if (resolvedSeq === undefined) return true;
-            return resolvedSeq >= entrySeq;
-        } catch {
-            return true;
-        }
+        return completionDiagnostics.hasApprovalResolutionEvidence(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
     }
 
-    // (FALSEIDLE-a) Hold a completion that is the anomalous DIRECT waiting_approval→idle
-    // transition with no positive resolution evidence. A genuinely resolved approval routes
-    // through resolveModal → setStatus('generating'), so its completion's previousStatus is
-    // 'generating' (not 'waiting_approval') and this gate never fires for it. Scoped to
-    // delegated mesh/coordinator sessions — whose only modal-resolution path is auto-approve /
-    // mesh_approve (both advance lastResolvedEntrySeq) — so an interactive local session, where
-    // a human may answer the PTY prompt directly and leave no resolveModal record, is untouched.
-    // Non-terminal: the hold is bounded by COMPLETED_FINALIZATION_MAX_WAIT_MS (30s), giving a
-    // settling auto-approve time to fire and advance the seq, and guaranteeing no permanent wedge
-    // if resolution ever happens via a path that does not record evidence.
     private approvalResolutionFinalizationBlock(pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
-        if (pending.previousStatus !== 'waiting_approval') return null;
-        const meshContext = !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator);
-        if (!meshContext) return null;
-        if (this.hasApprovalResolutionEvidence()) return null;
-        return { reason: 'approval_resolution_unconfirmed', terminal: false };
+        return completionDiagnostics.approvalResolutionFinalizationBlock(
+            this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
+            pending,
+        );
     }
 
     private scheduleCompletedDebounceFlush(delayMs: number): void {
@@ -2537,153 +1997,11 @@ export class CliProviderInstance implements ProviderInstance {
      * delegate, whose historical signature receives the status pre-computed.
      */
     private buildCompletionSignalReader(pending: CompletedDebouncePending, visibleStatusOverride?: string): CompletionSignalReader {
-        const memo = new Map<string, unknown>();
-        const once = <T,>(key: string, compute: () => T): T => {
-            if (!memo.has(key)) memo.set(key, compute());
-            return memo.get(key) as T;
-        };
-        const adapterStatus = () => once('adapterStatus', () => this.adapter.getStatus({ allowParse: false }) as any);
-        const rawParsed = () => once('rawParsed', () => {
-            try { return { ok: true as const, value: this.adapter.getScriptParsedStatus() as any }; }
-            catch (error: any) { return { ok: false as const, error: error?.message || String(error) }; }
-        });
-        return {
-            now: () => Date.now(),
-            visibleStatus: () => once('visibleStatus', () => {
-                if (typeof visibleStatusOverride === 'string') return visibleStatusOverride;
-                const latest = adapterStatus();
-                const latestAutoApproveActive = latest?.status === 'waiting_approval' && this.shouldUsePtyAutoApprove();
-                return latestAutoApproveActive || this.autoApproveBusy ? 'generating' : String(latest?.status ?? 'unknown');
-            }),
-            busyEpoch: () => this.busyEpoch,
-            lastOutputAt: () => {
-                const v = adapterStatus()?.lastOutputAt;
-                return typeof v === 'number' && Number.isFinite(v) ? v as number : undefined;
-            },
-            adapterWaitingForResponse: () => (this.adapter as any)?.isWaitingForResponse === true,
-            adapterTurnScopeActive: () => !!(this.adapter as any)?.currentTurnScope,
-            adapterAnyPending: () => this.hasAdapterPendingResponse(),
-            partialResponsePending: () => {
-                const partial = typeof this.adapter.getPartialResponse === 'function'
-                    ? this.adapter.getPartialResponse()
-                    : '';
-                return typeof partial === 'string' && !!partial.trim();
-            },
-            parsedStatus: () => once('parsedStatus', () => {
-                const rp = rawParsed();
-                if (!rp.ok) return { ok: false as const, error: rp.error };
-                const parsed = rp.value;
-                return {
-                    ok: true as const,
-                    status: typeof parsed?.status === 'string' ? parsed.status : 'unknown',
-                    modalActive: !!(parsed?.activeModal || parsed?.modal),
-                    messages: parsed?.messages,
-                };
-            }),
-            staleParsedBusySuppressed: () => once('staleParsedBusySuppressed', () => {
-                const rp = rawParsed();
-                return rp.ok ? this.shouldSuppressStaleParsedBusyStatus(rp.value, adapterStatus()) : false;
-            }),
-            backgroundTask: () => once('backgroundTask', () => {
-                const rp = rawParsed();
-                const parsed = rp.ok ? rp.value as { backgroundTaskActive?: boolean; backgroundTaskCount?: number } : undefined;
-                return { active: parsed?.backgroundTaskActive === true, count: parsed?.backgroundTaskCount };
-            }),
-            finalAssistantEvidence: () => once('finalAssistantEvidence', () => {
-                const rp = rawParsed();
-                const evidence = this.completionFinalAssistantEvidence(rp.ok ? rp.value?.messages : undefined, pending.turnStartedAt);
-                LOG.debug('CLI', `[${this.type}] finalAssistantEvidence: present=${evidence.present} source=${evidence.source}`);
-                return {
-                    present: evidence.present,
-                    source: evidence.source as EvidenceSource,
-                    messages: Array.isArray(evidence.messages) ? evidence.messages : [],
-                };
-            }),
-            externalNativeTailProbe: () => once('externalNativeTailProbe', () => {
-                const probe = this.recordPendingTranscriptProbe(pending);
-                if (probe && !pending.loggedTranscriptProbe) {
-                    LOG.info('CLI', `[${this.type}] external transcript probe: msgCount=${probe.msgCount} lastRole=${probe.lastRole || 'none'} lastKind=${probe.lastKind || 'none'} contentLen=${probe.contentLen} sourceMtime=${probe.sourceMtimeMs ?? 'unknown'} mtimeAge=${probe.mtimeAgeMs ?? 'unknown'}ms`);
-                    pending.loggedTranscriptProbe = true;
-                }
-                LOG.debug('CLI', `[${this.type}] external-native probe result: lastRole=${probe?.lastRole} contentLen=${probe?.contentLen}`);
-                return probe ? { lastRole: probe.lastRole ?? undefined, contentLen: probe.contentLen } : null;
-            }),
-            transcriptGrowth: () => once('transcriptGrowth', () => {
-                let snapshot: SignalSnapshot | null = null;
-                try { snapshot = this.probeNativeTranscriptSignals()?.snapshot ?? null; } catch { snapshot = null; }
-                if (!snapshot) return null;
-                const available = snapshot.available === true;
-                return {
-                    available,
-                    growing: available && (snapshot as any).signals?.transcript_growing === true,
-                    msgCount: (snapshot as any).detail?.msgCount as number | undefined,
-                    mtimeAgeMs: ((snapshot as any).detail?.ageMs ?? 0) as number,
-                };
-            }),
-            busyLeaseGateEnabled: () => this.busyLeaseGateEnabled(),
-            busyLease: () => {
-                const lease = this.transcriptSignalSource?.busyLease() ?? null;
-                if (!lease) return null;
-                return {
-                    active: (lease as any).active === true,
-                    lastLiveAt: (lease as any).lastLiveAt as number | undefined,
-                    expiresAt: (lease as any).expiresAt as number | undefined,
-                    remainingMs: (lease as any).remainingMs as number | undefined,
-                };
-            },
-            transcriptAgeMs: () => {
-                try {
-                    const snapshot = this.lastTranscriptSignalSnapshot;
-                    return snapshot?.available === true
-                        && typeof (snapshot as any).detail?.ageMs === 'number'
-                        && Number.isFinite((snapshot as any).detail.ageMs)
-                        ? (snapshot as any).detail.ageMs as number
-                        : undefined;
-                } catch { return undefined; }
-            },
-            inApprovalResumeGrace: () => this.inApprovalResumeGrace(),
-            hasApprovalResolutionEvidence: () => this.hasApprovalResolutionEvidence(),
-            screenTailShowsApprovalPrompt: () => once('screenTailShowsApprovalPrompt', () => {
-                try {
-                    const screenText = typeof (this.adapter as any).getScreenText === 'function'
-                        ? String((this.adapter as any).getScreenText() || '')
-                        : '';
-                    if (!screenText) return false;
-                    const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
-                    return looksLikeActiveApprovalPromptText(tailLines);
-                } catch { return false; }
-            }),
-            holdClassPtyStillActive: () => this.antigravityHoldPtyStillActive(),
-            ownsExternalHistory: () => (this.adapter as any)?.chatMessagesOwnedExternally === true,
-            authorityTiming: () => resolveTranscriptAuthorityProfile(this.provider).timing,
-            allowMissingAssistantTimeout: () => !!(this.settings.meshNodeFor || this.settings.meshActiveTaskId || this.settings.launchedByCoordinator),
-            // (SUMMARY-SCRAPE-FALLBACK, part A) Is this turn's COMPLETE text on disk yet?
-            //
-            // This is a REAL extra native read, not a reuse of the evidence probe's: on the
-            // path this signal exists for, completionFinalAssistantEvidence returned via its
-            // `parsed` short-circuit and never touched the transcript at all. It is bounded by
-            // the guards on the call site — the engine consults it only on an otherwise-clean
-            // verdict for an ownsExternal provider with `parsed` evidence, at most once per
-            // flush attempt (memoized), and at most for nativeSummaryWriteWaitMaxMs of retries.
-            //
-            // Fails closed to undefined ("cannot tell" ⇒ never holds) on any throw and for a
-            // provider that owns no external history.
-            nativeSummaryOnDisk: () => once('nativeSummaryOnDisk', () => {
-                try {
-                    if ((this.adapter as any)?.chatMessagesOwnedExternally !== true) return undefined;
-                    const messages = this.readExternalCompletionMessages();
-                    // A NULL read means the transcript is not RESOLVABLE (no session pinned,
-                    // typed fail-closed attribution) — not "written imminently". Waiting for a
-                    // transcript that is not coming would convert the established
-                    // signal-absence fail-open (kimi-parsed-race case 4: unresolved native +
-                    // parsed answer must EMIT) into a hold. So: undefined, never a hold. Only a
-                    // transcript we CAN read, which simply has no in-turn bubble yet, is the
-                    // write-lag race this hold exists for.
-                    if (!messages) return undefined;
-                    return !!evidence.extractFinalSummaryForTurn(messages, pending.turnStartedAt);
-                } catch { return undefined; }
-            }),
-        };
+        return completionDiagnostics.buildCompletionSignalReader(
+            this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
+            pending,
+            visibleStatusOverride,
+        );
     }
 
     /** Applies an engine decision's pending-record patch (null clears a field). */
@@ -2697,34 +2015,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     /** Human log + mesh trace for a hold decision — messages preserved verbatim per hold id. */
     private logCompletionHold(decision: Extract<CompletionFlushDecision, { kind: 'hold' }>): void {
-        if (!decision.firstOfReason) return;
-        const t = decision.trace as Record<string, any>;
-        switch (decision.reason) {
-            case 'background_task_active':
-                LOG.info('CLI', `[${this.type}] holding pending completed (background_task_active count=${t.backgroundTaskCount ?? '?'} heldMs=${t.heldMs} max=${BACKGROUND_TASK_HOLD_MAX_MS})`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `background_task_active heldMs=${t.heldMs}`);
-                break;
-            case 'native_transcript_advancing':
-                LOG.info('CLI', `[${this.type}] holding pending completed (native_transcript_advancing: msgCount=${t.msgCount} mtimeAge=${t.sourceMtimeAgeMs}ms < ${MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS}ms) — transcript still growing, screen-idle verdict not trusted`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `native_transcript_advancing msgCount=${t.msgCount} mtimeAge=${t.sourceMtimeAgeMs}ms`);
-                break;
-            case 'busy_lease_active':
-                LOG.info('CLI', `[${this.type}] holding pending completed (busy_lease_active: lastLiveAt=${t.leaseLastLiveAt} expiresIn=${t.leaseRemainingMs}ms) — transcript live within the lease bound, screen-idle verdict not trusted`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `busy_lease_active lastLiveAt=${t.leaseLastLiveAt} expiresIn=${t.leaseRemainingMs}ms`);
-                break;
-            case 'canon_c_min_elapsed_floor':
-                LOG.info('CLI', `[${this.type}] holding CANON-C decoupled emit until min-elapsed floor (waitedMs=${t.waitedMs} floor=${CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS}); no final assistant yet (${t.blockReason})`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `canon_c_min_elapsed_floor waited=${t.waitedMs}ms`);
-                break;
-            case 'antigravity_hold_pty_active':
-                LOG.info('CLI', `[${this.type}] 30s cap reached but PTY still generating; holding antigravity completion past cap (waitedMs=${t.waitedMs} hardCap=${ANTIGRAVITY_HOLD_HARD_CAP_MS}) (${t.blockReason})`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `antigravity_hold_pty_active waited=${t.waitedMs}ms`);
-                break;
-            default:
-                LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${decision.reason})`);
-                if (this.isMeshWorkerSession()) traceMeshEventDrop('completion_gate_hold', this.meshTraceCtx(), `${decision.reason} waited=${t.waitedMs}ms`);
-                break;
-        }
+        completionDiagnostics.logCompletionHold(this as unknown as completionDiagnostics.CompletionDiagnosticsHost, decision);
     }
 
     /**
@@ -2738,205 +2029,7 @@ export class CliProviderInstance implements ProviderInstance {
      * on the engine; do not re-inline judgment here.
      */
     private flushCompletedDebounceIfFinalized(): void {
-        const pending = this.completedDebouncePending;
-        if (!pending) {
-            this.completedDebounceTimer = null;
-            return;
-        }
-
-        const reader = this.buildCompletionSignalReader(pending);
-        const policy = this.completionEnginePolicy();
-        const latestVisibleStatus = reader.visibleStatus();
-        const pre = decideCompletionPreflight(pending, reader, policy);
-        let decision: CompletionFlushDecision;
-        if (pre.kind !== 'proceed') {
-            decision = pre;
-        } else {
-            this.applyCompletionArmPatch(pending, pre.armPatch);
-            // Historical seam: the finalization block is obtained through the instance
-            // method (not the engine directly) so the per-incident regression suites can
-            // pin it. The delegate also applies the evidence-stash patch to `pending`.
-            const block = this.getCompletedFinalizationBlock(latestVisibleStatus, pending);
-            decision = decideCompletionVerdict(pending, reader, policy, block);
-        }
-        LOG.debug('CLI', `[${this.type}] flush attempt: latestVisible=${latestVisibleStatus} decision=${decision.kind} generatingStartedAt=${this.generatingStartedAt}`);
-
-        if (decision.kind === 'cancel') {
-            const label = decision.reason === 'resumed_status'
-                ? `resumed ${latestVisibleStatus}`
-                : decision.reason === 'busy_reentry'
-                    ? `busy re-entry during settle: epoch ${pending.busyEpochAtArm}→${this.busyEpoch}`
-                    : `new PTY output during settle: ${pending.lastOutputAtArm}→${(decision.trace as any).lastOutputAt}`;
-            LOG.info('CLI', `[${this.type}] cancelled pending completed (${label})`);
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('cancel', { blockReason: decision.reason, ...decision.trace });
-            this.completedDebouncePending = null;
-            this.completedDebounceTimer = null;
-            // (CANCEL-BLIP-ORPHAN) The cancel above is CORRECT and stays — a resumed turn
-            // must never emit the completion armed before it. But dropping the arm here was
-            // the whole story, and that is the defect: the ONLY path that re-arms a
-            // completion is a fresh idle→generating FSM edge, so a sub-second PTY blip
-            // right after a genuine turn end (live codex incident: busy→idle→busy in 81ms,
-            // then idle again with no further edge) deleted the arm and no completion ever
-            // fired — the worker finished ~10min later while the coordinator's queue row
-            // sat 'generating' until a 15/90-min hard deadline reclaimed it.
-            //
-            // Instead of guessing blip-vs-real-resume at cancel time (unknowable from a
-            // point sample — that is exactly what made the original inline judgment
-            // unreliable), hand the deleted arm to a bounded RE-VERIFICATION watch and
-            // decide later, when the session's state is actually observable. A real resume
-            // simply re-cancels on each recheck and the watch expires; a blip settles back
-            // to idle and the re-armed pending flushes through the unchanged gate. Every
-            // rule (continuity, finalization block, evidence) is re-applied on the retry —
-            // the watch grants no exemption, it only restores the chance to be judged.
-            this.armCancelledCompletionRecheck(pending, decision.reason);
-            return;
-        }
-
-        this.applyCompletionArmPatch(pending, decision.armPatch);
-
-        if (decision.kind === 'hold') {
-            this.logCompletionHold(decision);
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('hold', {
-                blockReason: (decision.trace as any).blockReason ?? decision.reason,
-                ...decision.trace,
-            });
-            this.scheduleCompletedDebounceFlush(decision.retryInMs);
-            return;
-        }
-
-        if (decision.kind === 'emit-weak') {
-            const blockReason = decision.block.reason;
-            const waitedMs = decision.waitedMs;
-            const emittedAfterFinalizationTimeout = decision.emittedAfterFinalizationTimeout;
-            const latestStatus = this.adapter.getStatus({ allowParse: false });
-            const completionDiagnostic = this.buildCompletedFinalizationDiagnostic({
-                blockReason,
-                latestStatus,
-                latestVisibleStatus,
-                waitedMs,
-                pending,
-                emittedAfterFinalizationTimeout,
-            });
-            // Surface the CANON-C immediate-emit path distinctly so a delegated worker's idle
-            // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
-            (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = decision.decoupledImmediateEmit;
-            // (INFINITE-GENERATING) A hard-cap release means the terminal block's reason never
-            // cleared — the session would previously have wedged in generating forever. Log it
-            // distinctly from the ordinary timeout so the stuck provider stays diagnosable.
-            (completionDiagnostic as Record<string, unknown>).releasedByTerminalBlockHardCap = decision.releasedByTerminalBlockHardCap;
-            const emitCause = decision.releasedByTerminalBlockHardCap
-                ? `terminal block never cleared, released at ${waitedMs}ms hard cap`
-                : decision.decoupledImmediateEmit ? 'CANON-C decoupled-immediate, transcript pending' : `after ${waitedMs}ms`;
-            LOG.warn('CLI', `[${this.type}] emitting completed event (${emitCause}) without finalized assistant turn (${blockReason})`);
-            if (this.isMeshWorkerSession()) {
-                traceMeshEventStage('fired', this.meshTraceCtx(), `forced after ${waitedMs}ms (${blockReason})`);
-            }
-            if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
-                path: decision.releasedByTerminalBlockHardCap
-                    ? 'terminal_block_hard_cap'
-                    : decision.decoupledImmediateEmit ? 'canon_c_decoupled' : 'forced_timeout',
-                blockReason,
-                latestVisibleStatus,
-                approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
-                finalAssistantPresent: (completionDiagnostic as any).finalAssistantPresent === true,
-                evidenceSource: (completionDiagnostic as any).finalAssistantEvidenceSource ?? null,
-                lastVisibleRole: (completionDiagnostic as any).lastVisibleRole ?? null,
-                lastVisibleContentLen: (completionDiagnostic as any).lastVisibleContentLength ?? null,
-                emittedAfterFinalizationTimeout,
-                waitedMs,
-                busyEpoch: this.busyEpoch,
-            });
-            // finalSummary provenance chain unchanged (see snapshotExternalNativeCompletionSummary /
-            // completionFinalSummary / cachedInTurnCompletionSummaryContent docs above).
-            // (SUMMARY-SCRAPE-FALLBACK, part B) Resolved into a local FIRST so the provenance
-            // completionFinalSummary just recorded can be stamped onto the diagnostic below —
-            // reading it before the chain runs would stamp the previous turn's source.
-            const weakFinalSummary = (this.nativeTurnTerminalSummary(pending.turnStartedAt)
-                || this.snapshotExternalNativeCompletionSummary(pending)
-                || this.completionFinalSummary(this.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
-                || this.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
-                || (blockReason.startsWith('parsed_status:') ? '' : undefined));
-            Object.assign(
-                completionDiagnostic as Record<string, unknown>,
-                this.finalSummaryProvenanceDiagnostic(weakFinalSummary),
-            );
-            this.emitGeneratingCompleted({
-                chatTitle: pending.chatTitle,
-                duration: pending.duration,
-                timestamp: pending.timestamp,
-                taskId: pending.taskId,
-                finalSummary: weakFinalSummary,
-                completionDiagnostic,
-            });
-            this.completedDebouncePending = null;
-            this.completedDebounceTimer = null;
-            // (CANCEL-BLIP-ORPHAN) This turn's completion is out; any watch owed for it is
-            // settled. Leaving it armed would let a stale recheck re-arm a duplicate.
-            this.clearCancelledCompletionRecheck();
-            this.generatingStartedAt = 0;
-            this.lastApprovalEventFingerprint = '';
-            this.markCurrentTurnStartupGraceCollapseSatisfied();
-            return;
-        }
-
-        // emit-genuine: the clean path — transcript finalized, evidence stashed on pending.
-        LOG.info('CLI', `[${this.type}] completed in ${pending.duration}s`);
-        if (this.isMeshWorkerSession()) {
-            traceMeshEventStage('fired', this.meshTraceCtx(), `duration=${pending.duration}s`);
-        }
-        if (this.completionTraceOn()) this.recordCompletionGateTrace('fire', {
-            path: 'clean',
-            latestVisibleStatus,
-            approvalResolvedIdle: pending.previousStatus === 'waiting_approval',
-            finalAssistantPresent: true,
-            duration: pending.duration,
-            busyEpoch: this.busyEpoch,
-        });
-        const finalSummary = this.cleanCompletionFinalSummary(pending);
-        const transcriptProfile = resolveTranscriptAuthorityProfile(this.provider);
-        const finalContentLength = typeof finalSummary === 'string' ? finalSummary.trim().length : 0;
-        this.emitGeneratingCompleted({
-            chatTitle: pending.chatTitle,
-            duration: pending.duration,
-            timestamp: pending.timestamp,
-            taskId: pending.taskId,
-            finalSummary,
-            evidenceLevel: 'reported',
-            completionDiagnostic: {
-                source: 'clean_final_assistant',
-                cleanPath: true,
-                evidenceWeak: false,
-                finalAssistantPresent: true,
-                finalAssistantEvidenceSource: pending.resolvedFinalEvidenceSource ?? 'parsed',
-                finalAssistantContentLength: finalContentLength,
-                ...this.finalSummaryProvenanceDiagnostic(finalSummary),
-                transcriptEvidence: {
-                    version: 1,
-                    kind: 'final_assistant',
-                    cleanPath: true,
-                    weak: false,
-                    authorityClass: transcriptProfile.class,
-                    timing: transcriptProfile.timing,
-                    providerOwnsTranscript: transcriptProfile.providerOwnsTranscript,
-                    observedAt: pending.resolvedFinalEvidenceObservedAt ?? Date.now(),
-                    turnStartedAt: pending.turnStartedAt ?? null,
-                    finalContentLength,
-                    taskId: pending.taskId ?? null,
-                    attemptId: typeof this.settings.meshActiveAttemptId === 'string'
-                        ? this.settings.meshActiveAttemptId : null,
-                    dispatchNonce: typeof this.settings.meshActiveDispatchNonce === 'number'
-                        ? this.settings.meshActiveDispatchNonce : null,
-                    sessionId: this.instanceId,
-                },
-            },
-        });
-        this.completedDebouncePending = null;
-        this.completedDebounceTimer = null;
-        // (CANCEL-BLIP-ORPHAN) Completion delivered — settle any outstanding watch.
-        this.clearCancelledCompletionRecheck();
-        this.generatingStartedAt = 0;
-        this.lastApprovalEventFingerprint = '';
-        this.markCurrentTurnStartupGraceCollapseSatisfied();
+        completionFlush.flushCompletedDebounceIfFinalized(this as unknown as completionFlush.CompletionFlushHost);
     }
 
     /**
@@ -3041,56 +2134,7 @@ export class CliProviderInstance implements ProviderInstance {
         evidenceLevel?: string;
         completionDiagnostic?: Record<string, unknown>;
     }): void {
-        // Cache the final assistant summary so the dashboard snapshot can surface it
-        // for native-source providers whose assistant answer is absent from the PTY
-        // parse (antigravity). completionFinalSummary already read native-history to
-        // produce this, so nothing extra is read here.
-        const summary = typeof opts.finalSummary === 'string' ? opts.finalSummary.trim() : '';
-        if (summary) {
-            this.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
-        }
-        const completionEvent = {
-            event: 'agent:generating_completed' as const,
-            chatTitle: opts.chatTitle,
-            duration: opts.duration,
-            timestamp: opts.timestamp,
-            // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
-            ...(opts.taskId ? { taskId: opts.taskId } : {}),
-            // finalSummary is always carried (value may be undefined) — every prior
-            // inline builder included the key, so downstream consumers see the same shape.
-            finalSummary: opts.finalSummary,
-            ...(opts.evidenceLevel !== undefined ? { evidenceLevel: opts.evidenceLevel } : {}),
-            ...(opts.completionDiagnostic !== undefined ? { completionDiagnostic: opts.completionDiagnostic } : {}),
-        };
-        // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): record that THIS turn's
-        // completion has now been emitted, keyed by its taskId, so the pre-cleanup
-        // completion flush never fires a duplicate for the same turn.
-        //
-        // COMPLETION-WEAK-REARM (fix1): stamp the emit's evidence STRENGTH so the three
-        // transcript re-emit guards can distinguish a weak first emit (which must be
-        // re-armable once a genuine idle lands) from a genuine one (single-shot). The
-        // weakness is read from the exact event being pushed — evidenceLevel plus the
-        // completionDiagnostic (missing_final_assistant blockReason) — via the same
-        // isWeakCompletionEvidence() the coordinator/ledger paths share, so the worker's
-        // notion of "weak" cannot drift from theirs. emittedAtEpoch snapshots busyEpoch so
-        // a re-arm requires a real generating→idle transition after this emit.
-        this.lastEmittedCompletion = {
-            taskId: typeof opts.taskId === 'string' ? opts.taskId : '',
-            at: Date.now(),
-            evidenceLevel: opts.evidenceLevel,
-            weak: isWeakCompletionEvidence(completionEvent as Record<string, unknown>),
-            emittedAtEpoch: this.busyEpoch,
-        };
-        this.pushEvent(completionEvent);
-        // COORDINATOR-SILENT-IDLE one-shot consume: this completion's snapshot rides the
-        // armed mute (resolveMuted honors settings.silentNextIdlePush for the idle status
-        // above), so the routine idle push is suppressed for THIS completion only. Clear
-        // the arm now — AFTER the completion event was pushed — so the NEXT turn notifies
-        // normally. Redundant with the TTL leak-guard, but the deterministic clear is the
-        // primary one-shot mechanism; the TTL only covers a worker that never completes.
-        if (this.settings?.silentNextIdlePush === true) {
-            this.updateSettings({ silentNextIdlePush: undefined, silentNextIdlePushArmedAt: undefined });
-        }
+        completionFlush.emitGeneratingCompleted(this as unknown as completionFlush.CompletionEmitHost, opts);
     }
 
     /**
@@ -3210,200 +2254,15 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private pushEvent(event: ProviderEvent): void {
-        const enrichedEvent: ProviderEvent = {
-            ...event,
-            instanceId: typeof event.instanceId === 'string' && event.instanceId.trim()
-                ? event.instanceId
-                : this.instanceId,
-            targetSessionId: typeof event.targetSessionId === 'string' && event.targetSessionId.trim()
-                ? event.targetSessionId
-                : this.instanceId,
-            providerType: typeof event.providerType === 'string' && event.providerType.trim()
-                ? event.providerType
-                : this.type,
-            workspaceName: typeof event.workspaceName === 'string' && event.workspaceName.trim()
-                ? event.workspaceName
-                : this.workingDir,
-            // Carry the workspace under BOTH `workspace` and `workspaceName` so the
-            // downstream mesh forward/merge path — which reads `workspace` — can
-            // propagate it to the coordinator snapshot. Without `workspace` the live
-            // event path delivers an empty workspace and the dashboard falls back to
-            // the generic "Terminal (Mesh Node)" title.
-            workspace: typeof event.workspace === 'string' && event.workspace.trim()
-                ? event.workspace
-                : this.workingDir,
-            providerSessionId: typeof event.providerSessionId === 'string' && event.providerSessionId.trim()
-                ? event.providerSessionId
-                : this.providerSessionId,
-        };
-        // TASKIDLESS: stamp the mesh task primary key on lifecycle events emitted by
-        // a mesh worker session. The consumer (updateDirectDispatchStatus) was switched
-        // to key on task_id (CANON-B), but the producer never carried it — so every
-        // forwarded metadataEvent.taskId arrived undefined and the coordinator fell back
-        // to a session_id match, which can flip a sibling dispatch row. Surface it here so
-        // updateDirectDispatchStatus hits the exact PK row and the session_id fallback is
-        // never exercised. Non-mesh sessions get no taskId (regression guard) —
-        // isMeshWorkerSession() gates the injection.
-        //
-        // ARCH-REFACTOR R1 (per-turn identity): resolution order is
-        //   (1) an explicit taskId already on the event — the debounce-flush completion
-        //       path stamps the taskId captured at the generating→idle transition (the
-        //       turn that actually produced this completion);
-        //   (2) the per-turn binding (engine.currentTurnTaskId) for synchronously-emitted
-        //       events whose turn is still the current one;
-        //   (3) the legacy session scalar (settings.meshActiveTaskId) as a last-resort
-        //       backward-compat alias.
-        // The scalar is last because it is last-write-wins: a second task attaching while
-        // this turn was still running overwrites it, which is the exact NOTIF-MISDELIVER /
-        // TASK-MSG-MISROUTE race this refactor removes.
-        if (this.isMeshWorkerSession()) {
-            const existingTaskId = typeof enrichedEvent.taskId === 'string' && enrichedEvent.taskId.trim()
-                ? enrichedEvent.taskId
-                : undefined;
-            if (!existingTaskId) {
-                const resolved = this.completingTurnTaskId();
-                if (resolved) enrichedEvent.taskId = resolved;
-            }
-            // REDRIVE-DUP: echo the dispatch nonce this session's active task was stamped with
-            // so the coordinator's generating_started handler can reject a stale (reclaimed)
-            // dispatch and stop this worker before it double-executes the reclaimed task.
-            if (enrichedEvent.dispatchNonce === undefined && typeof this.settings.meshActiveDispatchNonce === 'number') {
-                enrichedEvent.dispatchNonce = this.settings.meshActiveDispatchNonce;
-            }
-            // TURN-LEDGER (Stage 5): echo the attempt identity alongside the nonce so the
-            // coordinator's reducer correlates this event to (taskId, attemptId, session).
-            if (enrichedEvent.attemptId === undefined && typeof this.settings.meshActiveAttemptId === 'string' && this.settings.meshActiveAttemptId) {
-                enrichedEvent.attemptId = this.settings.meshActiveAttemptId;
-            }
-        }
-        if (this.context?.emitProviderEvent) {
-            this.context.emitProviderEvent(enrichedEvent);
-        } else {
-            this.events.push(enrichedEvent);
-        }
-        // Auto-detach a direct-dispatch mesh assignment once the dispatched
-        // task reaches a terminal state. Leaving meshNodeFor pinned would
-        // route this session's next unrelated turn (a dashboard chat) into
-        // the coordinator as if it were the completion of another task.
-        // We schedule after the emit so the originating coordinator still
-        // observes the completion event with its routing marker intact.
-        //
-        // RESTART-REBOUND agent:ready guard (post-restart completion wedge):
-        // agent:ready is a queue-CLAIM signal, not task-terminal evidence — and
-        // it re-fires after a daemon restart (agentReadyEmitted is per-process),
-        // potentially on the SAME first-idle frame that just armed this task's
-        // debounced completion. Detaching here would strip meshActiveTaskId /
-        // meshActiveAttemptId / meshActiveDispatchNonce before the completion
-        // flush emits, dropping the completion envelope-less. So agent:ready
-        // may only detach when NO turn is in flight and NO completion is
-        // pending; generating_completed / agent:stopped stay unconditional —
-        // they ARE the terminal evidence. A genuine agent:ready with no active
-        // task is unaffected (meshActiveTaskId falsy → no detach either way).
-        if (TERMINAL_MESH_EVENTS.has(event.event) && this.settings.meshActiveTaskId) {
-            const readyWithTurnInFlight = event.event === 'agent:ready'
-                && (this.generatingStartedAt !== 0
-                    || this.completedDebouncePending !== null
-                    || this.generatingDebouncePending !== null);
-            if (!readyWithTurnInFlight) {
-                try { this.detachMeshAssignment(); } catch { /* best-effort */ }
-            }
-        }
+        providerEvents.pushEvent(this as unknown as providerEvents.ProviderEventsHost, event);
     }
 
     private flushEvents(): ProviderEvent[] {
-        const events = [...this.events];
-        this.events = [];
-        return events;
+        return providerEvents.flushEvents(this as unknown as providerEvents.ProviderEventsHost);
     }
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
-        if (!data || typeof data !== 'object') return;
-
-        const patchedProviderSessionId = normalizeProviderSessionId(
-            this.provider,
-            typeof data.providerSessionId === 'string' ? data.providerSessionId : '',
-        );
-        if (patchedProviderSessionId) {
-            // A provider-response id is authoritative when it carries an
-            // explicit `new_session` marker (the CLI genuinely started a new
-            // conversation). Without that marker it's just an observed id and
-            // must not hijack an existing binding (see promoteProviderSessionId).
-            this.promoteProviderSessionId(patchedProviderSessionId, {
-                authoritative: data.sessionEvent === 'new_session',
-            });
-        }
-
-        if (data.sessionEvent === 'new_session') {
-            this.runtimeMessages = [];
-            this.lastPersistedHistoryMessages = [];
-            this.suppressIdleHistoryReplay = false;
-            this.adapter.clearHistory();
-        }
-
-        const patchedState = mergeProviderPatchState({
-            providerControls: this.provider.controls,
-            data,
-            currentControlValues: this.controlValues,
-            currentSummaryMetadata: this.summaryMetadata,
-        });
-        this.controlValues = patchedState.controlValues;
-        this.summaryMetadata = patchedState.summaryMetadata;
-
-        const effects = normalizeProviderEffects(data);
-        for (const effect of effects) {
-            const effectWhen = effect.when || 'immediate';
-            if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
-            if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
-
-            const effectKey = getEffectDedupKey(effect);
-            if (this.appliedEffectKeys.has(effectKey)) continue;
-            this.appliedEffectKeys.add(effectKey);
-
-            if (effect.persist !== false) {
-                const persistedMessage = buildPersistedProviderEffectMessage(effect);
-                if (persistedMessage) this.appendRuntimeMessage(persistedMessage, effectKey);
-            }
-
-            if (effect.type === 'message' && effect.message) {
-                const content = typeof effect.message.content === 'string'
-                    ? effect.message.content
-                    : JSON.stringify(effect.message.content);
-                this.pushEvent({
-                    event: 'provider:message',
-                    timestamp: Date.now(),
-                    content,
-                    role: effect.message.role || 'system',
-                    kind: effect.message.kind,
-                    senderName: effect.message.senderName,
-                });
-            } else if (effect.type === 'toast' && effect.toast) {
-                this.pushEvent({
-                    event: 'provider:toast',
-                    effectId: effect.id || effectKey,
-                    timestamp: Date.now(),
-                    message: effect.toast.message,
-                    level: effect.toast.level || 'info',
-                });
-            } else if (effect.type === 'notification' && effect.notification) {
-                this.pushEvent({
-                    event: 'provider:notification',
-                    effectId: effect.id || effectKey,
-                    timestamp: Date.now(),
-                    title: effect.notification.title,
-                    message: effect.notification.body,
-                    content: typeof effect.notification.bubbleContent === 'string'
-                        ? effect.notification.bubbleContent
-                        : effect.notification.body,
-                    level: effect.notification.level || 'info',
-                    channels: effect.notification.channels || ['toast'],
-                    preferenceKey: effect.notification.preferenceKey,
-                });
-            }
-        }
-
-        if (this.appliedEffectKeys.size > 200) {
-            this.appliedEffectKeys = new Set(Array.from(this.appliedEffectKeys).slice(-100));
-        }
+        providerEvents.applyProviderResponse(this as unknown as providerEvents.ProviderEventsHost, data, options);
     }
  // ─── Adapter access (backward compat) ──────────────────
 
@@ -3488,261 +2347,45 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private maybeAppendRuntimeRecoveryMessage(runtime: PtyRuntimeMetadata | null): void {
-        if (!runtime?.restoredFromStorage || !runtime.runtimeId) return;
-
-        const recoveryState = String(runtime.recoveryState || '').trim();
-        if (!recoveryState) return;
-
-        let content = '';
-        if (recoveryState === 'auto_resumed') {
-            content = 'Session host restored this CLI after restart and reattached it from a saved snapshot.';
-        } else if (recoveryState === 'resume_failed') {
-            const errorSuffix = runtime.recoveryError ? ` Resume failed: ${runtime.recoveryError}` : '';
-            content = `Session host found this CLI after restart, but automatic resume failed.${errorSuffix}`;
-        } else if (recoveryState === 'host_restart_interrupted') {
-            content = 'Session host found this CLI in interrupted state after restart and is attempting to resume it.';
-        } else if (recoveryState === 'orphan_snapshot') {
-            content = 'Session host restored the last snapshot for this CLI, but the original runtime was not resumed automatically.';
-        } else {
-            content = `Session host restored this CLI after restart (${recoveryState}).`;
-        }
-
-        this.appendRuntimeSystemMessage(
-            content,
-            `runtime_recovery:${runtime.runtimeId}:${recoveryState}`,
-        );
+        runtimeMessages.maybeAppendRuntimeRecoveryMessage(this as unknown as runtimeMessages.RuntimeMessagesHost, runtime);
     }
 
     private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
-        this.appendRuntimeMessage(buildRuntimeSystemChatMessage({
-            content,
-            receivedAt,
-            timestamp: receivedAt,
-        }), dedupKey);
+        runtimeMessages.appendRuntimeSystemMessage(this as unknown as runtimeMessages.RuntimeMessagesHost, content, dedupKey, receivedAt);
     }
 
     private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
-        const normalizedMessage = buildChatMessage({
-            ...message,
-            receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
-            timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
-        } as ChatMessage);
-        const normalizedContent = typeof normalizedMessage.content === 'string'
-            ? normalizedMessage.content.trim()
-            : flattenContent(normalizedMessage.content).trim();
-        if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
-        if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
-
-        this.runtimeMessages.push({
-            key: dedupKey,
-            message: normalizedMessage,
-        });
-
-        if (normalizedContent) {
-            this.historyWriter.appendNewMessages(
-                this.type,
-                [{
-                    role: normalizedMessage.role,
-                    senderName: normalizedMessage.senderName,
-                    kind: normalizedMessage.kind,
-                    content: normalizedContent,
-                    receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
-                    historyDedupKey: dedupKey,
-                }],
-                this.adapter.getScriptParsedStatus?.()?.title || workingDirBasename(this.workingDir),
-                this.instanceId,
-                this.providerSessionId,
-            );
-        }
+        runtimeMessages.appendRuntimeMessage(this as unknown as runtimeMessages.RuntimeMessagesHost, message, dedupKey);
     }
 
     mergeRuntimeChatMessages(parsedMessages: ChatMessage[]): ChatMessage[] {
-        return mergeConversationMessages(this.runtimeMessages, this.parsedIngestTimestamps.stamp(parsedMessages));
+        return runtimeMessages.mergeRuntimeChatMessages(this as unknown as runtimeMessages.RuntimeMessagesHost, parsedMessages);
     }
 
     private promoteProviderSessionId(sessionId: string, opts: { authoritative?: boolean } = {}): void {
-        const nextSessionId = String(sessionId || '').trim();
-        if (!nextSessionId || nextSessionId === this.providerSessionId) return;
-
-        // Sticky binding: once this instance is bound to a provider session,
-        // an *observed* id (one discovered from a status parse or the native
-        // history reader) must NOT hijack the live binding. hermes ≥0.14
-        // spawns a fresh `sessions` row per internal sub-session, so a
-        // newest-wins native read surfaces a different id mid-turn on every
-        // poll; accepting it would re-bind the instance, re-hydrate unbounded
-        // history (daemon saturation) and reset completion detection so the
-        // turn never finalizes. Only an *authoritative* change — the first
-        // bind (no id yet) or an explicit provider `new_session`/resume — may
-        // replace an existing binding. Legitimate resume/new-session paths
-        // pass authoritative:true and are unaffected.
-        if (this.providerSessionId && !opts.authoritative) {
-            LOG.debug('CLI', `[${this.type}] ignoring non-authoritative session id ${nextSessionId} (bound to ${this.providerSessionId})`);
-            return;
-        }
-
-        const previousHistorySessionId = this.providerSessionId || this.instanceId;
-        const previousProviderSessionId = this.providerSessionId;
-        this.providerSessionId = nextSessionId;
-        // Conversation-binding lock (antigravity): the moment this session is
-        // authoritatively bound to a conversation uuid, claim it so a concurrent
-        // sibling session's newest-on-disk discovery can never resolve to the
-        // same .db (RCA: two antigravity sessions ~94ms apart shared one store
-        // and cross-routed completions). Released on dispose().
-        if (this.type === 'antigravity-cli') {
-            const owner = this.antigravityClaimOwner();
-            if (owner) claimAntigravityConversation(nextSessionId, owner);
-        }
-        this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
-        this.historyWriter.writeSessionStart(this.type, nextSessionId, this.workingDir, this.instanceId);
-        if (this.shouldHydrateExistingProviderHistory()) {
-            this.restorePersistedHistoryFromCurrentSession();
-        }
-        this.adapter.updateRuntimeMeta({ providerSessionId: nextSessionId });
-        this.onProviderSessionResolved?.({
-            instanceId: this.instanceId,
-            providerType: this.type,
-            providerName: this.provider.name,
-            workspace: this.workingDir,
-            providerSessionId: nextSessionId,
-            previousProviderSessionId,
-        });
-        LOG.info('CLI', `[${this.type}] discovered provider session id: ${nextSessionId}`);
+        historySync.promoteProviderSessionId(this as unknown as historySync.HistorySyncHost, sessionId, opts);
     }
 
     private shouldHydrateExistingProviderHistory(): boolean {
-        return this.launchMode === 'resume' || this.launchMode === 'manual';
+        return historySync.shouldHydrateExistingProviderHistory(this as unknown as historySync.HistorySyncHost);
     }
 
     private shouldSuppressFreshLaunchStartupReplay(parsedMessages: unknown[], parsedStatus: any, adapterStatus: any, parsedProviderSessionId = ''): boolean {
-        if (this.launchMode !== 'new') return false;
-        if (this.providerSessionId) return false;
-        if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) return false;
-        if (!isIdleStatus(adapterStatus?.status) || !isIdleStatus(parsedStatus?.status)) return false;
-        if (parsedProviderSessionId) return true;
-
-        const newestMessageAt = parsedMessages.reduce<number>((newest, message) => Math.max(newest, getMessageTime(message)), 0);
-
-        // Untimestamped idle parser output during a fresh launch is usually the
-        // provider's last workspace transcript before a new turn exists.
-        return newestMessageAt === 0;
+        return historySync.shouldSuppressFreshLaunchStartupReplay(
+            this as unknown as historySync.HistorySyncHost,
+            parsedMessages,
+            parsedStatus,
+            adapterStatus,
+            parsedProviderSessionId,
+        );
     }
 
     private syncCanonicalSavedHistoryIfNeeded(options: { full?: boolean } = {}): boolean {
-        if (!this.providerSessionId) return false;
-        const canonicalHistory = this.provider.nativeHistory;
-        if (!canonicalHistory) return false;
-
-        // Per-status-report hydration reads only a bounded tail (snapshot needs at
-        // most the newest 60). The once-per-resume restore path passes full:true
-        // because seedSessionHistory needs the COMPLETE transcript to seed dedup
-        // state. The read-cache key encodes the window so the bounded and full
-        // reads don't share/clobber each other's 2s cache entry.
-        const limit = options.full ? Number.MAX_SAFE_INTEGER : STATUS_HYDRATION_TAIL_LIMIT;
-        const windowTag = options.full ? 'full' : `tail:${STATUS_HYDRATION_TAIL_LIMIT}`;
-
-        // authority-ok: history-hydration READ routing, not a completion verdict. Selects
-        // the on-disk native transcript vs the materialized-mirror read path; no
-        // completion/stall/redrive decision is taken here.
-        if (isNativeSourceCanonicalHistory(canonicalHistory)) {
-            const cacheKey = [this.type, this.providerSessionId, this.workingDir, windowTag].join('\0');
-            const now = Date.now();
-            if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
-                return true;
-            }
-            this.lastNativeSourceCanonicalCacheKey = cacheKey;
-            this.lastNativeSourceCanonicalCheckAt = now;
-
-            const restoredHistory = readProviderChatHistory(this.type, {
-                canonicalHistory,
-                historySessionId: this.providerSessionId,
-                workspace: this.workingDir,
-                offset: 0,
-                limit,
-                historyBehavior: this.provider.historyBehavior,
-                scripts: this.provider.scripts as any,
-            });
-            if (restoredHistory.source === 'provider-native') {
-                this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                    role: message.role,
-                    content: message.content,
-                    kind: message.kind,
-                    senderName: message.senderName,
-                    receivedAt: message.receivedAt,
-                }));
-            }
-            return true;
-        }
-
-        try {
-            const cacheKey = [this.type, this.providerSessionId, this.workingDir, canonicalHistory.mode || 'materialized-mirror', windowTag].join('\0');
-            const now = Date.now();
-            if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
-                return true;
-            }
-            this.lastNativeSourceCanonicalCacheKey = cacheKey;
-            this.lastNativeSourceCanonicalCheckAt = now;
-
-            if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir, this.provider.scripts as any)) {
-                return false;
-            }
-            // Bounded by default: the per-status-report path only needs the newest
-            // STATUS_HYDRATION_TAIL_LIMIT messages because the snapshot caps
-            // activeChat.messages to the last 60 (status/normalize.ts) and loads
-            // the rest lazily via read_chat on subscribe. The once-per-resume
-            // restore path passes full:true so seedSessionHistory still sees the
-            // COMPLETE transcript for prefix-dedup seeding. readChatHistory serves
-            // a bounded limit as an O(tail) read.
-            const restoredHistory = readChatHistory(this.type, 0, limit, this.providerSessionId, 0, this.provider.historyBehavior);
-            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                role: message.role,
-                content: message.content,
-                kind: message.kind,
-                senderName: message.senderName,
-                receivedAt: message.receivedAt,
-            }));
-            return true;
-        } catch {
-            return false;
-        }
+        return historySync.syncCanonicalSavedHistoryIfNeeded(this as unknown as historySync.HistorySyncHost, options);
     }
 
     private restorePersistedHistoryFromCurrentSession(): void {
-        if (!this.providerSessionId) return;
-        // Restore is the once-per-resume seeding path: it needs the COMPLETE
-        // transcript so seedSessionHistory can prime dedup state. Pass full so the
-        // hydration read is unbounded here (and only here).
-        this.syncCanonicalSavedHistoryIfNeeded({ full: true });
-        // authority-ok: history-restore READ routing, not a completion verdict — picks the
-        // native transcript read vs the legacy chat-history read for seeding dedup state.
-        const restoredHistory = isNativeSourceCanonicalHistory(this.provider.nativeHistory)
-            ? readProviderChatHistory(this.type, {
-                canonicalHistory: this.provider.nativeHistory,
-                historySessionId: this.providerSessionId,
-                workspace: this.workingDir,
-                offset: 0,
-                limit: Number.MAX_SAFE_INTEGER,
-                historyBehavior: this.provider.historyBehavior,
-                scripts: this.provider.scripts as any,
-            })
-            : (() => {
-                this.historyWriter.compactHistorySession(this.type, this.providerSessionId!, this.provider.historyBehavior);
-                return readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
-            })();
-        this.historyWriter.seedSessionHistory(
-            this.type,
-            restoredHistory.messages,
-            this.providerSessionId,
-            this.instanceId,
-        );
-        this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-            kind: message.kind,
-            senderName: message.senderName,
-            receivedAt: message.receivedAt,
-        }));
-        this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
+        historySync.restorePersistedHistoryFromCurrentSession(this as unknown as historySync.HistorySyncHost);
     }
-
 
 }
