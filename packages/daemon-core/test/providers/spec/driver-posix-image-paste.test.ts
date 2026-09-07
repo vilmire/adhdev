@@ -87,12 +87,22 @@ function imagePasteSpec(optIn: boolean): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-posix-paste-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

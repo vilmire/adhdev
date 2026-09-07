@@ -8,7 +8,7 @@
  *   - the buffer is capped at 20 (oldest dropped),
  *   - the lightweight stateHistory / DriverHistoryEntry schema is unchanged.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -60,12 +60,22 @@ const SPEC = {
     ],
 };
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-snap-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(SPEC));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

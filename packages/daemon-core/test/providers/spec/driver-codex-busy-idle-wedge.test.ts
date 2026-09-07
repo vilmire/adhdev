@@ -22,7 +22,7 @@
  *  2. A live `Working (⣿ Ns · esc to interrupt)` spinner keeps BOTH arms
  *     vetoed well past the fallback bound — no false idle mid-generation.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -81,6 +81,8 @@ function scaleTimings(node: unknown): void {
     }
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeScaledSpec(): string {
     const spec = JSON.parse(fs.readFileSync(resolveSpecPath(), 'utf8'));
     scaleTimings(spec);
@@ -91,10 +93,18 @@ function writeScaledSpec(): string {
         throw new Error('shipping spec no longer carries the elapsed 30000 fallback arm — update this test');
     }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-busy-wedge-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

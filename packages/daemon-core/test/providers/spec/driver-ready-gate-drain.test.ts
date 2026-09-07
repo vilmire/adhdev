@@ -14,7 +14,7 @@
  * asserts the previously-queued message is flushed to the PTY on that same
  * readiness frame — no further screen activity required.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -83,12 +83,22 @@ function readyGateSpec(): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-ready-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

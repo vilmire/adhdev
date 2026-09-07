@@ -19,7 +19,7 @@
  *      and is drained once the machine returns to idle;
  *   2. a redelivery of the same text in the 1.2s..60s hole is written ONCE.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -92,12 +92,22 @@ function busyCycleSpec(): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-overlap-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

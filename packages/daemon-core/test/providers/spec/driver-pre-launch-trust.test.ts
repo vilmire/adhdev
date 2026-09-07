@@ -8,7 +8,7 @@
  * directly with cwd = worktree, and every fresh worktree (mesh task clone)
  * blocked on the trust prompt.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -57,12 +57,22 @@ function baseSpec(overrides: Record<string, unknown>): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-pretrust-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 describe('FsmDriver -- pre_launch_trust', () => {
     it('keeps user-confirmed trust materialization in the user store on start()', () => {

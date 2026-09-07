@@ -930,6 +930,10 @@ describe('resolveMeshCoordinatorSetup', () => {
       coordinator: {},
     }
 
+    // The code under test (not this fixture) creates an isolated HERMES_HOME
+    // directory as a side effect of launch_mesh_coordinator — capture it here
+    // so it can be swept in `finally` alongside the fixture's own `workspace`.
+    let productCreatedHermesHome: string | undefined
     try {
       const result = await router.execute('launch_mesh_coordinator', {
         meshId: 'mesh_hermes',
@@ -953,6 +957,7 @@ describe('resolveMeshCoordinatorSetup', () => {
           HERMES_HOME: expect.stringContaining('adhdev-hermes-mesh-coordinator-'),
         }),
       }))
+      productCreatedHermesHome = String(launchCall.env.HERMES_HOME)
       const isolatedConfigPath = join(String(launchCall.env.HERMES_HOME), 'config.yaml')
       expect(isolatedConfigPath).not.toBe(configPath)
       const isolatedConfigText = readFileSync(isolatedConfigPath, 'utf-8')
@@ -975,6 +980,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       if (previousHermesHome === undefined) delete process.env.HERMES_HOME
       else process.env.HERMES_HOME = previousHermesHome
       rmSync(workspace, { recursive: true, force: true })
+      if (productCreatedHermesHome) rmSync(productCreatedHermesHome, { recursive: true, force: true })
     }
   })
 

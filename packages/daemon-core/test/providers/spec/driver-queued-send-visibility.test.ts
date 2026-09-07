@@ -75,8 +75,11 @@ function busyCycleSpec(): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-queued-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
@@ -116,6 +119,10 @@ async function reachGenerating(pty: DrivablePty): Promise<void> {
 
 afterEach(() => {
     vi.restoreAllMocks();
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });
 
 describe('FsmDriver -- queued send visibility', () => {
