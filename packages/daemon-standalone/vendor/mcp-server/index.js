@@ -75832,6 +75832,52 @@ ${rendered}`, "utf-8");
         };
       }
     });
+    function applyBoundedRetention(map3, options) {
+      const { ttlMs, maxEntries, readTimestamp, isProtected } = options;
+      const now = options.now ?? Date.now();
+      let expired = 0;
+      let evicted = 0;
+      if (ttlMs > 0) {
+        for (const [key2, value] of map3) {
+          if (isProtected?.(key2, value)) continue;
+          const at = readTimestamp(value);
+          if (!Number.isFinite(at) || at <= 0) continue;
+          if (now - at > ttlMs) {
+            map3.delete(key2);
+            expired++;
+          }
+        }
+      }
+      if (maxEntries > 0 && map3.size > maxEntries) {
+        const candidates = [];
+        for (const [key2, value] of map3) {
+          if (isProtected?.(key2, value)) continue;
+          const at = readTimestamp(value);
+          candidates.push({ key: key2, at: Number.isFinite(at) && at > 0 ? at : 0 });
+        }
+        candidates.sort((a, b) => a.at - b.at);
+        const overflow = map3.size - maxEntries;
+        for (let i = 0; i < candidates.length && evicted < overflow; i++) {
+          map3.delete(candidates[i].key);
+          evicted++;
+        }
+      }
+      return { expired, evicted };
+    }
+    function setWithBoundedRetention(map3, key2, at, options) {
+      map3.set(key2, at);
+      return applyBoundedRetention(map3, {
+        ttlMs: options.ttlMs,
+        maxEntries: options.maxEntries,
+        readTimestamp: (value) => value,
+        now: options.now ?? at
+      });
+    }
+    var init_bounded_retention = __esm2({
+      "src/shared/bounded-retention.ts"() {
+        "use strict";
+      }
+    });
     async function fastForwardMeshNode(args) {
       const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
       const nodeId = normalizeOptionalString(args.nodeId);
@@ -89789,7 +89835,14 @@ ${cleanBody}`;
       const backoffRound = emptyRounds - REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF + 1;
       remotePullBackoffByDaemon.set(key2, {
         emptyRounds,
-        nextPullAtMs: emptyRounds >= REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF ? nowMs + resolveRemotePullBackoffMs(backoffRound) : 0
+        nextPullAtMs: emptyRounds >= REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF ? nowMs + resolveRemotePullBackoffMs(backoffRound) : 0,
+        lastTouchedAtMs: nowMs
+      });
+      applyBoundedRetention(remotePullBackoffByDaemon, {
+        ttlMs: REMOTE_PULL_PACING_TTL_MS,
+        maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+        readTimestamp: (state2) => state2.lastTouchedAtMs,
+        now: nowMs
       });
     }
     async function pullRemoteNodeQueues(components, mesh, localDaemonId, candidateDaemonIds) {
@@ -89835,7 +89888,12 @@ ${cleanBody}`;
       }
       let received = 0;
       let completedPulls = 0;
-      if (opts?.minIntervalSinceLastPullMs) lastRedrivePullAtMs.set(throttleKey, Date.now());
+      if (opts?.minIntervalSinceLastPullMs) {
+        setWithBoundedRetention(lastRedrivePullAtMs, throttleKey, Date.now(), {
+          ttlMs: REMOTE_PULL_PACING_TTL_MS,
+          maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES
+        });
+      }
       for (const pendingEventArgs of pulls) {
         let events;
         try {
@@ -90040,6 +90098,8 @@ ${cleanBody}`;
     var REMOTE_PULL_BACKOFF_BASE_MS;
     var REMOTE_PULL_BACKOFF_MAX_MS;
     var REDRIVE_PULL_MIN_INTERVAL_MS;
+    var REMOTE_PULL_PACING_TTL_MS;
+    var REMOTE_PULL_PACING_MAX_ENTRIES;
     var remotePullBackoffByDaemon;
     var lastRedrivePullAtMs;
     var NOT_REACHED;
@@ -90051,11 +90111,14 @@ ${cleanBody}`;
         init_mesh_events_utils();
         init_dist();
         init_mesh_reconcile_identity();
+        init_bounded_retention();
         init_transcript_daemon_consumer_read();
         REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF = 3;
         REMOTE_PULL_BACKOFF_BASE_MS = 8e3;
         REMOTE_PULL_BACKOFF_MAX_MS = 3e4;
         REDRIVE_PULL_MIN_INTERVAL_MS = 2e3;
+        REMOTE_PULL_PACING_TTL_MS = 10 * 60 * 1e3;
+        REMOTE_PULL_PACING_MAX_ENTRIES = 500;
         remotePullBackoffByDaemon = /* @__PURE__ */ new Map();
         lastRedrivePullAtMs = /* @__PURE__ */ new Map();
         NOT_REACHED = { received: 0, reached: false };
@@ -95742,6 +95805,12 @@ ${cleanBody}`;
         MESH_UNSANCTIONED_DIRECT_HINT3 = "You dispatched directly into an existing session for work you classified as a new subject. A new topic appended to a session can be dropped, or re-run as the previous task; give it its own task instead \u2014 mesh_enqueue_batch when a further step follows it, mesh_enqueue_task when nothing does.";
       }
     });
+    function noteAutoPruneRunAt(meshId, nowMs) {
+      setWithBoundedRetention(lastAutoPruneRunAtByMesh, meshId, nowMs, {
+        ttlMs: AUTO_PRUNE_THROTTLE_TTL_MS,
+        maxEntries: AUTO_PRUNE_THROTTLE_MAX_ENTRIES
+      });
+    }
     async function runMeshReconcileTick(components) {
       const meshesSnapshot = listMeshes();
       const localDaemonId = readNonEmptyString(loadConfig().machineId) || void 0;
@@ -95913,7 +95982,7 @@ ${cleanBody}`;
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           const lastRunAt = lastAutoPruneRunAtByMesh.get(mesh.id);
           if (lastRunAt !== void 0 && nowMs - lastRunAt < DEFAULT_AUTO_PRUNE_INTERVAL_MS) continue;
-          lastAutoPruneRunAtByMesh.set(mesh.id, nowMs);
+          noteAutoPruneRunAt(mesh.id, nowMs);
           try {
             const snapshot = await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
             if (snapshot) activeWorkLedgerSnapshots.set(mesh.id, snapshot);
@@ -96210,6 +96279,8 @@ ${cleanBody}`;
     var IDLE_SESSION_REAP_INTERVAL_MS;
     var lastIdleSessionReapRunAt;
     var lastAutoPruneRunAtByMesh;
+    var AUTO_PRUNE_THROTTLE_TTL_MS;
+    var AUTO_PRUNE_THROTTLE_MAX_ENTRIES;
     var init_mesh_reconcile_loop = __esm2({
       "src/mesh/mesh-reconcile-loop.ts"() {
         "use strict";
@@ -96240,6 +96311,7 @@ ${cleanBody}`;
         init_mesh_graph_gates();
         init_mesh_graph_staleness();
         init_mesh_graph_provenance();
+        init_bounded_retention();
         init_mesh_reconcile_v2_backstop();
         init_mesh_reconcile_acked_hold();
         init_mesh_reconcile_coordinator_drain();
@@ -96248,6 +96320,8 @@ ${cleanBody}`;
         DISK_RETENTION_INTERVAL_MS2 = 60 * 60 * 1e3;
         IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1e3;
         lastAutoPruneRunAtByMesh = /* @__PURE__ */ new Map();
+        AUTO_PRUNE_THROTTLE_TTL_MS = 24 * 60 * 60 * 1e3;
+        AUTO_PRUNE_THROTTLE_MAX_ENTRIES = 200;
       }
     });
     var mesh_events_exports = {};
@@ -141307,6 +141381,7 @@ ${e?.stderr || ""}`;
       appendLedgerEntry: () => appendLedgerEntry3,
       appendRecentActivity: () => appendRecentActivity,
       appendRemoteLedgerEntries: () => appendRemoteLedgerEntries3,
+      applyBoundedRetention: () => applyBoundedRetention,
       applyDaemonEnvOverrides: () => applyDaemonEnvOverrides,
       armBeacon: () => armBeacon,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
@@ -141833,6 +141908,7 @@ ${e?.stderr || ""}`;
       setLogLevel: () => setLogLevel,
       setMagiKindPanel: () => setMagiKindPanel2,
       setQuotaShowAccountEmail: () => setQuotaShowAccountEmail,
+      setWithBoundedRetention: () => setWithBoundedRetention,
       setWorkspaceBaseRevision: () => setWorkspaceBaseRevision,
       setupIdeInstance: () => setupIdeInstance,
       shouldAutoRestoreHostedSessionsOnStartup: () => shouldAutoRestoreHostedSessionsOnStartup,
@@ -143023,6 +143099,7 @@ ${e?.stderr || ""}`;
     }
     init_worker_mcp_isolation();
     init_usage_normalize();
+    init_bounded_retention();
     init_mesh_fast_forward();
     function lastTimestamp(slice) {
       const entries = Array.isArray(slice?.entries) ? slice.entries : [];

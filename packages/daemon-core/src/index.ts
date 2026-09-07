@@ -344,6 +344,8 @@ export { isWorkerMcpEnabled } from './mesh/worker-mcp-isolation.js';
 export type { MeshSessionUsage, MeshUsageSummary, EvictedUsageRollup } from './mesh/mesh-usage-store.js';
 export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './shared/usage-normalize.js';
 export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './shared/usage-normalize.js';
+export { applyBoundedRetention, setWithBoundedRetention } from './shared/bounded-retention.js';
+export type { BoundedRetentionOptions, BoundedRetentionResult } from './shared/bounded-retention.js';
 export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
