@@ -65,7 +65,7 @@ import {
     sumSessionUsage,
     type NativeUsage,
     type SessionUsageTotals,
-} from '../providers/native-history/usage-normalize.js';
+} from '../shared/usage-normalize.js';
 
 const USAGE_DIR_NAME = 'mesh-usage';
 

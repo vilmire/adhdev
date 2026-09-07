@@ -28,7 +28,7 @@ import { readApprovalResolutionEntries, type ProjectedLedgerView } from './mesh-
 import { shouldForceInjectMeshEvent } from './mesh-events-coordinator.js';
 import { isMeshApprovalEvent, MESH_APPROVAL_EVENTS } from './mesh-event-classify.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
-import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 export interface LiveCoordinator {

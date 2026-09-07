@@ -477,12 +477,3 @@ function extractNativeMessagesFromResult(providerType: string, result: any): Cha
     );
 }
 
-/**
- * ptyStatusApprovalOnly is true when the daemon should treat PTY content as
- * status/approval signal only (not as chat messages). v1 set this to `true`
- * whenever native-history was selected as the source, and `false` otherwise.
- * The machine equivalent: when native is the source we want PTY suppressed.
- */
-export function primaryPtyApprovalOnlyFor(_cliType: string, nativeSelected: boolean): boolean {
-    return nativeSelected;
-}

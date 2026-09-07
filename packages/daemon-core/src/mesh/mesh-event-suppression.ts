@@ -12,7 +12,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { MeshRuntimeStore, pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { prunePendingMeshCoordinatorEventsRetention, type PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
-import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { meshNodeIdMatches, sessionIdsEquivalent, withStatusProbeMarker, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import {
     findRecentTerminalLedgerEvidence,

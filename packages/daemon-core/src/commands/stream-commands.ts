@@ -585,10 +585,6 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
     }
 }
 
-export async function handleExtensionScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
-    return executeProviderScript(h, args, scriptName);
-}
-
 export async function handleProviderScript(h: CommandHelpers, args: any): Promise<CommandResult> {
     const scriptName = typeof args?.scriptName === 'string' ? args.scriptName.trim() : '';
     if (!scriptName) return { success: false, error: 'scriptName is required' };

@@ -47,8 +47,8 @@ import * as os from 'os';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type NativeHistoryRole = 'user' | 'assistant' | 'system';
-export type NativeHistoryKind = 'standard' | 'tool' | 'session_start';
+export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 
 export interface GrokNativeHistoryMessage {
   ts: string;

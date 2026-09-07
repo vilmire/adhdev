@@ -356,9 +356,6 @@ export function getRecentLogs(count = 50, minLevel: LogLevel = 'info'): LogEntry
     return filtered.slice(-count);
 }
 
-/** Ring buffer current size */
-export function getLogBufferSize(): number { return ringBuffer.length; }
-
 // ─── Timestamp ─────────────────────────────
 function ts(): string {
     return new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS

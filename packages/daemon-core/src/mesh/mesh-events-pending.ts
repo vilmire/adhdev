@@ -5,7 +5,7 @@ import { getLedgerDir, readLedgerEntries, readLedgerEntriesByKind, appendLedgerE
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
 import { buildMeshSystemMessage, readNonEmptyString, readRecord, resolveEventSessionId, readMeshCompletionSummary, isWeakCompletionMetadata } from './mesh-events-utils.js';
-import { traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { MESH_FORCE_INJECT_EVENTS } from './mesh-event-classify.js';
 import { daemonIdsEquivalent, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import {

@@ -13,7 +13,7 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { enqueueUnresolvedDelegateForward, nudgeUnresolvedForwardRetry } from './mesh-unresolved-forward-outbox.js';
-import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { delegatedWorkerAutoApproveSettings } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';

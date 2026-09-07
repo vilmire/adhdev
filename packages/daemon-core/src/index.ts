@@ -342,8 +342,8 @@ export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, 
 // pre-E-T0 tool count (design's "게이트 off ⇒ byte-identical" promise, §7.1).
 export { isWorkerMcpEnabled } from './mesh/worker-mcp-isolation.js';
 export type { MeshSessionUsage, MeshUsageSummary, EvictedUsageRollup } from './mesh/mesh-usage-store.js';
-export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './providers/native-history/usage-normalize.js';
-export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './providers/native-history/usage-normalize.js';
+export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './shared/usage-normalize.js';
+export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './shared/usage-normalize.js';
 export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
 export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';

@@ -16,6 +16,13 @@
  *
  * Dependency-light on purpose (only the logger) so both providers/ and mesh/ can
  * import it without any cycle risk.
+ *
+ * Lives in shared/ — NOT mesh/ — precisely because both layers consume it. While it
+ * sat under mesh/, every providers/completion/* call site registered as a
+ * providers → mesh boundary violation (check-import-boundaries.mjs) even though the
+ * module has no mesh dependency at all: the arrows were an artifact of its location,
+ * not real coupling. Keep it free of imports from providers/, mesh/, and
+ * cli-adapters/ so it stays neutral.
  */
 import { LOG } from '../logging/logger.js';
 

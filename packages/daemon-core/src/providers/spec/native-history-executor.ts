@@ -37,7 +37,7 @@ import {
     makeUsage,
     type NativeUsageRecord,
     type SessionUsageTotals,
-} from '../native-history/usage-normalize.js';
+} from '../../shared/usage-normalize.js';
 import {
     claimTranscript,
     isTranscriptClaimedByOther,

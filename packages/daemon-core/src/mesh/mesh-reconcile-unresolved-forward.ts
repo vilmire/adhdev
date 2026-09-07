@@ -26,7 +26,7 @@ import {
 } from './mesh-unresolved-forward-outbox.js';
 import { handleMeshForwardEvent, resolveForwardEventMeshId } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { daemonIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
 import { resolveCoordinatorDaemonIds } from './mesh-reconcile-identity.js';
 

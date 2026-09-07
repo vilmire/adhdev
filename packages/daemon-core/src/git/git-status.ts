@@ -101,9 +101,6 @@ export function __resetGitStatusCacheForTests(): void {
   buildBehindAncestryCache.clear();
 }
 
-/** Alias matching the task's requested name. */
-export const __resetGitStatusCache = __resetGitStatusCacheForTests;
-
 /** Test-only introspection: number of memoized Change Impact evaluations. */
 export function __changeImpactEvalCacheSizeForTests(): number {
   return changeImpactEvalCache.size;

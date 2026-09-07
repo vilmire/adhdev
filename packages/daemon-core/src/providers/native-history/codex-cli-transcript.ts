@@ -23,7 +23,7 @@ import {
   makeUsage,
   type NativeUsageRecord,
   type SessionUsageTotals,
-} from './usage-normalize.js';
+} from '../../shared/usage-normalize.js';
 import {
   resolveNativeCompletionSignalSpec,
   type NativeCompletionSignalSpec,
@@ -53,8 +53,8 @@ const CODEX_DEFAULT_COMPLETION_SIGNAL: NativeCompletionSignalSpec = {
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type NativeHistoryRole = 'user' | 'assistant' | 'system';
-export type NativeHistoryKind = 'standard' | 'tool' | 'session_start';
+export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 
 export interface NativeHistoryMessage {
   ts: string;

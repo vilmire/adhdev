@@ -19,7 +19,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
+import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-trace.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
 import { getActiveDirectDispatches, getQueue, updateDirectDispatchStatus } from './mesh-work-queue.js';

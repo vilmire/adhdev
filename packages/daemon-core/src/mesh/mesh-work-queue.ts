@@ -44,8 +44,6 @@ export type MeshTaskMode = 'code_change' | 'validation' | 'live_debug_readonly' 
 /** G6: task-level scheduling priority. Ranks which task a node pulls first (created_at tie-break). */
 export type MeshTaskPriority = 'low' | 'normal' | 'high';
 
-export const ACTIVE_MESH_QUEUE_STATUSES: MeshActiveTaskStatus[] = ['pending', 'assigned'];
-export const HISTORICAL_MESH_QUEUE_STATUSES: MeshHistoricalTaskStatus[] = ['completed', 'failed', 'cancelled'];
 export const MESH_TASK_MODES: MeshTaskMode[] = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'];
 export const MESH_TASK_PRIORITIES: MeshTaskPriority[] = ['low', 'normal', 'high'];
 

@@ -21,7 +21,7 @@ import type { CompletedDebouncePending, CompletedFinalizationBlock } from '../cl
 import type { CompletionArmPatch, CompletionFlushDecision, CompletionPolicy, CompletionSignalReader } from './completion-engine.js';
 import { decideCompletionPreflight, decideCompletionVerdict } from './completion-engine.js';
 import type { CancelledCompletionReason } from './cancel-recheck.js';
-import { traceMeshEventStage } from '../../mesh/mesh-event-trace.js';
+import { traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';

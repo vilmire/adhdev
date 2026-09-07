@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { LOG } from '../../src/logging/logger.js';
-import { meshEventTraceKey, traceMeshEventStage, traceMeshEventDrop } from '../../src/mesh/mesh-event-trace.js';
+import { meshEventTraceKey, traceMeshEventStage, traceMeshEventDrop } from '../../src/shared/mesh-event-trace.js';
 
 describe('mesh-event-trace (EVTTRACE)', () => {
   afterEach(() => vi.restoreAllMocks());

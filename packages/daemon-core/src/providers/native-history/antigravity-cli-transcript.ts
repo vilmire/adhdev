@@ -72,8 +72,8 @@ import { LOG } from '../../logging/logger.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type NativeHistoryRole = 'user' | 'assistant' | 'system';
-export type NativeHistoryKind = 'standard' | 'tool' | 'session_start';
+export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 
 export interface NativeHistoryMessage {
   ts: string;
