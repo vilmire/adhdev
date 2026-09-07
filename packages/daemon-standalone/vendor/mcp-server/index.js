@@ -49230,6 +49230,8 @@ ${error48.message || ""}`;
     });
     var mesh_config_exports = {};
     __export2(mesh_config_exports, {
+      __getListMeshesDiskReadCountForTests: () => __getListMeshesDiskReadCountForTests,
+      __resetListMeshesDiskReadCountForTests: () => __resetListMeshesDiskReadCountForTests,
       addNode: () => addNode,
       applyMeshHostJoinRequest: () => applyMeshHostJoinRequest,
       collectIgnoredMagiSlotFields: () => collectIgnoredMagiSlotFields2,
@@ -49460,7 +49462,14 @@ ${error48.message || ""}`;
       }
       return identity.replace(/\.git$/i, "");
     }
+    function __getListMeshesDiskReadCountForTests() {
+      return listMeshesDiskReadCount;
+    }
+    function __resetListMeshesDiskReadCountForTests() {
+      listMeshesDiskReadCount = 0;
+    }
     function listMeshes() {
+      listMeshesDiskReadCount++;
       return loadMeshConfig().meshes;
     }
     function listMeshesReadOnly() {
@@ -50147,6 +50156,7 @@ ${error48.message || ""}`;
     var MESH_CONFIG_LOCK_POLL_MS;
     var meshConfigLockHeldInProcess;
     var mergeMeshPolicy;
+    var listMeshesDiskReadCount;
     var MAGI_KIND_PANEL_KINDS;
     var MAX_MAGI_KIND_SLOTS;
     var MAGI_SLOT_KNOWN_KEYS;
@@ -50170,6 +50180,7 @@ ${error48.message || ""}`;
         MESH_CONFIG_LOCK_POLL_MS = 25;
         meshConfigLockHeldInProcess = false;
         mergeMeshPolicy = mergeAndNormalizePolicy;
+        listMeshesDiskReadCount = 0;
         MAGI_KIND_PANEL_KINDS = ["claim_audit", "rca", "design", "freeform"];
         MAX_MAGI_KIND_SLOTS = 24;
         MAGI_SLOT_KNOWN_KEYS = ["provider", "nodeId", "model", "capabilityTags", "n"];
@@ -95732,6 +95743,7 @@ ${cleanBody}`;
       }
     });
     async function runMeshReconcileTick(components) {
+      const meshesSnapshot = listMeshes();
       const localDaemonId = readNonEmptyString(loadConfig().machineId) || void 0;
       const drainDaemonIds = resolveCoordinatorDaemonIds(components);
       const dispatchMeshCommand = components.dispatchMeshCommand;
@@ -95751,7 +95763,7 @@ ${cleanBody}`;
         }
       }
       if (components.router) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           try {
             if (components.router.getCachedInlineMesh(mesh.id)) {
               components.router.getCachedInlineMesh(mesh.id, mesh);
@@ -95762,7 +95774,7 @@ ${cleanBody}`;
         }
       }
       if (dispatchMeshCommand) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           const nodeAwareMesh = getMeshWithCache(components, mesh.id) ?? mesh;
@@ -95774,7 +95786,7 @@ ${cleanBody}`;
         }
       }
       if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95794,7 +95806,7 @@ ${cleanBody}`;
           }
         }
       }
-      for (const mesh of listMeshes()) {
+      for (const mesh of meshesSnapshot) {
         const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
         if (!daemonHostsMesh(mesh, selfIds)) continue;
         try {
@@ -95804,7 +95816,7 @@ ${cleanBody}`;
         }
       }
       if (dispatchMeshCommand) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95815,7 +95827,7 @@ ${cleanBody}`;
         }
       }
       if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95829,7 +95841,7 @@ ${cleanBody}`;
           }
         }
       }
-      for (const mesh of listMeshes()) {
+      for (const mesh of meshesSnapshot) {
         const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
         if (!daemonHostsMesh(mesh, selfIds)) continue;
         try {
@@ -95839,7 +95851,7 @@ ${cleanBody}`;
         }
       }
       if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95863,7 +95875,7 @@ ${cleanBody}`;
         }
       }
       if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95883,7 +95895,7 @@ ${cleanBody}`;
             invalidateAggregateMeshStatus: (meshId) => router.invalidateAggregateMeshStatus(meshId)
           }
         } : {});
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           try {
@@ -95896,7 +95908,7 @@ ${cleanBody}`;
       {
         const minAgeMs = resolveAutoPruneMinAgeMs();
         const nowMs = Date.now();
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
           if (!daemonHostsMesh(mesh, selfIds)) continue;
           const lastRunAt = lastAutoPruneRunAtByMesh.get(mesh.id);
@@ -95920,7 +95932,7 @@ ${cleanBody}`;
           } catch (e) {
             LOG.warn("MeshReconcile", `Disk retention sweep failed: ${e?.message || e}`);
           }
-          for (const mesh of listMeshes()) {
+          for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -95948,7 +95960,7 @@ ${cleanBody}`;
               invalidateAggregateMeshStatus: (meshId) => router.invalidateAggregateMeshStatus(meshId)
             };
             const tickId = `reconcile-${nowMs}`;
-            for (const mesh of listMeshes()) {
+            for (const mesh of meshesSnapshot) {
               const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
               if (!daemonHostsMesh(mesh, selfIds)) continue;
               try {
@@ -95978,7 +95990,7 @@ ${cleanBody}`;
               args
             )
           };
-          for (const mesh of listMeshes()) {
+          for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -150505,11 +150517,21 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       async flushDaemonMetadata(connectionId) {
         const source = this.opts.sources?.daemonMetadataBody;
         if (!source) return;
-        for (const entry of this.collectPushEntries("daemon.metadata", connectionId)) {
+        const entries = this.collectPushEntries("daemon.metadata", connectionId);
+        if (entries.length === 0) return;
+        const cohortBodies = /* @__PURE__ */ new Map();
+        const bodyFor = (cohort) => {
+          const cached5 = cohortBodies.get(cohort);
+          if (cached5 !== void 0) return cached5;
+          const built = source({ includeSessions: cohort });
+          cohortBodies.set(cohort, built);
+          return built;
+        };
+        for (const entry of entries) {
           const now = this.now();
           entry.seq += 1;
           entry.lastSentAt = now;
-          const body = source(entry.params);
+          const body = bodyFor(entry.params?.includeSessions === true);
           this.sink.send(entry.connectionId, "daemon.metadata", {
             topic: "daemon.metadata",
             key: entry.key,
@@ -151371,25 +151393,37 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const now = this.lastStatusSentAt;
         const target = opts?.p2pOnly ? "P2P" : serverConnected ? "P2P+Server" : "P2P";
         const allStates = this.deps.instanceManager.collectAllStates();
-        const ideStates = allStates.filter((s2) => s2.category === "ide");
-        const cliStates = allStates.filter((s2) => s2.category === "cli");
-        const acpStates = allStates.filter((s2) => s2.category === "acp");
-        const ideSummary = ideStates.map((s2) => {
-          const msgs = s2.activeChat?.messages?.length || 0;
-          const exts = s2.extensions.length;
-          return `${s2.type}(${s2.status},${msgs}msg,${exts}ext)`;
-        }).join(", ");
-        const cliSummary = cliStates.map((s2) => `${s2.type}(${s2.status})`).join(", ");
-        const acpSummary = acpStates.map((s2) => `${s2.type}(${s2.status})`).join(", ");
         const logLevel = opts?.p2pOnly ? "debug" : "info";
-        const baseSummary = `IDE: ${ideStates.length} [${ideSummary}] CLI: ${cliStates.length} [${cliSummary}] ACP: ${acpStates.length} [${acpSummary}]`;
-        const summaryChanged = baseSummary !== this.lastStatusSummary;
-        if (summaryChanged) {
-          this.lastStatusSummary = baseSummary;
-          if (logLevel === "debug") {
-            LOG.debug("StatusReport", `\u2192${target} ${baseSummary}`);
-          } else {
-            LOG.info("StatusReport", `\u2192${target} ${baseSummary}`);
+        if (logLevel !== "debug" || getLogLevel() === "debug") {
+          let ideCount = 0;
+          let cliCount = 0;
+          let acpCount = 0;
+          const ideParts = [];
+          const cliParts = [];
+          const acpParts = [];
+          for (const s2 of allStates) {
+            if (s2.category === "ide") {
+              const ide = s2;
+              ideCount++;
+              ideParts.push(`${ide.type}(${ide.status},${ide.activeChat?.messages?.length || 0}msg,${ide.extensions.length}ext)`);
+            } else if (s2.category === "cli") {
+              const cli = s2;
+              cliCount++;
+              cliParts.push(`${cli.type}(${cli.status})`);
+            } else if (s2.category === "acp") {
+              const acp = s2;
+              acpCount++;
+              acpParts.push(`${acp.type}(${acp.status})`);
+            }
+          }
+          const baseSummary = `IDE: ${ideCount} [${ideParts.join(", ")}] CLI: ${cliCount} [${cliParts.join(", ")}] ACP: ${acpCount} [${acpParts.join(", ")}]`;
+          if (baseSummary !== this.lastStatusSummary) {
+            this.lastStatusSummary = baseSummary;
+            if (logLevel === "debug") {
+              LOG.debug("StatusReport", `\u2192${target} ${baseSummary}`);
+            } else {
+              LOG.info("StatusReport", `\u2192${target} ${baseSummary}`);
+            }
           }
         }
         let beaconDiagnostics = null;
@@ -151460,20 +151494,22 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             onlineState: fleetOnlineState
           };
         });
-        recordFleetStatusShadow(fleetStatusEntry({
-          daemonId: this.deps.instanceId,
-          sessions: payload.sessions,
-          // Derived from what this process can actually observe: a live server
-          // socket is `online`; no socket while P2P still carries traffic is a
-          // daemon mid-reconnect rather than a dead one. `offline` is
-          // effectively unreachable from here — `sendUnifiedStatusReport`
-          // returns early when neither transport is up — and is kept in the
-          // enum for a consumer that infers it from a stale `at`.
-          onlineState: fleetOnlineState,
-          p2pActive: p2pConnected,
-          timestamp: now,
-          seqscribe: this.deps.getSeqscribeStats?.() || void 0
-        }));
+        if (isFleetStatusShadowActive()) {
+          recordFleetStatusShadow(fleetStatusEntry({
+            daemonId: this.deps.instanceId,
+            sessions: payload.sessions,
+            // Derived from what this process can actually observe: a live server
+            // socket is `online`; no socket while P2P still carries traffic is a
+            // daemon mid-reconnect rather than a dead one. `offline` is
+            // effectively unreachable from here — `sendUnifiedStatusReport`
+            // returns early when neither transport is up — and is kept in the
+            // enum for a consumer that infers it from a stale `at`.
+            onlineState: fleetOnlineState,
+            p2pActive: p2pConnected,
+            timestamp: now,
+            seqscribe: this.deps.getSeqscribeStats?.() || void 0
+          }));
+        }
         if (opts?.p2pOnly) return;
         if (!serverConnected || !serverConn) return;
         const wsPayload = buildCloudStatusReportPayload(

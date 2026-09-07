@@ -189,6 +189,28 @@ export function __resetAutoPruneThrottleForTests(): void {
 //     Unchanged from before.
 
 export async function runMeshReconcileTick(components: DaemonComponents): Promise<void> {
+    // ── PER-TICK MESH SNAPSHOT (perf) ─────────────────────────────────────────
+    // Every `listMeshes()` is a synchronous readFileSync + JSON.parse + full
+    // migration object rebuild of meshes.json. This tick iterates the mesh list
+    // in ~17 separate places (one per phase, several gated on store/router), so
+    // the unmodified tick re-read and re-parsed the SAME file up to 17 times
+    // every 4 seconds — measured 0.10ms/read at 20 meshes, i.e. ~1.7ms of
+    // blocking sync I/O per tick that produced byte-identical data each time.
+    //
+    // Read it ONCE here and pass the result to every phase below. This is a
+    // pure de-duplication of reads within a single tick, not a cross-tick cache:
+    // the next tick re-reads from disk, so a mesh added/removed by another
+    // daemon (or a hand edit) is still picked up within one interval, exactly as
+    // before. Within one tick the phases already ran against whatever the file
+    // said at their own read moment with no ordering guarantee between them, so
+    // a consistent single snapshot is if anything the stronger contract — a
+    // mesh can no longer appear in PHASE 3 but vanish before PHASE 5 of the
+    // same tick.
+    //
+    // ★ Deliberately NOT applied to `getMesh(...)` calls inside the phases:
+    // those re-read the mesh's POLICY at the moment of use, and PHASE 5.5's
+    // saga recovery can legitimately mutate config mid-tick.
+    const meshesSnapshot = listMeshes();
     const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
     // The id-set used to scope the local queue drain (status id + machineId). See
     // resolveCoordinatorDaemonIds — the status id is what the MCP layer stamps and
@@ -256,7 +278,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // to a resolution sourced from a snapshot that's only as fresh as the last
     // 4s tick. Only merge into a cache entry that already exists.
     if (components.router) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             try {
                 if (components.router.getCachedInlineMesh(mesh.id)) {
                     components.router.getCachedInlineMesh(mesh.id, mesh);
@@ -286,7 +308,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // claim path itself (see its doc comment, CLAIMSTALL fix). Union the inline
     // cache here too so PHASE 1 polls every node the claim/status paths already see.
     if (dispatchMeshCommand) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             // Expand to every id-form this daemon answers to for this mesh (runtime
             // drain ids ∪ config-form node/host ids) and use it for BOTH the host gate
             // and the remote pull filter, so a worker stamp in any form is recovered.
@@ -305,7 +327,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // Runs before PHASE 3 so any row it returns to 'pending' is re-dispatched by the
     // PHASE 3 trigger in this same tick. See recoverStrandedAssignedDispatches.
     if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -339,7 +361,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // helper structured-blocks, never rebases). Runs for EVERY mesh this daemon hosts
     // (not gated on continuous mode) and BEFORE PHASE 3 so a caught-up base is current
     // before any new task is dispatched. No markers → immediate no-op.
-    for (const mesh of listMeshes()) {
+    for (const mesh of meshesSnapshot) {
         const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
         if (!daemonHostsMesh(mesh, selfIds)) continue;
         try {
@@ -358,7 +380,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // hammering peers. No-op for every mesh that has not opted into continuous mode, so
     // the default (idle-edge only) path is byte-for-byte unchanged.
     if (dispatchMeshCommand) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -392,7 +414,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // store and emit the WARN below every tick × mesh count, flooding the logs. Skip
     // the phase entirely in that case; the JSONL event-delivery path is unaffected.
     if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -421,7 +443,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // so it no longer depends on the LLM polling. The reconcile is idempotent
     // (hasTerminalLedgerAfterDispatch guards against re-synthesis), so attempting it
     // every tick for the same dispatch is safe — once a terminal exists it no-ops.
-    for (const mesh of listMeshes()) {
+    for (const mesh of meshesSnapshot) {
         const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
         if (!daemonHostsMesh(mesh, selfIds)) continue;
         try {
@@ -446,7 +468,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // awaiting_coordinator/claimed. Isolated per mesh so a sweep fault cannot kill
     // the tick.
     if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -481,7 +503,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // mesh-graph-staleness.ts). Never mutates graph/gate/queue state; timeout
     // POLICY remains PHASE 5.4's job. Isolated per mesh like the other phases.
     if (store) {
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -512,7 +534,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                 },
             }
             : {});
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             try {
@@ -543,7 +565,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     {
         const minAgeMs = resolveAutoPruneMinAgeMs();
         const nowMs = Date.now();
-        for (const mesh of listMeshes()) {
+        for (const mesh of meshesSnapshot) {
             const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             const lastRunAt = lastAutoPruneRunAtByMesh.get(mesh.id);
@@ -586,7 +608,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             }
             // Orphan-worktree detection is per-mesh (needs the mesh's base repo + node set)
             // and only for meshes this daemon hosts (its local base checkout is the git anchor).
-            for (const mesh of listMeshes()) {
+            for (const mesh of meshesSnapshot) {
                 const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
                 if (!daemonHostsMesh(mesh, selfIds)) continue;
                 try {
@@ -619,7 +641,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     invalidateAggregateMeshStatus: meshId => router.invalidateAggregateMeshStatus(meshId),
                 };
                 const tickId = `reconcile-${nowMs}`;
-                for (const mesh of listMeshes()) {
+                for (const mesh of meshesSnapshot) {
                     const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
                     if (!daemonHostsMesh(mesh, selfIds)) continue;
                     try {
@@ -659,7 +681,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
                     args as Parameters<typeof router.cleanupMeshSessions>[0],
                 ),
             };
-            for (const mesh of listMeshes()) {
+            for (const mesh of meshesSnapshot) {
                 const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
                 if (!daemonHostsMesh(mesh, selfIds)) continue;
                 try {
