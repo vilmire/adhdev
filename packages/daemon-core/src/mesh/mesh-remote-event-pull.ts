@@ -22,6 +22,7 @@ import { handleMeshForwardEvent } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
+import { applyBoundedRetention, setWithBoundedRetention } from '../shared/bounded-retention.js';
 import {
     readTranscriptForDaemonConsumer,
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
@@ -59,7 +60,25 @@ export const REMOTE_PULL_BACKOFF_MAX_MS = 30_000;
 // Well under the 4s tick so a genuinely fresh check is never stale next tick.
 export const REDRIVE_PULL_MIN_INTERVAL_MS = 2_000;
 
-interface RemotePullBackoff { emptyRounds: number; nextPullAtMs: number; }
+// ─── Pacing-state retention (MEM-4) ────────────────────────────────────────
+// Both maps below are keyed `meshId::canonicalDaemonId`, so their cardinality
+// grows with every distinct (mesh, daemon) pair the coordinator has EVER pulled
+// from — nodes removed from a mesh, retired worktree clones, machines that went
+// away. `remotePullBackoffByDaemon` is only deleted on a NON-EMPTY pull result,
+// so a daemon that is removed while backed off (or never returns events again)
+// keeps its row forever; `lastRedrivePullAtMs` had no production delete path at
+// all. Neither is large per entry, but neither had a bound.
+//
+// Both hold pure PACING state whose whole purpose expires on a timescale of
+// seconds (30s backoff cap / 2s redrive window). Dropping a row simply restores
+// full-cadence pulling for that daemon — lossless, since the remote queue keeps
+// undrained rows. So the TTL is set far above both windows (10 min) and can only
+// remove entries whose pacing decision is long since moot.
+const REMOTE_PULL_PACING_TTL_MS = 10 * 60 * 1000;
+/** Backstop only: a real mesh fleet is nowhere near this many (mesh, daemon) pairs. */
+const REMOTE_PULL_PACING_MAX_ENTRIES = 500;
+
+interface RemotePullBackoff { emptyRounds: number; nextPullAtMs: number; lastTouchedAtMs: number; }
 const remotePullBackoffByDaemon = new Map<string, RemotePullBackoff>();
 const lastRedrivePullAtMs = new Map<string, number>();
 
@@ -68,6 +87,39 @@ export function __resetRemoteEventPullPacingForTests(): void {
     remotePullBackoffByDaemon.clear();
     lastRedrivePullAtMs.clear();
 }
+
+/**
+ * @internal Test-only: drive the real (module-private) backoff writer and observe the
+ * resulting map size, so the MEM-4 retention bound is exercised through production
+ * code rather than a re-implementation of it.
+ */
+export function __noteRemotePullResultForTests(
+    meshId: string,
+    daemonId: string,
+    result: PullFromNodeResult,
+    nowMs: number,
+): void {
+    noteRemotePullResult(meshId, daemonId, result, nowMs);
+}
+
+/** @internal Test-only: current pacing-map sizes + key presence. */
+export function __readRemoteEventPullPacingStateForTests(): {
+    backoffSize: number;
+    backoffKeys: string[];
+    redriveSize: number;
+} {
+    return {
+        backoffSize: remotePullBackoffByDaemon.size,
+        backoffKeys: [...remotePullBackoffByDaemon.keys()],
+        redriveSize: lastRedrivePullAtMs.size,
+    };
+}
+
+/** @internal Test-only: the bounds MEM-4 applies, so tests assert against the real values. */
+export const __REMOTE_PULL_PACING_BOUNDS_FOR_TESTS = {
+    ttlMs: REMOTE_PULL_PACING_TTL_MS,
+    maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+} as const;
 
 // Exponential backoff per consecutive empty round past the grace rounds:
 // 8s, 16s, then pinned at the 30s cap.
@@ -102,6 +154,15 @@ function noteRemotePullResult(meshId: string, daemonId: string, result: PullFrom
         nextPullAtMs: emptyRounds >= REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF
             ? nowMs + resolveRemotePullBackoffMs(backoffRound)
             : 0,
+        lastTouchedAtMs: nowMs,
+    });
+    // MEM-4: bound the pacing map. The entry just written is the newest, so the
+    // oldest-first sweep can never drop it; only rows untouched for 10 min go.
+    applyBoundedRetention(remotePullBackoffByDaemon, {
+        ttlMs: REMOTE_PULL_PACING_TTL_MS,
+        maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+        readTimestamp: (state) => state.lastTouchedAtMs,
+        now: nowMs,
     });
 }
 
@@ -253,7 +314,14 @@ export async function pullPendingEventsFromNode(
     // not write this map: the last-chance pull intentionally runs after PHASE 1
     // to close an event-arrived-during-this-tick race. Only later stranded rows
     // on the same daemon reuse this first targeted drain.
-    if (opts?.minIntervalSinceLastPullMs) lastRedrivePullAtMs.set(throttleKey, Date.now());
+    if (opts?.minIntervalSinceLastPullMs) {
+        // MEM-4: same bound on the redrive-throttle map, which previously had no
+        // production delete path whatsoever. The row just stamped is newest.
+        setWithBoundedRetention(lastRedrivePullAtMs, throttleKey, Date.now(), {
+            ttlMs: REMOTE_PULL_PACING_TTL_MS,
+            maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+        });
+    }
     for (const pendingEventArgs of pulls) {
         let events: unknown;
         try {

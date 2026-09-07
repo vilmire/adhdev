@@ -115,6 +115,7 @@ import { createDefaultWorkspaceSagaPorts } from './mesh-graph-workspace-ports.js
 import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
 import { sweepMeshGraphStaleness } from './mesh-graph-staleness.js';
 import { recordGraphGateExpired } from './mesh-graph-provenance.js';
+import { setWithBoundedRetention } from '../shared/bounded-retention.js';
 
 // Re-export the extracted public API so existing importers (mesh-events.ts barrel;
 // the reconcile-loop test suite) keep their `from './mesh-reconcile-loop.js'` paths.
@@ -164,9 +165,45 @@ let lastIdleSessionReapRunAt: number | undefined;
 // meshes avoid rebuilding the same active-work evidence on every 4s tick.
 const lastAutoPruneRunAtByMesh = new Map<string, number>();
 
+// MEM-4: this throttle map is keyed by meshId and had no production delete path,
+// so a daemon that hosts, then stops hosting, a succession of meshes (each mesh
+// delete/recreate mints a fresh id) accumulated a row per mesh id for the whole
+// process lifetime. The value is pure cadence state whose only effect is "run the
+// 24h-gated prune again"; dropping a row makes the next tick run one extra prune
+// pass for that mesh, which is exactly the post-restart behavior the code already
+// documents as correct ("undefined = never run yet"). So the TTL is far above the
+// throttle interval and can only ever expire a mesh this daemon stopped hosting.
+const AUTO_PRUNE_THROTTLE_TTL_MS = 24 * 60 * 60 * 1000; // 24h — the prune's own age gate
+/** Backstop only: no daemon legitimately hosts anywhere near this many meshes. */
+const AUTO_PRUNE_THROTTLE_MAX_ENTRIES = 200;
+
 export function __resetAutoPruneThrottleForTests(): void {
     lastAutoPruneRunAtByMesh.clear();
 }
+
+/** @internal Test-only: observe the MEM-4 bound on the auto-prune throttle map. */
+export function __readAutoPruneThrottleStateForTests(): { size: number; keys: string[] } {
+    return { size: lastAutoPruneRunAtByMesh.size, keys: [...lastAutoPruneRunAtByMesh.keys()] };
+}
+
+/** The single bounded write path for the auto-prune throttle map (production + tests). */
+function noteAutoPruneRunAt(meshId: string, nowMs: number): void {
+    setWithBoundedRetention(lastAutoPruneRunAtByMesh, meshId, nowMs, {
+        ttlMs: AUTO_PRUNE_THROTTLE_TTL_MS,
+        maxEntries: AUTO_PRUNE_THROTTLE_MAX_ENTRIES,
+    });
+}
+
+/** @internal Test-only: drive the real bounded write path above. */
+export function __noteAutoPruneRunForTests(meshId: string, nowMs: number): void {
+    noteAutoPruneRunAt(meshId, nowMs);
+}
+
+/** @internal Test-only: the bounds applied, so tests assert the real values. */
+export const __AUTO_PRUNE_THROTTLE_BOUNDS_FOR_TESTS = {
+    ttlMs: AUTO_PRUNE_THROTTLE_TTL_MS,
+    maxEntries: AUTO_PRUNE_THROTTLE_MAX_ENTRIES,
+} as const;
 
 // One reconcile tick. Two independent phases:
 //
@@ -570,7 +607,9 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
             if (!daemonHostsMesh(mesh, selfIds)) continue;
             const lastRunAt = lastAutoPruneRunAtByMesh.get(mesh.id);
             if (lastRunAt !== undefined && nowMs - lastRunAt < DEFAULT_AUTO_PRUNE_INTERVAL_MS) continue;
-            lastAutoPruneRunAtByMesh.set(mesh.id, nowMs);
+            // MEM-4: bounded write — the row just stamped is the newest, so the
+            // oldest-first sweep can never evict the mesh being processed.
+            noteAutoPruneRunAt(mesh.id, nowMs);
             try {
                 const snapshot = await autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs);
                 if (snapshot) activeWorkLedgerSnapshots.set(mesh.id, snapshot);
