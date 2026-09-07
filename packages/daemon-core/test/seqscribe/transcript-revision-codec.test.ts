@@ -287,4 +287,55 @@ describe('TranscriptRevisionAssembler — fail-closed reassembly (design §3.3/�
 
         expect(assembler.getLatestComplete()).toEqual(complete);
     });
+
+    // ★ Warm-cache integrity: the re-decode short-circuit skips only the DECODE,
+    // never a CHECK. A second delivery that DECLARES the cached snapshot's hash
+    // but carries tampered chunk bytes must be rejected exactly as a cold
+    // assembler rejects it — otherwise a warm subscriber accepts an envelope a
+    // cold one refuses, and integrity depends on cache residency.
+    it('rejects a TAMPERED chunk even when the commit declares the WARM-CACHED hash', () => {
+        const encoded = encode();
+        const warm = new TranscriptRevisionAssembler(IDENTITY.producerWriterId);
+        const rows = rowsOf(encoded);
+        rows.forEach((row) => warm.ingestRow(row));
+        const cached = warm.getLatestComplete();
+        expect(cached).not.toBeNull();
+
+        // Replay the SAME revision (same declared bytes/hash) with a corrupted body.
+        const tamperedChunk: TranscriptRevisionChunkV1 = {
+            ...(rows[1]!.payload as TranscriptRevisionChunkV1),
+            dataBase64: 'AA==',
+        };
+        const tamperedRows: TranscriptRevisionRow[] = [
+            rows[0]!,
+            { ...rows[1]!, payload: tamperedChunk },
+            rows[2]!,
+        ];
+
+        // A cold assembler is the reference behaviour.
+        const cold = new TranscriptRevisionAssembler(IDENTITY.producerWriterId);
+        let coldResult;
+        for (const row of tamperedRows) coldResult = cold.ingestRow(row);
+        expect(coldResult?.status).toBe('rejected');
+
+        let warmResult;
+        for (const row of tamperedRows) warmResult = warm.ingestRow(row);
+        expect(warmResult).toEqual(coldResult);
+        // And the previously verified snapshot is still what is served.
+        expect(warm.getLatestComplete()).toEqual(cached);
+    });
+
+    it('still short-circuits (accepts) an INTACT re-delivery of the cached revision', () => {
+        const encoded = encode();
+        const warm = new TranscriptRevisionAssembler(IDENTITY.producerWriterId);
+        const rows = rowsOf(encoded);
+        rows.forEach((row) => warm.ingestRow(row));
+        const cached = warm.getLatestComplete();
+
+        let replayResult;
+        for (const row of rows) replayResult = warm.ingestRow(row);
+        expect(replayResult?.status).toBe('complete');
+        // Identity-equal object: proof the cached snapshot was returned, not re-parsed.
+        expect(warm.getLatestComplete()?.snapshot).toBe(cached?.snapshot);
+    });
 });

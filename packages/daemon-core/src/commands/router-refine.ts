@@ -534,7 +534,10 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             // but the local main checkout hasn't been fast-forwarded yet.
             let fetchWarning: string | undefined;
             try {
-                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
+                // without it an unreachable remote hangs this await forever, so the refine
+                // job never completes and holds its node slot indefinitely.
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
             } catch (e: any) {
                 fetchWarning = `git fetch origin ${baseBranch} failed (proceeding with local HEAD): ${e?.message}`;
             }
@@ -1701,7 +1704,10 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             if (!requireApprovalForPush) {
                 const pushStarted = Date.now();
                 try {
-                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
+                    // an unreachable remote must surface as a push FAILURE (which the catch
+                    // below already reports) rather than an await that never settles.
+                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
                     recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
                 } catch (e: any) {
@@ -2046,7 +2052,10 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
             } catch { /* fall back to main */ }
             let baseRef = 'HEAD';
             try {
-                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
+                // without it an unreachable remote hangs this await forever, so the refine
+                // job never completes and holds its node slot indefinitely.
+                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
             } catch { /* offline / no remote — fall through to local refs */ }
             try {
                 const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
