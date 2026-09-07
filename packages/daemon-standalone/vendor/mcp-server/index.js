@@ -143284,6 +143284,16 @@ ${e?.stderr || ""}`;
           graphStore.updateNodeState(graphId, nodeId, "blocked", nowIso);
           heldNodeIds.push(nodeId);
         });
+        const gateNodesById = new Map(
+          graphStore.listNodes(graphId).map((n) => [n.nodeId, n])
+        );
+        for (const g3 of gates) {
+          const gateNodeId = gateNodeIdByRef.get(g3.ref.trim());
+          if (edges.some((e) => e.toNodeId === gateNodeId)) continue;
+          const gateNode = gateNodesById.get(gateNodeId);
+          if (!gateNode) continue;
+          maybeOpenCoordinatorGate(store, gateNode, edges, gateNodesById, nowIso);
+        }
         return {
           graphId,
           batchId,

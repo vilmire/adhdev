@@ -68,7 +68,7 @@ import {
     parseOnDependencyFailurePolicy,
     serializeGraphPolicy,
 } from './mesh-graph-derived-failure.js';
-import { graphMaterializationBlockReason } from './mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason, maybeOpenCoordinatorGate } from './mesh-graph-transition-runner.js';
 import { declareWorkspaceIntents, type GraphWorkspaceDeclaration } from './mesh-graph-workspace-saga.js';
 import { enqueueTaskGraph, type MeshTaskGraphEntrySpec, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 
@@ -600,6 +600,37 @@ export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanRes
             graphStore.updateNodeState(graphId, nodeId, 'blocked', nowIso);
             heldNodeIds.push(nodeId);
         });
+
+        // ── 6. Gates with NO predecessors open IMMEDIATELY (M-GATE-STUCK-DECLARED) ──
+        // ★ THE DEFECT: `maybeOpenCoordinatorGate` was reachable ONLY from an
+        // edge-traversal frontier — the terminal-completion loop in the runner and
+        // the release loop in mesh-graph-gates. Both walk edges OUT of a node that
+        // just reached a terminal state. A gate with an empty `depends_on` has NO
+        // incoming edge, so no completion ever names it as a downstream target and
+        // nothing ever called the opener: the gate sat `declared` forever, claims
+        // returned `gate_not_awaiting` ("predecessors have not completed yet") for
+        // a gate with zero predecessors, and its downstream tasks stayed pinned
+        // under `graph_materialization_pending`. Measured live 2026-09-06: batch
+        // `queued-send-fix-land-deploy-rc91` held a refinery gate for 2h+.
+        //
+        // The predicate `maybeOpenCoordinatorGate` already applies is exactly
+        // right — `incoming.every(...)` is VACUOUSLY TRUE for zero predecessors,
+        // i.e. "no predecessors" already means "predecessors satisfied". The bug
+        // was purely that nothing ever asked. So we ask, once, at commit time, and
+        // ONLY for gates whose incoming edge set is empty. A gate that does have
+        // predecessors is untouched here and still opens only when they complete —
+        // reusing the same opener keeps a single source of truth for the block /
+        // outbox / `waiting_gate` side effects rather than duplicating them.
+        const gateNodesById = new Map<string, MeshTaskGraphNodeRow>(
+            graphStore.listNodes(graphId).map(n => [n.nodeId, n]),
+        );
+        for (const g of gates) {
+            const gateNodeId = gateNodeIdByRef.get(g.ref.trim())!;
+            if (edges.some(e => e.toNodeId === gateNodeId)) continue;
+            const gateNode = gateNodesById.get(gateNodeId);
+            if (!gateNode) continue;
+            maybeOpenCoordinatorGate(store, gateNode, edges, gateNodesById, nowIso);
+        }
 
         return {
             graphId,
