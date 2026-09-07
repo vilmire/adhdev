@@ -45,7 +45,29 @@ const SECRET_LIKE_KEY_PATTERN = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API[_-]
 // contract: the whole point of this map is that config drives the next
 // restart), but flagging it in the boot log catches a typo that would
 // otherwise silently do nothing.
-const KNOWN_FLAG_KEYS = new Set(['ADHDEV_WORKER_MCP']);
+//
+// ADHDEV_SEQSCRIBE_TRANSCRIPT is the DAEMON half of the Phase 3 transcript
+// replica opt-in (design §8 unit 9's "유효한 소크의 전제"). Listing it here is
+// deliberately the whole of its wiring: `resolveTranscriptMode()` reads
+// `process.env` lazily at call time (seqscribe/transcript-mode.ts), and boot
+// applies this map to `process.env` before any such read
+// (boot/daemon-lifecycle.ts §1.1), so persisting the key here is sufficient to
+// put a daemon in `primary` across restarts AND upgrades — the upgrade helper
+// re-spawns from the parent's env, which is not a durable channel on its own.
+//
+// It is NOT set anywhere by default, and must not be: `primary` is what makes
+// a `replicaHealthy` session actually unsubscribe legacy `session.chat_tail`
+// (§8 unit 9), which is a live behavior change. Absent this key the mode
+// resolves to `shadow` and nothing moves off the legacy read path. Turning it
+// on is an operator decision — see docs/operations/TRANSCRIPT_PRIMARY_OPT_IN.md.
+//
+// The deploy scripts are deliberately NOT the injection point. They set env on
+// `npm run build` children only; that works for the BROWSER half
+// (`VITE_ADHDEV_TRANSCRIPT_WORKER`, which Vite inlines into the bundle at build
+// time) but a build-time env cannot reach a daemon process that starts later on
+// another machine. A deploy-script entry for this key would look set and do
+// nothing.
+const KNOWN_FLAG_KEYS = new Set(['ADHDEV_WORKER_MCP', 'ADHDEV_SEQSCRIBE_TRANSCRIPT']);
 
 export function isSecretLikeEnvKey(key: string): boolean {
     return SECRET_LIKE_KEY_PATTERN.test(key);

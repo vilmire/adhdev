@@ -42794,7 +42794,7 @@ var require_dist3 = __commonJS({
       "src/config/env-overrides.ts"() {
         "use strict";
         SECRET_LIKE_KEY_PATTERN = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|COOKIE/i;
-        KNOWN_FLAG_KEYS = /* @__PURE__ */ new Set(["ADHDEV_WORKER_MCP"]);
+        KNOWN_FLAG_KEYS = /* @__PURE__ */ new Set(["ADHDEV_WORKER_MCP", "ADHDEV_SEQSCRIBE_TRANSCRIPT"]);
       }
     });
     var config_exports = {};
