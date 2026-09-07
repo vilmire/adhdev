@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { getChatMessageStableKey } from '../../src/components/ChatMessageList/chatMessageHelpers'
+import {
+    buildChatMessageStableKeys,
+    getChatMessageStableKey,
+} from '../../src/components/ChatMessageList/chatMessageHelpers'
 import type { ChatMessage } from '../../src/types'
 
 /**
@@ -157,5 +160,127 @@ describe('getChatMessageStableKey — turn-grained-only identity (nullable seque
         expect(getChatMessageStableKey(bubble, 9)).toBe(getChatMessageStableKey(bubble, 0))
         expect(getChatMessageStableKey({ ...bubble } as ChatMessage, 4))
             .toBe(getChatMessageStableKey(bubble, 0))
+    })
+})
+
+/**
+ * ★ Same-content siblings: the residual collision the per-message key CANNOT
+ * close, and which `buildChatMessageStableKeys` exists for.
+ *
+ * `getChatMessageStableKey`'s derived tiers discriminate on role + content-hash
+ * + timestamp. Two bubbles of one turn that match on ALL of those still collapse
+ * onto one key. Measured before the fix:
+ *   { role:'assistant', content:'same', _turnKey:'_turn' } × 2
+ *   → both `turn:_turn|role:assistant|chash:yjccrj`.
+ *
+ * Reachable, not theoretical: daemon-core's
+ * `collapseAdjacentDuplicateChatMessages` collapses only ADJACENT duplicates —
+ * its own suite pins that `A, B, A` within one turn survives as three messages
+ * ("only collapses *adjacent* duplicates"). With no numeric `sequence`, bubbles
+ * 1 and 3 then render under one React key and React reconciles them together.
+ *
+ * Injection check: deleting the `|dup:N` suffixing in
+ * `buildChatMessageStableKeys` (i.e. `return baseKeys`) turns the first two
+ * tests here red, while every test above stays green.
+ */
+describe('buildChatMessageStableKeys — same-content sibling collision', () => {
+    const TURN_KEY = 'claude-code:native-turn:sess-1:7'
+
+    it('gives unique keys to two siblings identical in turn, role, content AND timestamp', () => {
+        const siblings = [
+            { role: 'assistant', content: 'same', _turnKey: TURN_KEY, receivedAt: 5 },
+            { role: 'assistant', content: 'same', _turnKey: TURN_KEY, receivedAt: 5 },
+        ] as unknown as ChatMessage[]
+
+        // Pre-condition: the per-message key genuinely cannot tell them apart.
+        expect(getChatMessageStableKey(siblings[0], 0))
+            .toBe(getChatMessageStableKey(siblings[1], 1))
+
+        const keys = buildChatMessageStableKeys(siblings)
+        expect(new Set(keys).size, `siblings collided: ${JSON.stringify(keys)}`).toBe(2)
+    })
+
+    it('separates the surviving A,B,A duplicates that adjacent-collapse leaves behind', () => {
+        // The exact shape daemon-core's collapse test pins as surviving.
+        const turn = [
+            { role: 'assistant', content: 'A', _turnKey: TURN_KEY },
+            { role: 'assistant', content: 'B', _turnKey: TURN_KEY },
+            { role: 'assistant', content: 'A', _turnKey: TURN_KEY },
+        ] as unknown as ChatMessage[]
+
+        const keys = buildChatMessageStableKeys(turn)
+        expect(new Set(keys).size, `A,B,A collapsed: ${JSON.stringify(keys)}`).toBe(3)
+    })
+
+    it('also separates same-content siblings that carry NO identity at all', () => {
+        const legacy = [
+            { role: 'assistant', content: 'same' },
+            { role: 'assistant', content: 'same' },
+        ] as ChatMessage[]
+        expect(new Set(buildChatMessageStableKeys(legacy)).size).toBe(2)
+    })
+
+    // ── Negative control: non-colliding keys must be returned UNCHANGED ──────
+    it('leaves every already-unique key byte-identical (no remount)', () => {
+        const messages = [
+            { role: 'user', content: 'q', _turnKey: TURN_KEY, sequence: 1 },
+            { role: 'assistant', content: 'a', _turnKey: TURN_KEY, sequence: 2 },
+            { role: 'assistant', content: 'legacy tail' },
+            { role: 'assistant', content: 'x', id: 'bubble-42' },
+        ] as unknown as ChatMessage[]
+
+        expect(buildChatMessageStableKeys(messages))
+            .toEqual(messages.map((m, i) => getChatMessageStableKey(m, i)))
+        // And specifically: no ordinal suffix leaked onto a unique key.
+        for (const key of buildChatMessageStableKeys(messages)) {
+            expect(key).not.toContain('|dup:')
+        }
+    })
+
+    it('keeps `sequence`-bearing bubbles on their exact pre-fix key format', () => {
+        const withSequence = [
+            { role: 'assistant', content: 'x', _turnKey: TURN_KEY, sequence: 3 },
+        ] as unknown as ChatMessage[]
+        expect(buildChatMessageStableKeys(withSequence)).toEqual([`turn:${TURN_KEY}|seq:3`])
+    })
+
+    /**
+     * Seam stability: the same bubble must key identically whether it arrives
+     * from the live store or the history store. Both feed ONE merged array here,
+     * and the ordinal is derived within the duplicate group — whose members never
+     * reorder, because the chronological sort is stable on original index and
+     * windowing only drops from the head.
+     */
+    it('is seam-stable: the same bubble keys identically from either store', () => {
+        const fromHistory = { role: 'assistant', content: 'The build passed.', _turnKey: TURN_KEY, receivedAt: 1003 }
+        const fromLive = { ...fromHistory }
+
+        const historyRender = buildChatMessageStableKeys([
+            { role: 'user', content: 'run the build', _turnKey: TURN_KEY, receivedAt: 1000 },
+            fromHistory,
+        ] as unknown as ChatMessage[])
+        const liveRender = buildChatMessageStableKeys([
+            { role: 'user', content: 'run the build', _turnKey: TURN_KEY, receivedAt: 1000 },
+            fromLive,
+        ] as unknown as ChatMessage[])
+
+        expect(liveRender[1]).toBe(historyRender[1])
+    })
+
+    it('is stable under a head-windowing shift that keeps the duplicate group intact', () => {
+        const dupA = { role: 'assistant', content: 'same', _turnKey: TURN_KEY }
+        const dupB = { role: 'assistant', content: 'same', _turnKey: TURN_KEY }
+
+        // Before: an older message precedes the pair. After: it is windowed out.
+        const before = buildChatMessageStableKeys([
+            { role: 'user', content: 'older', _turnKey: 'turn-0' },
+            dupA,
+            dupB,
+        ] as unknown as ChatMessage[])
+        const after = buildChatMessageStableKeys([dupA, dupB] as unknown as ChatMessage[])
+
+        // Dropping a NON-member of the duplicate group does not renumber it —
+        // the ordinal is group-relative, not list-relative.
+        expect(after).toEqual(before.slice(1))
     })
 })

@@ -198,3 +198,65 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
 
     return fallback.join('|');
 }
+
+/**
+ * List-level React keys for a rendered message array — the call sites' entry
+ * point. Use this instead of mapping `getChatMessageStableKey` yourself.
+ *
+ * ── The residual collision this closes ─────────────────────────────────────
+ * `getChatMessageStableKey`'s two derived tiers (turn-grained-only, and
+ * no-identity-at-all) discriminate with `role + content-hash + timestamp`.
+ * That separates bubbles that DIFFER in any of those, but two sibling bubbles
+ * of one turn that match on ALL of them still return one key. Measured:
+ *   { role:'assistant', content:'same', _turnKey:'_turn' } × 2
+ *   → both `turn:_turn|role:assistant|chash:yjccrj`.
+ * This is reachable, not theoretical: `collapseAdjacentDuplicateChatMessages`
+ * (daemon-core `read-chat-presentation.ts`) collapses only *adjacent*
+ * duplicates — its own test pins that `A, B, A` in one turn survives as three
+ * messages. A turn whose producer emits no numeric `sequence` therefore renders
+ * bubbles 1 and 3 under a single React key, and React reconciles them into each
+ * other: the turn shows fewer rows than it has.
+ *
+ * ── Why an OCCURRENCE ordinal, not the array index ─────────────────────────
+ * The array index is exactly the position-dependent material
+ * `getChatMessageStableKey` exists to avoid (CHAT-FLAP-LONG-CONVO): windowing
+ * and re-sorting renumber it, and a key that moves remounts its bubble.
+ *
+ * The ordinal here is instead "the Nth message in this list carrying this same
+ * base key", and it is applied ONLY to base keys that actually repeat. That
+ * makes it stable under both mutations the pipeline performs:
+ *  - Windowing drops from the HEAD (`buildVisibleConversationMessages` slices
+ *    `liveMessages.slice(-visibleLiveCount)`), which never reorders survivors.
+ *  - The chronological sort is stable and tie-breaks on original index
+ *    (`sortMessagesChronologically`), so two siblings with identical timestamps
+ *    keep their relative order across every re-sort.
+ * So a duplicate's ordinal is derived from its position *within its own
+ * duplicate group*, not within the list — a group whose members never reorder.
+ *
+ * Seam consequence, stated honestly: if head-windowing drops an EARLIER member
+ * of a duplicate group, the survivor's ordinal shifts (`#1` → `#0`) and that one
+ * bubble remounts. That is strictly better than the status quo, where the same
+ * bubble does not merely remount but is *reconciled away* and can display a
+ * sibling's content. It costs a remount only for genuinely indistinguishable
+ * bubbles — every message carrying any per-message identity (`id`/`_localId`/
+ * `bubbleId`/`providerUnitKey`/`index`/`sequence`) has a unique base key, never
+ * enters a duplicate group, and keeps a byte-identical key. The live and history
+ * stores feed one merged array here, so a given bubble is keyed once per render
+ * from the same material regardless of which store produced it.
+ */
+export function buildChatMessageStableKeys(messages: readonly ChatMessage[]): string[] {
+    const baseKeys = messages.map((message, index) => getChatMessageStableKey(message, index));
+
+    // Only base keys that actually repeat get an ordinal, so every already-unique
+    // key (i.e. every message with per-message identity) is returned unchanged.
+    const totals = new Map<string, number>();
+    for (const key of baseKeys) totals.set(key, (totals.get(key) ?? 0) + 1);
+
+    const seen = new Map<string, number>();
+    return baseKeys.map((key) => {
+        if ((totals.get(key) ?? 0) < 2) return key;
+        const ordinal = seen.get(key) ?? 0;
+        seen.set(key, ordinal + 1);
+        return `${key}|dup:${ordinal}`;
+    });
+}

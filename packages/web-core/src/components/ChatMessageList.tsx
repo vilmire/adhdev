@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import {
     getRenderableTimestamp,
     getChatMessageStableKey,
+    buildChatMessageStableKeys,
     type ActionLog,
 } from './ChatMessageList/chatMessageHelpers';
 import {
@@ -54,7 +55,7 @@ import type { ChatMessage } from '../types';
 // Re-export the pure helpers so existing import paths (tests, ChatPane) keep
 // resolving from this module after the C9 3/3 decomposition.
 export type { ActionLog } from './ChatMessageList/chatMessageHelpers';
-export { getChatMessageStableKey } from './ChatMessageList/chatMessageHelpers';
+export { getChatMessageStableKey, buildChatMessageStableKeys } from './ChatMessageList/chatMessageHelpers';
 export {
     buildChatScrollFingerprint,
     getChatScrollJumpButtonState,
@@ -478,16 +479,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     };
 
     // Merge messages + action logs by timestamp
-    type MsgItem = { type: 'message'; data: ChatMessage; index: number; ts: number };
+    // `stableKey` is resolved list-wide (not per message) so that sibling bubbles
+    // which are indistinguishable on their own material — same turn, role,
+    // content and timestamp — still get unique React keys. See
+    // `buildChatMessageStableKeys`.
+    type MsgItem = { type: 'message'; data: ChatMessage; index: number; ts: number; stableKey: string };
     type LogItem = { type: 'action'; data: ActionLog; index: number; ts: number };
     type MergedItem = MsgItem | LogItem;
 
     const items: MergedItem[] = useMemo(() => {
+        const stableKeys = buildChatMessageStableKeys(visibleMessages);
         const msgItems: MsgItem[] = visibleMessages.map((m, i) => ({
             type: 'message' as const,
             data: m,
             index: i,
             ts: getRenderableTimestamp(m, i, receivedAtMap),
+            stableKey: stableKeys[i],
         }));
 
         if (!actionLogs || actionLogs.length === 0) return msgItems;
@@ -585,8 +592,12 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
                 const m = item.data as ChatMessage;
                 const i = item.index;
-                const messageKey = getChatMessageStableKey(m, i);
-                const receivedAt = m.receivedAt || receivedAtMap[messageKey];
+                const messageKey = item.stableKey;
+                // The receivedAt cache is keyed by the BASE key (what
+                // `getRenderableTimestamp` and ChatPane write), which duplicate
+                // siblings legitimately share — only the React key needs to be
+                // unique per bubble.
+                const receivedAt = m.receivedAt || receivedAtMap[getChatMessageStableKey(m, i)];
                 const expandKey = `${contextKey}-${messageKey}`;
                 const isTextExpanded = expandedTexts.has(expandKey);
                 return (
