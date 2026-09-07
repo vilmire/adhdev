@@ -91897,6 +91897,7 @@ ${cleanBody}`;
         dropped: 0,
         collectorUnavailable: 0,
         sourcePending: 0,
+        collectFailed: 0,
         ptyDirtyCoalesced: 0
       };
     }
@@ -92150,12 +92151,25 @@ ${cleanBody}`;
           async runPull(sessionId) {
             try {
               const collector = this.deps.collectObservation;
-              const collected = collector ? await collector(sessionId) : null;
+              let collected = null;
+              let collectThrew = false;
+              if (collector) {
+                try {
+                  collected = await collector(sessionId);
+                } catch (error48) {
+                  collectThrew = true;
+                  this.counters.collectFailed++;
+                  LOG.warn(
+                    "Seqscribe",
+                    `transcript projection collect failed session=${redactSessionId(sessionId)}: ${error48?.message || String(error48)}`
+                  );
+                }
+              }
               const ctx = this.triggerContext.get(sessionId);
               if (ctx) this.latency.recordStage("trigger_to_collect", this.latency.now() - ctx.startedAt);
               if (collected) {
                 await this.publishObservation(sessionId, collected.observation, collected.verifiedClear ?? false);
-              } else {
+              } else if (!collectThrew) {
                 this.counters.sourcePending++;
               }
             } finally {
@@ -159976,7 +159990,8 @@ data: ${JSON.stringify(msg.data)}
               ptyDirtyCoalesced: opts.transcript.ptyDirtyCoalesced,
               emptyGuarded: opts.transcript.emptyGuarded ?? 0,
               collectorUnavailable: opts.transcript.collectorUnavailable ?? 0,
-              sourcePending: opts.transcript.sourcePending ?? 0
+              sourcePending: opts.transcript.sourcePending ?? 0,
+              collectFailed: opts.transcript.collectFailed ?? 0
             }
           } : {},
           ...routing ? {
@@ -161360,7 +161375,8 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
                   ptyDirtyCoalesced: transcriptCounters.ptyDirtyCoalesced,
                   emptyGuarded: transcriptCounters.emptyGuarded,
                   collectorUnavailable: transcriptCounters.collectorUnavailable,
-                  sourcePending: transcriptCounters.sourcePending
+                  sourcePending: transcriptCounters.sourcePending,
+                  collectFailed: transcriptCounters.collectFailed
                 }
               } : {},
               // persistentMismatches is LOCAL-ONLY by the allow-lists in
@@ -161548,7 +161564,12 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
             collectObservation: async (sessionId) => {
               try {
                 await commandHandler.handle("read_chat", { targetSessionId: sessionId });
-              } catch {
+              } catch (error48) {
+                LOG.warn(
+                  "Seqscribe",
+                  `transcript projection internal read_chat failed session=${sessionId.length <= 8 ? sessionId : `${sessionId.slice(0, 8)}\u2026`}: ${error48?.message || String(error48)}`
+                );
+                throw error48;
               }
               return null;
             },
