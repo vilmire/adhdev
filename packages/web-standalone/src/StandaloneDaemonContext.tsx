@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode } fro
 import {
     BaseDaemonProvider,
     useBaseDaemonActions,
-    useBaseDaemons,
+    useBaseDaemonIdentity,
     applyRouteTarget,
     subscriptionManager,
     statusPayloadToEntries,
@@ -205,7 +205,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
     actionsRef.current = actions
 
     // userName setter from context (ref to avoid retriggering WS effect)
-    const { setUserName } = useBaseDaemons()
+    const { setUserName } = useBaseDaemonIdentity()
     const setUserNameRef = useRef(setUserName)
     setUserNameRef.current = setUserName
     const daemonMetadataUnsubscribeRef = useRef<(() => void) | null>(null)

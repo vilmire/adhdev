@@ -117,9 +117,24 @@ export function filterChatActivityMessages<T extends ChatMessage>(messages: T[] 
     return (Array.isArray(messages) ? messages : []).filter((message) => classifyChatMessageForDisplay(message).isActivityFacing)
 }
 
+/**
+ * Bubble-text cache keyed by message object identity.
+ *
+ * `chatBubbleText` JSON-stringifies non-string content, and the collapse pass
+ * below runs over the whole rendered window on every transcript change. Messages
+ * are immutable snapshots (a changed field arrives as a NEW object — see
+ * `withPendingLocalMessage`), so identity determines the text and the cache can
+ * never go stale. WeakMap so scrolled-off messages are collected automatically.
+ */
+const bubbleTextCache = new WeakMap<ChatMessage, string>()
+
 function chatBubbleText(message: ChatMessage): string {
+    const cached = bubbleTextCache.get(message)
+    if (cached !== undefined) return cached
     const content = (message as { content?: unknown }).content
-    return typeof content === 'string' ? content : (() => { try { return JSON.stringify(content ?? '') } catch { return String(content ?? '') } })()
+    const text = typeof content === 'string' ? content : (() => { try { return JSON.stringify(content ?? '') } catch { return String(content ?? '') } })()
+    bubbleTextCache.set(message, text)
+    return text
 }
 
 function chatBubbleContentSignature(message: ChatMessage): string {

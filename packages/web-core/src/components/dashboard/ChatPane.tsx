@@ -215,7 +215,13 @@ export default function ChatPane({
         getConversationLiveMessages(activeConv, chatTailState),
         pendingLocalMessage,
     );
-    const activityToggleCount = filterChatActivityMessages(liveMessages).length;
+    // Only the COUNT is consumed (activity-toggle affordance), but the filter
+    // classifies every live message. Memoized on `liveMessages` so it runs when
+    // the tail actually changes rather than on every render of this pane.
+    const activityToggleCount = useMemo(
+        () => filterChatActivityMessages(liveMessages).length,
+        [liveMessages],
+    );
 
     // (CHAT-TAB-SWITCH-STALE-FALLBACK ②) Restore this tab's remembered expanded
     // window instead of collapsing to the default. Switching to a DIFFERENT tab
@@ -290,13 +296,17 @@ export default function ChatPane({
             : visibleMessages;
         const nextReceivedAtMap: Record<string, number> = {};
         allMessages.forEach((message, index: number) => {
-            const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
+            // Compute the stable key ONCE per message: it was previously derived
+            // twice here (cache key + map key) for the same (message, index), and
+            // the key builder hashes message content on its fallback path.
+            const stableKey = getChatMessageStableKey(message, index);
+            const messageKey = `${activeConv.tabKey}:${stableKey}`;
             let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
             if (!receivedAt) {
                 receivedAt = Date.now();
                 receivedAtCache.current.set(messageKey, receivedAt);
             }
-            nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
+            nextReceivedAtMap[stableKey] = receivedAt;
         });
         return { allMessages, receivedAtMap: nextReceivedAtMap };
     }, [

@@ -1,3 +1,5 @@
+import { isConversationGenerating } from '../dashboard/DashboardMobileChatShared'
+
 interface IDEChatTabsProps {
     hasExtensions: boolean
     ideName: string
@@ -30,7 +32,11 @@ export default function IDEChatTabs({
             {extensionTabs.map(tab => {
                 const isActive = activeChatTab === tab.tabKey
                 const needsApproval = tab.status === 'waiting_approval'
-                const isGenerating = tab.status === 'generating'
+                // Canonical predicate — a raw `status === 'generating'` compare
+                // missed `starting`/`finalizing` (and the legacy wire aliases),
+                // so the tab dot went dark mid-turn while every other surface
+                // still showed the conversation as working.
+                const isGenerating = isConversationGenerating(tab)
 
                 return (
                     <button
