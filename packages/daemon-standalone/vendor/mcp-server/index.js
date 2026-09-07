@@ -103389,6 +103389,53 @@ ${marker}`,
         parsedJsonlCache.delete(oldestKey);
       }
     }
+    function canResumeFrom(cached5, stat2) {
+      if (cached5.dev !== stat2.dev || cached5.ino !== stat2.ino) return false;
+      if (stat2.size < cached5.committedBytes) return false;
+      return true;
+    }
+    function parseJsonlInto(out, text) {
+      const lastNewline = text.lastIndexOf("\n");
+      const settled = lastNewline >= 0 ? text.slice(0, lastNewline + 1) : "";
+      const fragment = lastNewline >= 0 ? text.slice(lastNewline + 1) : text;
+      for (const line of settled.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          out.push(JSON.parse(trimmed));
+        } catch {
+        }
+      }
+      const committedLineCount = out.length;
+      const trimmedFragment = fragment.trim();
+      if (trimmedFragment) {
+        try {
+          out.push(JSON.parse(trimmedFragment));
+        } catch {
+        }
+      }
+      return { committedBytes: Buffer.byteLength(settled, "utf8"), committedLineCount };
+    }
+    function readTailBytes(p, from, to) {
+      if (to <= from) return "";
+      let fd = null;
+      try {
+        fd = fs28.openSync(p, "r");
+        const length = to - from;
+        const buf = Buffer.allocUnsafe(length);
+        const read = fs28.readSync(fd, buf, 0, length, from);
+        return buf.subarray(0, read).toString("utf8");
+      } catch {
+        return null;
+      } finally {
+        if (fd !== null) {
+          try {
+            fs28.closeSync(fd);
+          } catch {
+          }
+        }
+      }
+    }
     function readJsonlLines(p, forceRefresh = false) {
       let stat2;
       try {
@@ -103405,6 +103452,27 @@ ${marker}`,
         return cached5.lines;
       }
       parsedJsonlCacheStats.misses++;
+      if (!forceRefresh && cached5 && canResumeFrom(cached5, stat2)) {
+        const tail = readTailBytes(p, cached5.committedBytes, stat2.size);
+        if (tail !== null) {
+          parsedJsonlCacheStats.fileReads++;
+          parsedJsonlCacheStats.incrementalReads++;
+          parsedJsonlCacheStats.incrementalBytesSkipped += cached5.committedBytes;
+          const lines = cached5.lines.slice(0, cached5.committedLineCount);
+          if (tail.length > 0) parsedJsonlCacheStats.parsePasses++;
+          const parsed2 = parseJsonlInto(lines, tail);
+          storeParsedJsonlCache(p, {
+            signature,
+            sourceBytes: stat2.size,
+            lines,
+            committedBytes: cached5.committedBytes + parsed2.committedBytes,
+            committedLineCount: parsed2.committedLineCount,
+            dev: stat2.dev,
+            ino: stat2.ino
+          });
+          return lines;
+        }
+      }
       let text;
       try {
         text = fs28.readFileSync(p, "utf8");
@@ -103414,15 +103482,16 @@ ${marker}`,
       }
       parsedJsonlCacheStats.parsePasses++;
       const out = [];
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          out.push(JSON.parse(trimmed));
-        } catch {
-        }
-      }
-      storeParsedJsonlCache(p, { signature, sourceBytes: stat2.size, lines: out });
+      const parsed = parseJsonlInto(out, text);
+      storeParsedJsonlCache(p, {
+        signature,
+        sourceBytes: stat2.size,
+        lines: out,
+        committedBytes: parsed.committedBytes,
+        committedLineCount: parsed.committedLineCount,
+        dev: stat2.dev,
+        ino: stat2.ino
+      });
       return out;
     }
     var fs28;
@@ -103439,7 +103508,14 @@ ${marker}`,
         PARSED_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
         parsedJsonlCache = /* @__PURE__ */ new Map();
         parsedJsonlCacheSourceBytes = 0;
-        parsedJsonlCacheStats = { hits: 0, misses: 0, fileReads: 0, parsePasses: 0 };
+        parsedJsonlCacheStats = {
+          hits: 0,
+          misses: 0,
+          fileReads: 0,
+          parsePasses: 0,
+          incrementalReads: 0,
+          incrementalBytesSkipped: 0
+        };
       }
     });
     function executeNativeHistory(cfg, input) {
@@ -128952,13 +129028,13 @@ ${asText(streams.stderr)}
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path66) => `:(exclude)${path66}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync8, closeSync: closeSync8 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync9, closeSync: closeSync9 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join76 } = await import("path");
       const scratch = mkdtempSync3(join76(tmpdir8(), "adhdev-patchid-"));
       const patchFile = join76(scratch, "patch.diff");
       try {
-        const out = openSync8(patchFile, "w");
+        const out = openSync9(patchFile, "w");
         let diffRun;
         try {
           diffRun = spawnSync3(GIT2, diffArgs, {
@@ -128967,7 +129043,7 @@ ${asText(streams.stderr)}
             encoding: "utf8"
           });
         } finally {
-          closeSync8(out);
+          closeSync9(out);
         }
         if (diffRun.error) throw diffRun.error;
         if (diffRun.status !== 0) {
@@ -128975,7 +129051,7 @@ ${asText(streams.stderr)}
             `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
           );
         }
-        const patchIn = openSync8(patchFile, "r");
+        const patchIn = openSync9(patchFile, "r");
         let patchIdRun;
         try {
           patchIdRun = spawnSync3(GIT2, ["patch-id", "--stable"], {
@@ -128985,7 +129061,7 @@ ${asText(streams.stderr)}
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
           });
         } finally {
-          closeSync8(patchIn);
+          closeSync9(patchIn);
         }
         if (patchIdRun.error) throw patchIdRun.error;
         if (patchIdRun.status !== 0) {
