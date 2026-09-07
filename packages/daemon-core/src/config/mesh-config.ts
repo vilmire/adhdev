@@ -430,7 +430,30 @@ export function normalizeRepoIdentity(remoteUrl: string): string {
 // writes go through the exact same normalizer the scheduler/display paths use.
 const mergeMeshPolicy = mergeAndNormalizePolicy;
 
+/**
+ * Count of `listMeshes()` calls that actually reached disk (readFileSync +
+ * JSON.parse + migration rebuild). Test-only instrumentation for the reconcile
+ * tick's per-tick read budget — see test/mesh/mesh-reconcile-listmeshes-budget.test.ts.
+ *
+ * Incremented in `listMeshes` rather than in `loadMeshConfig` on purpose: the
+ * budget being asserted is "how many times does ONE reconcile tick re-read
+ * meshes.json", and mutators (createMesh/updateMesh) legitimately load under a
+ * write lock without being part of that budget.
+ */
+let listMeshesDiskReadCount = 0;
+
+/** Test-only: read the disk-read counter above. */
+export function __getListMeshesDiskReadCountForTests(): number {
+    return listMeshesDiskReadCount;
+}
+
+/** Test-only: reset the disk-read counter above. */
+export function __resetListMeshesDiskReadCountForTests(): void {
+    listMeshesDiskReadCount = 0;
+}
+
 export function listMeshes(): LocalMeshEntry[] {
+    listMeshesDiskReadCount++;
     return loadMeshConfig().meshes;
 }
 

@@ -5,7 +5,7 @@
  * Each Instance manages its own status/transition. This module only assembles + transmits.
  */
 
-import { LOG } from '../logging/logger.js';
+import { LOG, getLogLevel } from '../logging/logger.js';
 import {
     DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS,
     DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS,
@@ -16,7 +16,7 @@ import type { MachineInfo } from '../shared-types.js';
 import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
-import { recordFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
+import { recordFleetStatusShadow, isFleetStatusShadowActive } from '../seqscribe/fleet-status-shadow.js';
 import { observeFleetStatusWsProjection } from '../seqscribe/fleet-status-parity.js';
 import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
@@ -751,33 +751,58 @@ export class DaemonStatusReporter {
         const target = opts?.p2pOnly ? 'P2P' : (serverConnected ? 'P2P+Server' : 'P2P');
 
         const allStates = this.deps.instanceManager.collectAllStates();
-        const ideStates = allStates.filter((s): s is IdeProviderState => s.category === 'ide');
-        const cliStates = allStates.filter((s): s is CliProviderState => s.category === 'cli');
-        const acpStates = allStates.filter((s): s is AcpProviderState => s.category === 'acp');
-
- // IDE summary
-        const ideSummary = ideStates.map((s) => {
-            const msgs = s.activeChat?.messages?.length || 0;
-            const exts = s.extensions.length;
-            return `${s.type}(${s.status},${msgs}msg,${exts}ext)`;
-        }).join(', ');
-
- // CLI summary
-        const cliSummary = cliStates.map((s) => `${s.type}(${s.status})`).join(', ');
- // ACP summary
-        const acpSummary = acpStates.map((s) => `${s.type}(${s.status})`).join(', ');
 
  // P2P-only = 5s heartbeat → DEBUG, P2P+Server = 30s interval → INFO
         const logLevel = opts?.p2pOnly ? 'debug' : 'info';
-        const baseSummary = `IDE: ${ideStates.length} [${ideSummary}] CLI: ${cliStates.length} [${cliSummary}] ACP: ${acpStates.length} [${acpSummary}]`;
+        // ★ The per-category summary below exists ONLY to build one log line. It
+        // used to run three full `allStates.filter(...)` passes plus three
+        // `.map().join()` string builds on EVERY tick — including the 5s P2P
+        // heartbeat, whose line is DEBUG and therefore discarded outright on a
+        // default (info) daemon. That is O(N) array + string allocation per tick
+        // to produce a string nobody reads.
+        //
+        // Two changes, neither of which alters what is logged when the line IS
+        // emitted:
+        //   1. skip the whole block when the target level is suppressed, and
+        //   2. build the three category summaries in ONE pass over allStates
+        //      instead of three filters plus three maps.
+        //
+        // `lastStatusSummary` is still updated whenever the summary is computed,
+        // so the "skip identical repeats" dedup is unchanged for the levels that
+        // do log. When the level is suppressed the summary is not computed at
+        // all, so the memo is simply not advanced — which is correct: it only
+        // ever gates a log line, never a transmission.
+        if (logLevel !== 'debug' || getLogLevel() === 'debug') {
+            let ideCount = 0;
+            let cliCount = 0;
+            let acpCount = 0;
+            const ideParts: string[] = [];
+            const cliParts: string[] = [];
+            const acpParts: string[] = [];
+            for (const s of allStates) {
+                if (s.category === 'ide') {
+                    const ide = s as IdeProviderState;
+                    ideCount++;
+                    ideParts.push(`${ide.type}(${ide.status},${ide.activeChat?.messages?.length || 0}msg,${ide.extensions.length}ext)`);
+                } else if (s.category === 'cli') {
+                    const cli = s as CliProviderState;
+                    cliCount++;
+                    cliParts.push(`${cli.type}(${cli.status})`);
+                } else if (s.category === 'acp') {
+                    const acp = s as AcpProviderState;
+                    acpCount++;
+                    acpParts.push(`${acp.type}(${acp.status})`);
+                }
+            }
+            const baseSummary = `IDE: ${ideCount} [${ideParts.join(', ')}] CLI: ${cliCount} [${cliParts.join(', ')}] ACP: ${acpCount} [${acpParts.join(', ')}]`;
  // Skip identical repeats at any level to reduce log noise
-        const summaryChanged = baseSummary !== this.lastStatusSummary;
-        if (summaryChanged) {
-            this.lastStatusSummary = baseSummary;
-            if (logLevel === 'debug') {
-                LOG.debug('StatusReport', `→${target} ${baseSummary}`);
-            } else {
-                LOG.info('StatusReport', `→${target} ${baseSummary}`);
+            if (baseSummary !== this.lastStatusSummary) {
+                this.lastStatusSummary = baseSummary;
+                if (logLevel === 'debug') {
+                    LOG.debug('StatusReport', `→${target} ${baseSummary}`);
+                } else {
+                    LOG.info('StatusReport', `→${target} ${baseSummary}`);
+                }
             }
         }
 
@@ -876,20 +901,32 @@ export class DaemonStatusReporter {
             };
         });
 
-        recordFleetStatusShadow(fleetStatusEntry({
-            daemonId: this.deps.instanceId,
-            sessions: payload.sessions,
-            // Derived from what this process can actually observe: a live server
-            // socket is `online`; no socket while P2P still carries traffic is a
-            // daemon mid-reconnect rather than a dead one. `offline` is
-            // effectively unreachable from here — `sendUnifiedStatusReport`
-            // returns early when neither transport is up — and is kept in the
-            // enum for a consumer that infers it from a stale `at`.
-            onlineState: fleetOnlineState,
-            p2pActive: p2pConnected,
-            timestamp: now,
-            seqscribe: this.deps.getSeqscribeStats?.() || undefined,
-        }));
+        // ★ Gate the ENTRY CONSTRUCTION, not just the append. `fleetStatusEntry`
+        // runs countFleetSessions over every session and calls the seqscribe
+        // stats getter, but `recordFleetStatusShadow` discards the result
+        // outright when no shadow node is armed — which is the DEFAULT for every
+        // daemon. So the unmodified path paid a full O(N) session walk plus a
+        // stats read on every 5s P2P tick to build an object that was then
+        // thrown away. `isFleetStatusShadowActive()` is the same activeNode +
+        // mode check recordFleetStatusShadow performs first, so gating here is
+        // behavior-identical: when the shadow IS armed the entry is built and
+        // recorded exactly as before.
+        if (isFleetStatusShadowActive()) {
+            recordFleetStatusShadow(fleetStatusEntry({
+                daemonId: this.deps.instanceId,
+                sessions: payload.sessions,
+                // Derived from what this process can actually observe: a live server
+                // socket is `online`; no socket while P2P still carries traffic is a
+                // daemon mid-reconnect rather than a dead one. `offline` is
+                // effectively unreachable from here — `sendUnifiedStatusReport`
+                // returns early when neither transport is up — and is kept in the
+                // enum for a consumer that infers it from a stale `at`.
+                onlineState: fleetOnlineState,
+                p2pActive: p2pConnected,
+                timestamp: now,
+                seqscribe: this.deps.getSeqscribeStats?.() || undefined,
+            }));
+        }
 
  // ═══ Server transmit (minimal routing meta only) ═══
         if (opts?.p2pOnly) return;

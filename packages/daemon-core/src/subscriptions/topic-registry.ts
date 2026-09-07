@@ -646,11 +646,58 @@ export class TopicSubscriptionRegistry {
     private async flushDaemonMetadata(connectionId?: string): Promise<void> {
         const source = this.opts.sources?.daemonMetadataBody;
         if (!source) return;
-        for (const entry of this.collectPushEntries('daemon.metadata', connectionId)) {
+        // ── PER-PASS COHORT SHARING (perf) ───────────────────────────────────
+        // `source(...)` is the daemon's buildDaemonMetadataBody: a full
+        // collectAllStates() + buildStatusSnapshot('metadata') over every
+        // provider/session, plus (when includeSessions) the mesh-owned session
+        // append. It was invoked once PER SUBSCRIBER, so S dashboards watching
+        // the same daemon each paid an independent O(N) snapshot — measured
+        // 1.03ms → 2.92ms → 4.80ms for S=1/3/5 at N=500, on a path that is
+        // event-driven and fires on every status change.
+        //
+        // The body depends on exactly ONE input: `includeSessions`
+        // (DaemonMetadataSubscriptionParams has no other field). So within a
+        // single flush pass there are at most TWO distinct bodies, and every
+        // subscriber in a cohort is entitled to byte-identical content — they
+        // are reading the same daemon at the same instant.
+        //
+        // Build at most one body per cohort, lazily: a pass with only
+        // includeSessions:false subscribers never builds the (more expensive)
+        // sessions-inclusive body, and a pass with no subscribers at all builds
+        // nothing. Envelope fields stay strictly per-subscription: `key` and the
+        // monotonic `seq` are read from each entry, and `timestamp` is stamped
+        // per entry exactly as before, so no subscriber observes another's seq.
+        //
+        // ★ The shared object is spread into each envelope (`...body`) rather
+        // than sent by reference, so per-entry envelope keys cannot mutate a
+        // sibling's payload. The nested `status` object IS shared by reference —
+        // which is correct here because the send path serializes it and no
+        // consumer in this pass mutates it — and matches what a single
+        // subscriber already received.
+        const entries = this.collectPushEntries('daemon.metadata', connectionId);
+        if (entries.length === 0) return;
+        const cohortBodies = new Map<boolean, DaemonMetadataUpdateBody>();
+        const bodyFor = (cohort: boolean): DaemonMetadataUpdateBody => {
+            const cached = cohortBodies.get(cohort);
+            if (cached !== undefined) return cached;
+            // Pass a NORMALIZED params object, not the first cohort member's
+            // own. The cohort key is `includeSessions`, so handing the source a
+            // params object carrying only that field keeps the shared body a
+            // pure function of the key. If a future field is added to
+            // DaemonMetadataSubscriptionParams and read by the source, this
+            // call breaks at the type level (the object literal below must
+            // gain it) — which forces the cohort key to be widened here rather
+            // than letting one subscriber's unread field silently decide the
+            // payload for the whole cohort.
+            const built = source({ includeSessions: cohort });
+            cohortBodies.set(cohort, built);
+            return built;
+        };
+        for (const entry of entries) {
             const now = this.now();
             entry.seq += 1;
             entry.lastSentAt = now;
-            const body = source(entry.params as DaemonMetadataSubscriptionParams);
+            const body = bodyFor((entry.params as DaemonMetadataSubscriptionParams | undefined)?.includeSessions === true);
             this.sink.send(entry.connectionId, 'daemon.metadata', {
                 topic: 'daemon.metadata',
                 key: entry.key,
