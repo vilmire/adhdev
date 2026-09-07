@@ -106,6 +106,35 @@ describe('replica adapter — per-bubble React key identity', () => {
         ).toBe(keys.length)
     })
 
+    /**
+     * ★ The nullable-`sequence` door into the same collapse.
+     *
+     * `ReplicatedTranscriptMessageV1.sequence` is `number | null` BY DESIGN, and
+     * the adapter maps neither `bubbleId` nor `providerUnitKey`. So a snapshot
+     * whose producer did not stamp `sequence` leaves `_turnKey` as the ONLY
+     * identity — and the four bubbles above only stayed distinct because their
+     * `sequence` happened to be present. Measured before the fix: 1 distinct key.
+     */
+    it('keeps bubbles distinct even when the wire carries sequence: null', () => {
+        const snapshot = snapshotWithMultiBubbleTurn()
+        const withoutSequence = {
+            ...snapshot,
+            messages: snapshot.messages.map(message => ({ ...message, sequence: null })),
+        } as unknown as ReplicatedTranscriptSnapshotV1
+
+        const update = mapTranscriptSnapshotToChatTailUpdate(withoutSequence, MAP_OPTIONS)
+        const messages = (update?.messages ?? []) as unknown as ChatMessage[]
+        expect(messages).toHaveLength(4)
+        // The adapter must not invent a sequence — null stays unmapped.
+        expect(messages.every(message => message.sequence === undefined)).toBe(true)
+
+        const keys = messages.map((message, index) => getChatMessageStableKey(message, index))
+        expect(
+            new Set(keys).size,
+            `null sequence collapsed a turn onto one React key: ${JSON.stringify(keys)}`,
+        ).toBe(keys.length)
+    })
+
     it('does not let a turn-grained value masquerade as per-bubble identity', () => {
         const update = mapTranscriptSnapshotToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
         const messages = (update?.messages ?? []) as unknown as (ChatMessage & {

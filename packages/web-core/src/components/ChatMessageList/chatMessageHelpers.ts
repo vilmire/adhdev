@@ -111,6 +111,32 @@ function hashContent(input: string): string {
  * `index` is retained in the signature for call-site compatibility
  * (`getRenderableTimestamp` and existing callers pass it) but is intentionally
  * NOT part of the returned key.
+ *
+ * ── ★ Why a TURN-GRAINED-ONLY identity is not enough ───────────────────────
+ * `_turnKey` is turn-grained: the producer mints one value per user message, so
+ * every bubble of a multi-bubble turn (prompt → tool → output → answer) shares
+ * it. It only yields a per-BUBBLE key when a per-message field (`bubbleId`,
+ * `providerUnitKey`, `index`, `sequence`) joins it in the composite.
+ *
+ * On the replica path that is NOT guaranteed. `ReplicatedTranscriptMessageV1.
+ * sequence` is `number | null` BY DESIGN ("null means UNKNOWN, never 0"), and
+ * `transcript-chat-pane-adapter.ts` deliberately maps `turnKey` → `_turnKey`
+ * while leaving `bubbleId`/`providerUnitKey` unset (the former would collapse
+ * the turn, the latter embeds a content hash the wire allow-list excludes). So
+ * a producer that emits `turnKey` without a numeric `sequence` — the identity
+ * stamping in `chat-commands-read.ts` / `parse-session.ts` is per-path, not a
+ * property of `ChatMessage` itself — reduces the whole composite to
+ * `turn:<turnKey>` and EVERY bubble of that turn collides on one React key.
+ * React then reconciles distinct bubbles into each other: the turn renders
+ * fewer rows than it has, and a surviving row can show another bubble's
+ * content. That is the same failure `transcript-adapter-bubble-identity.test.ts`
+ * guards on the adapter side, reached through the nullable-`sequence` door.
+ *
+ * The guard below therefore adds a content-derived discriminator ONLY when the
+ * identity found so far is turn-grained-only. Keys for messages that DO carry a
+ * per-message field are byte-identical to before, so no bubble remounts (the
+ * CHAT-FLAP-LONG-CONVO scroll/flash regression) as a result of this fix, and a
+ * given bubble hashes the same in the live and history stores — seam-stable.
  */
 export function getChatMessageStableKey(message: ChatMessage, index: number): string {
     void index;
@@ -118,6 +144,19 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
     const content = stringifyTextContent(message.content, { joiner: '\n' });
 
     // Position-independent stable identity, most-authoritative first.
+    // `perMessage` fields identify ONE bubble; `_turnKey` identifies the turn
+    // that contains it and is shared by that turn's siblings.
+    const perMessageIdentity = [
+        message.id ? `id:${message.id}` : '',
+        dashboardMessage._localId ? `local:${dashboardMessage._localId}` : '',
+        message.bubbleId ? `bubble:${message.bubbleId}` : '',
+        message.providerUnitKey ? `unit:${message.providerUnitKey}` : '',
+        typeof message.index === 'number' ? `msgIndex:${message.index}` : '',
+        typeof message.sequence === 'number' ? `seq:${message.sequence}` : '',
+    ].filter(Boolean);
+
+    // Preserved emission order (id > _localId > _turnKey > bubbleId > ...) so
+    // every key that was already unique keeps its exact previous value.
     const identity = [
         message.id ? `id:${message.id}` : '',
         dashboardMessage._localId ? `local:${dashboardMessage._localId}` : '',
@@ -129,6 +168,20 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
     ].filter(Boolean);
 
     if (identity.length > 0) {
+        // ★ Turn-grained-only: `_turnKey` is the sole identity we have, so it is
+        // shared with every sibling bubble of this turn. Discriminate with the
+        // same position-independent material the no-identity fallback uses
+        // (role + full-content hash + timestamp) rather than the array index,
+        // which would shift under windowing/re-sort and remount the bubble.
+        if (perMessageIdentity.length === 0) {
+            const turnTimestamp = message.receivedAt || message.timestamp || 0;
+            return [
+                ...identity,
+                `role:${message.role ?? ''}`,
+                `chash:${hashContent(content)}`,
+                ...(turnTimestamp ? [`ts:${turnTimestamp}`] : []),
+            ].join('|');
+        }
         return identity.join('|');
     }
 
