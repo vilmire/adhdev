@@ -11,7 +11,7 @@
  * opencode off ProviderCliAdapter
  * (docs/design/2026-08-17-legacy-cli-spec-migration.md).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -59,12 +59,22 @@ function baseSpec(overrides: Record<string, unknown>): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-startup-dismiss-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
 }
+
+afterEach(() => {
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 function makeDriver(specOverrides: Record<string, unknown>): { driver: FsmDriver; factory: DrivableFactory } {
     const factory = new DrivableFactory();

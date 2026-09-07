@@ -7,7 +7,8 @@
  * `adhdev-providers-<ref>/` shape of GitHub archive tarballs).
  */
 
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { afterEach } from 'vitest';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { computeProviderTreeDigest, TREE_DIGEST_ALGORITHM } from '../../../src/providers/channel/tree-digest.js';
@@ -15,9 +16,33 @@ import type { ChannelEntry, ProviderChannel } from '../../../src/providers/chann
 import { ProviderChannelStore } from '../../../src/providers/channel/store.js';
 import { ProviderChannelRuntime } from '../../../src/providers/channel/runtime.js';
 
+/**
+ * Every directory this file's tests create via makeTmp() outlives the call
+ * that made it (tests read/write into it across a whole `it()` body, and
+ * some — buildObjectStaging()'s staging dir — outlive that too), so none of
+ * them can be rm'd inline. Track every one here and sweep them in a single
+ * afterEach below. Every test file that imports makeTmp/buildObjectStaging
+ * from this module gets that afterEach registered automatically (a top-level
+ * vitest hook call attaches to whichever suite is currently running), so
+ * individual test files don't need their own matching cleanup — this
+ * replaces the per-file `rmSync(tmpRoot, ...)` afterEach pattern some test
+ * files still also do; running both is harmless (rmSync force:true no-ops on
+ * an already-removed path).
+ */
+const trackedTmpDirs: string[] = [];
+
 export function makeTmp(prefix: string): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  trackedTmpDirs.push(dir);
+  return dir;
 }
+
+afterEach(() => {
+  while (trackedTmpDirs.length > 0) {
+    const dir = trackedTmpDirs.pop()!;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 export interface FixtureProviderSpec {
   category: string;
@@ -66,9 +91,13 @@ export function buildRepoTree(repoRoot: string, specs: FixtureProviderSpec[]): s
  */
 export function digestFor(repoRoot: string, category: string, dirname: string): string {
   const mirror = makeTmp('adhdev-channel-mirror-');
-  mkdirSync(join(mirror, category), { recursive: true });
-  cpSync(join(repoRoot, category, dirname), join(mirror, category, dirname), { recursive: true });
-  return computeProviderTreeDigest(mirror);
+  try {
+    mkdirSync(join(mirror, category), { recursive: true });
+    cpSync(join(repoRoot, category, dirname), join(mirror, category, dirname), { recursive: true });
+    return computeProviderTreeDigest(mirror);
+  } finally {
+    rmSync(mirror, { recursive: true, force: true });
+  }
 }
 
 /** Registry row (rowToMeta) shape consumed by the runtime's metadata source. */

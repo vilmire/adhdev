@@ -1,3 +1,5 @@
+import { afterAll } from 'vitest'
+
 // Vitest global setup: shrink the production-sized mesh P2P probe windows for the
 // test environment.
 //
@@ -48,6 +50,15 @@ for (const key of [
   const fs = require('node:fs') as typeof import('node:fs')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-daemon-core-test-config-'))
   process.env.ADHDEV_CONFIG_DIR = dir
+  // This dir lives for the whole test file (every test in it reads/writes
+  // through ADHDEV_CONFIG_DIR), so it can only be reclaimed once the file is
+  // done — afterAll, not afterEach. Exact-path removal (not a tmpdir listing
+  // diff): safe under Vitest's default concurrent file-parallel forks, which
+  // all share the real OS tmpdir and would otherwise race a listing-based
+  // sweep into deleting a sibling process's still-in-use directory.
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
 }
 
 // Make the verification path load the REPO's provider specs (the sibling

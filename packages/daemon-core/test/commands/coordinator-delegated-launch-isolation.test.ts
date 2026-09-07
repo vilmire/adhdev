@@ -1,10 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-manager'
+
+// Every it() below creates its own mkdtempSync workspace inline (no shared
+// beforeEach), so there is no single variable to hook an afterEach onto.
+// Track every path created and sweep them all after each test instead —
+// see the fix-testtmp-leak-provider-channel-fixtures task for why this file
+// leaked ~13 adhdev-mesh-child-*/adhdev-gateoff-*/adhdev-gateon-* dirs per run.
+const __tmpDirsToClean: string[] = []
+afterEach(() => {
+  while (__tmpDirsToClean.length > 0) {
+    const dir = __tmpDirsToClean.pop()!
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 const claudeIsolation = {
   args: [
@@ -37,6 +50,7 @@ const codexIsolation = {
 describe('coordinator delegated CLI launch isolation', () => {
   it('clears Repo Mesh coordinator env and prompts inherited by delegated child agents', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-env-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'codex-cli',
@@ -64,6 +78,7 @@ describe('coordinator delegated CLI launch isolation', () => {
 
   it('preserves delegated Hermes args so user default model/provider config is still used', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-hermes-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'hermes-cli',
@@ -78,6 +93,7 @@ describe('coordinator delegated CLI launch isolation', () => {
 
   it('does not inject model/provider flags for delegated Hermes launches without explicit overrides', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-hermes-default-model-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'hermes-cli',
@@ -93,6 +109,7 @@ describe('coordinator delegated CLI launch isolation', () => {
 
   it('starts delegated Claude agents with provider-declared isolated empty MCP config instead of repo .mcp coordinator setup', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-claude-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'claude-cli',
@@ -114,6 +131,7 @@ describe('coordinator delegated CLI launch isolation', () => {
 
   it('starts delegated Codex agents with provider-declared mesh MCP disabled so workers cannot act as coordinators', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-codex-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'codex-cli',
@@ -127,6 +145,7 @@ describe('coordinator delegated CLI launch isolation', () => {
 
   it('does not duplicate an explicit Codex adhdev-mesh MCP override for delegated agents', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-codex-explicit-'))
+    __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'codex-cli',
@@ -177,6 +196,7 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
     let checked = 0
     for (const cliType of ALL_PROVIDERS) {
       const workspace = mkdtempSync(join(tmpdir(), `adhdev-gateoff-${cliType}-`))
+      __tmpDirsToClean.push(workspace)
       const result = buildCoordinatorDelegatedCliLaunchOptions({
         cliType,
         workspace,
@@ -199,6 +219,7 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
 
   it('produces args/env identical to a call that never mentions worker-MCP at all', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateoff-identity-'))
+    __tmpDirsToClean.push(workspace)
     const baseArgs = { cliType: 'kimi', workspace, cliArgs: ['--model', 'test'], env: { KEEP: 'yes' } }
 
     const withoutFeature = buildCoordinatorDelegatedCliLaunchOptions(baseArgs)
@@ -217,6 +238,7 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
     // not exist with the gate off. Applying it anyway would export a literal
     // `{{workerHome}}` and send the CLI to a nonexistent directory.
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateoff-envset-'))
+    __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'antigravity-cli',
       workspace,
@@ -227,6 +249,7 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
 
   it('does not redirect HOME with the gate off', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateoff-home-'))
+    __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'antigravity-cli',
       workspace,
@@ -251,6 +274,7 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     // CLI would still resolve `~` to the real home and inherit the
     // coordinator's mcp_config.json, i.e. the feature would be silently inert.
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-home-'))
+    __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'antigravity-cli',
       workspace,
@@ -271,6 +295,7 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
 
   it('leaves a repo-local provider on the real HOME', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-kimi-'))
+    __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'kimi',
       workspace,
@@ -287,6 +312,7 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
 
   it('delivers Codex worker MCP via config overrides while keeping the bind out of argv', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-codex-'))
+    __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
       cliType: 'codex-cli',
       workspace,

@@ -61,8 +61,11 @@ function baseSpec(overrides: Record<string, unknown>): Record<string, unknown> {
     };
 }
 
+const __tmpDirsToClean: string[] = [];
+
 function writeSpec(spec: Record<string, unknown>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsm-prime-'));
+    __tmpDirsToClean.push(dir);
     const p = path.join(dir, 'spec.json');
     fs.writeFileSync(p, JSON.stringify(spec));
     return p;
@@ -75,6 +78,10 @@ const FOCUS_IN = '\x1b[I';
 afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    while (__tmpDirsToClean.length > 0) {
+        const dir = __tmpDirsToClean.pop()!;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });
 
 describe('FsmDriver -- send_on_spawn input prime', () => {
