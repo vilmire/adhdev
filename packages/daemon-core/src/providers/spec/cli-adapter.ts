@@ -304,6 +304,16 @@ export class SpecCliAdapter implements CliAdapter {
         this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: _opts?.bracketedPaste });
     }
 
+    /**
+     * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
+     * FIFO so this caller becomes its only delivery route. See
+     * ISpecDriver.claimQueuedSends for why the interrupt path needs it.
+     */
+    claimQueuedSends(text: string): number {
+        if (typeof this.driver.claimQueuedSends !== 'function') return 0;
+        return this.driver.claimQueuedSends(text);
+    }
+
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
         // A strong live Kimi auth/billing marker outranks generic process liveness.

@@ -13,6 +13,10 @@
  *
  * The supported sequence is:
  *
+ *   0. CLAIM — take every queued copy of this body out of the driver's
+ *      pendingSends FIFO (adapter.claimQueuedSends). See the double-send note
+ *      below; without this the module is a SECOND delivery route for a body the
+ *      driver already holds, and its failure reports are not truthful.
  *   1. INTERRUPT — press the provider's OWN stop key, resolved from the spec
  *      that session actually loaded (SpecCliAdapter.interruptTurn). The turn in
  *      flight is aborted and LOST; that is inherent to steering, not a defect.
@@ -27,6 +31,29 @@
  *      isSendInFlight, idle) park it and we report `queued` honestly rather
  *      than claiming a delivery that did not happen.
  *
+ * ── SEND-NOW-DOUBLE-SEND: why step 0 exists ───────────────────────────────
+ * "Send now" is pressed on a QUEUED bubble — so by construction the driver is
+ * already holding that exact body in pendingSends, and drainPendingSends will
+ * write it the moment the machine next reaches idle. Interrupting is precisely
+ * what makes the machine reach idle. Without step 0 the two routes race, and
+ * the failure report is a lie in both directions:
+ *
+ *   • Measured live (2026-09-07, claude-cli): interrupt written at 02:42:12.688,
+ *     idle observed by the FSM at 02:42:21.685 — 9.0s. The 8s ceiling fired
+ *     first, so this module returned ok:false/idle_timeout and the dashboard
+ *     said "not delivered … still queued; try again". 995ms later the log reads
+ *     `draining queued send` and the body WAS submitted. A user who took that
+ *     advice sent it twice.
+ *   • Even without the timeout, step 3's sendMessage on a body still sitting in
+ *     the FIFO trips the driver's isDuplicateResend gate (same text, pendingSends
+ *     non-empty ⇒ stillProcessing), which returns `duplicate` → reported as
+ *     `delivered`. That "delivery" is the OTHER copy, drained on the driver's
+ *     schedule, not this call's write.
+ *
+ * Claiming the body first collapses both routes into one: after step 0 the only
+ * thing that can write that text is this function, so ok:false genuinely means
+ * nothing was sent and a retry is safe, and ok:true means this call sent it once.
+ *
  * ── What this module deliberately does NOT do ─────────────────────────────
  * It does not bypass the modal park guard (cli-provider-instance.isModalParked)
  * or the driver's send gates, because it does not have its own write path at
@@ -38,12 +65,30 @@
 import { LOG } from '../logging/logger.js';
 
 /** How long to wait for the FSM to observe busy→idle after the stop key lands.
- *  Measured: claude-cli returns to an idle prompt well under 2s; the ceiling is
- *  generous because a slow abort must not be reported as a failed interrupt
- *  (the turn HAS been cancelled by then — only the observation is late). */
-export const INTERRUPT_IDLE_TIMEOUT_MS = 8_000;
+ *
+ *  ★ Was 8s on the premise that "claude-cli returns to an idle prompt well under
+ *  2s". Live measurement disproved it: 2026-09-07, stop key at 02:42:12.688 →
+ *  busy→idle at 02:42:21.685 = 9.0s, because claude-cli does not abandon a tool
+ *  call mid-flight — it waits for the running tool to return before redrawing an
+ *  idle prompt, and a tool can take arbitrarily long. 15s covers that observed
+ *  worst case with headroom. The ceiling is deliberately generous: a slow abort
+ *  must not be reported as a failed interrupt (the turn HAS been cancelled by
+ *  then — only the observation is late). */
+export const INTERRUPT_IDLE_TIMEOUT_MS = 15_000;
 /** Poll cadence for the busy→idle observation. */
 export const INTERRUPT_IDLE_POLL_MS = 120;
+/** How long to wait after the FIRST stop key before pressing it a second time.
+ *
+ *  Some TUIs (claude-cli measured above) treat one Ctrl-C as "finish the running
+ *  tool, then stop" and only abort immediately on a second press. One extra
+ *  press shortens the common case without changing the contract — we still wait
+ *  for the FSM's own busy→idle, never assume the abort landed.
+ *
+ *  ★ Gated on confidence==='proven' (see providers/spec/interrupt-capability.ts).
+ *  For a provider whose stop key is spec-DECLARED but whose busy→idle effect has
+ *  never been observed live, a second unexplained control byte at an unknown TUI
+ *  state is a change we have no evidence is safe — those keep the single press. */
+export const INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
 
 /** Statuses that mean the session is not free to accept a new turn. */
 const BUSY_STATUSES = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
@@ -81,6 +126,10 @@ export interface InterruptibleAdapter {
         | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
         | { ok: false; reason: string; message: string }
     >;
+    /** SEND-NOW-DOUBLE-SEND: remove every queued copy of `text` from the driver
+     *  FIFO, returning how many were taken. Optional: an adapter without it
+     *  simply has no second delivery route to reconcile. */
+    claimQueuedSends?(text: string): number;
 }
 
 function readStatus(adapter: InterruptibleAdapter): string | undefined {
@@ -99,6 +148,12 @@ function sleep(ms: number): Promise<void> {
  * Wait for the adapter to leave every busy status. Resolves true on the first
  * observed non-busy status, false on timeout.
  *
+ * `secondPress`, when supplied, is invoked ONCE after `secondPressAfterMs` if
+ * the session is still busy by then — the extra stop-key press described at
+ * INTERRUPT_SECOND_PRESS_DELAY_MS. It is skipped entirely once idle is observed,
+ * so a CLI that stopped on the first press never sees a stray control byte at
+ * its idle prompt.
+ *
  * Exported for the regression test, which asserts the ORDER of the three steps
  * against a real adapter rather than a stub.
  */
@@ -106,12 +161,26 @@ export async function waitForIdleAfterInterrupt(
     adapter: InterruptibleAdapter,
     timeoutMs: number = INTERRUPT_IDLE_TIMEOUT_MS,
     pollMs: number = INTERRUPT_IDLE_POLL_MS,
+    options?: { secondPress?: () => void; secondPressAfterMs?: number },
 ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
+    const secondPressAt = options?.secondPress
+        ? startedAt + (options.secondPressAfterMs ?? INTERRUPT_SECOND_PRESS_DELAY_MS)
+        : Number.POSITIVE_INFINITY;
+    let pressed = false;
     for (;;) {
         const status = readStatus(adapter);
         if (status !== undefined && !BUSY_STATUSES.has(status)) return true;
-        if (Date.now() >= deadline) return false;
+        const now = Date.now();
+        if (now >= deadline) return false;
+        if (!pressed && now >= secondPressAt) {
+            pressed = true;
+            // Still busy after the first press. interruptTurn re-validates
+            // capability and 'generating' before writing, so this is a no-op if
+            // the session has meanwhile parked on a modal.
+            options?.secondPress?.();
+        }
         await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
     }
 }
@@ -126,7 +195,7 @@ export async function waitForIdleAfterInterrupt(
 export async function interruptAndDeliver(
     adapter: InterruptibleAdapter,
     text: string,
-    options?: { meshTaskId?: string; timeoutMs?: number; pollMs?: number },
+    options?: { meshTaskId?: string; timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number },
 ): Promise<InterruptAndDeliverOutcome> {
     if (typeof adapter.interruptTurn !== 'function') {
         return {
@@ -147,19 +216,38 @@ export async function interruptAndDeliver(
         return { ok: false, reason: interrupted.reason, message: interrupted.message };
     }
 
+    // Step 0 — claim the body. Ordered AFTER interruptTurn deliberately: every
+    // rejection above leaves the session untouched, so the queued copy must stay
+    // exactly where it was and keep its ordinary drain. From here on the stop key
+    // HAS been written and this call owns the delivery.
+    const claimed = typeof adapter.claimQueuedSends === 'function'
+        ? adapter.claimQueuedSends(text)
+        : 0;
+    if (claimed > 0) {
+        LOG.info('SendNow', `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body — this call is now its only delivery route`);
+    }
+
     // Step 2 — wait for the FSM to observe busy→idle before writing anything.
-    const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs);
+    // A provider with a live-proven stop key gets one extra press partway
+    // through: see INTERRUPT_SECOND_PRESS_DELAY_MS.
+    const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+        secondPress: interrupted.confidence === 'proven'
+            ? () => { void adapter.interruptTurn?.(); }
+            : undefined,
+        secondPressAfterMs: options?.secondPressAfterMs,
+    });
     if (!wentIdle) {
         // The stop key WAS written, so the turn is very likely already aborted;
-        // only the observation timed out. The body was deliberately NOT sent —
-        // reporting this honestly lets the caller keep the bubble queued rather
-        // than showing a delivery that never happened.
-        LOG.warn('SendNow', `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms`);
+        // only the observation timed out. The body was deliberately NOT sent, and
+        // step 0 removed the queued copy that would otherwise have been drained
+        // behind our back — so "not delivered, retry is safe" is now literally
+        // true rather than the half-truth that produced a duplicate send live.
+        LOG.warn('SendNow', `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
         return {
             ok: false,
             reason: 'idle_timeout',
             message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. `
-                + 'It is still queued; try again in a moment.',
+                + 'Nothing was sent — send it again when the agent settles.',
         };
     }
 
@@ -169,7 +257,7 @@ export async function interruptAndDeliver(
     const queued = sendResult?.status === 'queued';
     LOG.info(
         'SendNow',
-        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'}`,
+        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'} (claimed=${claimed})`,
     );
     return {
         ok: true,

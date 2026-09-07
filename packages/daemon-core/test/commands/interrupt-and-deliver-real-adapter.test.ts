@@ -202,6 +202,132 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
         }
     }, 15_000);
 
+    // ── SEND-NOW-DOUBLE-SEND ──────────────────────────────────────────────
+    // "Send now" is pressed on a bubble that is ALREADY queued in the driver
+    // FIFO, so the driver would drain that copy on the next idle frame. These
+    // two tests pin the invariant that fixes the live 2026-09-07 defect:
+    // whatever interruptAndDeliver reports is the whole truth about that body.
+    describe('with the same body already queued in the driver FIFO', () => {
+        /** Queue `text` the way an ordinary send does while the session is busy,
+         *  and assert it really was parked rather than written. */
+        async function queueWhileBusy(adapter: SpecCliAdapter, text: string) {
+            const disposition = await adapter.sendMessage(text);
+            expect(disposition).toEqual({ status: 'queued' });
+        }
+
+        it('does not double-send: on idle_timeout the queued copy is NOT drained later', async () => {
+            const { adapter, pty } = await makeRunningAdapter();
+            try {
+                const body = 'steer the agent here';
+                await queueWhileBusy(adapter, body);
+                const before = pty.writes.length;
+
+                // Never leaves `generating` within the window, so the interrupt
+                // observation times out — the exact live shape.
+                const outcome = await interruptAndDeliver(adapter as never, body, {
+                    timeoutMs: 300,
+                    pollMs: 30,
+                });
+                expect(outcome.ok).toBe(false);
+                if (!outcome.ok) expect(outcome.reason).toBe('idle_timeout');
+                // ★ The report must be truthful: nothing sent, retry is safe.
+                if (!outcome.ok) expect(outcome.message).not.toContain('still queued');
+
+                // Now let the CLI settle. Before the fix this is where
+                // `draining queued send` wrote the body the caller was just told
+                // had NOT been delivered.
+                pty.feed('\n>\n? for shortcuts');
+                await sleep(800);
+
+                const written = pty.writes.slice(before).join('');
+                expect(written).toContain(CTRL_C);
+                expect(written).not.toContain(body);
+            } finally {
+                adapter.shutdown();
+            }
+        }, 20_000);
+
+        it('delivers EXACTLY ONCE when idle is observed, despite the queued copy', async () => {
+            const { adapter, pty } = await makeRunningAdapter();
+            try {
+                const body = 'deliver me exactly once';
+                await queueWhileBusy(adapter, body);
+                const before = pty.writes.length;
+
+                const settle = (async () => {
+                    for (let i = 0; i < 100; i += 1) {
+                        if (pty.writes.slice(before).includes(CTRL_C)) {
+                            pty.feed('\n>\n? for shortcuts');
+                            return true;
+                        }
+                        await sleep(20);
+                    }
+                    return false;
+                })();
+
+                const outcome = await interruptAndDeliver(adapter as never, body);
+                expect(await settle).toBe(true);
+                expect(outcome.ok).toBe(true);
+                if (outcome.ok) expect(outcome.delivered).toBe(true);
+
+                // Give the drain timer every chance to write a second copy.
+                await sleep(1_200);
+
+                // Count PTY writes that carry the body. The driver writes a body
+                // in one burst (plus the echo the fake PTY replays into the
+                // screen, which is not a write), so >1 means two submissions.
+                const bodyWrites = pty.writes.slice(before).filter(w => w.includes(body));
+                expect(bodyWrites).toHaveLength(1);
+            } finally {
+                adapter.shutdown();
+            }
+        }, 20_000);
+    });
+
+    it('presses the stop key a SECOND time when a proven provider stays busy', async () => {
+        // Defect A: claude-cli was measured taking 9.0s to redraw an idle prompt
+        // because one Ctrl-C means "finish the running tool, then stop". The
+        // extra press is the shortcut; the FSM's own busy→idle is still the only
+        // thing we treat as proof.
+        const { adapter, pty } = await makeRunningAdapter();
+        try {
+            const before = pty.writes.length;
+            await interruptAndDeliver(adapter as never, 'body', {
+                timeoutMs: 600,
+                pollMs: 30,
+                secondPressAfterMs: 100,
+            });
+            const stops = pty.writes.slice(before).filter(w => w === CTRL_C);
+            expect(stops.length).toBe(2);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('does NOT press a second time once the session reports idle', async () => {
+        // A CLI that stopped on the first press must never see a stray control
+        // byte at its idle prompt.
+        const { adapter, pty } = await makeRunningAdapter();
+        try {
+            const before = pty.writes.length;
+            const settle = (async () => {
+                for (let i = 0; i < 100; i += 1) {
+                    if (pty.writes.slice(before).includes(CTRL_C)) {
+                        pty.feed('\n>\n? for shortcuts');
+                        return;
+                    }
+                    await sleep(5);
+                }
+            })();
+            await interruptAndDeliver(adapter as never, 'body', { pollMs: 20, secondPressAfterMs: 400 });
+            await settle;
+            await sleep(600);
+            expect(pty.writes.slice(before).filter(w => w === CTRL_C).length).toBe(1);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
     it('waitForIdleAfterInterrupt resolves once the real adapter reports idle', async () => {
         const { adapter, pty } = await makeRunningAdapter();
         try {
