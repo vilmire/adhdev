@@ -87,3 +87,75 @@ describe('getChatMessageStableKey', () => {
         expect(keyAfter).toBe(keyBefore)
     })
 })
+
+/**
+ * ★ Turn-grained-only identity must not collapse a turn's bubbles.
+ *
+ * `ReplicatedTranscriptMessageV1.sequence` is `number | null` BY DESIGN ("null
+ * means UNKNOWN, never 0"), and `transcript-chat-pane-adapter.ts` maps only
+ * `turnKey` → `_turnKey`, deliberately leaving `bubbleId` (would itself collapse
+ * the turn) and `providerUnitKey` (content hash, off the wire allow-list) unset.
+ * So when a producer emits `turnKey` without a numeric `sequence`, the identity
+ * composite reduces to `turn:<turnKey>` — shared by every bubble of the turn.
+ *
+ * Measured before the fix: 4 bubbles → 1 distinct key. React reconciles
+ * duplicate-keyed siblings into each other, so the turn renders fewer rows than
+ * it has and a surviving row can show another bubble's content ("중간 메시지 안
+ * 보임 / 버블 뒤섞임").
+ *
+ * Injection check: reverting the turn-grained-only branch in
+ * `getChatMessageStableKey` turns the first test red (distinct 1 ≠ 4).
+ */
+describe('getChatMessageStableKey — turn-grained-only identity (nullable sequence)', () => {
+    const TURN_KEY = 'claude-code:native-turn:sess-1:7'
+
+    /** One turn, four bubbles, shared `_turnKey`, NO per-message identity. */
+    const turnBubbles = (): ChatMessage[] => ([
+        { role: 'user', content: 'run the build', _turnKey: TURN_KEY },
+        { role: 'assistant', content: 'Bash(npm run build)', _turnKey: TURN_KEY },
+        { role: 'assistant', content: 'build output line', _turnKey: TURN_KEY },
+        { role: 'assistant', content: 'The build passed.', _turnKey: TURN_KEY },
+    ] as unknown as ChatMessage[])
+
+    it('gives every bubble of one turn a DISTINCT key when sequence is absent', () => {
+        const keys = turnBubbles().map((message, index) => getChatMessageStableKey(message, index))
+        expect(
+            new Set(keys).size,
+            `all bubbles of one turn collapsed onto a shared React key: ${JSON.stringify(keys)}`,
+        ).toBe(keys.length)
+    })
+
+    it('still carries the turn axis in the key', () => {
+        for (const key of turnBubbles().map((m, i) => getChatMessageStableKey(m, i))) {
+            expect(key).toContain(`turn:${TURN_KEY}`)
+        }
+    })
+
+    // ── Negative control: the fallback fires ONLY when identity is turn-only ──
+    it('does NOT change the key when a per-message field is present', () => {
+        // The exact pre-fix format for a `_turnKey` + `sequence` bubble. A drift
+        // here would remount every replica bubble (CHAT-FLAP-LONG-CONVO).
+        const withSequence = { role: 'assistant', content: 'x', _turnKey: TURN_KEY, sequence: 3 }
+        expect(getChatMessageStableKey(withSequence as unknown as ChatMessage, 0))
+            .toBe(`turn:${TURN_KEY}|seq:3`)
+
+        const withBubbleId = { role: 'assistant', content: 'x', _turnKey: TURN_KEY, bubbleId: 'b1' }
+        expect(getChatMessageStableKey(withBubbleId as unknown as ChatMessage, 0))
+            .toBe(`turn:${TURN_KEY}|bubble:b1`)
+    })
+
+    it('is position-independent and seam-stable across the live/history stores', () => {
+        const bubble = {
+            role: 'assistant',
+            content: 'The build passed.',
+            _turnKey: TURN_KEY,
+            receivedAt: 1003,
+        } as unknown as ChatMessage
+
+        // Same bubble, different array positions (window shift / re-sort) and
+        // read from either store — the key material is intrinsic, so it holds.
+        expect(getChatMessageStableKey(bubble, 9)).toBe(getChatMessageStableKey(bubble, 0))
+        expect(getChatMessageStableKey({ ...bubble } as ChatMessage, 4))
+            .toBe(getChatMessageStableKey(bubble, 0))
+    })
+})
