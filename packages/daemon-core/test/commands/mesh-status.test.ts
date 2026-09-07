@@ -1525,7 +1525,13 @@ describe('mesh_status', () => {
       sessionHostControl.listSessions.mockClear()
       const withEvent = await router.execute('mesh_status', { meshId: mesh.id }) as any
       expect(withEvent.success).toBe(true)
-      expect(withEvent.sourceOfTruth.aggregateSnapshot.refreshReason).toBe('pending_coordinator_events')
+      // A pending coordinator event no longer forces the full synchronous rebuild:
+      // it is re-attached fresh onto the served snapshot instead (the aggregate
+      // rebuild's per-node peer probe is what made the overview open slowly). The
+      // pending events / asyncRefineJobs assertions below are what actually matter
+      // here, and they hold on the cache-served path exactly as before.
+      // See mesh-status-stale-serve-pending-events.test.ts.
+      expect(withEvent.sourceOfTruth.aggregateSnapshot.refreshReason).toBe('memory_cache_hit')
       expect(withEvent.pendingCoordinatorEvents).toEqual([
         expect.objectContaining({
           event: 'refine:completed',
@@ -1543,7 +1549,10 @@ describe('mesh_status', () => {
           instruction: expect.stringContaining('completed'),
         }),
       ])
-      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(1)
+      // The whole point of the change: a pending event is served from the cached
+      // aggregate, so the expensive live rebuild (session-host enumeration + the
+      // per-node peer git probe) does NOT run on this interactive path.
+      expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(0)
 
       // mesh_status is peek-only — events are NOT consumed; still present for drain.
       expect(drainPendingMeshCoordinatorEvents(mesh.id)).toHaveLength(1)

@@ -133001,18 +133001,60 @@ ${ptyResult.output.slice(-2e3)}`);
               const peekScope = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : ctx.deps.statusInstanceId || void 0;
               const pendingCoordinatorEventCount = getPendingMeshCoordinatorEvents(meshId, peekScope).length;
               const hadAggregateCache = ctx.aggregateMeshStatusCache.has(meshId);
+              const attachLiveOnlyExtras = async (snapshot) => {
+                const pendingCoordinatorEvents2 = getPendingMeshCoordinatorEvents(meshId, peekScope);
+                const asyncRefineJobs2 = pendingCoordinatorEvents2.length > 0 ? await (async () => {
+                  try {
+                    const { readLedgerEntriesByKind: readLedgerEntriesByKind4 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                    return buildMeshAsyncRefineJobs3({
+                      meshId,
+                      ledgerEntries: readLedgerEntriesByKind4(meshId, ["task_dispatched", "task_completed", "task_failed"]),
+                      pendingEvents: [...pendingCoordinatorEvents2]
+                    });
+                  } catch {
+                    return Array.isArray(snapshot?.asyncRefineJobs) ? snapshot.asyncRefineJobs : [];
+                  }
+                })() : Array.isArray(snapshot?.asyncRefineJobs) ? snapshot.asyncRefineJobs : [];
+                if (pendingCoordinatorEvents2.length > 0) {
+                  const held = ctx.aggregateMeshStatusCache.get(meshId);
+                  if (held?.snapshot) {
+                    if (asyncRefineJobs2.length > 0) held.snapshot.asyncRefineJobs = asyncRefineJobs2;
+                    else delete held.snapshot.asyncRefineJobs;
+                  }
+                }
+                const { asyncRefineJobs: _cachedAsyncRefineJobs, ...rest } = snapshot ?? {};
+                return {
+                  ...rest,
+                  ...asyncRefineJobs2.length > 0 ? { asyncRefineJobs: asyncRefineJobs2 } : {},
+                  ...pendingCoordinatorEvents2.length > 0 ? { pendingCoordinatorEvents: pendingCoordinatorEvents2 } : {},
+                  ...(() => {
+                    const unroutableDeliveries2 = getRecentUnroutableDeliveries();
+                    return unroutableDeliveries2.length > 0 ? { unroutableDeliveries: unroutableDeliveries2 } : {};
+                  })(),
+                  meshProtocolV2Counters: {
+                    enforce: isMeshProtocolV2EnforceEnabled(),
+                    drain: { ...getMeshV2DrainCounters() },
+                    backstop: { ...getMeshV2BackstopCounters() }
+                  },
+                  pendingRetentionCounters: { ...getPendingRetentionCounters() },
+                  turnPresentationCounters: getTurnPresentationMetrics()
+                };
+              };
               if (!refreshRequested && !verboseMissions && pendingCoordinatorEventCount === 0) {
                 const cachedStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, { requireDirectPeerTruth: args?.requireDirectPeerTruth === true });
                 if (cachedStatus) {
+                  const returned = await attachLiveOnlyExtras(cachedStatus);
                   logRepoMeshStatusDebug("return_cached", {
                     meshId,
                     command: "mesh_status",
                     refreshRequested,
                     durationMs: Date.now() - startedAtMs,
-                    summary: summarizeRepoMeshStatusDebug(cachedStatus)
+                    summary: summarizeRepoMeshStatusDebug(returned)
                   });
-                  return cachedStatus;
+                  return returned;
                 }
+              }
+              if (!refreshRequested && !verboseMissions) {
                 const staleStatus = ctx.getCachedAggregateMeshStatus(meshId, mesh, {
                   requireDirectPeerTruth: args?.requireDirectPeerTruth === true,
                   allowStalePending: true
@@ -133031,14 +133073,16 @@ ${ptyResult.output.slice(-2e3)}`);
                       ctx.swrRefreshInFlight.delete(meshId);
                     });
                   }
+                  const returned = await attachLiveOnlyExtras(staleStatus);
                   logRepoMeshStatusDebug("return_stale_swr", {
                     meshId,
                     command: "mesh_status",
                     refreshRequested,
+                    pendingCoordinatorEventCount,
                     durationMs: Date.now() - startedAtMs,
-                    summary: summarizeRepoMeshStatusDebug(staleStatus)
+                    summary: summarizeRepoMeshStatusDebug(returned)
                   });
-                  return staleStatus;
+                  return returned;
                 }
               }
               const refreshReason = refreshRequested ? "explicit_refresh" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
