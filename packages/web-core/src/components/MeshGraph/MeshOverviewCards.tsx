@@ -25,7 +25,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
-import { nodeCheckoutLabel, nodeDisplayName, sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { nodeDisplayName, sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 
 /**
@@ -1442,7 +1442,7 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                         return (
                             <div key={node.nodeId} className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                 <StatusBadge meshTheme={meshTheme} label={node.health} tone={healthTone(node.health)} />
-                                <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeCheckoutLabel(node)}</span>
+                                <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeDisplayName(node)}</span>
                                 {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
                                 <span className={`max-w-full truncate font-mono text-3xs ${meshTheme.textMuted}`}>{nodeDriftSummary(node)}</span>
                                 {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{sessionCount} session{sessionCount > 1 ? 's' : ''}</span>}
