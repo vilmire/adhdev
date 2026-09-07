@@ -27,7 +27,7 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { readNonEmptyString, buildMeshSystemMessage } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { traceMeshEventStage, traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { getQueue, reclaimStrandedAssignedTask, updateTaskStatus } from './mesh-work-queue.js';
 import { resolveSessionBusyVerdict } from './mesh-queue-assignment.js';

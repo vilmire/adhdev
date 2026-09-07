@@ -108,7 +108,3 @@ export function parseMaybeJson(value: any): any {
         return value;
     }
 }
-
-export function getChatMessageSignature(message: ChatMessage | null | undefined): string {
-    return buildChatMessageSignature(message);
-}

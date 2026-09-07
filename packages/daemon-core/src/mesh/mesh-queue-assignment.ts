@@ -18,7 +18,7 @@ import {
     shouldRedriveDeferredClaim,
     type MeshClaimRefusal,
 } from './mesh-claim-refusal.js';
-import { traceMeshEventDrop, traceMeshEventStage } from './mesh-event-trace.js';
+import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-trace.js';
 import { buildRedriveProvenance, describeRedriveProviderFlip } from './mesh-redrive-provenance.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';

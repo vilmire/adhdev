@@ -7,14 +7,10 @@
  * Migrated from @adhdev/core — this is now the single source of truth.
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
 import { existsSync, statSync } from 'fs';
 import { platform, homedir } from 'os';
 import * as path from 'path';
 import type { ProviderLoader } from '../providers/provider-loader.js';
-import { isKnownWin32GuiExe, readWin32IdeVersionFromDisk } from './win32-ide-version.js';
 
 // ─── Types ──────────────────────────────────────
 
@@ -94,40 +90,6 @@ function findCliCommand(command: string): string | null {
         }
     }
     return null;
-}
-
-/**
- * Resolve an IDE version on demand (NOT at boot).
- *
- * Order of preference, all spawn-free where possible:
- *  1. win32: read the bundled product.json/package.json next to the exe.
- *  2. Otherwise spawn `<cli> --version` — but ONLY when the binary is not a
- *     known GUI executable (the #4 guard), so we never boot an IDE window.
- *
- * `win32ProcessNames` is provider.json `processNames.win32` (type → exe names),
- * used to recognise GUI executables. Callers that have a ProviderLoader can
- * pass `providerLoader.getWinProcessNames()`.
- */
-export async function getIdeVersion(
-    cliCommand: string,
-    win32ProcessNames: Record<string, string[]> = {},
-): Promise<string | null> {
-    if (platform() === 'win32') {
-        const fromDisk = readWin32IdeVersionFromDisk(cliCommand);
-        if (fromDisk) return fromDisk;
-        // Refuse to spawn a known GUI exe — it would launch the IDE window.
-        if (isKnownWin32GuiExe(cliCommand, win32ProcessNames)) return null;
-    }
-    try {
-        const { stdout } = await execAsync(`"${cliCommand}" --version`, {
-            encoding: 'utf-8',
-            windowsHide: true,
-            timeout: 10000,
-        });
-        return stdout.trim().split('\n')[0] || null;
-    } catch {
-        return null;
-    }
 }
 
 function checkPathExists(paths: string[]): string | null {

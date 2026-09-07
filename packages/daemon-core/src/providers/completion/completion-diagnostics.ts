@@ -24,7 +24,7 @@ import { isUserFacingChatMessage } from '../chat-message-normalization.js';
 import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isCliGeneratingLikeStatus, hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
-import { traceMeshEventDrop } from '../../mesh/mesh-event-trace.js';
+import { traceMeshEventDrop } from '../../shared/mesh-event-trace.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
 import * as evidence from './evidence.js';
 import type {

@@ -28,7 +28,7 @@ import { normalizeProviderSessionId } from '../provider-session-id.js';
 import { workingDirBasename } from '../working-dir.js';
 import { extractFinalSummaryFromMessages } from '../chat-message-normalization.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
-import { traceMeshEventStage, traceMeshEventDrop } from '../../mesh/mesh-event-trace.js';
+import { traceMeshEventStage, traceMeshEventDrop } from '../../shared/mesh-event-trace.js';
 import { computeTurnAnchoredDurationMs, hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
 import { formatApprovalRequestMessage } from '../cli-provider-effect-format.js';
 import type {

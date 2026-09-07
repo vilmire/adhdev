@@ -2,7 +2,7 @@ import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { noteTargetPinCleared } from './mesh-turn-ledger.js';
-import { traceMeshEventDrop } from './mesh-event-trace.js';
+import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { loadConfig } from '../config/config.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
 

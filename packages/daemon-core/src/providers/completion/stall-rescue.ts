@@ -21,7 +21,7 @@
  */
 
 import { LOG } from '../../logging/logger.js';
-import { traceMeshEventStage } from '../../mesh/mesh-event-trace.js';
+import { traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { extractFinalSummaryFromMessages, extractFinalSummaryFromMessagesAfter } from '../chat-message-normalization.js';
 import type { ProviderModule } from '../contracts.js';

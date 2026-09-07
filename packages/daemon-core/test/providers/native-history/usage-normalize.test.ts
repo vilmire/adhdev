@@ -19,7 +19,7 @@ import {
   totalTokens,
   type NativeUsageRecord,
   type SessionUsageTotals,
-} from '../../../src/providers/native-history/usage-normalize.js';
+} from '../../../src/shared/usage-normalize.js';
 
 const META = { providerSessionId: 'sess-1', agent: 'test-cli' };
 

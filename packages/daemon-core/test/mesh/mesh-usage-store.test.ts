@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SessionUsageTotals } from '../../src/providers/native-history/usage-normalize.js';
+import type { SessionUsageTotals } from '../../src/shared/usage-normalize.js';
 
 // The store writes under getConfigDir(), which test/helpers/setup-env.ts
 // already isolates to a per-run tmp dir via ADHDEV_CONFIG_DIR. Do NOT reassign

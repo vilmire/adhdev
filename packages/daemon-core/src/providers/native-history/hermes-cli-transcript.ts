@@ -25,7 +25,7 @@ import {
     makeUsage,
     type NativeUsageRecord,
     type SessionUsageTotals,
-} from './usage-normalize.js';
+} from '../../shared/usage-normalize.js';
 
 export interface NativeHistoryMessage {
     id: string;

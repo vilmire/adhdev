@@ -20,12 +20,12 @@ import {
   makeUsage,
   type NativeUsageRecord,
   type SessionUsageTotals,
-} from './usage-normalize.js';
+} from '../../shared/usage-normalize.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type NativeHistoryRole = 'user' | 'assistant' | 'system';
-export type NativeHistoryKind = 'standard' | 'tool' | 'session_start';
+export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 
 export interface NativeHistoryMessage {
   ts: string;

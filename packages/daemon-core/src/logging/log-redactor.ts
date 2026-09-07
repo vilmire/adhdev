@@ -95,6 +95,3 @@ export function redactLogLine(line: string): string {
 export function redactLogLines(lines: string[]): string[] {
     return lines.map((line) => redactLogLine(line));
 }
-
-/** Exposed for tests/introspection: the rule names applied, in order. */
-export const LOG_REDACTION_RULE_NAMES: readonly string[] = RULES.map((r) => r.name);

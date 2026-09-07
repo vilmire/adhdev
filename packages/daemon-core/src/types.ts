@@ -93,7 +93,6 @@ export interface ExtensionInfo {
   id: string;
   type: string;      // 'cline' | 'roo-code' | etc.
   name: string;
-  isMonitored?: boolean;
   agentStatus?: string;
 }
 
@@ -111,11 +110,6 @@ export interface ProviderConfig {
   id: string;
   type: 'ide' | 'extension' | 'cli' | 'acp';
   name: string;
- /** CDP port detection */
-  cdpDetect?: {
-    processName?: string;
-    portFlag?: string;
-  };
  /** Capabilities */
   capabilities?: string[];
 }

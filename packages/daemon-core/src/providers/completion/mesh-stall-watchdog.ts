@@ -23,7 +23,7 @@
 
 import { resolveSessionTurnPresentation } from '../../mesh/mesh-turn-presentation.js';
 import { isTerminalTurnStage } from '../../mesh/mesh-turn-ledger.js';
-import { traceMeshEventDrop, traceMeshEventStage } from '../../mesh/mesh-event-trace.js';
+import { traceMeshEventDrop, traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
 
 export const MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 180_000;
