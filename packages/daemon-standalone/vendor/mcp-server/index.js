@@ -96690,7 +96690,9 @@ ${cleanBody}`;
     });
     var fsm_loader_exports = {};
     __export2(fsm_loader_exports, {
+      collectFsmSpecWarnings: () => collectFsmSpecWarnings,
       loadFsmSpec: () => loadFsmSpec,
+      reportFsmSpecWarnings: () => reportFsmSpecWarnings,
       validateFsmSpec: () => validateFsmSpec
     });
     function loadFsmSpec(sourcePath) {
@@ -96702,7 +96704,7 @@ ${cleanBody}`;
       }
       const errors = validateFsmSpec(raw);
       if (errors.length) return { ok: false, errors, sourcePath };
-      return { ok: true, spec: raw, sourcePath };
+      return { ok: true, spec: raw, sourcePath, warnings: collectFsmSpecWarnings(raw) };
     }
     function validateFsmSpec(raw) {
       const errs = [];
@@ -96806,6 +96808,65 @@ ${cleanBody}`;
       }
       return errs;
     }
+    function reportFsmSpecWarnings(warnings, tag, warn) {
+      for (const w of warnings) warn("FsmDriver", `[${tag}] spec lint: ${w}`);
+    }
+    function collectFsmSpecWarnings(raw) {
+      if (!isV4Spec(raw)) return [];
+      const spec = raw;
+      const warns = [];
+      for (const [i, t] of (spec.transitions ?? []).entries()) {
+        if (t.when) warns.push(...warnCondition(t.when, `transitions[${i}].when`));
+      }
+      return warns;
+    }
+    function warnCondition(c, path67) {
+      const warns = [];
+      const w = c;
+      if ("all" in w && Array.isArray(w.all)) {
+        w.all.forEach((x, i) => warns.push(...warnCondition(x, `${path67}.all[${i}]`)));
+        return warns;
+      }
+      if ("any" in w && Array.isArray(w.any)) {
+        w.any.forEach((x, i) => warns.push(...warnCondition(x, `${path67}.any[${i}]`)));
+        return warns;
+      }
+      if ("not" in w && w.not) {
+        warns.push(...warnCondition(w.not, `${path67}.not`));
+        return warns;
+      }
+      if ("matches" in w && typeof w.matches === "string") {
+        const flags = typeof w.flags === "string" ? w.flags : "i";
+        if (flags.includes("m")) return warns;
+        if (!hasUnescapedLineAnchor(w.matches)) return warns;
+        warns.push(
+          `${path67}.matches uses ^ or $ without the "m" flag \u2014 the anchor binds to the whole screen, not a line. Add "flags": "${flags}m" or use the (?:^|\\n) idiom.`
+        );
+      }
+      return warns;
+    }
+    function hasUnescapedLineAnchor(pattern) {
+      let src = pattern;
+      for (const re of LINE_BOUNDARY_IDIOMS) src = src.replace(re, "");
+      let inClass = false;
+      for (let i = 0; i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === "\\") {
+          i += 1;
+          continue;
+        }
+        if (inClass) {
+          if (ch === "]") inClass = false;
+          continue;
+        }
+        if (ch === "[") {
+          inClass = true;
+          continue;
+        }
+        if (ch === "^" || ch === "$") return true;
+      }
+      return false;
+    }
     function validateCondition(c, sectionIds, path67) {
       const errs = [];
       const w = c;
@@ -96857,11 +96918,20 @@ ${cleanBody}`;
       return errs;
     }
     var fs20;
+    var LINE_BOUNDARY_IDIOMS;
     var init_fsm_loader = __esm2({
       "src/providers/spec/fsm-loader.ts"() {
         "use strict";
         fs20 = __toESM2(require("fs"));
         init_fsm_types();
+        LINE_BOUNDARY_IDIOMS = [
+          /\(\?:\^\|\\n\)/g,
+          /\(\?:\\n\|\^\)/g,
+          /\(\?=\\n\|\$\)/g,
+          /\(\?=\$\|\\n\)/g,
+          /\(\?:\\n\|\$\)/g,
+          /\(\?:\$\|\\n\)/g
+        ];
       }
     });
     var evaluator_exports = {};
@@ -97133,7 +97203,7 @@ ${cleanBody}`;
           } else {
             key2 = keyTemplate.replace(/\{index\}/g, String(ordinal.length + 1));
           }
-          ordinal.push({ index: ordinal.length + 1, label, key: key2, current: hasCursorMarker(om[0]) });
+          ordinal.push({ index: ordinal.length + 1, label, key: key2, current: hasCursorMarker(om[0], rule.cursor_marker) });
         }
         return ordinal;
       }
@@ -97148,7 +97218,7 @@ ${cleanBody}`;
           const idx = Number(m[1]);
           let label = String(m[2] ?? "").trim();
           if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
-          const current = hasCursorMarker(lines[i]);
+          const current = hasCursorMarker(lines[i], rule.cursor_marker);
           let j = i + 1;
           while (j < lines.length) {
             const next = lines[j];
@@ -97170,7 +97240,7 @@ ${cleanBody}`;
           const label = String(m[2] ?? "").trim();
           if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
           const key2 = keyTemplate.replace(/\{index\}/g, String(idx));
-          buttons.push({ index: idx, label, key: key2, current: hasCursorMarker(m[0]) });
+          buttons.push({ index: idx, label, key: key2, current: hasCursorMarker(m[0], rule.cursor_marker) });
         }
       }
       const block2 = lastContiguousNumberedBlock(buttons);
@@ -97186,12 +97256,15 @@ ${cleanBody}`;
       }
       return entries.slice(start);
     }
-    function hasCursorMarker(text) {
-      return /^\s*[❯›>→]/.test(text);
+    function hasCursorMarker(text, markerClass) {
+      const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
+      return new RegExp("^\\s*[" + cls + "]").test(text);
     }
+    var DEFAULT_CURSOR_MARKER_CLASS;
     var init_evaluator = __esm2({
       "src/providers/spec/evaluator.ts"() {
         "use strict";
+        DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {
@@ -97560,9 +97633,9 @@ ${cleanBody}`;
             }
             const schema2 = parsed.$schema;
             if (schema2 === "adhdev:cli/spec@4") {
-              const { validateFsmSpec: validateFsmSpec2 } = await Promise.resolve().then(() => (init_fsm_loader(), fsm_loader_exports));
+              const { validateFsmSpec: validateFsmSpec2, collectFsmSpecWarnings: collectFsmSpecWarnings2 } = await Promise.resolve().then(() => (init_fsm_loader(), fsm_loader_exports));
               const errors = validateFsmSpec2(parsed);
-              return { success: true, valid: errors.length === 0, errors };
+              return { success: true, valid: errors.length === 0, errors, warnings: collectFsmSpecWarnings2(parsed) };
             }
             return { success: true, valid: false, errors: [`unsupported $schema "${schema2}" \u2014 form builder is v4-only`] };
           },
@@ -102596,6 +102669,7 @@ ${marker}`,
             const res = loadFsmSpec(this.opts.specPath);
             if (!res.ok) throw new Error(`fsm spec invalid: ${res.errors.join("; ")}`);
             this.spec = res.spec;
+            reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
           }
           buildAdapterOpts() {
             const cols = this.opts.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS;
@@ -102643,6 +102717,7 @@ ${marker}`,
                   return;
                 }
                 this.spec = res.spec;
+                reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
                 LOG.info("FsmDriver", `[${this.specTag()}] spec hot-reloaded`);
                 this.reevaluate(true);
               });
@@ -141694,6 +141769,7 @@ ${e?.stderr || ""}`;
       clearDebugTrace: () => clearDebugTrace,
       clearPendingMeshCoordinatorEvents: () => clearPendingMeshCoordinatorEvents,
       codexSessionsDir: () => codexSessionsDir,
+      collectFsmSpecWarnings: () => collectFsmSpecWarnings,
       collectGateConvergenceEvidence: () => collectGateConvergenceEvidence3,
       collectIgnoredMagiSlotFields: () => collectIgnoredMagiSlotFields2,
       collectPendingApprovals: () => collectPendingApprovals3,

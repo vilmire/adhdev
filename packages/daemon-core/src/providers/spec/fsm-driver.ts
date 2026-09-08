@@ -36,7 +36,7 @@ import {
     type CliSpecV4, type FsmState, type FsmTransition,
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
-import { loadFsmSpec } from './fsm-loader.js';
+import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
@@ -1066,6 +1066,7 @@ export class FsmDriver implements ISpecDriver {
         const res = loadFsmSpec(this.opts.specPath);
         if (!res.ok) throw new Error(`fsm spec invalid: ${res.errors.join('; ')}`);
         this.spec = res.spec;
+        reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
     }
 
     private buildAdapterOpts(): TerminalAdapterOpts {
@@ -1128,6 +1129,7 @@ export class FsmDriver implements ISpecDriver {
                     return;
                 }
                 this.spec = res.spec;
+                reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
                 LOG.info('FsmDriver', `[${this.specTag()}] spec hot-reloaded`);
                 // Re-evaluate immediately with the new transitions.
                 this.reevaluate(true);
