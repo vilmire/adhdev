@@ -25879,9 +25879,9 @@ var require_streamx = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/b4a/index.js
+// ../../node_modules/tar-stream/node_modules/b4a/index.js
 var require_b4a2 = __commonJS({
-  "../daemon-core/node_modules/b4a/index.js"(exports2, module2) {
+  "../../node_modules/tar-stream/node_modules/b4a/index.js"(exports2, module2) {
     "use strict";
     function isBuffer(value) {
       return Buffer.isBuffer(value) || value instanceof Uint8Array;
@@ -26037,9 +26037,9 @@ var require_b4a2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/headers.js
+// ../../node_modules/tar-stream/headers.js
 var require_headers = __commonJS({
-  "../daemon-core/node_modules/tar-stream/headers.js"(exports2) {
+  "../../node_modules/tar-stream/headers.js"(exports2) {
     "use strict";
     var b4a = require_b4a2();
     var ZEROS = "0000000000000000000";
@@ -26300,9 +26300,9 @@ var require_headers = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/extract.js
+// ../../node_modules/tar-stream/extract.js
 var require_extract = __commonJS({
-  "../daemon-core/node_modules/tar-stream/extract.js"(exports2, module2) {
+  "../../node_modules/tar-stream/extract.js"(exports2, module2) {
     "use strict";
     var { Writable, Readable, getStreamError } = require_streamx();
     var FIFO = require_fast_fifo();
@@ -26645,9 +26645,9 @@ var require_extract = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/constants.js
+// ../../node_modules/tar-stream/constants.js
 var require_constants2 = __commonJS({
-  "../daemon-core/node_modules/tar-stream/constants.js"(exports2, module2) {
+  "../../node_modules/tar-stream/constants.js"(exports2, module2) {
     "use strict";
     var constants = {
       // just for envs without fs
@@ -26666,9 +26666,9 @@ var require_constants2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/pack.js
+// ../../node_modules/tar-stream/pack.js
 var require_pack = __commonJS({
-  "../daemon-core/node_modules/tar-stream/pack.js"(exports2, module2) {
+  "../../node_modules/tar-stream/pack.js"(exports2, module2) {
     "use strict";
     var { Readable, Writable, getStreamError } = require_streamx();
     var b4a = require_b4a2();
@@ -26901,9 +26901,9 @@ var require_pack = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/index.js
+// ../../node_modules/tar-stream/index.js
 var require_tar_stream = __commonJS({
-  "../daemon-core/node_modules/tar-stream/index.js"(exports2) {
+  "../../node_modules/tar-stream/index.js"(exports2) {
     "use strict";
     exports2.extract = require_extract();
     exports2.pack = require_pack();
@@ -27146,9 +27146,9 @@ var require_pump = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-fs/index.js
+// ../../node_modules/tar-fs/index.js
 var require_tar_fs = __commonJS({
-  "../daemon-core/node_modules/tar-fs/index.js"(exports2) {
+  "../../node_modules/tar-fs/index.js"(exports2) {
     "use strict";
     var tar = require_tar_stream();
     var pump = require_pump();
