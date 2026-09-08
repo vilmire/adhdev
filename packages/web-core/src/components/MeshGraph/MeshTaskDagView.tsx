@@ -536,6 +536,19 @@ function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
 
 type PlanFlowNode = Node<Record<string, unknown> & { overlay: FusedOverlays['planned'][number]; theme: MeshGraphTheme }, 'planNode'>
 
+/* The canvas mixes task cards with gate/plan overlays, so node callbacks
+ * receive this union, not just TaskFlowNode. Discrimination goes through the
+ * guards below rather than bare `node.type ===` comparisons: web-core compiles
+ * twice — its own build with strict off (where every Node's `type` widens to
+ * `string | undefined` and a literal comparison narrows nothing) and inside
+ * web-cloud's program with strict on (where a bare comparison against another
+ * member's literal is a TS2367 no-overlap error, the one that broke the
+ * v1.0.58 deploy-web job). User-defined guards narrow identically in both. */
+type AnyFlowNode = TaskFlowNode | GateFlowNode | PlanFlowNode
+const isTaskFlowNode = (node: AnyFlowNode): node is TaskFlowNode => node.type === 'taskNode'
+const isGateFlowNode = (node: AnyFlowNode): node is GateFlowNode => node.type === 'gateNode'
+const isPlanFlowNode = (node: AnyFlowNode): node is PlanFlowNode => node.type === 'planNode'
+
 function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
     const { t } = useTranslation('common')
     const { overlay, theme } = data
@@ -1109,7 +1122,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
     /** Axis marks for the vertical time rail — one per graph cluster, keyed to its stacked y. */
     // State (not a ref) so the live-fit effect reruns once the canvas mounts.
-    const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<TaskFlowNode, Edge> | null>(null)
+    const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<AnyFlowNode, Edge> | null>(null)
     /* Relative-time clock. Ticks on its own so "3분 전" ages while the tab sits
      * open, independent of the 45s data poll — a card must never look fresher
      * than it is just because nothing refetched. Coarse (30s) because the label
@@ -1554,10 +1567,10 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     // the card transitions, so it faded in/out on every hover change (flicker).
     const hoverClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     useEffect(() => () => { if (hoverClearTimer.current) clearTimeout(hoverClearTimer.current) }, [])
-    const handleNodeHover = useCallback((_event: unknown, node: TaskFlowNode) => {
+    const handleNodeHover = useCallback((_event: unknown, node: AnyFlowNode) => {
         // Entering a NON-task node (gate, ghost) must not snuff the thread
         // instantly — treat it like leaving, so the delayed clear decides.
-        if (node.type !== 'taskNode') return
+        if (!isTaskFlowNode(node)) return
         if (hoverClearTimer.current) { clearTimeout(hoverClearTimer.current); hoverClearTimer.current = null }
         const missionId = node.data.dagNode.task.missionId
         setHoveredMissionId(typeof missionId === 'string' && missionId ? missionId : null)
@@ -1567,9 +1580,9 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
         hoverClearTimer.current = setTimeout(() => { setHoveredMissionId(null) }, 300)
     }, [])
 
-    const handleNodeClick = useCallback((_event: unknown, node: TaskFlowNode) => {
-        if (node.type === 'gateNode') {
-            const overlay = (node.data as unknown as { overlay: FusedOverlays['gates'][number] }).overlay
+    const handleNodeClick = useCallback((_event: unknown, node: AnyFlowNode) => {
+        if (isGateFlowNode(node)) {
+            const overlay = node.data.overlay
             onGateOpen?.(overlay.graph, overlay.nodeId, overlay.gate)
             return
         }
@@ -1580,8 +1593,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
          * dead end: a two-word ref and nowhere to go. Resolved against the
          * unscoped `tasks`, not `dag`/`scoped`, precisely because the
          * interesting case is the task the window is hiding. */
-        if (node.type === 'planNode') {
-            const overlay = (node.data as unknown as { overlay: FusedOverlays['planned'][number] }).overlay
+        if (isPlanFlowNode(node)) {
+            const overlay = node.data.overlay
             if (!overlay.taskId) return
             const task = tasks.find(candidate => candidate.id === overlay.taskId)
             if (!task) return
@@ -1589,7 +1602,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             else setSelectedTaskId(current => (current === task.id ? null : task.id))
             return
         }
-        if (node.type !== 'taskNode') return
+        if (!isTaskFlowNode(node)) return
         if (onTaskOpen) {
             onTaskOpen(node.data.dagNode.task)
             return
@@ -1666,7 +1679,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             <div className="relative min-h-0 flex-1">
             <ReactFlow
                 className="h-full w-full"
-                nodes={[...flowNodes, ...overlayFlowNodes] as TaskFlowNode[]}
+                nodes={[...flowNodes, ...overlayFlowNodes] as AnyFlowNode[]}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
                 onInit={setFlowInstance}

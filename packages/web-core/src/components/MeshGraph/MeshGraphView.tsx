@@ -569,7 +569,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     </div>
                 )}
                 {attentionBadge && (
-                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                    <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel ?? undefined}>
                         <span className="truncate">{attentionLabel}</span>
                     </div>
                 )}
@@ -675,7 +675,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {attentionBadge ? (
-                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel}>
+                <div className={`mt-2 inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${getAttentionBadgeClasses(attentionBadge.tone, meshTheme.isDark)}`} title={attentionLabel ?? undefined}>
                     <span className="truncate">{attentionLabel}</span>
                 </div>
             ) : node.branch && !isSubmoduleNode ? (
