@@ -20,6 +20,13 @@
 //      (wired into the two-tick retention pass in mesh-worktree-retention.ts).
 //   4. Durable execution lease so two retention passes can never remove the
 //      same node concurrently (same module).
+//
+// Scope (Slice 3): graph control-plane retention —
+//   5. Terminal-graph cascade window over the seven mesh_task_graph* /
+//      mesh_graph_* tables (wired into MeshGraphStore.pruneTerminalGraphs).
+//   6. Delivered/failed outbox-row window, a cross-graph sweep independent of
+//      (5) (MeshGraphStore.pruneTerminalOutbox).
+//   7. The enforce switch that keeps (5)+(6) in OBSERVE mode by default.
 // ---------------------------------------------------------------------------
 
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -167,4 +174,74 @@ export function resolveWorktreeNodeRetentionLeaseMs(): number {
         if (Number.isFinite(parsed) && parsed >= 60 * 1000 && parsed <= 60 * 60 * 1000) return parsed;
     }
     return DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS;
+}
+
+// ─── (5) terminal-graph cascade window (Slice 3) ─────────────────────────────
+// The seven graph control-plane tables (mesh_task_graphs + nodes/edges/outputs/
+// gates/workspace_intents/outbox) had NO lifecycle GC at all: every graph ever
+// accepted stays forever, along with a node row per task, an edge row per
+// dependency, and an immutable output version per terminal commit. This window
+// deletes a graph — always as a WHOLE, never row-by-row — once it has been
+// terminal for longer than the window.
+//
+// Default 30 days, aligned with MESH_TERMINAL_QUEUE_RETENTION_MS. That
+// alignment is not cosmetic: mesh_task_outputs is keyed by the queue task id and
+// backs the queue task's detail view, so letting the graph side and the queue
+// side age out on different clocks would leave one referring to a task the other
+// had already forgotten. Clamp [1d, 90d], same rationale as (1).
+export const DEFAULT_GRAPH_RETENTION_MS = 30 * DAY_MS;
+
+export function resolveGraphRetentionMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+    }
+    return DEFAULT_GRAPH_RETENTION_MS;
+}
+
+// ─── (6) delivered/failed outbox window (Slice 3) ────────────────────────────
+// A cross-graph sweep, deliberately SEPARATE from (5): outbox rows may carry a
+// NULL graph_id, so the graph cascade can never reach them, and delivered rows
+// accumulate far faster than graphs do (several per state transition). Only the
+// terminal statuses are collected — 'pending' is NEVER pruned at any age,
+// because a pending row is undelivered work the drain still owes.
+//
+// ★ 'failed' is also a RETRY-BACKOFF state, not only a dead end:
+// markOutboxEventStatus writes attempt_count/next_attempt_at_ms alongside it. The
+// age gate is what makes collecting it safe — a row still being retried is being
+// touched, so its updated_at stays recent and it falls outside the window.
+//
+// Default 14 days, matching MESH_TOOL_CALL_LOG_RETENTION_MS: same character of
+// data (a delivery/audit trail read only over a recent debugging horizon).
+// Clamp [1d, 90d].
+export const DEFAULT_GRAPH_OUTBOX_RETENTION_MS = 14 * DAY_MS;
+
+export function resolveGraphOutboxRetentionMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_GRAPH_OUTBOX_RETENTION_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+    }
+    return DEFAULT_GRAPH_OUTBOX_RETENTION_MS;
+}
+
+// ─── (7) graph retention enforce switch (Slice 3) ────────────────────────────
+// The graph tables carry NO foreign keys (mesh-graph-schema.ts is ADDITIVE-ONLY;
+// FKs cannot be added retroactively to live DBs), so the seven-table delete order
+// is entirely an application-level invariant: miss a table and the orphan is
+// silent — no error, no constraint violation, just rows nothing will ever reach
+// again. Deletion is also irreversible.
+//
+// So the first shipped default is OBSERVE: the sweep runs its full selection —
+// terminal-graph predicate, every exception filter, the outbox window — and
+// reports the counts it WOULD delete, without issuing a single DELETE. Flipping
+// the default to enforce is a separate, deliberate commit made after live
+// observe counts have been read; it is not something an operator should trip
+// into by accident, which is why only an explicit '1'/'true' enables it.
+export function resolveGraphRetentionEnforce(): boolean {
+    const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_ENFORCE);
+    if (!raw) return false;
+    const normalized = raw.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true';
 }
