@@ -426,9 +426,22 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     }
 
     const mtime = safeMtimeMs(sourcePath);
-    // Completion evidence explicitly requests forceRefresh. It still benefits
-    // from the PTY trigger throttle, but never trusts a reusable parse even when
-    // a filesystem reports coarse or unchanged timestamps.
+    // Completion evidence explicitly requests forceRefresh: it never trusts a
+    // reusable parse, even when the filesystem reports coarse or unchanged
+    // timestamps.
+    //
+    // What keeps the resulting full re-parse affordable is NOT a throttle on this
+    // path — there is none, despite what this comment used to claim. It is the
+    // caller's own cadence: the single forceRefresh caller is
+    // readExternalCompletionMessages (providers/completion/evidence.ts), reached
+    // via probeNativeTranscriptSignals / hasFreshNativeFinalAssistantForCurrentTurn,
+    // which by construction run only at the stall threshold (≥180s of PTY stasis)
+    // or during an armed completion-debounce retry — never on the routine 5s tick.
+    // If a future caller starts requesting forceRefresh at PTY frequency, that
+    // cadence assumption is what breaks, and this becomes a full re-parse per
+    // chunk. Relaxing forceRefresh to bypass only the memo (keeping the
+    // size/mtime resume path, which re-stats and reads actual bytes so it is not
+    // stale) is the known fix if that day comes.
     const forceRefresh = input.forceRefresh === true || input.args?.forceRefresh === true;
     const lines = readJsonlLines(sourcePath, forceRefresh);
     if (lines.length === 0) return null;

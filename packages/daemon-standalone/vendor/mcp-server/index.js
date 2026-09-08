@@ -105651,9 +105651,25 @@ ${marker}`,
       });
       return { ...usage, mode: "cumulative", receivedAt };
     }
+    function readFirstJsonlLine(filePath) {
+      const fd = fs31.openSync(filePath, "r");
+      try {
+        const buffer = Buffer.alloc(SESSION_META_PREFIX_BYTES);
+        const bytes = fs31.readSync(fd, buffer, 0, buffer.length, 0);
+        if (bytes <= 0) return null;
+        const text = buffer.subarray(0, bytes).toString("utf8");
+        const lines = text.split("\n");
+        const idx = lines.findIndex(Boolean);
+        if (idx >= 0 && idx < lines.length - 1) return lines[idx];
+        if (bytes < buffer.length) return idx >= 0 ? lines[idx] : null;
+        return fs31.readFileSync(filePath, "utf-8").split("\n").find(Boolean) ?? null;
+      } finally {
+        fs31.closeSync(fd);
+      }
+    }
     function readSessionMeta(filePath) {
       try {
-        const firstLine = fs31.readFileSync(filePath, "utf-8").split("\n").find(Boolean);
+        const firstLine = readFirstJsonlLine(filePath);
         if (!firstLine) return null;
         const parsed = JSON.parse(firstLine);
         if (String(parsed.type ?? "") !== "session_meta") return null;
@@ -105843,6 +105859,7 @@ ${marker}`,
     var fs31;
     var path35;
     var CODEX_DEFAULT_COMPLETION_SIGNAL;
+    var SESSION_META_PREFIX_BYTES;
     var init_codex_cli_transcript = __esm2({
       "src/providers/native-history/codex-cli-transcript.ts"() {
         "use strict";
@@ -105856,6 +105873,7 @@ ${marker}`,
           summaryField: "last_agent_message",
           turnIdField: "turn_id"
         };
+        SESSION_META_PREFIX_BYTES = 8192;
       }
     });
     function extractTimestampValue3(value) {
@@ -129569,13 +129587,13 @@ ${asText(streams.stderr)}
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path67) => `:(exclude)${path67}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync9, closeSync: closeSync9 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync10, closeSync: closeSync10 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join76 } = await import("path");
       const scratch = mkdtempSync3(join76(tmpdir8(), "adhdev-patchid-"));
       const patchFile = join76(scratch, "patch.diff");
       try {
-        const out = openSync9(patchFile, "w");
+        const out = openSync10(patchFile, "w");
         let diffRun;
         try {
           diffRun = spawnSync3(GIT2, diffArgs, {
@@ -129584,7 +129602,7 @@ ${asText(streams.stderr)}
             encoding: "utf8"
           });
         } finally {
-          closeSync9(out);
+          closeSync10(out);
         }
         if (diffRun.error) throw diffRun.error;
         if (diffRun.status !== 0) {
@@ -129592,7 +129610,7 @@ ${asText(streams.stderr)}
             `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
           );
         }
-        const patchIn = openSync9(patchFile, "r");
+        const patchIn = openSync10(patchFile, "r");
         let patchIdRun;
         try {
           patchIdRun = spawnSync3(GIT2, ["patch-id", "--stable"], {
@@ -129602,7 +129620,7 @@ ${asText(streams.stderr)}
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
           });
         } finally {
-          closeSync9(patchIn);
+          closeSync10(patchIn);
         }
         if (patchIdRun.error) throw patchIdRun.error;
         if (patchIdRun.status !== 0) {
