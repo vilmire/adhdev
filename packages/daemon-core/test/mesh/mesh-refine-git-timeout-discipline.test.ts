@@ -90,4 +90,65 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
         expect(network.length).toBeGreaterThanOrEqual(3);
         expect(network.filter(call => !/timeout:/.test(call))).toEqual([]);
     });
+
+    /**
+     * ★The adjacent gap the first pass missed. `mesh-refine-gitlink-utils.ts` is
+     * the sibling of the converge module pinned above, and its
+     * `ensureSubmoduleCommitLocal` runs THREE `git fetch` strategies with
+     * `protocol.file.allow=always` — a network-capable call that had no bound at
+     * all. Measured in that exact shape: against a blackhole remote
+     * (git://10.255.255.1) the unbounded fetch had NOT returned after 30s and
+     * fired ZERO of the ~300 expected 100ms heartbeat ticks (execFileSync blocks
+     * the whole event loop), while the same call with a timeout returned at its
+     * bound. Source-level, for the same reason as the sibling assertions: these
+     * call sites are module-internal, so pinning the shipped text is what
+     * actually holds them.
+     */
+    it('every execFileSync in the gitlink-utils path declares a timeout and a sanitized env', () => {
+        const src = sourceOf('mesh-refine-gitlink-utils.ts');
+        const callSites = src.match(/execFileSync\(GIT,[\s\S]*?\n?\s*\}\)/g) ?? [];
+        // Guards against the regex silently matching nothing after a refactor.
+        expect(callSites.length).toBeGreaterThanOrEqual(8);
+        expect(callSites.filter(site => !/timeout:/.test(site))).toEqual([]);
+        expect(callSites.filter(site => !/gitChildEnv\(\)/.test(site))).toEqual([]);
+    });
+
+    it('the gitlink-utils network fetch strategies use the NETWORK bound, not the local one', () => {
+        const src = sourceOf('mesh-refine-gitlink-utils.ts');
+        // The `protocol.file.allow=always` fetch loop in ensureSubmoduleCommitLocal:
+        // it accepts any transport, so it must carry the 30s network bound.
+        const fetchSite = src.match(/execFileSync\(GIT, \['-c', 'protocol\.file\.allow=always'[\s\S]*?\n\s*\}\)/)?.[0] ?? '';
+        expect(fetchSite).not.toBe('');
+        expect(fetchSite).toMatch(/timeout: GIT_NETWORK_TIMEOUT_MS/);
+        // Both bounds live beside gitChildEnv() so this module and router-refine.ts
+        // share one value and one rationale rather than minting parallel constants.
+        const locale = readFileSync(
+            fileURLToPath(new URL('../../src/git/git-locale.ts', import.meta.url)),
+            'utf8',
+        );
+        expect(locale).toMatch(/export const GIT_NETWORK_TIMEOUT_MS = 30_000;/);
+        expect(locale).toMatch(/export const GIT_LOCAL_TIMEOUT_MS = 15_000;/);
+    });
+
+    it('router-refine bounds its SYNCHRONOUS rebase pair (event-loop blocking)', () => {
+        const src = readFileSync(
+            fileURLToPath(new URL('../../src/commands/router-refine.ts', import.meta.url)),
+            'utf8',
+        );
+        // The rebase pair shares one options object (`rebaseExec`); the remaining
+        // sync sites carry their options inline. Both must be bounded and sanitized.
+        const rebaseExec = src.match(/const rebaseExec = \{[^}]*\}/)?.[0] ?? '';
+        expect(rebaseExec).toMatch(/timeout: REFINE_GIT_LOCAL_TIMEOUT_MS/);
+        expect(rebaseExec).toMatch(/env: gitChildEnv\(\)/);
+        // ★Unbounded, a rebase that stalls (lock contention, a hung filter/hook)
+        // freezes the daemon outright — it is SYNCHRONOUS.
+        const rebaseCalls = src.match(/execFileSync\('git', \['rebase'[^;]*?\);/g) ?? [];
+        expect(rebaseCalls).toHaveLength(2);
+        expect(rebaseCalls.filter(call => !/rebaseExec/.test(call))).toEqual([]);
+
+        const inlineSync = src.match(/execFileSync\('git',(?![^;]*rebaseExec)[\s\S]{0,240}?\}\)/g) ?? [];
+        expect(inlineSync.length).toBeGreaterThanOrEqual(2);
+        expect(inlineSync.filter(call => !/timeout:/.test(call))).toEqual([]);
+        expect(inlineSync.filter(call => !/gitChildEnv\(\)/.test(call))).toEqual([]);
+    });
 });

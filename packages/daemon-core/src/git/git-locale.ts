@@ -119,3 +119,15 @@ export function gitChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Proce
     }
     return env;
 }
+
+/**
+ * Wall-clock bounds for git child processes, shared by the call sites that need
+ * one. Node's default is `timeout: 0` — NO bound — and a `execFileSync` git call
+ * blocks the daemon's ENTIRE event loop for its whole duration (heartbeat, status
+ * reporting and the WS bridge included), so an unreachable remote freezes the
+ * daemon and the coordinator marks a LIVE node dead. Measured against a blackhole
+ * remote: an unbounded fetch had not returned after 30s and fired ZERO of the ~300
+ * expected 100ms heartbeat ticks; the same call with a timeout returned at its bound.
+ */
+export const GIT_NETWORK_TIMEOUT_MS = 30_000;
+export const GIT_LOCAL_TIMEOUT_MS = 15_000;
