@@ -50634,6 +50634,28 @@ Next step: ${nextStep}`;
       }
       return DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS;
     }
+    function resolveGraphRetentionMs() {
+      const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_MS);
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+      }
+      return DEFAULT_GRAPH_RETENTION_MS;
+    }
+    function resolveGraphOutboxRetentionMs() {
+      const raw = readNonEmptyString(process.env.MESH_GRAPH_OUTBOX_RETENTION_MS);
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+      }
+      return DEFAULT_GRAPH_OUTBOX_RETENTION_MS;
+    }
+    function resolveGraphRetentionEnforce() {
+      const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_ENFORCE);
+      if (!raw) return false;
+      const normalized = raw.trim().toLowerCase();
+      return normalized === "1" || normalized === "true";
+    }
     var HOUR_MS;
     var DAY_MS;
     var MB;
@@ -50643,6 +50665,8 @@ Next step: ${nextStep}`;
     var DEFAULT_LEDGER_ROTATION_MAX_FILES;
     var DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS;
     var DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS;
+    var DEFAULT_GRAPH_RETENTION_MS;
+    var DEFAULT_GRAPH_OUTBOX_RETENTION_MS;
     var init_mesh_retention_config = __esm2({
       "src/mesh/mesh-retention-config.ts"() {
         "use strict";
@@ -50656,6 +50680,8 @@ Next step: ${nextStep}`;
         DEFAULT_LEDGER_ROTATION_MAX_FILES = 15;
         DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS = 48 * HOUR_MS;
         DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS = 10 * 60 * 1e3;
+        DEFAULT_GRAPH_RETENTION_MS = 30 * DAY_MS;
+        DEFAULT_GRAPH_OUTBOX_RETENTION_MS = 14 * DAY_MS;
       }
     });
     function loadBetterSqlite3() {
@@ -66499,6 +66525,179 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             WHERE id = ?
         `).run(status, nowIso, opts?.incrementAttempt ? 1 : 0, opts?.nextAttemptAtMs ?? null, id);
           }
+          // ── Retention (lifecycle Slice 3) ────────────────────────────────────────
+          /**
+           * Retention prune for TERMINAL graphs, cascading across all seven graph
+           * tables. This is the ONLY place in the codebase that deletes graph rows.
+           *
+           * ★ THERE ARE NO FOREIGN KEYS. mesh-graph-schema.ts is additive-only (FKs
+           * cannot be retrofitted onto live DBs), so the child→parent delete order and
+           * the completeness of the table list below are pure application invariants:
+           * omit a table and its rows are silently orphaned — no error is raised, and
+           * nothing will ever reach them again. The regression test asserts every one
+           * of the seven tables reaches zero for a pruned graph precisely because a
+           * miss is otherwise invisible.
+           *
+           * SELECTION — `terminal_at IS NOT NULL AND status IN (completed|failed|
+           * cancelled)`. terminal_at is the primary gate rather than status alone:
+           * classifyGraphRollup is the only writer that sets it (updateGraphStatus with
+           * terminal=true), so requiring it excludes any row whose status was touched
+           * outside the rollup path. The three statuses are exactly
+           * MeshTerminalCommitStatus (mesh-graph-transition-runner.ts).
+           *
+           * The four non-terminal statuses are all deliberately excluded, and none of
+           * them may be inferred as "finished" from age alone:
+           *   - preparing: pre-materialization; rows are still being ADDED.
+           *   - active: a graph with failed nodes stays active under the block policy —
+           *     a failure is not an ending.
+           *   - waiting_gate: gates have NO auto-release path (on_timeout ∈ hold |
+           *     cancel_downstream | fail_graph), so an in-flight gate legitimately
+           *     holds a graph open indefinitely.
+           *   - compensation_required: ★ never delete. Workspace safety refused a
+           *     worktree removal, so a real directory is still on disk and the intent
+           *     row is its only ledger. Deleting it strands the worktree permanently.
+           *
+           * Three further exceptions are applied per-graph on top of the status gate:
+           *   1. compensation_required workspace intents — as above, but checked at the
+           *      INTENT level too, since an intent can be stuck in that saga state while
+           *      the graph itself already rolled up terminal.
+           *   2. Unexpired workspace-intent leases — an active lease means another
+           *      actor is mid-saga on that workspace right now.
+           *   3. Undrained ('pending') outbox rows — the graph still owes a
+           *      notification; deleting it drops that event with no trace.
+           *
+           * ★ mesh_task_outputs rows with graph_id IS NULL are NEVER touched here.
+           * persistOutputVersion writes an output for every terminal commit including
+           * the legacy no-node path, where graph_id is NULL; those rows are by
+           * definition unreachable from any graph, so a graph cascade must not use them
+           * as a starting point. Their own retention is a separate slice.
+           *
+           * When `enforce` is false (the shipped default) this performs the complete
+           * selection and returns the counts it WOULD delete, issuing no DELETE.
+           */
+          pruneTerminalGraphs(olderThanMs, opts) {
+            const enforce = opts?.enforce === true;
+            const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+            const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+            return this.db.transaction(() => {
+              const candidates = this.db.prepare(`
+                SELECT graph_id FROM mesh_task_graphs
+                WHERE terminal_at IS NOT NULL
+                  AND status IN ('completed', 'failed', 'cancelled')
+                  AND terminal_at < ?
+            `).all(cutoffIso);
+              const deletable = [];
+              let skipped = 0;
+              for (const { graph_id: graphId } of candidates) {
+                if (this.graphHasRetentionHold(graphId, nowIso)) {
+                  skipped += 1;
+                  continue;
+                }
+                deletable.push(graphId);
+              }
+              const counts = {
+                graphs: 0,
+                nodes: 0,
+                edges: 0,
+                outputs: 0,
+                gates: 0,
+                workspaceIntents: 0,
+                outbox: 0,
+                skippedGraphs: skipped,
+                enforced: enforce
+              };
+              for (let i = 0; i < deletable.length; i += 500) {
+                const chunk = deletable.slice(i, i + 500);
+                const marks = chunk.map(() => "?").join(",");
+                if (!enforce) {
+                  counts.outbox += this.countIn(`mesh_graph_outbox`, "graph_id", marks, chunk);
+                  counts.workspaceIntents += this.countIn(`mesh_graph_workspace_intents`, "graph_id", marks, chunk);
+                  counts.gates += this.countIn(`mesh_graph_gates`, "graph_id", marks, chunk);
+                  counts.edges += this.countIn(`mesh_task_graph_edges`, "graph_id", marks, chunk);
+                  counts.outputs += this.countIn(`mesh_task_outputs`, "graph_id", marks, chunk, true);
+                  counts.nodes += this.countIn(`mesh_task_graph_nodes`, "graph_id", marks, chunk);
+                  counts.graphs += this.countIn(`mesh_task_graphs`, "graph_id", marks, chunk);
+                  continue;
+                }
+                counts.outbox += this.db.prepare(
+                  `DELETE FROM mesh_graph_outbox WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.workspaceIntents += this.db.prepare(
+                  `DELETE FROM mesh_graph_workspace_intents WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.gates += this.db.prepare(
+                  `DELETE FROM mesh_graph_gates WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.edges += this.db.prepare(
+                  `DELETE FROM mesh_task_graph_edges WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.outputs += this.db.prepare(
+                  `DELETE FROM mesh_task_outputs WHERE graph_id IS NOT NULL AND graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.nodes += this.db.prepare(
+                  `DELETE FROM mesh_task_graph_nodes WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+                counts.graphs += this.db.prepare(
+                  `DELETE FROM mesh_task_graphs WHERE graph_id IN (${marks})`
+                ).run(...chunk).changes;
+              }
+              return counts;
+            }).immediate();
+          }
+          /**
+           * True when a terminal graph must be kept despite passing the age gate.
+           * See pruneTerminalGraphs for why each hold exists.
+           */
+          graphHasRetentionHold(graphId, nowIso) {
+            const held = this.db.prepare(`
+            SELECT
+                EXISTS (
+                    SELECT 1 FROM mesh_graph_workspace_intents
+                    WHERE graph_id = ?
+                      AND (saga_state = 'compensation_required'
+                           OR (lease_expires_at IS NOT NULL AND lease_expires_at > ?))
+                ) AS workspace_hold,
+                EXISTS (
+                    SELECT 1 FROM mesh_graph_outbox
+                    WHERE graph_id = ? AND status = 'pending'
+                ) AS outbox_hold
+        `).get(graphId, nowIso, graphId);
+            return held.workspace_hold === 1 || held.outbox_hold === 1;
+          }
+          /** OBSERVE-mode counterpart of one cascade DELETE. */
+          countIn(table, column, marks, chunk, notNull = false) {
+            const guard = notNull ? `${column} IS NOT NULL AND ` : "";
+            const r = this.db.prepare(
+              `SELECT COUNT(*) AS n FROM ${table} WHERE ${guard}${column} IN (${marks})`
+            ).get(...chunk);
+            return r.n;
+          }
+          /**
+           * Retention prune for DELIVERED/FAILED mesh_graph_outbox rows — a cross-graph
+           * sweep independent of the graph cascade, because an outbox row may carry a
+           * NULL graph_id and would otherwise be unreachable forever.
+           *
+           * ★ 'pending' is never collected at ANY age: it is undelivered work the drain
+           * still owes, and there is no periodic re-drain that would otherwise retire it
+           * (every drainMeshGraphOutbox call site is event-driven, post-commit).
+           *
+           * ★ 'failed' doubles as the retry-backoff state (markOutboxEventStatus writes
+           * attempt_count/next_attempt_at_ms with it), so the age gate is what makes it
+           * safe to collect: a row still under retry has a recent updated_at.
+           *
+           * Returns the rows deleted, or in observe mode the rows that would be.
+           */
+          pruneTerminalOutbox(olderThanMs, opts) {
+            const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+            const where = `status IN ('delivered', 'failed') AND updated_at < ?`;
+            if (opts?.enforce !== true) {
+              const r = this.db.prepare(
+                `SELECT COUNT(*) AS n FROM mesh_graph_outbox WHERE ${where}`
+              ).get(cutoffIso);
+              return r.n;
+            }
+            return this.db.prepare(`DELETE FROM mesh_graph_outbox WHERE ${where}`).run(cutoffIso).changes;
+          }
         };
       }
     });
@@ -69372,6 +69571,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (ledger + toolCalls + terminalQueue + sessionDelivery + turn.attempts > 0) {
           LOG.info("MeshRuntimeStore", `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery / ${turn.attempts} turn-attempt (+${turn.events} turn-event, +${turn.heldSuspensions} held-suspension) row(s)`);
         }
+        const graph = pruneMeshGraphRetention(store);
         return {
           ledger,
           toolCalls,
@@ -69379,11 +69579,50 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           sessionDelivery,
           turnAttempts: turn.attempts,
           turnEvents: turn.events,
-          turnHeldSuspensions: turn.heldSuspensions
+          turnHeldSuspensions: turn.heldSuspensions,
+          graph
         };
       } catch (e) {
         LOG.warn("MeshRuntimeStore", `Runtime retention prune failed: ${e?.message || e}`);
-        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0, turnAttempts: 0, turnEvents: 0, turnHeldSuspensions: 0 };
+        return {
+          ledger: 0,
+          toolCalls: 0,
+          terminalQueue: 0,
+          sessionDelivery: 0,
+          turnAttempts: 0,
+          turnEvents: 0,
+          turnHeldSuspensions: 0,
+          graph: emptyGraphRetentionCounts()
+        };
+      }
+    }
+    function emptyGraphRetentionCounts() {
+      return {
+        graphs: 0,
+        nodes: 0,
+        edges: 0,
+        outputs: 0,
+        gates: 0,
+        workspaceIntents: 0,
+        outbox: 0,
+        skippedGraphs: 0,
+        enforced: false
+      };
+    }
+    function pruneMeshGraphRetention(store) {
+      try {
+        const enforce = resolveGraphRetentionEnforce();
+        const graphStore = store.graphStore();
+        const counts = graphStore.pruneTerminalGraphs(resolveGraphRetentionMs(), { enforce });
+        counts.outbox += graphStore.pruneTerminalOutbox(resolveGraphOutboxRetentionMs(), { enforce });
+        const total = counts.graphs + counts.nodes + counts.edges + counts.outputs + counts.gates + counts.workspaceIntents + counts.outbox;
+        if (total > 0 || counts.skippedGraphs > 0) {
+          LOG.info("MeshRuntimeStore", `Graph retention ${enforce ? "enforce" : "observe"}: ${counts.graphs} graph / ${counts.nodes} node / ${counts.edges} edge / ${counts.outputs} output / ${counts.gates} gate / ${counts.workspaceIntents} workspace-intent / ${counts.outbox} outbox row(s)${enforce ? " removed" : " would be removed"}, ${counts.skippedGraphs} graph(s) held back`);
+        }
+        return counts;
+      } catch (e) {
+        LOG.warn("MeshRuntimeStore", `Graph retention prune failed: ${e?.message || e}`);
+        return emptyGraphRetentionCounts();
       }
     }
     var onLedgerBulkChange;

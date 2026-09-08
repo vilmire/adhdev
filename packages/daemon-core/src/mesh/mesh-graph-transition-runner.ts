@@ -383,7 +383,7 @@ export function commitTaskTerminalAndAdvanceGraph(
     // only SCHEDULES the ordinary queue trigger (setImmediate) outside the lock.
     try {
         drainMeshGraphOutbox(terminal.meshId);
-    } catch { /* drain is best-effort — the committed state stands; the reconcile tick re-drains */ }
+    } catch { /* drain is best-effort — the committed state stands. NOTE: there is no periodic re-drain; every drainMeshGraphOutbox call site is event-driven (post-commit), so a row that fails here stays 'pending' until the next graph event for this mesh drains it. Retention never collects 'pending' rows for exactly this reason. */ }
     return result;
 }
 
