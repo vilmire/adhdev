@@ -38,7 +38,7 @@ export type { RefineMergeLanding, RefineTerminalKind } from '../mesh/mesh-refine
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 import { classifyChangedPackages } from '../git/git-status.js';
-import { gitChildEnv } from '../git/git-locale.js';
+import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS as REFINE_GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
 import type { ChangedPackageClassification } from '../git/git-status.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import {
@@ -805,6 +805,7 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
             // aborts and falls through to the same blocked_review handling as a plain
             // rebase conflict below (via the thrown gitlinkRebaseError).
             const rebaseStarted = Date.now();
+            const rebaseExec = { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[], timeout: REFINE_GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }; // ★bounds the SYNCHRONOUS rebase pair (blocks the event loop)
             try {
                 if (gitlinkResolutions.length > 0) {
                     const gitlinkRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
@@ -819,11 +820,11 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                         throw err;
                     }
                 } else {
-                    execFileSync('git', ['rebase', baseHead], { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] });
+                    execFileSync('git', ['rebase', baseHead], rebaseExec);
                 }
             } catch (rebaseErr: any) {
                 if (!rebaseErr?.alreadyAborted) {
-                    try { execFileSync('git', ['rebase', '--abort'], { cwd: node.workspace, stdio: 'ignore' }); } catch { /* ignore */ }
+                    try { execFileSync('git', ['rebase', '--abort'], { ...rebaseExec, stdio: 'ignore' }); } catch { /* ignore */ }
                 }
                 // ★REBASE-FAILURE-CLASSIFY: read what git ACTUALLY said before naming the
                 // failure. This branch used to hardcode `needs_rebase_with_conflicts` for
@@ -2784,14 +2785,14 @@ export async function recordRefineAcceptBaseDivergence(
             ? node.worktreeBranch.trim()
             : (() => {
                 try {
-                    return execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8' }).trim();
+                    return execFileSync('git', ['branch', '--show-current'], { cwd: workspace, encoding: 'utf8', timeout: REFINE_GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
                 } catch { return ''; }
             })();
         if (!branch) return;
 
         const baseBranch = (() => {
             try {
-                return execFileSync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' }).trim() || 'main';
+                return execFileSync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', timeout: REFINE_GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim() || 'main';
             } catch { return 'main'; }
         })();
 

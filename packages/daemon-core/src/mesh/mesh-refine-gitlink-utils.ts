@@ -17,11 +17,35 @@ import { resolve as pathResolve } from 'path';
 
 import { LOG } from '../logging/logger.js';
 
+import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
 export const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
+/*
+ * ★GIT CALL-SITE DISCIPLINE for this module — same rule, and the same reason, as
+ * the sibling `mesh-refine-submodule-converge.ts` (which carries the long-form note): every
+ * `execFileSync` below is SYNCHRONOUS and blocks the daemon's ENTIRE event loop
+ * for its whole duration — heartbeat, status reporting and the WS bridge
+ * included. Node's default `timeout: 0` means "no bound", so one unreachable
+ * remote freezes the daemon indefinitely and the coordinator marks a LIVE node
+ * dead.
+ *
+ * This module was the adjacent gap left by that fix: {@link ensureSubmoduleCommitLocal}
+ * runs three `git fetch` strategies against a path that can be a network remote,
+ * with `protocol.file.allow=always` set. Reproduced in exactly that shape here:
+ * the strategy-3 fetch against a blackhole remote (10.255.255.1) had NOT returned
+ * after 30s with `timeout: 0` and fired ZERO of the ~300 expected 100ms heartbeat
+ * ticks, while the identical call with a timeout returned at its bound.
+ *
+ * The bounds themselves (30s network / 15s local) live in `../git/git-locale.ts`
+ * beside `gitChildEnv()`, so this module and `router-refine.ts` share one value
+ * and one rationale. `gitChildEnv()` is applied for the reason every other git
+ * call site in this package applies it: an inherited `GIT_DIR` overrides both
+ * `-C` and `cwd`, so these commands would silently read — and fetch into — a
+ * DIFFERENT repository.
+ */
 export const REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 // Head+tail budget (was head-only 2000 chars — see REFINE-LOG-TRUNCATION). A
@@ -57,6 +81,9 @@ export function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: gitChildEnv(),
         });
         const paths = new Set<string>();
         for (const line of output.split('\n')) {
@@ -83,6 +110,9 @@ export function readTreeObject(repoRoot: string, ref: string, path: string): str
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: 1024 * 1024,
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: gitChildEnv(),
         }).trim();
         const match = output.match(/\bcommit\s+([0-9a-f]{40})\b/i);
         return match?.[1];
@@ -105,7 +135,7 @@ function gitRefsResolvable(cwd: string, refs: string[]): boolean {
     for (const ref of refs) {
         if (!ref) return false;
         try {
-            execFileSync(GIT, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd, stdio: 'ignore', windowsHide: true });
+            execFileSync(GIT, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         } catch {
             return false;
         }
@@ -138,7 +168,7 @@ export function probeGitAncestry(cwd: string, ancestor: string, descendant: stri
     }
     if (!gitRefsResolvable(cwd, [ancestor, descendant])) return 'undeterminable';
     try {
-        execFileSync(GIT, ['merge-base', '--is-ancestor', ancestor, descendant], { cwd, stdio: 'ignore', windowsHide: true });
+        execFileSync(GIT, ['merge-base', '--is-ancestor', ancestor, descendant], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return true;
     } catch (e: any) {
         // Both operands resolved above, so exit 1 is git's real "no". Anything
@@ -250,7 +280,7 @@ export function warnRefineSubmoduleUndeterminable(nodeId: string, evidence: any)
 export function submoduleCommitPresent(submoduleRepoPath: string, commit: string): boolean {
     if (!commit) return false;
     try {
-        execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+        execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return true;
     } catch {
         return false;
@@ -291,7 +321,7 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
     if (!commit) return false;
     const present = (): boolean => {
         try {
-            execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore' });
+            execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
             return true;
         } catch {
             return false;
@@ -314,9 +344,17 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
     ];
     for (const args of strategies) {
         try {
+            // ★NETWORK timeout, not local: `baseSubmoduleRepoPath` is normally a
+            // sibling path on the same machine, but `git fetch` accepts any
+            // transport and this call runs with `protocol.file.allow=always`, so a
+            // remote-backed or network-mounted source reaches the wire. Unbounded,
+            // one such source freezes the whole daemon (see the module note above).
             execFileSync(GIT, ['-c', 'protocol.file.allow=always', ...args], {
                 cwd: submoduleRepoPath,
                 stdio: ['ignore', 'ignore', 'pipe'],
+                timeout: GIT_NETWORK_TIMEOUT_MS,
+                windowsHide: true,
+                env: gitChildEnv(),
             });
         } catch { /* try the next strategy */ }
         if (present()) return true;
@@ -452,6 +490,9 @@ export function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: s
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: gitChildEnv(),
         });
         const result: Array<{ path: string; isGitlink: boolean }> = [];
         const seen = new Set<string>();
@@ -678,9 +719,10 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             const { stdout } = await execFileAsync(GIT, args, {
                 cwd,
                 encoding: 'utf8',
-                timeout: 30_000,
+                timeout: GIT_NETWORK_TIMEOUT_MS,
                 maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                 windowsHide: true,
+                env: gitChildEnv(),
             });
             return String(stdout || '');
         };
@@ -694,9 +736,10 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
                 cwd: submodulePath,
                 encoding: 'utf8',
-                timeout: 30_000,
+                timeout: GIT_NETWORK_TIMEOUT_MS,
                 maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                 windowsHide: true,
+                env: gitChildEnv(),
             });
             return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
         };
