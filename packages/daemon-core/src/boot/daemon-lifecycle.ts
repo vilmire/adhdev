@@ -34,7 +34,7 @@ import {
     DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
     DEFAULT_CDP_SCAN_INTERVAL_MS,
 } from '../runtime-defaults.js';
-import { loadConfig, getConfigDir } from '../config/config.js';
+import { loadConfig, getConfigDir, getMachineId } from '../config/config.js';
 import { applyDaemonEnvOverrides } from '../config/env-overrides.js';
 import { configDirChannelMismatch } from '../config/config-dir.js';
 import { isPreviewReleaseChannel, PROVIDER_CHANNEL_ENV_VAR } from '../providers/channel/contract.js';
@@ -230,7 +230,7 @@ export interface DaemonComponents {
     // `daemon_<machineId>`). This is the SAME id the MCP layer stamps as a
     // worker's meshCoordinatorDaemonId (ctx.localDaemonId, sourced from
     // getStatus().status.instanceId), so the reconcile loop MUST drain with it —
-    // draining with bare loadConfig().machineId never matches a unicast event
+    // draining with bare getMachineId() never matches a unicast event
     // stamped with the prefixed status id. Absent → reconcile falls back to
     // machineId only.
     statusInstanceId?: string;

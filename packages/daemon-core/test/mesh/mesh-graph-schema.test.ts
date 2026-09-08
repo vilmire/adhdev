@@ -25,6 +25,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'test-machine' } as any),
+    getMachineId: () => ({ machineId: 'test-machine' } as any).machineId,
+    getMachineNickname: () => ({ machineId: 'test-machine' } as any).machineNickname ?? null,
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';

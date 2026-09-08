@@ -28,6 +28,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'test-machine', machineNickname: 'test-nick' }),
+    getMachineId: () => (({ machineId: 'test-machine', machineNickname: 'test-nick' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'test-machine', machineNickname: 'test-nick' }) as any).machineNickname ?? null,
 }));
 
 import {

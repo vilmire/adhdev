@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
 import {
     drainPendingMeshCoordinatorEvents,
@@ -259,7 +259,7 @@ export function shouldHoldPendingDrainForBusyLocalCoordinator(
     if (!requested) return true; // broadcast drain → would consume the held local events
     const localIds = expandDaemonIdForms([
         readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
-        readNonEmptyString(loadConfig().machineId),
+        readNonEmptyString(getMachineId()),
     ]);
     const targetsLocalCoordinator = localIds.some(id => daemonIdsEquivalent(id, requested));
     if (!targetsLocalCoordinator) return false;

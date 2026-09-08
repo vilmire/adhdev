@@ -3,7 +3,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
@@ -184,7 +184,7 @@ export function notifyCoordinatorOfParkedTaskDropped(
         + `To avoid this next time, check parkedTasks in mesh_view_queue — parked rows are surfaced there from the moment they park.`;
     const nodeLabel = readNonEmptyString(task.targetNodeId) || readNonEmptyString(task.parked?.targetNodeId) || meshId;
     try {
-        const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+        const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
         const targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
         queuePendingMeshCoordinatorEvent({
             event: 'mesh:dispatch_blocked',

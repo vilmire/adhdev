@@ -17,6 +17,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    getMachineId: () => 'test-machine',
+    getMachineNickname: () => null,
 }));
 
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';

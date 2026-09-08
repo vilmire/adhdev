@@ -20,6 +20,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }),
+    getMachineId: () => (({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'mach_1b46842a15d3409d96ad33e767a916dd' }) as any).machineNickname ?? null,
 }));
 
 import { migratePendingEventsJsonlToSqlite } from '../../src/mesh/mesh-events-pending-migration.js';

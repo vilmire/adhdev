@@ -17,7 +17,7 @@ import { getDaemonBuildInfo } from '../build-info.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { normalizeGitStatus as sharedNormalizeGitStatus, pickBestTransitGitStatus as sharedPickBestTransitGitStatus, summarizeGitShape as sharedSummarizeGitShape, normalizeMeshNodeId, normalizeMeshNodeFacts, daemonIdsEquivalent, meshWorkspacesEquivalent, sessionIdsEquivalent, withStatusProbeMarker, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
 import { buildLocalNodeFacts } from './node-facts.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineNickname } from '../config/config.js';
 import { resolveSessionTurnPresentation } from './mesh-turn-presentation.js';
 import type { MeshReportedMemberState } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
@@ -506,7 +506,7 @@ export function recordInlineMeshDirectGitTruth(
             // on the coordinator's own machine.
             let localNickname: string | null = null;
             try {
-                localNickname = readStringValue(loadConfig().machineNickname) ?? null;
+                localNickname = readStringValue(getMachineNickname()) ?? null;
             } catch { /* config read is best-effort */ }
             node.nodeFacts = buildLocalNodeFacts({
                 providerVersions: reporterProviderVersions ?? null,

@@ -7,6 +7,8 @@ let configDir = '';
 
 vi.mock('../../src/config/config.js', () => ({
   getConfigDir: () => configDir,
+  getMachineId: () => 'test-machine',
+  getMachineNickname: () => null,
 }));
 
 import {

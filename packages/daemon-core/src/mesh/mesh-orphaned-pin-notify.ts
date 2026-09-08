@@ -4,7 +4,7 @@ import { getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 
 // ---------------------------------------------------------------------------
 // CANCEL-ORPHANS-PINNED-TASK: stopping a worker session strands every OTHER queue
@@ -172,7 +172,7 @@ export function notifyCoordinatorOfOrphanedPins(
     // Address the event to THIS daemon (it owns the queue) and, when known, to the
     // coordinator session that issued the cancel — the same addressing the actionable
     // dispatch-skip notification uses.
-    const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+    const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
     const targetCoordinatorSessionId = readNonEmptyString(opts?.coordinatorSessionId);
 
     LOG.warn('MeshQueue', `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map(o => o.taskId).join(', ')}`);

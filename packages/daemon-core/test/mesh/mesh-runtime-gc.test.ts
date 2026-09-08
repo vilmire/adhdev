@@ -24,6 +24,8 @@ vi.mock('../../src/config/config.js', () => ({
     return testConfigDir
   },
   loadConfig: () => ({ machineId: 'test-host-machine' }),
+  getMachineId: () => (({ machineId: 'test-host-machine' }) as any).machineId,
+  getMachineNickname: () => (({ machineId: 'test-host-machine' }) as any).machineNickname ?? null,
 }))
 vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: vi.fn() }))
 vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({ fastForwardMeshNode: vi.fn() }))

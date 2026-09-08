@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { join } from 'path';
 import { randomBytes, randomUUID } from 'crypto';
 import { shortHash } from '../system/hash.js';
-import { getConfigDir, loadConfig } from './config.js';
+import { getConfigDir, getMachineNickname } from './config.js';
 import type {
     LocalMeshConfig,
     LocalMeshEntry,
@@ -1035,7 +1035,7 @@ function addNodeUnlocked(meshId: string, opts: AddNodeOptions): LocalMeshNodeEnt
         const explicit = typeof opts.machineNickname === 'string' ? opts.machineNickname.trim() : '';
         if (explicit) return explicit;
         try {
-            const local = loadConfig().machineNickname;
+            const local = getMachineNickname();
             return typeof local === 'string' && local.trim() ? local.trim() : undefined;
         } catch {
             return undefined;

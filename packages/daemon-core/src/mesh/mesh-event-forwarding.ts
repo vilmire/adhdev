@@ -1,5 +1,5 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext } from './mesh-ledger.js';
@@ -150,7 +150,7 @@ function nonRetryableProviderFailureReason(metadataEvent: Record<string, unknown
 // base-node completion-surface bug) and vice versa.
 function resolveCoordinatorDrainDaemonIds(components: DaemonComponents): string[] {
     const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const machineId = readNonEmptyString(loadConfig().machineId);
+    const machineId = readNonEmptyString(getMachineId());
     return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 

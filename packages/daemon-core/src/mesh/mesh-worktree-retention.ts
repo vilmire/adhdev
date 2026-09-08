@@ -51,7 +51,7 @@ import { hostname } from 'os';
 import { join as pathJoin, resolve as pathResolve, sep as pathSep } from 'path';
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { removeNode as removeNodeFromMeshConfig } from '../config/mesh-config.js';
 import { appendLedgerEntry, getLedgerDir, readLedgerEntriesByKind, type MeshLedgerEntry } from './mesh-ledger.js';
 import { getQueue, getActiveDirectDispatches, type DirectDispatchRecord, type MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -566,7 +566,7 @@ async function buildPlan(
     const meshId = String(mesh?.id || mesh?.name || '');
     const graceMs = opts.graceMs ?? resolveWorktreeNodeRetentionGraceMs();
     const exists = opts.existsSync ?? fs.existsSync;
-    const localDaemonId = opts.localDaemonId ?? (() => { try { return readNonEmptyString(loadConfig().machineId) || ''; } catch { return ''; } })();
+    const localDaemonId = opts.localDaemonId ?? (() => { try { return readNonEmptyString(getMachineId()) || ''; } catch { return ''; } })();
     const processCwd = opts.processCwd ?? process.cwd();
 
     let sessions: any[] | undefined = opts.sessions;

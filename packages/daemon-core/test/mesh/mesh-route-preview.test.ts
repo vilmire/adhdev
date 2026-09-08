@@ -12,6 +12,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'preview-test-machine' }),
+    getMachineId: () => (({ machineId: 'preview-test-machine' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'preview-test-machine' }) as any).machineNickname ?? null,
 }));
 
 const detectCliMocks = vi.hoisted(() => ({ detected: new Set<string>() }));

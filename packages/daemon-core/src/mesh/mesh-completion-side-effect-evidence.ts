@@ -38,7 +38,7 @@ import { statSync } from 'node:fs';
 import * as path from 'node:path';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { LOG } from '../logging/logger.js';
@@ -58,7 +58,7 @@ function readNonEmptyString(value: unknown): string {
 // local-machine equivalence regardless of which form it was stamped in.
 function resolveLocalDaemonIds(components: DaemonComponents): string[] {
     const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const machineId = readNonEmptyString(loadConfig().machineId);
+    const machineId = readNonEmptyString(getMachineId());
     return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 

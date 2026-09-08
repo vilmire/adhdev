@@ -5,7 +5,7 @@ import { GitCommandError, isPathInside, resolveGitRepository, runGit } from './g
 import { createGitSnapshotStore } from './git-snapshot-store.js';
 import { getGitRepoStatus } from './git-status.js';
 import { buildLocalNodeFacts } from '../mesh/node-facts.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineNickname } from '../config/config.js';
 import type {
   GitCommandName,
   GitDiffSummary,
@@ -345,7 +345,7 @@ export async function handleGitCommand(
       // this node's friendly label instead of a raw daemonId/nodeId.
       const reporterMachineNickname = (() => {
         try {
-          const nick = loadConfig().machineNickname;
+          const nick = getMachineNickname();
           return typeof nick === 'string' && nick.trim() ? nick.trim() : undefined;
         } catch {
           return undefined;

@@ -16,6 +16,8 @@ vi.mock('../../src/config/config.js', () => ({
         }
         return testConfigDir;
     },
+    getMachineId: () => 'test-machine',
+    getMachineNickname: () => null,
 }));
 
 import {

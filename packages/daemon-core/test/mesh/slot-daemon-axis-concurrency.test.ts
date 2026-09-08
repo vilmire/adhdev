@@ -26,6 +26,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'mach_local' }),
+    getMachineId: () => (({ machineId: 'mach_local' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'mach_local' }) as any).machineNickname ?? null,
 }));
 
 import {

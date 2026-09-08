@@ -29,6 +29,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'test-machine' } as any),
+    getMachineId: () => ({ machineId: 'test-machine' } as any).machineId,
+    getMachineNickname: () => ({ machineId: 'test-machine' } as any).machineNickname ?? null,
 }));
 
 const queued = vi.hoisted(() => ({ events: [] as any[] }));
