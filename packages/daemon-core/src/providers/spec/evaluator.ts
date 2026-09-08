@@ -371,7 +371,7 @@ export function extractButtonsFromRule(
             } else {
                 key = keyTemplate.replace(/\{index\}/g, String(ordinal.length + 1));
             }
-            ordinal.push({ index: ordinal.length + 1, label, key, current: hasCursorMarker(om[0]) });
+            ordinal.push({ index: ordinal.length + 1, label, key, current: hasCursorMarker(om[0], rule.cursor_marker) });
         }
         return ordinal;
     }
@@ -387,7 +387,7 @@ export function extractButtonsFromRule(
             const idx = Number(m[1]);
             let label = String(m[2] ?? '').trim();
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
-            const current = hasCursorMarker(lines[i]);
+            const current = hasCursorMarker(lines[i], rule.cursor_marker);
             let j = i + 1;
             while (j < lines.length) {
                 const next = lines[j];
@@ -418,7 +418,7 @@ export function extractButtonsFromRule(
             // position so `select_mode: 'arrow_keys'` can step from it.
             // Like the continuation path, no top-down de-dup — body numbered
             // lines are filtered out by the bottom-block selection below.
-            buttons.push({ index: idx, label, key, current: hasCursorMarker(m[0]) });
+            buttons.push({ index: idx, label, key, current: hasCursorMarker(m[0], rule.cursor_marker) });
         }
     }
 
@@ -459,9 +459,18 @@ export function lastContiguousNumberedBlock<T extends { index: number }>(entries
     return entries.slice(start);
 }
 
-/** True when a button line carries a TUI cursor marker (`❯`, `›`, `>`, `→`)
- *  before its number/label — i.e. the cursor currently sits on that row.
- *  (`→` is cursor-agent's focused-row marker, live-measured 2026-08-17.) */
-function hasCursorMarker(text: string): boolean {
-    return /^\s*[❯›>→]/.test(text);
+/** True when a button line carries a TUI cursor marker before its number/label
+ *  — i.e. the cursor currently sits on that row.
+ *
+ *  The default marker class is `❯›>→` (`→` is cursor-agent's focused-row marker,
+ *  live-measured 2026-08-17). A spec whose modal section can contain markdown
+ *  blockquotes narrows it via `ExtractButtons.cursor_marker` (e.g. `"❯›"`), since
+ *  the bare `>` otherwise matches a quoted `> 1. …` line. The default is a
+ *  per-spec opt-in on purpose: changing the engine literal would silently move
+ *  every other CLI's cursor detection. */
+const DEFAULT_CURSOR_MARKER_CLASS = '❯›>→';
+
+function hasCursorMarker(text: string, markerClass?: string): boolean {
+    const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
+    return new RegExp('^\\s*[' + cls + ']').test(text);
 }

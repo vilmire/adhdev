@@ -141,9 +141,11 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
         }
         const schema = (parsed as any).$schema;
         if (schema === 'adhdev:cli/spec@4') {
-            const { validateFsmSpec } = await import('../../providers/spec/fsm-loader.js');
+            const { validateFsmSpec, collectFsmSpecWarnings } = await import('../../providers/spec/fsm-loader.js');
             const errors = validateFsmSpec(parsed);
-            return { success: true, valid: errors.length === 0, errors };
+            // Warnings are advisory only — they never gate Save (see
+            // collectFsmSpecWarnings: out-of-tree specs must keep loading).
+            return { success: true, valid: errors.length === 0, errors, warnings: collectFsmSpecWarnings(parsed) };
         }
         // v1/v3 left to the legacy loader path; the builder is v4-only.
         return { success: true, valid: false, errors: [`unsupported $schema "${schema}" — form builder is v4-only`] };

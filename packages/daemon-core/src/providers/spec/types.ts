@@ -444,4 +444,15 @@ export interface ExtractButtons {
     /** Arrow byte sequences for `select_mode: 'arrow_keys'`. Defaults to ANSI
      *  cursor up/down (`[A` / `[B`) when omitted. */
     cursor_keys?: { up: string; down: string };
+    /**
+     * Per-spec override for the focus-cursor marker class used to detect the
+     * current row. Defaults to the engine literal `[❯›>→]` when unset.
+     *
+     * The value is the INSIDE of a regex character class (e.g. `"❯›"`), matched
+     * at the start of a button row. Narrow it when the modal section can contain
+     * markdown blockquotes: the default class includes a bare `>`, so a quoted
+     * `> 1. …` line is mistaken for the focused row and `select_mode:
+     * 'arrow_keys'` steps its cursor delta from the wrong origin.
+     */
+    cursor_marker?: string;
 }

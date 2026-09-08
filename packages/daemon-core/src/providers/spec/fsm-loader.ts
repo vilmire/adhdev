@@ -11,7 +11,7 @@
 import * as fs from 'node:fs';
 import { type CliSpecV4, type FsmCondition, isV4Spec } from './fsm-types.js';
 
-export interface FsmLoadOk { ok: true; spec: CliSpecV4; sourcePath: string; }
+export interface FsmLoadOk { ok: true; spec: CliSpecV4; sourcePath: string; warnings: string[]; }
 export interface FsmLoadErr { ok: false; errors: string[]; sourcePath: string; }
 
 export function loadFsmSpec(sourcePath: string): FsmLoadOk | FsmLoadErr {
@@ -23,7 +23,7 @@ export function loadFsmSpec(sourcePath: string): FsmLoadOk | FsmLoadErr {
     }
     const errors = validateFsmSpec(raw);
     if (errors.length) return { ok: false, errors, sourcePath };
-    return { ok: true, spec: raw as CliSpecV4, sourcePath };
+    return { ok: true, spec: raw as CliSpecV4, sourcePath, warnings: collectFsmSpecWarnings(raw) };
 }
 
 /** Pure validator — usable from a "validate before save" API in the panel. */
@@ -136,6 +136,85 @@ export function validateFsmSpec(raw: unknown): string[] {
     }
 
     return errs;
+}
+
+/**
+ * Emit a loaded spec's advisory lint through the caller's logger. Lives here (not
+ * at the call site) so `fsm-driver.ts` — which sits at the file-size cap — stays
+ * a single line per load path.
+ */
+export function reportFsmSpecWarnings(warnings: string[], tag: string, warn: (scope: string, msg: string) => void): void {
+    for (const w of warnings) warn('FsmDriver', `[${tag}] spec lint: ${w}`);
+}
+
+/**
+ * Non-fatal spec lint — advisory diagnostics a spec author should see but which
+ * must NEVER fail the load. Third-party / out-of-tree specs are loaded
+ * fail-closed on `validateFsmSpec` errors, so anything stylistic belongs here:
+ * turning a lint into an error would kill a working provider on upgrade.
+ */
+export function collectFsmSpecWarnings(raw: unknown): string[] {
+    if (!isV4Spec(raw)) return [];
+    const spec = raw as CliSpecV4;
+    const warns: string[] = [];
+    for (const [i, t] of (spec.transitions ?? []).entries()) {
+        if (t.when) warns.push(...warnCondition(t.when, `transitions[${i}].when`));
+    }
+    return warns;
+}
+
+/**
+ * `matches` conditions are evaluated against the WHOLE screen, and the engine
+ * compiles them with `flags ?? 'i'` — no `m`. So an unescaped `^`/`$` anchors to
+ * the start/end of the entire screen buffer, not to a line, which silently makes
+ * the condition never (or always) match.
+ *
+ * The `(?:^|\n)` / `(?=\n|$)` idioms are the deliberate line-boundary spellings
+ * that work WITHOUT `m` (the built-in claude-cli spec uses both), so they are
+ * stripped before the scan rather than flagged.
+ */
+function warnCondition(c: FsmCondition, path: string): string[] {
+    const warns: string[] = [];
+    const w = c as any;
+    if ('all' in w && Array.isArray(w.all)) { w.all.forEach((x: FsmCondition, i: number) => warns.push(...warnCondition(x, `${path}.all[${i}]`))); return warns; }
+    if ('any' in w && Array.isArray(w.any)) { w.any.forEach((x: FsmCondition, i: number) => warns.push(...warnCondition(x, `${path}.any[${i}]`))); return warns; }
+    if ('not' in w && w.not) { warns.push(...warnCondition(w.not, `${path}.not`)); return warns; }
+    if ('matches' in w && typeof w.matches === 'string') {
+        const flags = typeof w.flags === 'string' ? w.flags : 'i';
+        if (flags.includes('m')) return warns;
+        if (!hasUnescapedLineAnchor(w.matches)) return warns;
+        warns.push(
+            `${path}.matches uses ^ or $ without the "m" flag — the anchor binds to the whole ` +
+            `screen, not a line. Add "flags": "${flags}m" or use the (?:^|\\n) idiom.`,
+        );
+    }
+    return warns;
+}
+
+/** The no-`m` line-boundary spellings a spec is SUPPOSED to use: `(?:^|\n)` /
+ *  `(?:\n|^)` for line start, `(?=\n|$)` / `(?=$|\n)` for line end (and their
+ *  non-lookahead `(?:…)` forms). Stripped before the anchor scan. */
+const LINE_BOUNDARY_IDIOMS = [
+    /\(\?:\^\|\\n\)/g, /\(\?:\\n\|\^\)/g,
+    /\(\?=\\n\|\$\)/g, /\(\?=\$\|\\n\)/g,
+    /\(\?:\\n\|\$\)/g, /\(\?:\$\|\\n\)/g,
+];
+
+/** True when the pattern carries a `^`/`$` that is neither escaped (`\^`), nor a
+ *  negation inside a character class (`[^…]`), nor part of a line-boundary idiom. */
+function hasUnescapedLineAnchor(pattern: string): boolean {
+    // Strip the sanctioned line-boundary idioms first so they never trip the scan.
+    let src = pattern;
+    for (const re of LINE_BOUNDARY_IDIOMS) src = src.replace(re, '');
+    let inClass = false;
+    for (let i = 0; i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === '\\') { i += 1; continue; }            // escaped — skip the pair
+        if (inClass) { if (ch === ']') inClass = false; continue; } // `[^…]` is negation
+        if (ch === '[') { inClass = true; continue; }
+        if (ch === '^' || ch === '$') return true;
+    }
+    return false;
 }
 
 function validateCondition(c: FsmCondition, sectionIds: Set<string>, path: string): string[] {

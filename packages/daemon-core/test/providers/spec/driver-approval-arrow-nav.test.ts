@@ -254,6 +254,163 @@ describe('extractButtonsFromRule — cursor row detection', () => {
     });
 });
 
+// ── CURSORMARKER: per-spec cursor_marker opt-in ──────────────────────────────
+// The engine's default focus-marker class is `[❯›>→]`, which includes a bare
+// `>`. antigravity-cli renders assistant/tool text INSIDE the modal section, and
+// that text carries markdown blockquotes (`> 1. …`). A quoted line that happens
+// to be numbered therefore parsed as a button AND was flagged `current: true`.
+// When such a line lands inside the bottom-most contiguous numbered block (i.e.
+// it is adjacent to the real options, so lastContiguousNumberedBlock cannot
+// filter it), two rows claim the cursor and arrow-nav steps from the wrong one —
+// committing the wrong approval choice.
+//
+// The fix is per-spec, NOT an engine default change: a spec whose modal section
+// can contain blockquotes declares `cursor_marker: "❯›"` to drop bare `>`.
+// Specs that omit it keep the engine literal verbatim.
+//
+// NOTE on fixture shape: lastContiguousNumberedBlock already filters a quoted
+// line whose index BREAKS the descending chain (`> 1.` above `❯ 1.`). The
+// surviving hazard — reproduced below — is a quoted line whose index CONTINUES
+// it, so the quote lands inside the option block and steals `current`.
+describe('extractButtonsFromRule — per-spec cursor_marker (CURSORMARKER)', () => {
+    // The quoted `> 1.` continues into the real options (2./3.), so the
+    // bottom-block reduction keeps it — and it is the ONLY row flagged current,
+    // i.e. arrow-nav would step from a phantom cursor and commit the wrong row.
+    const QUOTED_MODAL = [
+        'Requesting permission for:',
+        '  > 1. quoted checklist item from the assistant',
+        '  2. Yes, proceed',
+        '  3. No, cancel',
+    ].join('\n');
+
+    // A second shape: the real cursor IS present, but the quote also claims it —
+    // two rows current, so the cursor delta is ambiguous.
+    const QUOTED_MODAL_WITH_REAL_CURSOR = [
+        'Requesting permission for:',
+        '  > 1. quoted checklist item from the assistant',
+        '  ❯ 2. Yes, proceed',
+        '    3. No, cancel',
+    ].join('\n');
+
+    const ANTIGRAVITY_RULE = {
+        section: 'modal',
+        pattern: '^\\s*(?:[❯›>]\\s*)?(\\d+)\\.\\s*(\\S.+?)\\s*$',
+        flags: 'gm',
+        key_for_index: '{index}\r',
+        min_count: 2,
+        select_mode: 'arrow_keys' as const,
+        continuation_lines: true,
+    };
+
+    it('WITHOUT cursor_marker: a blockquote row is a false-positive cursor row', () => {
+        const buttons = extractButtonsFromRule(ANTIGRAVITY_RULE, QUOTED_MODAL);
+        // The quote is the ONLY row flagged current — arrow-nav would treat the
+        // quoted line as the cursor position and commit the wrong option.
+        expect(buttons.map(b => b.label)).toEqual([
+            'quoted checklist item from the assistant', 'Yes, proceed', 'No, cancel',
+        ]);
+        expect(buttons.filter(b => b.current).map(b => b.label))
+            .toEqual(['quoted checklist item from the assistant']);
+    });
+
+    it('WITHOUT cursor_marker: the quote also steals current from the real ❯ row', () => {
+        const buttons = extractButtonsFromRule(ANTIGRAVITY_RULE, QUOTED_MODAL_WITH_REAL_CURSOR);
+        // Two rows current → ambiguous cursor delta.
+        expect(buttons.filter(b => b.current).length).toBeGreaterThan(1);
+    });
+
+    it('WITH cursor_marker "❯›": the blockquote no longer claims the cursor', () => {
+        const buttons = extractButtonsFromRule({ ...ANTIGRAVITY_RULE, cursor_marker: '❯›' }, QUOTED_MODAL);
+        // The quoted row is still PARSED (the pattern's own `>` alternation is
+        // untouched — this fix only narrows cursor detection) but is not current.
+        expect(buttons.map(b => b.label)).toEqual([
+            'quoted checklist item from the assistant', 'Yes, proceed', 'No, cancel',
+        ]);
+        expect(buttons.filter(b => b.current)).toHaveLength(0);
+    });
+
+    it('WITH cursor_marker "❯›": exactly the real ❯ row is current', () => {
+        const buttons = extractButtonsFromRule(
+            { ...ANTIGRAVITY_RULE, cursor_marker: '❯›' }, QUOTED_MODAL_WITH_REAL_CURSOR);
+        expect(buttons.filter(b => b.current).map(b => b.label)).toEqual(['Yes, proceed']);
+    });
+
+    it('an unset cursor_marker is byte-identical to the engine default', () => {
+        for (const hay of [QUOTED_MODAL, QUOTED_MODAL_WITH_REAL_CURSOR]) {
+            const withoutField = extractButtonsFromRule(ANTIGRAVITY_RULE, hay);
+            const withUnset = extractButtonsFromRule({ ...ANTIGRAVITY_RULE, cursor_marker: undefined }, hay);
+            const explicitDefault = extractButtonsFromRule({ ...ANTIGRAVITY_RULE, cursor_marker: '❯›>→' }, hay);
+            expect(withUnset).toEqual(withoutField);
+            expect(explicitDefault).toEqual(withoutField);
+        }
+    });
+});
+
+describe('antigravity-cli 4.0 spec opts into cursor_marker', () => {
+    const raw = () => JSON.parse(fs.readFileSync(
+        path.join(REPO_ROOT, 'adhdev-providers/cli/antigravity-cli/specs/4.0.json'), 'utf8'));
+
+    it('every arrow_keys buttons rule declares cursor_marker "❯›"', () => {
+        const rules = (raw().states ?? [])
+            .map((s: any) => s?.extract?.buttons)
+            .filter((b: any) => b?.select_mode === 'arrow_keys');
+        expect(rules.length).toBe(2); // approval + trust
+        for (const r of rules) expect(r.cursor_marker).toBe('❯›');
+    });
+
+    it('still validates with the new field', () => {
+        expect(validateFsmSpec(raw())).toEqual([]);
+    });
+
+    it('end-to-end: a blockquote-polluted approval screen yields exactly one cursor row', () => {
+        const spec = raw() as CliSpecV4;
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const screen = [
+            '⏺ Following the reviewer notes:',
+            '',
+            'Requesting permission for:',
+            '  > 1. quoted checklist item from the assistant',
+            '  ❯ 2. Yes, proceed',
+            '    3. No, cancel',
+        ];
+        const sections = resolveSections(spec.sections ?? {}, screen);
+        const rule = approval.extract!.buttons!;
+        const hay = sectionText(sections, rule.section, screen.join('\n'));
+        const buttons = extractButtonsFromRule(rule, hay);
+        expect(buttons.filter(b => b.current).map(b => b.label)).toEqual(['Yes, proceed']);
+    });
+});
+
+describe('cursor_marker-less specs are unchanged (engine default preserved)', () => {
+    // The 7 built-in specs that do NOT opt in must keep the literal `[❯›>→]`
+    // default. Guard by counting: any new opt-in is a deliberate spec edit.
+    const CLI_ROOT = () => path.join(REPO_ROOT, 'adhdev-providers/cli');
+
+    it('exactly one provider spec family declares cursor_marker (antigravity)', () => {
+        const optedIn: string[] = [];
+        for (const dir of fs.readdirSync(CLI_ROOT())) {
+            const specDir = path.join(CLI_ROOT(), dir, 'specs');
+            if (!fs.existsSync(specDir)) continue;
+            for (const f of fs.readdirSync(specDir).filter(n => n.endsWith('.json'))) {
+                const text = fs.readFileSync(path.join(specDir, f), 'utf8');
+                if (text.includes('"cursor_marker"')) optedIn.push(`${dir}/${f}`);
+            }
+        }
+        expect(optedIn).toEqual(['antigravity-cli/4.0.json']);
+    });
+
+    it("claude-cli 4.0's approval rule has no cursor_marker and behaves on the engine literal", () => {
+        const raw = JSON.parse(fs.readFileSync(
+            path.join(REPO_ROOT, 'adhdev-providers/cli/claude-cli/specs/4.0.json'), 'utf8'));
+        const rule = raw.states.find((s: any) => s.id === 'approval').extract.buttons;
+        expect(rule.cursor_marker).toBeUndefined();
+        const hay = [' ❯ 1. Yes', '   2. No'].join('\n');
+        const buttons = extractButtonsFromRule(rule, hay);
+        expect(buttons.find(b => b.index === 1)?.current).toBe(true);
+        expect(buttons.find(b => b.index === 2)?.current).toBe(false);
+    });
+});
+
 describe('claude-cli spec declares arrow-nav for the approval modal', () => {
     it.each(['3.0.json', '4.0.json'])('%s approval buttons use select_mode arrow_keys', (file) => {
         const raw = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'adhdev-providers/cli/claude-cli/specs', file), 'utf8'));
