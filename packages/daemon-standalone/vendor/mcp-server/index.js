@@ -50619,6 +50619,14 @@ Next step: ${nextStep}`;
       }
       return DEFAULT_SESSION_DELIVERY_RETENTION_MS;
     }
+    function resolveTurnAttemptRetentionMs() {
+      const raw = readNonEmptyString(process.env.MESH_TURN_ATTEMPT_RETENTION_MS);
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+      }
+      return DEFAULT_TURN_ATTEMPT_RETENTION_MS;
+    }
     function resolveLedgerRotationMaxBytes() {
       const raw = readNonEmptyString(process.env.MESH_LEDGER_ROTATION_MAX_BYTES);
       if (raw) {
@@ -50664,6 +50672,7 @@ Next step: ${nextStep}`;
     var DAY_MS;
     var MB;
     var DEFAULT_SESSION_DELIVERY_RETENTION_MS;
+    var DEFAULT_TURN_ATTEMPT_RETENTION_MS;
     var DEFAULT_LEDGER_ROTATION_MAX_BYTES;
     var DEFAULT_LEDGER_ROTATION_MAX_FILES;
     var DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS;
@@ -50676,6 +50685,7 @@ Next step: ${nextStep}`;
         DAY_MS = 24 * 60 * 60 * 1e3;
         MB = 1024 * 1024;
         DEFAULT_SESSION_DELIVERY_RETENTION_MS = 14 * DAY_MS;
+        DEFAULT_TURN_ATTEMPT_RETENTION_MS = 30 * DAY_MS;
         DEFAULT_LEDGER_ROTATION_MAX_BYTES = 200 * MB;
         DEFAULT_LEDGER_ROTATION_MAX_FILES = 15;
         DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS = 48 * HOUR_MS;
@@ -69400,13 +69410,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const sessionDelivery = store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs());
-        if (ledger + toolCalls + terminalQueue + sessionDelivery > 0) {
-          LOG.info("MeshRuntimeStore", `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery row(s)`);
+        const turn = store.pruneTerminalTurnAttempts(resolveTurnAttemptRetentionMs());
+        if (ledger + toolCalls + terminalQueue + sessionDelivery + turn.attempts > 0) {
+          LOG.info("MeshRuntimeStore", `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery / ${turn.attempts} turn-attempt (+${turn.events} turn-event, +${turn.heldSuspensions} held-suspension) row(s)`);
         }
-        return { ledger, toolCalls, terminalQueue, sessionDelivery };
+        return {
+          ledger,
+          toolCalls,
+          terminalQueue,
+          sessionDelivery,
+          turnAttempts: turn.attempts,
+          turnEvents: turn.events,
+          turnHeldSuspensions: turn.heldSuspensions
+        };
       } catch (e) {
         LOG.warn("MeshRuntimeStore", `Runtime retention prune failed: ${e?.message || e}`);
-        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0 };
+        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0, turnAttempts: 0, turnEvents: 0, turnHeldSuspensions: 0 };
       }
     }
     var onLedgerBulkChange;
@@ -69462,9 +69481,78 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         `).run(kind, cutoffIso);
       return info.changes ?? 0;
     }
+    function deleteTurnEventsForAttempts(db, attemptIds, excludeKinds = []) {
+      let removed = 0;
+      const kindFilter = excludeKinds.length ? ` AND kind NOT IN (${excludeKinds.map(() => "?").join(",")})` : "";
+      for (let i = 0; i < attemptIds.length; i += 500) {
+        const chunk = attemptIds.slice(i, i + 500);
+        const info = db.prepare(`
+            DELETE FROM mesh_turn_events
+            WHERE attempt_id IN (${chunk.map(() => "?").join(",")})${kindFilter}
+        `).run(...chunk, ...excludeKinds);
+        removed += info.changes ?? 0;
+      }
+      return removed;
+    }
+    function deleteHeldSuspensionsForAttempts(db, attemptIds) {
+      let removed = 0;
+      for (let i = 0; i < attemptIds.length; i += 500) {
+        const chunk = attemptIds.slice(i, i + 500);
+        const info = db.prepare(`
+            DELETE FROM mesh_turn_held_suspensions
+            WHERE attempt_id IN (${chunk.map(() => "?").join(",")})
+              AND status != 'held'
+        `).run(...chunk);
+        removed += info.changes ?? 0;
+      }
+      return removed;
+    }
+    function pruneTerminalTurnAttemptsWithCascade(db, olderThanMs) {
+      const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+      const candidates = db.prepare(`
+        SELECT a.attempt_id FROM mesh_turn_attempts a
+        WHERE a.terminal_outcome IS NOT NULL
+          AND a.terminal_at IS NOT NULL
+          AND a.terminal_at < ?
+          -- (2) keep each session's newest attempt, whatever its age. A row is
+          -- deletable only if some OTHER attempt of the same session ranks ahead
+          -- of it under getLatestTurnAttemptForSession's ordering (updated_at
+          -- DESC, attempt_seq DESC) \u2014 i.e. it is not the row that read returns.
+          -- Rows with a NULL session_id are unreachable by that read.
+          AND (
+              a.session_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM mesh_turn_attempts b
+                  WHERE b.session_id = a.session_id
+                    AND b.attempt_id != a.attempt_id
+                    AND (b.updated_at > a.updated_at
+                         OR (b.updated_at = a.updated_at AND b.attempt_seq > a.attempt_seq))
+              )
+          )
+          -- (3) keep anything with an unresolved held suspension
+          AND NOT EXISTS (
+              SELECT 1 FROM mesh_turn_held_suspensions h
+              WHERE h.attempt_id = a.attempt_id AND h.status = 'held'
+          )
+    `).all(cutoffIso);
+      const deletable = candidates.map((r) => r.attempt_id);
+      if (deletable.length === 0) return { attempts: 0, events: 0, heldSuspensions: 0 };
+      const events = deleteTurnEventsForAttempts(db, deletable, [TURN_EVENT_KIND_OWNED_ELSEWHERE]);
+      const heldSuspensions = deleteHeldSuspensionsForAttempts(db, deletable);
+      let attempts = 0;
+      for (let i = 0; i < deletable.length; i += 500) {
+        const chunk = deletable.slice(i, i + 500);
+        attempts += db.prepare(
+          `DELETE FROM mesh_turn_attempts WHERE attempt_id IN (${chunk.map(() => "?").join(",")})`
+        ).run(...chunk).changes ?? 0;
+      }
+      return { attempts, events, heldSuspensions };
+    }
+    var TURN_EVENT_KIND_OWNED_ELSEWHERE;
     var init_mesh_turn_event_queries = __esm2({
       "src/mesh/mesh-turn-event-queries.ts"() {
         "use strict";
+        TURN_EVENT_KIND_OWNED_ELSEWHERE = "worker_handoff_note";
       }
     });
     function selectUnsettledTerminalQueueRowsAndAttempts(db, meshId, terminalOutcomes) {
@@ -71229,6 +71317,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
              WHERE status IN ('completed', 'failed', 'expired', 'cancelled')
                AND updated_at < ?`
             ).run(cutoffIso).changes;
+          }
+          /**
+           * Retention prune for TERMINAL mesh_turn_attempts rows, cascading to
+           * mesh_turn_events and mesh_turn_held_suspensions. SQL, the three exclusion
+           * anchors and their rationale: mesh-turn-event-queries.ts.
+           */
+          pruneTerminalTurnAttempts(olderThanMs) {
+            return this.transaction(() => pruneTerminalTurnAttemptsWithCascade(this.db, olderThanMs));
           }
           // ── G2: Event Ledger ────────────────────────────────────────────────────
           appendLedgerEntry(entry) {

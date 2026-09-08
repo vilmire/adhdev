@@ -22,7 +22,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
-import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, type TurnEventRow } from './mesh-turn-event-queries.js';
+import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, type TurnEventRow } from './mesh-turn-event-queries.js';
 import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
@@ -2290,6 +2290,15 @@ export class MeshRuntimeStore {
              WHERE status IN ('completed', 'failed', 'expired', 'cancelled')
                AND updated_at < ?`
         ).run(cutoffIso).changes;
+    }
+
+    /**
+     * Retention prune for TERMINAL mesh_turn_attempts rows, cascading to
+     * mesh_turn_events and mesh_turn_held_suspensions. SQL, the three exclusion
+     * anchors and their rationale: mesh-turn-event-queries.ts.
+     */
+    pruneTerminalTurnAttempts(olderThanMs: number): { attempts: number; events: number; heldSuspensions: number } {
+        return this.transaction(() => pruneTerminalTurnAttemptsWithCascade(this.db, olderThanMs));
     }
 
     // ── G2: Event Ledger ────────────────────────────────────────────────────
