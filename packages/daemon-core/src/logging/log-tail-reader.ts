@@ -67,6 +67,9 @@ export interface DaemonLogTailResult {
     filtered: boolean;
     /** The grep source actually applied (echoed back for clarity). */
     grep?: string;
+    /** How the grep source was matched: as a literal substring, or as a
+     * compiled (backtracking-screened) regex. See buildGrepPredicate. */
+    grepMode?: 'literal' | 'regex';
     /** True when the filtered full-file scan path ran (grep/sinceMs given). */
     fullScan: boolean;
     /** Total bytes read while scanning (filter mode scans the whole file + backup). */
@@ -193,21 +196,102 @@ function parseLineEpochMs(line: string, fileDate: Date): number | null {
     return d.getTime();
 }
 
-/** Build the case-insensitive line predicate for a grep source, falling back to
- * a literal (lowercased substring) match when the source is not a valid regex. */
-function buildGrepPredicate(grepSource: string): (line: string) => boolean {
-    let re: RegExp | null = null;
+/**
+ * SECURITY (ReDoS): the grep source is attacker-reachable. `get_mesh_node_logs`
+ * is forwarded over P2P to the owning daemon, so any peer that can address a
+ * node picks this pattern, and in filter mode it is applied to EVERY line of the
+ * whole log file plus all rotation backups. Compiling it as an unrestricted
+ * regex made a catastrophic-backtracking source such as `(a+)+$` stall the
+ * daemon's event loop: measured at ~59_000 ms on one 40-char line — the single
+ * line is enough, the full-file scan just multiplies it.
+ *
+ * The safe shape used here:
+ *  1. Length cap — sources longer than MAX_GREP_PATTERN_LENGTH are rejected.
+ *  2. Literal by default — a plain source is matched as a lowercased substring,
+ *     never compiled. This covers essentially every real grep the coordinator
+ *     issues (`dispatch`, `inject`, a sessionId, …) at zero risk.
+ *  3. Opt-in regex only for sources this module can prove are backtracking-safe:
+ *     no nested/adjacent quantifiers, bounded alternation, no backreferences.
+ *     Anything else falls back to a literal match rather than being compiled.
+ */
+export const MAX_GREP_PATTERN_LENGTH = 200;
+
+/** Regex metacharacters — their absence means the source is a plain literal. */
+const REGEX_METACHAR = /[\\^$.|?*+()[\]{}]/;
+
+/**
+ * Conservative safety screen for a source we are willing to compile.
+ *
+ * Rejects the constructs that make backtracking blow up rather than trying to
+ * analyse the pattern properly: a quantifier applied to a group that itself
+ * contains a quantifier (`(a+)+`, `(a*)*`, `(a|aa)+`), two quantifiers in a row
+ * (`a+*`), and backreferences (`\1`). It is intentionally strict — a rejected
+ * pattern still matches, as a literal, so a false negative costs precision but
+ * never availability.
+ */
+function isBacktrackingSafeRegexSource(source: string): boolean {
+    if (/\\[1-9]/.test(source)) return false; // backreference
+    if (/[*+?}][*+]/.test(source)) return false; // stacked quantifiers: a+*, a{2,}+
+
+    // Walk the source tracking group spans so we can reject a quantified group
+    // that contains a quantifier or an alternation of repeatable atoms.
+    const openStack: number[] = [];
+    for (let i = 0; i < source.length; i++) {
+        const ch = source[i];
+        if (ch === '\\') { i++; continue; } // skip the escaped char
+        if (ch === '[') { // skip a character class wholesale
+            i++;
+            while (i < source.length && source[i] !== ']') {
+                if (source[i] === '\\') i++;
+                i++;
+            }
+            continue;
+        }
+        if (ch === '(') { openStack.push(i); continue; }
+        if (ch === ')') {
+            const start = openStack.pop();
+            if (start === undefined) return false; // unbalanced — let it fail to compile
+            const next = source[i + 1];
+            const groupIsQuantified = next === '*' || next === '+' || next === '?' || next === '{';
+            if (groupIsQuantified) {
+                const body = source.slice(start + 1, i);
+                // A quantifier or alternation inside a quantified group is the
+                // classic exponential shape.
+                if (/[*+{]/.test(body.replace(/\\./g, '')) || body.includes('|')) return false;
+            }
+        }
+    }
+    return openStack.length === 0;
+}
+
+export type GrepPredicate = ((line: string) => boolean) & { mode: 'literal' | 'regex' };
+
+/**
+ * Build the case-insensitive line predicate for a grep source. Literal substring
+ * match by default; a regex is compiled only when the source both looks like one
+ * and passes `isBacktrackingSafeRegexSource`.
+ */
+export function buildGrepPredicate(grepSource: string): GrepPredicate {
+    const literal = (): GrepPredicate => {
+        const needle = grepSource.toLowerCase();
+        const fn = ((line: string) => line.toLowerCase().includes(needle)) as GrepPredicate;
+        fn.mode = 'literal';
+        return fn;
+    };
+
+    // No metacharacters → nothing to gain from compiling.
+    if (!REGEX_METACHAR.test(grepSource)) return literal();
+    if (!isBacktrackingSafeRegexSource(grepSource)) return literal();
+
+    let compiled: RegExp;
     try {
-        re = new RegExp(grepSource, 'i');
+        compiled = new RegExp(grepSource, 'i');
     } catch {
-        re = null;
+        return literal();
     }
-    if (re) {
-        const compiled = re;
-        return (line: string) => compiled.test(line);
-    }
-    const needle = grepSource.toLowerCase();
-    return (line: string) => line.toLowerCase().includes(needle);
+    const fn = ((line: string) => compiled.test(line)) as GrepPredicate;
+    fn.mode = 'regex';
+    return fn;
 }
 
 function fileDateFor(date?: string | Date): Date {
@@ -325,9 +409,19 @@ export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTa
 
     // grep filter
     let appliedGrep: string | undefined;
+    let grepMode: 'literal' | 'regex' | undefined;
     if (hasGrep) {
         appliedGrep = (args.grep as string).trim();
+        // SECURITY: bound the pattern length before it ever reaches a matcher.
+        if (appliedGrep.length > MAX_GREP_PATTERN_LENGTH) {
+            return errorResult(
+                `grep pattern too long (${appliedGrep.length} > ${MAX_GREP_PATTERN_LENGTH} chars)`,
+                logPath,
+                platform,
+            );
+        }
         const matches = buildGrepPredicate(appliedGrep);
+        grepMode = matches.mode;
         lines = lines.filter(matches);
     }
 
@@ -350,5 +444,6 @@ export function readDaemonLogTail(args: ReadDaemonLogTailArgs = {}): DaemonLogTa
         matchedLineCount,
         excludedByFilter,
         ...(appliedGrep ? { grep: appliedGrep } : {}),
+        ...(grepMode ? { grepMode } : {}),
     };
 }

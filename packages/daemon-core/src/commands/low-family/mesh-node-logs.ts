@@ -9,7 +9,7 @@
  * CommandRouterResult the inlined case did.
  */
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { readDaemonLogTail, MAX_TAIL_BYTES } from '../../logging/log-tail-reader.js';
+import { readDaemonLogTail, MAX_TAIL_BYTES, MAX_GREP_PATTERN_LENGTH } from '../../logging/log-tail-reader.js';
 import { redactLogLines } from '../../logging/log-redactor.js';
 import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
@@ -46,11 +46,27 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         }
 
         // Local read on the owning daemon.
+        // SECURITY: args reach here from a remote peer over P2P. Bound the grep
+        // pattern length up front (readDaemonLogTail enforces the same cap and
+        // matches literally unless the source is provably backtracking-safe) and
+        // clamp tailBytes on BOTH ends — a negative/zero value previously slipped
+        // past `Math.min` into the reader, which then fell back to the default.
+        const rawGrep = typeof args?.grep === 'string' ? args.grep : undefined;
+        if (rawGrep !== undefined && rawGrep.trim().length > MAX_GREP_PATTERN_LENGTH) {
+            return {
+                success: false,
+                error: `grep pattern too long (max ${MAX_GREP_PATTERN_LENGTH} chars)`,
+                nodeId,
+            } as CommandRouterResult;
+        }
         const rawTailBytes = Number(args?.tailBytes);
+        const tailBytes = Number.isFinite(rawTailBytes) && rawTailBytes > 0
+            ? Math.min(rawTailBytes, MAX_TAIL_BYTES)
+            : undefined;
         const tail = readDaemonLogTail({
             date: typeof args?.date === 'string' ? args.date : undefined,
-            tailBytes: Number.isFinite(rawTailBytes) ? Math.min(rawTailBytes, MAX_TAIL_BYTES) : undefined,
-            grep: typeof args?.grep === 'string' ? args.grep : undefined,
+            tailBytes,
+            grep: rawGrep,
             sinceMs: Number.isFinite(Number(args?.sinceMs)) ? Number(args?.sinceMs) : undefined,
         });
         if (!tail.success) {
@@ -82,6 +98,9 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
             matchedLineCount: tail.matchedLineCount,
             excludedByFilter: tail.excludedByFilter,
             ...(tail.grep ? { grep: tail.grep } : {}),
+            // Tells the coordinator whether its pattern ran as a regex or was
+            // matched literally (the safe default for unscreened sources).
+            ...(tail.grepMode ? { grepMode: tail.grepMode } : {}),
         } as CommandRouterResult;
     },
 };
