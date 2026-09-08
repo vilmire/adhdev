@@ -11,6 +11,8 @@ const testConfigDir = mkdtempSync(join(tmpdir(), 'adhdev-create-mesh-cfg-'))
 vi.mock('../../src/config/config.js', () => ({
   getConfigDir: () => testConfigDir,
   loadConfig: () => ({ machineId: 'test-machine' } as any),
+  getMachineId: () => ({ machineId: 'test-machine' } as any).machineId,
+  getMachineNickname: () => ({ machineId: 'test-machine' } as any).machineNickname ?? null,
 }))
 
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js'

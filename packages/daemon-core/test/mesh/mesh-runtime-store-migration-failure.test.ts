@@ -23,6 +23,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    getMachineId: () => 'test-machine',
+    getMachineNickname: () => null,
 }));
 
 // Override ONLY renameSync; every other fs export stays real. better-sqlite3 opens

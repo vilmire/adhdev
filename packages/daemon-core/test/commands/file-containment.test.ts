@@ -27,6 +27,8 @@ const mockConfig: { workspaces: Array<{ id: string; path: string; addedAt: numbe
 vi.mock('../../src/config/config.js', () => ({
     loadConfig: () => mockConfig,
     getConfigDir: () => path.join(os.tmpdir(), 'adhdev-test-config'),
+    getMachineId: () => (mockConfig as any).machineId,
+    getMachineNickname: () => (mockConfig as any).machineNickname ?? null,
 }));
 
 const { confineToAllowedRoots, getAllowedFileRoots, FILE_ROOTS_ENV } = await import(

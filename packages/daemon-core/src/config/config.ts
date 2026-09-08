@@ -515,6 +515,63 @@ function migrateStateToStateFile(raw: Record<string, any>): void {
 }
 
 /**
+ * Field-scoped memo for the two config fields that are read on hot paths but
+ * whose values do not change under the daemon.
+ *
+ * ★NEVER promote this to a whole-config cache. `machineSecret` is deliberately
+ * re-read from disk on every reconnect (server-connection.ts) — caching the
+ * config object turns a rotated secret into a permanent
+ * `machine_secret_not_found` loop. Only these two fields are memoized, and only
+ * because their invalidation rules are known:
+ *
+ *   - machineId: stamped ONCE by ensureMachineId and immutable afterwards, so
+ *     it never needs invalidation.
+ *   - machineNickname: user-editable, so every saveConfig drops the memo.
+ *
+ * ★When adding an export to THIS module that mesh/command code calls: the test
+ * suite mocks `config.js` with hand-rolled `vi.mock` factories that enumerate
+ * their exports explicitly, so a new symbol makes vitest throw
+ * `No "<name>" export is defined on the ... mock` in every file whose factory
+ * omits it — ~441 tests at once, in files unrelated to the change. Either add
+ * the symbol to those factories in the same commit, or have the factory spread
+ * `await importOriginal()` (the shape used by the daemon-upgrade tests, which
+ * inherits new exports for free).
+ */
+let memoizedMachineId: { value: string | undefined } | undefined;
+let memoizedMachineNickname: { value: string | null } | undefined;
+
+/**
+ * The daemon instance key (`mach_<uuid>`), read without re-parsing config.json.
+ *
+ * Prefer this over `loadConfig().machineId` — it is the same value (loadConfig
+ * stamps one via ensureMachineId when absent) minus the readFileSync +
+ * JSON.parse + full normalization that the field alone does not need.
+ */
+export function getMachineId(): string | undefined {
+    if (memoizedMachineId === undefined) {
+        memoizedMachineId = { value: loadConfig().machineId };
+    }
+    return memoizedMachineId.value;
+}
+
+/**
+ * Drop both field memos. Called by every config write; also exported so tests
+ * that swap the config dir between cases do not observe a previous case's value.
+ */
+export function invalidateConfigFieldMemos(): void {
+    memoizedMachineId = undefined;
+    memoizedMachineNickname = undefined;
+}
+
+/** The user-assigned machine label, or null when unset. Invalidated by saveConfig. */
+export function getMachineNickname(): string | null {
+    if (memoizedMachineNickname === undefined) {
+        memoizedMachineNickname = { value: loadConfig().machineNickname };
+    }
+    return memoizedMachineNickname.value;
+}
+
+/**
  * Load configuration from disk
  */
 export function loadConfig(): ADHDevConfig {
@@ -557,6 +614,11 @@ export function saveConfig(config: ADHDevConfig): void {
     const configPath = getConfigPath();
     const dir = getConfigDir();
     const normalized = normalizeConfig(config);
+
+    // Drop the field memos: a write is the only way either value can change.
+    // machineId is immutable in practice, but resetConfig/import paths do
+    // rewrite the file, so invalidate both rather than reason about which.
+    invalidateConfigFieldMemos();
 
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });

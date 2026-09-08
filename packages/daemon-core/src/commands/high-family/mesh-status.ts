@@ -13,7 +13,7 @@
  */
 import * as fs from 'fs';
 import { hostname as osHostname } from 'os';
-import { loadConfig } from '../../config/config.js';
+import { getMachineId, getMachineNickname } from '../../config/config.js';
 import { getGitRepoStatus } from '../../git/git-status.js';
 import {
     normalizeMeshNodeId,
@@ -275,12 +275,12 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         : [];
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
-                    const localMachineId = loadConfig().machineId || '';
+                    const localMachineId = getMachineId() || '';
                     // Local daemon's operator-set nickname — stamped onto the self/base
                     // node at render time so the friendly label resolves even before the
                     // persisted node record (addNode) has been rewritten with it.
                     const localMachineNickname = (() => {
-                        const nick = loadConfig().machineNickname;
+                        const nick = getMachineNickname();
                         return typeof nick === 'string' && nick.trim() ? nick.trim() : '';
                     })();
                     const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;

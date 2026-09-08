@@ -23,7 +23,7 @@ import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../../mesh/mesh-events.js';
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
 import { readNonEmptyString } from '../../mesh/mesh-events-utils.js';
-import { loadConfig } from '../../config/config.js';
+import { getMachineId } from '../../config/config.js';
 import {
     hydrateInlineMeshDirectTruth,
     normalizeProviderRoles,
@@ -226,7 +226,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
             getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
             statusInstanceId: ctx.deps.statusInstanceId,
-            localMachineId: loadConfig().machineId || '',
+            localMachineId: getMachineId() || '',
             probeRemotePeers,
             probeCache: ctx.meshGitProbeCache,
         });
@@ -1129,10 +1129,10 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                 const nodeDaemonId = typeof node.daemonId === 'string' ? node.daemonId.trim() : '';
                 const nodeMachineId = readMeshNodeMachineId(node as Record<string, unknown>) || '';
                 const selfDaemonId = ctx.deps.statusInstanceId || '';
-                const selfMachineId = (() => { try { return loadConfig().machineId || ''; } catch { return ''; } })();
+                const selfMachineId = (() => { try { return getMachineId() || ''; } catch { return ''; } })();
                 // Identity match is form-safe: a daemon answers to the same machine
                 // under interchangeable id forms (bare `mach_X`, cloud `daemon_mach_X`,
-                // standalone `standalone_mach_X`). statusInstanceId/loadConfig().machineId
+                // standalone `standalone_mach_X`). statusInstanceId/getMachineId()
                 // and the node's stored daemonId/machineId frequently hold DIFFERENT forms
                 // of the same machine, so a raw `===` would miss the self-match and let the
                 // coordinator delete its own live base node (the very accident this guard
@@ -1574,7 +1574,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // resolves past its raw id. Mirror buildMemberJoinNode's fallback here.
             const effectiveDaemonId = readMeshNodeDaemonId(sourceNode as any) || readNonEmptyString(ctx.deps.statusInstanceId) || undefined;
             const effectiveMachineId = readMeshNodeMachineId(sourceNode as any)
-                || (() => { try { return readNonEmptyString(loadConfig().machineId); } catch { return ''; } })()
+                || (() => { try { return readNonEmptyString(getMachineId()); } catch { return ''; } })()
                 || undefined;
 
             const repoRoot = sourceNode.repoRoot || sourceNode.workspace;

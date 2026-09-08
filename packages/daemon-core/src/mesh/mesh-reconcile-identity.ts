@@ -8,7 +8,7 @@
 
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
 
@@ -17,7 +17,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 // meshCoordinatorDaemonId, which can be either:
 //   - the daemon's canonical status id (`standalone_<machineId>` / `daemon_<machineId>`),
 //     stamped by the MCP layer via ctx.localDaemonId (= getStatus().status.instanceId), or
-//   - the bare machineId, stamped by the local queue-assignment path (loadConfig().machineId).
+//   - the bare machineId, stamped by the local queue-assignment path (getMachineId()).
 //   - the config-form node daemonId (`daemon_<machineId>`), which the MCP layer's
 //     resolveCoordinatorDaemonId prefers and stamps onto direct-dispatch workers.
 // Draining with only one of these silently misses events stamped with the other —
@@ -29,7 +29,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 // succeeds regardless of which path stamped the event.
 export function resolveCoordinatorDaemonIds(components: DaemonComponents): string[] {
     const statusInstanceId = readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId);
-    const machineId = readNonEmptyString(loadConfig().machineId);
+    const machineId = readNonEmptyString(getMachineId());
     return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 

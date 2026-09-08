@@ -15,6 +15,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'local-daemon' }),
+    getMachineId: () => (({ machineId: 'local-daemon' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'local-daemon' }) as any).machineNickname ?? null,
 }));
 
 import { runWorktreeNodeRetentionTick, __deleteWorktreeNodeRetentionStateForTests, type WorktreeRetentionDeps } from '../../src/mesh/mesh-worktree-retention.js';

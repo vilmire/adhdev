@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { getLedgerDir, readLedgerEntries, readLedgerEntriesByKind, appendLedgerEntry } from './mesh-ledger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { resolveTurnAttemptRow } from './mesh-turn-presentation.js';
@@ -1228,12 +1228,12 @@ export function stampPendingEventV2(
     // (unicast-defaulting) terminal event to a BROADCAST — deliverable to whatever
     // coordinator drains on this machine, instead of an undeliverable v1 event.
     // When a real coordinator identity DOES exist the unicast path below is
-    // unchanged (no regression). loadConfig().machineId is the same self-id source
+    // unchanged (no regression). getMachineId() is the same self-id source
     // resolveCoordinatorDaemonIds / the local queue-assignment stamp use, so the
     // broadcast dispatcher matches the drainer's own identity form.
     const selfFallback = !coordinatorIdentity;
     const dispatchedBy = coordinatorIdentity ?? coordinatorIdentityFromEmitFields({
-        daemonId: readNonEmptyString(loadConfig().machineId),
+        daemonId: readNonEmptyString(getMachineId()),
     });
     // The unicast target is, by default, the same coordinator the event is already
     // routed to (its originating coordinator). A hint may override it. In the

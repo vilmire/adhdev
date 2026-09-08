@@ -14,6 +14,8 @@ vi.mock('../../src/config/config.js', () => ({
     return testConfigDir
   },
   loadConfig: () => ({ machineId: 'coordinator-machine' } as any),
+  getMachineId: () => ({ machineId: 'coordinator-machine' } as any).machineId,
+  getMachineNickname: () => ({ machineId: 'coordinator-machine' } as any).machineNickname ?? null,
 }))
 
 import { DaemonCommandRouter } from '../../src/commands/router.js'

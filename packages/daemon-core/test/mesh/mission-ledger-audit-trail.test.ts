@@ -14,6 +14,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    getMachineId: () => 'test-machine',
+    getMachineNickname: () => null,
 }));
 
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';

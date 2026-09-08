@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
@@ -130,7 +130,7 @@ export type { SessionBusyVerdict };
 /**
  * CANON: the single canonical coordinator-daemon id this daemon stamps onto every
  * worker dispatch (meshContext.coordinatorDaemonId / sourceCoordinatorDaemonId / the
- * co-located meshCoordinatorDaemonId anchor). loadConfig().machineId is the bare
+ * co-located meshCoordinatorDaemonId anchor). getMachineId() is the bare
  * `mach_X` form; canonicalizing to `daemon_mach_X` unifies it with the MCP-side
  * resolveCoordinatorDaemonId producer so the two dispatch paths can never stamp a
  * worker's coordinator anchor in two different forms — the CANON-IDENTITY
@@ -139,7 +139,7 @@ export type { SessionBusyVerdict };
  * the read side; this only removes the producer-side skew.
  */
 function localCoordinatorDaemonId(): string | undefined {
-    return canonicalDaemonId(readNonEmptyString(loadConfig().machineId));
+    return canonicalDaemonId(readNonEmptyString(getMachineId()));
 }
 
 

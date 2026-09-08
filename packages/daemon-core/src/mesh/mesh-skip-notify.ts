@@ -9,7 +9,7 @@ import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable, isMeshNodeFreshEnough
 import { queuePendingMeshCoordinatorEvent, retractPendingDispatchBlockedEvent } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { isWithinCloneBootstrapGraceDurable } from './mesh-clone-grace.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { SLOT_MODEL_ABSENT_SKIP_REASON } from './slot-model-enforcement.js';
 import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-assignment.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-observability.js';
@@ -369,7 +369,7 @@ export function retractActionableSkipIfPreviouslyNotified(meshId: string, taskId
     const dedupKey = `${meshId}:${taskId}`;
     if (!lastActionableSkipNotified.delete(dedupKey)) return; // nothing was paged → nothing to retract
     try {
-        const coordinatorDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+        const coordinatorDaemonId = readNonEmptyString(getMachineId()) || undefined;
         const removed = retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId);
         if (removed > 0) {
             LOG.info('MeshQueue', `Retracted ${removed} stale dispatch-blocked event(s) for task ${taskId} (mesh ${meshId}) — its blocker resolved`);
@@ -547,7 +547,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     }
     // The queue is owned by this coordinator daemon, so scope the event to this daemon's id;
     // the originating coordinator SESSION (if known) further narrows delivery on this daemon.
-    const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+    const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
     const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
     const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
     // DISPATCH-ACK-EVIDENCE: resolve what the delivery records actually witness for this task

@@ -32,6 +32,8 @@ vi.mock('../../src/config/config.js', () => ({
     return testConfigDir
   },
   loadConfig: () => ({ machineId: 'mach_evidence_test' } as any),
+  getMachineId: () => ({ machineId: 'mach_evidence_test' } as any).machineId,
+  getMachineNickname: () => ({ machineId: 'mach_evidence_test' } as any).machineNickname ?? null,
 }))
 
 vi.mock('../../src/config/mesh-config.js', () => ({

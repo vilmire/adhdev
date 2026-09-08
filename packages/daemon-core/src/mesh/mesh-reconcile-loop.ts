@@ -45,7 +45,7 @@
 // ---------------------------------------------------------------------------
 
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { listMeshes, getMesh } from '../config/mesh-config.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
@@ -248,7 +248,7 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
     // those re-read the mesh's POLICY at the moment of use, and PHASE 5.5's
     // saga recovery can legitimately mutate config mid-tick.
     const meshesSnapshot = listMeshes();
-    const localDaemonId = readNonEmptyString(loadConfig().machineId) || undefined;
+    const localDaemonId = readNonEmptyString(getMachineId()) || undefined;
     // The id-set used to scope the local queue drain (status id + machineId). See
     // resolveCoordinatorDaemonIds — the status id is what the MCP layer stamps and
     // is mandatory here for a generating CLI coordinator to self-receive completions.

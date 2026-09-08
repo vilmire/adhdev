@@ -28,6 +28,8 @@ vi.mock('../../src/config/config.js', () => ({
     // an event carries no coordinator identity, so the emit path can still mint a v2
     // broadcast envelope (instead of leaving the event unversioned → enforce-quarantined).
     loadConfig: () => ({ machineId: SELF_MACH }),
+    getMachineId: () => (({ machineId: SELF_MACH }) as any).machineId,
+    getMachineNickname: () => (({ machineId: SELF_MACH }) as any).machineNickname ?? null,
 }));
 
 import {

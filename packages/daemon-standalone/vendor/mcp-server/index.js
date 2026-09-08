@@ -42808,6 +42808,9 @@ var require_dist3 = __commonJS({
       generateMachineId: () => generateMachineId,
       getConfigDir: () => getConfigDir,
       getDaemonDataDir: () => getDaemonDataDir,
+      getMachineId: () => getMachineId,
+      getMachineNickname: () => getMachineNickname,
+      invalidateConfigFieldMemos: () => invalidateConfigFieldMemos,
       isSetupComplete: () => isSetupComplete,
       isStableMachineId: () => isStableMachineId,
       loadConfig: () => loadConfig,
@@ -42981,6 +42984,22 @@ var require_dist3 = __commonJS({
       };
       (0, import_fs3.writeFileSync)(statePath, JSON.stringify(state2, null, 2), { encoding: "utf-8", mode: 384 });
     }
+    function getMachineId() {
+      if (memoizedMachineId === void 0) {
+        memoizedMachineId = { value: loadConfig().machineId };
+      }
+      return memoizedMachineId.value;
+    }
+    function invalidateConfigFieldMemos() {
+      memoizedMachineId = void 0;
+      memoizedMachineNickname = void 0;
+    }
+    function getMachineNickname() {
+      if (memoizedMachineNickname === void 0) {
+        memoizedMachineNickname = { value: loadConfig().machineNickname };
+      }
+      return memoizedMachineNickname.value;
+    }
     function loadConfig() {
       const configPath = getConfigPath();
       if (!(0, import_fs3.existsSync)(configPath)) {
@@ -43014,6 +43033,7 @@ var require_dist3 = __commonJS({
       const configPath = getConfigPath();
       const dir = getConfigDir();
       const normalized = normalizeConfig(config2);
+      invalidateConfigFieldMemos();
       if (!(0, import_fs3.existsSync)(dir)) {
         (0, import_fs3.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
@@ -43064,6 +43084,8 @@ var require_dist3 = __commonJS({
     var import_crypto;
     var DEFAULT_CONFIG;
     var MACHINE_ID_PREFIX;
+    var memoizedMachineId;
+    var memoizedMachineNickname;
     var init_config = __esm2({
       "src/config/config.ts"() {
         "use strict";
@@ -49782,7 +49804,7 @@ ${error48.message || ""}`;
         const explicit = typeof opts.machineNickname === "string" ? opts.machineNickname.trim() : "";
         if (explicit) return explicit;
         try {
-          const local = loadConfig().machineNickname;
+          const local = getMachineNickname();
           return typeof local === "string" && local.trim() ? local.trim() : void 0;
         } catch {
           return void 0;
@@ -55304,7 +55326,7 @@ ${lines.join("\n")}
       });
       const selfFallback = !coordinatorIdentity;
       const dispatchedBy = coordinatorIdentity ?? coordinatorIdentityFromEmitFields2({
-        daemonId: readNonEmptyString(loadConfig().machineId)
+        daemonId: readNonEmptyString(getMachineId())
       });
       const intendedFor = hint?.intendedFor ?? (selfFallback ? void 0 : coordinatorIdentity);
       const stamp2 = buildPendingEventEmitStamp({
@@ -55751,7 +55773,7 @@ Task ${taskId} was parked because its delta was addressed to session '${addresse
 The instruction it carried was never delivered to anyone. If it still matters, re-enqueue it (mesh_enqueue_task) against a live session; the failed row remains in the queue as the audit record. To avoid this next time, check parkedTasks in mesh_view_queue \u2014 parked rows are surfaced there from the moment they park.`;
       const nodeLabel = readNonEmptyString(task.targetNodeId) || readNonEmptyString(task.parked?.targetNodeId) || meshId;
       try {
-        const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+        const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
         const targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
         queuePendingMeshCoordinatorEvent({
           event: "mesh:dispatch_blocked",
@@ -68086,7 +68108,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         try {
           let localNickname = null;
           try {
-            localNickname = readStringValue(loadConfig().machineNickname) ?? null;
+            localNickname = readStringValue(getMachineNickname()) ?? null;
           } catch {
           }
           node.nodeFacts = buildLocalNodeFacts({
@@ -81431,7 +81453,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
     });
     function localCoordinatorDaemonId() {
-      return canonicalDaemonId2(readNonEmptyString(loadConfig().machineId));
+      return canonicalDaemonId2(readNonEmptyString(getMachineId()));
     }
     function isIdleSessionState(state2) {
       const status = readNonEmptyString(state2?.status).toLowerCase();
@@ -82140,7 +82162,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (!meshId) return;
       const localIds = expandDaemonIdForms([
         readNonEmptyString(components.statusInstanceId),
-        readNonEmptyString(loadConfig().machineId)
+        readNonEmptyString(getMachineId())
       ]);
       let markers = [];
       try {
@@ -82354,7 +82376,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const dedupKey = `${meshId}:${taskId}`;
       if (!lastActionableSkipNotified.delete(dedupKey)) return;
       try {
-        const coordinatorDaemonId = readNonEmptyString(loadConfig().machineId) || void 0;
+        const coordinatorDaemonId = readNonEmptyString(getMachineId()) || void 0;
         const removed = retractPendingDispatchBlockedEvent(meshId, taskId, coordinatorDaemonId);
         if (removed > 0) {
           LOG.info("MeshQueue", `Retracted ${removed} stale dispatch-blocked event(s) for task ${taskId} (mesh ${meshId}) \u2014 its blocker resolved`);
@@ -82456,7 +82478,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         lastActionableSkipNotified.delete(dedupKey);
         return;
       }
-      const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+      const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
       const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
       const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
       const evidence = reason === "target_session_pin_expired" || reason === PARKED_SKIP_REASON ? resolveTaskDeliveryEvidence(meshId, taskId) : void 0;
@@ -82606,7 +82628,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         error: opts.error,
         liveSessions
       });
-      const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(loadConfig().machineId);
+      const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(getMachineId());
       const targetCoordinatorSessionId = readNonEmptyString(opts.sourceCoordinatorSessionId);
       LOG.warn("MeshQueue", `COORD-NOTIFY-STUCK: dispatch of pinned task ${opts.taskId} to session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) failed and requeued with pin intact.`);
       try {
@@ -82653,7 +82675,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         silentForMs: opts.silentForMs,
         liveSessions
       });
-      const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(loadConfig().machineId);
+      const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(getMachineId());
       const targetCoordinatorSessionId = readNonEmptyString(opts.sourceCoordinatorSessionId);
       LOG.warn("MeshQueue", `COORD-NOTIFY-STUCK: pinned task ${opts.taskId} reclaimed from session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) after ${Math.round(opts.silentForMs / 6e4)}min silence and requeued with pin intact.`);
       try {
@@ -83652,7 +83674,7 @@ ${block2.text}`,
       }
     });
     function localCoordinatorDaemonId2() {
-      return canonicalDaemonId2(readNonEmptyString(loadConfig().machineId));
+      return canonicalDaemonId2(readNonEmptyString(getMachineId()));
     }
     function loadRepoConfigForNode(node) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
@@ -87077,7 +87099,7 @@ ${cleanBody}`;
     }
     function resolveLocalDaemonIds(components) {
       const statusInstanceId = readNonEmptyString3(components.statusInstanceId);
-      const machineId = readNonEmptyString3(loadConfig().machineId);
+      const machineId = readNonEmptyString3(getMachineId());
       return expandDaemonIdForms([statusInstanceId, machineId]);
     }
     function resolveLocalCodeChangeWorkspace(components, meshId, nodeId) {
@@ -88393,7 +88415,7 @@ ${cleanBody}`;
     }
     function resolveCoordinatorDrainDaemonIds(components) {
       const statusInstanceId = readNonEmptyString(components.statusInstanceId);
-      const machineId = readNonEmptyString(loadConfig().machineId);
+      const machineId = readNonEmptyString(getMachineId());
       return expandDaemonIdForms([statusInstanceId, machineId]);
     }
     function getCachedMeshByWorkspace(workspace) {
@@ -89669,7 +89691,7 @@ ${cleanBody}`;
     });
     function resolveCoordinatorDaemonIds(components) {
       const statusInstanceId = readNonEmptyString(components.statusInstanceId);
-      const machineId = readNonEmptyString(loadConfig().machineId);
+      const machineId = readNonEmptyString(getMachineId());
       return expandDaemonIdForms([statusInstanceId, machineId]);
     }
     function daemonHostsMesh(mesh, daemonIds) {
@@ -90737,7 +90759,7 @@ ${cleanBody}`;
       const exists = opts.existsSync ?? fs18.existsSync;
       const localDaemonId = opts.localDaemonId ?? (() => {
         try {
-          return readNonEmptyString(loadConfig().machineId) || "";
+          return readNonEmptyString(getMachineId()) || "";
         } catch {
           return "";
         }
@@ -93583,7 +93605,7 @@ ${cleanBody}`;
       if (!requested) return true;
       const localIds = expandDaemonIdForms([
         readNonEmptyString(components.statusInstanceId),
-        readNonEmptyString(loadConfig().machineId)
+        readNonEmptyString(getMachineId())
       ]);
       const targetsLocalCoordinator = localIds.some((id) => daemonIdsEquivalent4(id, requested));
       if (!targetsLocalCoordinator) return false;
@@ -96039,7 +96061,7 @@ ${cleanBody}`;
     }
     async function runMeshReconcileTick(components) {
       const meshesSnapshot = listMeshes();
-      const localDaemonId = readNonEmptyString(loadConfig().machineId) || void 0;
+      const localDaemonId = readNonEmptyString(getMachineId()) || void 0;
       const drainDaemonIds = resolveCoordinatorDaemonIds(components);
       const dispatchMeshCommand = components.dispatchMeshCommand;
       const store = (() => {
@@ -99985,7 +100007,7 @@ ${marker}`,
               cdpManagers: ctx.deps.cdpManagers,
               providerLoader: ctx.deps.providerLoader,
               detectedIdes: ctx.deps.detectedIdes.value,
-              instanceId: ctx.deps.statusInstanceId || loadConfig().machineId || "daemon",
+              instanceId: ctx.deps.statusInstanceId || getMachineId() || "daemon",
               version: ctx.deps.statusVersion || "unknown",
               profile: "metadata"
             });
@@ -100088,7 +100110,7 @@ ${marker}`,
               refreshed: entries,
               // Same "omit rather than send undefined" contract as the reads above.
               ...quota ? { quota } : {},
-              machineNickname: loadConfig().machineNickname,
+              machineNickname: getMachineNickname(),
               timestamp: Date.now()
             };
           },
@@ -100103,7 +100125,7 @@ ${marker}`,
                 // buildLocalNodeFacts (mesh/node-facts.ts). `'quota' in machine`
                 // must stay false until the refresh loop's first tick.
                 ...quota ? { quota } : {},
-                machineNickname: loadConfig().machineNickname
+                machineNickname: getMachineNickname()
               },
               timestamp: Date.now()
             };
@@ -100190,7 +100212,7 @@ ${marker}`,
               // (not `quota: undefined`) until the refresh loop's first tick —
               // same never-reported-vs-reported-empty contract as node-facts.ts.
               ...quota ? { quota } : {},
-              machineNickname: loadConfig().machineNickname,
+              machineNickname: getMachineNickname(),
               // Present only for coordinator-spawned worker sessions; null keeps
               // the "field exists, nothing to show" contract of `coordinator`.
               meshWorker,
@@ -133560,9 +133582,9 @@ ${ptyResult.output.slice(-2e3)}`);
               const ledgerSummary = getLedgerSummary22(meshId);
               const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
               const liveMeshSessions = (0, import_session_host_core3.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
-              const localMachineId = loadConfig().machineId || "";
+              const localMachineId = getMachineId() || "";
               const localMachineNickname = (() => {
-                const nick = loadConfig().machineNickname;
+                const nick = getMachineNickname();
                 return typeof nick === "string" && nick.trim() ? nick.trim() : "";
               })();
               const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
@@ -139316,7 +139338,7 @@ ${e?.stderr || ""}`;
               dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
               getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
               statusInstanceId: ctx.deps.statusInstanceId,
-              localMachineId: loadConfig().machineId || "",
+              localMachineId: getMachineId() || "",
               probeRemotePeers,
               probeCache: ctx.meshGitProbeCache
             });
@@ -140028,7 +140050,7 @@ ${e?.stderr || ""}`;
                 const selfDaemonId = ctx.deps.statusInstanceId || "";
                 const selfMachineId = (() => {
                   try {
-                    return loadConfig().machineId || "";
+                    return getMachineId() || "";
                   } catch {
                     return "";
                   }
@@ -140249,7 +140271,7 @@ ${e?.stderr || ""}`;
               const effectiveDaemonId = readMeshNodeDaemonId(sourceNode) || readNonEmptyString(ctx.deps.statusInstanceId) || void 0;
               const effectiveMachineId = readMeshNodeMachineId(sourceNode) || (() => {
                 try {
-                  return readNonEmptyString(loadConfig().machineId);
+                  return readNonEmptyString(getMachineId());
                 } catch {
                   return "";
                 }
@@ -142948,7 +142970,7 @@ ${e?.stderr || ""}`;
           if ("success" in status) return status;
           const reporterMachineNickname = (() => {
             try {
-              const nick = loadConfig().machineNickname;
+              const nick = getMachineNickname();
               return typeof nick === "string" && nick.trim() ? nick.trim() : void 0;
             } catch {
               return void 0;
@@ -144201,7 +144223,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const cause = readNonEmptyString(opts?.cause) || "A cancellation";
       const coordinatorMessage = buildOrphanedPinNotice2(orphans, stoppedSessionId, cause);
       const nodeLabel = readNonEmptyString(opts?.nodeId) || readNonEmptyString(orphans[0]?.targetNodeId) || meshId;
-      const targetCoordinatorDaemonId = readNonEmptyString(loadConfig().machineId);
+      const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
       const targetCoordinatorSessionId = readNonEmptyString(opts?.coordinatorSessionId);
       LOG.warn("MeshQueue", `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map((o) => o.taskId).join(", ")}`);
       try {

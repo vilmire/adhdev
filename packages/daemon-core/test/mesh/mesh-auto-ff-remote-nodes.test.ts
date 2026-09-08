@@ -21,6 +21,8 @@ const fastForwardMocks = vi.hoisted(() => ({
 vi.mock('../../src/config/config.js', () => ({
   loadConfig: configMocks.loadConfig,
   getConfigDir: () => '/tmp/adhdev-auto-ff-remote-test',
+  getMachineId: () => (configMocks.loadConfig() as any).machineId,
+  getMachineNickname: () => (configMocks.loadConfig() as any).machineNickname ?? null,
 }))
 vi.mock('../../src/config/mesh-config.js', () => ({
   getMesh: meshConfigMocks.getMesh,

@@ -33,7 +33,7 @@
 // inside it. It must NOT import back from mesh-queue-assignment — that module calls into this
 // one, so the pair would cycle; see the local isIdleSessionState copy below.
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getQueue } from './mesh-work-queue.js';
@@ -56,7 +56,7 @@ const AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
 export const AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1000;
 
 function localCoordinatorDaemonId(): string | undefined {
-    return canonicalDaemonId(readNonEmptyString(loadConfig().machineId));
+    return canonicalDaemonId(readNonEmptyString(getMachineId()));
 }
 
 // Local copy of mesh-queue-assignment's isIdleSessionState. Deliberately NOT imported: this

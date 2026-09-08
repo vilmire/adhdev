@@ -35,6 +35,8 @@ vi.mock('../../src/config/config.js', () => ({
         return testConfigDir;
     },
     loadConfig: () => ({ machineId: 'test-machine' }),
+    getMachineId: () => (({ machineId: 'test-machine' }) as any).machineId,
+    getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
 // CLI detection is exercised end-to-end elsewhere; here the "installed" set is

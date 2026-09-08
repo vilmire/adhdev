@@ -26,6 +26,8 @@ vi.mock('../../src/config/config.js', () => ({
     return testConfigDir
   },
   loadConfig: configMocks.loadConfig,
+  getMachineId: () => (configMocks.loadConfig() as any).machineId,
+  getMachineNickname: () => (configMocks.loadConfig() as any).machineNickname ?? null,
 }))
 
 const meshConfigMocks = vi.hoisted(() => ({

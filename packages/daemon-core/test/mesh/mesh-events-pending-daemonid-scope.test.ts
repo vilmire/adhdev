@@ -26,6 +26,8 @@ vi.mock('../../src/config/config.js', () => ({
     // fallback in stampPendingEventV2 reads loadConfig().machineId to mint a v2
     // broadcast envelope so they still surface to any coordinator form on this machine.
     loadConfig: () => ({ machineId: MACH }),
+    getMachineId: () => (({ machineId: MACH }) as any).machineId,
+    getMachineNickname: () => (({ machineId: MACH }) as any).machineNickname ?? null,
 }));
 
 import {

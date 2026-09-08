@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
-import { loadConfig } from '../config/config.js';
+import { getMachineId } from '../config/config.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -345,7 +345,7 @@ export async function runPendingCoordinatorCatchupScan(components: DaemonCompone
     if (!meshId) return;
     const localIds = expandDaemonIdForms([
         readNonEmptyString((components as { statusInstanceId?: string }).statusInstanceId),
-        readNonEmptyString(loadConfig().machineId),
+        readNonEmptyString(getMachineId()),
     ]);
     let markers: Awaited<ReturnType<typeof drainPendingMeshCoordinatorEvents>> = [];
     try {

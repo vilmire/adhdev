@@ -7,7 +7,7 @@
  * session/coordinator registries the router already holds via deps; none of these
  * touch the router's inline-mesh cache or other instance state.
  */
-import { loadConfig, updateConfig } from '../../config/config.js';
+import { updateConfig, getMachineId, getMachineNickname } from '../../config/config.js';
 import { readUpgradeFailureNotice } from '../upgrade-helper.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../../status/snapshot.js';
 import { getDaemonBuildInfo } from '../../build-info.js';
@@ -42,7 +42,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             cdpManagers: ctx.deps.cdpManagers,
             providerLoader: ctx.deps.providerLoader,
             detectedIdes: ctx.deps.detectedIdes.value,
-            instanceId: ctx.deps.statusInstanceId || loadConfig().machineId || 'daemon',
+            instanceId: ctx.deps.statusInstanceId || getMachineId() || 'daemon',
             version: ctx.deps.statusVersion || 'unknown',
             profile: 'metadata',
         });
@@ -165,7 +165,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             refreshed: entries,
             // Same "omit rather than send undefined" contract as the reads above.
             ...(quota ? { quota } : {}),
-            machineNickname: loadConfig().machineNickname,
+            machineNickname: getMachineNickname(),
             timestamp: Date.now(),
         };
     },
@@ -181,7 +181,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
                 // buildLocalNodeFacts (mesh/node-facts.ts). `'quota' in machine`
                 // must stay false until the refresh loop's first tick.
                 ...(quota ? { quota } : {}),
-                machineNickname: loadConfig().machineNickname,
+                machineNickname: getMachineNickname(),
             },
             timestamp: Date.now(),
         };
@@ -300,7 +300,7 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // (not `quota: undefined`) until the refresh loop's first tick —
             // same never-reported-vs-reported-empty contract as node-facts.ts.
             ...(quota ? { quota } : {}),
-            machineNickname: loadConfig().machineNickname,
+            machineNickname: getMachineNickname(),
             // Present only for coordinator-spawned worker sessions; null keeps
             // the "field exists, nothing to show" contract of `coordinator`.
             meshWorker,

@@ -23,6 +23,8 @@ vi.mock('../../src/config/config.js', () => ({
         if (!existsSync(testConfigDir)) mkdirSync(testConfigDir, { recursive: true });
         return testConfigDir;
     },
+    getMachineId: () => 'test-machine',
+    getMachineNickname: () => null,
 }));
 
 import { drainPendingMeshCoordinatorEvents, __resetSqlitePendingDrainWarnForTests } from '../../src/mesh/mesh-events-pending.js';
