@@ -53,6 +53,7 @@
 
 import { estimateEntryBytes, resolveConstants, sanitizeJson, type JsonValue } from 'seqscribe';
 import { LOG } from '../logging/logger.js';
+import { createInflightGate } from './inflight-gate.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import { FLEET_STATUS_TOPIC } from './topics.js';
 import type { FleetStatusEntry } from '../status/reporter.js';
@@ -132,7 +133,16 @@ const counters: FleetStatusCounters = {
 
 let activeNode: SeqscribeNodeHandle | null = null;
 let activeMode: FleetStatusMode = 'off';
-let inflight = 0;
+/**
+ * In-flight accounting, shared with the mesh leg (`inflight-gate.ts`).
+ *
+ * The two legs hand-rolled the same counter and grew the same two defects in
+ * it — a slot leaked on `append`'s one surviving synchronous throw, and a
+ * negative count after a reconfigure zeroed it with appends still outstanding.
+ * Keeping one implementation is what makes "fixed in both legs" structural
+ * rather than a thing the next reader has to remember.
+ */
+const inflightGate = createInflightGate(MAX_INFLIGHT);
 /** Tri-state: unknown (null) until the first write checks the node. */
 let topicUsable: boolean | null = null;
 let configurationGeneration = 0;
@@ -186,7 +196,12 @@ export function configureFleetStatusShadow(
     activeNode = node;
     activeMode = resolveFleetStatusMode(env);
     topicUsable = null;
-    inflight = 0;
+    // Retires the previous generation instead of zeroing a live counter: the
+    // appends admitted under the old configuration still settle, and letting
+    // them decrement from a fresh zero drove the count negative — which put the
+    // load-shed's `>= MAX_INFLIGHT` test out of reach and stopped the cap
+    // bounding anything at all.
+    inflightGate.reconfigure();
     configurationGeneration++;
     appendGeneration = 0;
     lastAppendedGeneration = 0;
@@ -240,15 +255,6 @@ export function recordFleetStatusShadow(entry: FleetStatusEntry): boolean {
         if (!node || activeMode === 'off') return false;
         if (!ensureTopic(node)) return false;
 
-        if (inflight >= MAX_INFLIGHT) {
-            counters.dropped++;
-            warnOnce(
-                `fleet.status shadow shedding load — ${MAX_INFLIGHT} appends in flight; ` +
-                    'status records are being dropped from the RING only (the WS status_report is unaffected)',
-            );
-            return false;
-        }
-
         // `sanitizeJson` rather than a cast: the entry crosses a package
         // boundary as a plain object and the library requires a JsonValue. A
         // cast would let an `undefined`, a Date or a cycle through to the
@@ -278,37 +284,51 @@ export function recordFleetStatusShadow(entry: FleetStatusEntry): boolean {
         const configuredGeneration = configurationGeneration;
         const thisAppendGeneration = ++appendGeneration;
         const paritySnapshot = freezeParitySnapshot(entry);
-        inflight++;
-        void node.node
-            .log(FLEET_STATUS_TOPIC)
-            .append(FLEET_STATUS_ENTRY_KIND, payload)
-            .then(
-                () => {
-                    inflight--;
-                    counters.written++;
-                    // A completion from a detached/replaced configuration must
-                    // not repopulate the getter, and an older append resolving
-                    // late must not replace a newer successful one.
-                    if (
-                        activeNode === configuredNode &&
-                        activeMode === 'shadow' &&
-                        configurationGeneration === configuredGeneration &&
-                        thisAppendGeneration >= lastAppendedGeneration
-                    ) {
-                        lastAppendedGeneration = thisAppendGeneration;
-                        lastAppendedEntryForParity = paritySnapshot;
-                    }
-                },
-                (error: unknown) => {
-                    inflight--;
-                    counters.failed++;
-                    warnOnce(
-                        `fleet.status shadow append failed (further failures logged once): ${
-                            error instanceof Error ? error.message : String(error)
-                        }`,
-                    );
-                },
-            );
+        // The gate runs the append itself so that P11 §11.1's surviving
+        // synchronous throw (static API misuse) costs NO in-flight slot. Taking
+        // the slot first leaked it permanently on that path — neither settle
+        // handler runs — which pinned the counter at the cap and silently
+        // dropped every later status record for the life of the process.
+        const attempt = inflightGate.run(
+            () => node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload),
+            () => {
+                counters.written++;
+                // A completion from a detached/replaced configuration must
+                // not repopulate the getter, and an older append resolving
+                // late must not replace a newer successful one.
+                if (
+                    activeNode === configuredNode &&
+                    activeMode === 'shadow' &&
+                    configurationGeneration === configuredGeneration &&
+                    thisAppendGeneration >= lastAppendedGeneration
+                ) {
+                    lastAppendedGeneration = thisAppendGeneration;
+                    lastAppendedEntryForParity = paritySnapshot;
+                }
+            },
+            (error: unknown) => {
+                counters.failed++;
+                warnOnce(
+                    `fleet.status shadow append failed (further failures logged once): ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            },
+        );
+
+        if (!attempt.admitted) {
+            if (attempt.reason === 'shed') {
+                counters.dropped++;
+                warnOnce(
+                    `fleet.status shadow shedding load — ${MAX_INFLIGHT} appends in flight; ` +
+                        'status records are being dropped from the RING only (the WS status_report is unaffected)',
+                );
+                return false;
+            }
+            // Synchronous static-misuse throw — rethrown to the single catch
+            // below so it is counted and logged in exactly one place.
+            throw attempt.error;
+        }
         return true;
     } catch (error) {
         // Synchronous throw from the sanitize/estimate path, or a static API
@@ -341,7 +361,7 @@ export function fleetStatusMode(): FleetStatusMode {
 
 /** Appends currently in flight — used by tests to await quiescence. */
 export function fleetStatusInflight(): number {
-    return inflight;
+    return inflightGate.count();
 }
 
 /**
@@ -359,7 +379,7 @@ export function __resetFleetStatusShadowForTests(): void {
     activeNode = null;
     activeMode = 'off';
     topicUsable = null;
-    inflight = 0;
+    inflightGate.reconfigure();
     configurationGeneration++;
     appendGeneration = 0;
     lastAppendedGeneration = 0;

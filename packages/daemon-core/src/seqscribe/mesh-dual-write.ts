@@ -127,6 +127,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import { createInflightGate } from './inflight-gate.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import {
     estimateProjectedEntryBytes,
@@ -276,7 +277,16 @@ const discoveredMeshIds = new Set<string>();
  * for a daemon whose seqscribe node failed to open — dual-write then no-ops. */
 let activeNode: SeqscribeNodeHandle | null = null;
 let activeMode: MeshDualWriteMode = 'shadow';
-let inflight = 0;
+/**
+ * In-flight accounting for the fire-and-forget appends below.
+ *
+ * Shared with the `fleet.status` leg (`inflight-gate.ts`) rather than
+ * hand-rolled per leg: the two legs previously kept identical counters and grew
+ * identical defects in them — a slot leaked on `append`'s one surviving
+ * synchronous throw, and a negative count after a reconfigure that zeroed the
+ * counter with appends still outstanding. Both are the gate's problem now.
+ */
+const inflightGate = createInflightGate(MAX_INFLIGHT);
 
 const warnedOnce = new Set<string>();
 function warnOnce(message: string): void {
@@ -398,7 +408,12 @@ export function configureMeshDualWrite(
     activeNode = node;
     activeMode = resolveMeshDualWriteMode(env);
     definedTopics.clear();
-    inflight = 0;
+    // Retires the previous generation rather than zeroing a live counter:
+    // appends admitted under the old configuration are still outstanding and
+    // will settle, and decrementing those from a fresh zero is what drove the
+    // count negative — which put the load-shed's `>= MAX_INFLIGHT` test out of
+    // reach and stopped the cap bounding at all.
+    inflightGate.reconfigure();
     if (node && activeMode === 'primary') {
         // The write leg is identical to shadow here — only the READ path differs
         // (mesh-read-model.ts), and it differs per mesh behind a readiness gate.
@@ -674,15 +689,6 @@ function recordMeshEvent(
         const topic = ensureTopic(node, meshId);
         if (!topic) return false;
 
-        if (inflight >= MAX_INFLIGHT) {
-            counters.dropped++;
-            warnOnce(
-                `mesh dual-write shedding load — ${MAX_INFLIGHT} appends in flight; ` +
-                    'records are being dropped from the SHADOW leg only (the ledger is unaffected)',
-            );
-            return false;
-        }
-
         const projected = projectMeshLedgerEntry(entry);
 
         // P13 pre-flight: know the entry is appendable BEFORE spending an
@@ -703,40 +709,55 @@ function recordMeshEvent(
             return false;
         }
 
-        inflight++;
         // ── One error path, not two (seqscribe v3.5 P11) ────────────────────
         // Every data-dependent `append` failure — closed node, unknown topic,
-        // JSON encoding, sealed writer, oversized entry — now REJECTS the
-        // returned Promise rather than splitting between a synchronous throw
-        // and a rejection. So the rejection handler below is the single place a
-        // shadow-write failure is counted; the outer try/catch no longer
-        // double-counts the same condition through two branches.
+        // JSON encoding, sealed writer, oversized entry — REJECTS the returned
+        // Promise rather than splitting between a synchronous throw and a
+        // rejection. So the rejection handler below is the single place a
+        // shadow-write failure is counted.
         //
-        // The outer try/catch is retained deliberately, and its scope is now
-        // narrow and honest: it guards the SYNCHRONOUS work above (`ensureTopic`,
-        // `projectMeshLedgerEntry`, the P13 estimate) plus the static-misuse
-        // throws P11 explicitly keeps synchronous. It is no longer the mechanism
-        // by which append failures are caught.
-        void node.node
-            .log(topic)
-            .append(MESH_EVENT_ENTRY_KIND, toJsonValue(projected))
-            .then(
-                () => {
-                    inflight--;
-                    if (origin === 'backfill') counters.backfilled++;
-                    else counters.written++;
-                },
-                (error: unknown) => {
-                    inflight--;
-                    if (origin === 'backfill') counters.backfillFailed++;
-                    else counters.failed++;
-                    warnOnce(
-                        `mesh dual-write append failed (further failures logged once): ${
-                            error instanceof Error ? error.message : String(error)
-                        }`,
-                    );
-                },
-            );
+        // The one exception P11 keeps synchronous is §11.1's static API misuse
+        // (raw append on a register topic). The gate runs the append itself so
+        // that throw costs NO in-flight slot: taking the slot first leaked it
+        // permanently on that path, since neither settle handler ever runs.
+        // Repeated, that pinned the counter at the cap and silently dropped
+        // every later record for the life of the process.
+        //
+        // The outer try/catch is retained deliberately and its scope is narrow
+        // and honest: it guards the SYNCHRONOUS work above (`ensureTopic`,
+        // `projectMeshLedgerEntry`, the P13 estimate). Append failures — sync or
+        // async — are accounted here.
+        const attempt = inflightGate.run(
+            () => node.node.log(topic).append(MESH_EVENT_ENTRY_KIND, toJsonValue(projected)),
+            () => {
+                if (origin === 'backfill') counters.backfilled++;
+                else counters.written++;
+            },
+            (error: unknown) => {
+                if (origin === 'backfill') counters.backfillFailed++;
+                else counters.failed++;
+                warnOnce(
+                    `mesh dual-write append failed (further failures logged once): ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                );
+            },
+        );
+
+        if (!attempt.admitted) {
+            if (attempt.reason === 'shed') {
+                counters.dropped++;
+                warnOnce(
+                    `mesh dual-write shedding load — ${MAX_INFLIGHT} appends in flight; ` +
+                        'records are being dropped from the SHADOW leg only (the ledger is unaffected)',
+                );
+                return false;
+            }
+            // Synchronous static-misuse throw. Counted exactly as the outer
+            // catch would have counted it, and rethrown to that single reporting
+            // site so the message stays one string in one place.
+            throw attempt.error;
+        }
         return true;
     } catch (error) {
         // Synchronous throw from the projection/estimate path, or one of P11's
@@ -792,7 +813,7 @@ export function meshDualWriteMode(): MeshDualWriteMode {
 
 /** Appends currently in flight — used by tests to await quiescence. */
 export function meshDualWriteInflight(): number {
-    return inflight;
+    return inflightGate.count();
 }
 
 /**
@@ -809,7 +830,7 @@ export function __resetMeshDualWriteForTests(): void {
     activeMode = 'shadow';
     definedTopics.clear();
     discoveredMeshIds.clear();
-    inflight = 0;
+    inflightGate.reconfigure();
     warnedOnce.clear();
     counters.written = 0;
     counters.failed = 0;
