@@ -300,9 +300,51 @@ function extractCodexUsage(
  * Read the first line of a Codex JSONL session file and parse the session_meta record.
  * Returns the payload object (containing id, cwd, etc.) or null.
  */
+/**
+ * The session_meta record is always the FIRST line of the JSONL file, so read a
+ * bounded prefix instead of the whole file. These transcripts routinely reach
+ * multiple MB and this is called once per candidate file during discovery; the
+ * old `readFileSync(...).split('\n')` materialised every byte (twice — string
+ * plus the split array) to look at ~200 of them.
+ *
+ * Same technique and buffer size as readCodexSessionMeta in dispatcher.ts, which
+ * reads the same first line of the same format. One difference: if no newline
+ * appears within the prefix the line is longer than the buffer, and parsing the
+ * truncated text would either throw or — worse — succeed on a prefix that
+ * happens to be valid JSON. Fall back to the full read in that case, so this is
+ * strictly a read-size optimisation with no behaviour change.
+ */
+const SESSION_META_PREFIX_BYTES = 8192;
+
+function readFirstJsonlLine(filePath: string): string | null {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(SESSION_META_PREFIX_BYTES);
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytes <= 0) return null;
+    const text = buffer.subarray(0, bytes).toString('utf8');
+    // `.find(Boolean)` on the old full-file split skipped leading blank lines;
+    // preserve that rather than returning an empty first line.
+    const lines = text.split('\n');
+    const idx = lines.findIndex(Boolean);
+    // A hit that is not the final element is newline-terminated, so it is
+    // complete and safe to return.
+    if (idx >= 0 && idx < lines.length - 1) return lines[idx];
+    // Otherwise the candidate line runs to the end of the prefix: complete only
+    // if the prefix was the whole file (a short final line with no trailing
+    // newline). If the buffer filled, the line may be truncated — and parsing a
+    // truncated prefix could silently succeed on partial JSON — so re-read in
+    // full. Both branches keep this a pure read-size optimisation.
+    if (bytes < buffer.length) return idx >= 0 ? lines[idx] : null;
+    return fs.readFileSync(filePath, 'utf-8').split('\n').find(Boolean) ?? null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function readSessionMeta(filePath: string): Record<string, unknown> | null {
   try {
-    const firstLine = fs.readFileSync(filePath, 'utf-8').split('\n').find(Boolean);
+    const firstLine = readFirstJsonlLine(filePath);
     if (!firstLine) return null;
     const parsed = JSON.parse(firstLine) as Record<string, unknown>;
     if (String(parsed.type ?? '') !== 'session_meta') return null;

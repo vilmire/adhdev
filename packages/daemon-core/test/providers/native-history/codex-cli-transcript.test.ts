@@ -317,6 +317,87 @@ describe('codex-cli-transcript — readSession', () => {
     expect(assistantStandard).toHaveLength(1);
     expect(assistantStandard[0].content).toBe('Only one assistant bubble.');
   });
+
+// ─── session_meta bounded-prefix read ───────────────────────────────────────
+// readSessionMeta reads only the first ~8KB rather than the whole (often
+// multi-MB) transcript. The change is a read-size optimisation and must be
+// behaviour-preserving, so these pin the boundary cases a naive prefix read
+// would get wrong: a session_meta line LONGER than the prefix, and a final line
+// with no trailing newline (complete, not truncated).
+//
+// ★Scope note, verified rather than assumed: readSessionMeta's truncation
+// fallback cannot be observed through readSession. parseSessionFile re-reads the
+// whole file and recovers the same id/cwd from the meta ROW independently, so
+// removing the fallback leaves every assertion below unchanged (measured — the
+// injection passes). These therefore pin end-to-end behaviour across the prefix
+// boundary, NOT the fallback branch itself; the fallback stays because it makes
+// readSessionMeta correct in isolation, not because a caller depends on it.
+  it('resolves a session whose session_meta line exceeds the read prefix', async () => {
+    const sessionId = '77777777-0000-0000-0000-000000000001';
+    const dir = path.join(tmpDir, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+
+    // Pad the meta payload past the 8KB prefix so the first newline lies outside
+    // it. Parsing the truncated prefix would throw (or, worse, silently succeed
+    // on partial JSON) and the id would not resolve.
+    const lines = [
+      JSON.stringify({
+        type: 'session_meta',
+        timestamp: 1_800_000_000_000,
+        payload: { id: sessionId, cwd: '/work', padding: 'x'.repeat(20_000) },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: 1_800_000_001_000,
+        payload: { type: 'message', role: 'user', content: 'hello' },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        timestamp: 1_800_000_002_000,
+        payload: { type: 'message', role: 'assistant', content: 'hi there' },
+      }),
+    ];
+    fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+
+    const { readSession } = await import('../../../src/providers/native-history/codex-cli-transcript.js');
+    const result = await readSession(filePath);
+    expect(result?.providerSessionId).toBe(sessionId);
+    // cwd is carried on the meta row, so an oversized first line must not stop
+    // the workspace from resolving.
+    expect(result?.workspace).toBe('/work');
+  });
+
+  it('does not throw on a session_meta line with no trailing newline', async () => {
+    const sessionId = '77777777-0000-0000-0000-000000000002';
+    const dir = path.join(tmpDir, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+    // The prefix IS the whole line and it is complete — "no newline" must not be
+    // mistaken for "truncated".
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({ type: 'session_meta', timestamp: 1_800_000_000_000, payload: { id: sessionId, cwd: '/work' } }),
+      'utf-8',
+    );
+
+    const { readSession } = await import('../../../src/providers/native-history/codex-cli-transcript.js');
+    // The unterminated line must parse as a complete session_meta: the id is
+    // resolved from it, not from the filename fallback alone.
+    expect(() => readSession(filePath)).not.toThrow();
+    expect(readSession(filePath)?.providerSessionId).toBe(sessionId);
+  });
+
+  it('returns null for an empty file', async () => {
+    const sessionId = '77777777-0000-0000-0000-000000000003';
+    const dir = path.join(tmpDir, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+    fs.writeFileSync(filePath, '', 'utf-8');
+
+    const { readSession } = await import('../../../src/providers/native-history/codex-cli-transcript.js');
+    expect(await readSession(filePath)).toBeNull();
+  });
 });
 
 describe('codex-cli-transcript — listSessions', () => {
