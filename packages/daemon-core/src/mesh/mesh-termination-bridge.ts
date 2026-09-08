@@ -24,6 +24,10 @@
 
 import type { SessionTermination } from '@adhdev/session-host-core';
 import { LOG } from '../logging/logger.js';
+import {
+    configureSessionTerminationObserver,
+    type SessionTerminationObservation,
+} from '../shared/session-termination-sink.js';
 
 /**
  * How a terminated mesh session should be classified in the ledger.
@@ -219,12 +223,15 @@ export function resolveMeshTerminationBinding(settings: Record<string, unknown> 
  * Best-effort by construction: a ledger write must never propagate back into the
  * PTY exit path and turn an observability gap into a crash. Import is dynamic to
  * match `recordIntentionalMeshSessionStop` and keep the mesh ledger out of the
- * adapter's static import graph.
+ * adapter's static import graph. A host-requested stop is deliberately ignored:
+ * the intentional mesh cleanup path writes `operator_cleanup` before asking the
+ * host to stop/delete the runtime, so emitting its later tombstone would create
+ * two `session_stopped` rows for one death.
  */
 export async function recordMeshSessionTerminationStop(
     input: MeshSessionTerminationLedgerInput,
 ): Promise<void> {
-    if (!input.meshId || !input.sessionId) return;
+    if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
     try {
         const { appendLedgerEntry } = await import('./mesh-ledger.js');
         appendLedgerEntry(input.meshId, {
@@ -237,4 +244,47 @@ export async function recordMeshSessionTerminationStop(
     } catch (e: any) {
         LOG.warn('MeshTermination', `Failed to record termination stop for ${input.sessionId}: ${e?.message || e}`);
     }
+}
+
+/**
+ * Translate a neutral termination observation into a mesh ledger write.
+ *
+ * This is the mesh half of the inverted dependency: the provider layer reports a
+ * death without knowing what a mesh is, and this function applies the mesh
+ * meaning — resolve the binding, drop non-mesh sessions, write the row. Exported
+ * so the boot layer can wire it and so tests can drive the seam end to end
+ * without a live daemon.
+ *
+ * A session with no mesh binding is the ordinary case (any non-mesh CLI session)
+ * and writing nothing is correct.
+ *
+ * Returns the in-flight write so tests can await the ledger row; the production
+ * caller is the PTY exit path and deliberately does not wait on it.
+ */
+export function handleSessionTerminationObservation(
+    observation: SessionTerminationObservation,
+): Promise<void> {
+    const binding = resolveMeshTerminationBinding(observation.runtimeSettings);
+    if (!binding) return Promise.resolve();
+    // recordMeshSessionTerminationStop applies the requestedStop double-write
+    // guard itself, so no filtering is duplicated here.
+    return recordMeshSessionTerminationStop({
+        meshId: binding.meshId,
+        sessionId: observation.sessionId,
+        nodeId: binding.nodeId,
+        providerType: observation.providerType,
+        workspace: observation.workspace,
+        isCoordinator: binding.isCoordinator,
+        termination: observation.termination,
+    });
+}
+
+/** Wire the provider→mesh termination seam at daemon boot. */
+export function installMeshTerminationObserver(): void {
+    configureSessionTerminationObserver(handleSessionTerminationObservation);
+}
+
+/** Unwire the seam at daemon shutdown (and between tests). */
+export function uninstallMeshTerminationObserver(): void {
+    configureSessionTerminationObserver(null);
 }

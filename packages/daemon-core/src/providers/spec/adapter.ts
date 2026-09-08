@@ -8,14 +8,17 @@
  *   init({ pid })               — PTY spawned
  *   on_pty_data(chunk)          — raw PTY byte chunk received
  *   on_screen_changed(snapshot) — coalesced visible-screen change
- *   on_exit({ exitCode })       — PTY exited
+ *   on_exit(exitInfo)           — PTY exited (including a session-host tombstone, when available)
  *   tick()                      — periodic tick (if tickIntervalMs > 0)
  */
 'use strict';
 
 import { TerminalScreen } from '../../cli-adapters/terminal-screen.js';
-import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
-import type { PtyRuntimeTransport } from '../../cli-adapters/pty-transport.js';
+import type {
+    PtyRuntimeExitInfo,
+    PtyRuntimeTransport,
+    PtyTransportFactory,
+} from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import { LOG } from '../../logging/logger.js';
 
@@ -48,7 +51,7 @@ export interface TerminalAdapterHandlers {
     init?(info: { pid: number }): void;
     on_pty_data?(chunk: string): void;
     on_screen_changed?(snapshot: string): void;
-    on_exit?(info: { exitCode: number }): void;
+    on_exit?(info: PtyRuntimeExitInfo): void;
     tick?(): void;
 }
 
@@ -148,8 +151,16 @@ export class TerminalAdapter {
         this.pty.onData((chunk) => this.onChunk(chunk));
         this.pty.onExit((info) => {
             this.stopTimers();
-            this.recordEvent('exit', `exitCode=${typeof info.exitCode === 'number' ? info.exitCode : 0}`);
-            this.handlers.on_exit?.({ exitCode: typeof info.exitCode === 'number' ? info.exitCode : 0 });
+            const exitCode = typeof info.exitCode === 'number' ? info.exitCode : null;
+            const signal = typeof info.signal === 'number' ? info.signal : null;
+            this.recordEvent(
+                'exit',
+                `exitCode=${exitCode === null ? 'unknown' : exitCode}${signal ? ` signal=${signal}` : ''}`,
+            );
+            // Preserve the authoritative session-host tombstone all the way to
+            // SpecCliAdapter. Collapsing null to 0 or narrowing this to only an
+            // exit code reopens the mesh ledger blind spot for external deaths.
+            this.handlers.on_exit?.({ ...info, exitCode, signal });
             this.pty = null;
         });
         if (this.tickIntervalMs > 0) {

@@ -38,8 +38,12 @@ import {
   recordMeshSessionTerminationStop,
   resolveMeshTerminationBinding,
   resolveTerminationSignal,
+  handleSessionTerminationObservation,
+  installMeshTerminationObserver,
+  uninstallMeshTerminationObserver,
 } from '../../src/mesh/mesh-termination-bridge.js'
 import { appendLedgerEntry, isIntentionalCleanupStopEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { publishSessionTermination } from '../../src/shared/session-termination-sink.js'
 
 /** The real 249e9979 tombstone, field for field. */
 const SIGTERM_TERMINATION: SessionTermination = {
@@ -185,6 +189,34 @@ describe('recordMeshSessionTerminationStop', () => {
     await recordMeshSessionTerminationStop({ meshId: '', sessionId: 's1', termination: SIGTERM_TERMINATION })
     expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
   })
+
+  it('does not duplicate an intentional cleanup row for a host-requested stop', async () => {
+    const meshId = `mesh_intentional_${randomUUID().slice(0, 8)}`
+    appendLedgerEntry(meshId, {
+      kind: 'session_stopped',
+      nodeId: 'node_1',
+      sessionId: 'sess_cleanup',
+      payload: {
+        intentional: true,
+        reason: 'operator_cleanup',
+        intentionalStopReason: 'operator_cleanup',
+        source: 'mesh_cleanup_sessions',
+        cleanupMode: 'stop',
+        action: 'stop_session',
+      },
+    })
+
+    await recordMeshSessionTerminationStop({
+      meshId,
+      nodeId: 'node_1',
+      sessionId: 'sess_cleanup',
+      termination: { ...SIGTERM_TERMINATION, requestedStop: 'stop' },
+    })
+
+    const stops = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    expect(stops).toHaveLength(1)
+    expect(stops[0].payload.source).toBe('mesh_cleanup_sessions')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -250,5 +282,86 @@ describe('ledger-only discrimination of intentional vs. external stop', () => {
     expect(entry.payload.source).not.toBe('mesh_remove_node')
     expect(entry.payload.source).not.toBe('mesh_cleanup_sessions')
     expect(entry.payload.reason).not.toBe('operator_cleanup')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The provider→mesh seam.
+//
+// `providers/**` may not value-import `mesh/**` (an enforced layering boundary,
+// scripts/check-import-boundaries.mjs), so the adapter publishes a neutral
+// observation and this module subscribes. That inversion is only worth anything
+// if the subscriber actually lands the row — a seam that silently drops would
+// reopen the exact blind spot the bridge exists to close, and would do it
+// invisibly, since "no ledger entry" is indistinguishable from the bug.
+// ---------------------------------------------------------------------------
+describe('session termination seam', () => {
+  it('turns a published observation into a real ledger row', async () => {
+    const meshId = `mesh_seam_${randomUUID().slice(0, 8)}`
+    await handleSessionTerminationObservation({
+      sessionId: 'sess_seam',
+      providerType: 'claude',
+      workspace: '/tmp/ws',
+      runtimeSettings: { meshNodeFor: meshId, meshNodeId: 'node_7' },
+      termination: SIGTERM_TERMINATION,
+    })
+
+    const [entry] = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    expect(entry.sessionId).toBe('sess_seam')
+    expect(entry.nodeId).toBe('node_7')
+    expect(entry.providerType).toBe('claude')
+    expect(entry.payload.reason).toBe('external_signal')
+    expect(entry.payload.workspace).toBe('/tmp/ws')
+  })
+
+  it('resolves a coordinator binding, the role whose death motivated the bridge', async () => {
+    const meshId = `mesh_seamcoord_${randomUUID().slice(0, 8)}`
+    await handleSessionTerminationObservation({
+      sessionId: '249e9979',
+      runtimeSettings: { meshCoordinatorFor: meshId },
+      termination: SIGTERM_TERMINATION,
+    })
+
+    const [entry] = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    expect(entry.payload.coordinatorSession).toBe(true)
+  })
+
+  it('writes nothing for a session with no mesh binding', async () => {
+    const meshId = `mesh_seamnone_${randomUUID().slice(0, 8)}`
+    await handleSessionTerminationObservation({
+      sessionId: 'sess_plain',
+      runtimeSettings: { autoApprove: true },
+      termination: SIGTERM_TERMINATION,
+    })
+    expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
+  })
+
+  it('is inert until installed, and again after uninstall', async () => {
+    const meshId = `mesh_seamwire_${randomUUID().slice(0, 8)}`
+    const observation = {
+      sessionId: 'sess_wire',
+      runtimeSettings: { meshNodeFor: meshId },
+      termination: SIGTERM_TERMINATION,
+    }
+    const stops = () => readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped').length
+    // publishSessionTermination is deliberately fire-and-forget, so let the
+    // subscriber's async ledger write settle before reading.
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+    // No observer wired: publishing must be a silent no-op, not a throw — this
+    // runs on the PTY exit path in a daemon that may have no mesh at all.
+    publishSessionTermination(observation)
+    await flush()
+    expect(stops()).toBe(0)
+
+    installMeshTerminationObserver()
+    publishSessionTermination(observation)
+    await flush()
+    expect(stops()).toBe(1)
+
+    uninstallMeshTerminationObserver()
+    publishSessionTermination(observation)
+    await flush()
+    expect(stops()).toBe(1)
   })
 })

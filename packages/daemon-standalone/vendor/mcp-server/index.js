@@ -101499,8 +101499,13 @@ ${marker}`,
             this.pty.onData((chunk) => this.onChunk(chunk));
             this.pty.onExit((info) => {
               this.stopTimers();
-              this.recordEvent("exit", `exitCode=${typeof info.exitCode === "number" ? info.exitCode : 0}`);
-              this.handlers.on_exit?.({ exitCode: typeof info.exitCode === "number" ? info.exitCode : 0 });
+              const exitCode = typeof info.exitCode === "number" ? info.exitCode : null;
+              const signal = typeof info.signal === "number" ? info.signal : null;
+              this.recordEvent(
+                "exit",
+                `exitCode=${exitCode === null ? "unknown" : exitCode}${signal ? ` signal=${signal}` : ""}`
+              );
+              this.handlers.on_exit?.({ ...info, exitCode, signal });
               this.pty = null;
             });
             if (this.tickIntervalMs > 0) {
@@ -102140,7 +102145,7 @@ ${marker}`,
                   this.emit({ kind: "pty_data", chunk });
                 },
                 on_screen_changed: () => this.reevaluate(),
-                on_exit: ({ exitCode }) => this.handleExit(exitCode)
+                on_exit: (info) => this.handleExit(info)
               }
             );
             if (this.opts.hotReload !== false) this.armSpecWatcher();
@@ -103480,8 +103485,13 @@ ${marker}`,
             if (!re.test(hay)) return;
             this.pickerInProgress = null;
           }
-          handleExit(exitCode) {
-            this.emit({ kind: "exit", exit_code: exitCode });
+          handleExit(info) {
+            this.emit({
+              kind: "exit",
+              exit_code: info.exitCode,
+              ...info.signal !== void 0 ? { signal: info.signal } : {},
+              ...info.termination ? { termination: info.termination } : {}
+            });
             this.shutdown();
           }
           pushHistory(stateId, label, meta3) {
@@ -107857,6 +107867,29 @@ ${text}` : text;
         LIVE_VERIFIED_PROVIDERS = /* @__PURE__ */ new Set(["claude-cli"]);
       }
     });
+    function configureSessionTerminationObserver(next) {
+      observer = next;
+    }
+    function publishSessionTermination(observation) {
+      if (!observer) return;
+      const warn = (e) => LOG.warn(
+        "SessionTermination",
+        `Termination observer failed for ${observation.sessionId}: ${e?.message || e}`
+      );
+      try {
+        void Promise.resolve(observer(observation)).catch(warn);
+      } catch (e) {
+        warn(e);
+      }
+    }
+    var observer;
+    var init_session_termination_sink = __esm2({
+      "src/shared/session-termination-sink.ts"() {
+        "use strict";
+        init_logger();
+        observer = null;
+      }
+    });
     function detectKimiPendingQuestion(cfg, input) {
       if ((input.agentType ?? "").trim() !== "kimi") return null;
       if (!cfg?.source || cfg.source.kind !== "jsonl") return null;
@@ -108215,6 +108248,7 @@ ${text}` : text;
         init_interrupt_capability();
         init_provider_cli_shared();
         init_logger();
+        init_session_termination_sink();
         init_interactive_prompt();
         init_interactive_prompt();
         init_kimi_pending_question();
@@ -108240,6 +108274,10 @@ ${text}` : text;
           /** Owning session id (session registry / read-path targetSessionId) —
            *  the sidecar-claim owner token for wire-based prompt detection. */
           owningSessionId;
+          /** Runtime settings are the authoritative in-daemon mesh binding. They are
+           *  mirrored here so the PTY exit seam can attribute a host tombstone before
+           *  the owning provider instance is disposed. */
+          runtimeSettings = {};
           lastEvent = null;
           latestState = null;
           latestModal = null;
@@ -108793,7 +108831,8 @@ ${text}` : text;
           }
           clearHistory() {
           }
-          updateRuntimeSettings(_settings) {
+          updateRuntimeSettings(settings) {
+            this.runtimeSettings = { ...settings ?? {} };
           }
           setServerConn(_conn) {
           }
@@ -109127,7 +109166,8 @@ ${text}` : text;
               case "exit":
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
-                if (!this.observeKimiAuthBillingOutput("", ev.exit_code)) this.statusCallback?.();
+                this.publishTerminationObservation(ev.termination);
+                if (!this.observeKimiAuthBillingOutput("", ev.exit_code ?? void 0)) this.statusCallback?.();
                 return;
               case "spec_error":
                 LOG.warn("SpecAdapter", `[${this.cliType}] spec reload error: ${ev.errors.join("; ")}`);
@@ -109135,6 +109175,31 @@ ${text}` : text;
               default:
                 return;
             }
+          }
+          /**
+           * Publish the session-host tombstone to the neutral termination seam.
+           *
+           * This layer deliberately does NOT decide what the death means or where it
+           * gets recorded — it only reports what it saw. Resolving the mesh binding and
+           * writing the ledger row belongs to the subscriber wired at daemon boot,
+           * because `providers/**` may not value-import `mesh/**` (enforced by
+           * scripts/check-import-boundaries.mjs). Forwarding `runtimeSettings` opaquely
+           * is what keeps this side mesh-unaware.
+           *
+           * `requestedStop` is intentionally NOT filtered here. The double-write guard
+           * (a host-requested stop already has an `operator_cleanup` row from the mesh
+           * cleanup path) lives with the writer in mesh-termination-bridge, so the
+           * policy has exactly one home and cannot drift between the two halves.
+           */
+          publishTerminationObservation(termination) {
+            if (!termination || !this.owningSessionId) return;
+            publishSessionTermination({
+              sessionId: this.owningSessionId,
+              providerType: this.cliType,
+              workspace: this.workingDir,
+              runtimeSettings: this.runtimeSettings,
+              termination
+            });
           }
           observeKimiAuthBillingOutput(chunk, exitCode) {
             if (this.cliType !== "kimi" || this.kimiAuthBillingFailure) return false;
@@ -159645,6 +159710,114 @@ data: ${JSON.stringify(msg.data)}
     init_refresh();
     init_mesh_runtime_store();
     init_coordinator_registry();
+    init_logger();
+    init_session_termination_sink();
+    var SIGNAL_NAMES = {
+      1: "SIGHUP",
+      2: "SIGINT",
+      3: "SIGQUIT",
+      6: "SIGABRT",
+      9: "SIGKILL",
+      11: "SIGSEGV",
+      13: "SIGPIPE",
+      15: "SIGTERM"
+    };
+    function resolveTerminationSignal(termination) {
+      if (typeof termination.signal === "number" && termination.signal > 0) return termination.signal;
+      const code = termination.exitCode;
+      if (typeof code === "number" && code > 128 && code <= 159) return code - 128;
+      return null;
+    }
+    function terminationSignalName(signal) {
+      return signal !== null ? SIGNAL_NAMES[signal] : void 0;
+    }
+    function classifyMeshTerminationStop(termination) {
+      const signal = resolveTerminationSignal(termination);
+      const signalName = terminationSignalName(signal);
+      if (termination.requestedStop) {
+        return { reason: "host_requested_stop", intentional: true, signal, signalName };
+      }
+      if (signal !== null) return { reason: "external_signal", intentional: false, signal, signalName };
+      if (termination.exitCode === null) return { reason: "unknown_termination", intentional: false, signal, signalName };
+      if (termination.exitCode === 0) return { reason: "self_exit", intentional: false, signal, signalName };
+      return { reason: "unexpected_exit", intentional: false, signal, signalName };
+    }
+    function buildMeshTerminationStopPayload(input) {
+      const { termination } = input;
+      const classified = classifyMeshTerminationStop(termination);
+      const terminatedAtIso = Number.isFinite(termination.terminatedAt) ? new Date(termination.terminatedAt).toISOString() : void 0;
+      const lastOutputAtIso = typeof termination.lastOutputAt === "number" && Number.isFinite(termination.lastOutputAt) ? new Date(termination.lastOutputAt).toISOString() : void 0;
+      const silentForMs = typeof termination.lastOutputAt === "number" && Number.isFinite(termination.lastOutputAt) && Number.isFinite(termination.terminatedAt) && termination.terminatedAt >= termination.lastOutputAt ? termination.terminatedAt - termination.lastOutputAt : void 0;
+      return {
+        intentional: classified.intentional,
+        reason: classified.reason,
+        // `source` marks who wrote the row, mirroring the operator-cleanup path's
+        // convention so a reader can tell the two writers apart.
+        source: "session_host_tombstone",
+        observedVia: "session_exit",
+        exitCode: termination.exitCode,
+        signal: classified.signal,
+        ...classified.signalName ? { signalName: classified.signalName } : {},
+        // session-host's own classification, kept verbatim alongside ours so the
+        // ledger never silently disagrees with the tombstone on disk.
+        terminationReason: termination.reason,
+        lifecycle: termination.lifecycle,
+        ...termination.previousLifecycle ? { previousLifecycle: termination.previousLifecycle } : {},
+        ...termination.requestedStop ? { requestedStop: termination.requestedStop } : {},
+        ...typeof termination.osPid === "number" ? { osPid: termination.osPid } : {},
+        ...terminatedAtIso ? { terminatedAt: terminatedAtIso } : {},
+        ...lastOutputAtIso ? { lastOutputAt: lastOutputAtIso } : {},
+        ...silentForMs !== void 0 ? { silentForMs } : {},
+        ...input.isCoordinator ? { coordinatorSession: true } : {},
+        ...input.workspace ? { workspace: input.workspace } : {}
+      };
+    }
+    function resolveMeshTerminationBinding(settings) {
+      if (!settings || typeof settings !== "object") return null;
+      const read = (value) => typeof value === "string" ? value.trim() : "";
+      const workerMeshId = read(settings.meshNodeFor);
+      if (workerMeshId) {
+        const nodeId = read(settings.meshNodeId);
+        return { meshId: workerMeshId, ...nodeId ? { nodeId } : {}, isCoordinator: false };
+      }
+      const coordinatorMeshId = read(settings.meshCoordinatorFor);
+      if (coordinatorMeshId) return { meshId: coordinatorMeshId, isCoordinator: true };
+      return null;
+    }
+    async function recordMeshSessionTerminationStop(input) {
+      if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
+      try {
+        const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        appendLedgerEntry22(input.meshId, {
+          kind: "session_stopped",
+          ...input.nodeId ? { nodeId: input.nodeId } : {},
+          sessionId: input.sessionId,
+          ...input.providerType ? { providerType: input.providerType } : {},
+          payload: buildMeshTerminationStopPayload(input)
+        });
+      } catch (e) {
+        LOG.warn("MeshTermination", `Failed to record termination stop for ${input.sessionId}: ${e?.message || e}`);
+      }
+    }
+    function handleSessionTerminationObservation(observation) {
+      const binding = resolveMeshTerminationBinding(observation.runtimeSettings);
+      if (!binding) return Promise.resolve();
+      return recordMeshSessionTerminationStop({
+        meshId: binding.meshId,
+        sessionId: observation.sessionId,
+        nodeId: binding.nodeId,
+        providerType: observation.providerType,
+        workspace: observation.workspace,
+        isCoordinator: binding.isCoordinator,
+        termination: observation.termination
+      });
+    }
+    function installMeshTerminationObserver() {
+      configureSessionTerminationObserver(handleSessionTerminationObservation);
+    }
+    function uninstallMeshTerminationObserver() {
+      configureSessionTerminationObserver(null);
+    }
     init_mesh_refine_executor_liveness();
     var _hardened = false;
     var HARDENED_PROTOS = [
@@ -161454,6 +161627,7 @@ data: ${JSON.stringify(msg.data)}
       installProviderProcessShim();
       installGlobalInterceptor();
       loadMeshCoordinatorRegistry();
+      installMeshTerminationObserver();
       const envOverrideResult = applyDaemonEnvOverrides(
         loadConfig().envOverrides,
         process.env,
@@ -162189,6 +162363,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       }
       try {
         configureHandoffNoteSink(null);
+      } catch {
+      }
+      try {
+        uninstallMeshTerminationObserver();
       } catch {
       }
       try {
