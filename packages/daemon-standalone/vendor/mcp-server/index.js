@@ -40970,7 +40970,7 @@ var require_dist3 = __commonJS({
       if (cached2) return cached2;
       const commit = readInjected(true ? "unknown" : void 0) ?? "unknown";
       const commitShort = readInjected(true ? "unknown" : void 0) ?? (commit !== "unknown" ? commit.slice(0, 7) : "unknown");
-      const version2 = readInjected(true ? "1.0.57" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
+      const version2 = readInjected(true ? "1.0.58" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
       const builtAt = readInjected(true ? "unknown" : void 0);
       cached2 = builtAt ? { commit, commitShort, version: version2, builtAt } : { commit, commitShort, version: version2 };
       return cached2;
