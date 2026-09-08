@@ -63598,6 +63598,49 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         rebuildEpoch = /* @__PURE__ */ new Map();
       }
     });
+    function createInflightGate(maxInflight) {
+      let count = 0;
+      let generation = 0;
+      return {
+        run(start, onSettled, onRejected) {
+          if (count >= maxInflight) return { admitted: false, reason: "shed" };
+          const admittedGeneration = generation;
+          let promise2;
+          try {
+            promise2 = start();
+          } catch (error48) {
+            return { admitted: false, reason: "threw", error: error48 };
+          }
+          count++;
+          const release2 = () => {
+            if (admittedGeneration === generation) count--;
+          };
+          void promise2.then(
+            () => {
+              release2();
+              onSettled(true);
+            },
+            (error48) => {
+              release2();
+              onRejected(error48);
+            }
+          );
+          return { admitted: true };
+        },
+        count() {
+          return count;
+        },
+        reconfigure() {
+          generation++;
+          count = 0;
+        }
+      };
+    }
+    var init_inflight_gate = __esm2({
+      "src/seqscribe/inflight-gate.ts"() {
+        "use strict";
+      }
+    });
     function resolveMeshDualWriteMode(env2 = process.env) {
       const raw = env2[MESH_DUAL_WRITE_ENV]?.trim().toLowerCase();
       if (!raw) return "primary";
@@ -63650,7 +63693,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       activeNode2 = node;
       activeMode = resolveMeshDualWriteMode(env2);
       definedTopics.clear();
-      inflight = 0;
+      inflightGate.reconfigure();
       if (node && activeMode === "primary") {
         LOG.info(
           "Seqscribe",
@@ -63759,13 +63802,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!node || activeMode === "off") return false;
         const topic = ensureTopic(node, meshId);
         if (!topic) return false;
-        if (inflight >= MAX_INFLIGHT) {
-          counters2.dropped++;
-          warnOnce2(
-            `mesh dual-write shedding load \u2014 ${MAX_INFLIGHT} appends in flight; records are being dropped from the SHADOW leg only (the ledger is unaffected)`
-          );
-          return false;
-        }
         const projected = projectMeshLedgerEntry(entry);
         const estimated = estimateProjectedEntryBytes(topic, projected);
         const ceiling = maxEntryBytes();
@@ -63776,15 +63812,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           );
           return false;
         }
-        inflight++;
-        void node.node.log(topic).append(MESH_EVENT_ENTRY_KIND, toJsonValue(projected)).then(
+        const attempt = inflightGate.run(
+          () => node.node.log(topic).append(MESH_EVENT_ENTRY_KIND, toJsonValue(projected)),
           () => {
-            inflight--;
             if (origin === "backfill") counters2.backfilled++;
             else counters2.written++;
           },
           (error48) => {
-            inflight--;
             if (origin === "backfill") counters2.backfillFailed++;
             else counters2.failed++;
             warnOnce2(
@@ -63792,6 +63826,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             );
           }
         );
+        if (!attempt.admitted) {
+          if (attempt.reason === "shed") {
+            counters2.dropped++;
+            warnOnce2(
+              `mesh dual-write shedding load \u2014 ${MAX_INFLIGHT} appends in flight; records are being dropped from the SHADOW leg only (the ledger is unaffected)`
+            );
+            return false;
+          }
+          throw attempt.error;
+        }
         return true;
       } catch (error48) {
         if (origin === "backfill") counters2.backfillFailed++;
@@ -63815,14 +63859,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return activeMode;
     }
     function meshDualWriteInflight() {
-      return inflight;
+      return inflightGate.count();
     }
     function __resetMeshDualWriteForTests() {
       activeNode2 = null;
       activeMode = "shadow";
       definedTopics.clear();
       discoveredMeshIds.clear();
-      inflight = 0;
+      inflightGate.reconfigure();
       warnedOnce2.clear();
       counters2.written = 0;
       counters2.failed = 0;
@@ -63839,13 +63883,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var discoveredMeshIds;
     var activeNode2;
     var activeMode;
-    var inflight;
+    var inflightGate;
     var warnedOnce2;
     var TOPIC_LISTENERS;
     var init_mesh_dual_write = __esm2({
       "src/seqscribe/mesh-dual-write.ts"() {
         "use strict";
         init_logger();
+        init_inflight_gate();
         init_mesh_event_projection();
         init_topics2();
         MESH_DUAL_WRITE_ENV = "ADHDEV_SEQSCRIBE_MESH";
@@ -63863,7 +63908,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         discoveredMeshIds = /* @__PURE__ */ new Set();
         activeNode2 = null;
         activeMode = "shadow";
-        inflight = 0;
+        inflightGate = createInflightGate(MAX_INFLIGHT);
         warnedOnce2 = /* @__PURE__ */ new Set();
         TOPIC_LISTENERS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.topicActivatedListeners");
       }
@@ -151012,6 +151057,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_builders();
     init_dist2();
     init_logger();
+    init_inflight_gate();
     init_topics2();
     var FLEET_STATUS_ENV = "ADHDEV_SEQSCRIBE_FLEET_STATUS";
     var FLEET_STATUS_ENTRY_KIND = "adhdev.fleet.status";
@@ -151034,7 +151080,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     };
     var activeNode3 = null;
     var activeMode2 = "off";
-    var inflight2 = 0;
+    var inflightGate2 = createInflightGate(MAX_INFLIGHT2);
     var topicUsable = null;
     var configurationGeneration = 0;
     var appendGeneration = 0;
@@ -151061,7 +151107,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       activeNode3 = node;
       activeMode2 = resolveFleetStatusMode(env2);
       topicUsable = null;
-      inflight2 = 0;
+      inflightGate2.reconfigure();
       configurationGeneration++;
       appendGeneration = 0;
       lastAppendedGeneration = 0;
@@ -151087,13 +151133,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const node = activeNode3;
         if (!node || activeMode2 === "off") return false;
         if (!ensureTopic2(node)) return false;
-        if (inflight2 >= MAX_INFLIGHT2) {
-          counters3.dropped++;
-          warnOnce4(
-            `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT2} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
-          );
-          return false;
-        }
         const payload = sanitizeJson(entry);
         const estimated = estimateEntryBytes({
           topic: FLEET_STATUS_TOPIC,
@@ -151112,10 +151151,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const configuredGeneration = configurationGeneration;
         const thisAppendGeneration = ++appendGeneration;
         const paritySnapshot = freezeParitySnapshot(entry);
-        inflight2++;
-        void node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload).then(
+        const attempt = inflightGate2.run(
+          () => node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload),
           () => {
-            inflight2--;
             counters3.written++;
             if (activeNode3 === configuredNode && activeMode2 === "shadow" && configurationGeneration === configuredGeneration && thisAppendGeneration >= lastAppendedGeneration) {
               lastAppendedGeneration = thisAppendGeneration;
@@ -151123,13 +151161,22 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             }
           },
           (error48) => {
-            inflight2--;
             counters3.failed++;
             warnOnce4(
               `fleet.status shadow append failed (further failures logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
             );
           }
         );
+        if (!attempt.admitted) {
+          if (attempt.reason === "shed") {
+            counters3.dropped++;
+            warnOnce4(
+              `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT2} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
+            );
+            return false;
+          }
+          throw attempt.error;
+        }
         return true;
       } catch (error48) {
         counters3.failed++;
