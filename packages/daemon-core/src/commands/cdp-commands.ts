@@ -7,6 +7,7 @@ import type { CommandResult, CommandHelpers } from './handler.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { confineToAllowedRoots } from './file-containment.js';
 
 // Windows Virtual Key Code mapping for special keys (Chrome CDP requirement)
 const KEY_TO_VK: Record<string, number> = {
@@ -312,9 +313,41 @@ function listWindowsDriveEntries(excludePath?: string): Array<{ name: string; ty
     return drives;
 }
 
+/**
+ * Extra allowed root from the live command context: the workspace of the session
+ * the command is bound to. Keeps dashboard file R/W working for a session whose
+ * folder was opened ad hoc and never saved as a workspace entry.
+ */
+function sessionWorkspaceRoots(h: CommandHelpers): string[] {
+    const roots: string[] = [];
+    const add = (v: unknown) => {
+        if (typeof v === 'string' && v.trim()) roots.push(v.trim());
+    };
+    try {
+        const session = h.currentSession;
+        add(session?.workspace);
+        if (session?.sessionId) {
+            add((h.ctx.instanceManager?.getInstance(session.sessionId) as any)?.getState?.()?.workspace);
+        }
+    } catch {
+        // Best effort — a missing session context just contributes no extra root.
+    }
+    return roots;
+}
+
+/**
+ * SECURITY: `file_read` / `file_write` resolve a caller-supplied path and then
+ * read/create content at it. The path arrives from any command source, including
+ * the P2P DataChannel file handler where a peer controls it outright, so the
+ * resolved path is confined to the configured workspace roots before any fs call.
+ * See `commands/file-containment.ts` for the root set and why `file_list*` is
+ * deliberately excluded.
+ */
 export async function handleFileRead(h: CommandHelpers, args: any): Promise<CommandResult> {
     try {
-        const filePath = resolveSafePath(args?.path);
+        const confined = confineToAllowedRoots(resolveSafePath(args?.path), sessionWorkspaceRoots(h));
+        if (!confined.ok) return { success: false, error: confined.error };
+        const filePath = confined.path;
         const content = fs.readFileSync(filePath, 'utf-8');
         return { success: true, content, path: filePath };
     } catch (e: any) {
@@ -324,7 +357,9 @@ export async function handleFileRead(h: CommandHelpers, args: any): Promise<Comm
 
 export async function handleFileWrite(h: CommandHelpers, args: any): Promise<CommandResult> {
     try {
-        const filePath = resolveSafePath(args?.path);
+        const confined = confineToAllowedRoots(resolveSafePath(args?.path), sessionWorkspaceRoots(h));
+        if (!confined.ok) return { success: false, error: confined.error };
+        const filePath = confined.path;
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, args?.content || '', 'utf-8');
         return { success: true, path: filePath };
