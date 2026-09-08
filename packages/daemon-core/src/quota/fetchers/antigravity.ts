@@ -313,6 +313,7 @@ import {
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { retryAfterMs, toNumber } from './coerce.js';
 
 /**
  * Default Cloud Code host — the one `agy` itself uses.
@@ -769,17 +770,6 @@ function asArray(value: unknown): unknown[] {
     return Array.isArray(value) ? value : [];
 }
 
-function toNumber(value: unknown): number | null {
-    if (typeof value === 'number') {
-        return Number.isFinite(value) ? value : null;
-    }
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-}
-
 function toResetMs(value: unknown): number | null {
     if (typeof value !== 'string' || value.trim() === '') {
         return null;
@@ -973,18 +963,6 @@ function mapQuotaSummary(data: unknown): ProviderQuota {
         status: 'ok',
         metadata: { source: 'oauth' },
     };
-}
-
-function retryAfterMs(header: string | null, nowMs: number): number | undefined {
-    if (!header) {
-        return undefined;
-    }
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) {
-        return nowMs + seconds * 1000;
-    }
-    const at = new Date(header).getTime();
-    return Number.isNaN(at) ? undefined : at;
 }
 
 /**

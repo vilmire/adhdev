@@ -91,6 +91,7 @@ import {
     type ProjectedMeshEvent,
 } from './mesh-event-projection.js';
 import { meshEventsTopic } from './topics.js';
+import { shortId } from './short-id.js';
 
 /** Durable consumer name for the parity tail. Renaming replays the log once. */
 export const PARITY_CONSUMER = 'stage3-mesh-parity';
@@ -304,10 +305,6 @@ function collectOwnShadowRecords(
     }
 
     return { records, through, truncatedBelow };
-}
-
-function shortId(id: string): string {
-    return id.length <= 12 ? id : `${id.slice(0, 12)}…`;
 }
 
 /**

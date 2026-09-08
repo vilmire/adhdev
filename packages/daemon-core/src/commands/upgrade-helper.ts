@@ -21,6 +21,7 @@ import { canonicalizeInstancePath } from '@adhdev/session-host-core';
 import { resolveSessionHostAppName } from '../session-host/app-name.js';
 import { getConfigDir } from '../config/config.js';
 import { IDENTITY } from '../track-identity.js';
+import { isPidAlive } from '../system/process-utils.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
 
@@ -667,15 +668,6 @@ export async function stopSessionHostProcesses(
  * PowerShell/wmic probe does not. `EPERM` means the process exists but belongs
  * to someone else — alive for our purposes.
  */
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
-  }
-}
-
 // Native addons that stay EXCLUSIVELY locked on Windows while any process keeps
 // them memory-mapped. node-pty's `conpty.node` is the confirmed offender; the
 // ghostty VT dll has the same lifetime, so guard both.

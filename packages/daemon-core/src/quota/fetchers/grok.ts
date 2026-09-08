@@ -52,6 +52,7 @@ import {
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { retryAfterMs, toNumber } from './coerce.js';
 
 const DEFAULT_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -178,17 +179,6 @@ function isExpired(credentials: GrokCredentials, nowMs: number): boolean {
 // { config: { creditUsagePercent, currentPeriod: { type, start, end },
 //             billingPeriodEnd, ... }, subscription_tier? }
 
-function toNumber(value: unknown): number | null {
-    if (typeof value === 'number') {
-        return Number.isFinite(value) ? value : null;
-    }
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-}
-
 function toResetMs(value: unknown): number | null {
     if (typeof value !== 'string' || value.trim() === '') {
         return null;
@@ -285,18 +275,6 @@ function mapBillingResponse(data: unknown): ProviderQuota {
         status: 'ok',
         metadata: { source: 'oauth', ...(tier ? { planType: tier } : {}) },
     };
-}
-
-function retryAfterMs(header: string | null, nowMs: number): number | undefined {
-    if (!header) {
-        return undefined;
-    }
-    const seconds = Number(header);
-    if (Number.isFinite(seconds)) {
-        return nowMs + seconds * 1000;
-    }
-    const at = new Date(header).getTime();
-    return Number.isNaN(at) ? undefined : at;
 }
 
 /**

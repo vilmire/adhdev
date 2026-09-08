@@ -47,6 +47,7 @@ import { assignWindows } from './codex-windows.js';
 import { codexRolloutMissingFailure, fetchCodexQuotaFromRollout } from './codex-rollout.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
+import { toNumber } from './coerce.js';
 
 /** Whole-operation budget: spawn, handshake and reply. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -192,17 +193,6 @@ interface JsonRpcMessage {
     id?: number | string;
     result?: unknown;
     error?: { code?: number; message?: string };
-}
-
-function toNumber(value: unknown): number | null {
-    if (typeof value === 'number') {
-        return Number.isFinite(value) ? value : null;
-    }
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
 }
 
 /**

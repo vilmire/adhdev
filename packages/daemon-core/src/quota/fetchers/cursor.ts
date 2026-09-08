@@ -23,6 +23,7 @@ import {
     type ProviderQuota,
     type QuotaMetadata,
 } from '../types.js';
+import { toNumber } from './coerce.js';
 import type { QuotaChildProcess, QuotaFetchDeps, QuotaFetchResponse } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 
@@ -245,15 +246,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function field(record: Record<string, unknown> | null, snake: string, camel: string): unknown {
     return record?.[snake] ?? record?.[camel];
-}
-
-function toNumber(value: unknown): number | null {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
 }
 
 function toOptionalNumber(value: unknown): number | undefined {

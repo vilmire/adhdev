@@ -56,6 +56,7 @@ import {
 import { assignWindows } from './codex-windows.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
+import { toNumber } from './coerce.js';
 
 /**
  * How old a rollout reading may be and still count as current.
@@ -106,15 +107,6 @@ export interface RolloutRateLimits {
     planType: string | null;
     /** Unix ms parsed from the record's own `timestamp`. */
     capturedAt: number;
-}
-
-function toNumber(value: unknown): number | null {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
 }
 
 /** `resets_at` is Unix seconds; pass through anything already in ms. */

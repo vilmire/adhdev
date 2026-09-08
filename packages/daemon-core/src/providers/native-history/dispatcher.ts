@@ -31,6 +31,7 @@ import {
     claimAntigravityConversation,
     isAntigravityConversationClaimedByOther,
 } from './antigravity-claim-registry.js';
+import { isSafeFilename } from './fs-utils.js';
 
 export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
 
@@ -653,10 +654,6 @@ function codexSessionsRoot(): string {
 
 function isUuidLikeSessionId(sessionId: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
-}
-
-function isSafeFilename(name: string): boolean {
-    return /^[A-Za-z0-9._:-]+$/.test(name) && !name.includes('..');
 }
 
 function newestFile(dir: string, pattern: RegExp): string | null {

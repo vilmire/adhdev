@@ -26,6 +26,7 @@ import {
 
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import { statMtimeMs } from './fs-utils.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -80,10 +81,6 @@ function extractTimestampValue(value: unknown): number {
     if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
   return 0;
-}
-
-function statMtimeMs(filePath: string): number {
-  try { return fs.statSync(filePath).mtimeMs; } catch { return 0; }
 }
 
 function isSafeSessionId(sessionId: string): boolean {
