@@ -86,6 +86,7 @@ import {
     type TranscriptLatencyDetail,
     type TranscriptTriggerSource,
 } from './transcript-latency.js';
+import { redactSessionId } from './transcript-parity.js';
 
 /** Hard bound on distinct sessions tracked at once — mirrors MAX_INFLIGHT's
  * role in mesh-dual-write.ts: a shadow that OOMs a daemon is worse than a
@@ -207,10 +208,6 @@ interface SessionState {
     revision: number;
     /** Content hash of the last successfully published complete revision. */
     hash: string;
-}
-
-function redactSessionId(id: string): string {
-    return id.length <= 8 ? id : `${id.slice(0, 8)}…(${id.length})`;
 }
 
 export class TranscriptProjectionService {

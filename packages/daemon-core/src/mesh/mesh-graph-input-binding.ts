@@ -56,8 +56,8 @@
  *      module — structural non-authority is the boundary (design :302-303).
  */
 
-import { createHash } from 'crypto';
 import { redactLogLine } from '../logging/log-redactor.js';
+import { sha256Hex } from '../system/hash.js';
 
 // ── Limits (design :271-280) ─────────────────────────────────────────────────
 
@@ -379,9 +379,9 @@ export function canonicalJson(value: unknown): string {
     return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
 }
 
-export function sha256Hex(text: string): string {
-    return createHash('sha256').update(text, 'utf8').digest('hex');
-}
+// Re-exported so the existing `sha256Hex` import sites in this module's
+// neighbours (mesh-graph-gates, mesh-graph-transition-runner) keep working.
+export { sha256Hex };
 
 function utf8Bytes(text: string): number {
     return Buffer.byteLength(text, 'utf8');

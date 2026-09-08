@@ -50,6 +50,7 @@ import { LOG } from '../logging/logger.js';
 import { appendAssistantJournal, consumeAssistantJournal } from './journal.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import { ASSISTANT_JOURNAL_TOPIC } from './topics.js';
+import { shortId } from './short-id.js';
 
 /** Entry `kind` for probe records. Namespaced so a real consumer can skip them. */
 export const PROBE_ENTRY_KIND = 'adhdev.probe.heartbeat';
@@ -103,10 +104,6 @@ export interface ProbeHandle {
  * Shorten an id for logs. Full writerIds are 8 random bytes plus a prefix and
  * add nothing to a log line; the head is enough to tell two writers apart.
  */
-function shortId(id: string): string {
-    return id.length <= 12 ? id : `${id.slice(0, 12)}…`;
-}
-
 /**
  * Start the probe: append one record now, log every record another writer
  * appended, and repeat on a slow cadence.

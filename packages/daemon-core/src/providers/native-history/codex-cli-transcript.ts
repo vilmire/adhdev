@@ -55,6 +55,7 @@ const CODEX_DEFAULT_COMPLETION_SIGNAL: NativeCompletionSignalSpec = {
 
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
+import { isSafeFilename, statMtimeMs } from './fs-utils.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -126,16 +127,8 @@ function extractTimestampValue(value: unknown): number {
   return 0;
 }
 
-function statMtimeMs(filePath: string): number {
-  try { return fs.statSync(filePath).mtimeMs; } catch { return 0; }
-}
-
 function isUuidLikeSessionId(sessionId: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
-}
-
-function isSafeFilename(name: string): boolean {
-  return /^[A-Za-z0-9._:-]+$/.test(name) && !name.includes('..');
 }
 
 function codexSessionsRoot(): string {

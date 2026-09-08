@@ -16,6 +16,7 @@ import type { DevServerContext, ProviderCategory } from './dev-server-types.js';
 import { DEV_SERVER_PORT } from './dev-server.js';
 import { LOG } from '../logging/logger.js';
 import { runCliAutoImplVerification } from './dev-cli-debug.js';
+import { isPidAlive } from '../system/process-utils.js';
 
 type CliExerciseVerification = {
   request?: Record<string, any>;
@@ -37,15 +38,6 @@ type CliExerciseVerification = {
 function getAutoImplPid(ctx: DevServerContext): number | null {
   const pid = ctx.autoImplProcess?.pid;
   return typeof pid === 'number' && pid > 0 ? pid : null;
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error: any) {
-    return error?.code === 'EPERM';
-  }
 }
 
 function clearStaleAutoImplState(ctx: DevServerContext, reason: string): void {

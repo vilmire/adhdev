@@ -45,7 +45,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import * as yaml from 'js-yaml';
+import { parseConfigText } from './config-text.js';
 import type {
     RepoMeshCoordinatorConfig,
     LocalMeshEntry,
@@ -191,11 +191,6 @@ export const MESH_JSON_CONFIG_SCHEMA = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseConfigText(path: string, text: string): unknown {
-    if (/\.json$/i.test(path)) return JSON.parse(text);
-    return yaml.load(text);
 }
 
 // ─── Declarative config: Parse / Normalize ──────

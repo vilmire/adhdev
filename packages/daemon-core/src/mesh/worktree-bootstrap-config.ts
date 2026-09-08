@@ -3,7 +3,7 @@ import { join, resolve as pathResolve } from 'path';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import * as yaml from 'js-yaml';
+import { parseConfigText } from '../config/config-text.js';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { pickBestTransitGitStatus } from '@adhdev/mesh-shared';
 import {
@@ -445,11 +445,6 @@ export const MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA = {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OUTPUT_LIMIT_BYTES = 128 * 1024;
 const OUTPUT_SUMMARY_CHARS = 2_000;
-
-function parseConfigText(path: string, text: string): unknown {
-    if (/\.json$/i.test(path)) return JSON.parse(text);
-    return yaml.load(text);
-}
 
 function truncateOutput(value: unknown): string {
     const text = typeof value === 'string' ? value : value == null ? '' : String(value);

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
-import * as yaml from 'js-yaml';
+import { parseConfigText } from '../config/config-text.js';
 
 /**
  * "Change Impact" — config-driven classification of which git changes between the
@@ -175,11 +175,6 @@ export function validateChangeImpactConfig(raw: unknown, source = 'inline'): { v
     }
 
     return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : undefined };
-}
-
-function parseConfigText(path: string, text: string): unknown {
-    if (/\.json$/i.test(path)) return JSON.parse(text);
-    return yaml.load(text);
 }
 
 /**

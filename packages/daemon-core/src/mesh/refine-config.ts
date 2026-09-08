@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import * as yaml from 'js-yaml';
+import { parseConfigText } from '../config/config-text.js';
 
 export const MESH_REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 export type MeshRefineValidationCategory = typeof MESH_REFINE_VALIDATION_CATEGORIES[number];
@@ -356,11 +356,6 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
     }
     if (rejectedCommands.length) errors.push('one or more validation commands are invalid');
     return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
-}
-
-function parseConfigText(path: string, text: string): unknown {
-    if (/\.json$/i.test(path)) return JSON.parse(text);
-    return yaml.load(text);
 }
 
 export function loadMeshRefineConfig(mesh: any, workspace: string): MeshRefineConfigLoadResult {

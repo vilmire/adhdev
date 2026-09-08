@@ -18,6 +18,7 @@ import { LOG } from '../logging/logger.js';
 import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
 import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
+import { isPidAlive } from '../system/process-utils.js';
 
 /**
  * Shared managed-session-host process helpers.
@@ -348,15 +349,6 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
      * `EPERM` means the process exists but is owned by someone else — alive for
      * our purposes, and a pid we could not have killed anyway.
      */
-    function isPidAlive(pid: number): boolean {
-        try {
-            process.kill(pid, 0);
-            return true;
-        } catch (error) {
-            return (error as NodeJS.ErrnoException)?.code === 'EPERM';
-        }
-    }
-
     function stopManagedSessionHostProcess(): boolean {
         let stopped = false;
         const pidFile = getPidFile();
