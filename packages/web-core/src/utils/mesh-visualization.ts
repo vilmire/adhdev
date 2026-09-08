@@ -706,10 +706,14 @@ function assessSnapshotCompleteness(args: {
         }
     }
 
-    if (nodeStatus.connection?.state !== 'self' && refreshedAtMs !== null && typeof git.lastCheckedAt === 'number') {
-        const ageMs = refreshedAtMs - git.lastCheckedAt
-        if (ageMs > STALE_SNAPSHOT_MS) {
-            snapshotWarnings.push(`${label} is relying on a peer git snapshot older than 5m; re-probe before trusting convergence.`)
+    if (nodeStatus.connection && nodeStatus.connection.state !== 'self' && refreshedAtMs !== null) {
+        if (typeof git.lastCheckedAt === 'number') {
+            const ageMs = refreshedAtMs - git.lastCheckedAt
+            if (ageMs > STALE_SNAPSHOT_MS) {
+                snapshotWarnings.push(`${label} is relying on a peer git snapshot older than 5m; re-probe before trusting convergence.`)
+            }
+        } else {
+            snapshotWarnings.push(`${label} peer git snapshot age was not measured because no check time was reported.`)
         }
     }
 
@@ -1059,7 +1063,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const mergeReadyNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length
     const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
     const notMergeableNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length
-    const incompleteSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotWarnings.length > 0).length
+    const incompleteSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness !== 'complete').length
     const pendingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'pending_git').length
     const missingGitSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_git').length
     const missingSubmoduleSnapshotNodes = visibleGraphNodes.filter(node => node.snapshotCompleteness === 'missing_submodule_report').length

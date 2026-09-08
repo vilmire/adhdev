@@ -41,8 +41,8 @@ export interface GitSubmoduleStatus {
     dirty: boolean
     /** Whether the submodule commit differs from what the parent repo expects */
     outOfSync: boolean
-    /** Last checked timestamp */
-    lastCheckedAt: number
+    /** Last checked timestamp. Absent when the source did not report one. */
+    lastCheckedAt?: number
     /** Error message if submodule status could not be read */
     error?: string
 }
@@ -100,7 +100,8 @@ export interface GitRepoStatus extends GitRepoIdentity {
     hasConflicts: boolean
     conflictFiles: string[]
     stashCount: number
-    lastCheckedAt: number
+    /** Absent when the source did not report a measurement time. */
+    lastCheckedAt?: number
     /** Submodule statuses when auto-discover is enabled */
     submodules?: GitSubmoduleStatus[]
     /**

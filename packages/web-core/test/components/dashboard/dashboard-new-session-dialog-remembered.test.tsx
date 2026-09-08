@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DashboardNewSessionDialog from '../../../src/components/dashboard/DashboardNewSessionDialog'
 import type { DaemonData } from '../../../src/types'
 
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
 const DIALOG_KEY = 'adhdev.remember.new-session-dialog'
 const WORKSPACE_KEY = 'adhdev.remember.new-session-workspace'
 
@@ -57,6 +59,7 @@ function createMachine(index: number): DaemonData {
         type: 'adhdev-daemon',
         status: 'online',
         nickname: `Machine ${index}`,
+        platform: 'darwin',
         availableProviders: [
             {
                 type: 'claude',
@@ -88,6 +91,7 @@ function createMachine(index: number): DaemonData {
 function renderDialog(machines: DaemonData[], overrides: {
     onClose?: () => void
     onLaunchProvider?: Parameters<typeof DashboardNewSessionDialog>[0]['onLaunchProvider']
+    onBrowseDirectory?: Parameters<typeof DashboardNewSessionDialog>[0]['onBrowseDirectory']
 } = {}) {
     act(() => {
         root.render(
@@ -95,7 +99,7 @@ function renderDialog(machines: DaemonData[], overrides: {
                 machines,
                 ides: [],
                 onClose: overrides.onClose || (() => {}),
-                onBrowseDirectory: async () => ({ path: '/', directories: [] }),
+                onBrowseDirectory: overrides.onBrowseDirectory || (async () => ({ path: '/', directories: [] })),
                 onSaveWorkspace: async () => ({ ok: true }),
                 onLaunchIde: async () => ({ ok: true }),
                 onLaunchProvider: overrides.onLaunchProvider || (async () => ({ ok: true })),
@@ -125,6 +129,36 @@ function findMachineChip(name: string): HTMLButtonElement {
 }
 
 describe('DashboardNewSessionDialog remembered choices', () => {
+    it('drops a stale desktop directory response after the machine changes', async () => {
+        let resolveA!: (value: { path: string; directories: Array<{ name: string; path: string }> }) => void
+        let resolveB!: (value: { path: string; directories: Array<{ name: string; path: string }> }) => void
+        const requestA = new Promise<{ path: string; directories: Array<{ name: string; path: string }> }>((resolve) => { resolveA = resolve })
+        const requestB = new Promise<{ path: string; directories: Array<{ name: string; path: string }> }>((resolve) => { resolveB = resolve })
+        renderDialog([createMachine(1), createMachine(2)], {
+            onBrowseDirectory: (machineId) => machineId === 'machine-1' ? requestA : requestB,
+        })
+
+        const browseButton = () => allButtons().find(button => button.textContent?.trim() === 'Browse…')!
+        act(() => browseButton().click())
+        act(() => findMachineChip('Machine 2').click())
+        act(() => browseButton().click())
+
+        await act(async () => {
+            resolveB({ path: '/repo/b', directories: [{ name: 'b', path: '/repo/b/b' }] })
+            await Promise.resolve()
+            await Promise.resolve()
+        })
+        const browsePathInput = () => document.body.querySelector('[aria-labelledby="workspace-browse-title"] input') as HTMLInputElement | null
+        expect(browsePathInput()?.value).toBe('/repo/b')
+
+        await act(async () => {
+            resolveA({ path: '/repo/a', directories: [{ name: 'a', path: '/repo/a/a' }] })
+            await Promise.resolve()
+            await Promise.resolve()
+        })
+        expect(browsePathInput()?.value).toBe('/repo/b')
+    })
+
     it('preselects the remembered machine and provider target when they still exist', () => {
         store.set(DIALOG_KEY, JSON.stringify({ machineId: 'machine-2', mode: 'workspace' }))
         store.set(WORKSPACE_KEY, JSON.stringify({ kind: 'cli', target: 'codex', workspaceChoice: '__home__' }))

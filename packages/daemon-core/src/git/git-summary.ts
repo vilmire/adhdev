@@ -17,6 +17,11 @@ export function createGitCompactSummary(status: GitRepoStatus, diffSummary?: Git
   const diffChangedFiles = diffSummary?.files.length ?? 0;
   const changedFiles = Math.max(statusChangedFiles, diffChangedFiles);
   const conflictCount = status.conflictFiles.length > 0 ? status.conflictFiles.length : status.hasConflicts ? 1 : 0;
+  const checkedAtCandidates = [status.lastCheckedAt, diffSummary?.lastCheckedAt]
+    .filter((value): value is number => typeof value === 'number');
+  if (checkedAtCandidates.length === 0) {
+    throw new Error('Git status summary did not include a measurement time');
+  }
 
   return {
     isGitRepo: status.isGitRepo,
@@ -37,7 +42,7 @@ export function createGitCompactSummary(status: GitRepoStatus, diffSummary?: Git
     ahead: status.ahead,
     behind: status.behind,
     hasConflicts: status.hasConflicts || conflictCount > 0,
-    lastCheckedAt: Math.max(status.lastCheckedAt, diffSummary?.lastCheckedAt ?? status.lastCheckedAt),
+    lastCheckedAt: Math.max(...checkedAtCandidates),
     error: status.error ?? diffSummary?.error,
     reason: status.reason ?? diffSummary?.reason,
   };

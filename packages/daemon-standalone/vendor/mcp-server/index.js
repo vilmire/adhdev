@@ -47036,9 +47036,10 @@ child.on('exit', () => process.exit(0));
           path: path67,
           commit,
           dirty: readBoolean(submodule.dirty) ?? false,
-          outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false,
-          lastCheckedAt: readNumber2(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now()
+          outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false
         };
+        const lastCheckedAt = readNumber2(submodule.lastCheckedAt, submodule.last_checked_at);
+        if (lastCheckedAt !== void 0) result.lastCheckedAt = lastCheckedAt;
         if (repoPath) result.repoPath = repoPath;
         const error48 = readString22(submodule.error);
         if (error48) result.error = error48;
@@ -47077,6 +47078,7 @@ child.on('exit', () => process.exit(0));
       const untracked = readNumber2(status.untracked) ?? 0;
       const deleted = readNumber2(status.deleted) ?? 0;
       const renamed2 = readNumber2(status.renamed) ?? 0;
+      const lastCheckedAt = options?.lastCheckedAt ?? readNumber2(status.lastCheckedAt, status.last_checked_at);
       return {
         workspace: readString22(status.workspace, node.workspace) || "",
         repoRoot: repoRoot ?? null,
@@ -47099,7 +47101,7 @@ child.on('exit', () => process.exit(0));
         hasConflicts,
         conflictFiles,
         stashCount: readNumber2(status.stashCount, status.stash_count) ?? 0,
-        lastCheckedAt: options?.lastCheckedAt ?? readNumber2(status.lastCheckedAt, status.last_checked_at) ?? Date.now(),
+        ...lastCheckedAt !== void 0 ? { lastCheckedAt } : {},
         ...submodules ? { submodules } : {},
         // Deploy-lag visibility: daemonBuildBehind is computed by the reporting
         // daemon's git probe (build commit vs workspace/submodule HEAD). It must
@@ -47135,10 +47137,9 @@ child.on('exit', () => process.exit(0));
       const probeGitResult = readRecord(probeGit.result);
       const probeDirectStatus = readRecord(probeGit.status);
       const probeNestedStatus = readRecord(probeGitResult.status);
-      const lastCheckedAt = options?.lastCheckedAt;
       let best = null;
       for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
-        const normalized = normalizeGitStatus(status, node, { lastCheckedAt: lastCheckedAt ?? Date.now() });
+        const normalized = normalizeGitStatus(status, node, options);
         if (!normalized) continue;
         const score = scoreGitStatusCandidate(normalized);
         if (!best || score > best.score) best = { git: normalized, score };
@@ -68008,7 +68009,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return normalizeGitStatus(status, readObjectRecord(node), options);
     }
     function buildInlineMeshTransitGitStatus(node) {
-      return pickBestTransitGitStatus(readObjectRecord(node), { lastCheckedAt: Date.now() });
+      return pickBestTransitGitStatus(readObjectRecord(node));
     }
     function shouldRefreshStalePendingAggregate(snapshot, options) {
       if (options?.requireDirectPeerTruth !== true || !Array.isArray(snapshot?.nodes)) return false;
@@ -142114,6 +142115,10 @@ ${e?.stderr || ""}`;
       const diffChangedFiles = diffSummary?.files.length ?? 0;
       const changedFiles = Math.max(statusChangedFiles, diffChangedFiles);
       const conflictCount = status.conflictFiles.length > 0 ? status.conflictFiles.length : status.hasConflicts ? 1 : 0;
+      const checkedAtCandidates = [status.lastCheckedAt, diffSummary?.lastCheckedAt].filter((value) => typeof value === "number");
+      if (checkedAtCandidates.length === 0) {
+        throw new Error("Git status summary did not include a measurement time");
+      }
       return {
         isGitRepo: status.isGitRepo,
         repoRoot: status.repoRoot,
@@ -142126,7 +142131,7 @@ ${e?.stderr || ""}`;
         ahead: status.ahead,
         behind: status.behind,
         hasConflicts: status.hasConflicts || conflictCount > 0,
-        lastCheckedAt: Math.max(status.lastCheckedAt, diffSummary?.lastCheckedAt ?? status.lastCheckedAt),
+        lastCheckedAt: Math.max(...checkedAtCandidates),
         error: status.error ?? diffSummary?.error,
         reason: status.reason ?? diffSummary?.reason
       };
@@ -142136,6 +142141,9 @@ ${e?.stderr || ""}`;
       return Math.max(1, Math.floor(capacity ?? 100));
     }
     function createEmptyDiffSummary(status) {
+      if (typeof status.lastCheckedAt !== "number") {
+        throw new Error("Git snapshot status did not include a measurement time");
+      }
       return {
         workspace: status.workspace,
         repoRoot: status.repoRoot,

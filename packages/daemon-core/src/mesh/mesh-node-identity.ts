@@ -341,7 +341,7 @@ function normalizeInlineMeshGitStatus(
 }
 
 export function buildInlineMeshTransitGitStatus(node: any): Record<string, unknown> | undefined {
-    return sharedPickBestTransitGitStatus(readObjectRecord(node), { lastCheckedAt: Date.now() }) as Record<string, unknown> | undefined;
+    return sharedPickBestTransitGitStatus(readObjectRecord(node)) as Record<string, unknown> | undefined;
 }
 
 export function shouldRefreshStalePendingAggregate(snapshot: any, options?: { requireDirectPeerTruth?: boolean }): boolean {
@@ -1345,12 +1345,9 @@ export function buildMeshNodeDataFreshness(args: {
         || !!readStringValue(git.branch, git.headCommit, git.head, git.upstream);
     const connectionFreshAt = toIsoTimestamp(connection.lastCommandAt ?? connection.lastConnectedAt ?? connection.lastStateChangeAt);
     // Provenance-aware probe time. A FRESH probe this call writes a genuine
-    // git.lastCheckedAt, so trust it for live nodes. Held/standing truth, however,
-    // is re-normalized through pickBestTransitGitStatus which stamps lastCheckedAt
-    // with Date.now() on assembly (git-normalize.ts) — so status.git.lastCheckedAt
-    // would falsely read fresh. For cached nodes prefer the authentic peer-reported
-    // check time persisted on node.lastGit.checkedAt / cachedStatus, so a genuinely
-    // old cache is correctly reported stale.
+    // git.lastCheckedAt, so trust it for live nodes. Held/standing truth can predate
+    // that field, so for cached nodes prefer the authoritative peer probe time on
+    // node.lastGit.checkedAt / cachedStatus before the normalized status value.
     const liveGitCheckedAt = liveTruthProbed ? toIsoTimestamp(git.lastCheckedAt) : null;
     const heldGit = readObjectRecord(node?.lastGit ?? node?.last_git);
     const heldCheckedAt = toIsoTimestamp(heldGit.checkedAt ?? heldGit.checked_at);

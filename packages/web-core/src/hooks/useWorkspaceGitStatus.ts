@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GitDiffSummary, GitFileDiff, GitRepoStatus, GitWorkspaceUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
@@ -118,15 +118,19 @@ export function useWorkspaceGitStatus({
     const [diffSummary, setDiffSummary] = useState<GitDiffSummary | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const requestSeqRef = useRef(0)
 
     const refresh = useCallback(async () => {
         if (!active || !daemonId || !workspacePath) return
+        const requestSeq = requestSeqRef.current + 1
+        requestSeqRef.current = requestSeq
         setLoading(true)
         setError(null)
         try {
             const statusResult = readGitStatusCommandResponse(
                 await sendCommand(daemonId, 'git_status', { workspace: workspacePath }),
             )
+            if (requestSeqRef.current !== requestSeq) return
             if (statusResult.error) {
                 setStatus(null)
                 setDiffSummary(null)
@@ -143,6 +147,7 @@ export function useWorkspaceGitStatus({
             const diffResult = readGitDiffSummaryCommandResponse(
                 await sendCommand(daemonId, 'git_diff_summary', { workspace: workspacePath }),
             )
+            if (requestSeqRef.current !== requestSeq) return
             if (diffResult.error) {
                 setDiffSummary(null)
                 setError(diffResult.error)
@@ -150,9 +155,10 @@ export function useWorkspaceGitStatus({
             }
             setDiffSummary(diffResult.diffSummary)
         } catch (err) {
+            if (requestSeqRef.current !== requestSeq) return
             setError(getErrorMessage(err, 'Git status request failed'))
         } finally {
-            setLoading(false)
+            if (requestSeqRef.current === requestSeq) setLoading(false)
         }
     }, [active, daemonId, includeDiffSummary, sendCommand, workspacePath])
 
@@ -162,11 +168,12 @@ export function useWorkspaceGitStatus({
     }, [includeDiffSummary, intervalMs, workspacePath])
 
     useEffect(() => {
+        requestSeqRef.current += 1
+        setStatus(null)
+        setDiffSummary(null)
+        setLoading(false)
+        setError(null)
         if (!active || !daemonId || !workspacePath || !request) {
-            setStatus(null)
-            setDiffSummary(null)
-            setLoading(false)
-            setError(null)
             return
         }
 
@@ -189,6 +196,7 @@ export function useWorkspaceGitStatus({
         void refresh()
 
         return () => {
+            requestSeqRef.current += 1
             unsubscribe?.()
         }
     }, [active, daemonId, refresh, request, sendData, workspacePath])

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
     hasGitStatusEvidence,
     normalizeGitStatus,
@@ -8,6 +8,15 @@ import {
 } from '../src/git-normalize'
 
 describe('readGitSubmodules', () => {
+    it('does not invent a check time when the source omits it', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(9_999)
+        const subs = readGitSubmodules([{ path: 'oss', commit: 'abc123' }])
+
+        expect(subs?.[0].lastCheckedAt).toBeUndefined()
+        expect(now).not.toHaveBeenCalled()
+        now.mockRestore()
+    })
+
     it('keeps a submodule that has path + commit but NO repoPath (cloud transit)', () => {
         const subs = readGitSubmodules([
             { path: 'oss', commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a', dirty: false, outOfSync: false },
@@ -57,6 +66,20 @@ describe('hasGitStatusEvidence', () => {
 })
 
 describe('normalizeGitStatus', () => {
+    it('does not invent a check time when the source omits it', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(9_999)
+        const git = normalizeGitStatus({ isGitRepo: true, branch: 'main' }, {})
+
+        expect(git?.lastCheckedAt).toBeUndefined()
+        expect(now).not.toHaveBeenCalled()
+        now.mockRestore()
+    })
+
+    it('preserves source and explicitly injected check times', () => {
+        expect(normalizeGitStatus({ isGitRepo: true, lastCheckedAt: 123 }, {})?.lastCheckedAt).toBe(123)
+        expect(normalizeGitStatus({ isGitRepo: true, lastCheckedAt: 123 }, {}, { lastCheckedAt: 456 })?.lastCheckedAt).toBe(456)
+    })
+
     it('keeps submodules when only repoRoot/workspace evidence is present', () => {
         const git = normalizeGitStatus(
             {
@@ -114,6 +137,15 @@ describe('scoreGitStatusCandidate ordering', () => {
 })
 
 describe('pickBestTransitGitStatus', () => {
+    it('does not invent a check time for an undated transit status', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(9_999)
+        const git = pickBestTransitGitStatus({ lastGit: { status: { isGitRepo: true, branch: 'main' } } })
+
+        expect(git?.lastCheckedAt).toBeUndefined()
+        expect(now).not.toHaveBeenCalled()
+        now.mockRestore()
+    })
+
     it('picks the richest of the four envelope slots', () => {
         const node = {
             // lastProbe.git.status is the richest; lastGit.status is bare.

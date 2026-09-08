@@ -48,6 +48,9 @@ function normalizeCapacity(capacity: number | undefined): number {
 }
 
 function createEmptyDiffSummary(status: GitRepoStatus): GitDiffSummary {
+  if (typeof status.lastCheckedAt !== 'number') {
+    throw new Error('Git snapshot status did not include a measurement time');
+  }
   return {
     workspace: status.workspace,
     repoRoot: status.repoRoot,

@@ -86,6 +86,8 @@ export function useDashboardMobileMachineLauncher({
     const [launchConfirmSortMode, setLaunchConfirmSortMode] = useState<SavedHistorySortMode>(() => createSavedHistoryFilterState().sortMode)
     const [launchConfirmSessionsLoading, setLaunchConfirmSessionsLoading] = useState(false)
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
+    const browseRequestSeqRef = useRef(0)
+    const savedSessionsRequestSeqRef = useRef(0)
     const lastMachineIdRef = useRef<string | null>(null)
     const lastSavedHistoryScopeRef = useRef<string | null>(null)
 
@@ -114,17 +116,21 @@ export function useDashboardMobileMachineLauncher({
     )
 
     const loadBrowsePath = useCallback(async (path: string) => {
+        const requestSeq = browseRequestSeqRef.current + 1
+        browseRequestSeqRef.current = requestSeq
         setBrowseBusy(true)
         setBrowseError('')
         try {
             const result = await onBrowseDirectory(path)
+            if (browseRequestSeqRef.current !== requestSeq) return
             setBrowseCurrentPath(result.path)
             setCustomWorkspacePath(result.path)
             setBrowseDirectories(result.directories)
         } catch (error) {
+            if (browseRequestSeqRef.current !== requestSeq) return
             setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
         } finally {
-            setBrowseBusy(false)
+            if (browseRequestSeqRef.current === requestSeq) setBrowseBusy(false)
         }
     }, [onBrowseDirectory])
 
@@ -190,6 +196,8 @@ export function useDashboardMobileMachineLauncher({
         },
         action: () => Promise<void>,
     ) => {
+        const requestSeq = savedSessionsRequestSeqRef.current + 1
+        savedSessionsRequestSeqRef.current = requestSeq
         launchConfirmActionRef.current = action
         launchConfirmWorkspaceKeyRef.current = config.selectedWorkspaceKey || '__home__'
         setLaunchConfirmWorkspaceKey(config.selectedWorkspaceKey || '__home__')
@@ -212,9 +220,20 @@ export function useDashboardMobileMachineLauncher({
         if (config.providerType && onListSavedSessions) {
             setLaunchConfirmSessionsLoading(true)
             onListSavedSessions(config.providerType)
-                .then(sessions => setLaunchConfirmSavedSessions(sessions || []))
-                .catch(err => console.warn('Failed to load saved sessions', err))
-                .finally(() => setLaunchConfirmSessionsLoading(false))
+                .then(sessions => {
+                    if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                    setLaunchConfirmSavedSessions(sessions || [])
+                })
+                .catch(err => {
+                    if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                    console.warn('Failed to load saved sessions', err)
+                })
+                .finally(() => {
+                    if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                    setLaunchConfirmSessionsLoading(false)
+                })
+        } else {
+            setLaunchConfirmSessionsLoading(false)
         }
     }, [onListSavedSessions, selectedMachineEntry.id])
 
@@ -247,7 +266,9 @@ export function useDashboardMobileMachineLauncher({
     }, [])
 
     const closeLaunchConfirm = useCallback(() => {
+        savedSessionsRequestSeqRef.current += 1
         launchConfirmActionRef.current = null
+        setLaunchConfirmSessionsLoading(false)
         setLaunchConfirm(null)
     }, [])
 
@@ -258,13 +279,21 @@ export function useDashboardMobileMachineLauncher({
 
     useEffect(() => {
         if (lastMachineIdRef.current !== selectedMachineEntry.id) {
+            browseRequestSeqRef.current += 1
+            savedSessionsRequestSeqRef.current += 1
             lastMachineIdRef.current = selectedMachineEntry.id
             setWorkspaceChoice(defaultWorkspaceId || (workspaceRows[0]?.id || '__custom__'))
             setCustomWorkspacePath('')
             setBrowseCurrentPath('')
             setBrowseDirectories([])
+            setBrowseBusy(false)
             setBrowseError('')
             setBrowseDialogOpen(false)
+            launchConfirmActionRef.current = null
+            setLaunchConfirm(null)
+            setLaunchConfirmSavedSessions([])
+            setLaunchConfirmSessionsLoading(false)
+            setLaunchConfirmBusy(false)
             setLaunchConfirmTextFilter(createSavedHistoryFilterState().textQuery)
             setLaunchConfirmWorkspaceFilter(createSavedHistoryFilterState().workspaceQuery)
             setLaunchConfirmModelFilter(createSavedHistoryFilterState().modelQuery)

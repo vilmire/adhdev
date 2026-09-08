@@ -60,6 +60,7 @@ export function useMachineDiagnosticsStreams({
   const [traceFetchError, setTraceFetchError] = useState('')
   const [reloadToken, setReloadToken] = useState(0)
 
+  const requestSeqRef = useRef(0)
   const lastLogTsRef = useRef(0)
   const lastTraceTsRef = useRef(0)
   const daemonStateRef = useRef<DaemonLogMergeState>({ entries: [], kind: 'empty', rawText: '', lastTs: 0 })
@@ -109,12 +110,15 @@ export function useMachineDiagnosticsStreams({
   const fetchDebugData = useCallback(async () => {
     if (!machineId) return
 
+    const requestSeq = requestSeqRef.current + 1
+    requestSeqRef.current = requestSeq
     const sinceLogTs = lastLogTsRef.current
     const sinceTraceTs = lastTraceTsRef.current
     const [logsRes, traceRes] = await Promise.allSettled([
       sendDaemonCommand(machineId, 'get_logs', { count: 200, minLevel: logLevelState, since: sinceLogTs }),
       sendDaemonCommand(machineId, 'get_debug_trace', buildDebugTraceQuery({ count: 120, since: sinceTraceTs, category: traceCategoryState })),
     ])
+    if (requestSeqRef.current !== requestSeq) return
 
     if (logsRes.status === 'fulfilled') {
       const rawLogsRes = logsRes.value
@@ -164,13 +168,30 @@ export function useMachineDiagnosticsStreams({
   }, [resetTraceState, traceCategoryState])
 
   useEffect(() => {
+    requestSeqRef.current += 1
+    resetDaemonState()
+    resetTraceState()
+    setWebEvents([])
+    setLastUpdatedAt(null)
+    setDaemonFetchError('')
+    setTraceFetchError('')
+  }, [machineId, resetDaemonState, resetTraceState])
+
+  useEffect(() => {
     if (!machineId) return
     void fetchDebugData()
-    if (!autoRefresh) return
+    if (!autoRefresh) {
+      return () => {
+        requestSeqRef.current += 1
+      }
+    }
     const timer = setInterval(() => {
       void fetchDebugData()
     }, 3000)
-    return () => clearInterval(timer)
+    return () => {
+      requestSeqRef.current += 1
+      clearInterval(timer)
+    }
   }, [autoRefresh, fetchDebugData, machineId, reloadToken])
 
   return {

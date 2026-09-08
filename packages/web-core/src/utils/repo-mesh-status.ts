@@ -40,7 +40,7 @@ function shortMachineKey(machineKey: string): string {
 function readTransitGitStatus(node: JsonRecord): GitRepoStatus | undefined {
     // Shared with the standalone path: picks the best of the four transit envelope
     // slots (lastGit/lastProbe × status/result.status).
-    return pickBestTransitGitStatus(node, { lastCheckedAt: Date.now() })
+    return pickBestTransitGitStatus(node)
 }
 
 function getGitSubmoduleDriftState(git: GitRepoStatus | null | undefined): { dirty: boolean; outOfSync: boolean } {

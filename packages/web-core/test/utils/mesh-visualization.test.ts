@@ -1384,6 +1384,36 @@ describe('isMeshGraphStructurallyComplete', () => {
         expect(isMeshGraphStructurallyComplete(graph)).toBe(true)
     })
 
+    it('reports an undated peer snapshot as unmeasured without calling it stale', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_undated',
+            meshName: 'Undated Mesh',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-06-15T00:10:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_undated',
+                    machineLabel: 'Undated',
+                    workspace: '/repo/undated',
+                    health: 'online',
+                    machineStatus: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    connection: { state: 'connected', source: 'reported', transport: 'relay', reported: true },
+                    git: {
+                        ...baseGit('main'),
+                        lastCheckedAt: undefined,
+                        submodules: [],
+                    },
+                },
+            ],
+        } as any)
+        const node = graph.nodes.find(n => n.id === 'node_undated')
+        expect(node?.snapshotCompleteness).toBe('complete')
+        expect(node?.snapshotWarnings).toContain('Undated peer git snapshot age was not measured because no check time was reported.')
+        expect(node?.snapshotWarnings.some(warning => warning.includes('older than 5m'))).toBe(false)
+    })
+
     it('is not tripped by synthetic submodule child nodes (always complete)', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_submodule_complete',
