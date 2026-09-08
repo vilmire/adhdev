@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { pickBestTransitGitStatus } from '@adhdev/mesh-shared'
+import { buildInlineMeshTransitGitStatus } from '../../src/mesh/mesh-node-identity'
 
 /**
  * Round-trip regression for the standalone (daemon-core) transit path. The router's
@@ -10,6 +11,17 @@ import { pickBestTransitGitStatus } from '@adhdev/mesh-shared'
  * would fail if the two transports ever drift again.
  */
 describe('daemon-core mesh transit round-trip (shared normalizer)', () => {
+    it('does not restamp an undated transit status at assembly time', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(9_999)
+        const git = buildInlineMeshTransitGitStatus({
+            lastGit: { status: { isGitRepo: true, branch: 'main' } },
+        })
+
+        expect(git?.lastCheckedAt).toBeUndefined()
+        expect(now).not.toHaveBeenCalled()
+        now.mockRestore()
+    })
+
     it('keeps a repoPath-less submodule on a node whose git carries only repoRoot', () => {
         const repoRoot = '/Users/x/adhdev'
         const node = {

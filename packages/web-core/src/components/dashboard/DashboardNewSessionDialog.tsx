@@ -298,6 +298,8 @@ export default function DashboardNewSessionDialog({
     const pendingRememberedWorkspaceTuningRef = useRef(true)
     const pendingRememberedMeshTuningRef = useRef(true)
     const savedSessionsRequestSeqRef = useRef(0)
+    const browseRequestSeqRef = useRef(0)
+    const meshesRequestSeqRef = useRef(0)
 
     useEffect(() => {
         if (!selectedMachineId && sortedMachines[0]?.id) {
@@ -403,20 +405,24 @@ export default function DashboardNewSessionDialog({
     const visibleMeshManualSetup = meshManualSetup || providerMeshManualSetup
 
     const loadMeshes = useCallback(async (machineId: string) => {
+        const requestSeq = meshesRequestSeqRef.current + 1
+        meshesRequestSeqRef.current = requestSeq
         setMeshLoading(true)
         setMeshError('')
         try {
             const meshes = await onListMeshes(machineId)
+            if (meshesRequestSeqRef.current !== requestSeq) return
             setMeshOptions(meshes)
             setSelectedMeshId(prev => meshes.some(mesh => mesh.id === prev) ? prev : (meshes[0]?.id || ''))
             setMeshLoadedMachineId(machineId)
         } catch (error) {
+            if (meshesRequestSeqRef.current !== requestSeq) return
             setMeshOptions([])
             setSelectedMeshId('')
             setMeshLoadedMachineId(machineId)
             setMeshError(error instanceof Error ? error.message : t('newSession.errorLoadMeshes'))
         } finally {
-            setMeshLoading(false)
+            if (meshesRequestSeqRef.current === requestSeq) setMeshLoading(false)
         }
     }, [onListMeshes, t])
 
@@ -425,6 +431,8 @@ export default function DashboardNewSessionDialog({
 
         const machineChanged = initializedMachineIdRef.current !== selectedMachine.id
         if (machineChanged) {
+            browseRequestSeqRef.current += 1
+            meshesRequestSeqRef.current += 1
             // A machine switch after the first init means the user navigated away
             // from the preselected machine — the pending preselects no longer apply.
             if (initializedMachineIdRef.current !== null) {
@@ -448,6 +456,11 @@ export default function DashboardNewSessionDialog({
             const pendingWorkspaceId = pendingInitialWorkspaceIdRef.current
             const pendingRememberedChoice = pendingRememberedWorkspaceChoiceRef.current
             setCustomWorkspacePath('')
+            setBrowseDialogOpen(false)
+            setBrowseCurrentPath('')
+            setBrowseDirectories([])
+            setBrowseBusy(false)
+            setBrowseError('')
             if (pendingWorkspaceId && workspaceRows.some(workspace => workspace.id === pendingWorkspaceId)) {
                 pendingInitialWorkspaceIdRef.current = null
                 setWorkspaceChoice(pendingWorkspaceId)
@@ -466,6 +479,7 @@ export default function DashboardNewSessionDialog({
             }
             setMeshOptions([])
             setSelectedMeshId('')
+            setMeshLoading(false)
             setMeshLoadedMachineId(null)
             setMeshError('')
             const rememberedKind = pendingRememberedKindRef.current
@@ -796,6 +810,8 @@ export default function DashboardNewSessionDialog({
 
     const openBrowseDialog = useCallback(() => {
         if (!selectedMachine) return
+        const requestSeq = browseRequestSeqRef.current + 1
+        browseRequestSeqRef.current = requestSeq
         setWorkspaceChoice('__custom__')
         setBrowseDialogOpen(true)
         setBrowseError('')
@@ -814,14 +830,19 @@ export default function DashboardNewSessionDialog({
         setBrowseBusy(true)
         void onBrowseDirectory(selectedMachine.id, initialPath)
             .then(result => {
+                if (browseRequestSeqRef.current !== requestSeq) return
                 setBrowseCurrentPath(result.path)
                 setCustomWorkspacePath(result.path)
                 setBrowseDirectories(result.directories)
             })
             .catch(error => {
+                if (browseRequestSeqRef.current !== requestSeq) return
                 setBrowseError(error instanceof Error ? error.message : t('newSession.errorLoadFolder'))
             })
-            .finally(() => setBrowseBusy(false))
+            .finally(() => {
+                if (browseRequestSeqRef.current !== requestSeq) return
+                setBrowseBusy(false)
+            })
     }, [
         customWorkspacePath,
         defaultWorkspaceId,
@@ -835,18 +856,25 @@ export default function DashboardNewSessionDialog({
 
     const navigateBrowsePath = useCallback((path: string) => {
         if (!selectedMachine) return
+        const requestSeq = browseRequestSeqRef.current + 1
+        browseRequestSeqRef.current = requestSeq
         setBrowseBusy(true)
         setBrowseError('')
         void onBrowseDirectory(selectedMachine.id, path)
             .then(result => {
+                if (browseRequestSeqRef.current !== requestSeq) return
                 setBrowseCurrentPath(result.path)
                 setCustomWorkspacePath(result.path)
                 setBrowseDirectories(result.directories)
             })
             .catch(error => {
+                if (browseRequestSeqRef.current !== requestSeq) return
                 setBrowseError(error instanceof Error ? error.message : t('newSession.errorLoadFolder'))
             })
-            .finally(() => setBrowseBusy(false))
+            .finally(() => {
+                if (browseRequestSeqRef.current !== requestSeq) return
+                setBrowseBusy(false)
+            })
     }, [onBrowseDirectory, selectedMachine])
 
     const handleSaveCurrentWorkspace = useCallback(async () => {

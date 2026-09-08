@@ -350,9 +350,8 @@ export function isRemoteWorktreeBootstrapStaleRunning(
     if (!workspace || existsSync(workspace)) return false;
     // The probe's OWN recorded time lives on the envelope (`lastGit.checkedAt`), stamped by
     // recordInlineMeshDirectGitTruth (mesh-node-identity.ts) when the P2P probe actually ran.
-    // pickBestTransitGitStatus's returned `lastCheckedAt` is NOT that value — it always reflects
-    // either an explicit override or the CURRENT wall clock (mesh-shared normalizeGitStatus), so
-    // reading it here would make every call "after start" regardless of when the probe really ran.
+    // A status-level `lastCheckedAt` may be absent on older transit records and is not the
+    // envelope's provenance timestamp, so use the authoritative probe time here.
     const rawGit = readRecord(node?.lastGit) ?? readRecord((node as any)?.last_git);
     const checkedAt = typeof rawGit?.checkedAt === 'number' ? rawGit.checkedAt : undefined;
     if (checkedAt === undefined || checkedAt <= startedMs) return false;

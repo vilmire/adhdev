@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTransport } from '../context/TransportContext'
 
 export function useGitRemoteUrl(daemonId: string | null | undefined, workspace: string | null | undefined): {
@@ -9,16 +9,31 @@ export function useGitRemoteUrl(daemonId: string | null | undefined, workspace: 
     const { sendCommand } = useTransport()
     const [remoteUrl, setRemoteUrl] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
+    const requestSeqRef = useRef(0)
 
     useEffect(() => {
-        if (!daemonId || !workspace) { setRemoteUrl(null); return }
+        const requestSeq = requestSeqRef.current + 1
+        requestSeqRef.current = requestSeq
+        setRemoteUrl(null)
+        if (!daemonId || !workspace) {
+            setLoading(false)
+            return
+        }
         setLoading(true)
         void sendCommand(daemonId, 'git_remote_url', { workspace }).then((res) => {
+            if (requestSeqRef.current !== requestSeq) return
             const body = res?.result ?? res
             setRemoteUrl(typeof body?.remoteUrl === 'string' ? body.remoteUrl : null)
         }).catch(() => {
+            if (requestSeqRef.current !== requestSeq) return
             setRemoteUrl(null)
-        }).finally(() => setLoading(false))
+        }).finally(() => {
+            if (requestSeqRef.current !== requestSeq) return
+            setLoading(false)
+        })
+        return () => {
+            requestSeqRef.current += 1
+        }
     }, [daemonId, workspace, sendCommand])
 
     const githubUrl = extractGitHubUrl(remoteUrl)

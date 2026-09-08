@@ -46,8 +46,9 @@ export function readGitSubmodules(value: unknown, parentRepoRoot?: string): GitS
                 commit,
                 dirty: readBoolean(submodule.dirty) ?? false,
                 outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false,
-                lastCheckedAt: readNumber(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),
             }
+            const lastCheckedAt = readNumber(submodule.lastCheckedAt, submodule.last_checked_at)
+            if (lastCheckedAt !== undefined) result.lastCheckedAt = lastCheckedAt
             if (repoPath) result.repoPath = repoPath
             const error = readString(submodule.error)
             if (error) result.error = error
@@ -105,6 +106,7 @@ export function normalizeGitStatus(
     const untracked = readNumber(status.untracked) ?? 0
     const deleted = readNumber(status.deleted) ?? 0
     const renamed = readNumber(status.renamed) ?? 0
+    const lastCheckedAt = options?.lastCheckedAt ?? readNumber(status.lastCheckedAt, status.last_checked_at)
     return {
         workspace: readString(status.workspace, node.workspace) || '',
         repoRoot: repoRoot ?? null,
@@ -127,7 +129,7 @@ export function normalizeGitStatus(
         hasConflicts,
         conflictFiles,
         stashCount: readNumber(status.stashCount, status.stash_count) ?? 0,
-        lastCheckedAt: options?.lastCheckedAt ?? readNumber(status.lastCheckedAt, status.last_checked_at) ?? Date.now(),
+        ...(lastCheckedAt !== undefined ? { lastCheckedAt } : {}),
         ...(submodules ? { submodules } : {}),
         // Deploy-lag visibility: daemonBuildBehind is computed by the reporting
         // daemon's git probe (build commit vs workspace/submodule HEAD). It must
@@ -172,10 +174,9 @@ export function pickBestTransitGitStatus(node: JsonRecord, options?: { lastCheck
     const probeGitResult = readRecord(probeGit.result)
     const probeDirectStatus = readRecord(probeGit.status)
     const probeNestedStatus = readRecord(probeGitResult.status)
-    const lastCheckedAt = options?.lastCheckedAt
     let best: { git: GitRepoStatus; score: number } | null = null
     for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
-        const normalized = normalizeGitStatus(status, node, { lastCheckedAt: lastCheckedAt ?? Date.now() })
+        const normalized = normalizeGitStatus(status, node, options)
         if (!normalized) continue
         const score = scoreGitStatusCandidate(normalized)
         if (!best || score > best.score) best = { git: normalized, score }
