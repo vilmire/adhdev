@@ -23,8 +23,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { TerminalAdapter, type TerminalAdapterOpts, type SpecPtyEvent } from './adapter.js';
 import { resolveCliSpawnPlanFromParts, stripRemovedSpawnArgs } from '../../cli-adapters/provider-cli-runtime.js';
-import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import type { PtyRuntimeExitInfo, PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
+import type { SessionTermination } from '@adhdev/session-host-core';
 import {
     resolveSections, sectionText, extractTitle, extractButtonsFromRule,
     type ResolvedSection, type TraceEntry,
@@ -63,7 +64,12 @@ export type DashboardEvent =
     | { kind: 'notification'; id: string; title: string; body: string }
     | { kind: 'delegate'; id: string; task: string }
     | { kind: 'spec_trace'; entries: TraceEntry[] }
-    | { kind: 'exit'; exit_code: number }
+    | {
+        kind: 'exit';
+        exit_code: number | null;
+        signal?: number | null;
+        termination?: SessionTermination;
+    }
     | { kind: 'spec_error'; errors: string[] };
 
 export type DashboardCommand =
@@ -722,7 +728,7 @@ export class FsmDriver implements ISpecDriver {
                     this.emit({ kind: 'pty_data', chunk });
                 },
                 on_screen_changed: () => this.reevaluate(),
-                on_exit: ({ exitCode }) => this.handleExit(exitCode),
+                on_exit: (info) => this.handleExit(info),
             },
         );
         if (this.opts.hotReload !== false) this.armSpecWatcher();
@@ -2230,8 +2236,13 @@ export class FsmDriver implements ISpecDriver {
         this.pickerInProgress = null;
     }
 
-    private handleExit(exitCode: number): void {
-        this.emit({ kind: 'exit', exit_code: exitCode });
+    private handleExit(info: PtyRuntimeExitInfo): void {
+        this.emit({
+            kind: 'exit',
+            exit_code: info.exitCode,
+            ...(info.signal !== undefined ? { signal: info.signal } : {}),
+            ...(info.termination ? { termination: info.termination } : {}),
+        });
         this.shutdown();
     }
 

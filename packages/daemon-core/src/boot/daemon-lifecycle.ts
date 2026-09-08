@@ -48,6 +48,10 @@ import { migratePendingEventsJsonlToSqlite } from '../mesh/mesh-events-pending-m
 import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
+import {
+    installMeshTerminationObserver,
+    uninstallMeshTerminationObserver,
+} from '../mesh/mesh-termination-bridge.js';
 import { currentRefineExecutorBootId } from '../mesh/mesh-refine-executor-liveness.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
@@ -333,6 +337,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 1. Global log interceptor
     installGlobalInterceptor();
     loadMeshCoordinatorRegistry();
+    // Arm the provider→mesh termination seam. The spec adapter publishes a
+    // session-host tombstone to a neutral sink (it may not import mesh); this
+    // installs the mesh-side subscriber that turns one into a `session_stopped`
+    // ledger row. Must precede any provider spawn, or an early death goes
+    // unrecorded — which is the exact blind spot this bridge exists to close.
+    installMeshTerminationObserver();
 
     // 1.1 Apply persisted daemon env/flag overrides (config.json `envOverrides`)
     // to process.env BEFORE anything below reads a feature flag. Explicit
@@ -1395,6 +1405,9 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // stops trying to store text once the node is going away.
     try { configureHandoffNotesSeqscribe(null); } catch { /* noop */ }
     try { configureHandoffNoteSink(null); } catch { /* noop */ }
+    // Drop the termination observer too: sessions torn down below this point are
+    // dying because the daemon is going away, not because something killed them.
+    try { uninstallMeshTerminationObserver(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

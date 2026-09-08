@@ -44,6 +44,7 @@ import {
 import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
+import type { SessionTermination } from '@adhdev/session-host-core';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     encodeMeshSendKeys,
@@ -52,6 +53,7 @@ import {
     type MeshSendKeyName,
 } from '../../cli-adapters/provider-cli-shared.js';
 import { LOG } from '../../logging/logger.js';
+import { publishSessionTermination } from '../../shared/session-termination-sink.js';
 import {
     buildClaudeInteractiveTuiAnswerSteps,
     buildClaudeInteractiveToolResult,
@@ -117,6 +119,10 @@ export class SpecCliAdapter implements CliAdapter {
     /** Owning session id (session registry / read-path targetSessionId) —
      *  the sidecar-claim owner token for wire-based prompt detection. */
     private owningSessionId?: string;
+    /** Runtime settings are the authoritative in-daemon mesh binding. They are
+     *  mirrored here so the PTY exit seam can attribute a host tombstone before
+     *  the owning provider instance is disposed. */
+    private runtimeSettings: Record<string, unknown> = {};
     private lastEvent: DashboardEvent | null = null;
     private latestState: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
@@ -883,7 +889,9 @@ export class SpecCliAdapter implements CliAdapter {
             && (Date.now() - this.lastApprovalResolvedAt) < SpecCliAdapter.APPROVAL_RESOLVED_COOLDOWN_MS);
     }
     clearHistory(): void { /* no transcript buffer yet */ }
-    updateRuntimeSettings(_settings?: Record<string, unknown>): void { /* no runtime settings in spec model yet */ }
+    updateRuntimeSettings(settings?: Record<string, unknown>): void {
+        this.runtimeSettings = { ...(settings ?? {}) };
+    }
     setServerConn(_conn?: unknown): void { /* server conn unused by SpecDriver */ }
     /**
      * Map an invokeScript(name, args) call onto a control_bar entry.
@@ -1272,11 +1280,16 @@ export class SpecCliAdapter implements CliAdapter {
             case 'exit':
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
+                // This is the spec path's equivalent of the deleted legacy
+                // ProviderCliAdapter PTY onExit hook — the only point that sees
+                // the tombstone at all. It reports the death outward; the mesh
+                // side decides whether it earns a ledger row.
+                this.publishTerminationObservation(ev.termination);
                 // Some CLIs repaint the failure off-screen before exit. Re-run the
                 // classifier against the retained tail at the exit seam. The observer
                 // invokes statusCallback only when it discovers a new typed failure;
                 // otherwise this branch publishes the ordinary stopped transition.
-                if (!this.observeKimiAuthBillingOutput('', ev.exit_code)) this.statusCallback?.();
+                if (!this.observeKimiAuthBillingOutput('', ev.exit_code ?? undefined)) this.statusCallback?.();
                 return;
             case 'spec_error':
                 LOG.warn('SpecAdapter', `[${this.cliType}] spec reload error: ${ev.errors.join('; ')}`);
@@ -1284,6 +1297,32 @@ export class SpecCliAdapter implements CliAdapter {
             default:
                 return;
         }
+    }
+
+    /**
+     * Publish the session-host tombstone to the neutral termination seam.
+     *
+     * This layer deliberately does NOT decide what the death means or where it
+     * gets recorded — it only reports what it saw. Resolving the mesh binding and
+     * writing the ledger row belongs to the subscriber wired at daemon boot,
+     * because `providers/**` may not value-import `mesh/**` (enforced by
+     * scripts/check-import-boundaries.mjs). Forwarding `runtimeSettings` opaquely
+     * is what keeps this side mesh-unaware.
+     *
+     * `requestedStop` is intentionally NOT filtered here. The double-write guard
+     * (a host-requested stop already has an `operator_cleanup` row from the mesh
+     * cleanup path) lives with the writer in mesh-termination-bridge, so the
+     * policy has exactly one home and cannot drift between the two halves.
+     */
+    private publishTerminationObservation(termination?: SessionTermination): void {
+        if (!termination || !this.owningSessionId) return;
+        publishSessionTermination({
+            sessionId: this.owningSessionId,
+            providerType: this.cliType,
+            workspace: this.workingDir,
+            runtimeSettings: this.runtimeSettings,
+            termination,
+        });
     }
 
     private observeKimiAuthBillingOutput(chunk: string, exitCode?: number): boolean {
