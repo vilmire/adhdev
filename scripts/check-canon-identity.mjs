@@ -22,17 +22,38 @@
  *
  * Escape hatch: append `// canon-ok: <why>` to a line the gate flags when the
  * comparison is genuinely not a machine-identity check.
+ *
+ * Extra scan roots may be passed as CLI arguments (or ADHDEV_CANON_SCAN_ROOTS,
+ * path-separator delimited), resolved against the process cwd. The superproject
+ * uses this to also scan proprietary trees that live outside this repository —
+ * those paths must never be hard-coded here, since this repo is published on its
+ * own and only the defaults above are guaranteed to exist.
  */
-import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ossRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SCAN_ROOTS = [
+const DEFAULT_SCAN_ROOTS = [
   'packages/daemon-core/src',
   'packages/mcp-server/src',
   'packages/mesh-shared/src',
-];
+].map((p) => join(ossRoot, p));
+
+const extraRootArgs = [
+  ...process.argv.slice(2),
+  ...(process.env.ADHDEV_CANON_SCAN_ROOTS || '').split(delimiter),
+].filter(Boolean);
+
+const extraRoots = extraRootArgs.map((p) => (isAbsolute(p) ? p : resolve(process.cwd(), p)));
+const missing = extraRoots.filter((p) => !existsSync(p) || !statSync(p).isDirectory());
+if (missing.length > 0) {
+  console.error('canon-identity gate: scan root(s) not found:');
+  for (const p of missing) console.error(`  ${p}`);
+  process.exit(1);
+}
+
+const SCAN_ROOTS = [...DEFAULT_SCAN_ROOTS, ...extraRoots];
 
 const DAEMON_ID_TOKEN = /[a-zA-Z_$.]*[dD]aemonId[a-zA-Z_$]*/;
 const EQ_COMPARISON = new RegExp(
@@ -54,7 +75,7 @@ function* walk(dir) {
 
 const findings = [];
 for (const root of SCAN_ROOTS) {
-  for (const file of walk(join(ossRoot, root))) {
+  for (const file of walk(root)) {
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
       if (line.includes('canon-ok')) return;
@@ -81,7 +102,7 @@ for (const root of SCAN_ROOTS) {
 if (findings.length > 0) {
   console.error(`canon-identity gate: ${findings.length} raw daemon-id comparison(s) found:`);
   for (const f of findings) {
-    console.error(`  ${relative(ossRoot, f.file)}:${f.line} — ${f.rule}`);
+    console.error(`  ${relative(process.cwd(), f.file)}:${f.line} — ${f.rule}`);
     console.error(`      ${f.text}`);
   }
   console.error('Fix with helpers from packages/mesh-shared/src/daemon-normalize.ts, or annotate `// canon-ok: <why>` when not a machine-identity comparison.');
