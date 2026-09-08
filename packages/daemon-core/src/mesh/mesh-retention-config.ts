@@ -49,6 +49,32 @@ export function resolveSessionDeliveryRetentionMs(): number {
     return DEFAULT_SESSION_DELIVERY_RETENTION_MS;
 }
 
+// ─── (1b) mesh_turn_attempts retention ───────────────────────────────────────
+// TERMINAL attempt rows (terminal_outcome IS NOT NULL) past this window are
+// deleted, cascading to their mesh_turn_events / mesh_turn_held_suspensions
+// children. Nonterminal rows are NEVER pruned — they are the recovery set
+// (listActiveTurnAttempts → restart reconcile drain), and an old nonterminal row
+// is the stuck turn that most needs recovering. Two further anchors are enforced
+// in the SQL (see pruneTerminalTurnAttempts): each session's newest attempt
+// survives at any age, because getLatestTurnAttemptForSession has no time bound
+// and backs the presented session status; and an attempt still holding an
+// unresolved suspension stays with it.
+//
+// Default 30 days, aligned with MESH_TERMINAL_QUEUE_RETENTION_MS: an attempt row
+// is the turn-level companion of the queue row it came from, so letting the two
+// age out on different clocks would leave one side referring to a task the other
+// had already forgotten. Clamp [1d, 90d], same rationale as (1).
+export const DEFAULT_TURN_ATTEMPT_RETENTION_MS = 30 * DAY_MS;
+
+export function resolveTurnAttemptRetentionMs(): number {
+    const raw = readNonEmptyString(process.env.MESH_TURN_ATTEMPT_RETENTION_MS);
+    if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
+    }
+    return DEFAULT_TURN_ATTEMPT_RETENTION_MS;
+}
+
 // ─── (2) per-mesh ledger rotation cap ────────────────────────────────────────
 // Closed rotation files (<mesh>.<n>.jsonl and <mesh>.archive.<n>.jsonl) are the
 // only unbounded on-disk ledger growth left: the active file self-limits via

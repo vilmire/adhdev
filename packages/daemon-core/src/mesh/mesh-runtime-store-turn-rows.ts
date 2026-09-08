@@ -8,7 +8,7 @@
 // mesh-tools-internal.ts / mesh-tools.ts for precedent (export diff verified: 0 change
 // to mesh-runtime-store.ts's public surface).
 import { LOG } from '../logging/logger.js';
-import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
+import { resolveSessionDeliveryRetentionMs, resolveTurnAttemptRetentionMs } from './mesh-retention-config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 /** Row shape returned by the mesh_turn_attempts accessors (camelCase, store-agnostic). */
@@ -130,6 +130,14 @@ export function notifyLedgerBulkChange(): void {
 //   - Terminal queue rows 30 days: mesh_task_history / completion-dedup lookups are
 //     recent-task scoped; live dependsOn anchors are exempted inside
 //     pruneTerminalQueueEntries.
+//   - Terminal turn-attempt rows 30 days, cascading to mesh_turn_events and
+//     mesh_turn_held_suspensions: these were the last unbounded turn-side growth
+//     (one attempt row + its causal event log per dispatched turn, never deleted).
+//     Aligned with the terminal-queue window because an attempt is the turn-level
+//     companion of its queue row. Nonterminal rows, each session's newest attempt,
+//     and attempts holding an unresolved suspension are all exempted inside
+//     pruneTerminalTurnAttempts; the window is env-tunable
+//     (resolveTurnAttemptRetentionMs, clamped [1d, 90d]).
 //   - Terminal session-delivery rows 14 days (lifecycle retention Slice 1):
 //     completed/failed/expired/cancelled rows only — live/nonterminal rows
 //     (queued/delivering/delivered/acked) carry the retry/recovery semantics and
@@ -151,7 +159,15 @@ export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 
  * The returned counts are the content-free sweep metrics (row counts only, never
  * message/payload content).
  */
-export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number; terminalQueue: number; sessionDelivery: number } {
+export function pruneMeshRuntimeRetention(): {
+    ledger: number;
+    toolCalls: number;
+    terminalQueue: number;
+    sessionDelivery: number;
+    turnAttempts: number;
+    turnEvents: number;
+    turnHeldSuspensions: number;
+} {
     try {
         const store = MeshRuntimeStore.getInstance();
         const ledger = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS);
@@ -166,12 +182,21 @@ export function pruneMeshRuntimeRetention(): { ledger: number; toolCalls: number
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const sessionDelivery = store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs());
-        if (ledger + toolCalls + terminalQueue + sessionDelivery > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery row(s)`);
+        const turn = store.pruneTerminalTurnAttempts(resolveTurnAttemptRetentionMs());
+        if (ledger + toolCalls + terminalQueue + sessionDelivery + turn.attempts > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery / ${turn.attempts} turn-attempt (+${turn.events} turn-event, +${turn.heldSuspensions} held-suspension) row(s)`);
         }
-        return { ledger, toolCalls, terminalQueue, sessionDelivery };
+        return {
+            ledger,
+            toolCalls,
+            terminalQueue,
+            sessionDelivery,
+            turnAttempts: turn.attempts,
+            turnEvents: turn.events,
+            turnHeldSuspensions: turn.heldSuspensions,
+        };
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
-        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0 };
+        return { ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0, turnAttempts: 0, turnEvents: 0, turnHeldSuspensions: 0 };
     }
 }
