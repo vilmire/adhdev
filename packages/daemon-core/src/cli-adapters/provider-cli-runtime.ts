@@ -62,6 +62,31 @@ function isFlagToken(arg: unknown): arg is string {
 }
 
 /**
+ * Per-arg cap for the spawn diagnostic log line below. Flags, session ids and
+ * uuids are all well under this (session ids run ~60 chars); a `cli_arg`
+ * prompt injection (contracts.ts `MeshCoordinatorSystemPromptInjection`,
+ * mode: 'cli_arg') pushes the full mesh coordinator prompt onto argv and can
+ * run to tens of KB, which is what this caps.
+ */
+const SPAWN_LOG_ARG_MAX_CHARS = 200;
+
+/**
+ * Render argv for the spawn diagnostic log, truncating any single argument
+ * that exceeds SPAWN_LOG_ARG_MAX_CHARS so a `cli_arg`-mode prompt injection
+ * cannot blow the log line up to the size of the prompt itself. Never mutates
+ * the argv actually passed to spawn — only the logged string.
+ */
+function renderArgsForLog(args: readonly string[]): string {
+    return args
+        .map((arg) => {
+            if (arg.length <= SPAWN_LOG_ARG_MAX_CHARS) return arg;
+            const omitted = arg.length - SPAWN_LOG_ARG_MAX_CHARS;
+            return `${arg.slice(0, SPAWN_LOG_ARG_MAX_CHARS)}…(+${omitted} chars)`;
+        })
+        .join(' ');
+}
+
+/**
  * Flags declared by `extraArgs`, normalized to their bare form so both the
  * `--flag value` and `--flag=value` spellings collapse to `--flag`.
  */
@@ -250,11 +275,18 @@ export function resolveCliSpawnPlanFromParts(options: {
     // This lives here because the legacy provider-module path and the spec/FSM
     // path both funnel through this function: logging in ProviderCliAdapter
     // alone covered kimi but silently missed codex, which spawns via FsmDriver.
-    // Args are provider flags and ids — never prompt or transcript text — so
-    // this stays content-free.
+    //
+    // NOT content-free: args are usually just provider flags and ids, but a
+    // `cli_arg`-mode system-prompt injection (contracts.ts
+    // MeshCoordinatorSystemPromptInjection, mode: 'cli_arg') pushes the full
+    // mesh coordinator prompt onto argv for that CLI, and it lands here whole.
+    // renderArgsForLog truncates any single arg over SPAWN_LOG_ARG_MAX_CHARS
+    // so a prompt-sized arg cannot blow this line — and the log file — up to
+    // the size of the prompt itself; short args (flags, ids) pass through
+    // unchanged.
     LOG.info(
         'CLI',
-        `[${diagnosticCliType || 'cli'}] Spawning (spec v${diagnosticProviderVersion || 'unknown'}) in ${workingDir}: ${binaryPath} ${allArgs.join(' ')}`,
+        `[${diagnosticCliType || 'cli'}] Spawning (spec v${diagnosticProviderVersion || 'unknown'}) in ${workingDir}: ${binaryPath} ${renderArgsForLog(allArgs)}`,
     );
 
     return {
