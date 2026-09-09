@@ -289,7 +289,8 @@
     },
     "approval": {
         "processing": "처리 중...",
-        "actionRequired": "조치 필요"
+        "actionRequired": "조치 필요",
+        "alwaysAllowWarning": "이 권한을 영구적으로 허용합니다 — 이후 실행에서 다시 묻지 않습니다"
     },
     "newSession": {
         "title": "세션 시작",
@@ -394,7 +395,7 @@
         "idle": "유휴",
         "unreadSuffix": " · 읽지 않음 {{count}}개",
         "noActiveChats": "활성 채팅 없음",
-        "needsAttention": "조치 필요",
+        "needsAttention": "확인이 필요합니다",
         "taskComplete": "작업 완료",
         "workingNow": "작업 중",
         "earlier": "이전",
@@ -416,7 +417,6 @@
         "reconnectingItem": "재연결 중…",
         "connectingItem": "연결 중…",
         "actionNeeded": "조치 필요",
-        "needsAttention": "확인이 필요합니다",
         "done": "완료",
         "openMeshGraphFor": "{{title}} 메시 그래프 열기",
         "openLiveMeshGraph": "실시간 리포 메시 그래프 열기",
@@ -1427,7 +1427,9 @@
         "replicaDegraded": "실시간 동기화에 문제가 있어 이전 방식으로 표시 중입니다",
         "busyNoProgress": "에이전트가 진행 상황이 없습니다.",
         "busyGenerating": "에이전트가 응답을 생성 중입니다.",
-        "busyWaitingApproval": "에이전트가 승인을 기다리고 있습니다. 승인 컨트롤이 준비되면 표시됩니다."
+        "busyWaitingApproval": "에이전트가 승인을 기다리고 있습니다. 승인 컨트롤이 준비되면 표시됩니다.",
+        "activityToggleLabel": "활동",
+        "activityToggleTitle": "도구 호출·터미널·생각 활동 행 표시"
     },
     "chatInput": {
         "attachImage": "이미지 첨부",
@@ -3307,7 +3309,13 @@
         "appearance": {
             "modeLabel": "모드",
             "themeLabel": "테마",
-            "mobileLabel": "모바일"
+            "mobileLabel": "모바일",
+            "chatLabel": "채팅"
+        },
+        "chatActivity": {
+            "rowLabel": "채팅에 에이전트 활동 표시",
+            "descriptionOn": "도구 호출·터미널 출력·생각 과정이 채팅 메시지 사이에 표시됩니다.",
+            "descriptionOff": "채팅 메시지만 표시됩니다. 도구 호출·터미널 출력·생각 과정은 숨겨집니다."
         }
     },
     "historyModal": {

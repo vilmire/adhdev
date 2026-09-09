@@ -289,7 +289,8 @@
     },
     "approval": {
         "processing": "PROCESANDO...",
-        "actionRequired": "ACCIÓN REQUERIDA"
+        "actionRequired": "ACCIÓN REQUERIDA",
+        "alwaysAllowWarning": "Concede este permiso de forma permanente — las próximas ejecuciones no volverán a preguntar"
     },
     "newSession": {
         "title": "Iniciar sesión",
@@ -394,7 +395,7 @@
         "idle": "Inactivo",
         "unreadSuffix": " · {{count}} sin leer",
         "noActiveChats": "No hay chats activos",
-        "needsAttention": "Requiere atención",
+        "needsAttention": "Necesita atención",
         "taskComplete": "Tarea completada",
         "workingNow": "Trabajando ahora",
         "earlier": "Anteriores",
@@ -416,7 +417,6 @@
         "reconnectingItem": "Reconectando…",
         "connectingItem": "Conectando…",
         "actionNeeded": "Se requiere acción",
-        "needsAttention": "Necesita atención",
         "done": "Listo",
         "openMeshGraphFor": "Abrir el grafo de mesh de {{title}}",
         "openLiveMeshGraph": "Abrir el grafo de repo mesh en vivo",
@@ -1432,7 +1432,9 @@
         "replicaDegraded": "La sincronización en vivo tiene problemas: se muestran los mensajes del modo anterior",
         "busyNoProgress": "El agente no muestra progreso.",
         "busyGenerating": "El agente está generando una respuesta.",
-        "busyWaitingApproval": "El agente está esperando aprobación. Los controles de aprobación aparecerán cuando estén disponibles."
+        "busyWaitingApproval": "El agente está esperando aprobación. Los controles de aprobación aparecerán cuando estén disponibles.",
+        "activityToggleLabel": "Actividad",
+        "activityToggleTitle": "Mostrar filas de actividad de herramientas, terminal y razonamiento"
     },
     "chatInput": {
         "attachImage": "Adjuntar imagen",
@@ -3312,7 +3314,13 @@
         "appearance": {
             "modeLabel": "Modo",
             "themeLabel": "Tema",
-            "mobileLabel": "Móvil"
+            "mobileLabel": "Móvil",
+            "chatLabel": "Chat"
+        },
+        "chatActivity": {
+            "rowLabel": "Mostrar actividad del agente en el chat",
+            "descriptionOn": "Las llamadas a herramientas, la salida del terminal y el razonamiento se muestran entre los mensajes.",
+            "descriptionOff": "Solo se muestran los mensajes de chat. Las llamadas a herramientas, la salida del terminal y el razonamiento permanecen ocultos."
         }
     },
     "historyModal": {

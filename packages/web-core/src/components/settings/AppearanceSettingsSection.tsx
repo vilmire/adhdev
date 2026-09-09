@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { GeneralThemeSection } from './GeneralThemeSection'
 import { ChatThemeSection } from './ChatThemeSection'
+import { ChatActivitySection } from './ChatActivitySection'
 import { MobileDashboardModeSection } from './MobileDashboardModeSection'
 
 export interface AppearanceSettingsSectionProps {
@@ -47,6 +48,12 @@ export function AppearanceSettingsSection({
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.themeLabel')}</div>
                 <p className="text-2xs text-text-muted mb-3">{themeDescription}</p>
                 <ChatThemeSection />
+            </div>
+
+            {/* Chat transcript */}
+            <div className="border-t border-border-subtle pt-4">
+                <div className="text-xs text-text-muted mb-1 font-medium">{t('settings.appearance.chatLabel')}</div>
+                <ChatActivitySection />
             </div>
 
             {/* Fonts (optional, standalone-only) */}

@@ -9,6 +9,7 @@
     "./index.css": "./src/index.css",
     "./constants/supported": "./src/constants/supported.ts",
     "./utils/provider-priority": "./src/utils/provider-priority.ts",
+    "./utils/debug-flags": "./src/utils/debug-flags.ts",
     "./transcript-transport": "./src/transcript-transport/index.ts",
     "./transcript-transport/worker-entry": "./src/transcript-transport/transcript-worker-entry.ts"
   },

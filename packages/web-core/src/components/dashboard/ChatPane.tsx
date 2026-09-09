@@ -40,9 +40,10 @@ import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
 import {
-    CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY,
     filterChatActivityMessages,
     readChatActivityVisiblePreference,
+    setChatActivityVisiblePreference,
+    subscribeChatActivityVisiblePreference,
 } from './chat-activity-visibility';
 
 export interface ChatPaneProps {
@@ -401,13 +402,16 @@ export default function ChatPane({
         visibleLiveCount,
     ]);
 
-    useEffect(() => {
-        const onStorage = (event: StorageEvent) => {
-            if (event.key !== CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) return;
-            setShowActivityMessages(readChatActivityVisiblePreference());
-        };
-        window.addEventListener('storage', onStorage);
-        return () => window.removeEventListener('storage', onStorage);
+    // React to preference flips from the Settings toggle (same document, custom
+    // event) and from other tabs (storage event).
+    useEffect(() => subscribeChatActivityVisiblePreference(setShowActivityMessages), []);
+
+    const handleActivityToggle = useCallback(() => {
+        setShowActivityMessages((current) => {
+            const next = !current;
+            setChatActivityVisiblePreference(next);
+            return next;
+        });
     }, []);
 
     const handleControlsToggleDebugGesture = useCallback(() => {
@@ -497,11 +501,25 @@ export default function ChatPane({
             {...buildTranscriptReadSourceAttributes(chatTailState)}
         >
             {/* Message Stream */}
-{/* Compact chat header. The old Activity toggle lived here but it didn't carry
-                its weight — activity rows already follow the user's preference, and the
-                button just added noise above every chat. The session-info (ⓘ) action
-                takes its place: same row, right-aligned, opens SessionInfoDialog. */}
+{/* Compact chat header. The Activity toggle was dropped once as noise, which
+                left the visibility preference with readers but no writer — activity rows
+                became permanently hidden for everyone (O5). Restored by owner decision:
+                it flips the same global preference the Settings → Appearance toggle
+                writes, with the live activity-row count as the affordance. */}
             <div className="chat-activity-toggle-bar">
+                <button
+                    type="button"
+                    className={`chat-activity-toggle ${showActivityMessages ? 'chat-activity-toggle-active' : ''}`}
+                    onClick={handleActivityToggle}
+                    aria-pressed={showActivityMessages}
+                    title={t('chatPane.activityToggleTitle')}
+                >
+                    <span className="chat-activity-toggle-dot" />
+                    {t('chatPane.activityToggleLabel')}
+                    {activityToggleCount > 0 && (
+                        <span className="chat-activity-toggle-count">{activityToggleCount}</span>
+                    )}
+                </button>
                 <div className="ml-auto flex items-center gap-1">
                     <ConversationMuteButton
                         sessionId={activeConv.sessionId}

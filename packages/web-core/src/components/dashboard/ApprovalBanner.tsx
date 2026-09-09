@@ -62,9 +62,18 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                 <div className="flex gap-2 flex-wrap">
                     {activeConv.modalButtons.map((btnText, idx) => {
                         const clean = cleanBtnText(btnText).toLowerCase();
-                        // "Always allow" grants the broadest ongoing permission — it must not
-                        // read as the recommended/default choice, so it's excluded from the
-                        // primary (strong) treatment and falls through to neutral styling below.
+                        // (O6) Visual hierarchy follows RISK, not affirmativeness. Button
+                        // ORDER is left exactly as the daemon reported it — reordering
+                        // would break muscle memory and cause mis-taps; only styling ranks
+                        // the choices:
+                        //   1. one-time approve (isPrimary) — solid, strongest: the safe
+                        //      affirmative default the eye should land on first
+                        //   2. reject (isDanger) — red tint: the safe exit, kept loud
+                        //   3. neutral choices — translucent
+                        //   4. "Always allow" (isAlwaysAllow) — LEAST prominent: outline
+                        //      only, warning icon. It grants the broadest standing
+                        //      permission and is hard to walk back, so it must read as a
+                        //      deliberate opt-in, never as the recommended choice.
                         const isAlwaysAllow = /^always\b/.test(clean);
                         const isPrimary = !isAlwaysAllow && /^(run|approve|accept|yes|allow|always)/.test(clean);
                         const isDanger = /^(reject|deny|delete|remove|abort)/.test(clean);
@@ -75,9 +84,11 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                 key={idx}
                                 onClick={() => handleClick(btnText)}
                                 disabled={isDisabled}
+                                title={isAlwaysAllow ? t('approval.alwaysAllowWarning') : undefined}
                                 className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 ${
                                     isPrimary ? 'font-extrabold'
                                     : isDanger ? 'bg-red-500/30 text-white font-semibold'
+                                    : isAlwaysAllow ? 'text-white/90 font-semibold'
                                     : 'text-white font-semibold'
                                 } ${isDisabled && !isThisPending ? 'opacity-40' : 'opacity-100'} ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                                 style={isPrimary
@@ -86,14 +97,23 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                         background: 'var(--surface-primary)',
                                         boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--status-warning) 18%, transparent)',
                                     }
-                                    : !isDanger
+                                    : isAlwaysAllow
                                         ? {
-                                            background: 'color-mix(in srgb, var(--surface-primary) 82%, transparent)',
-                                            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 10%, transparent)',
+                                            background: 'transparent',
+                                            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 55%, transparent)',
                                         }
-                                        : undefined}
+                                        : !isDanger
+                                            ? {
+                                                background: 'color-mix(in srgb, var(--surface-primary) 82%, transparent)',
+                                                boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 10%, transparent)',
+                                            }
+                                            : undefined}
                             >
-                                {isThisPending ? <IconSpinner size={12} /> : cleanBtnText(btnText)}
+                                {isThisPending
+                                    ? <IconSpinner size={12} />
+                                    : isAlwaysAllow
+                                        ? <span className="inline-flex items-center gap-1"><IconWarning size={11} />{cleanBtnText(btnText)}</span>
+                                        : cleanBtnText(btnText)}
                             </button>
                         );
                     })}
