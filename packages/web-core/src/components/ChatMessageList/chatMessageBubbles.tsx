@@ -31,6 +31,12 @@ import {
     type StructuredMessagePart,
 } from './chatMessageHelpers';
 
+// System bubbles (git errors, status lines, long file paths) truncate at this
+// length before the "show more" toggle kicks in. 100 chars is roughly one
+// terminal line of context — enough to identify the message at a glance
+// without the system-message row dominating the chat column (G8).
+const SYSTEM_BUBBLE_TRUNCATE_LENGTH = 100;
+
 function CopyButton({ text }: { text: string }) {
     const { t } = useTranslation('common');
     const [copied, setCopied] = useState(false);
@@ -488,8 +494,8 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         // reusing the row's existing isTextExpanded/onToggleTextExpanded (already
         // threaded in for the standard-bubble expand toggle) lets it expand in
         // place, consistent with how a long assistant/user bubble expands.
-        const isTruncated = contentStr.length > 100;
-        const systemText = isTextExpanded || !isTruncated ? contentStr : `${contentStr.slice(0, 100)}…`;
+        const isTruncated = contentStr.length > SYSTEM_BUBBLE_TRUNCATE_LENGTH;
+        const systemText = isTextExpanded || !isTruncated ? contentStr : `${contentStr.slice(0, SYSTEM_BUBBLE_TRUNCATE_LENGTH)}…`;
         return (
             <div className="self-center chat-msg-system" title={contentStr}>
                 {hasStructuredRenderer && structuredParts ? (
