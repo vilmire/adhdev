@@ -3649,25 +3649,25 @@
         },
         "scenario": {
             "sectionTitle": "一句话。Mac构建，Windows测试，main落地。",
-            "sectionSubtitle": "真实场景：分配一个任务，智能体并行分发到Mac和Windows工作树，各自在隔离环境中验证，Refinery将两者都落地到main——无人值守。",
-            "step1Label": "分配任务",
-            "step1Desc": "用一句话告诉协调器要构建什么。",
-            "step2Label": "智能体分发",
-            "step2Desc": "同时分发到Mac和Windows节点——各自在独立的git工作树中，无共享状态。",
-            "step3Label": "各工作树验证",
-            "step3Desc": "类型检查、测试、代码规范——你的仓库自己的检查门，在异构机器上并行运行。",
-            "step4Label": "Refinery收敛",
-            "step4Desc": "补丁等价性检查、子模块可达性门控、仅fast-forward。不强制推送。",
-            "step5Label": "main自动落地",
-            "step5Desc": "完成的工作到达main。你从未需要坐在终端前。",
-            "caveat": "Mac和Windows是经过验证的日常驱动节点。Linux也受支持。"
+            "sectionSubtitle": "真实会话的三个步骤：你把要做的事说一遍，智能体在多台机器上并行工作，完成的代码抵达main——你无需守在终端前。",
+            "step1Label": "描述要做的事",
+            "step1Desc": "用一句话告诉它要构建什么。无需配置，无需逐台机器设置。",
+            "step2Label": "智能体并行运行",
+            "step2Desc": "工作同时分派到你的Mac和Windows机器——各自在自己的分支上，运行你项目的测试和检查。",
+            "step3Label": "完成的代码落地main",
+            "step3Desc": "检查通过后，工作会自动、安全地合并进main。拿不准的会留给你审查——绝不force-push。",
+            "caveat": "Mac和Windows是经过验证的日常主力机器。Linux同样受支持。"
         }
     },
     "interactivePrompt": {
         "selectAllThatApply": "选择所有适用项",
         "multipleChoice": "多选",
         "singleChoice": "单选",
-        "other": "其他"
+        "other": "其他",
+        "answersRequired_one": "还有{{count}}个问题需要回答",
+        "answersRequired_other": "还有{{count}}个问题需要回答",
+        "errorReviewPageNotFocused": "终端正在显示其他画面，回答未能提交——请检查终端画面，或关闭此窗口后重试。",
+        "errorReviewUnconfirmed": "回答已发送，但终端未及时确认。再次回答前请先检查终端画面——重新发送可能会提交两次。"
     },
     "git": {
         "changeList": {

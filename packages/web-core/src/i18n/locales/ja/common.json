@@ -3649,25 +3649,25 @@
         },
         "scenario": {
             "sectionTitle": "プロンプト一つ。Macがビルド、Windowsがテスト、mainに着地。",
-            "sectionSubtitle": "実際のセッション: ミッションを割り当てると、エージェントがMacとWindowsのワークツリーに並行展開し、それぞれ隔離環境で検証した後、Refineryが両方をmainに着地させます — 無人で。",
-            "step1Label": "ミッション割り当て",
-            "step1Desc": "コーディネーターに何を作るか一文で指示します。",
-            "step2Label": "エージェント展開",
-            "step2Desc": "MacとWindowsノードに同時ディスパッチ — それぞれ独立したgitワークツリー、共有状態なし。",
-            "step3Label": "各ワークツリー検証",
-            "step3Desc": "型チェック、テスト、リント — リポジトリ独自のゲートが異種マシンで並行実行。",
-            "step4Label": "Refinery収束",
-            "step4Desc": "パッチ等価性確認、サブモジュール到達可能性ゲート、fast-forwardのみ。force-pushなし。",
-            "step5Label": "main着地、無人で",
-            "step5Desc": "完成した作業がmainに届きます。ターミナルの前にいる必要はありませんでした。",
-            "caveat": "MacとWindowsが検証済みの日常使用ノードです。Linuxもサポートしています。"
+            "sectionSubtitle": "実際のセッションを3ステップで: やることを一度説明すると、エージェントが複数のマシンで並行して作業し、完成したコードがmainに届きます — ターミナルの前に座っていなくても。",
+            "step1Label": "やることを説明",
+            "step1Desc": "何を作るか一文で伝えます。設定も、マシンごとのセットアップも不要です。",
+            "step2Label": "エージェントが並行実行",
+            "step2Desc": "作業がMacとWindowsのマシンに同時に分かれます — それぞれ自分のブランチで、プロジェクトのテストと検査を実行しながら。",
+            "step3Label": "完成したコードがmainに着地",
+            "step3Desc": "検査を通過すると、自動で安全にmainへマージされます。曖昧なものはレビュー用に保留され — force-pushは決してありません。",
+            "caveat": "MacとWindowsが検証済みの日常使用マシンです。Linuxもサポートしています。"
         }
     },
     "interactivePrompt": {
         "selectAllThatApply": "該当するものをすべて選択",
         "multipleChoice": "複数選択",
         "singleChoice": "単一選択",
-        "other": "その他"
+        "other": "その他",
+        "answersRequired_one": "回答が必要な質問が{{count}}件あります",
+        "answersRequired_other": "回答が必要な質問が{{count}}件あります",
+        "errorReviewPageNotFocused": "ターミナルが別の画面を表示しているため、回答は送信されませんでした — ターミナル画面を確認するか、これを閉じてもう一度お試しください。",
+        "errorReviewUnconfirmed": "回答は送信されましたが、ターミナルが時間内に確認しませんでした。もう一度回答する前にターミナル画面を確認してください — 再送信すると二重に送信される可能性があります。"
     },
     "git": {
         "changeList": {
