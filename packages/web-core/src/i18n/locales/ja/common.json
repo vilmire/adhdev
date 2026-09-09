@@ -1807,7 +1807,9 @@
             "updatePayment": "お支払い方法を更新してください",
             "managePayment": "お支払いと請求書を管理",
             "couldNotOpenPortal": "お支払いポータルを開けませんでした",
+            "checkoutSuccess": "サブスクリプションが有効になりました。アップグレードいただきありがとうございます！",
             "statMachines": "マシン",
+            "statSharedSessions": "共有セッション",
             "statTurnPerDay": "TURN 分/日",
             "resetsDailyUtc": "毎日 UTC 00:00 にリセット",
             "resetsInHours_one": "約{{count}}時間後",
@@ -1818,11 +1820,13 @@
             "monthly": "月額",
             "yearly": "年額",
             "savePercent": "年払いで最大 {{pct}}% お得",
+            "pricesInUsd": "すべての価格は米ドル（USD）表示です",
             "paddleLoading": "Paddle を読み込み中です。もう一度お試しください。",
             "cancelConfirm": "サブスクリプションを解約してもよろしいですか？請求期間の終了まではアクセスを維持できます。",
             "cancelSubscription": "サブスクリプションを解約",
             "cancelRetainAccess": "現在の請求期間の終了まで {{plan}} の機能へのアクセスを維持できます。",
-            "cancelTeamDowngrade": " すべてのチームメンバーは個人プランにダウングレードされます。"
+            "cancelTeamDowngrade": " すべてのチームメンバーは個人プランにダウングレードされます。",
+            "cancelFailed": "サブスクリプションの解約に失敗しました"
         },
         "about": {
             "title": "概要",

@@ -1807,7 +1807,9 @@
             "updatePayment": "请更新你的付款方式",
             "managePayment": "管理付款与发票",
             "couldNotOpenPortal": "无法打开账单门户",
+            "checkoutSuccess": "订阅已生效，感谢你的升级！",
             "statMachines": "机器",
+            "statSharedSessions": "共享会话",
             "statTurnPerDay": "TURN 分钟/天",
             "resetsDailyUtc": "每天 UTC 00:00 重置",
             "resetsInHours_one": "约 {{count}} 小时后",
@@ -1818,11 +1820,13 @@
             "monthly": "按月",
             "yearly": "按年",
             "savePercent": "年付最多节省 {{pct}}%",
+            "pricesInUsd": "所有价格均以美元（USD）计",
             "paddleLoading": "Paddle 正在加载，请重试。",
             "cancelConfirm": "确定要取消订阅吗？在当前计费周期结束前，你仍可继续使用。",
             "cancelSubscription": "取消订阅",
             "cancelRetainAccess": "在当前计费周期结束前，你仍可使用 {{plan}} 的功能。",
-            "cancelTeamDowngrade": " 所有团队成员将被降级到各自的个人套餐。"
+            "cancelTeamDowngrade": " 所有团队成员将被降级到各自的个人套餐。",
+            "cancelFailed": "取消订阅失败"
         },
         "about": {
             "title": "关于",

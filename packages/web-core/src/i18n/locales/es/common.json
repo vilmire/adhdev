@@ -1812,7 +1812,9 @@
             "updatePayment": "Actualiza tu método de pago",
             "managePayment": "Gestionar pagos y facturas",
             "couldNotOpenPortal": "No se pudo abrir el portal de facturación",
+            "checkoutSuccess": "Tu suscripción está activa. ¡Gracias por actualizar!",
             "statMachines": "Máquinas",
+            "statSharedSessions": "Sesiones compartidas",
             "statTurnPerDay": "min TURN/día",
             "resetsDailyUtc": "Se reinicia a diario a las 00:00 UTC",
             "resetsInHours_one": "~{{count}} h restante",
@@ -1823,11 +1825,13 @@
             "monthly": "Mensual",
             "yearly": "Anual",
             "savePercent": "Ahorra hasta un {{pct}} % al año",
+            "pricesInUsd": "Todos los precios en USD",
             "paddleLoading": "Paddle se está cargando, inténtalo de nuevo.",
             "cancelConfirm": "¿Seguro que quieres cancelar tu suscripción? Conservarás el acceso hasta el final de tu período de facturación.",
             "cancelSubscription": "Cancelar suscripción",
             "cancelRetainAccess": "Conservarás el acceso a las funciones de {{plan}} hasta el final de tu período de facturación actual.",
-            "cancelTeamDowngrade": " Todos los miembros del equipo pasarán a sus planes personales."
+            "cancelTeamDowngrade": " Todos los miembros del equipo pasarán a sus planes personales.",
+            "cancelFailed": "No se pudo cancelar la suscripción"
         },
         "about": {
             "title": "Acerca de",
