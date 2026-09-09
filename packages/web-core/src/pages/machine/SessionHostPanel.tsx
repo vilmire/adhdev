@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
     getSessionHostAvailabilityBadge,
+    getSessionHostLifecycleLabel,
     getSessionHostNextActionLabel,
     getSessionHostRecoveryLabel,
     getSessionHostSectionHint,
@@ -185,8 +186,8 @@ export default function SessionHostPanel({
     const loading = sessionHostSubscription.loading
     const applyDiagnostics = sessionHostSubscription.applyDiagnostics
     const availabilityBadge = useMemo(
-        () => getSessionHostAvailabilityBadge({ diagnostics, loading, refreshing, error }),
-        [diagnostics, loading, refreshing, error],
+        () => getSessionHostAvailabilityBadge({ diagnostics, loading, refreshing, error, t }),
+        [diagnostics, loading, refreshing, error, t],
     )
     const cliBySessionId = useMemo(
         () => new Map(cliSessions.map((session) => [session.sessionId || session.id, session])),
@@ -325,12 +326,13 @@ export default function SessionHostPanel({
         const busyResume = busyActionKey === `session_host_resume_session:${session.sessionId}`
         const busyRestart = busyActionKey === `session_host_restart_session:${session.sessionId}`
         const busyStop = busyActionKey === `session_host_stop_session:${session.sessionId}`
-        const recoveryLabel = getSessionHostRecoveryLabel(session.meta)
+        const recoveryLabel = getSessionHostRecoveryLabel(session.meta, t)
         const linkedCli = cliBySessionId.get(session.sessionId)
         const clientsLabel = t('sessionHost.clientsCount', { count: session.attachedClients.length })
         const recoveryActionLabel = section === 'recovery' ? t('sessionHost.recover') : t('sessionHost.resume')
         const recoveryActionBusyLabel = section === 'recovery' ? t('sessionHost.recovering') : t('sessionHost.resuming')
-        const nextActionLabel = getSessionHostNextActionLabel(section)
+        const nextActionLabel = getSessionHostNextActionLabel(section, t)
+        const lifecycleLabel = getSessionHostLifecycleLabel(session.lifecycle, t)
         return (
             <div key={session.sessionId} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                 <div className="flex items-start justify-between gap-3">
@@ -340,7 +342,7 @@ export default function SessionHostPanel({
                                 {session.displayName || linkedCli?.cliName || session.providerType}
                             </div>
                             <span className={`px-2 py-0.5 rounded-md text-3xs font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
-                                {session.lifecycle}
+                                {lifecycleLabel}
                             </span>
                             {recoveryLabel && (
                                 <span className="px-2 py-0.5 rounded-md text-3xs font-semibold bg-sky-500/[0.08] text-sky-300">
@@ -370,7 +372,7 @@ export default function SessionHostPanel({
                             <span className="text-text-muted">·</span>
                             <span className="text-text-primary/85">active {formatRelativeTime(session.lastActivityAt)}</span>
                             <span className="text-text-muted">·</span>
-                            <span className="text-sky-200">Next: {nextActionLabel}</span>
+                            <span className="text-sky-200">{t('sessionHost.nextAction', { action: nextActionLabel })}</span>
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -500,7 +502,7 @@ export default function SessionHostPanel({
                                 <IconTerminal size={14} /> {t('sessionHost.liveTitle')}
                             </div>
                             <div className="text-2xs text-text-secondary mb-2.5">
-                                {getSessionHostSectionHint('live')}
+                                {getSessionHostSectionHint('live', t)}
                             </div>
                             {liveSessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
@@ -518,7 +520,7 @@ export default function SessionHostPanel({
                                 <IconServer size={14} /> {t('sessionHost.recoveryTitle')}
                             </div>
                             <div className="text-2xs text-text-secondary mb-2.5">
-                                {getSessionHostSectionHint('recovery')}
+                                {getSessionHostSectionHint('recovery', t)}
                             </div>
                             {recoverySessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
@@ -537,7 +539,7 @@ export default function SessionHostPanel({
                                     {t('sessionHost.inactiveTitle')}
                                 </div>
                                 <div className="text-2xs text-text-secondary mb-2.5">
-                                    {getSessionHostSectionHint('inactive')}
+                                    {getSessionHostSectionHint('inactive', t)}
                                 </div>
                                 <div className="space-y-2 opacity-85">
                                     {inactiveSessions.map((session) => renderSessionCard(session, 'inactive'))}

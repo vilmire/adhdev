@@ -11,10 +11,18 @@ import { getMachineSessionDedupeKey } from '../components/dashboard/conversation
 
 // ─── Formatters ──────────────────────────────────
 
-/** Format IDE type string (e.g. 'cursor' → 'Cursor', 'claude-code-vscode' → 'Claude Code Vscode') */
+// Title-casing each hyphen segment mangles names with non-standard
+// capitalization (vscode → Vscode, pearai → Pearai). Override with the
+// provider manifest's displayName for the words known to need it.
+const IDE_WORD_OVERRIDES: Record<string, string> = {
+    vscode: 'VS Code',
+    pearai: 'PearAI',
+}
+
+/** Format IDE type string (e.g. 'cursor' → 'Cursor', 'claude-code-vscode' → 'Claude Code VS Code') */
 export function formatIdeType(type: string): string {
     if (!type) return 'IDE'
-    return type.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+    return type.split('-').map(w => IDE_WORD_OVERRIDES[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())).join(' ')
 }
 
 /** Convert seconds to human-readable uptime format */

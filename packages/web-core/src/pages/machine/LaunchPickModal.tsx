@@ -48,7 +48,7 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                 </p>
                 <div className="flex flex-col gap-2 mb-4 max-h-48 overflow-y-auto">
                     {(machine.workspaces || []).length === 0 ? (
-                        <span className="text-2xs text-text-muted">No saved workspaces yet. Add one in Overview or type a path above.</span>
+                        <span className="text-2xs text-text-muted">No saved workspaces yet. Add one in the Workspace tab or type a path above.</span>
                     ) : (
                         (machine.workspaces || []).map(w => (
                             <button

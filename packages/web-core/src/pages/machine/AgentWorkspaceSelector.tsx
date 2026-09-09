@@ -51,7 +51,7 @@ export default function AgentWorkspaceSelector({
                         </>
                     ) : (
                         <>
-                            <option value="">(no workspaces saved — add in Overview tab)</option>
+                            <option value="">(no workspaces saved — add in Workspace tab)</option>
                             <option value="__custom__">{canBrowse ? 'Select workspace…' : 'Custom path…'}</option>
                         </>
                     )}

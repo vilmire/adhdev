@@ -39,6 +39,7 @@ import LaunchPickModal from './machine/LaunchPickModal'
 import MachineCommandCenter from './machine/MachineCommandCenter'
 import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
 import GitStatusDialog from '../components/git/GitStatusDialog'
+import { ProviderLogo } from '../components/ProviderLogo'
 import LaunchConfirmDialog from '../components/machine/LaunchConfirmDialog'
 import { buildLaunchWorkspaceOptions } from '../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './machine/types'
@@ -99,15 +100,12 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const [providerSyncBusy, setProviderSyncBusy] = useState(false)
     const [providerSyncNonce, setProviderSyncNonce] = useState(0)
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
-    void useCallback((daemonId: string, workspace: string) => {
-        setGitDialogTarget({ daemonId, workspace })
-    }, [])
     const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
     const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
         title: string
         description: string
-        details: Array<{ label: string; value: string }>
+        details: Array<{ label: string; value: ReactNode }>
         confirmLabel: string
         busyLabel?: string
         workspaceOptions: LaunchWorkspaceOption[]
@@ -504,10 +502,22 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             workspaceOptions: options,
             details: [
                 { label: 'Mode', value: session.kind.toUpperCase() },
-                ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
+                ...(session.providerType ? [{
+                    label: 'Provider',
+                    value: (() => {
+                        const providerInfo = providers.find(p => p.type === session.providerType)
+                        const providerLabel = providerInfo?.displayName || session.providerType
+                        return (
+                            <span className="flex items-center gap-1.5">
+                                <ProviderLogo type={session.providerType} label={providerLabel} size={14} />
+                                {providerLabel}
+                            </span>
+                        )
+                    })(),
+                }] : []),
             ],
         })
-    }, [actions, machine])
+    }, [actions, machine, providers])
 
     useEffect(() => {
         setActiveTab(effectiveTab)

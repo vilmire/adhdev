@@ -1,6 +1,6 @@
 /**
  * ProvidersTab — Dynamic provider settings with filter and inline editing.
- * Now includes Auto-Fix (AI agent script implementation) and Clone Provider modals.
+ * Includes the Clone Provider modal.
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -31,6 +31,7 @@ import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderR
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 import { IconSpinner } from '../../components/Icons'
+import { AlertBanner } from '../../components/ui/AlertBanner'
 
 interface ProvidersTabProps {
     machineId: string
@@ -58,6 +59,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [channelNewTypes, setChannelNewTypes] = useState<string[]>([])
     const [installingNewType, setInstallingNewType] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
+    const [loadError, setLoadError] = useState<string | null>(null)
     const [savingKey, setSavingKey] = useState<string | null>(null)
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('cli')
     const [showClone, setShowClone] = useState(false)
@@ -81,8 +83,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 setSourceModeInput(payload.sourceMode)
                 setProviderDirInput(payload.explicitProviderDir || '')
             }
-        } catch { }
-    }, [machineId, sendDaemonCommand])
+        } catch (e: any) {
+            setLoadError(t('machine.providers.loadFailed', { error: e?.message || String(e) }))
+        }
+    }, [machineId, sendDaemonCommand, t])
 
     const fetchSettings = useCallback(async () => {
         if (!machineId) return
@@ -96,10 +100,13 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 })
                 entries.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName))
                 setSettings(entries)
+                setLoadError(null)
             }
-        } catch { }
+        } catch (e: any) {
+            setLoadError(t('machine.providers.loadFailed', { error: e?.message || String(e) }))
+        }
         setLoading(false)
-    }, [machineId, providers, sendDaemonCommand])
+    }, [machineId, providers, sendDaemonCommand, t])
 
     const fetchQuotaAccountLabel = useCallback(async () => {
         if (!machineId) return
@@ -144,12 +151,16 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         try {
             const res = await sendDaemonCommand(machineId, 'set_quota_provider_enabled', { providerType, enabled })
             const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as { success?: boolean; error?: unknown } | undefined
-            if (body?.success === false && typeof body.error === 'string') console.warn(`set_quota_provider_enabled failed: ${body.error}`)
+            if (body?.success === false) {
+                setLoadError(t('machine.providers.quotaToggleFailed', { provider: providerType, error: typeof body.error === 'string' ? body.error : 'unknown error' }))
+            }
+        } catch (e: any) {
+            setLoadError(t('machine.providers.quotaToggleFailed', { provider: providerType, error: e?.message || String(e) }))
         } finally {
             // Reconcile with what the daemon actually stored.
             await fetchQuotaEnabled()
         }
-    }, [machineId, sendDaemonCommand, fetchQuotaEnabled])
+    }, [machineId, sendDaemonCommand, fetchQuotaEnabled, t])
 
     /**
      * Verified-channel pins + what the channel currently offers.
@@ -391,6 +402,12 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     >{t('machine.providers.advanced')}</button>
                 </div>
             </div>
+
+            {loadError && (
+                <AlertBanner variant="error" onDismiss={() => setLoadError(null)}>
+                    {loadError}
+                </AlertBanner>
+            )}
 
             {/* Verified-channel types never installed on this machine (kimi
                 class: first published AFTER this machine bootstrapped, so no
