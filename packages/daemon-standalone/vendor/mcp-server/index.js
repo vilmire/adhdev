@@ -135629,6 +135629,429 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_router_refine();
       }
     });
+    async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
+      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord?.mesh;
+      if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
+      const allNodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
+      const isConvergeable = (n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace;
+      let targetNodes;
+      if (Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0) {
+        targetNodes = [];
+        const missing = [];
+        const nonWorktree = [];
+        for (const nodeId of requestedNodeIds) {
+          const node = allNodes.find((n) => meshNodeIdMatches4(n, nodeId));
+          if (!node) {
+            missing.push(nodeId);
+            continue;
+          }
+          if (!isConvergeable(node)) {
+            nonWorktree.push(nodeId);
+            continue;
+          }
+          targetNodes.push(node);
+        }
+        if (missing.length || nonWorktree.length) {
+          return {
+            success: false,
+            error: "One or more requested nodes are not convergeable local worktree nodes.",
+            ...missing.length ? { missingNodeIds: missing } : {},
+            ...nonWorktree.length ? { nonWorktreeNodeIds: nonWorktree } : {}
+          };
+        }
+      } else {
+        targetNodes = allNodes.filter(isConvergeable);
+      }
+      if (targetNodes.length === 0) {
+        return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: "No convergeable local worktree nodes found." };
+      }
+      const { execFile: execFile9 } = await import("child_process");
+      const { promisify: promisify11 } = await import("util");
+      const execFileAsync8 = promisify11(execFile9);
+      const resolveRepoRootFor = (node) => {
+        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches4(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
+        return sourceNode?.repoRoot || sourceNode?.workspace;
+      };
+      const repoRootBaseRef = /* @__PURE__ */ new Map();
+      const submodulePathsByRepoRoot = /* @__PURE__ */ new Map();
+      const resolveBaseRef = async (repoRoot) => {
+        const cached5 = repoRootBaseRef.get(repoRoot);
+        if (cached5) return cached5;
+        let baseBranch = "main";
+        try {
+          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          if (stdout.trim()) baseBranch = stdout.trim();
+        } catch {
+        }
+        let baseRef = "HEAD";
+        try {
+          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
+        } catch {
+        }
+        try {
+          const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          baseRef = stdout.trim();
+        } catch {
+          try {
+            const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            baseRef = stdout.trim();
+          } catch {
+          }
+        }
+        repoRootBaseRef.set(repoRoot, baseRef);
+        return baseRef;
+      };
+      const changeAreas = [];
+      for (const node of targetNodes) {
+        const repoRoot = resolveRepoRootFor(node);
+        let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
+        try {
+          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+          if (stdout.trim()) branch = stdout.trim();
+        } catch {
+        }
+        if (!repoRoot || !branch) {
+          changeAreas.push({
+            nodeId: node.id,
+            workspace: node.workspace,
+            branch: branch || "(unknown)",
+            changedTopLevelPaths: [],
+            changedFiles: [],
+            touchedSubmodulePaths: [],
+            touchesSubmodule: false,
+            aheadCount: 0,
+            error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
+          });
+          continue;
+        }
+        if (!submodulePathsByRepoRoot.has(repoRoot)) {
+          let subPaths = /* @__PURE__ */ new Set();
+          try {
+            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            for (const line of stdout.split("\n")) {
+              const trimmed = line.trim();
+              const spaceIdx = trimmed.indexOf(" ");
+              if (spaceIdx === -1) continue;
+              const value = trimmed.slice(spaceIdx + 1).trim();
+              if (value) subPaths.add(value);
+            }
+          } catch {
+            subPaths = /* @__PURE__ */ new Set();
+          }
+          submodulePathsByRepoRoot.set(repoRoot, subPaths);
+        }
+        const baseRef = await resolveBaseRef(repoRoot);
+        let branchRef = branch;
+        try {
+          const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+          branchRef = stdout.trim() || branch;
+        } catch {
+        }
+        changeAreas.push(await analyzeMeshRefineNodeChangeArea({
+          nodeId: node.id,
+          workspace: node.workspace,
+          branch,
+          baseRef,
+          branchRef,
+          diffCwd: node.workspace,
+          repoRoot,
+          submodulePaths: submodulePathsByRepoRoot.get(repoRoot)
+        }));
+      }
+      const ordering = orderMeshRefineBatchNodes(changeAreas);
+      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches4(n, nodeId))).filter((n) => !!n);
+      const dryRun = args?.dryRun !== false && args?.execute !== true;
+      if (dryRun) {
+        return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
+      }
+      return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
+    }
+    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args) {
+      const refineOne = async (node) => {
+        let result;
+        try {
+          result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args);
+        } catch (e) {
+          result = { success: false, error: e?.message || String(e) };
+        }
+        const { convergence, code, stage, retryable } = classifyBatchNodeConvergence(result);
+        const fbcs = result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === "object" ? result.finalBranchConvergenceState : void 0;
+        return {
+          nodeId: node.id,
+          workspace: node.workspace,
+          convergence,
+          ...code ? { code } : {},
+          ...typeof result.blockedReason === "string" ? { reason: result.blockedReason } : {},
+          ...stage ? { stage } : {},
+          ...typeof result.error === "string" ? { error: result.error } : {},
+          ...retryable ? { retryable: true } : {},
+          ...fbcs ? { finalBranchConvergenceState: fbcs } : {}
+        };
+      };
+      const results = [];
+      const retryQueue = [];
+      for (const node of orderedNodes) {
+        const outcome = await refineOne(node);
+        results.push(outcome);
+        if (outcome.retryable) retryQueue.push(node);
+      }
+      for (const node of retryQueue) {
+        const idx = results.findIndex((r) => r.nodeId === node.id);
+        const retried = await refineOne(node);
+        retried.retried = true;
+        if (idx >= 0) results[idx] = retried;
+        else results.push(retried);
+      }
+      const summary = {
+        merged: results.filter((r) => r.convergence === "merged_to_main").length,
+        skipped: results.filter((r) => r.convergence === "skipped_patch_equivalent").length,
+        blocked: results.filter((r) => r.convergence === "blocked_review").length,
+        notMergeable: results.filter((r) => r.convergence === "not_mergeable").length,
+        ...retryQueue.length ? { retried: retryQueue.length } : {}
+      };
+      const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
+      return {
+        success: true,
+        batch: true,
+        dryRun: false,
+        nodeCount: orderedNodes.length,
+        order: ordering.order,
+        orderingRationale: ordering.rationale,
+        summary,
+        allConverged,
+        results,
+        ...allConverged ? {} : {
+          // Name the failed nodes inline — the aggregate nextStep used to hide
+          // WHICH nodes blocked, forcing a manual git-log cross-check.
+          nextStep: `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
+        }
+      };
+    }
+    function buildRefineBatchJobKey(self, meshId) {
+      return `${meshId}::batch`;
+    }
+    function buildRefineBatchJobHandle(self, args) {
+      return {
+        success: true,
+        async: true,
+        batch: true,
+        status: args.status || "accepted",
+        jobId: args.jobId || `refine_batch_${createInteractionId()}`,
+        interactionId: args.interactionId || createInteractionId(),
+        meshId: args.meshId,
+        batchLabel: `batch:${args.nodeIds.length} node${args.nodeIds.length === 1 ? "" : "s"}`,
+        nodeIds: args.nodeIds,
+        nodeCount: args.nodeIds.length,
+        order: args.order,
+        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
+        ...args.completedAt ? { completedAt: args.completedAt } : {},
+        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
+        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
+        eventDelivery: { pendingEvents: true, ledger: true },
+        evidence: {
+          pendingEventsCommand: "get_pending_mesh_events",
+          ledgerCommand: "get_mesh_ledger_slice",
+          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
+        }
+      };
+    }
+    function queueRefineBatchJobEvent(self, event, handle, result) {
+      const metadataEvent = {
+        source: "refine_mesh_node_async_job",
+        batch: true,
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        meshId: handle.meshId,
+        nodeId: handle.batchLabel,
+        nodeIds: handle.nodeIds,
+        workspace: void 0,
+        status: handle.status,
+        startedAt: handle.startedAt,
+        completedAt: handle.completedAt,
+        order: handle.order,
+        ...result ? { result } : {}
+      };
+      const eventPayload = {
+        event,
+        meshId: handle.meshId,
+        nodeLabel: handle.batchLabel,
+        nodeId: handle.batchLabel,
+        metadataEvent: {
+          ...metadataEvent,
+          // REFINE-EVENT-SESSION-SCOPED-UNICAST — see queueRefineJobEvent.
+          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+        },
+        queuedAt: Date.now(),
+        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+        // THE FIX (batch half) — address the batch terminal event to the requesting
+        // coordinator SESSION so a sibling session cannot consume it.
+        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+      };
+      if (typeof self.deps.instanceManager?.getByCategory === "function") {
+        const forwarded = handleMeshForwardEvent(
+          { instanceManager: self.deps.instanceManager },
+          {
+            event,
+            meshId: handle.meshId,
+            nodeId: handle.batchLabel,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            status: handle.status,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            // RC32: same return-address passthrough as queueRefineJobEvent —
+            // the sessionless batch job's terminal event must stay targeted
+            // at the originating coordinator, not self-fallback to this daemon.
+            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+            // REFINE-EVENT-SESSION-SCOPED-UNICAST — session half of the return
+            // address, both spellings (see queueRefineJobEvent).
+            ...handle.targetCoordinatorSessionId ? {
+              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
+              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
+            } : {},
+            ...result ? { result } : {}
+          }
+        );
+        if (forwarded?.success === true) return;
+        LOG.warn("Mesh", `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || "unknown error"}`);
+      }
+      queuePendingMeshCoordinatorEvent(eventPayload);
+    }
+    async function appendRefineBatchJobLedger(self, kind, handle, result) {
+      try {
+        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
+        appendLedgerEntry22(handle.meshId, {
+          kind,
+          nodeId: handle.batchLabel,
+          payload: {
+            source: "refine_mesh_node_async_job",
+            refineJob: {
+              batch: true,
+              jobId: handle.jobId,
+              interactionId: handle.interactionId,
+              status: handle.status,
+              meshId: handle.meshId,
+              nodeIds: handle.nodeIds,
+              order: handle.order,
+              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
+              startedAt: handle.startedAt,
+              completedAt: handle.completedAt
+            },
+            async: true,
+            batch: true,
+            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
+            ...result ? {
+              success: result.success === true,
+              result
+            } : {}
+          }
+        });
+      } catch (e) {
+        LOG.warn("Mesh", `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
+      }
+    }
+    async function finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args) {
+      const key2 = buildRefineBatchJobKey(self, handle.meshId);
+      let result;
+      try {
+        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args);
+      } catch (e) {
+        result = { success: false, error: e?.message || String(e), batch: true };
+      }
+      const completedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const summary = result.summary && typeof result.summary === "object" ? result.summary : void 0;
+      const allConverged = result.allConverged === true;
+      const isTerminalSuccess = result.success === true && allConverged;
+      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : isTerminalSuccess ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
+      const normalizedResult = {
+        ...result,
+        batch: true,
+        nextStep,
+        ...summary ? {
+          convergenceStatus: allConverged ? "all_converged" : "partial"
+        } : {}
+      };
+      const terminalHandle = buildRefineBatchJobHandle(self, {
+        meshId: handle.meshId,
+        nodeIds: handle.nodeIds,
+        order: handle.order,
+        status: isTerminalSuccess ? "completed" : "failed",
+        startedAt: handle.startedAt,
+        completedAt,
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        // REFINE-EVENT-SESSION-SCOPED-UNICAST — carry the requester's session onto the
+        // terminal batch handle (see the single-node path).
+        coordinatorSessionId: handle.targetCoordinatorSessionId
+      });
+      const terminal = { ...terminalHandle, result: normalizedResult };
+      self.terminalRefineBatchJobs.set(key2, terminal);
+      self.runningRefineBatchJobs.delete(key2);
+      self.invalidateAggregateMeshStatus(handle.meshId);
+      await appendRefineBatchJobLedger(self, isTerminalSuccess ? "task_completed" : "task_failed", terminalHandle, normalizedResult);
+      queueRefineBatchJobEvent(self, isTerminalSuccess ? "refine:completed" : "refine:failed", terminalHandle, normalizedResult);
+    }
+    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
+      const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+      const planRecord = plan;
+      if (planRecord.success !== true) return plan;
+      if (args?.dryRun === true && args?.execute !== true) return plan;
+      const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
+      const nodeIds = order.slice();
+      if (nodeIds.length === 0) {
+        return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
+      }
+      const key2 = buildRefineBatchJobKey(self, meshId);
+      const running = self.runningRefineBatchJobs.get(key2);
+      if (running) return { ...running, duplicate: true };
+      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord?.mesh;
+      const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+      const orderedNodes = nodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches4(n, id))).filter((n) => !!n);
+      if (orderedNodes.length === 0) {
+        return { success: false, error: "Batch nodes no longer resolvable in mesh", batch: true };
+      }
+      const ordering = {
+        order,
+        rationale: planRecord.orderingRationale
+      };
+      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
+      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
+      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
+      self.runningRefineBatchJobs.set(key2, handle);
+      await appendRefineBatchJobLedger(self, "task_dispatched", handle);
+      queueRefineBatchJobEvent(self, "refine:accepted", handle);
+      setImmediate(() => {
+        void runWithRefineExecutionSlot(
+          `batch ${handle.jobId} (mesh ${meshId})`,
+          () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args)
+        );
+      });
+      return {
+        ...handle,
+        order,
+        orderingRationale: planRecord.orderingRationale,
+        plan: planRecord.plan,
+        note: "Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly."
+      };
+    }
+    var init_router_refine_batch_jobs = __esm2({
+      "src/commands/router-refine-batch-jobs.ts"() {
+        "use strict";
+        init_logger();
+        init_debug_trace();
+        init_dist();
+        init_mesh_events();
+        init_mesh_refine_batch();
+        init_mesh_refine_submodule_preflight();
+        init_git_locale();
+        init_mesh_refine_concurrency();
+        init_router_refine();
+      }
+    });
     var router_refine_exports = {};
     __export2(router_refine_exports, {
       appendRefineBatchJobLedger: () => appendRefineBatchJobLedger,
@@ -137075,144 +137498,6 @@ ${e?.stderr || ""}`;
         finalBranchConvergenceState
       } };
     }
-    async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
-      if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
-      const allNodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
-      const isConvergeable = (n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace;
-      let targetNodes;
-      if (Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0) {
-        targetNodes = [];
-        const missing = [];
-        const nonWorktree = [];
-        for (const nodeId of requestedNodeIds) {
-          const node = allNodes.find((n) => meshNodeIdMatches4(n, nodeId));
-          if (!node) {
-            missing.push(nodeId);
-            continue;
-          }
-          if (!isConvergeable(node)) {
-            nonWorktree.push(nodeId);
-            continue;
-          }
-          targetNodes.push(node);
-        }
-        if (missing.length || nonWorktree.length) {
-          return {
-            success: false,
-            error: "One or more requested nodes are not convergeable local worktree nodes.",
-            ...missing.length ? { missingNodeIds: missing } : {},
-            ...nonWorktree.length ? { nonWorktreeNodeIds: nonWorktree } : {}
-          };
-        }
-      } else {
-        targetNodes = allNodes.filter(isConvergeable);
-      }
-      if (targetNodes.length === 0) {
-        return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: "No convergeable local worktree nodes found." };
-      }
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
-      const resolveRepoRootFor = (node) => {
-        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches4(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
-        return sourceNode?.repoRoot || sourceNode?.workspace;
-      };
-      const repoRootBaseRef = /* @__PURE__ */ new Map();
-      const submodulePathsByRepoRoot = /* @__PURE__ */ new Map();
-      const resolveBaseRef = async (repoRoot) => {
-        const cached5 = repoRootBaseRef.get(repoRoot);
-        if (cached5) return cached5;
-        let baseBranch = "main";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) baseBranch = stdout.trim();
-        } catch {
-        }
-        let baseRef = "HEAD";
-        try {
-          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
-        } catch {
-        }
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          baseRef = stdout.trim();
-        } catch {
-          try {
-            const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-            baseRef = stdout.trim();
-          } catch {
-          }
-        }
-        repoRootBaseRef.set(repoRoot, baseRef);
-        return baseRef;
-      };
-      const changeAreas = [];
-      for (const node of targetNodes) {
-        const repoRoot = resolveRepoRootFor(node);
-        let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) branch = stdout.trim();
-        } catch {
-        }
-        if (!repoRoot || !branch) {
-          changeAreas.push({
-            nodeId: node.id,
-            workspace: node.workspace,
-            branch: branch || "(unknown)",
-            changedTopLevelPaths: [],
-            changedFiles: [],
-            touchedSubmodulePaths: [],
-            touchesSubmodule: false,
-            aheadCount: 0,
-            error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
-          });
-          continue;
-        }
-        if (!submodulePathsByRepoRoot.has(repoRoot)) {
-          let subPaths = /* @__PURE__ */ new Set();
-          try {
-            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-            for (const line of stdout.split("\n")) {
-              const trimmed = line.trim();
-              const spaceIdx = trimmed.indexOf(" ");
-              if (spaceIdx === -1) continue;
-              const value = trimmed.slice(spaceIdx + 1).trim();
-              if (value) subPaths.add(value);
-            }
-          } catch {
-            subPaths = /* @__PURE__ */ new Set();
-          }
-          submodulePathsByRepoRoot.set(repoRoot, subPaths);
-        }
-        const baseRef = await resolveBaseRef(repoRoot);
-        let branchRef = branch;
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          branchRef = stdout.trim() || branch;
-        } catch {
-        }
-        changeAreas.push(await analyzeMeshRefineNodeChangeArea({
-          nodeId: node.id,
-          workspace: node.workspace,
-          branch,
-          baseRef,
-          branchRef,
-          diffCwd: node.workspace,
-          repoRoot,
-          submodulePaths: submodulePathsByRepoRoot.get(repoRoot)
-        }));
-      }
-      const ordering = orderMeshRefineBatchNodes(changeAreas);
-      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches4(n, nodeId))).filter((n) => !!n);
-      const dryRun = args?.dryRun !== false && args?.execute !== true;
-      if (dryRun) {
-        return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
-      }
-      return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
-    }
     function classifyBatchNodeConvergence(result) {
       const code = typeof result.code === "string" ? result.code : "";
       const stage = Array.isArray(result.refineStages) ? result.refineStages.filter((s2) => s2.status === "failed").map((s2) => s2.stage).filter(Boolean).pop() : void 0;
@@ -137228,277 +137513,6 @@ ${e?.stderr || ""}`;
       }
       const retryable = convergence === "blocked_review" && (result.retryable === true || RETRYABLE_BASE_MOVEMENT_CODES.has(code));
       return { convergence, code, retryable, ...stage ? { stage } : {} };
-    }
-    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args) {
-      const refineOne = async (node) => {
-        let result;
-        try {
-          result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args);
-        } catch (e) {
-          result = { success: false, error: e?.message || String(e) };
-        }
-        const { convergence, code, stage, retryable } = classifyBatchNodeConvergence(result);
-        const fbcs = result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === "object" ? result.finalBranchConvergenceState : void 0;
-        return {
-          nodeId: node.id,
-          workspace: node.workspace,
-          convergence,
-          ...code ? { code } : {},
-          ...typeof result.blockedReason === "string" ? { reason: result.blockedReason } : {},
-          ...stage ? { stage } : {},
-          ...typeof result.error === "string" ? { error: result.error } : {},
-          ...retryable ? { retryable: true } : {},
-          ...fbcs ? { finalBranchConvergenceState: fbcs } : {}
-        };
-      };
-      const results = [];
-      const retryQueue = [];
-      for (const node of orderedNodes) {
-        const outcome = await refineOne(node);
-        results.push(outcome);
-        if (outcome.retryable) retryQueue.push(node);
-      }
-      for (const node of retryQueue) {
-        const idx = results.findIndex((r) => r.nodeId === node.id);
-        const retried = await refineOne(node);
-        retried.retried = true;
-        if (idx >= 0) results[idx] = retried;
-        else results.push(retried);
-      }
-      const summary = {
-        merged: results.filter((r) => r.convergence === "merged_to_main").length,
-        skipped: results.filter((r) => r.convergence === "skipped_patch_equivalent").length,
-        blocked: results.filter((r) => r.convergence === "blocked_review").length,
-        notMergeable: results.filter((r) => r.convergence === "not_mergeable").length,
-        ...retryQueue.length ? { retried: retryQueue.length } : {}
-      };
-      const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
-      return {
-        success: true,
-        batch: true,
-        dryRun: false,
-        nodeCount: orderedNodes.length,
-        order: ordering.order,
-        orderingRationale: ordering.rationale,
-        summary,
-        allConverged,
-        results,
-        ...allConverged ? {} : {
-          // Name the failed nodes inline — the aggregate nextStep used to hide
-          // WHICH nodes blocked, forcing a manual git-log cross-check.
-          nextStep: `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
-        }
-      };
-    }
-    function buildRefineBatchJobKey(self, meshId) {
-      return `${meshId}::batch`;
-    }
-    function buildRefineBatchJobHandle(self, args) {
-      return {
-        success: true,
-        async: true,
-        batch: true,
-        status: args.status || "accepted",
-        jobId: args.jobId || `refine_batch_${createInteractionId()}`,
-        interactionId: args.interactionId || createInteractionId(),
-        meshId: args.meshId,
-        batchLabel: `batch:${args.nodeIds.length} node${args.nodeIds.length === 1 ? "" : "s"}`,
-        nodeIds: args.nodeIds,
-        nodeCount: args.nodeIds.length,
-        order: args.order,
-        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
-        ...args.completedAt ? { completedAt: args.completedAt } : {},
-        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
-        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
-        eventDelivery: { pendingEvents: true, ledger: true },
-        evidence: {
-          pendingEventsCommand: "get_pending_mesh_events",
-          ledgerCommand: "get_mesh_ledger_slice",
-          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
-        }
-      };
-    }
-    function queueRefineBatchJobEvent(self, event, handle, result) {
-      const metadataEvent = {
-        source: "refine_mesh_node_async_job",
-        batch: true,
-        jobId: handle.jobId,
-        interactionId: handle.interactionId,
-        meshId: handle.meshId,
-        nodeId: handle.batchLabel,
-        nodeIds: handle.nodeIds,
-        workspace: void 0,
-        status: handle.status,
-        startedAt: handle.startedAt,
-        completedAt: handle.completedAt,
-        order: handle.order,
-        ...result ? { result } : {}
-      };
-      const eventPayload = {
-        event,
-        meshId: handle.meshId,
-        nodeLabel: handle.batchLabel,
-        nodeId: handle.batchLabel,
-        metadataEvent: {
-          ...metadataEvent,
-          // REFINE-EVENT-SESSION-SCOPED-UNICAST — see queueRefineJobEvent.
-          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-        },
-        queuedAt: Date.now(),
-        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-        // THE FIX (batch half) — address the batch terminal event to the requesting
-        // coordinator SESSION so a sibling session cannot consume it.
-        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-      };
-      if (typeof self.deps.instanceManager?.getByCategory === "function") {
-        const forwarded = handleMeshForwardEvent(
-          { instanceManager: self.deps.instanceManager },
-          {
-            event,
-            meshId: handle.meshId,
-            nodeId: handle.batchLabel,
-            jobId: handle.jobId,
-            interactionId: handle.interactionId,
-            status: handle.status,
-            startedAt: handle.startedAt,
-            completedAt: handle.completedAt,
-            // RC32: same return-address passthrough as queueRefineJobEvent —
-            // the sessionless batch job's terminal event must stay targeted
-            // at the originating coordinator, not self-fallback to this daemon.
-            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-            // REFINE-EVENT-SESSION-SCOPED-UNICAST — session half of the return
-            // address, both spellings (see queueRefineJobEvent).
-            ...handle.targetCoordinatorSessionId ? {
-              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
-              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
-            } : {},
-            ...result ? { result } : {}
-          }
-        );
-        if (forwarded?.success === true) return;
-        LOG.warn("Mesh", `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || "unknown error"}`);
-      }
-      queuePendingMeshCoordinatorEvent(eventPayload);
-    }
-    async function appendRefineBatchJobLedger(self, kind, handle, result) {
-      try {
-        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
-        appendLedgerEntry22(handle.meshId, {
-          kind,
-          nodeId: handle.batchLabel,
-          payload: {
-            source: "refine_mesh_node_async_job",
-            refineJob: {
-              batch: true,
-              jobId: handle.jobId,
-              interactionId: handle.interactionId,
-              status: handle.status,
-              meshId: handle.meshId,
-              nodeIds: handle.nodeIds,
-              order: handle.order,
-              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
-              startedAt: handle.startedAt,
-              completedAt: handle.completedAt
-            },
-            async: true,
-            batch: true,
-            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
-            ...result ? {
-              success: result.success === true,
-              result
-            } : {}
-          }
-        });
-      } catch (e) {
-        LOG.warn("Mesh", `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
-      }
-    }
-    async function finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args) {
-      const key2 = buildRefineBatchJobKey(self, handle.meshId);
-      let result;
-      try {
-        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args);
-      } catch (e) {
-        result = { success: false, error: e?.message || String(e), batch: true };
-      }
-      const completedAt = (/* @__PURE__ */ new Date()).toISOString();
-      const summary = result.summary && typeof result.summary === "object" ? result.summary : void 0;
-      const allConverged = result.allConverged === true;
-      const isTerminalSuccess = result.success === true && allConverged;
-      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : isTerminalSuccess ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
-      const normalizedResult = {
-        ...result,
-        batch: true,
-        nextStep,
-        ...summary ? {
-          convergenceStatus: allConverged ? "all_converged" : "partial"
-        } : {}
-      };
-      const terminalHandle = buildRefineBatchJobHandle(self, {
-        meshId: handle.meshId,
-        nodeIds: handle.nodeIds,
-        order: handle.order,
-        status: isTerminalSuccess ? "completed" : "failed",
-        startedAt: handle.startedAt,
-        completedAt,
-        jobId: handle.jobId,
-        interactionId: handle.interactionId,
-        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
-        // REFINE-EVENT-SESSION-SCOPED-UNICAST — carry the requester's session onto the
-        // terminal batch handle (see the single-node path).
-        coordinatorSessionId: handle.targetCoordinatorSessionId
-      });
-      const terminal = { ...terminalHandle, result: normalizedResult };
-      self.terminalRefineBatchJobs.set(key2, terminal);
-      self.runningRefineBatchJobs.delete(key2);
-      self.invalidateAggregateMeshStatus(handle.meshId);
-      await appendRefineBatchJobLedger(self, isTerminalSuccess ? "task_completed" : "task_failed", terminalHandle, normalizedResult);
-      queueRefineBatchJobEvent(self, isTerminalSuccess ? "refine:completed" : "refine:failed", terminalHandle, normalizedResult);
-    }
-    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
-      const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
-      const planRecord = plan;
-      if (planRecord.success !== true) return plan;
-      if (args?.dryRun === true && args?.execute !== true) return plan;
-      const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
-      const nodeIds = order.slice();
-      if (nodeIds.length === 0) {
-        return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
-      }
-      const key2 = buildRefineBatchJobKey(self, meshId);
-      const running = self.runningRefineBatchJobs.get(key2);
-      if (running) return { ...running, duplicate: true };
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
-      const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const orderedNodes = nodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches4(n, id))).filter((n) => !!n);
-      if (orderedNodes.length === 0) {
-        return { success: false, error: "Batch nodes no longer resolvable in mesh", batch: true };
-      }
-      const ordering = {
-        order,
-        rationale: planRecord.orderingRationale
-      };
-      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
-      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
-      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
-      self.runningRefineBatchJobs.set(key2, handle);
-      await appendRefineBatchJobLedger(self, "task_dispatched", handle);
-      queueRefineBatchJobEvent(self, "refine:accepted", handle);
-      setImmediate(() => {
-        void runWithRefineExecutionSlot(
-          `batch ${handle.jobId} (mesh ${meshId})`,
-          () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args)
-        );
-      });
-      return {
-        ...handle,
-        order,
-        orderingRationale: planRecord.orderingRationale,
-        plan: planRecord.plan,
-        note: "Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly."
-      };
     }
     function shouldAutoRetryRefine(result) {
       const alreadyRetried = result.refineRetried === true;
@@ -137688,8 +137702,6 @@ ${e?.stderr || ""}`;
         init_mesh_events();
         init_mesh_reconcile_identity();
         init_mesh_fast_forward();
-        init_mesh_refine_batch();
-        init_mesh_refine_submodule_preflight();
         init_mesh_refine_base_divergence();
         init_mesh_refine_inflight();
         init_mesh_refine_inflight();
@@ -137708,6 +137720,7 @@ ${e?.stderr || ""}`;
         init_mesh_refine_base_cas();
         init_mesh_refine_concurrency();
         init_router_refine_resume();
+        init_router_refine_batch_jobs();
         RETRYABLE_BASE_MOVEMENT_CODES = /* @__PURE__ */ new Set(["base_moved", "base_locked", "base_cas_undeterminable"]);
       }
     });
