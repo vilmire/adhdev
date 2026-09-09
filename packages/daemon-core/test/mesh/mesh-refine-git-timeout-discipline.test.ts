@@ -82,10 +82,15 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
     });
 
     it('router-refine bounds its fetch and push network calls', () => {
-        const src = readFileSync(
-            fileURLToPath(new URL('../../src/commands/router-refine.ts', import.meta.url)),
-            'utf8',
-        );
+        // The batch Refinery orchestration (incl. one of the fetch call sites) moved out
+        // of router-refine.ts into router-refine-batch-jobs.ts (pure move, no behavior
+        // change). Only the read path follows it — every assertion below is unchanged.
+        const src = ['router-refine.ts', 'router-refine-batch-jobs.ts']
+            .map(f => readFileSync(
+                fileURLToPath(new URL(`../../src/commands/${f}`, import.meta.url)),
+                'utf8',
+            ))
+            .join('\n');
         const network = src.match(/execFileAsync\('git', \['(?:fetch|push)'[\s\S]{0,240}?\}\);/g) ?? [];
         expect(network.length).toBeGreaterThanOrEqual(3);
         expect(network.filter(call => !/timeout:/.test(call))).toEqual([]);
