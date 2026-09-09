@@ -80676,37 +80676,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         "use strict";
       }
     });
-    async function waitForRemoteSessionReady(meshId, nodeId, sessionId, opts) {
-      if (!sessionId) return false;
-      const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
-      const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
-      const now = opts.now ?? (() => Date.now());
-      const sleep4 = opts.sleep ?? ((ms) => new Promise((resolve34) => setTimeout(resolve34, ms)));
-      const deadline = now() + timeoutMs;
-      for (; ; ) {
-        let ready = false;
-        try {
-          ready = opts.isReady();
-        } catch {
-          return false;
-        }
-        if (ready) return true;
-        if (now() >= deadline) break;
-        await sleep4(pollMs);
-      }
-      LOG.warn("MeshQueue", `Remote auto-launched session ${sessionId} on node ${nodeId} (mesh ${meshId}) did not report agent:ready within ${timeoutMs}ms; proceeding optimistically \u2014 unchanged behavior, the claim still fires via the normal event/reconcile path`);
-      return false;
-    }
-    var REMOTE_LAUNCH_READY_TIMEOUT_MS;
-    var REMOTE_LAUNCH_READY_POLL_MS;
-    var init_mesh_remote_ready_wait = __esm2({
-      "src/mesh/mesh-remote-ready-wait.ts"() {
-        "use strict";
-        init_logger();
-        REMOTE_LAUNCH_READY_TIMEOUT_MS = 15e3;
-        REMOTE_LAUNCH_READY_POLL_MS = 100;
-      }
-    });
     function liveLocalQuotaForRouting(isLocalNode) {
       const entries = readQuotaCache();
       if (!entries) return null;
@@ -81703,7 +81672,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
       }
     }
-    function autoLaunchWriteWouldClobberWinner(meshId, taskId, args, awaitClaimWindowMs3) {
+    function autoLaunchWriteWouldClobberWinner(meshId, taskId, args, awaitClaimWindowMs2) {
       if (args.status === "completed" && readNonEmptyString(args.sessionId)) return false;
       let existing;
       try {
@@ -81714,7 +81683,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const heldSessionId = existing ? readNonEmptyString(existing.sessionId) : "";
       if (!existing || existing.status !== "completed" || !heldSessionId) return false;
       const heldAtMs = Date.parse(existing.updatedAt);
-      if (!Number.isFinite(heldAtMs) || Date.now() - heldAtMs >= awaitClaimWindowMs3) return false;
+      if (!Number.isFinite(heldAtMs) || Date.now() - heldAtMs >= awaitClaimWindowMs2) return false;
       if (sessionIdsEquivalent(readNonEmptyString(args.sessionId), heldSessionId)) return false;
       LOG.info("MeshQueue", `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
       return true;
@@ -82189,30 +82158,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_mesh_queue_observability();
         init_mesh_work_queue();
         init_mesh_candidacy_predicates();
-      }
-    });
-    function isAnthropicProvider(providerType) {
-      const p = typeof providerType === "string" ? providerType.trim().toLowerCase() : "";
-      return p.length > 0 && ANTHROPIC_PROVIDER_TYPES.has(p);
-    }
-    function isAnthropicModel(model) {
-      const m = typeof model === "string" ? model.trim().toLowerCase() : "";
-      if (!m) return false;
-      if (m.startsWith("claude") || m.startsWith("anthropic")) return true;
-      return /^(opus|sonnet|haiku)(\b|[-_])/.test(m);
-    }
-    function isModelCompatibleWithProvider(model, providerType) {
-      if (!isAnthropicModel(model)) return true;
-      if (isAnthropicProvider(providerType)) return true;
-      return false;
-    }
-    var ANTHROPIC_PROVIDER_TYPES;
-    var init_model_provider_compat = __esm2({
-      "src/mesh/model-provider-compat.ts"() {
-        "use strict";
-        ANTHROPIC_PROVIDER_TYPES = /* @__PURE__ */ new Set([
-          "claude-cli"
-        ]);
       }
     });
     function encodeDuplicateMeshDispatchCode(holderSessionId) {
@@ -83017,354 +82962,6 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         RECLAIMED_PINNED_REASON = "pinned_session_reclaimed_stranded";
       }
     });
-    function buildProviderSelectionDiagnostics(args) {
-      const now = args.now ?? Date.now();
-      const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext, args.ranked);
-      const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map((candidate) => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext, args.ranked);
-      const riskByProvider = new Map(allRisks.map((snapshot) => [snapshot.providerType, snapshot]));
-      const scoreDetails = args.task ? args.usableSlots.map((candidate, selectionRank) => {
-        const selectionCapacity = slotCapacityRemaining(
-          args.meshId ?? "",
-          args.nodeId,
-          args.node,
-          candidate.slot,
-          args.meshNodes
-        );
-        const taskCapacity = args.forReadonlyTask ? slotCapacityRemaining(
-          args.meshId ?? "",
-          args.nodeId,
-          args.node,
-          candidate.slot,
-          args.meshNodes,
-          true
-        ) : selectionCapacity;
-        return {
-          providerType: candidate.providerType,
-          ...candidate.slot.model ? { model: candidate.slot.model } : {},
-          selectionRank,
-          fitnessInputRank: selectionRank,
-          capacitySortKey: selectionCapacity.available ? 1 : 0,
-          capacityAvailable: selectionCapacity.available,
-          capacity: taskCapacity,
-          difficultyEligible: !args.difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, args.task.difficulty) !== void 0,
-          admittedToFloorTier: args.candidateSlots.includes(candidate),
-          ...scoreSlotForTaskBreakdown(candidate.slot, args.task, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0)
-        };
-      }) : [];
-      const quotaOrder = [
-        ...args.ranked.clear.map((providerType) => ({ providerType, ...riskByProvider.get(providerType)?.risk !== void 0 ? { quotaRisk: riskByProvider.get(providerType).risk } : {} })),
-        ...args.ranked.gated.map((entry) => ({ providerType: entry.providerType, ...riskByProvider.get(entry.providerType)?.risk !== void 0 ? { quotaRisk: riskByProvider.get(entry.providerType).risk } : {}, gated: true }))
-      ];
-      if (args.taskId) {
-        LOG.info("MeshQueue", `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? "none"}`);
-      }
-      const bonusDiagnostics = args.task && args.unbounded ? quotaSpreadBonusDiagnosticsByProvider(
-        args.node,
-        args.usableSlots.map((candidate) => candidate.providerType),
-        args.quotaRouting,
-        now,
-        args.quotaFactsContext
-      ) : [];
-      const rankedProviders = /* @__PURE__ */ new Set([
-        ...args.ranked.clear,
-        ...args.ranked.gated.map((entry) => entry.providerType)
-      ]);
-      const evidenceByProvider = new Map(
-        (args.ranked.rankingEvidence ?? []).map((entry, clearOrderIndex) => {
-          const { providerType, ...rest } = entry;
-          return [providerType, { ...rest, clearOrderIndex }];
-        })
-      );
-      const quotaDiagnostics = bonusDiagnostics.map((detail) => {
-        const { providerType, ...bonus } = detail;
-        const ranking = evidenceByProvider.get(detail.providerType);
-        const withRanking = ranking ? { ranking } : {};
-        const gated = args.ranked.gated.find((entry) => entry.providerType === detail.providerType);
-        if (!rankedProviders.has(detail.providerType)) {
-          return { providerType, bonus, gate: { outcome: "not-evaluated-floor" } };
-        }
-        if (gated) {
-          return {
-            providerType,
-            bonus,
-            gate: {
-              outcome: gated.block.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON ? "hard-block" : "skip",
-              reason: gated.block.reason
-            }
-          };
-        }
-        const failOpen = detail.zeroReason === "stale" || detail.zeroReason === "no-data" || detail.zeroReason === "opted-out" || detail.zeroReason === "provider-disabled" || detail.zeroReason === "snapshot-error";
-        return {
-          providerType,
-          bonus,
-          gate: failOpen ? { outcome: "fail-open", reason: detail.zeroReason } : { outcome: "clear" },
-          ...withRanking
-        };
-      });
-      const previewOnly = args.unbounded ? {
-        previewScores: scoreDetails,
-        quotaDiagnostics
-      } : {};
-      if (!args.winner || !args.task) return { riskSnapshot, ...previewOnly };
-      const winner = args.winner;
-      const losers = args.usableSlots.filter((candidate) => candidate.slot !== winner.slot).map((candidate) => {
-        const risk = riskByProvider.get(candidate.providerType)?.risk;
-        const hasCapacity = slotHasCapacity(args.meshId ?? "", args.nodeId, args.node, candidate.slot);
-        const reason = (args.difficultyFloorRequired && !hasCapacity ? "slot_capacity_exhausted" : void 0) ?? (args.difficultyFloorRequired && !args.candidateSlots.includes(candidate) ? "higher_difficulty_tier_deferred" : void 0) ?? args.ranked.gated.find((entry) => entry.providerType === candidate.providerType)?.block.reason ?? (candidate.providerType === winner.providerType ? hasCapacity ? "lower_slot_fitness" : "slot_capacity_exhausted" : risk === void 0 ? "lower_slot_order" : "lower_quota_rank");
-        return {
-          providerType: candidate.providerType,
-          ...candidate.slot.model ? { model: candidate.slot.model } : {},
-          fitnessScore: scoreSlotForTask(candidate.slot, args.task, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
-          ...risk !== void 0 ? { quotaRisk: risk } : {},
-          reason
-        };
-      });
-      const candidates = scoreDetails.map((detail) => ({
-        providerType: detail.providerType,
-        ...detail.model ? { model: detail.model } : {},
-        fitnessScore: detail.total,
-        capacityAvailable: detail.capacityAvailable,
-        difficultyEligible: detail.difficultyEligible
-      }));
-      const winnerRisk = riskByProvider.get(winner.providerType)?.risk;
-      return {
-        riskSnapshot,
-        ...losers.length ? { allLosers: losers } : {},
-        ...riskSnapshot.length ? { quotaRiskSnapshot: args.unbounded ? riskSnapshot : riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {},
-        ...!args.unbounded && riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {},
-        ...losers.length ? { intraNodeLosers: args.unbounded ? losers : losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {},
-        ...!args.unbounded && losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {},
-        selectionTrajectory: {
-          candidates: args.unbounded ? candidates : candidates.slice(0, ROUTING_ARRAY_MAX),
-          ...!args.unbounded && candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {},
-          quotaOrder: args.unbounded ? quotaOrder : quotaOrder.slice(0, ROUTING_ARRAY_MAX),
-          ...!args.unbounded && quotaOrder.length > ROUTING_ARRAY_MAX ? { quotaOrderOmitted: quotaOrder.length - ROUTING_ARRAY_MAX } : {},
-          providerWinner: {
-            providerType: winner.providerType,
-            ...winner.slot.model ? { model: winner.slot.model } : {},
-            fitnessScore: scoreSlotForTask(winner.slot, args.task, args.quotaBonusByProvider?.[winner.slot.provider] ?? 0),
-            ...winnerRisk !== void 0 ? { quotaRisk: winnerRisk } : {}
-          }
-        },
-        ...previewOnly
-      };
-    }
-    function selectProviderWithDiagnostics(args) {
-      let candidateSlots = args.usableSlots;
-      if (args.difficultyFloorRequired) {
-        const available = args.usableSlots.filter((candidate) => slotHasCapacity(
-          args.meshId ?? "",
-          args.nodeId,
-          args.node,
-          candidate.slot,
-          args.meshNodes
-        ));
-        if (!available.length) {
-          const ranked2 = { clear: [], gated: [] };
-          const diagnostics2 = args.unbounded ? buildProviderSelectionDiagnostics({
-            ...args,
-            candidateSlots: [],
-            ranked: ranked2
-          }) : { riskSnapshot: [] };
-          return {
-            reason: `task_difficulty_floor_wait:${args.task.difficulty}`,
-            candidateSlots: [],
-            candidates: [],
-            ranked: ranked2,
-            diagnostics: diagnostics2
-          };
-        }
-        const tier = Math.min(...available.map((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) ?? Number.POSITIVE_INFINITY));
-        candidateSlots = available.filter((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) === tier);
-      }
-      const candidates = [];
-      const seenProviders = /* @__PURE__ */ new Set();
-      for (const candidate of candidateSlots) {
-        if (seenProviders.has(candidate.providerType)) continue;
-        seenProviders.add(candidate.providerType);
-        candidates.push(candidate);
-      }
-      const now = args.now ?? Date.now();
-      const ranked = rankProvidersByQuotaGate2(
-        args.node,
-        candidates.map((candidate) => candidate.providerType),
-        args.quotaRouting,
-        now,
-        args.quotaFactsContext,
-        new Map(candidates.map((candidate) => [
-          candidate.providerType,
-          { model: candidate.slot.model }
-        ]))
-      );
-      const winner = ranked.clear.length ? candidates.find((candidate) => candidate.providerType === ranked.clear[0]) ?? candidates[0] : void 0;
-      const diagnostics = buildProviderSelectionDiagnostics({
-        ...args,
-        now,
-        candidateSlots,
-        ranked,
-        winner
-      });
-      return { candidateSlots, candidates, ranked, winner, diagnostics };
-    }
-    function selectionRationaleFrom(trajectory, allLosers) {
-      const winner = trajectory?.providerWinner;
-      if (!winner) return void 0;
-      return buildQuotaRankingRationale(
-        {
-          providerType: winner.providerType,
-          ...winner.model ? { model: winner.model } : {},
-          fitnessScore: winner.fitnessScore
-        },
-        (allLosers ?? []).map((loser) => ({
-          providerType: loser.providerType,
-          ...loser.model ? { model: loser.model } : {},
-          ...loser.fitnessScore !== void 0 ? { fitnessScore: loser.fitnessScore } : {},
-          reason: loser.reason
-        }))
-      );
-    }
-    function serializedBytes(value) {
-      return Buffer.byteLength(JSON.stringify(value), "utf8");
-    }
-    function compactRoutingDecision2(decision) {
-      while (serializedBytes(decision) >= ROUTING_DECISION_MAX_BYTES) {
-        if ((decision.intraNodeLosers?.length ?? 0) > 1) {
-          decision.intraNodeLosers.pop();
-          decision.intraNodeLosersOmitted = (decision.intraNodeLosersOmitted ?? 0) + 1;
-          continue;
-        }
-        if ((decision.skippedCandidates?.length ?? 0) > 1) {
-          decision.skippedCandidates.pop();
-          decision.skippedCandidatesOmitted = (decision.skippedCandidatesOmitted ?? 0) + 1;
-          continue;
-        }
-        if ((decision.quotaRiskSnapshot?.length ?? 0) > 1) {
-          decision.quotaRiskSnapshot.pop();
-          decision.quotaRisksOmitted = (decision.quotaRisksOmitted ?? 0) + 1;
-          continue;
-        }
-        if ((decision.intraNodeLosers?.length ?? 0) > 0) {
-          decision.intraNodeLosers.pop();
-          decision.intraNodeLosersOmitted = (decision.intraNodeLosersOmitted ?? 0) + 1;
-          delete decision.intraNodeLosers;
-          continue;
-        }
-        if ((decision.selectionTrajectory?.candidates.length ?? 0) > 1) {
-          decision.selectionTrajectory.candidates.pop();
-          decision.selectionTrajectory.candidatesOmitted = (decision.selectionTrajectory.candidatesOmitted ?? 0) + 1;
-          continue;
-        }
-        if ((decision.selectionTrajectory?.quotaOrder.length ?? 0) > 1) {
-          decision.selectionTrajectory.quotaOrder.pop();
-          decision.selectionTrajectory.quotaOrderOmitted = (decision.selectionTrajectory.quotaOrderOmitted ?? 0) + 1;
-          continue;
-        }
-        break;
-      }
-      return decision;
-    }
-    function buildAutoLaunchRoutingDecision(args) {
-      const bonus = quotaSpreadBonusByProvider(args.node, args.quotaRouting, Date.now(), args.quotaFactsContext);
-      const winningSlot = args.resolved.slot;
-      const executedSlot = args.executedSlot ?? winningSlot;
-      const winningProvider = args.resolved.providerType;
-      const executedProvider = executedSlot.provider;
-      const sameDeclaredProvider = winningSlot.provider === executedSlot.provider;
-      const winningModel = winningSlot.model?.trim() || void 0;
-      const executedModel = executedSlot.model?.trim() || void 0;
-      const demoted = !sameDeclaredProvider || winningModel !== executedModel;
-      const baseTrajectory = args.resolved.selectionTrajectory;
-      const boundedCandidates = baseTrajectory?.candidates.slice(0, ROUTING_ARRAY_MAX) ?? [];
-      const boundedQuotaOrder = baseTrajectory?.quotaOrder.slice(0, ROUTING_ARRAY_MAX) ?? [];
-      const selectionTrajectory = baseTrajectory ? {
-        ...baseTrajectory,
-        candidates: boundedCandidates,
-        ...baseTrajectory.candidates.length > boundedCandidates.length ? { candidatesOmitted: (baseTrajectory.candidatesOmitted ?? 0) + baseTrajectory.candidates.length - boundedCandidates.length } : {},
-        quotaOrder: boundedQuotaOrder,
-        ...baseTrajectory.quotaOrder.length > boundedQuotaOrder.length ? { quotaOrderOmitted: (baseTrajectory.quotaOrderOmitted ?? 0) + baseTrajectory.quotaOrder.length - boundedQuotaOrder.length } : {},
-        slotFinalization: {
-          winningSlot: {
-            providerType: winningProvider,
-            ...winningModel ? { model: winningModel } : {}
-          },
-          executedSlot: {
-            providerType: executedProvider,
-            ...executedModel ? { model: executedModel } : {}
-          },
-          demoted,
-          ...demoted ? {
-            demotionReason: args.demotionReason ?? "slot_reselected_during_launch",
-            otherProviderAvailableAtDemotion: args.otherProviderAvailableAtDemotion ?? baseTrajectory.candidates.some((candidate) => candidate.providerType !== winningProvider && candidate.capacityAvailable && candidate.difficultyEligible)
-          } : {}
-        }
-      } : void 0;
-      const boundedSkipped = args.skippedCandidates.slice(0, ROUTING_ARRAY_MAX);
-      const boundedRisk = args.resolved.quotaRiskSnapshot?.slice(0, ROUTING_ARRAY_MAX);
-      const boundedLosers = args.resolved.intraNodeLosers?.slice(0, ROUTING_ARRAY_MAX);
-      const decision = {
-        source: "autoLaunch",
-        fitnessScore: scoreSlotForTask(winningSlot, args.task, bonus[winningSlot.provider] ?? 0),
-        selectedSlot: {
-          providerType: executedProvider,
-          ...executedModel ? { model: executedModel } : {}
-        },
-        ...boundedSkipped.length ? { skippedCandidates: boundedSkipped } : {},
-        ...args.skippedCandidates.length > boundedSkipped.length ? { skippedCandidatesOmitted: args.skippedCandidates.length - boundedSkipped.length } : {},
-        requiredTagsResult: args.requiredTagsResult,
-        resolvedProviderType: args.resolved.providerType,
-        ...args.effectiveModel ? { resolvedModel: args.effectiveModel } : {},
-        ...args.effectiveThinkingLevel ? { resolvedThinkingLevel: args.effectiveThinkingLevel } : {},
-        ...args.task.difficulty ? { resolvedDifficulty: String(args.task.difficulty) } : {},
-        ...boundedRisk?.length ? { quotaRiskSnapshot: boundedRisk } : {},
-        ...(args.resolved.quotaRisksOmitted ?? 0) + Math.max(0, (args.resolved.quotaRiskSnapshot?.length ?? 0) - (boundedRisk?.length ?? 0)) ? { quotaRisksOmitted: (args.resolved.quotaRisksOmitted ?? 0) + Math.max(0, (args.resolved.quotaRiskSnapshot?.length ?? 0) - (boundedRisk?.length ?? 0)) } : {},
-        ...boundedLosers?.length ? { intraNodeLosers: boundedLosers } : {},
-        ...(args.resolved.intraNodeLosersOmitted ?? 0) + Math.max(0, (args.resolved.intraNodeLosers?.length ?? 0) - (boundedLosers?.length ?? 0)) ? { intraNodeLosersOmitted: (args.resolved.intraNodeLosersOmitted ?? 0) + Math.max(0, (args.resolved.intraNodeLosers?.length ?? 0) - (boundedLosers?.length ?? 0)) } : {},
-        ...selectionTrajectory ? { selectionTrajectory } : {},
-        ...args.resolved.reason ? { reason: args.resolved.reason } : {}
-      };
-      return compactRoutingDecision2(decision);
-    }
-    var ROUTING_ARRAY_MAX;
-    var ROUTING_DECISION_MAX_BYTES;
-    var INTRA_NODE_LOSERS_MAX;
-    var init_mesh_routing_decision = __esm2({
-      "src/mesh/mesh-routing-decision.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_quota_routing();
-        init_mesh_scheduling_fitness();
-        ROUTING_ARRAY_MAX = 5;
-        ROUTING_DECISION_MAX_BYTES = 2e3;
-        INTRA_NODE_LOSERS_MAX = 2;
-      }
-    });
-    function selectQuotaBusyFallback(args) {
-      const { clearOrder, candidates, busyProviderType, probe } = args;
-      const slotByProvider = /* @__PURE__ */ new Map();
-      for (const candidate of candidates) {
-        if (!slotByProvider.has(candidate.providerType)) {
-          slotByProvider.set(candidate.providerType, candidate);
-        }
-      }
-      const skipped = [];
-      const seen = /* @__PURE__ */ new Set([busyProviderType]);
-      for (const providerType of clearOrder) {
-        if (seen.has(providerType)) continue;
-        seen.add(providerType);
-        const candidate = slotByProvider.get(providerType);
-        if (!candidate) continue;
-        if (probe(candidate)) {
-          return { outcome: "fallback", candidate, skipped };
-        }
-        skipped.push(providerType);
-      }
-      return { outcome: "exhausted", skipped };
-    }
-    var init_mesh_quota_fallback = __esm2({
-      "src/mesh/mesh-quota-fallback.ts"() {
-        "use strict";
-      }
-    });
     var worker_report_exports = {};
     __export2(worker_report_exports, {
       WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
@@ -83972,6 +83569,1043 @@ ${block2.text}`,
         init_mesh_runtime_store();
         init_worker_mcp_isolation();
         init_worker_handoff_notes();
+      }
+    });
+    async function waitForRemoteSessionReady(meshId, nodeId, sessionId, opts) {
+      if (!sessionId) return false;
+      const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
+      const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
+      const now = opts.now ?? (() => Date.now());
+      const sleep4 = opts.sleep ?? ((ms) => new Promise((resolve34) => setTimeout(resolve34, ms)));
+      const deadline = now() + timeoutMs;
+      for (; ; ) {
+        let ready = false;
+        try {
+          ready = opts.isReady();
+        } catch {
+          return false;
+        }
+        if (ready) return true;
+        if (now() >= deadline) break;
+        await sleep4(pollMs);
+      }
+      LOG.warn("MeshQueue", `Remote auto-launched session ${sessionId} on node ${nodeId} (mesh ${meshId}) did not report agent:ready within ${timeoutMs}ms; proceeding optimistically \u2014 unchanged behavior, the claim still fires via the normal event/reconcile path`);
+      return false;
+    }
+    var REMOTE_LAUNCH_READY_TIMEOUT_MS;
+    var REMOTE_LAUNCH_READY_POLL_MS;
+    var init_mesh_remote_ready_wait = __esm2({
+      "src/mesh/mesh-remote-ready-wait.ts"() {
+        "use strict";
+        init_logger();
+        REMOTE_LAUNCH_READY_TIMEOUT_MS = 15e3;
+        REMOTE_LAUNCH_READY_POLL_MS = 100;
+      }
+    });
+    function isAnthropicProvider(providerType) {
+      const p = typeof providerType === "string" ? providerType.trim().toLowerCase() : "";
+      return p.length > 0 && ANTHROPIC_PROVIDER_TYPES.has(p);
+    }
+    function isAnthropicModel(model) {
+      const m = typeof model === "string" ? model.trim().toLowerCase() : "";
+      if (!m) return false;
+      if (m.startsWith("claude") || m.startsWith("anthropic")) return true;
+      return /^(opus|sonnet|haiku)(\b|[-_])/.test(m);
+    }
+    function isModelCompatibleWithProvider(model, providerType) {
+      if (!isAnthropicModel(model)) return true;
+      if (isAnthropicProvider(providerType)) return true;
+      return false;
+    }
+    var ANTHROPIC_PROVIDER_TYPES;
+    var init_model_provider_compat = __esm2({
+      "src/mesh/model-provider-compat.ts"() {
+        "use strict";
+        ANTHROPIC_PROVIDER_TYPES = /* @__PURE__ */ new Set([
+          "claude-cli"
+        ]);
+      }
+    });
+    function buildProviderSelectionDiagnostics(args) {
+      const now = args.now ?? Date.now();
+      const riskSnapshot = quotaRiskSnapshotForCandidates(args.node, args.ranked.clear, args.quotaRouting, now, args.quotaFactsContext, args.ranked);
+      const allRisks = quotaRiskSnapshotForCandidates(args.node, args.candidateSlots.map((candidate) => candidate.providerType), args.quotaRouting, now, args.quotaFactsContext, args.ranked);
+      const riskByProvider = new Map(allRisks.map((snapshot) => [snapshot.providerType, snapshot]));
+      const scoreDetails = args.task ? args.usableSlots.map((candidate, selectionRank) => {
+        const selectionCapacity = slotCapacityRemaining(
+          args.meshId ?? "",
+          args.nodeId,
+          args.node,
+          candidate.slot,
+          args.meshNodes
+        );
+        const taskCapacity = args.forReadonlyTask ? slotCapacityRemaining(
+          args.meshId ?? "",
+          args.nodeId,
+          args.node,
+          candidate.slot,
+          args.meshNodes,
+          true
+        ) : selectionCapacity;
+        return {
+          providerType: candidate.providerType,
+          ...candidate.slot.model ? { model: candidate.slot.model } : {},
+          selectionRank,
+          fitnessInputRank: selectionRank,
+          capacitySortKey: selectionCapacity.available ? 1 : 0,
+          capacityAvailable: selectionCapacity.available,
+          capacity: taskCapacity,
+          difficultyEligible: !args.difficultyFloorRequired || slotDifficultyTierForTask(candidate.slot, args.task.difficulty) !== void 0,
+          admittedToFloorTier: args.candidateSlots.includes(candidate),
+          ...scoreSlotForTaskBreakdown(candidate.slot, args.task, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0)
+        };
+      }) : [];
+      const quotaOrder = [
+        ...args.ranked.clear.map((providerType) => ({ providerType, ...riskByProvider.get(providerType)?.risk !== void 0 ? { quotaRisk: riskByProvider.get(providerType).risk } : {} })),
+        ...args.ranked.gated.map((entry) => ({ providerType: entry.providerType, ...riskByProvider.get(entry.providerType)?.risk !== void 0 ? { quotaRisk: riskByProvider.get(entry.providerType).risk } : {}, gated: true }))
+      ];
+      if (args.taskId) {
+        LOG.info("MeshQueue", `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? "none"}`);
+      }
+      const bonusDiagnostics = args.task && args.unbounded ? quotaSpreadBonusDiagnosticsByProvider(
+        args.node,
+        args.usableSlots.map((candidate) => candidate.providerType),
+        args.quotaRouting,
+        now,
+        args.quotaFactsContext
+      ) : [];
+      const rankedProviders = /* @__PURE__ */ new Set([
+        ...args.ranked.clear,
+        ...args.ranked.gated.map((entry) => entry.providerType)
+      ]);
+      const evidenceByProvider = new Map(
+        (args.ranked.rankingEvidence ?? []).map((entry, clearOrderIndex) => {
+          const { providerType, ...rest } = entry;
+          return [providerType, { ...rest, clearOrderIndex }];
+        })
+      );
+      const quotaDiagnostics = bonusDiagnostics.map((detail) => {
+        const { providerType, ...bonus } = detail;
+        const ranking = evidenceByProvider.get(detail.providerType);
+        const withRanking = ranking ? { ranking } : {};
+        const gated = args.ranked.gated.find((entry) => entry.providerType === detail.providerType);
+        if (!rankedProviders.has(detail.providerType)) {
+          return { providerType, bonus, gate: { outcome: "not-evaluated-floor" } };
+        }
+        if (gated) {
+          return {
+            providerType,
+            bonus,
+            gate: {
+              outcome: gated.block.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON ? "hard-block" : "skip",
+              reason: gated.block.reason
+            }
+          };
+        }
+        const failOpen = detail.zeroReason === "stale" || detail.zeroReason === "no-data" || detail.zeroReason === "opted-out" || detail.zeroReason === "provider-disabled" || detail.zeroReason === "snapshot-error";
+        return {
+          providerType,
+          bonus,
+          gate: failOpen ? { outcome: "fail-open", reason: detail.zeroReason } : { outcome: "clear" },
+          ...withRanking
+        };
+      });
+      const previewOnly = args.unbounded ? {
+        previewScores: scoreDetails,
+        quotaDiagnostics
+      } : {};
+      if (!args.winner || !args.task) return { riskSnapshot, ...previewOnly };
+      const winner = args.winner;
+      const losers = args.usableSlots.filter((candidate) => candidate.slot !== winner.slot).map((candidate) => {
+        const risk = riskByProvider.get(candidate.providerType)?.risk;
+        const hasCapacity = slotHasCapacity(args.meshId ?? "", args.nodeId, args.node, candidate.slot);
+        const reason = (args.difficultyFloorRequired && !hasCapacity ? "slot_capacity_exhausted" : void 0) ?? (args.difficultyFloorRequired && !args.candidateSlots.includes(candidate) ? "higher_difficulty_tier_deferred" : void 0) ?? args.ranked.gated.find((entry) => entry.providerType === candidate.providerType)?.block.reason ?? (candidate.providerType === winner.providerType ? hasCapacity ? "lower_slot_fitness" : "slot_capacity_exhausted" : risk === void 0 ? "lower_slot_order" : "lower_quota_rank");
+        return {
+          providerType: candidate.providerType,
+          ...candidate.slot.model ? { model: candidate.slot.model } : {},
+          fitnessScore: scoreSlotForTask(candidate.slot, args.task, args.quotaBonusByProvider?.[candidate.slot.provider] ?? 0),
+          ...risk !== void 0 ? { quotaRisk: risk } : {},
+          reason
+        };
+      });
+      const candidates = scoreDetails.map((detail) => ({
+        providerType: detail.providerType,
+        ...detail.model ? { model: detail.model } : {},
+        fitnessScore: detail.total,
+        capacityAvailable: detail.capacityAvailable,
+        difficultyEligible: detail.difficultyEligible
+      }));
+      const winnerRisk = riskByProvider.get(winner.providerType)?.risk;
+      return {
+        riskSnapshot,
+        ...losers.length ? { allLosers: losers } : {},
+        ...riskSnapshot.length ? { quotaRiskSnapshot: args.unbounded ? riskSnapshot : riskSnapshot.slice(0, ROUTING_ARRAY_MAX) } : {},
+        ...!args.unbounded && riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {},
+        ...losers.length ? { intraNodeLosers: args.unbounded ? losers : losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {},
+        ...!args.unbounded && losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {},
+        selectionTrajectory: {
+          candidates: args.unbounded ? candidates : candidates.slice(0, ROUTING_ARRAY_MAX),
+          ...!args.unbounded && candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {},
+          quotaOrder: args.unbounded ? quotaOrder : quotaOrder.slice(0, ROUTING_ARRAY_MAX),
+          ...!args.unbounded && quotaOrder.length > ROUTING_ARRAY_MAX ? { quotaOrderOmitted: quotaOrder.length - ROUTING_ARRAY_MAX } : {},
+          providerWinner: {
+            providerType: winner.providerType,
+            ...winner.slot.model ? { model: winner.slot.model } : {},
+            fitnessScore: scoreSlotForTask(winner.slot, args.task, args.quotaBonusByProvider?.[winner.slot.provider] ?? 0),
+            ...winnerRisk !== void 0 ? { quotaRisk: winnerRisk } : {}
+          }
+        },
+        ...previewOnly
+      };
+    }
+    function selectProviderWithDiagnostics(args) {
+      let candidateSlots = args.usableSlots;
+      if (args.difficultyFloorRequired) {
+        const available = args.usableSlots.filter((candidate) => slotHasCapacity(
+          args.meshId ?? "",
+          args.nodeId,
+          args.node,
+          candidate.slot,
+          args.meshNodes
+        ));
+        if (!available.length) {
+          const ranked2 = { clear: [], gated: [] };
+          const diagnostics2 = args.unbounded ? buildProviderSelectionDiagnostics({
+            ...args,
+            candidateSlots: [],
+            ranked: ranked2
+          }) : { riskSnapshot: [] };
+          return {
+            reason: `task_difficulty_floor_wait:${args.task.difficulty}`,
+            candidateSlots: [],
+            candidates: [],
+            ranked: ranked2,
+            diagnostics: diagnostics2
+          };
+        }
+        const tier = Math.min(...available.map((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) ?? Number.POSITIVE_INFINITY));
+        candidateSlots = available.filter((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) === tier);
+      }
+      const candidates = [];
+      const seenProviders = /* @__PURE__ */ new Set();
+      for (const candidate of candidateSlots) {
+        if (seenProviders.has(candidate.providerType)) continue;
+        seenProviders.add(candidate.providerType);
+        candidates.push(candidate);
+      }
+      const now = args.now ?? Date.now();
+      const ranked = rankProvidersByQuotaGate2(
+        args.node,
+        candidates.map((candidate) => candidate.providerType),
+        args.quotaRouting,
+        now,
+        args.quotaFactsContext,
+        new Map(candidates.map((candidate) => [
+          candidate.providerType,
+          { model: candidate.slot.model }
+        ]))
+      );
+      const winner = ranked.clear.length ? candidates.find((candidate) => candidate.providerType === ranked.clear[0]) ?? candidates[0] : void 0;
+      const diagnostics = buildProviderSelectionDiagnostics({
+        ...args,
+        now,
+        candidateSlots,
+        ranked,
+        winner
+      });
+      return { candidateSlots, candidates, ranked, winner, diagnostics };
+    }
+    function selectionRationaleFrom(trajectory, allLosers) {
+      const winner = trajectory?.providerWinner;
+      if (!winner) return void 0;
+      return buildQuotaRankingRationale(
+        {
+          providerType: winner.providerType,
+          ...winner.model ? { model: winner.model } : {},
+          fitnessScore: winner.fitnessScore
+        },
+        (allLosers ?? []).map((loser) => ({
+          providerType: loser.providerType,
+          ...loser.model ? { model: loser.model } : {},
+          ...loser.fitnessScore !== void 0 ? { fitnessScore: loser.fitnessScore } : {},
+          reason: loser.reason
+        }))
+      );
+    }
+    function serializedBytes(value) {
+      return Buffer.byteLength(JSON.stringify(value), "utf8");
+    }
+    function compactRoutingDecision2(decision) {
+      while (serializedBytes(decision) >= ROUTING_DECISION_MAX_BYTES) {
+        if ((decision.intraNodeLosers?.length ?? 0) > 1) {
+          decision.intraNodeLosers.pop();
+          decision.intraNodeLosersOmitted = (decision.intraNodeLosersOmitted ?? 0) + 1;
+          continue;
+        }
+        if ((decision.skippedCandidates?.length ?? 0) > 1) {
+          decision.skippedCandidates.pop();
+          decision.skippedCandidatesOmitted = (decision.skippedCandidatesOmitted ?? 0) + 1;
+          continue;
+        }
+        if ((decision.quotaRiskSnapshot?.length ?? 0) > 1) {
+          decision.quotaRiskSnapshot.pop();
+          decision.quotaRisksOmitted = (decision.quotaRisksOmitted ?? 0) + 1;
+          continue;
+        }
+        if ((decision.intraNodeLosers?.length ?? 0) > 0) {
+          decision.intraNodeLosers.pop();
+          decision.intraNodeLosersOmitted = (decision.intraNodeLosersOmitted ?? 0) + 1;
+          delete decision.intraNodeLosers;
+          continue;
+        }
+        if ((decision.selectionTrajectory?.candidates.length ?? 0) > 1) {
+          decision.selectionTrajectory.candidates.pop();
+          decision.selectionTrajectory.candidatesOmitted = (decision.selectionTrajectory.candidatesOmitted ?? 0) + 1;
+          continue;
+        }
+        if ((decision.selectionTrajectory?.quotaOrder.length ?? 0) > 1) {
+          decision.selectionTrajectory.quotaOrder.pop();
+          decision.selectionTrajectory.quotaOrderOmitted = (decision.selectionTrajectory.quotaOrderOmitted ?? 0) + 1;
+          continue;
+        }
+        break;
+      }
+      return decision;
+    }
+    function buildAutoLaunchRoutingDecision(args) {
+      const bonus = quotaSpreadBonusByProvider(args.node, args.quotaRouting, Date.now(), args.quotaFactsContext);
+      const winningSlot = args.resolved.slot;
+      const executedSlot = args.executedSlot ?? winningSlot;
+      const winningProvider = args.resolved.providerType;
+      const executedProvider = executedSlot.provider;
+      const sameDeclaredProvider = winningSlot.provider === executedSlot.provider;
+      const winningModel = winningSlot.model?.trim() || void 0;
+      const executedModel = executedSlot.model?.trim() || void 0;
+      const demoted = !sameDeclaredProvider || winningModel !== executedModel;
+      const baseTrajectory = args.resolved.selectionTrajectory;
+      const boundedCandidates = baseTrajectory?.candidates.slice(0, ROUTING_ARRAY_MAX) ?? [];
+      const boundedQuotaOrder = baseTrajectory?.quotaOrder.slice(0, ROUTING_ARRAY_MAX) ?? [];
+      const selectionTrajectory = baseTrajectory ? {
+        ...baseTrajectory,
+        candidates: boundedCandidates,
+        ...baseTrajectory.candidates.length > boundedCandidates.length ? { candidatesOmitted: (baseTrajectory.candidatesOmitted ?? 0) + baseTrajectory.candidates.length - boundedCandidates.length } : {},
+        quotaOrder: boundedQuotaOrder,
+        ...baseTrajectory.quotaOrder.length > boundedQuotaOrder.length ? { quotaOrderOmitted: (baseTrajectory.quotaOrderOmitted ?? 0) + baseTrajectory.quotaOrder.length - boundedQuotaOrder.length } : {},
+        slotFinalization: {
+          winningSlot: {
+            providerType: winningProvider,
+            ...winningModel ? { model: winningModel } : {}
+          },
+          executedSlot: {
+            providerType: executedProvider,
+            ...executedModel ? { model: executedModel } : {}
+          },
+          demoted,
+          ...demoted ? {
+            demotionReason: args.demotionReason ?? "slot_reselected_during_launch",
+            otherProviderAvailableAtDemotion: args.otherProviderAvailableAtDemotion ?? baseTrajectory.candidates.some((candidate) => candidate.providerType !== winningProvider && candidate.capacityAvailable && candidate.difficultyEligible)
+          } : {}
+        }
+      } : void 0;
+      const boundedSkipped = args.skippedCandidates.slice(0, ROUTING_ARRAY_MAX);
+      const boundedRisk = args.resolved.quotaRiskSnapshot?.slice(0, ROUTING_ARRAY_MAX);
+      const boundedLosers = args.resolved.intraNodeLosers?.slice(0, ROUTING_ARRAY_MAX);
+      const decision = {
+        source: "autoLaunch",
+        fitnessScore: scoreSlotForTask(winningSlot, args.task, bonus[winningSlot.provider] ?? 0),
+        selectedSlot: {
+          providerType: executedProvider,
+          ...executedModel ? { model: executedModel } : {}
+        },
+        ...boundedSkipped.length ? { skippedCandidates: boundedSkipped } : {},
+        ...args.skippedCandidates.length > boundedSkipped.length ? { skippedCandidatesOmitted: args.skippedCandidates.length - boundedSkipped.length } : {},
+        requiredTagsResult: args.requiredTagsResult,
+        resolvedProviderType: args.resolved.providerType,
+        ...args.effectiveModel ? { resolvedModel: args.effectiveModel } : {},
+        ...args.effectiveThinkingLevel ? { resolvedThinkingLevel: args.effectiveThinkingLevel } : {},
+        ...args.task.difficulty ? { resolvedDifficulty: String(args.task.difficulty) } : {},
+        ...boundedRisk?.length ? { quotaRiskSnapshot: boundedRisk } : {},
+        ...(args.resolved.quotaRisksOmitted ?? 0) + Math.max(0, (args.resolved.quotaRiskSnapshot?.length ?? 0) - (boundedRisk?.length ?? 0)) ? { quotaRisksOmitted: (args.resolved.quotaRisksOmitted ?? 0) + Math.max(0, (args.resolved.quotaRiskSnapshot?.length ?? 0) - (boundedRisk?.length ?? 0)) } : {},
+        ...boundedLosers?.length ? { intraNodeLosers: boundedLosers } : {},
+        ...(args.resolved.intraNodeLosersOmitted ?? 0) + Math.max(0, (args.resolved.intraNodeLosers?.length ?? 0) - (boundedLosers?.length ?? 0)) ? { intraNodeLosersOmitted: (args.resolved.intraNodeLosersOmitted ?? 0) + Math.max(0, (args.resolved.intraNodeLosers?.length ?? 0) - (boundedLosers?.length ?? 0)) } : {},
+        ...selectionTrajectory ? { selectionTrajectory } : {},
+        ...args.resolved.reason ? { reason: args.resolved.reason } : {}
+      };
+      return compactRoutingDecision2(decision);
+    }
+    var ROUTING_ARRAY_MAX;
+    var ROUTING_DECISION_MAX_BYTES;
+    var INTRA_NODE_LOSERS_MAX;
+    var init_mesh_routing_decision = __esm2({
+      "src/mesh/mesh-routing-decision.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_quota_routing();
+        init_mesh_scheduling_fitness();
+        ROUTING_ARRAY_MAX = 5;
+        ROUTING_DECISION_MAX_BYTES = 2e3;
+        INTRA_NODE_LOSERS_MAX = 2;
+      }
+    });
+    function selectQuotaBusyFallback(args) {
+      const { clearOrder, candidates, busyProviderType, probe } = args;
+      const slotByProvider = /* @__PURE__ */ new Map();
+      for (const candidate of candidates) {
+        if (!slotByProvider.has(candidate.providerType)) {
+          slotByProvider.set(candidate.providerType, candidate);
+        }
+      }
+      const skipped = [];
+      const seen = /* @__PURE__ */ new Set([busyProviderType]);
+      for (const providerType of clearOrder) {
+        if (seen.has(providerType)) continue;
+        seen.add(providerType);
+        const candidate = slotByProvider.get(providerType);
+        if (!candidate) continue;
+        if (probe(candidate)) {
+          return { outcome: "fallback", candidate, skipped };
+        }
+        skipped.push(providerType);
+      }
+      return { outcome: "exhausted", skipped };
+    }
+    var init_mesh_quota_fallback = __esm2({
+      "src/mesh/mesh-quota-fallback.ts"() {
+        "use strict";
+      }
+    });
+    function sweepExpiredCooldowns() {
+      const now = Date.now();
+      for (const [key2, until] of autoLaunchCooldownUntil) {
+        if (now >= until) autoLaunchCooldownUntil.delete(key2);
+      }
+    }
+    function resolveAutoLaunchTarget(components, node) {
+      if (isLocalAutoLaunchNode(node)) return { mode: "local" };
+      const daemonId = readMeshNodeDaemonId(node ?? {});
+      if (!daemonId) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
+      if (!components.dispatchMeshCommand) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
+      const coordinatorDaemonId = localCoordinatorDaemonId2();
+      if (!coordinatorDaemonId) return { mode: "skip", reason: "remote_auto_launch_no_coordinator_daemon_id" };
+      return { mode: "remote", daemonId, coordinatorDaemonId };
+    }
+    function markAutoLaunch(meshId, taskId, args) {
+      const reason = args.reason || args.error;
+      const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
+      if (difficultyFloorSkip) {
+        handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
+      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
+        recordTaskAutoLaunch(meshId, taskId, {
+          status: args.status,
+          reason,
+          nodeId: args.nodeId,
+          providerType: args.providerType,
+          sessionId: args.sessionId
+        });
+      }
+      recordAutoLaunchEvent(meshId, {
+        phase: args.status,
+        taskId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        sessionId: args.sessionId,
+        reason: args.reason,
+        error: args.error,
+        ...args.model ? { model: args.model } : {},
+        ...args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}
+      });
+      if (args.status === "skipped") {
+        if (isActionableSkipReason(args.reason)) {
+          notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
+        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
+          retractActionableSkipIfPreviouslyNotified(meshId, taskId);
+        }
+      } else {
+        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
+      }
+    }
+    async function resolveUsableProvider(components, nodeId, node, meshId, requiredTags, task, quotaRouting, quotaFactsContext, taskId) {
+      const providerLoader = components.providerLoader;
+      if (!providerLoader) return { reason: "provider_loader_unavailable" };
+      const slots = resolveNodeCapabilitySlots(node, meshId);
+      if (!slots.length) return { reason: "missing_provider_priority" };
+      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext) : void 0;
+      const orderedSlots = task ? orderSlotsForProviderSelection(slots, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots;
+      const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
+      if (difficultyFloorRequired && !orderedSlots.length) {
+        return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
+      }
+      const failed = [];
+      const usableSlots = [];
+      for (const slot of orderedSlots) {
+        const requestedType = slot.provider;
+        const normalizedType = typeof providerLoader.resolveAlias === "function" ? providerLoader.resolveAlias(requestedType) : requestedType;
+        if (requiredTags?.length && !nodeSatisfiesRequiredTags3(requiredTags, buildMeshNodeCapabilityTags3(node, normalizedType))) {
+          failed.push(`${requestedType}: required_tags_mismatch`);
+          continue;
+        }
+        if (typeof providerLoader.isMachineProviderEnabled === "function" && !providerLoader.isMachineProviderEnabled(normalizedType)) {
+          failed.push(`${requestedType}: disabled`);
+          continue;
+        }
+        let detected;
+        try {
+          detected = await detectCLI(normalizedType, providerLoader, { includeVersion: false });
+        } catch (e) {
+          failed.push(`${requestedType}: detect failed: ${e?.message || e}`);
+          continue;
+        }
+        if (typeof providerLoader.setCliDetectionResults === "function") {
+          providerLoader.setCliDetectionResults([{
+            id: normalizedType,
+            installed: !!detected,
+            path: detected?.path
+          }], false);
+        }
+        components.onStatusChange?.();
+        if (detected) {
+          usableSlots.push({ slot, providerType: normalizedType });
+          continue;
+        }
+        failed.push(`${requestedType}: not detected`);
+      }
+      if (!usableSlots.length) {
+        if (difficultyFloorRequired) {
+          return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
+        }
+        return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId}` };
+      }
+      const selection = selectProviderWithDiagnostics({
+        node,
+        nodeId,
+        meshId,
+        task,
+        taskId,
+        quotaRouting,
+        quotaFactsContext,
+        quotaBonusByProvider,
+        difficultyFloorRequired,
+        usableSlots
+      });
+      if (selection.reason) return { reason: selection.reason };
+      const { ranked, winner } = selection;
+      const { riskSnapshot, allLosers, ...routingDiagnostics } = selection.diagnostics;
+      const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
+      if (!ranked.clear.length) {
+        const detail = ranked.gated.map((g3) => `${g3.providerType}: ${g3.block.reason}`).join("; ");
+        LOG.info("MeshQueue", `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
+        recordLastQuotaRanking(nodeId, {
+          decidedAt: Date.now(),
+          clear: riskSnapshot,
+          gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
+          ...taskId ? { taskId } : {}
+        });
+        return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
+      }
+      const selectedWinner = winner;
+      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
+      recordLastQuotaRanking(nodeId, {
+        decidedAt: Date.now(),
+        winner: selectedWinner.providerType,
+        clear: riskSnapshot,
+        gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
+        ...taskId ? { taskId } : {},
+        ...rationale ? { rationale } : {}
+      });
+      return {
+        providerType: selectedWinner.providerType,
+        ...ranked.gated.length ? { quotaGated: ranked.gated } : {},
+        // QUOTA-BUSY FALLBACK inputs: the risk-ordered clear ranking and the
+        // de-duplicated candidates it was drawn from, so a caller that finds the
+        // winner saturated can walk to the next clear candidate WITHOUT re-running
+        // selection (re-ranking would just re-elect the same busy winner — that
+        // recomputation is the defect). Only `clear` is exposed: gated providers
+        // must stay unreachable from the fallback path. See mesh-quota-fallback.ts.
+        quotaClearOrder: ranked.clear,
+        quotaCandidates: selection.candidates,
+        ...selectedWinner.slot.model ? { model: selectedWinner.slot.model } : {},
+        ...selectedWinner.slot.thinkingLevel ? { thinkingLevel: selectedWinner.slot.thinkingLevel } : {},
+        // The slot that won selection. Returned so the caller can enforce
+        // "the launch model must be one this slot declares" — a preset
+        // model must not widen what the operator configured. See
+        // slot-model-enforcement.ts.
+        slot: selectedWinner.slot,
+        ...routingDiagnostics
+      };
+    }
+    async function maybeAutoLaunchOneQueueSession(components, meshId, mesh) {
+      const queue = getQueue3(meshId);
+      const statusById = new Map(queue.map((task) => [task.id, task.status]));
+      const pending = queue.filter((task) => task.status === "pending").sort((a, b) => meshTaskPriorityRank2(b.priority) - meshTaskPriorityRank2(a.priority));
+      {
+        const pendingIds = new Set(pending.map((t) => t.id));
+        const prefix = `${meshId}::`;
+        for (const key2 of [...autoLaunchAwaitClaimBackoff.keys()]) {
+          if (key2.startsWith(prefix) && !pendingIds.has(key2.slice(prefix.length))) autoLaunchAwaitClaimBackoff.delete(key2);
+        }
+      }
+      if (!pending.length) return false;
+      const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy(mesh).maxBehind };
+      const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
+      const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
+      for (const task of pending) {
+        const taskLaunchKey = `${meshId}::${task.id}`;
+        if (autoLaunchTaskInProgress.has(taskLaunchKey)) {
+          recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "auto_launch_task_in_progress" });
+          continue;
+        }
+        autoLaunchTaskInProgress.add(taskLaunchKey);
+        try {
+          if (!taskDependenciesSatisfied3(task, statusById)) {
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "dependencies_unsatisfied" });
+            continue;
+          }
+          if (!meshTaskNotBeforeReady(task)) {
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "not_before_delayed" });
+            continue;
+          }
+          const isReadonly = isTaskReadonly2(task);
+          if (isReadonly) {
+            if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
+              markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_readonly_parallel_tasks_reached" });
+              continue;
+            }
+          } else if (activeWriteAssignedCount(meshId) >= maxParallelTasks) {
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_parallel_tasks_reached" });
+            continue;
+          }
+          if (taskIsParked(task)) {
+            settleParkedQueueTask(
+              meshId,
+              task,
+              (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }),
+              failRetentionExpiredParkedTask
+            );
+            continue;
+          }
+          if (task.targetSessionId) {
+            const deadTarget = resolveDeadTargetVerdict(components, meshId, mesh, task);
+            if (deadTarget.dead) {
+              const requeued = requeueTask3(meshId, task.id, {
+                reason: deadTarget.reason,
+                clearTargetSession: true,
+                // Keep the node pin if only the SESSION died on a still-live node; clear it
+                // when the NODE itself is absent (nothing to pin to).
+                clearTargetNode: deadTarget.nodeDead
+              });
+              if (requeued) {
+                noteTargetPinCleared(deadTarget.reason);
+                LOG.warn("MeshQueue", `DEAD-TARGET-SELFHEAL: task ${task.id} (mesh ${meshId}) was pinned to a dead target (${deadTarget.reason}); requeued${deadTarget.nodeDead ? " and unpinned node" : ""} (requeueCount=${requeued.requeueCount ?? "?"}, status=${requeued.status}).`);
+              }
+              markAutoLaunch(meshId, task.id, { status: "skipped", reason: "target_session_dead_requeued" });
+              continue;
+            }
+            if (parkExpiredTargetPin(meshId, task, resolveTargetPinTtlVerdict(components, task), TARGET_SESSION_PIN_TTL_MS, (m, t, r) => parkTaskTargetPin(m, t, { reason: r }))) {
+              markAutoLaunch(meshId, task.id, { status: "skipped", reason: PARKED_SKIP_REASON });
+              continue;
+            }
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "target_session_constraint" });
+            continue;
+          }
+          if (task.autoLaunch?.status === "completed" && task.autoLaunch.sessionId) {
+            const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
+            const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
+            const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
+            const alProvider = readNonEmptyString(task.autoLaunch.providerType);
+            if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+              if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
+                (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches4(n, alNodeId)) : void 0)?.workspace
+              )))) {
+                if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, void 0, void 0, "auto_launch")) {
+                  clearClaimDeferralForNode(meshId, alNodeId);
+                  recordAutoLaunchEvent(meshId, { phase: "completed", taskId: task.id, reason: "fast_forward_deferred_claim_redriven", nodeId: alNodeId, sessionId: alSessionId });
+                  LOG.info("MeshQueue", `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
+                  return true;
+                }
+                noteClaimDeferredForNode(meshId, alNodeId);
+              }
+              recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim", nodeId: alNodeId, sessionId: alSessionId });
+              continue;
+            }
+            if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
+              const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
+              if (outcome === "claimed" || outcome === "fallback") return true;
+              if (outcome === "backoff") continue;
+            }
+          }
+          if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
+          const candidateNodes = Array.isArray(mesh?.nodes) ? mesh.nodes.filter((node) => {
+            if (task.targetNodeId && !meshNodeIdMatches4(node, task.targetNodeId)) return false;
+            if (task.taskMode === "convergence" && node?.isLocalWorktree === true) return false;
+            if (task.requiredTags?.length) {
+              const slotProviders = resolveNodeCapabilitySlots(node, meshId).map((s2) => s2.provider).filter(Boolean);
+              const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority2(node?.policy);
+              const providerCandidates = priorities.length ? priorities : [void 0];
+              return providerCandidates.some(
+                (p) => nodeSatisfiesRequiredTags3(task.requiredTags, buildMeshNodeCapabilityTags3(node, p))
+              );
+            }
+            return true;
+          }) : [];
+          if (!candidateNodes.length) {
+            const targetPinUnmatched = !!task.targetNodeId && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n) => meshNodeIdMatches4(n, task.targetNodeId)));
+            const convergenceOntoWorktree = task.taskMode === "convergence" && Array.isArray(mesh?.nodes) && (() => {
+              const matched = mesh.nodes.filter((n) => !task.targetNodeId || meshNodeIdMatches4(n, task.targetNodeId));
+              return matched.length > 0 && matched.every((n) => n?.isLocalWorktree === true);
+            })();
+            const targetTransientlyUnresolved = targetPinUnmatched && isTargetNodeTransientlyUnresolved(mesh, task);
+            markAutoLaunch(meshId, task.id, {
+              status: "skipped",
+              reason: convergenceOntoWorktree ? "mesh_convergence_target_is_worktree" : targetTransientlyUnresolved ? TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON : targetPinUnmatched ? "target_node_id_unmatched" : "no_node_satisfies_required_tags",
+              nodeId: task.targetNodeId
+            });
+            continue;
+          }
+          const strategy = resolveSchedulingStrategy(mesh);
+          const orderedCandidateNodes = strategy === "first_eligible" ? candidateNodes : orderEligibleNodes(
+            meshId,
+            strategy,
+            candidateNodes.map((node, index) => ({ nodeId: readMeshNodeId(node), node, index })).filter((c) => c.nodeId),
+            // Auto-launch drains one task at a time, so the task IS in scope here —
+            // pass it through for the 'fitness' strategy's task→slot ranking. The
+            // mesh's quotaRouting thresholds ride along so the fitness score can
+            // include the quota-headroom spread bonus (fail-open when unset).
+            { bumpCursor: true, task: { difficulty: task.difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) }
+          ).map((c) => c.node);
+          const skippedCandidates = [];
+          const SKIPPED_CANDIDATES_MAX = 5;
+          const markSkip = (nodeIdForSkip, reason, extra) => {
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason, nodeId: nodeIdForSkip, ...extra || {} });
+            if (nodeIdForSkip && skippedCandidates.length < SKIPPED_CANDIDATES_MAX) {
+              skippedCandidates.push({ nodeId: nodeIdForSkip, reason });
+            }
+          };
+          for (const node of orderedCandidateNodes) {
+            const nodeId = readMeshNodeId(node);
+            if (!nodeId) continue;
+            const launchKey = `${meshId}:${nodeId}`;
+            const now = Date.now();
+            const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
+            if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
+            if (autoLaunchInProgress.has(launchKey)) {
+              markSkip(nodeId, "auto_launch_in_progress");
+              continue;
+            }
+            if (now < cooldownUntil) {
+              markSkip(nodeId, "auto_launch_cooldown");
+              continue;
+            }
+            if (isDirtyNode(node)) {
+              markSkip(nodeId, "dirty_workspace");
+              continue;
+            }
+            if (!isLaunchableNode(node)) {
+              markSkip(nodeId, "node_health_not_launchable");
+              continue;
+            }
+            if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
+              markSkip(nodeId, "node_stale_behind_upstream");
+              continue;
+            }
+            const launchTarget = resolveAutoLaunchTarget(components, node);
+            if (launchTarget.mode === "skip") {
+              markSkip(nodeId, launchTarget.reason || "auto_launch_unavailable");
+              autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+              sweepExpiredCooldowns();
+              continue;
+            }
+            if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
+              markSkip(nodeId, "node_has_live_session_pending_claim");
+              continue;
+            }
+            if (!isTaskReadonly2(task) && nodeHasActiveAssignment(meshId, nodeId)) {
+              markSkip(nodeId, "node_has_active_assignment");
+              continue;
+            }
+            const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
+            if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+              markSkip(nodeId, "max_concurrent_sessions_reached");
+              continue;
+            }
+            autoLaunchInProgress.add(launchKey);
+            try {
+              const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
+              if (!resolved.providerType) {
+                markSkip(nodeId, resolved.reason || "provider_unusable");
+                continue;
+              }
+              const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, task.difficulty);
+              const requestedModel = resolveLaunchAxis(task.model, task.modelSource, resolved.model, slotCoversDifficulty);
+              const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, task.thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
+              const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map((slot) => ({
+                slot,
+                available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly)
+              }));
+              let effectiveProviderType = resolved.providerType;
+              let effectiveRequestedModel = requestedModel;
+              let effectiveWinningSlot = resolved.slot;
+              let slotDecision = decideSlotForModel({
+                requestedModel,
+                providerType: effectiveProviderType,
+                slots: nodeSlotAvailability()
+              });
+              if (slotDecision.outcome === "wait") {
+                const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback ? selectQuotaBusyFallback({
+                  clearOrder: resolved.quotaClearOrder ?? [],
+                  candidates: resolved.quotaCandidates ?? [],
+                  busyProviderType: resolved.providerType,
+                  probe: (candidate) => decideSlotForModel({
+                    // Re-resolve the model against the CANDIDATE's own slot: the
+                    // requested model was derived from the busy winner's slot, and
+                    // carrying it over would ask the fallback provider to honour a
+                    // model it may never declare — the exact (provider, model)
+                    // pair-splitting slot-model-enforcement.ts forbids.
+                    requestedModel: resolveLaunchAxis(
+                      task.model,
+                      task.modelSource,
+                      candidate.slot.model,
+                      slotCoversTaskDifficulty(candidate.slot, task.difficulty)
+                    ),
+                    providerType: candidate.providerType,
+                    slots: nodeSlotAvailability()
+                  }).outcome === "run"
+                }) : { outcome: "exhausted", skipped: [] };
+                if (fallback.outcome === "fallback") {
+                  const { candidate } = fallback;
+                  LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(", ")})` : ""}`);
+                  effectiveProviderType = candidate.providerType;
+                  effectiveWinningSlot = candidate.slot;
+                  effectiveRequestedModel = resolveLaunchAxis(
+                    task.model,
+                    task.modelSource,
+                    candidate.slot.model,
+                    slotCoversTaskDifficulty(candidate.slot, task.difficulty)
+                  );
+                  slotDecision = decideSlotForModel({
+                    requestedModel: effectiveRequestedModel,
+                    providerType: effectiveProviderType,
+                    slots: nodeSlotAvailability()
+                  });
+                }
+              }
+              if (slotDecision.outcome === "wait") {
+                LOG.info("MeshQueue", `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+                markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
+                continue;
+              }
+              if (slotDecision.outcome === "notify") {
+                LOG.warn("MeshQueue", `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(", ") || "none"}) for task ${task.id}; not launching \u2014 surfacing to the coordinator to re-drive`);
+                markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
+                continue;
+              }
+              const finalization = finalizeSlotSelection({
+                // The fallback-adjusted winning slot: when the quota-busy fallback
+                // moved the launch to a later candidate, the demotion bookkeeping
+                // must compare against THAT slot, not the abandoned busy one.
+                winningSlot: effectiveWinningSlot,
+                decidedSlot: slotDecision.slot,
+                decidedModel: slotDecision.model,
+                winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly)
+              });
+              const rawEffectiveModel = finalization.model;
+              const demotionReason = finalization.demotionReason;
+              const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType) ? rawEffectiveModel : void 0;
+              if (rawEffectiveModel && effectiveModel === void 0) {
+                LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
+              }
+              const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+              if (floorMiss) {
+                markSkip(nodeId, floorMiss, { providerType: effectiveProviderType });
+                continue;
+              }
+              const providerCap = effectiveSlotCap(
+                resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
+                isReadonly
+              );
+              if (providerCap !== void 0 && activeProviderAssignedCount(
+                meshId,
+                nodeId,
+                effectiveProviderType,
+                resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes)
+              ) >= providerCap) {
+                markSkip(nodeId, "max_provider_parallel_reached", { providerType: effectiveProviderType });
+                continue;
+              }
+              const launchSettings = {
+                // Worker launch envelope: role + mesh context so worker can route completion events.
+                role: "worker",
+                meshNodeFor: meshId,
+                meshNodeId: nodeId,
+                spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || "hidden",
+                // Coordinator-dispatched worker: auto-approve unless mesh/node policy
+                // opts out (default true). Lands in settingsOverride and beats the
+                // global per-provider-type boolean/mode through explicit opposite-key clearing.
+                ...delegatedWorkerAutoApproveSettingsForNode(
+                  mesh,
+                  node,
+                  components.providerLoader?.getMeta(effectiveProviderType),
+                  effectiveProviderType
+                ),
+                launchedByCoordinator: true,
+                autoLaunchedForQueueTaskId: task.id
+              };
+              const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t) => !!t) : [];
+              const buildRoutingDecision = () => buildAutoLaunchRoutingDecision({
+                node,
+                meshId,
+                task: { difficulty: task.difficulty, requiredTags: task.requiredTags },
+                resolved,
+                quotaRouting: mesh?.policy?.quotaRouting ?? null,
+                quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
+                skippedCandidates,
+                requiredTagsResult: {
+                  required: requiredTags,
+                  satisfied: !requiredTags.length || nodeSatisfiesRequiredTags3(requiredTags, buildMeshNodeCapabilityTags3(node, effectiveProviderType)),
+                  missing: requiredTags.filter((t) => !buildMeshNodeCapabilityTags3(node, effectiveProviderType).includes(t))
+                },
+                effectiveModel,
+                effectiveThinkingLevel,
+                executedSlot: slotDecision.slot,
+                demotionReason
+              });
+              if (launchTarget.mode === "remote") {
+                const remoteSettings = {
+                  ...launchSettings,
+                  meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
+                  meshCoordinatorNodeId: nodeId
+                };
+                markAutoLaunch(meshId, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+                let launchResult2;
+                try {
+                  launchResult2 = await components.dispatchMeshCommand(launchTarget.daemonId, "launch_cli", withStatusProbeMarker2({
+                    cliType: effectiveProviderType,
+                    dir: node.workspace,
+                    settings: remoteSettings,
+                    // MAGI-KIND-PANEL model axis: forward the task's model override so the
+                    // remote worker session launches with it (initialModel). Best-effort.
+                    // Slot-aware: task override wins, else the matched slot's model.
+                    ...effectiveModel ? { initialModel: effectiveModel } : {},
+                    // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+                    ...effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}
+                  }));
+                } catch (e) {
+                  markAutoLaunch(meshId, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType });
+                  autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                  sweepExpiredCooldowns();
+                  return false;
+                }
+                const payload = launchResult2 && typeof launchResult2 === "object" && "payload" in launchResult2 && launchResult2.payload && typeof launchResult2.payload === "object" ? launchResult2.payload : launchResult2;
+                if (!payload?.success) {
+                  const reason = readNonEmptyString(payload?.error) || "remote_launch_cli_failed";
+                  markAutoLaunch(meshId, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
+                  autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                  sweepExpiredCooldowns();
+                  return false;
+                }
+                const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
+                markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+                logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0);
+                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                sweepExpiredCooldowns();
+                if (remoteSessionId) {
+                  await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
+                    isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId)
+                  }).catch(() => false);
+                  const routingDecision2 = buildRoutingDecision();
+                  claimAfterRemoteAutoLaunch(
+                    components,
+                    meshId,
+                    nodeId,
+                    remoteSessionId,
+                    effectiveProviderType,
+                    (c, m, n, s2, p) => tryAssignQueueTask(c, m, n, s2, p, routingDecision2, void 0, "auto_launch")
+                  );
+                }
+                return true;
+              }
+              markAutoLaunch(meshId, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+              const launchResult = await components.cliManager.handleCliCommand("launch_cli", {
+                cliType: effectiveProviderType,
+                dir: node.workspace,
+                settings: launchSettings,
+                // MAGI-KIND-PANEL model axis: local launch forwards the effective model
+                // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
+                ...effectiveModel ? { initialModel: effectiveModel } : {},
+                // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+                ...effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}
+              });
+              if (!launchResult?.success) {
+                const reason = launchResult?.error || "launch_cli_failed";
+                markAutoLaunch(meshId, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
+                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                sweepExpiredCooldowns();
+                return false;
+              }
+              const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
+              if (!sessionId) {
+                markAutoLaunch(meshId, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: effectiveProviderType });
+                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                sweepExpiredCooldowns();
+                return false;
+              }
+              markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+              logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
+              await waitForLocalSessionReady(components, sessionId);
+              const routingDecision = buildRoutingDecision();
+              tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, void 0, "auto_launch");
+              return true;
+            } catch (e) {
+              markAutoLaunch(meshId, task.id, { status: "failed", error: e?.message || String(e), nodeId });
+              autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+              return false;
+            } finally {
+              autoLaunchInProgress.delete(launchKey);
+            }
+          }
+        } finally {
+          autoLaunchTaskInProgress.delete(taskLaunchKey);
+        }
+      }
+      return false;
+    }
+    var autoLaunchInProgress;
+    var autoLaunchTaskInProgress;
+    var autoLaunchCooldownUntil;
+    var AUTO_LAUNCH_COOLDOWN_MS;
+    var init_mesh_queue_autolaunch = __esm2({
+      "src/mesh/mesh-queue-autolaunch.ts"() {
+        "use strict";
+        init_cli_detector();
+        init_logger();
+        init_mesh_work_queue();
+        init_mesh_claim_refusal();
+        init_mesh_remote_ready_wait();
+        init_repo_mesh_types();
+        init_dist();
+        init_mesh_node_slots();
+        init_mesh_daemon_slot_axis();
+        init_mesh_quota_routing();
+        init_mesh_events_utils();
+        init_mesh_node_identity();
+        init_model_provider_compat();
+        init_slot_model_enforcement();
+        init_mesh_turn_ledger();
+        init_mesh_auto_fast_forward();
+        init_mesh_skip_notify();
+        init_mesh_task_parking();
+        init_mesh_scheduling_fitness();
+        init_mesh_queue_observability();
+        init_mesh_routing_decision();
+        init_mesh_quota_fallback();
+        init_mesh_autolaunch_integrity();
+        init_mesh_difficulty_floor();
+        init_mesh_autolaunch_spawn_cap();
+        init_mesh_candidacy_predicates();
+        init_mesh_queue_assignment();
+        autoLaunchInProgress = /* @__PURE__ */ new Set();
+        autoLaunchTaskInProgress = /* @__PURE__ */ new Set();
+        autoLaunchCooldownUntil = /* @__PURE__ */ new Map();
+        AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
     function localCoordinatorDaemonId2() {
@@ -84644,602 +85278,8 @@ ${block2.text}`,
       );
       return true;
     }
-    function sweepExpiredCooldowns() {
-      const now = Date.now();
-      for (const [key2, until] of autoLaunchCooldownUntil) {
-        if (now >= until) autoLaunchCooldownUntil.delete(key2);
-      }
-    }
-    function resolveAutoLaunchTarget(components, node) {
-      if (isLocalAutoLaunchNode(node)) return { mode: "local" };
-      const daemonId = readMeshNodeDaemonId(node ?? {});
-      if (!daemonId) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
-      if (!components.dispatchMeshCommand) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
-      const coordinatorDaemonId = localCoordinatorDaemonId2();
-      if (!coordinatorDaemonId) return { mode: "skip", reason: "remote_auto_launch_no_coordinator_daemon_id" };
-      return { mode: "remote", daemonId, coordinatorDaemonId };
-    }
-    function markAutoLaunch(meshId, taskId, args) {
-      const reason = args.reason || args.error;
-      const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
-      if (difficultyFloorSkip) {
-        handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
-      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
-        recordTaskAutoLaunch(meshId, taskId, {
-          status: args.status,
-          reason,
-          nodeId: args.nodeId,
-          providerType: args.providerType,
-          sessionId: args.sessionId
-        });
-      }
-      recordAutoLaunchEvent(meshId, {
-        phase: args.status,
-        taskId,
-        nodeId: args.nodeId,
-        providerType: args.providerType,
-        sessionId: args.sessionId,
-        reason: args.reason,
-        error: args.error,
-        ...args.model ? { model: args.model } : {},
-        ...args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}
-      });
-      if (args.status === "skipped") {
-        if (isActionableSkipReason(args.reason)) {
-          notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
-        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
-          retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-        }
-      } else {
-        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-      }
-    }
-    async function resolveUsableProvider(components, nodeId, node, meshId, requiredTags, task, quotaRouting, quotaFactsContext, taskId) {
-      const providerLoader = components.providerLoader;
-      if (!providerLoader) return { reason: "provider_loader_unavailable" };
-      const slots = resolveNodeCapabilitySlots(node, meshId);
-      if (!slots.length) return { reason: "missing_provider_priority" };
-      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext) : void 0;
-      const orderedSlots = task ? orderSlotsForProviderSelection(slots, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots;
-      const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
-      if (difficultyFloorRequired && !orderedSlots.length) {
-        return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
-      }
-      const failed = [];
-      const usableSlots = [];
-      for (const slot of orderedSlots) {
-        const requestedType = slot.provider;
-        const normalizedType = typeof providerLoader.resolveAlias === "function" ? providerLoader.resolveAlias(requestedType) : requestedType;
-        if (requiredTags?.length && !nodeSatisfiesRequiredTags3(requiredTags, buildMeshNodeCapabilityTags3(node, normalizedType))) {
-          failed.push(`${requestedType}: required_tags_mismatch`);
-          continue;
-        }
-        if (typeof providerLoader.isMachineProviderEnabled === "function" && !providerLoader.isMachineProviderEnabled(normalizedType)) {
-          failed.push(`${requestedType}: disabled`);
-          continue;
-        }
-        let detected;
-        try {
-          detected = await detectCLI(normalizedType, providerLoader, { includeVersion: false });
-        } catch (e) {
-          failed.push(`${requestedType}: detect failed: ${e?.message || e}`);
-          continue;
-        }
-        if (typeof providerLoader.setCliDetectionResults === "function") {
-          providerLoader.setCliDetectionResults([{
-            id: normalizedType,
-            installed: !!detected,
-            path: detected?.path
-          }], false);
-        }
-        components.onStatusChange?.();
-        if (detected) {
-          usableSlots.push({ slot, providerType: normalizedType });
-          continue;
-        }
-        failed.push(`${requestedType}: not detected`);
-      }
-      if (!usableSlots.length) {
-        if (difficultyFloorRequired) {
-          return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
-        }
-        return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId}` };
-      }
-      const selection = selectProviderWithDiagnostics({
-        node,
-        nodeId,
-        meshId,
-        task,
-        taskId,
-        quotaRouting,
-        quotaFactsContext,
-        quotaBonusByProvider,
-        difficultyFloorRequired,
-        usableSlots
-      });
-      if (selection.reason) return { reason: selection.reason };
-      const { ranked, winner } = selection;
-      const { riskSnapshot, allLosers, ...routingDiagnostics } = selection.diagnostics;
-      const rationale = selectionRationaleFrom(routingDiagnostics.selectionTrajectory, allLosers);
-      if (!ranked.clear.length) {
-        const detail = ranked.gated.map((g3) => `${g3.providerType}: ${g3.block.reason}`).join("; ");
-        LOG.info("MeshQueue", `QUOTA GATE: every usable provider on node ${nodeId} is quota-gated (${detail}); leaving the task queued until a quota window resets`);
-        recordLastQuotaRanking(nodeId, {
-          decidedAt: Date.now(),
-          clear: riskSnapshot,
-          gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
-          ...taskId ? { taskId } : {}
-        });
-        return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
-      }
-      const selectedWinner = winner;
-      LOG.debug("MeshQueue", `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map((s2) => `${s2.providerType}:${s2.risk?.toFixed(1) ?? "?"}`).join(",")}] gated=[${ranked.gated.map((g3) => `${g3.providerType}:${g3.block.reason}`).join(",")}] winner=${selectedWinner.providerType}`);
-      recordLastQuotaRanking(nodeId, {
-        decidedAt: Date.now(),
-        winner: selectedWinner.providerType,
-        clear: riskSnapshot,
-        gated: ranked.gated.map((g3) => ({ providerType: g3.providerType, reason: g3.block.reason })),
-        ...taskId ? { taskId } : {},
-        ...rationale ? { rationale } : {}
-      });
-      return {
-        providerType: selectedWinner.providerType,
-        ...ranked.gated.length ? { quotaGated: ranked.gated } : {},
-        // QUOTA-BUSY FALLBACK inputs: the risk-ordered clear ranking and the
-        // de-duplicated candidates it was drawn from, so a caller that finds the
-        // winner saturated can walk to the next clear candidate WITHOUT re-running
-        // selection (re-ranking would just re-elect the same busy winner — that
-        // recomputation is the defect). Only `clear` is exposed: gated providers
-        // must stay unreachable from the fallback path. See mesh-quota-fallback.ts.
-        quotaClearOrder: ranked.clear,
-        quotaCandidates: selection.candidates,
-        ...selectedWinner.slot.model ? { model: selectedWinner.slot.model } : {},
-        ...selectedWinner.slot.thinkingLevel ? { thinkingLevel: selectedWinner.slot.thinkingLevel } : {},
-        // The slot that won selection. Returned so the caller can enforce
-        // "the launch model must be one this slot declares" — a preset
-        // model must not widen what the operator configured. See
-        // slot-model-enforcement.ts.
-        slot: selectedWinner.slot,
-        ...routingDiagnostics
-      };
-    }
     function readMeshNodeId(node) {
       return normalizeMeshNodeId(node) ?? "";
-    }
-    async function maybeAutoLaunchOneQueueSession(components, meshId, mesh) {
-      const queue = getQueue3(meshId);
-      const statusById = new Map(queue.map((task) => [task.id, task.status]));
-      const pending = queue.filter((task) => task.status === "pending").sort((a, b) => meshTaskPriorityRank2(b.priority) - meshTaskPriorityRank2(a.priority));
-      {
-        const pendingIds = new Set(pending.map((t) => t.id));
-        const prefix = `${meshId}::`;
-        for (const key2 of [...autoLaunchAwaitClaimBackoff.keys()]) {
-          if (key2.startsWith(prefix) && !pendingIds.has(key2.slice(prefix.length))) autoLaunchAwaitClaimBackoff.delete(key2);
-        }
-      }
-      if (!pending.length) return false;
-      const freshnessGate = { maxBehind: resolveAutoFastForwardPolicy(mesh).maxBehind };
-      const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
-      const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
-      for (const task of pending) {
-        const taskLaunchKey = `${meshId}::${task.id}`;
-        if (autoLaunchTaskInProgress.has(taskLaunchKey)) {
-          recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "auto_launch_task_in_progress" });
-          continue;
-        }
-        autoLaunchTaskInProgress.add(taskLaunchKey);
-        try {
-          if (!taskDependenciesSatisfied3(task, statusById)) {
-            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "dependencies_unsatisfied" });
-            continue;
-          }
-          if (!meshTaskNotBeforeReady(task)) {
-            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "not_before_delayed" });
-            continue;
-          }
-          const isReadonly = isTaskReadonly2(task);
-          if (isReadonly) {
-            if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
-              markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_readonly_parallel_tasks_reached" });
-              continue;
-            }
-          } else if (activeWriteAssignedCount(meshId) >= maxParallelTasks) {
-            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_parallel_tasks_reached" });
-            continue;
-          }
-          if (taskIsParked(task)) {
-            settleParkedQueueTask(
-              meshId,
-              task,
-              (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }),
-              failRetentionExpiredParkedTask
-            );
-            continue;
-          }
-          if (task.targetSessionId) {
-            const deadTarget = resolveDeadTargetVerdict(components, meshId, mesh, task);
-            if (deadTarget.dead) {
-              const requeued = requeueTask3(meshId, task.id, {
-                reason: deadTarget.reason,
-                clearTargetSession: true,
-                // Keep the node pin if only the SESSION died on a still-live node; clear it
-                // when the NODE itself is absent (nothing to pin to).
-                clearTargetNode: deadTarget.nodeDead
-              });
-              if (requeued) {
-                noteTargetPinCleared(deadTarget.reason);
-                LOG.warn("MeshQueue", `DEAD-TARGET-SELFHEAL: task ${task.id} (mesh ${meshId}) was pinned to a dead target (${deadTarget.reason}); requeued${deadTarget.nodeDead ? " and unpinned node" : ""} (requeueCount=${requeued.requeueCount ?? "?"}, status=${requeued.status}).`);
-              }
-              markAutoLaunch(meshId, task.id, { status: "skipped", reason: "target_session_dead_requeued" });
-              continue;
-            }
-            if (parkExpiredTargetPin(meshId, task, resolveTargetPinTtlVerdict(components, task), TARGET_SESSION_PIN_TTL_MS, (m, t, r) => parkTaskTargetPin(m, t, { reason: r }))) {
-              markAutoLaunch(meshId, task.id, { status: "skipped", reason: PARKED_SKIP_REASON });
-              continue;
-            }
-            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "target_session_constraint" });
-            continue;
-          }
-          if (task.autoLaunch?.status === "completed" && task.autoLaunch.sessionId) {
-            const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
-            const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
-            const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
-            const alProvider = readNonEmptyString(task.autoLaunch.providerType);
-            if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
-              if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
-                (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches4(n, alNodeId)) : void 0)?.workspace
-              )))) {
-                if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, void 0, void 0, "auto_launch")) {
-                  clearClaimDeferralForNode(meshId, alNodeId);
-                  recordAutoLaunchEvent(meshId, { phase: "completed", taskId: task.id, reason: "fast_forward_deferred_claim_redriven", nodeId: alNodeId, sessionId: alSessionId });
-                  LOG.info("MeshQueue", `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
-                  return true;
-                }
-                noteClaimDeferredForNode(meshId, alNodeId);
-              }
-              recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim", nodeId: alNodeId, sessionId: alSessionId });
-              continue;
-            }
-            if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
-              const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
-              if (outcome === "claimed" || outcome === "fallback") return true;
-              if (outcome === "backoff") continue;
-            }
-          }
-          if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
-          const candidateNodes = Array.isArray(mesh?.nodes) ? mesh.nodes.filter((node) => {
-            if (task.targetNodeId && !meshNodeIdMatches4(node, task.targetNodeId)) return false;
-            if (task.taskMode === "convergence" && node?.isLocalWorktree === true) return false;
-            if (task.requiredTags?.length) {
-              const slotProviders = resolveNodeCapabilitySlots(node, meshId).map((s2) => s2.provider).filter(Boolean);
-              const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority2(node?.policy);
-              const providerCandidates = priorities.length ? priorities : [void 0];
-              return providerCandidates.some(
-                (p) => nodeSatisfiesRequiredTags3(task.requiredTags, buildMeshNodeCapabilityTags3(node, p))
-              );
-            }
-            return true;
-          }) : [];
-          if (!candidateNodes.length) {
-            const targetPinUnmatched = !!task.targetNodeId && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n) => meshNodeIdMatches4(n, task.targetNodeId)));
-            const convergenceOntoWorktree = task.taskMode === "convergence" && Array.isArray(mesh?.nodes) && (() => {
-              const matched = mesh.nodes.filter((n) => !task.targetNodeId || meshNodeIdMatches4(n, task.targetNodeId));
-              return matched.length > 0 && matched.every((n) => n?.isLocalWorktree === true);
-            })();
-            const targetTransientlyUnresolved = targetPinUnmatched && isTargetNodeTransientlyUnresolved(mesh, task);
-            markAutoLaunch(meshId, task.id, {
-              status: "skipped",
-              reason: convergenceOntoWorktree ? "mesh_convergence_target_is_worktree" : targetTransientlyUnresolved ? TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON : targetPinUnmatched ? "target_node_id_unmatched" : "no_node_satisfies_required_tags",
-              nodeId: task.targetNodeId
-            });
-            continue;
-          }
-          const strategy = resolveSchedulingStrategy(mesh);
-          const orderedCandidateNodes = strategy === "first_eligible" ? candidateNodes : orderEligibleNodes(
-            meshId,
-            strategy,
-            candidateNodes.map((node, index) => ({ nodeId: readMeshNodeId(node), node, index })).filter((c) => c.nodeId),
-            // Auto-launch drains one task at a time, so the task IS in scope here —
-            // pass it through for the 'fitness' strategy's task→slot ranking. The
-            // mesh's quotaRouting thresholds ride along so the fitness score can
-            // include the quota-headroom spread bonus (fail-open when unset).
-            { bumpCursor: true, task: { difficulty: task.difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) }
-          ).map((c) => c.node);
-          const skippedCandidates = [];
-          const SKIPPED_CANDIDATES_MAX = 5;
-          const markSkip = (nodeIdForSkip, reason, extra) => {
-            markAutoLaunch(meshId, task.id, { status: "skipped", reason, nodeId: nodeIdForSkip, ...extra || {} });
-            if (nodeIdForSkip && skippedCandidates.length < SKIPPED_CANDIDATES_MAX) {
-              skippedCandidates.push({ nodeId: nodeIdForSkip, reason });
-            }
-          };
-          for (const node of orderedCandidateNodes) {
-            const nodeId = readMeshNodeId(node);
-            if (!nodeId) continue;
-            const launchKey = `${meshId}:${nodeId}`;
-            const now = Date.now();
-            const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
-            if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
-            if (autoLaunchInProgress.has(launchKey)) {
-              markSkip(nodeId, "auto_launch_in_progress");
-              continue;
-            }
-            if (now < cooldownUntil) {
-              markSkip(nodeId, "auto_launch_cooldown");
-              continue;
-            }
-            if (isDirtyNode(node)) {
-              markSkip(nodeId, "dirty_workspace");
-              continue;
-            }
-            if (!isLaunchableNode(node)) {
-              markSkip(nodeId, "node_health_not_launchable");
-              continue;
-            }
-            if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
-              markSkip(nodeId, "node_stale_behind_upstream");
-              continue;
-            }
-            const launchTarget = resolveAutoLaunchTarget(components, node);
-            if (launchTarget.mode === "skip") {
-              markSkip(nodeId, launchTarget.reason || "auto_launch_unavailable");
-              autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-              sweepExpiredCooldowns();
-              continue;
-            }
-            if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
-              markSkip(nodeId, "node_has_live_session_pending_claim");
-              continue;
-            }
-            if (!isTaskReadonly2(task) && nodeHasActiveAssignment(meshId, nodeId)) {
-              markSkip(nodeId, "node_has_active_assignment");
-              continue;
-            }
-            const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
-            if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
-              markSkip(nodeId, "max_concurrent_sessions_reached");
-              continue;
-            }
-            autoLaunchInProgress.add(launchKey);
-            try {
-              const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
-              if (!resolved.providerType) {
-                markSkip(nodeId, resolved.reason || "provider_unusable");
-                continue;
-              }
-              const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, task.difficulty);
-              const requestedModel = resolveLaunchAxis(task.model, task.modelSource, resolved.model, slotCoversDifficulty);
-              const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, task.thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
-              const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map((slot) => ({
-                slot,
-                available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly)
-              }));
-              let effectiveProviderType = resolved.providerType;
-              let effectiveRequestedModel = requestedModel;
-              let effectiveWinningSlot = resolved.slot;
-              let slotDecision = decideSlotForModel({
-                requestedModel,
-                providerType: effectiveProviderType,
-                slots: nodeSlotAvailability()
-              });
-              if (slotDecision.outcome === "wait") {
-                const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback ? selectQuotaBusyFallback({
-                  clearOrder: resolved.quotaClearOrder ?? [],
-                  candidates: resolved.quotaCandidates ?? [],
-                  busyProviderType: resolved.providerType,
-                  probe: (candidate) => decideSlotForModel({
-                    // Re-resolve the model against the CANDIDATE's own slot: the
-                    // requested model was derived from the busy winner's slot, and
-                    // carrying it over would ask the fallback provider to honour a
-                    // model it may never declare — the exact (provider, model)
-                    // pair-splitting slot-model-enforcement.ts forbids.
-                    requestedModel: resolveLaunchAxis(
-                      task.model,
-                      task.modelSource,
-                      candidate.slot.model,
-                      slotCoversTaskDifficulty(candidate.slot, task.difficulty)
-                    ),
-                    providerType: candidate.providerType,
-                    slots: nodeSlotAvailability()
-                  }).outcome === "run"
-                }) : { outcome: "exhausted", skipped: [] };
-                if (fallback.outcome === "fallback") {
-                  const { candidate } = fallback;
-                  LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(", ")})` : ""}`);
-                  effectiveProviderType = candidate.providerType;
-                  effectiveWinningSlot = candidate.slot;
-                  effectiveRequestedModel = resolveLaunchAxis(
-                    task.model,
-                    task.modelSource,
-                    candidate.slot.model,
-                    slotCoversTaskDifficulty(candidate.slot, task.difficulty)
-                  );
-                  slotDecision = decideSlotForModel({
-                    requestedModel: effectiveRequestedModel,
-                    providerType: effectiveProviderType,
-                    slots: nodeSlotAvailability()
-                  });
-                }
-              }
-              if (slotDecision.outcome === "wait") {
-                LOG.info("MeshQueue", `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
-                markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
-                continue;
-              }
-              if (slotDecision.outcome === "notify") {
-                LOG.warn("MeshQueue", `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(", ") || "none"}) for task ${task.id}; not launching \u2014 surfacing to the coordinator to re-drive`);
-                markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
-                continue;
-              }
-              const finalization = finalizeSlotSelection({
-                // The fallback-adjusted winning slot: when the quota-busy fallback
-                // moved the launch to a later candidate, the demotion bookkeeping
-                // must compare against THAT slot, not the abandoned busy one.
-                winningSlot: effectiveWinningSlot,
-                decidedSlot: slotDecision.slot,
-                decidedModel: slotDecision.model,
-                winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly)
-              });
-              const rawEffectiveModel = finalization.model;
-              const demotionReason = finalization.demotionReason;
-              const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType) ? rawEffectiveModel : void 0;
-              if (rawEffectiveModel && effectiveModel === void 0) {
-                LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
-              }
-              const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
-              if (floorMiss) {
-                markSkip(nodeId, floorMiss, { providerType: effectiveProviderType });
-                continue;
-              }
-              const providerCap = effectiveSlotCap(
-                resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
-                isReadonly
-              );
-              if (providerCap !== void 0 && activeProviderAssignedCount(
-                meshId,
-                nodeId,
-                effectiveProviderType,
-                resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes)
-              ) >= providerCap) {
-                markSkip(nodeId, "max_provider_parallel_reached", { providerType: effectiveProviderType });
-                continue;
-              }
-              const launchSettings = {
-                // Worker launch envelope: role + mesh context so worker can route completion events.
-                role: "worker",
-                meshNodeFor: meshId,
-                meshNodeId: nodeId,
-                spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || "hidden",
-                // Coordinator-dispatched worker: auto-approve unless mesh/node policy
-                // opts out (default true). Lands in settingsOverride and beats the
-                // global per-provider-type boolean/mode through explicit opposite-key clearing.
-                ...delegatedWorkerAutoApproveSettingsForNode(
-                  mesh,
-                  node,
-                  components.providerLoader?.getMeta(effectiveProviderType),
-                  effectiveProviderType
-                ),
-                launchedByCoordinator: true,
-                autoLaunchedForQueueTaskId: task.id
-              };
-              const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t) => !!t) : [];
-              const buildRoutingDecision = () => buildAutoLaunchRoutingDecision({
-                node,
-                meshId,
-                task: { difficulty: task.difficulty, requiredTags: task.requiredTags },
-                resolved,
-                quotaRouting: mesh?.policy?.quotaRouting ?? null,
-                quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
-                skippedCandidates,
-                requiredTagsResult: {
-                  required: requiredTags,
-                  satisfied: !requiredTags.length || nodeSatisfiesRequiredTags3(requiredTags, buildMeshNodeCapabilityTags3(node, effectiveProviderType)),
-                  missing: requiredTags.filter((t) => !buildMeshNodeCapabilityTags3(node, effectiveProviderType).includes(t))
-                },
-                effectiveModel,
-                effectiveThinkingLevel,
-                executedSlot: slotDecision.slot,
-                demotionReason
-              });
-              if (launchTarget.mode === "remote") {
-                const remoteSettings = {
-                  ...launchSettings,
-                  meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
-                  meshCoordinatorNodeId: nodeId
-                };
-                markAutoLaunch(meshId, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
-                let launchResult2;
-                try {
-                  launchResult2 = await components.dispatchMeshCommand(launchTarget.daemonId, "launch_cli", withStatusProbeMarker2({
-                    cliType: effectiveProviderType,
-                    dir: node.workspace,
-                    settings: remoteSettings,
-                    // MAGI-KIND-PANEL model axis: forward the task's model override so the
-                    // remote worker session launches with it (initialModel). Best-effort.
-                    // Slot-aware: task override wins, else the matched slot's model.
-                    ...effectiveModel ? { initialModel: effectiveModel } : {},
-                    // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
-                    ...effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}
-                  }));
-                } catch (e) {
-                  markAutoLaunch(meshId, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType });
-                  autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                  sweepExpiredCooldowns();
-                  return false;
-                }
-                const payload = launchResult2 && typeof launchResult2 === "object" && "payload" in launchResult2 && launchResult2.payload && typeof launchResult2.payload === "object" ? launchResult2.payload : launchResult2;
-                if (!payload?.success) {
-                  const reason = readNonEmptyString(payload?.error) || "remote_launch_cli_failed";
-                  markAutoLaunch(meshId, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
-                  autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                  sweepExpiredCooldowns();
-                  return false;
-                }
-                const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
-                logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0);
-                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                sweepExpiredCooldowns();
-                if (remoteSessionId) {
-                  await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
-                    isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId)
-                  }).catch(() => false);
-                  const routingDecision2 = buildRoutingDecision();
-                  claimAfterRemoteAutoLaunch(
-                    components,
-                    meshId,
-                    nodeId,
-                    remoteSessionId,
-                    effectiveProviderType,
-                    (c, m, n, s2, p) => tryAssignQueueTask(c, m, n, s2, p, routingDecision2, void 0, "auto_launch")
-                  );
-                }
-                return true;
-              }
-              markAutoLaunch(meshId, task.id, { status: "started", nodeId, providerType: effectiveProviderType, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
-              const launchResult = await components.cliManager.handleCliCommand("launch_cli", {
-                cliType: effectiveProviderType,
-                dir: node.workspace,
-                settings: launchSettings,
-                // MAGI-KIND-PANEL model axis: local launch forwards the effective model
-                // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
-                ...effectiveModel ? { initialModel: effectiveModel } : {},
-                // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
-                ...effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}
-              });
-              if (!launchResult?.success) {
-                const reason = launchResult?.error || "launch_cli_failed";
-                markAutoLaunch(meshId, task.id, { status: "failed", reason, nodeId, providerType: effectiveProviderType });
-                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                sweepExpiredCooldowns();
-                return false;
-              }
-              const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
-              if (!sessionId) {
-                markAutoLaunch(meshId, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: effectiveProviderType });
-                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                sweepExpiredCooldowns();
-                return false;
-              }
-              markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
-              logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
-              await waitForLocalSessionReady(components, sessionId);
-              const routingDecision = buildRoutingDecision();
-              tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, void 0, "auto_launch");
-              return true;
-            } catch (e) {
-              markAutoLaunch(meshId, task.id, { status: "failed", error: e?.message || String(e), nodeId });
-              autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-              return false;
-            } finally {
-              autoLaunchInProgress.delete(launchKey);
-            }
-          }
-        } finally {
-          autoLaunchTaskInProgress.delete(taskLaunchKey);
-        }
-      }
-      return false;
     }
     function countQueueStatus(meshId, status) {
       return getQueue3(meshId, { status: [status] }).length;
@@ -85414,17 +85454,12 @@ ${block2.text}`,
     var dispatchWarmupGetterMissingWarned;
     var LOCAL_LAUNCH_READY_TIMEOUT_MS;
     var LOCAL_LAUNCH_READY_POLL_MS;
-    var autoLaunchInProgress;
-    var autoLaunchTaskInProgress;
-    var autoLaunchCooldownUntil;
-    var AUTO_LAUNCH_COOLDOWN_MS;
     var init_mesh_queue_assignment = __esm2({
       "src/mesh/mesh-queue-assignment.ts"() {
         "use strict";
         init_runtime_defaults();
         init_config();
         init_mesh_config();
-        init_cli_detector();
         init_logger();
         init_mesh_ledger();
         init_mesh_work_queue();
@@ -85434,7 +85469,6 @@ ${block2.text}`,
         init_mesh_claim_refusal();
         init_mesh_event_trace();
         init_mesh_redrive_provenance();
-        init_mesh_remote_ready_wait();
         init_mesh_warmup_deadline();
         init_repo_mesh_types();
         init_mesh_json_config();
@@ -85448,21 +85482,16 @@ ${block2.text}`,
         init_mesh_node_identity();
         init_worktree_bootstrap_config();
         init_mesh_task_inflight();
-        init_model_provider_compat();
         init_slot_model_enforcement();
         init_mesh_turn_ledger();
         init_mesh_duplicate_dispatch();
         init_mesh_auto_fast_forward();
         init_mesh_skip_notify();
-        init_mesh_task_parking();
         init_mesh_dispatch_failed_notify();
         init_mesh_scheduling_fitness();
         init_mesh_queue_observability();
-        init_mesh_routing_decision();
-        init_mesh_quota_fallback();
         init_mesh_autolaunch_integrity();
         init_mesh_difficulty_floor();
-        init_mesh_autolaunch_spawn_cap();
         init_worker_mcp_isolation();
         init_worker_handoff_dispatch();
         init_mesh_candidacy_predicates();
@@ -85470,6 +85499,8 @@ ${block2.text}`,
         init_mesh_auto_fast_forward();
         init_mesh_skip_notify();
         init_mesh_scheduling_fitness();
+        init_mesh_queue_autolaunch();
+        init_mesh_queue_autolaunch();
         init_mesh_claim_refusal();
         init_mesh_autolaunch_integrity();
         BOOTSTRAP_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["complete", "failed"]);
@@ -85478,10 +85509,6 @@ ${block2.text}`,
         dispatchWarmupGetterMissingWarned = /* @__PURE__ */ new Set();
         LOCAL_LAUNCH_READY_TIMEOUT_MS = 15e3;
         LOCAL_LAUNCH_READY_POLL_MS = 100;
-        autoLaunchInProgress = /* @__PURE__ */ new Set();
-        autoLaunchTaskInProgress = /* @__PURE__ */ new Set();
-        autoLaunchCooldownUntil = /* @__PURE__ */ new Map();
-        AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
     function readSettings(state2) {
@@ -135629,6 +135656,429 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_router_refine();
       }
     });
+    async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
+      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord?.mesh;
+      if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
+      const allNodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
+      const isConvergeable = (n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace;
+      let targetNodes;
+      if (Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0) {
+        targetNodes = [];
+        const missing = [];
+        const nonWorktree = [];
+        for (const nodeId of requestedNodeIds) {
+          const node = allNodes.find((n) => meshNodeIdMatches4(n, nodeId));
+          if (!node) {
+            missing.push(nodeId);
+            continue;
+          }
+          if (!isConvergeable(node)) {
+            nonWorktree.push(nodeId);
+            continue;
+          }
+          targetNodes.push(node);
+        }
+        if (missing.length || nonWorktree.length) {
+          return {
+            success: false,
+            error: "One or more requested nodes are not convergeable local worktree nodes.",
+            ...missing.length ? { missingNodeIds: missing } : {},
+            ...nonWorktree.length ? { nonWorktreeNodeIds: nonWorktree } : {}
+          };
+        }
+      } else {
+        targetNodes = allNodes.filter(isConvergeable);
+      }
+      if (targetNodes.length === 0) {
+        return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: "No convergeable local worktree nodes found." };
+      }
+      const { execFile: execFile9 } = await import("child_process");
+      const { promisify: promisify11 } = await import("util");
+      const execFileAsync8 = promisify11(execFile9);
+      const resolveRepoRootFor = (node) => {
+        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches4(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
+        return sourceNode?.repoRoot || sourceNode?.workspace;
+      };
+      const repoRootBaseRef = /* @__PURE__ */ new Map();
+      const submodulePathsByRepoRoot = /* @__PURE__ */ new Map();
+      const resolveBaseRef = async (repoRoot) => {
+        const cached5 = repoRootBaseRef.get(repoRoot);
+        if (cached5) return cached5;
+        let baseBranch = "main";
+        try {
+          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          if (stdout.trim()) baseBranch = stdout.trim();
+        } catch {
+        }
+        let baseRef = "HEAD";
+        try {
+          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
+        } catch {
+        }
+        try {
+          const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+          baseRef = stdout.trim();
+        } catch {
+          try {
+            const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            baseRef = stdout.trim();
+          } catch {
+          }
+        }
+        repoRootBaseRef.set(repoRoot, baseRef);
+        return baseRef;
+      };
+      const changeAreas = [];
+      for (const node of targetNodes) {
+        const repoRoot = resolveRepoRootFor(node);
+        let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
+        try {
+          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+          if (stdout.trim()) branch = stdout.trim();
+        } catch {
+        }
+        if (!repoRoot || !branch) {
+          changeAreas.push({
+            nodeId: node.id,
+            workspace: node.workspace,
+            branch: branch || "(unknown)",
+            changedTopLevelPaths: [],
+            changedFiles: [],
+            touchedSubmodulePaths: [],
+            touchesSubmodule: false,
+            aheadCount: 0,
+            error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
+          });
+          continue;
+        }
+        if (!submodulePathsByRepoRoot.has(repoRoot)) {
+          let subPaths = /* @__PURE__ */ new Set();
+          try {
+            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            for (const line of stdout.split("\n")) {
+              const trimmed = line.trim();
+              const spaceIdx = trimmed.indexOf(" ");
+              if (spaceIdx === -1) continue;
+              const value = trimmed.slice(spaceIdx + 1).trim();
+              if (value) subPaths.add(value);
+            }
+          } catch {
+            subPaths = /* @__PURE__ */ new Set();
+          }
+          submodulePathsByRepoRoot.set(repoRoot, subPaths);
+        }
+        const baseRef = await resolveBaseRef(repoRoot);
+        let branchRef = branch;
+        try {
+          const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+          branchRef = stdout.trim() || branch;
+        } catch {
+        }
+        changeAreas.push(await analyzeMeshRefineNodeChangeArea({
+          nodeId: node.id,
+          workspace: node.workspace,
+          branch,
+          baseRef,
+          branchRef,
+          diffCwd: node.workspace,
+          repoRoot,
+          submodulePaths: submodulePathsByRepoRoot.get(repoRoot)
+        }));
+      }
+      const ordering = orderMeshRefineBatchNodes(changeAreas);
+      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches4(n, nodeId))).filter((n) => !!n);
+      const dryRun = args?.dryRun !== false && args?.execute !== true;
+      if (dryRun) {
+        return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
+      }
+      return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
+    }
+    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args) {
+      const refineOne = async (node) => {
+        let result;
+        try {
+          result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args);
+        } catch (e) {
+          result = { success: false, error: e?.message || String(e) };
+        }
+        const { convergence, code, stage, retryable } = classifyBatchNodeConvergence(result);
+        const fbcs = result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === "object" ? result.finalBranchConvergenceState : void 0;
+        return {
+          nodeId: node.id,
+          workspace: node.workspace,
+          convergence,
+          ...code ? { code } : {},
+          ...typeof result.blockedReason === "string" ? { reason: result.blockedReason } : {},
+          ...stage ? { stage } : {},
+          ...typeof result.error === "string" ? { error: result.error } : {},
+          ...retryable ? { retryable: true } : {},
+          ...fbcs ? { finalBranchConvergenceState: fbcs } : {}
+        };
+      };
+      const results = [];
+      const retryQueue = [];
+      for (const node of orderedNodes) {
+        const outcome = await refineOne(node);
+        results.push(outcome);
+        if (outcome.retryable) retryQueue.push(node);
+      }
+      for (const node of retryQueue) {
+        const idx = results.findIndex((r) => r.nodeId === node.id);
+        const retried = await refineOne(node);
+        retried.retried = true;
+        if (idx >= 0) results[idx] = retried;
+        else results.push(retried);
+      }
+      const summary = {
+        merged: results.filter((r) => r.convergence === "merged_to_main").length,
+        skipped: results.filter((r) => r.convergence === "skipped_patch_equivalent").length,
+        blocked: results.filter((r) => r.convergence === "blocked_review").length,
+        notMergeable: results.filter((r) => r.convergence === "not_mergeable").length,
+        ...retryQueue.length ? { retried: retryQueue.length } : {}
+      };
+      const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
+      return {
+        success: true,
+        batch: true,
+        dryRun: false,
+        nodeCount: orderedNodes.length,
+        order: ordering.order,
+        orderingRationale: ordering.rationale,
+        summary,
+        allConverged,
+        results,
+        ...allConverged ? {} : {
+          // Name the failed nodes inline — the aggregate nextStep used to hide
+          // WHICH nodes blocked, forcing a manual git-log cross-check.
+          nextStep: `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
+        }
+      };
+    }
+    function buildRefineBatchJobKey(self, meshId) {
+      return `${meshId}::batch`;
+    }
+    function buildRefineBatchJobHandle(self, args) {
+      return {
+        success: true,
+        async: true,
+        batch: true,
+        status: args.status || "accepted",
+        jobId: args.jobId || `refine_batch_${createInteractionId()}`,
+        interactionId: args.interactionId || createInteractionId(),
+        meshId: args.meshId,
+        batchLabel: `batch:${args.nodeIds.length} node${args.nodeIds.length === 1 ? "" : "s"}`,
+        nodeIds: args.nodeIds,
+        nodeCount: args.nodeIds.length,
+        order: args.order,
+        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
+        ...args.completedAt ? { completedAt: args.completedAt } : {},
+        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
+        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
+        eventDelivery: { pendingEvents: true, ledger: true },
+        evidence: {
+          pendingEventsCommand: "get_pending_mesh_events",
+          ledgerCommand: "get_mesh_ledger_slice",
+          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
+        }
+      };
+    }
+    function queueRefineBatchJobEvent(self, event, handle, result) {
+      const metadataEvent = {
+        source: "refine_mesh_node_async_job",
+        batch: true,
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        meshId: handle.meshId,
+        nodeId: handle.batchLabel,
+        nodeIds: handle.nodeIds,
+        workspace: void 0,
+        status: handle.status,
+        startedAt: handle.startedAt,
+        completedAt: handle.completedAt,
+        order: handle.order,
+        ...result ? { result } : {}
+      };
+      const eventPayload = {
+        event,
+        meshId: handle.meshId,
+        nodeLabel: handle.batchLabel,
+        nodeId: handle.batchLabel,
+        metadataEvent: {
+          ...metadataEvent,
+          // REFINE-EVENT-SESSION-SCOPED-UNICAST — see queueRefineJobEvent.
+          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+        },
+        queuedAt: Date.now(),
+        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+        // THE FIX (batch half) — address the batch terminal event to the requesting
+        // coordinator SESSION so a sibling session cannot consume it.
+        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+      };
+      if (typeof self.deps.instanceManager?.getByCategory === "function") {
+        const forwarded = handleMeshForwardEvent(
+          { instanceManager: self.deps.instanceManager },
+          {
+            event,
+            meshId: handle.meshId,
+            nodeId: handle.batchLabel,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            status: handle.status,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            // RC32: same return-address passthrough as queueRefineJobEvent —
+            // the sessionless batch job's terminal event must stay targeted
+            // at the originating coordinator, not self-fallback to this daemon.
+            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+            // REFINE-EVENT-SESSION-SCOPED-UNICAST — session half of the return
+            // address, both spellings (see queueRefineJobEvent).
+            ...handle.targetCoordinatorSessionId ? {
+              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
+              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
+            } : {},
+            ...result ? { result } : {}
+          }
+        );
+        if (forwarded?.success === true) return;
+        LOG.warn("Mesh", `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || "unknown error"}`);
+      }
+      queuePendingMeshCoordinatorEvent(eventPayload);
+    }
+    async function appendRefineBatchJobLedger(self, kind, handle, result) {
+      try {
+        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
+        appendLedgerEntry22(handle.meshId, {
+          kind,
+          nodeId: handle.batchLabel,
+          payload: {
+            source: "refine_mesh_node_async_job",
+            refineJob: {
+              batch: true,
+              jobId: handle.jobId,
+              interactionId: handle.interactionId,
+              status: handle.status,
+              meshId: handle.meshId,
+              nodeIds: handle.nodeIds,
+              order: handle.order,
+              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
+              startedAt: handle.startedAt,
+              completedAt: handle.completedAt
+            },
+            async: true,
+            batch: true,
+            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
+            ...result ? {
+              success: result.success === true,
+              result
+            } : {}
+          }
+        });
+      } catch (e) {
+        LOG.warn("Mesh", `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
+      }
+    }
+    async function finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args) {
+      const key2 = buildRefineBatchJobKey(self, handle.meshId);
+      let result;
+      try {
+        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args);
+      } catch (e) {
+        result = { success: false, error: e?.message || String(e), batch: true };
+      }
+      const completedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const summary = result.summary && typeof result.summary === "object" ? result.summary : void 0;
+      const allConverged = result.allConverged === true;
+      const isTerminalSuccess = result.success === true && allConverged;
+      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : isTerminalSuccess ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
+      const normalizedResult = {
+        ...result,
+        batch: true,
+        nextStep,
+        ...summary ? {
+          convergenceStatus: allConverged ? "all_converged" : "partial"
+        } : {}
+      };
+      const terminalHandle = buildRefineBatchJobHandle(self, {
+        meshId: handle.meshId,
+        nodeIds: handle.nodeIds,
+        order: handle.order,
+        status: isTerminalSuccess ? "completed" : "failed",
+        startedAt: handle.startedAt,
+        completedAt,
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        // REFINE-EVENT-SESSION-SCOPED-UNICAST — carry the requester's session onto the
+        // terminal batch handle (see the single-node path).
+        coordinatorSessionId: handle.targetCoordinatorSessionId
+      });
+      const terminal = { ...terminalHandle, result: normalizedResult };
+      self.terminalRefineBatchJobs.set(key2, terminal);
+      self.runningRefineBatchJobs.delete(key2);
+      self.invalidateAggregateMeshStatus(handle.meshId);
+      await appendRefineBatchJobLedger(self, isTerminalSuccess ? "task_completed" : "task_failed", terminalHandle, normalizedResult);
+      queueRefineBatchJobEvent(self, isTerminalSuccess ? "refine:completed" : "refine:failed", terminalHandle, normalizedResult);
+    }
+    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
+      const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+      const planRecord = plan;
+      if (planRecord.success !== true) return plan;
+      if (args?.dryRun === true && args?.execute !== true) return plan;
+      const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
+      const nodeIds = order.slice();
+      if (nodeIds.length === 0) {
+        return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
+      }
+      const key2 = buildRefineBatchJobKey(self, meshId);
+      const running = self.runningRefineBatchJobs.get(key2);
+      if (running) return { ...running, duplicate: true };
+      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord?.mesh;
+      const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+      const orderedNodes = nodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches4(n, id))).filter((n) => !!n);
+      if (orderedNodes.length === 0) {
+        return { success: false, error: "Batch nodes no longer resolvable in mesh", batch: true };
+      }
+      const ordering = {
+        order,
+        rationale: planRecord.orderingRationale
+      };
+      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
+      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
+      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
+      self.runningRefineBatchJobs.set(key2, handle);
+      await appendRefineBatchJobLedger(self, "task_dispatched", handle);
+      queueRefineBatchJobEvent(self, "refine:accepted", handle);
+      setImmediate(() => {
+        void runWithRefineExecutionSlot(
+          `batch ${handle.jobId} (mesh ${meshId})`,
+          () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args)
+        );
+      });
+      return {
+        ...handle,
+        order,
+        orderingRationale: planRecord.orderingRationale,
+        plan: planRecord.plan,
+        note: "Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly."
+      };
+    }
+    var init_router_refine_batch_jobs = __esm2({
+      "src/commands/router-refine-batch-jobs.ts"() {
+        "use strict";
+        init_logger();
+        init_debug_trace();
+        init_dist();
+        init_mesh_events();
+        init_mesh_refine_batch();
+        init_mesh_refine_submodule_preflight();
+        init_git_locale();
+        init_mesh_refine_concurrency();
+        init_router_refine();
+      }
+    });
     var router_refine_exports = {};
     __export2(router_refine_exports, {
       appendRefineBatchJobLedger: () => appendRefineBatchJobLedger,
@@ -137075,144 +137525,6 @@ ${e?.stderr || ""}`;
         finalBranchConvergenceState
       } };
     }
-    async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
-      if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
-      const allNodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
-      const isConvergeable = (n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace;
-      let targetNodes;
-      if (Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0) {
-        targetNodes = [];
-        const missing = [];
-        const nonWorktree = [];
-        for (const nodeId of requestedNodeIds) {
-          const node = allNodes.find((n) => meshNodeIdMatches4(n, nodeId));
-          if (!node) {
-            missing.push(nodeId);
-            continue;
-          }
-          if (!isConvergeable(node)) {
-            nonWorktree.push(nodeId);
-            continue;
-          }
-          targetNodes.push(node);
-        }
-        if (missing.length || nonWorktree.length) {
-          return {
-            success: false,
-            error: "One or more requested nodes are not convergeable local worktree nodes.",
-            ...missing.length ? { missingNodeIds: missing } : {},
-            ...nonWorktree.length ? { nonWorktreeNodeIds: nonWorktree } : {}
-          };
-        }
-      } else {
-        targetNodes = allNodes.filter(isConvergeable);
-      }
-      if (targetNodes.length === 0) {
-        return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: "No convergeable local worktree nodes found." };
-      }
-      const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync8 = promisify11(execFile9);
-      const resolveRepoRootFor = (node) => {
-        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches4(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
-        return sourceNode?.repoRoot || sourceNode?.workspace;
-      };
-      const repoRootBaseRef = /* @__PURE__ */ new Map();
-      const submodulePathsByRepoRoot = /* @__PURE__ */ new Map();
-      const resolveBaseRef = async (repoRoot) => {
-        const cached5 = repoRootBaseRef.get(repoRoot);
-        if (cached5) return cached5;
-        let baseBranch = "main";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) baseBranch = stdout.trim();
-        } catch {
-        }
-        let baseRef = "HEAD";
-        try {
-          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
-        } catch {
-        }
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          baseRef = stdout.trim();
-        } catch {
-          try {
-            const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-            baseRef = stdout.trim();
-          } catch {
-          }
-        }
-        repoRootBaseRef.set(repoRoot, baseRef);
-        return baseRef;
-      };
-      const changeAreas = [];
-      for (const node of targetNodes) {
-        const repoRoot = resolveRepoRootFor(node);
-        let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) branch = stdout.trim();
-        } catch {
-        }
-        if (!repoRoot || !branch) {
-          changeAreas.push({
-            nodeId: node.id,
-            workspace: node.workspace,
-            branch: branch || "(unknown)",
-            changedTopLevelPaths: [],
-            changedFiles: [],
-            touchedSubmodulePaths: [],
-            touchesSubmodule: false,
-            aheadCount: 0,
-            error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
-          });
-          continue;
-        }
-        if (!submodulePathsByRepoRoot.has(repoRoot)) {
-          let subPaths = /* @__PURE__ */ new Set();
-          try {
-            const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-            for (const line of stdout.split("\n")) {
-              const trimmed = line.trim();
-              const spaceIdx = trimmed.indexOf(" ");
-              if (spaceIdx === -1) continue;
-              const value = trimmed.slice(spaceIdx + 1).trim();
-              if (value) subPaths.add(value);
-            }
-          } catch {
-            subPaths = /* @__PURE__ */ new Set();
-          }
-          submodulePathsByRepoRoot.set(repoRoot, subPaths);
-        }
-        const baseRef = await resolveBaseRef(repoRoot);
-        let branchRef = branch;
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          branchRef = stdout.trim() || branch;
-        } catch {
-        }
-        changeAreas.push(await analyzeMeshRefineNodeChangeArea({
-          nodeId: node.id,
-          workspace: node.workspace,
-          branch,
-          baseRef,
-          branchRef,
-          diffCwd: node.workspace,
-          repoRoot,
-          submodulePaths: submodulePathsByRepoRoot.get(repoRoot)
-        }));
-      }
-      const ordering = orderMeshRefineBatchNodes(changeAreas);
-      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches4(n, nodeId))).filter((n) => !!n);
-      const dryRun = args?.dryRun !== false && args?.execute !== true;
-      if (dryRun) {
-        return buildMeshRefineBatchDryRunResult({ mesh, orderedNodes, ordering });
-      }
-      return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
-    }
     function classifyBatchNodeConvergence(result) {
       const code = typeof result.code === "string" ? result.code : "";
       const stage = Array.isArray(result.refineStages) ? result.refineStages.filter((s2) => s2.status === "failed").map((s2) => s2.stage).filter(Boolean).pop() : void 0;
@@ -137228,277 +137540,6 @@ ${e?.stderr || ""}`;
       }
       const retryable = convergence === "blocked_review" && (result.retryable === true || RETRYABLE_BASE_MOVEMENT_CODES.has(code));
       return { convergence, code, retryable, ...stage ? { stage } : {} };
-    }
-    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args) {
-      const refineOne = async (node) => {
-        let result;
-        try {
-          result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args);
-        } catch (e) {
-          result = { success: false, error: e?.message || String(e) };
-        }
-        const { convergence, code, stage, retryable } = classifyBatchNodeConvergence(result);
-        const fbcs = result.finalBranchConvergenceState && typeof result.finalBranchConvergenceState === "object" ? result.finalBranchConvergenceState : void 0;
-        return {
-          nodeId: node.id,
-          workspace: node.workspace,
-          convergence,
-          ...code ? { code } : {},
-          ...typeof result.blockedReason === "string" ? { reason: result.blockedReason } : {},
-          ...stage ? { stage } : {},
-          ...typeof result.error === "string" ? { error: result.error } : {},
-          ...retryable ? { retryable: true } : {},
-          ...fbcs ? { finalBranchConvergenceState: fbcs } : {}
-        };
-      };
-      const results = [];
-      const retryQueue = [];
-      for (const node of orderedNodes) {
-        const outcome = await refineOne(node);
-        results.push(outcome);
-        if (outcome.retryable) retryQueue.push(node);
-      }
-      for (const node of retryQueue) {
-        const idx = results.findIndex((r) => r.nodeId === node.id);
-        const retried = await refineOne(node);
-        retried.retried = true;
-        if (idx >= 0) results[idx] = retried;
-        else results.push(retried);
-      }
-      const summary = {
-        merged: results.filter((r) => r.convergence === "merged_to_main").length,
-        skipped: results.filter((r) => r.convergence === "skipped_patch_equivalent").length,
-        blocked: results.filter((r) => r.convergence === "blocked_review").length,
-        notMergeable: results.filter((r) => r.convergence === "not_mergeable").length,
-        ...retryQueue.length ? { retried: retryQueue.length } : {}
-      };
-      const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
-      return {
-        success: true,
-        batch: true,
-        dryRun: false,
-        nodeCount: orderedNodes.length,
-        order: ordering.order,
-        orderingRationale: ordering.rationale,
-        summary,
-        allConverged,
-        results,
-        ...allConverged ? {} : {
-          // Name the failed nodes inline — the aggregate nextStep used to hide
-          // WHICH nodes blocked, forcing a manual git-log cross-check.
-          nextStep: `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
-        }
-      };
-    }
-    function buildRefineBatchJobKey(self, meshId) {
-      return `${meshId}::batch`;
-    }
-    function buildRefineBatchJobHandle(self, args) {
-      return {
-        success: true,
-        async: true,
-        batch: true,
-        status: args.status || "accepted",
-        jobId: args.jobId || `refine_batch_${createInteractionId()}`,
-        interactionId: args.interactionId || createInteractionId(),
-        meshId: args.meshId,
-        batchLabel: `batch:${args.nodeIds.length} node${args.nodeIds.length === 1 ? "" : "s"}`,
-        nodeIds: args.nodeIds,
-        nodeCount: args.nodeIds.length,
-        order: args.order,
-        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
-        ...args.completedAt ? { completedAt: args.completedAt } : {},
-        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
-        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
-        eventDelivery: { pendingEvents: true, ledger: true },
-        evidence: {
-          pendingEventsCommand: "get_pending_mesh_events",
-          ledgerCommand: "get_mesh_ledger_slice",
-          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
-        }
-      };
-    }
-    function queueRefineBatchJobEvent(self, event, handle, result) {
-      const metadataEvent = {
-        source: "refine_mesh_node_async_job",
-        batch: true,
-        jobId: handle.jobId,
-        interactionId: handle.interactionId,
-        meshId: handle.meshId,
-        nodeId: handle.batchLabel,
-        nodeIds: handle.nodeIds,
-        workspace: void 0,
-        status: handle.status,
-        startedAt: handle.startedAt,
-        completedAt: handle.completedAt,
-        order: handle.order,
-        ...result ? { result } : {}
-      };
-      const eventPayload = {
-        event,
-        meshId: handle.meshId,
-        nodeLabel: handle.batchLabel,
-        nodeId: handle.batchLabel,
-        metadataEvent: {
-          ...metadataEvent,
-          // REFINE-EVENT-SESSION-SCOPED-UNICAST — see queueRefineJobEvent.
-          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-        },
-        queuedAt: Date.now(),
-        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-        // THE FIX (batch half) — address the batch terminal event to the requesting
-        // coordinator SESSION so a sibling session cannot consume it.
-        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-      };
-      if (typeof self.deps.instanceManager?.getByCategory === "function") {
-        const forwarded = handleMeshForwardEvent(
-          { instanceManager: self.deps.instanceManager },
-          {
-            event,
-            meshId: handle.meshId,
-            nodeId: handle.batchLabel,
-            jobId: handle.jobId,
-            interactionId: handle.interactionId,
-            status: handle.status,
-            startedAt: handle.startedAt,
-            completedAt: handle.completedAt,
-            // RC32: same return-address passthrough as queueRefineJobEvent —
-            // the sessionless batch job's terminal event must stay targeted
-            // at the originating coordinator, not self-fallback to this daemon.
-            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-            // REFINE-EVENT-SESSION-SCOPED-UNICAST — session half of the return
-            // address, both spellings (see queueRefineJobEvent).
-            ...handle.targetCoordinatorSessionId ? {
-              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
-              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
-            } : {},
-            ...result ? { result } : {}
-          }
-        );
-        if (forwarded?.success === true) return;
-        LOG.warn("Mesh", `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || "unknown error"}`);
-      }
-      queuePendingMeshCoordinatorEvent(eventPayload);
-    }
-    async function appendRefineBatchJobLedger(self, kind, handle, result) {
-      try {
-        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
-        appendLedgerEntry22(handle.meshId, {
-          kind,
-          nodeId: handle.batchLabel,
-          payload: {
-            source: "refine_mesh_node_async_job",
-            refineJob: {
-              batch: true,
-              jobId: handle.jobId,
-              interactionId: handle.interactionId,
-              status: handle.status,
-              meshId: handle.meshId,
-              nodeIds: handle.nodeIds,
-              order: handle.order,
-              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
-              startedAt: handle.startedAt,
-              completedAt: handle.completedAt
-            },
-            async: true,
-            batch: true,
-            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
-            ...result ? {
-              success: result.success === true,
-              result
-            } : {}
-          }
-        });
-      } catch (e) {
-        LOG.warn("Mesh", `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
-      }
-    }
-    async function finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args) {
-      const key2 = buildRefineBatchJobKey(self, handle.meshId);
-      let result;
-      try {
-        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args);
-      } catch (e) {
-        result = { success: false, error: e?.message || String(e), batch: true };
-      }
-      const completedAt = (/* @__PURE__ */ new Date()).toISOString();
-      const summary = result.summary && typeof result.summary === "object" ? result.summary : void 0;
-      const allConverged = result.allConverged === true;
-      const isTerminalSuccess = result.success === true && allConverged;
-      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : isTerminalSuccess ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
-      const normalizedResult = {
-        ...result,
-        batch: true,
-        nextStep,
-        ...summary ? {
-          convergenceStatus: allConverged ? "all_converged" : "partial"
-        } : {}
-      };
-      const terminalHandle = buildRefineBatchJobHandle(self, {
-        meshId: handle.meshId,
-        nodeIds: handle.nodeIds,
-        order: handle.order,
-        status: isTerminalSuccess ? "completed" : "failed",
-        startedAt: handle.startedAt,
-        completedAt,
-        jobId: handle.jobId,
-        interactionId: handle.interactionId,
-        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
-        // REFINE-EVENT-SESSION-SCOPED-UNICAST — carry the requester's session onto the
-        // terminal batch handle (see the single-node path).
-        coordinatorSessionId: handle.targetCoordinatorSessionId
-      });
-      const terminal = { ...terminalHandle, result: normalizedResult };
-      self.terminalRefineBatchJobs.set(key2, terminal);
-      self.runningRefineBatchJobs.delete(key2);
-      self.invalidateAggregateMeshStatus(handle.meshId);
-      await appendRefineBatchJobLedger(self, isTerminalSuccess ? "task_completed" : "task_failed", terminalHandle, normalizedResult);
-      queueRefineBatchJobEvent(self, isTerminalSuccess ? "refine:completed" : "refine:failed", terminalHandle, normalizedResult);
-    }
-    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
-      const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
-      const planRecord = plan;
-      if (planRecord.success !== true) return plan;
-      if (args?.dryRun === true && args?.execute !== true) return plan;
-      const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
-      const nodeIds = order.slice();
-      if (nodeIds.length === 0) {
-        return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
-      }
-      const key2 = buildRefineBatchJobKey(self, meshId);
-      const running = self.runningRefineBatchJobs.get(key2);
-      if (running) return { ...running, duplicate: true };
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
-      const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const orderedNodes = nodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches4(n, id))).filter((n) => !!n);
-      if (orderedNodes.length === 0) {
-        return { success: false, error: "Batch nodes no longer resolvable in mesh", batch: true };
-      }
-      const ordering = {
-        order,
-        rationale: planRecord.orderingRationale
-      };
-      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
-      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
-      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
-      self.runningRefineBatchJobs.set(key2, handle);
-      await appendRefineBatchJobLedger(self, "task_dispatched", handle);
-      queueRefineBatchJobEvent(self, "refine:accepted", handle);
-      setImmediate(() => {
-        void runWithRefineExecutionSlot(
-          `batch ${handle.jobId} (mesh ${meshId})`,
-          () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args)
-        );
-      });
-      return {
-        ...handle,
-        order,
-        orderingRationale: planRecord.orderingRationale,
-        plan: planRecord.plan,
-        note: "Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly."
-      };
     }
     function shouldAutoRetryRefine(result) {
       const alreadyRetried = result.refineRetried === true;
@@ -137688,8 +137729,6 @@ ${e?.stderr || ""}`;
         init_mesh_events();
         init_mesh_reconcile_identity();
         init_mesh_fast_forward();
-        init_mesh_refine_batch();
-        init_mesh_refine_submodule_preflight();
         init_mesh_refine_base_divergence();
         init_mesh_refine_inflight();
         init_mesh_refine_inflight();
@@ -137708,6 +137747,7 @@ ${e?.stderr || ""}`;
         init_mesh_refine_base_cas();
         init_mesh_refine_concurrency();
         init_router_refine_resume();
+        init_router_refine_batch_jobs();
         RETRYABLE_BASE_MOVEMENT_CODES = /* @__PURE__ */ new Set(["base_moved", "base_locked", "base_cas_undeterminable"]);
       }
     });
@@ -170645,15 +170685,9 @@ async function meshReviewInbox(ctx, args = {}) {
 
 // src/tools/mesh-tools-magi.ts
 var import_daemon_core10 = __toESM(require_dist3());
-var MAGI_MAX_REPLICAS = 12;
-var MAGI_MIN_TARGETS = 2;
+
+// src/tools/mesh-tools-magi-core.ts
 var MAGI_CLUSTER_JACCARD = 0.4;
-var MAGI_DEFAULT_WAIT_MS = 48e4;
-var MAGI_MAX_WAIT_MS = 12e5;
-var MAGI_POLL_INTERVAL_MS = 5e3;
-function resolveMagiWaitTimeoutMs(raw) {
-  return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
-}
 var VALID_TASK_KINDS = ["claim_audit", "rca", "design", "freeform"];
 var DEFAULT_TASK_KIND = "claim_audit";
 function normalizeMagiTaskKind(raw) {
@@ -171082,6 +171116,49 @@ function computeMagiGitSkew(answered) {
     } : {}
   };
 }
+function collectMagiCandidateTexts(payload) {
+  if (!payload || typeof payload !== "object") return [];
+  const p = payload;
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    const text = typeof value === "string" ? value : "";
+    const trimmed = text.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(text);
+  };
+  const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    const role = String(msg.role || msg.from || "").toLowerCase();
+    if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
+    const content = msg.content ?? msg.text ?? msg.message;
+    if (typeof content === "string") push(content);
+    else if (Array.isArray(content)) {
+      const joined = content.map((part) => typeof part === "string" ? part : part && typeof part === "object" && typeof part.text === "string" ? part.text : "").join("");
+      push(joined);
+    }
+    push(msg.summary);
+    push(msg.summaryMetadata?.summary);
+  }
+  push(p.summary);
+  push(p.finalSummary);
+  push(p.lastMessagePreview);
+  push(p.text);
+  return out;
+}
+
+// src/tools/mesh-tools-magi.ts
+var MAGI_MAX_REPLICAS = 12;
+var MAGI_MIN_TARGETS = 2;
+var MAGI_DEFAULT_WAIT_MS = 48e4;
+var MAGI_MAX_WAIT_MS = 12e5;
+var MAGI_POLL_INTERVAL_MS = 5e3;
+function resolveMagiWaitTimeoutMs(raw) {
+  return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
+}
 function replicaCountFor(slot, defaultN, globalN) {
   const n = slot.n ?? defaultN ?? globalN ?? 1;
   return Math.max(1, Math.floor(n));
@@ -171365,39 +171442,6 @@ ${args.artifacts.map((a) => String(a)).join("\n\n---\n\n")}`);
 ## Output
 ${magiOutputContractFor(kind)}`);
   return parts.join("\n");
-}
-function collectMagiCandidateTexts(payload) {
-  if (!payload || typeof payload !== "object") return [];
-  const p = payload;
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (value) => {
-    const text = typeof value === "string" ? value : "";
-    const trimmed = text.trim();
-    if (!trimmed || seen.has(trimmed)) return;
-    seen.add(trimmed);
-    out.push(text);
-  };
-  const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") continue;
-    const role = String(msg.role || msg.from || "").toLowerCase();
-    if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
-    const content = msg.content ?? msg.text ?? msg.message;
-    if (typeof content === "string") push(content);
-    else if (Array.isArray(content)) {
-      const joined = content.map((part) => typeof part === "string" ? part : part && typeof part === "object" && typeof part.text === "string" ? part.text : "").join("");
-      push(joined);
-    }
-    push(msg.summary);
-    push(msg.summaryMetadata?.summary);
-  }
-  push(p.summary);
-  push(p.finalSummary);
-  push(p.lastMessagePreview);
-  push(p.text);
-  return out;
 }
 function replicaCompletionIsWeak(meshId, taskId) {
   try {
