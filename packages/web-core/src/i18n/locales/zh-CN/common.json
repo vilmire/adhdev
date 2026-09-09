@@ -1748,7 +1748,6 @@
             "planLimits": "套餐限制",
             "limitMachines": "机器",
             "limitP2P": "P2P 连接",
-            "limitWebhooks": "Webhook",
             "limitPushNotifications": "每日推送通知",
             "limitTurnRelay": "TURN 中继",
             "enabled": "已启用",
@@ -1795,8 +1794,6 @@
             "frozenFeatureTitle": "已冻结 — 此功能已暂停，暂不可用。请参阅 docs/FROZEN_SURFACES.md"
         },
         "billing": {
-            "title": "Billing",
-            "subtitle": "管理你的订阅和套餐",
             "currentPlan": "当前套餐：",
             "statusTrial": "试用",
             "statusActive": "有效",
@@ -1809,18 +1806,7 @@
             "managePayment": "管理付款与发票",
             "couldNotOpenPortal": "无法打开账单门户",
             "statMachines": "机器",
-            "statTeam": "团队",
             "statTurnPerDay": "TURN 分钟/天",
-            "planLimitsTitle": "套餐上限",
-            "limitApiCalls": "API 调用",
-            "limitSharedSessions": "共享会话",
-            "limitScreenshotMinutes": "截图时长",
-            "limitDescMachines": "同时连接的机器数",
-            "limitDescPush": "每日推送通知数",
-            "limitDescWebhooks": "已注册的 webhook 端点",
-            "limitDescApiCalls": "每月 REST API 调用数",
-            "limitDescSharedSessions": "并发共享会话数",
-            "limitDescScreenshotMinutes": "每日截图串流分钟数",
             "resetsDailyUtc": "每天 UTC 00:00 重置",
             "resetsInHours_one": "约 {{count}} 小时后",
             "resetsInHours_other": "约 {{count}} 小时后",
@@ -1832,12 +1818,6 @@
             "savePercent": "年付最多节省 {{pct}}%",
             "paddleLoading": "Paddle 正在加载，请重试。",
             "cancelConfirm": "确定要取消订阅吗？在当前计费周期结束前，你仍可继续使用。",
-            "teamSeats": "团队席位",
-            "seatsUsed": "已使用 {{used}} / {{total}} 个席位",
-            "pricePerMonth": "${{price}}/月",
-            "cannotReduceSeats": "无法减少到 {{count}} 个席位以下（当前正在使用）。请先移除成员。",
-            "removeSeat": "− 移除席位",
-            "addSeat": "+ 添加席位",
             "cancelSubscription": "取消订阅",
             "cancelRetainAccess": "在当前计费周期结束前，你仍可使用 {{plan}} 的功能。",
             "cancelTeamDowngrade": " 所有团队成员将被降级到各自的个人套餐。"
@@ -1906,11 +1886,9 @@
                 "freeFeature1": "1 台机器",
                 "freeFeature2": "实时聊天转发",
                 "freeFeature3": "本地代理的网页控制",
-                "freeFeature4": "1 个 Repo Mesh",
                 "proFeature1": "2 台机器",
                 "proFeature2": "无限 AI 代理",
                 "proFeature3": "P2P 远程查看",
-                "proFeature4": "Repo Mesh 无限制",
                 "ultraFeature1": "5 台机器 — 统一定价，非按席位",
                 "ultraFeature2": "包含 Pro 的全部功能",
                 "ultraFeature3": "更高的并发和用量上限",
@@ -3373,8 +3351,7 @@
             "docs": "文档",
             "getStarted": "开始使用",
             "toggleMenu": "切换菜单",
-            "mainNavigation": "主导航",
-            "magi": "MAGI"
+            "mainNavigation": "主导航"
         },
         "hero": {
             "badge": "多厂商、多机器的智能体控制平面",
@@ -3555,8 +3532,7 @@
                         "p2p": "P2P 聊天、命令、截图、远程输入",
                         "providers": "全部提供方 — CLI、IDE 和 ACP 代理",
                         "push": "审批和完成的推送通知",
-                        "share": "一个共享会话链接",
-                        "mesh": "1 个 Repo Mesh"
+                        "share": "一个共享会话链接"
                     }
                 },
                 "pro": {
@@ -3568,7 +3544,6 @@
                         "p2p": "更多并发 P2P 会话",
                         "push": "无限推送通知",
                         "turn": "为受限网络提供 TURN 中继",
-                        "mesh": "Repo Mesh 无限制",
                         "share": "更多共享会话"
                     }
                 },
@@ -3581,7 +3556,7 @@
                         "everything": "Pro 的全部功能",
                         "p2p": "最高的并发 P2P 会话数",
                         "screenshots": "每日截图时长无限制",
-                        "webhooks": "更多 webhook 和 API 调用",
+                        "webhooks": "更高的 API 调用限额",
                         "share": "更多共享会话"
                     }
                 }
@@ -3659,17 +3634,6 @@
             "point1": "基于难度的预设：简单 / 中等 / 困难",
             "point2": "每个预设选定 provider、model 和思考等级",
             "point3": "无需逐个任务手动调参即可节省 token"
-        },
-        "magi": {
-            "sectionTitle": "MAGI：Multi-Agent Ground-truth Insight",
-            "sectionSubtitle": "把同一个只读问题分发给跨不同机器与模型的独立智能体面板，再综合它们一致与分歧之处 —— 让某个模型自信的幻觉不会作为答案蒙混过关。",
-            "point1": "同一问题，独立的机器 × 模型副本",
-            "point2": "呈现一致、分歧与独有证据",
-            "point3": "抓出那个自信却出错的智能体",
-            "origin": "多模型交叉验证，在它成为潮流之前就已内建于 Repo Mesh。",
-            "diagramAlt": "MAGI 扇出示意图:同一个只读问题分发给独立的机器×模型副本,再综合为共识、争议与孤立主张",
-            "synthesisAlt": "协调器聊天中的真实 MAGI 综合结果:带 file:line 证据的共识结论、如实报告的失败副本,以及 source-coupled 标记",
-            "mediaCaption": "MAGI 真实运行结果,未经修饰 —— 失败的副本和 source-coupled 标记不是 bug,而是诚实。"
         },
         "scenario": {
             "sectionTitle": "一句话。Mac构建，Windows测试，main落地。",

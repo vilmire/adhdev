@@ -1748,7 +1748,6 @@
             "planLimits": "플랜 한도",
             "limitMachines": "머신",
             "limitP2P": "P2P 연결",
-            "limitWebhooks": "웹훅",
             "limitPushNotifications": "일별 푸시 알림",
             "limitTurnRelay": "TURN 릴레이",
             "enabled": "사용",
@@ -1795,8 +1794,6 @@
             "frozenFeatureTitle": "동결됨 — 이 기능은 일시 중지되어 사용할 수 없습니다. docs/FROZEN_SURFACES.md 참고"
         },
         "billing": {
-            "title": "Billing",
-            "subtitle": "구독 및 플랜 관리",
             "currentPlan": "현재 플랜:",
             "statusTrial": "체험판",
             "statusActive": "활성",
@@ -1809,18 +1806,7 @@
             "managePayment": "결제 및 청구서 관리",
             "couldNotOpenPortal": "결제 포털을 열 수 없습니다",
             "statMachines": "머신",
-            "statTeam": "팀",
             "statTurnPerDay": "TURN 분/일",
-            "planLimitsTitle": "플랜 한도",
-            "limitApiCalls": "API 호출",
-            "limitSharedSessions": "공유 세션",
-            "limitScreenshotMinutes": "스크린샷 시간",
-            "limitDescMachines": "동시에 연결하는 머신 수",
-            "limitDescPush": "하루 푸시 알림 수",
-            "limitDescWebhooks": "등록된 웹훅 엔드포인트",
-            "limitDescApiCalls": "월간 REST API 호출 수",
-            "limitDescSharedSessions": "동시 공유 세션 수",
-            "limitDescScreenshotMinutes": "하루 스크린샷 스트리밍 분",
             "resetsDailyUtc": "매일 UTC 00:00 초기화",
             "resetsInHours_one": "약 {{count}}시간 후",
             "resetsInHours_other": "약 {{count}}시간 후",
@@ -1832,12 +1818,6 @@
             "savePercent": "연간 최대 {{pct}}% 절약",
             "paddleLoading": "Paddle을 불러오는 중입니다. 다시 시도해 주세요.",
             "cancelConfirm": "정말 구독을 취소하시겠습니까? 결제 기간이 끝날 때까지는 계속 이용할 수 있습니다.",
-            "teamSeats": "팀 좌석",
-            "seatsUsed": "{{total}}개 중 {{used}}개 사용 중",
-            "pricePerMonth": "${{price}}/월",
-            "cannotReduceSeats": "{{count}}개 미만으로 줄일 수 없습니다(현재 사용 중). 먼저 멤버를 제거하세요.",
-            "removeSeat": "− 좌석 제거",
-            "addSeat": "+ 좌석 추가",
             "cancelSubscription": "구독 취소",
             "cancelRetainAccess": "현재 결제 기간이 끝날 때까지 {{plan}} 기능을 계속 이용할 수 있습니다.",
             "cancelTeamDowngrade": " 모든 팀 멤버는 개인 플랜으로 다운그레이드됩니다."
@@ -1906,11 +1886,9 @@
                 "freeFeature1": "머신 1개",
                 "freeFeature2": "실시간 채팅 릴레이",
                 "freeFeature3": "로컬 에이전트 웹 제어",
-                "freeFeature4": "Repo Mesh 1개",
                 "proFeature1": "머신 2개",
                 "proFeature2": "AI 에이전트 무제한",
                 "proFeature3": "P2P 원격 보기",
-                "proFeature4": "Repo Mesh 무제한",
                 "ultraFeature1": "머신 5개 — 고정 가격, 좌석당 아님",
                 "ultraFeature2": "Pro의 모든 것 포함",
                 "ultraFeature3": "더 높은 동시성 및 사용 한도",
@@ -3373,8 +3351,7 @@
             "docs": "문서",
             "getStarted": "시작하기",
             "toggleMenu": "메뉴 토글",
-            "mainNavigation": "주 내비게이션",
-            "magi": "MAGI"
+            "mainNavigation": "주 내비게이션"
         },
         "hero": {
             "badge": "멀티 벤더, 멀티 머신 에이전트 컨트롤 플레인",
@@ -3555,8 +3532,7 @@
                         "p2p": "P2P 채팅, 명령어, 스크린샷, 원격 입력",
                         "providers": "모든 프로바이더 — CLI, IDE, ACP 에이전트",
                         "push": "승인 및 완료 푸시 알림",
-                        "share": "공유 세션 링크 하나",
-                        "mesh": "Repo Mesh 1개"
+                        "share": "공유 세션 링크 하나"
                     }
                 },
                 "pro": {
@@ -3568,7 +3544,6 @@
                         "p2p": "더 많은 동시 P2P 세션",
                         "push": "무제한 푸시 알림",
                         "turn": "제한적 네트워크를 위한 TURN 릴레이",
-                        "mesh": "Repo Mesh 무제한",
                         "share": "더 많은 공유 세션"
                     }
                 },
@@ -3581,7 +3556,7 @@
                         "everything": "Pro의 모든 것 포함",
                         "p2p": "최고 동시 P2P 세션",
                         "screenshots": "무제한 일일 스크린샷 시간",
-                        "webhooks": "더 많은 웹훅 및 API 호출",
+                        "webhooks": "더 높은 API 호출 한도",
                         "share": "더 많은 공유 세션"
                     }
                 }
@@ -3659,17 +3634,6 @@
             "point1": "난이도 기반 프리셋: 쉬움 / 보통 / 어려움",
             "point2": "프리셋마다 provider, model, thinking 레벨 선택",
             "point3": "매 작업을 손으로 튜닝하지 않고 토큰 절약"
-        },
-        "magi": {
-            "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
-            "sectionSubtitle": "같은 읽기 전용 질문을 서로 다른 머신과 모델의 독립 에이전트 패널에 던지고, 일치하는 부분과 갈리는 부분을 합성합니다 — 한 모델의 자신만만한 착각이 정답으로 새어 나가지 않도록.",
-            "point1": "같은 질문, 독립적인 머신 × 모델 레플리카",
-            "point2": "일치·이견·고유 증거를 함께 드러냄",
-            "point3": "자신만만하게 틀린 에이전트 하나를 잡아냄",
-            "origin": "멀티모델 교차 검증은, 그것이 유행이 되기 전부터 Repo Mesh에 내장돼 있었습니다.",
-            "diagramAlt": "MAGI 팬아웃 다이어그램: 하나의 읽기 전용 질문을 독립 머신×모델 리플리카에 분배하고, 합의·이견·단독 주장으로 합성",
-            "synthesisAlt": "코디네이터 채팅에 도착한 실제 MAGI 합성: file:line 근거가 달린 합의 결론, 실패한 리플리카의 정직한 보고, source-coupled 플래그",
-            "mediaCaption": "실제 MAGI 실행 결과 그대로입니다 — 실패한 리플리카와 source-coupled 플래그까지, 연출이 아니라 정직함입니다."
         },
         "scenario": {
             "sectionTitle": "명령 하나. Mac 빌드, Windows 테스트, main 착지.",
