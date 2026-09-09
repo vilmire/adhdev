@@ -3654,25 +3654,25 @@
         },
         "scenario": {
             "sectionTitle": "Un prompt. Mac construye, Windows prueba, main aterriza.",
-            "sectionSubtitle": "Una sesión real: asignas una misión, los agentes se despliegan en paralelo a worktrees de Mac y Windows, cada uno valida en aislamiento, y el Refinery aterriza ambos en main — sin supervisión.",
-            "step1Label": "Asignar misión",
-            "step1Desc": "Le dices al coordinador qué construir. Una frase.",
-            "step2Label": "Agentes desplegados",
-            "step2Desc": "Tareas enviadas a nodos Mac y Windows simultáneamente — cada uno en un worktree git aislado, sin estado compartido.",
-            "step3Label": "Cada worktree valida",
-            "step3Desc": "Typecheck, tests, lint — las propias comprobaciones de tu repositorio, ejecutándose en paralelo en máquinas heterogéneas.",
-            "step4Label": "Refinery converge",
-            "step4Desc": "Verificación de equivalencia de parches, puerta de alcanzabilidad de submódulos, solo fast-forward. Nunca force-push.",
-            "step5Label": "main aterriza, sin supervisión",
-            "step5Desc": "El trabajo terminado llega a main. Nunca estuviste en la terminal.",
-            "caveat": "Mac y Windows son los nodos de uso diario verificados. Linux también está soportado."
+            "sectionSubtitle": "Una sesión real en tres pasos: describes el trabajo una vez, los agentes corren en paralelo en tus máquinas, y el código terminado llega a main — sin que estés frente a la terminal.",
+            "step1Label": "Describe el trabajo",
+            "step1Desc": "Dile qué construir, en una frase. Sin configuración, sin preparar cada máquina.",
+            "step2Label": "Agentes en paralelo",
+            "step2Desc": "El trabajo se reparte a la vez entre tus máquinas Mac y Windows — cada una en su propia rama, ejecutando los tests y comprobaciones de tu proyecto.",
+            "step3Label": "El código terminado aterriza en main",
+            "step3Desc": "Cuando las comprobaciones pasan, el trabajo se fusiona en main de forma automática y segura. Lo dudoso se reserva para tu revisión — nunca con force-push.",
+            "caveat": "Mac y Windows son las máquinas de uso diario verificadas. Linux también está soportado."
         }
     },
     "interactivePrompt": {
         "selectAllThatApply": "Selecciona todas las que correspondan",
         "multipleChoice": "Selección múltiple",
         "singleChoice": "Selección única",
-        "other": "Otro"
+        "other": "Otro",
+        "answersRequired_one": "{{count}} pregunta aún necesita respuesta",
+        "answersRequired_other": "{{count}} preguntas aún necesitan respuesta",
+        "errorReviewPageNotFocused": "La terminal está mostrando otra pantalla, así que la respuesta no se envió — revisa la pantalla de la terminal o cierra esto e inténtalo de nuevo.",
+        "errorReviewUnconfirmed": "Tu respuesta se envió, pero la terminal no la confirmó a tiempo. Revisa la pantalla de la terminal antes de responder de nuevo — reenviarla podría enviarla dos veces."
     },
     "git": {
         "changeList": {
