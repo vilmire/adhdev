@@ -2595,10 +2595,10 @@
         "mouse": "鼠标",
         "touch": "触摸",
         "connected": "已连接",
-        "ws": "WS",
+        "ws": "正在重新连接",
         "direct": "直连",
         "relay": "中继",
-        "turnBlocked": "TURN 已阻止",
+        "turnBlocked": "已达中继上限",
         "turnUsage": "TURN {{used}}/{{budget}}m",
         "typeAndEnter": "输入并按 Enter...",
         "settings": "设置",
@@ -2610,6 +2610,19 @@
         "dailyTurnTitle": "每日 TURN 中继使用量",
         "waitingState": {
             "turnRelayActive": "TURN 中继已启用"
+        },
+        "waiting": {
+            "connectedLabel": "已连接。正在等待第一帧...",
+            "connectingLabel": "正在连接主机...",
+            "reconnectingLabel": "正在重新连接主机...",
+            "connectedHint": "远程流正在预热",
+            "reconnectingHint": "正在等待远程流追上进度"
+        },
+        "error": {
+            "title": "远程连接已断开",
+            "reasonFailed": "连接此主机失败。请检查守护进程是否正在运行，然后重试。",
+            "reasonDisconnected": "与主机的连接已断开，15 秒后仍未能重新连接。",
+            "retry": "重试"
         }
     },
     "sessionNav": {

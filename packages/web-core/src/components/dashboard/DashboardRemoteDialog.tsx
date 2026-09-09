@@ -37,6 +37,8 @@ interface DashboardRemoteDialogProps {
     onOpenHistory: (conversation?: ActiveConversation) => void
     onConversationChange?: (conversation: ActiveConversation) => void
     onClose: () => void
+    /** Retry the remote connection for the active machine. Omitted when the host has no manual retry path. */
+    onRetryConnection?: (machineId: string) => void
 }
 
 export default function DashboardRemoteDialog({
@@ -52,6 +54,7 @@ export default function DashboardRemoteDialog({
     onOpenHistory,
     onConversationChange,
     onClose,
+    onRetryConnection,
 }: DashboardRemoteDialogProps) {
     const { t } = useTranslation('common')
     const [viewMode, setViewMode] = useState<RemoteDialogViewMode>('split')
@@ -163,6 +166,15 @@ export default function DashboardRemoteDialog({
         () => actionLogs.filter(log => log.routeId === modalAwareConv.tabKey),
         [actionLogs, modalAwareConv.tabKey],
     )
+    const remoteTabKey = modalAwareConv.tabKey
+    const handleRemoteLog = useCallback((text: string) => {
+        setActionLogs(prev => [...prev, { routeId: remoteTabKey, text, timestamp: Date.now() }])
+    }, [remoteTabKey, setActionLogs])
+    const remoteMachineId = activeIdeEntry?.machineId
+    const handleRemoteRetry = useMemo(() => {
+        if (!onRetryConnection || !remoteMachineId) return undefined
+        return () => onRetryConnection(remoteMachineId)
+    }, [onRetryConnection, remoteMachineId])
 
     useEffect(() => {
         onConversationChange?.(modalAwareConv)
@@ -273,12 +285,13 @@ export default function DashboardRemoteDialog({
 
                     <div className={`flex flex-col min-w-0 min-h-0 bg-bg-primary ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
-                            addLog={() => {}}
+                            addLog={handleRemoteLog}
                             connState={(modalAwareConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
                             connScreenshot={connScreenshot}
                             screenshotUsage={screenshotUsage}
                             transportType={modalAwareConv.transport}
                             onAction={handleRemoteAction}
+                            onRetry={handleRemoteRetry}
                         />
                     </div>
                 </div>

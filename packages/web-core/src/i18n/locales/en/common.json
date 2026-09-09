@@ -2595,10 +2595,10 @@
         "mouse": "Mouse",
         "touch": "Touch",
         "connected": "Connected",
-        "ws": "WS",
+        "ws": "Reconnecting",
         "direct": "Direct",
         "relay": "Relay",
-        "turnBlocked": "TURN blocked",
+        "turnBlocked": "Relay limit reached",
         "turnUsage": "TURN {{used}}/{{budget}}m",
         "typeAndEnter": "Type & Enter...",
         "settings": "SETTINGS",
@@ -2610,6 +2610,19 @@
         "dailyTurnTitle": "Daily TURN relay usage",
         "waitingState": {
             "turnRelayActive": "TURN relay active"
+        },
+        "waiting": {
+            "connectedLabel": "Connected. Waiting for first frame...",
+            "connectingLabel": "Connecting to Host...",
+            "reconnectingLabel": "Reconnecting to Host...",
+            "connectedHint": "The remote stream is warming up",
+            "reconnectingHint": "Waiting for the remote stream to catch up"
+        },
+        "error": {
+            "title": "Remote connection lost",
+            "reasonFailed": "The connection to this host failed. Check that the daemon is running and try again.",
+            "reasonDisconnected": "Lost connection to the host and could not reconnect after 15 seconds.",
+            "retry": "Retry"
         }
     },
     "sessionNav": {

@@ -2595,10 +2595,10 @@
         "mouse": "마우스",
         "touch": "터치",
         "connected": "연결됨",
-        "ws": "WS",
+        "ws": "재연결 중",
         "direct": "직접",
         "relay": "릴레이",
-        "turnBlocked": "TURN 차단됨",
+        "turnBlocked": "릴레이 한도 도달",
         "turnUsage": "TURN {{used}}/{{budget}}분",
         "typeAndEnter": "입력 후 Enter...",
         "settings": "설정",
@@ -2610,6 +2610,19 @@
         "dailyTurnTitle": "일일 TURN 릴레이 사용량",
         "waitingState": {
             "turnRelayActive": "TURN 릴레이 활성"
+        },
+        "waiting": {
+            "connectedLabel": "연결됨. 첫 프레임 대기 중...",
+            "connectingLabel": "호스트에 연결 중...",
+            "reconnectingLabel": "호스트에 재연결 중...",
+            "connectedHint": "원격 스트림을 준비하고 있습니다",
+            "reconnectingHint": "원격 스트림이 따라잡기를 기다리는 중입니다"
+        },
+        "error": {
+            "title": "원격 연결이 끊어졌습니다",
+            "reasonFailed": "이 호스트에 대한 연결이 실패했습니다. 데몬이 실행 중인지 확인한 후 다시 시도하세요.",
+            "reasonDisconnected": "호스트와의 연결이 끊어졌고 15초 후에도 재연결하지 못했습니다.",
+            "retry": "재시도"
         }
     },
     "sessionNav": {

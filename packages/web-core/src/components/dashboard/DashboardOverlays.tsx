@@ -45,6 +45,7 @@ interface DashboardOverlaysProps {
         onOpenHistory: (conversation?: ActiveConversation) => void
         onConversationChange: React.Dispatch<React.SetStateAction<ActiveConversation | null>>
         onClose: () => void
+        onRetryConnection?: (machineId: string) => void
     }
     cliStopDialog: {
         open: boolean
@@ -124,6 +125,7 @@ export default function DashboardOverlays({
                     onOpenHistory={remoteDialog.onOpenHistory}
                     onConversationChange={remoteDialog.onConversationChange}
                     onClose={remoteDialog.onClose}
+                    onRetryConnection={remoteDialog.onRetryConnection}
                 />
             )}
 
