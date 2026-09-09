@@ -3102,7 +3102,7 @@
         },
         "logsTabSections": {
             "view": "表示",
-            "filterInfo": "Info+ ({{count}})",
+            "filterInfo": "情報+ ({{count}})",
             "filterIssues": "問題 ({{count}})",
             "filterAll": "すべて ({{count}})",
             "searchPlaceholder": "診断情報を検索…",
