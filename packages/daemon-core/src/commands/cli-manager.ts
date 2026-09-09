@@ -22,6 +22,7 @@ import { appendRecentActivity } from '../config/recent-activity.js';
 import { shortHash } from '../system/hash.js';
 import { unregisterMeshCoordinator, getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
+import { appendLedgerEntry } from '../mesh/mesh-ledger.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
@@ -1850,6 +1851,46 @@ export class DaemonCliManager {
                     },
                 );
 
+                // LAUNCH-ACCOUNTING funnel: every mesh WORKER spawn — mesh_launch_session,
+                // queue auto-launch (local AND remote: the remote leg forwards launch_cli to
+                // this daemon), and the recovery relaunch — passes through this case with
+                // `meshNodeFor` stamped, so the audit `session_launched` entry is written
+                // HERE, on the daemon that actually spawned the session. Before this, only
+                // the mesh_launch_session MCP tool recorded one (the 2026-09-08 runaway
+                // spawned 60 sessions that were invisible to the ledger). Coordinator
+                // sessions stamp `meshCoordinatorFor`, not `meshNodeFor`, and stay excluded.
+                // `ledgerLaunchRecorded` in the result tells a caller that also records
+                // launches (mcp-server mesh_launch_session) to skip its own append.
+                let ledgerLaunchRecorded = false;
+                if (delegatedMeshId) {
+                    try {
+                        const autoLaunchTaskId = typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
+                            ? settingsOverride.autoLaunchedForQueueTaskId.trim() : '';
+                        // NB: distinct from this case's `launchSource` local (workspace-resolution
+                        // origin) — `meshLaunchSource` is the mesh-envelope path discriminator.
+                        const declaredSource = typeof settingsOverride?.meshLaunchSource === 'string'
+                            ? settingsOverride.meshLaunchSource.trim() : '';
+                        const meshNodeId = typeof settingsOverride?.meshNodeId === 'string'
+                            ? settingsOverride.meshNodeId.trim() : '';
+                        appendLedgerEntry(delegatedMeshId, {
+                            kind: 'session_launched',
+                            ...(meshNodeId ? { nodeId: meshNodeId } : {}),
+                            sessionId: started.runtimeSessionId,
+                            providerType,
+                            ...(autoLaunchTaskId ? { taskId: autoLaunchTaskId } : {}),
+                            payload: {
+                                ...(started.providerSessionId ? { providerSessionId: started.providerSessionId } : {}),
+                                // Path discriminator: explicit launchSource from the initiator wins;
+                                // the queue auto-launch is derived from its task marker (its envelope
+                                // predates launchSource and lives in a line-frozen file); anything
+                                // else (legacy caller / version skew) is labeled as such.
+                                source: declaredSource || (autoLaunchTaskId ? 'auto_launch' : 'unlabeled_delegated_launch'),
+                            },
+                        });
+                        ledgerLaunchRecorded = true;
+                    } catch { /* accounting is best-effort — never fail the launch */ }
+                }
+
                 return {
                     success: true,
                     cliType,
@@ -1858,6 +1899,7 @@ export class DaemonCliManager {
                     sessionId: started.runtimeSessionId,
                     providerSessionId: started.providerSessionId,
                     launchSource,
+                    ...(ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {}),
                 };
             }
             case 'stop_cli': {

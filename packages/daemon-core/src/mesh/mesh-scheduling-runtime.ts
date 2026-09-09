@@ -17,6 +17,7 @@ import {
     normalizeMeshSchedulingStrategy,
     resolveMaxParallelTasks,
     resolveMaxReadonlyParallelTasks,
+    resolveNodeMaxConcurrentSessions,
     resolveNodeSchedulingPriority,
     resolveProviderMaxParallel,
 } from '../repo-mesh-types.js';
@@ -186,14 +187,15 @@ export function buildMeshSchedulingRuntime(
             if (!providerRoles.length) providerRoles = undefined;
         }
 
-        const maxConcurrentSessions = Number(policy?.maxConcurrentSessions);
-        const hasSessionCap = Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0;
+        // Same resolver as the auto-launch gate (mesh-queue-assignment): an unset cap now
+        // surfaces the enforced default instead of showing an uncapped node.
+        const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(policy?.maxConcurrentSessions);
 
         nodes.push({
             nodeId,
             load,
             schedulingPriority,
-            ...(hasSessionCap ? { maxConcurrentSessions: Math.floor(maxConcurrentSessions) } : {}),
+            maxConcurrentSessions,
             ...(providerRoles ? { providerRoles } : {}),
             capReached: capReasons.length > 0,
             capReasons,

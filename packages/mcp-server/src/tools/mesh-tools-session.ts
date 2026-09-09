@@ -1688,6 +1688,9 @@ export async function meshLaunchSession(
                     role: 'worker',
                     meshNodeFor: ctx.mesh.id,
                     meshNodeId: args.node_id,
+                    // LAUNCH-ACCOUNTING: path discriminator for the daemon-side
+                    // session_launched funnel (cli-manager launch_cli).
+                    meshLaunchSource: 'mesh_launch_session',
                     spawnedSessionVisibility,
                     // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
                     // Lands in settingsOverride and beats the global per-provider autoApprove.
@@ -1733,16 +1736,23 @@ export async function meshLaunchSession(
                 expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
             });
         }
-        // Record session launch in ledger
-        try {
-            appendLedgerEntry(ctx.mesh.id, {
-                kind: 'session_launched',
-                nodeId: args.node_id,
-                sessionId: runtimeSessionId || undefined,
-                providerType: resolvedProviderType,
-                payload: { providerSessionId },
-            });
-        } catch { /* ledger append is best-effort */ }
+        // Record session launch in ledger — SKIPPED when the daemon already recorded it.
+        // LAUNCH-ACCOUNTING single-writer: a current daemon appends session_launched in its
+        // launch_cli funnel (cli-manager) and answers `ledgerLaunchRecorded: true`; appending
+        // here too would double-count the launch (locally for a co-located node, after
+        // replication for a remote one). Kept as a FALLBACK for a version-skewed older
+        // daemon that neither appends nor sets the flag, so no launch goes unrecorded.
+        if (launchPayload?.ledgerLaunchRecorded !== true) {
+            try {
+                appendLedgerEntry(ctx.mesh.id, {
+                    kind: 'session_launched',
+                    nodeId: args.node_id,
+                    sessionId: runtimeSessionId || undefined,
+                    providerType: resolvedProviderType,
+                    payload: { providerSessionId, source: 'mesh_launch_session_coordinator_fallback' },
+                });
+            } catch { /* ledger append is best-effort */ }
+        }
 
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks.
         // Surface the trigger result so coordinators can distinguish "session launched"
