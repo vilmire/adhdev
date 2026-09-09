@@ -1,4 +1,9 @@
+import { LOG } from '../logging/logger.js';
 import { getQueue, recordTaskAutoLaunch, type MeshWorkQueueEntry } from './mesh-work-queue.js';
+// One-way import: mesh-autolaunch-integrity deliberately imports nothing from this module
+// (its old isDifficultyFloorWaitReason dependency moved here with the wait-clock guard),
+// so this edge cannot cycle.
+import { AUTO_LAUNCH_AWAIT_CLAIM_MS, autoLaunchWriteWouldClobberWinner } from './mesh-autolaunch-integrity.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { isModelAllowedBySlot, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
@@ -52,6 +57,34 @@ export function taskMeetsSessionDifficultyFloor(
     return allowed.includes(task.difficulty);
 }
 
+// LAUNCH-SIDE DIFFICULTY FLOOR PARITY: re-check the FINAL (provider, model) pair the launch
+// is about to spawn against the exact predicate the claim side will apply
+// (allowedClassifiedDifficultiesForSession — the same function, deliberately co-located here,
+// not a reimplementation, so the two verdicts cannot drift apart again). The earlier launch
+// floor gates only prove SOME slot covers the task's difficulty; resolveLaunchAxis then lets
+// an explicit task.model override the covering slot's model, landing the launch on a slot
+// whose difficulty ceiling is BELOW the task (observed: slots fable[difficult]+opus[medium],
+// task difficulty=difficult with explicit model=opus). The claim side judges the spawned
+// session by its model and refuses 'difficulty_floor_unmet' forever while the launch side
+// kept passing — the spawn→refuse→orphan→respawn runaway of 2026-09-08 (task 53fc7bff,
+// ~300 launches in 8.8h). Returns the floor-wait skip reason on a mismatch (routing the
+// caller's markSkip through handleDifficultyFloorSkip and the existing 10-minute pager),
+// undefined when the launch may proceed. An undefined model (no axis value, or the CODEX-400
+// drop) mirrors the claim side's unknown-model conservative slot intersection.
+export function launchSideDifficultyFloorMismatch(
+    node: any,
+    slots: NodeCapabilitySlot[],
+    providerType: string,
+    model: string | undefined,
+    task: Pick<MeshWorkQueueEntry, 'id' | 'difficulty'>,
+    nodeId: string,
+): string | undefined {
+    const allowed = allowedClassifiedDifficultiesForSession(node, slots, providerType, model);
+    if (taskMeetsSessionDifficultyFloor(task, allowed)) return undefined;
+    LOG.info('MeshQueue', `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ''} on node ${nodeId} for task ${task.id} — the resolved launch model only covers [${(allowed || []).join(', ')}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
+    return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || 'classified'}`;
+}
+
 export function readSessionModel(state: any): string | undefined {
     const controlModel = typeof state?.controlValues?.model === 'string' ? state.controlValues.model.trim() : '';
     if (controlModel) return controlModel;
@@ -97,6 +130,22 @@ export function resetDifficultyFloorReportsForTests(): void {
     difficultyFloorTimeoutReported.clear();
 }
 
+// LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤ clobber guard, same shape as the winner guard in
+// mesh-autolaunch-integrity.ts: a session-pinned task is re-skipped
+// 'target_session_constraint' by the auto-launch scanner on EVERY tick, which — being a
+// non-floor reason — would otherwise unconditionally reset the difficulty-floor wait
+// clock's `updatedAt` each time, starving the claim path's bounded-wait pager
+// (mesh-queue-assignment.ts tryAssignQueueTask) of the elapsed time it needs.
+// (Moved here from mesh-autolaunch-integrity.ts: it is floor-domain logic, and the move
+// frees that module of its only import from this one so handleDifficultyFloorSkip can
+// import the winner guard back without a cycle.)
+export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: string, taskId: string, status: string): boolean {
+    if (status !== 'skipped') return false;
+    let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
+    try { existing = getQueue(meshId).find(t => t.id === taskId)?.autoLaunch; } catch { return false; }
+    return existing?.status === 'skipped' && isDifficultyFloorWaitReason(existing.reason);
+}
+
 // LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤: the claim path (tryAssignQueueTask) refuses an
 // already-running session with the store's 'difficulty_floor_unmet' literal — a case
 // markAutoLaunch's handleDifficultyFloorSkip call never covers, since that path is never
@@ -127,7 +176,20 @@ export function handleDifficultyFloorSkip(args: {
     if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
     const continuing = previousTask?.autoLaunch?.status === 'skipped'
         && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
-    if (!continuing) {
+    // AUTOLAUNCH-WINNER-CLOBBER (floor branch): the `continuing` check above only prevents
+    // skipped-over-skipped rewrites — it does NOT protect an in-window `completed` winner
+    // record. Both routes into this function bypassed markAutoLaunch's winner guard (the
+    // floor branch short-circuits before it; the claim path calls in here directly), so a
+    // claim-side 'difficulty_floor_unmet' refusal arriving right after a launch overwrote
+    // the winner record with `skipped`, disarming the 90s await-claim guard (which requires
+    // status==='completed') and resetting the 10-min pager clock every tick — the
+    // spawn→refuse→orphan→respawn runaway of 2026-09-08 (task 53fc7bff, ~300 launches).
+    // When the write is suppressed the pager clock below still runs: it reads `updatedAt`
+    // status-agnostically, so it counts from the surviving winner record instead.
+    if (!continuing && !autoLaunchWriteWouldClobberWinner(args.meshId, args.taskId, {
+        status: 'skipped',
+        nodeId: args.nodeId,
+    }, AUTO_LAUNCH_AWAIT_CLAIM_MS)) {
         recordTaskAutoLaunch(args.meshId, args.taskId, {
             status: 'skipped',
             reason: args.reason,

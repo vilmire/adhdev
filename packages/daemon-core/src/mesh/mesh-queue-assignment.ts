@@ -50,21 +50,8 @@ import { activeWriteAssignedCount, activeReadonlyAssignedCount, activeAssignedCo
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logAutoLaunchQuotaFallbackSuccess, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordAutoLaunchEvent, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type MeshTaskRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
-import {
-    sweepAutoLaunchOrphanSessions,
-    autoLaunchWriteWouldClobberWinner,
-    autoLaunchWriteWouldClobberDifficultyFloorWaitClock,
-    driveExpiredAwaitClaim,
-    autoLaunchAwaitClaimBackoff,
-    awaitClaimWindowMs,
-    remoteSessionAppearsLive,
-    claimAfterRemoteAutoLaunch,
-    AUTO_LAUNCH_REMOTE_IDLE_TTL_MS,
-    AUTO_LAUNCH_AWAIT_CLAIM_MS,
-    __clearAwaitClaimBackoffForTests,
-    __resetAutoLaunchOrphanNotifiedForTests,
-} from './mesh-autolaunch-integrity.js';
-import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloorRefusal, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, readSessionModel } from './mesh-difficulty-floor.js';
+import { sweepAutoLaunchOrphanSessions, autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, awaitClaimWindowMs, remoteSessionAppearsLive, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_REMOTE_IDLE_TTL_MS, AUTO_LAUNCH_AWAIT_CLAIM_MS, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
+import { allowedClassifiedDifficultiesForSession, autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleClaimPathDifficultyFloorRefusal, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import {
@@ -2370,6 +2357,13 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     if (rawEffectiveModel && effectiveModel === undefined) {
                         LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
                     }
+
+                    // LAUNCH-SIDE DIFFICULTY FLOOR PARITY (full rationale on the helper in
+                    // mesh-difficulty-floor.ts): the FINAL (provider, model) must clear the
+                    // claim side's own difficulty predicate before spawning, or the spawn is
+                    // refused 'difficulty_floor_unmet' forever — the 2026-09-08 respawn runaway.
+                    const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+                    if (floorMiss) { markSkip(nodeId, floorMiss, { providerType: effectiveProviderType }); continue; }
 
                     // Don't spawn a session for a (daemon, provider) already at its declared
                     // maxParallel cap — it would launch only to fail the claim. The claim
