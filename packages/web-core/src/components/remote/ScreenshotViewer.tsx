@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { IconX } from '../Icons';
 
 export interface ScreenshotViewerProps {
@@ -32,6 +33,7 @@ export default function ScreenshotViewer({
   className,
   style,
 }: ScreenshotViewerProps) {
+  const { t } = useTranslation('common');
   const imgRef = useRef<HTMLImageElement>(null);
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLImageElement>) => {
@@ -54,7 +56,7 @@ export default function ScreenshotViewer({
         <img
           ref={imgRef}
           src={screenshotUrl}
-          alt="IDE Screenshot"
+          alt={t('remote.screenshotViewer.altText')}
           className="w-full h-full object-cover"
         />
         {onDismiss && (
@@ -81,9 +83,9 @@ export default function ScreenshotViewer({
         >
           <img src="/otter-logo.png" alt="" className="w-8 h-8 opacity-90" />
         </div>
-        <p className="text-base">{emptyMessage || 'Waiting for screenshot stream...'}</p>
+        <p className="text-base">{emptyMessage || t('remote.screenshotViewer.waitingForStream')}</p>
         {connectionState && (
-          <p className="text-[13px] mt-2 opacity-50">P2P: {connectionState}</p>
+          <p className="text-[13px] mt-2 opacity-50">{t('remote.screenshotViewer.p2pStatus', { state: connectionState })}</p>
         )}
         <style>{`
           @keyframes remote-float {
@@ -106,7 +108,7 @@ export default function ScreenshotViewer({
       <img
         ref={imgRef}
         src={screenshotUrl}
-        alt="IDE Screenshot"
+        alt={t('remote.screenshotViewer.altText')}
         onClick={interactive ? handleClick : undefined}
         className="max-w-full max-h-full object-contain"
         style={{
