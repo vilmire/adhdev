@@ -130,6 +130,17 @@ function missionStatusTone(status: MeshMissionStatus): Tone {
     }
 }
 
+/** Label for a mission's status badge — falls back to the raw value for forward-compat with an unrecognized future status (G5-3, same pattern as difficultyLabel below). */
+function missionStatusLabel(status: MeshMissionStatus, t: (key: string) => string): string {
+    switch (status) {
+        case 'active': return t('mesh.overview.statActive')
+        case 'paused': return t('mesh.overview.statPaused')
+        case 'completed': return t('mesh.overview.statCompleted')
+        case 'abandoned': return t('mesh.overview.statAbandoned')
+        default: return status
+    }
+}
+
 function healthTone(health: string): Tone {
     switch (health) {
         case 'online': return 'emerald'
@@ -149,6 +160,18 @@ function queueTaskTone(status: RepoMeshQueueTask['status']): Tone {
         case 'assigned': return 'sky'
         case 'pending': return 'amber'
         default: return 'muted'
+    }
+}
+
+/** Label for a queue task's status badge — reuses the existing stat-tile labels (same vocabulary, same casing) rather than inventing a parallel set. Falls back to the raw value for forward-compat with an unrecognized future status (G5-3, same pattern as difficultyLabel below). */
+function queueTaskStatusLabel(status: RepoMeshQueueTask['status'], t: (key: string) => string): string {
+    switch (status) {
+        case 'completed': return t('mesh.overview.statCompleted')
+        case 'failed': return t('mesh.overview.statFailed')
+        case 'cancelled': return t('mesh.overview.statCancelled')
+        case 'assigned': return t('mesh.overview.statAssigned')
+        case 'pending': return t('mesh.overview.statPending')
+        default: return status
     }
 }
 
@@ -726,7 +749,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
-                <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
+                <StatusBadge meshTheme={meshTheme} label={missionStatusLabel(mission.status, t)} tone={missionStatusTone(mission.status)} />
                 <StatusBadge meshTheme={meshTheme} label={`${t_tasks.total} tasks`} tone="muted" />
             </div>
             {goalText && (
@@ -780,7 +803,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                     <div className="flex flex-col gap-0.5">
                         {taskList.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
-                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
                                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
@@ -997,7 +1020,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
-                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                 {completingProvider && <StatusBadge meshTheme={meshTheme} label={completingProvider} tone="muted" />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
@@ -1110,7 +1133,7 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
                     <div className="flex flex-col gap-0.5">
                         {sessionTasks.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
-                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
@@ -1211,16 +1234,17 @@ function MissionRow({ meshTheme, mission, onSelect }: {
     mission: MeshMissionDisplay
     onSelect: () => void
 }) {
-    const t = mission.tasks
-    const lastActivity = relativeTime(t.lastActivityAt)
+    const { t } = useTranslation('common')
+    const taskStats = mission.tasks
+    const lastActivity = relativeTime(taskStats.lastActivityAt)
     // A mission with zero attached tasks carries no progress signal — mute the
     // whole row so the ones with real work stand out.
-    const muted = t.total === 0
+    const muted = taskStats.total === 0
     return (
         <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
-            <StatusBadge meshTheme={meshTheme} label={mission.status} tone={missionStatusTone(mission.status)} />
+            <StatusBadge meshTheme={meshTheme} label={missionStatusLabel(mission.status, t)} tone={missionStatusTone(mission.status)} />
             <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{mission.title}</span>
-            {t.total > 0 && <span className={`shrink-0 tabular-nums text-2xs ${meshTheme.textMuted}`}>✓{t.completed}/{t.total}</span>}
+            {taskStats.total > 0 && <span className={`shrink-0 tabular-nums text-2xs ${meshTheme.textMuted}`}>✓{taskStats.completed}/{taskStats.total}</span>}
             {lastActivity && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{lastActivity}</span>}
         </ListRow>
     )
@@ -1408,7 +1432,7 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
-                                <StatusBadge meshTheme={meshTheme} label={task.status} tone={queueTaskTone(task.status)} />
+                                <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
                                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
