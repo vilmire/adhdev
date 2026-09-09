@@ -170685,15 +170685,9 @@ async function meshReviewInbox(ctx, args = {}) {
 
 // src/tools/mesh-tools-magi.ts
 var import_daemon_core10 = __toESM(require_dist3());
-var MAGI_MAX_REPLICAS = 12;
-var MAGI_MIN_TARGETS = 2;
+
+// src/tools/mesh-tools-magi-core.ts
 var MAGI_CLUSTER_JACCARD = 0.4;
-var MAGI_DEFAULT_WAIT_MS = 48e4;
-var MAGI_MAX_WAIT_MS = 12e5;
-var MAGI_POLL_INTERVAL_MS = 5e3;
-function resolveMagiWaitTimeoutMs(raw) {
-  return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
-}
 var VALID_TASK_KINDS = ["claim_audit", "rca", "design", "freeform"];
 var DEFAULT_TASK_KIND = "claim_audit";
 function normalizeMagiTaskKind(raw) {
@@ -171122,6 +171116,49 @@ function computeMagiGitSkew(answered) {
     } : {}
   };
 }
+function collectMagiCandidateTexts(payload) {
+  if (!payload || typeof payload !== "object") return [];
+  const p = payload;
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    const text = typeof value === "string" ? value : "";
+    const trimmed = text.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(text);
+  };
+  const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    const role = String(msg.role || msg.from || "").toLowerCase();
+    if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
+    const content = msg.content ?? msg.text ?? msg.message;
+    if (typeof content === "string") push(content);
+    else if (Array.isArray(content)) {
+      const joined = content.map((part) => typeof part === "string" ? part : part && typeof part === "object" && typeof part.text === "string" ? part.text : "").join("");
+      push(joined);
+    }
+    push(msg.summary);
+    push(msg.summaryMetadata?.summary);
+  }
+  push(p.summary);
+  push(p.finalSummary);
+  push(p.lastMessagePreview);
+  push(p.text);
+  return out;
+}
+
+// src/tools/mesh-tools-magi.ts
+var MAGI_MAX_REPLICAS = 12;
+var MAGI_MIN_TARGETS = 2;
+var MAGI_DEFAULT_WAIT_MS = 48e4;
+var MAGI_MAX_WAIT_MS = 12e5;
+var MAGI_POLL_INTERVAL_MS = 5e3;
+function resolveMagiWaitTimeoutMs(raw) {
+  return Math.min(MAGI_MAX_WAIT_MS, Math.max(MAGI_POLL_INTERVAL_MS, Number(raw) || MAGI_DEFAULT_WAIT_MS));
+}
 function replicaCountFor(slot, defaultN, globalN) {
   const n = slot.n ?? defaultN ?? globalN ?? 1;
   return Math.max(1, Math.floor(n));
@@ -171405,39 +171442,6 @@ ${args.artifacts.map((a) => String(a)).join("\n\n---\n\n")}`);
 ## Output
 ${magiOutputContractFor(kind)}`);
   return parts.join("\n");
-}
-function collectMagiCandidateTexts(payload) {
-  if (!payload || typeof payload !== "object") return [];
-  const p = payload;
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (value) => {
-    const text = typeof value === "string" ? value : "";
-    const trimmed = text.trim();
-    if (!trimmed || seen.has(trimmed)) return;
-    seen.add(trimmed);
-    out.push(text);
-  };
-  const messages = Array.isArray(p.messages) ? p.messages : Array.isArray(p.chat) ? p.chat : Array.isArray(p.transcript) ? p.transcript : [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") continue;
-    const role = String(msg.role || msg.from || "").toLowerCase();
-    if (role && role !== "assistant" && role !== "agent" && role !== "model") continue;
-    const content = msg.content ?? msg.text ?? msg.message;
-    if (typeof content === "string") push(content);
-    else if (Array.isArray(content)) {
-      const joined = content.map((part) => typeof part === "string" ? part : part && typeof part === "object" && typeof part.text === "string" ? part.text : "").join("");
-      push(joined);
-    }
-    push(msg.summary);
-    push(msg.summaryMetadata?.summary);
-  }
-  push(p.summary);
-  push(p.finalSummary);
-  push(p.lastMessagePreview);
-  push(p.text);
-  return out;
 }
 function replicaCompletionIsWeak(meshId, taskId) {
   try {
