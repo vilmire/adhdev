@@ -378,6 +378,17 @@ export interface MeshWorkQueueEntry {
         sessionId?: string;
         updatedAt: string;
     };
+    /**
+     * AUTOLAUNCH-SPAWN-CAP (P3): auto-launches recorded for this task since its last
+     * SUCCESSFUL claim. Deliberately a sibling of `autoLaunch` (which is overwritten
+     * wholesale on every transition) and deliberately DURABLE — it rides in the payload
+     * JSON so a daemon crash/restart cannot reset it, which is exactly how the in-memory
+     * brakes re-ignited the 2026-09-08 launch runaway. Incremented on each 'started'
+     * record (recordTaskAutoLaunch), reset by claim success (claimNextQueueTask) and by
+     * any explicit requeue. Absent on legacy rows → 0. Full rationale + the cap that
+     * consumes it: mesh-autolaunch-spawn-cap.ts.
+     */
+    autoLaunchUnclaimedCount?: number;
     /** ISO timestamp when the task was dispatched (assigned) to a node/session. Used for precise matching on completion. */
     dispatchTimestamp?: string;
     /**
@@ -1359,6 +1370,12 @@ export function recordTaskAutoLaunch(
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = new Date().toISOString();
+        // AUTOLAUNCH-SPAWN-CAP (P3): every 'started' spends one unit of the task's
+        // durable spawn budget. 'skipped'/'failed'/'completed' spend nothing — a launch
+        // is counted exactly once, at the moment it fires.
+        if (autoLaunch.status === 'started') {
+            entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
+        }
         entry.autoLaunch = { ...autoLaunch, updatedAt: now };
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
@@ -1659,6 +1676,8 @@ export function requeueTask(
             // PIN-PARKING: any requeue is an explicit coordinator decision about this
             // row's addressing — which is exactly what parking was waiting for. Unpark.
             delete entry.parked;
+            // AUTOLAUNCH-SPAWN-CAP (P3): same explicit decision → fresh spawn budget.
+            delete entry.autoLaunchUnclaimedCount;
             // Escalating backoff (dispatch attempt 1→2: DISPATCH_RETRY_BACKOFF_BASE_MS,
             // 2→3: ×2, …), so a re-dispatch lands after the session has had more time to
             // finish booting rather than racing the same window that just failed —
@@ -1704,6 +1723,10 @@ export function requeueTask(
         // on the ordinary requeue path too (not only for parked rows), which is
         // harmless: `delete` on an absent field is a no-op for every normal task.
         delete entry.parked;
+        // AUTOLAUNCH-SPAWN-CAP (P3): a requeue is the sanctioned exit from a spawn-cap
+        // park — it must also restore the durable launch budget, or the unparked row
+        // would re-park on its very next launch attempt (a dead exit).
+        delete entry.autoLaunchUnclaimedCount;
         // DISPATCH-BOOT-RACE: a caller-supplied backoff holds the row pending until the
         // session has had time to finish booting, instead of an immediate re-claim that
         // races the exact window that failed the first attempt. Absent → immediately
@@ -1751,14 +1774,18 @@ export function requeueTask(
 export function parkTaskTargetPin(
     meshId: string,
     taskId: string,
-    opts?: { reason?: string } & MeshQueueMutationOptions,
+    // AUTOLAUNCH-SPAWN-CAP (P3) reuses this mutator: `allowUntargeted` lifts the
+    // pin requirement below, because a spawn-cap runaway usually has no target pin
+    // at all. Every other parking semantic (pending-only, idempotent, claim-gate
+    // invisibility, requeue unparks, retention sweep) is shared unchanged.
+    opts?: { reason?: string; allowUntargeted?: boolean } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     return withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         if (entry.status !== 'pending') return null;
-        if (!entry.targetSessionId && !entry.targetNodeId) return null;
+        if (!opts?.allowUntargeted && !entry.targetSessionId && !entry.targetNodeId) return null;
         // Idempotent: never restamp an existing park (that would reset the
         // retention clock every tick and make a forgotten row immortal).
         if (taskIsParked(entry)) return null;

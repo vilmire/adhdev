@@ -4,6 +4,7 @@ import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getMachineId } from '../config/config.js';
+import { SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
@@ -177,8 +178,13 @@ export function notifyCoordinatorOfParkedTaskDropped(
     const taskId = task.id;
     const addressee = readNonEmptyString(task.parked?.targetSessionId);
     const hours = Math.round(PARKED_TASK_RETENTION_MS / 3_600_000);
+    // AUTOLAUNCH-SPAWN-CAP (P3): the park cause differs, so the drop notice must too —
+    // the pin wording ("addressed to session X") is false for a spawn-cap park.
+    const parkCause = task.parked?.reason === SPAWN_CAP_PARK_REASON
+        ? 'it exhausted its auto-launch spawn budget: every session launched for it failed to claim it (a launch/claim mismatch), so launching was stopped to break the loop'
+        : `its delta was addressed to session '${addressee || '(unknown)'}' and that pin went stale`;
     const coordinatorMessage = `[System] A PARKED mesh task was dropped after ${hours}h with no coordinator decision.\n`
-        + `Task ${taskId} was parked because its delta was addressed to session '${addressee || '(unknown)'}' and that pin went stale. `
+        + `Task ${taskId} was parked because ${parkCause}. `
         + `It was held — claimable by nobody — waiting for you to re-target, rewrite, or cancel it. That never happened, so it is now marked FAILED (${PARK_RETENTION_EXPIRED_REASON}) and any dependent tasks have been unblocked.\n`
         + `The instruction it carried was never delivered to anyone. If it still matters, re-enqueue it (mesh_enqueue_task) against a live session; the failed row remains in the queue as the audit record. `
         + `To avoid this next time, check parkedTasks in mesh_view_queue — parked rows are surfaced there from the moment they park.`;
@@ -288,7 +294,11 @@ export function settleParkedQueueTask(
         notifyCoordinatorOfParkedTaskDropped(meshId, task);
         return 'swept';
     }
-    markSkip(PARKED_SKIP_REASON);
+    // AUTOLAUNCH-SPAWN-CAP (P3): a spawn-cap park re-asserts its OWN skip reason,
+    // not the pin one — the coordinator guidance for the two is different (a stale
+    // addressee vs. a launch/claim mismatch), and the pin wording would misdirect
+    // diagnosis of a task that may never have had a target at all.
+    markSkip(task.parked?.reason === SPAWN_CAP_PARK_REASON ? SPAWN_CAP_PARK_REASON : PARKED_SKIP_REASON);
     return 'held';
 }
 

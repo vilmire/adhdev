@@ -52,6 +52,7 @@ import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectio
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import { sweepAutoLaunchOrphanSessions, autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, awaitClaimWindowMs, remoteSessionAppearsLive, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_REMOTE_IDLE_TTL_MS, AUTO_LAUNCH_AWAIT_CLAIM_MS, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleClaimPathDifficultyFloorRefusal, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch, readSessionModel } from './mesh-difficulty-floor.js';
+import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import {
@@ -2023,6 +2024,11 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.
                 }
             }
+
+            // AUTOLAUNCH-SPAWN-CAP (P3): durable per-task launch budget. Deliberately AFTER the
+            // await-claim guard (an in-flight claim is never parked mid-wait) and BEFORE node
+            // selection — the alternative here is another launch. See mesh-autolaunch-spawn-cap.ts.
+            if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }))) continue;
 
             const candidateNodes = Array.isArray(mesh?.nodes)
                 ? mesh.nodes.filter((node: any) => {

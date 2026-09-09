@@ -1500,6 +1500,11 @@ export class MeshRuntimeStore {
             // task. The worker echoes it on agent:generating_started; the coordinator rejects a
             // stale-nonce ack so a reclaimed+re-dispatched task's original inject cannot execute.
             entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+            // AUTOLAUNCH-SPAWN-CAP (P3): a successful claim is the healthy outcome the
+            // durable spawn counter is waiting for — reset the budget here, at the ONE
+            // choke point every claim path funnels through (idle drain, inline launch
+            // claim, remote claim, redrive, direct-delivery fallback all end here).
+            delete entry.autoLaunchUnclaimedCount;
             entry.updatedAt = now;
 
             this.db.prepare(`
