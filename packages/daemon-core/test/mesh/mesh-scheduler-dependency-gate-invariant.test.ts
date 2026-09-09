@@ -332,7 +332,9 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
     },
     {
         name: 'auto-launch candidate filter (maybeAutoLaunchOneQueueSession)',
-        file: path.join(SRC_ROOT, 'mesh/mesh-queue-assignment.ts'),
+        // maybeAutoLaunchOneQueueSession moved out of mesh-queue-assignment.ts into
+        // mesh-queue-autolaunch.ts (pure move). Only the path follows it.
+        file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
         gateCalls: ['taskDependenciesSatisfied(task, statusById)'],
         forbidGraphTokens: true,
     },

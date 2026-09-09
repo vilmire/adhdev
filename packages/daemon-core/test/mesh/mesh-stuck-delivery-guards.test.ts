@@ -24,6 +24,10 @@ const SRC = join(import.meta.dirname, '../../src/mesh')
 // behavior change). Only the path follows it — every assertion below is unchanged.
 const reconcile = readFileSync(join(SRC, 'mesh-reconcile-stranded-dispatch.ts'), 'utf-8')
 const assignment = readFileSync(join(SRC, 'mesh-queue-assignment.ts'), 'utf-8')
+// The auto-launch subsystem (incl. maybeAutoLaunchOneQueueSession and its gates) moved
+// out of mesh-queue-assignment.ts into mesh-queue-autolaunch.ts (pure move, no behavior
+// change). Only the path follows it — every assertion below is unchanged.
+const autolaunch = readFileSync(join(SRC, 'mesh-queue-autolaunch.ts'), 'utf-8')
 // The actionable-skip classifier and its guidance text moved out of mesh-queue-assignment.ts
 // into mesh-skip-notify.ts (pure move, no behavior change). Only the path follows them —
 // every assertion below is unchanged. Without this the two scans would slice an empty
@@ -117,8 +121,8 @@ describe('expired target pin reaches the coordinator (defect A — the real one)
     // reason moved with it (target_session_pin_expired → PARKED_SKIP_REASON). Asserted
     // through the shared constant rather than a literal so the two cannot drift apart
     // silently — a rename now breaks the import, not just this string match.
-    expect(assignment).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: PARKED_SKIP_REASON })")
-    expect(assignment).toContain("from './mesh-task-parking.js'")
+    expect(autolaunch).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: PARKED_SKIP_REASON })")
+    expect(autolaunch).toContain("from './mesh-task-parking.js'")
   })
 })
 
@@ -129,8 +133,8 @@ describe('★ write-concurrency invariant is unchanged (regression guard)', () =
     // while a targeted task returns earlier at the target_session_constraint branch and is
     // delivered by the claim path instead — so exempting it could not help delivery, and
     // would weaken the one-active-write-per-node invariant (worktree isolation).
-    expect(assignment).toContain('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
-    expect(assignment).toContain("markSkip(nodeId, 'node_has_active_assignment')")
+    expect(autolaunch).toContain('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
+    expect(autolaunch).toContain("markSkip(nodeId, 'node_has_active_assignment')")
   })
 
   it('the gate is NOT conditioned on targetSessionId', () => {
@@ -138,19 +142,19 @@ describe('★ write-concurrency invariant is unchanged (regression guard)', () =
     // indexOf calls return -1, slice() yields an unrelated region, and the negative
     // assertion below passes against exactly the change it exists to forbid — verified:
     // adding the exemption left this test green until the bounds were asserted.
-    const start = assignment.indexOf('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
+    const start = autolaunch.indexOf('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
     expect(start, 'concurrency gate not found in its expected form').toBeGreaterThan(-1)
-    const end = assignment.indexOf('const maxConcurrentSessions', start)
+    const end = autolaunch.indexOf('const maxConcurrentSessions', start)
     expect(end, 'gate terminator not found').toBeGreaterThan(start)
-    expect(assignment.slice(start, end)).not.toContain('targetSessionId')
+    expect(autolaunch.slice(start, end)).not.toContain('targetSessionId')
   })
 
   it('targeted tasks still return before the auto-launch gate', () => {
     // Proves the premise of the decision above: the targeted branch `continue`s, so it
     // never reaches the concurrency gate at all.
-    const targeted = assignment.slice(
-      assignment.indexOf('if (task.targetSessionId) {'),
-      assignment.indexOf('// Per-task await-claim guard', assignment.indexOf('if (task.targetSessionId) {')),
+    const targeted = autolaunch.slice(
+      autolaunch.indexOf('if (task.targetSessionId) {'),
+      autolaunch.indexOf('// Per-task await-claim guard', autolaunch.indexOf('if (task.targetSessionId) {')),
     )
     expect(targeted).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' })")
     expect(targeted.indexOf('continue;')).toBeGreaterThan(-1)
