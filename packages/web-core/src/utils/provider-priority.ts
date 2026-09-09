@@ -180,11 +180,10 @@ const CANONICAL_REPO_MESH_PROVIDER_TYPES = new Set([
   'hermes-cli',
   'claude-cli',
   'codex-cli',
-  'gemini-cli',
   'antigravity-cli',
 ])
 
-export const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, gemini-cli, antigravity-cli'
+export const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, antigravity-cli'
 
 function normalizeProviderPriorityToken(type: string): string | undefined {
   const trimmed = type.trim()
