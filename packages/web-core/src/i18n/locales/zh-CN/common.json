@@ -3403,6 +3403,7 @@
             "copied": "已复制",
             "copy": "复制",
             "getStarted": "开始使用",
+            "orInstall": "或安装 CLI",
             "openSource": "在 GitHub 上开源",
             "joinDiscord": "加入 Discord",
             "selfHost": "支持自托管",
