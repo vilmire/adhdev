@@ -25,6 +25,7 @@ import {
     getResourceDisplayName,
     buildMediaSrc,
     isStructuredMessagePartArray,
+    safeResourceHref,
     type ActionLog,
     type MessageMeta,
     type StructuredMessagePart,
@@ -228,16 +229,17 @@ function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: Structur
                 if (part.type === 'resource_link') {
                     const label = part.title || part.name || getResourceDisplayName(part.uri, 'resource');
                     const detail = [part.description, part.mimeType].filter(Boolean).join('\n');
+                    const href = safeResourceHref(part.uri);
                     return (
                         <div key={`resource-link-${index}`} className="flex flex-col gap-1">
-                            {part.uri ? (
-                                <a href={part.uri} target="_blank" rel="noreferrer" download className="underline break-all">
+                            {href ? (
+                                <a href={href} target="_blank" rel="noreferrer" download className="underline break-all">
                                     {label}
                                 </a>
                             ) : (
                                 renderStructuredPlaceholder('Resource', label, detail)
                             )}
-                            {part.uri && detail ? <div className="text-sm opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{detail}</div> : null}
+                            {href && detail ? <div className="text-sm opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{detail}</div> : null}
                         </div>
                     );
                 }
@@ -252,9 +254,10 @@ function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: Structur
                             </div>
                         );
                     }
-                    if (part.resource.uri) {
+                    const resourceHref = safeResourceHref(part.resource.uri);
+                    if (resourceHref) {
                         return (
-                            <a key={`resource-uri-${index}`} href={part.resource.uri} target="_blank" rel="noreferrer" className="underline break-all">
+                            <a key={`resource-uri-${index}`} href={resourceHref} target="_blank" rel="noreferrer" className="underline break-all">
                                 {label}
                             </a>
                         );

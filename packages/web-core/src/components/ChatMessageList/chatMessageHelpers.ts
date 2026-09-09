@@ -58,6 +58,26 @@ export function isStructuredMessagePartArray(content: unknown): content is Struc
     return Array.isArray(content) && content.some((part) => !!part && typeof part === 'object' && 'type' in part);
 }
 
+const SAFE_RESOURCE_HREF_PROTOCOLS = new Set(['https:', 'http:', 'mailto:', 'file:']);
+
+/**
+ * Validate a resource_link/resource URI before rendering it as an anchor href.
+ * These URIs come from agent/tool output and could otherwise smuggle a
+ * `javascript:` URI that executes on click. Allow-list only — `file:` is
+ * included because agents legitimately reference local workspace files this
+ * way (see buildMediaSrc's identical `file://` usage for image/audio/video
+ * src), which is inert (no script execution) unlike `javascript:`/`data:`.
+ */
+export function safeResourceHref(uri: string | undefined): string | undefined {
+    if (!uri) return undefined;
+    try {
+        const parsed = new URL(uri);
+        return SAFE_RESOURCE_HREF_PROTOCOLS.has(parsed.protocol) ? uri : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export function getResourceDisplayName(uri: string | undefined, fallback: string): string {
     if (!uri) return fallback;
     try {

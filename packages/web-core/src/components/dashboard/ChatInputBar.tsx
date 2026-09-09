@@ -101,6 +101,13 @@ const ChatInputBar = memo(function ChatInputBar({
     const [attachError, setAttachError] = useState<string | null>(null);
     const [isDragOver, setIsDragOver] = useState(false);
     const submitLockRef = useRef(false);
+    // macOS Safari: the Enter keystroke that confirms an IME composition fires
+    // a keydown with isComposing already false (and keyCode 229) — the
+    // isComposing guard alone misses it and the confirming Enter falls through
+    // to submit. Track the last compositionend time and ignore Enter within a
+    // short window after it, in addition to the isComposing check.
+    const compositionEndAtRef = useRef(0);
+    const IME_SUBMIT_GUARD_MS = 50;
     const { isVisible: areControlsVisible, toggleVisibility: toggleControlsVisibility } = useControlsBarVisibility();
 
     const canAttachImages = supportsImageInput(messageInput);
@@ -325,9 +332,16 @@ const ChatInputBar = memo(function ChatInputBar({
                                 el?.setSelectionRange(caret, caret);
                             });
                         }}
+                        onCompositionEnd={() => {
+                            compositionEndAtRef.current = Date.now();
+                        }}
                         onKeyDown={e => {
                             if (e.key !== 'Enter') return;
                             if (e.nativeEvent.isComposing) return;
+                            // keyCode 229 = IME composing (legacy signal Safari still sets on
+                            // the confirming keydown even though isComposing already flipped).
+                            if (e.keyCode === 229) return;
+                            if (Date.now() - compositionEndAtRef.current < IME_SUBMIT_GUARD_MS) return;
                             // Shift+Enter inserts a newline (textarea default).
                             // Plain Enter submits. No "double-newline submits"
                             // heuristic — interior newlines are preserved verbatim.
