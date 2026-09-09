@@ -118,8 +118,6 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
         if (!expanded[id] && !fullGoals[id]) void fetchFullGoals()
     }, [expanded, fullGoals, fetchFullGoals])
 
-    if (missions.length === 0) return null
-
     return (
         <Section title={t('repoMesh.missions.title')} description={t('repoMesh.missions.description')}>
             {fetchError && <div className="mb-3 text-[12px] text-amber-400">{fetchError}</div>}

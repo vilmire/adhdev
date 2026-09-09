@@ -54,8 +54,6 @@ export interface LaunchCoordinatorResult {
 export interface RepoMeshFeatures {
     /** Show "Mesh Host daemon" section with multi-daemon coordinator picker (cloud) */
     meshHostDaemonSection: boolean
-    /** Show queue summary + recent tasks section (both) */
-    queueSection: boolean
     /** Show daemon machine picker in "Create Mesh" form (cloud) */
     createDaemonPicker: boolean
     /** Show daemon machine picker in "Add Node" form (cloud) */
@@ -76,12 +74,6 @@ export interface RepoMeshFeatures {
      * keeps the original fast poll.
      */
     meshStatePushRefresh?: boolean
-    /**
-     * Maximum number of meshes the user may create. When set, the mesh list
-     * disables "Create Mesh" once this count is reached and shows an upgrade nudge.
-     * Omit (or -1) for unlimited. Cloud sets this to 1 on the free plan.
-     */
-    maxMeshes?: number
 }
 
 // ─── Context value ───────────────────────────────────────────────
@@ -185,7 +177,6 @@ export const STANDALONE_FEATURES: RepoMeshFeatures = {
     createDaemonPicker: false,
     addNodeDaemonPicker: false,
     // Functional features — both platforms
-    queueSection: true,
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,
@@ -198,7 +189,6 @@ export const CLOUD_FEATURES: RepoMeshFeatures = {
     createDaemonPicker: true,
     addNodeDaemonPicker: true,
     // Functional features — both platforms
-    queueSection: true,
     coordinatorPrompt: true,
     nodeInstruction: true,
     hermesMcpConfig: true,

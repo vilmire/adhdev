@@ -5,6 +5,7 @@ export type { TaskDagData, TaskDagNode, TaskDagEdge, TaskDagEdgeState, TaskDagSt
 export { default as MeshGraphPanel } from './MeshGraphPanel'
 export { default as MeshObservabilitySurface, MeshSurfaceTabControls } from './MeshObservabilitySurface'
 export type { MeshSurfaceTab } from './MeshObservabilitySurface'
+export { MeshHelpPanel } from './MeshHelpPanel'
 export { default as MeshOverviewCards } from './MeshOverviewCards'
 export { default as PendingApprovalsInbox, derivePendingApprovals } from './PendingApprovalsInbox'
 export type { PendingApprovalItem, PendingApprovalAction } from './PendingApprovalsInbox'

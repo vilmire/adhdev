@@ -983,7 +983,7 @@
             "refresh": "更新",
             "refreshing": "更新中…",
             "loadingStatus": "ライブメッシュステータスを読み込み中…",
-            "noGraph": "このコーディネーターにはまだ利用可能なライブメッシュグラフがありません。",
+            "noGraph": "このコーディネーターにはまだ利用可能なライブメッシュグラフがありません。上の？をタップすると Repo Mesh の役割がわかります。",
             "errorNoMeshId": "このコーディネーターはライブメッシュ ID を公開していません。",
             "errorUnexpectedPayload": "グラフ情報を読み込めませんでした。しばらくしてから再度お試しください。"
         },
@@ -1056,14 +1056,12 @@
             "cancel": "キャンセル",
             "loading": "メッシュを読み込み中...",
             "emptyTitle": "Repo Mesh がありません",
-            "emptyWithDaemons": "メッシュを作成して始めましょう。",
-            "emptyNoDaemons": "まず ADHDev デーモンを接続してください。",
+            "emptyWithDaemons": "Repo Mesh は、複数のマシン上の複数のコーディングエージェントを 1 つのリポジトリで連携させ、一箇所からまとめて操作できるようにします。メッシュを作成して始めましょう。",
+            "emptyNoDaemons": "Repo Mesh は、複数のマシン上の複数のコーディングエージェントを 1 つのリポジトリで連携させ、一箇所からまとめて操作できるようにします。まず ADHDev デーモンを接続してください。",
             "createFirst": "最初のメッシュを作成",
             "noRepoIdentity": "リポジトリ識別子なし",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "ノード",
-            "meshLimitReached": "Free プランには {{max}} つの Repo Mesh が含まれます。Pro にアップグレードすると制限なく使えます。",
-            "meshLimitBanner": "Free プランでは Repo Mesh を 1 つ利用できます。追加作成は Pro にアップグレードしてください。"
+            "nodesSuffix": "ノード"
         },
         "detail": {
             "back": "← 戻る",
@@ -2782,7 +2780,7 @@
             "detailLabelDependsOn": "依存タスク",
             "detailLabelSession": "セッション",
             "detailLabelProvider": "プロバイダー",
-            "detailLabelPayload": "ペイロード",
+            "detailLabelPayload": "生のペイロードを表示",
             "detailLabelTaskId": "タスクID",
             "detailLabelFinalSummary": "最終サマリー",
             "detailFinalSummaryLoading": "最終サマリーを読み込み中…",

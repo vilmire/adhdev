@@ -55,6 +55,22 @@ export {
     summarizeSelectedHead,
 } from './MeshObservabilitySurface/meshSurfaceHelpers'
 
+declare global {
+    interface Window {
+        __ADHDEV_DEBUG_MESH_GRAPH__?: boolean
+    }
+}
+
+/** Same window-flag + localStorage opt-in shape as useDevRenderTrace's isTraceEnabled. */
+function isMeshGraphDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false
+    try {
+        return window.__ADHDEV_DEBUG_MESH_GRAPH__ === true || window.localStorage.getItem('adhdev_debug_mesh_graph') === '1'
+    } catch {
+        return window.__ADHDEV_DEBUG_MESH_GRAPH__ === true
+    }
+}
+
 type DetailSelection =
     | { kind: 'node'; nodeId: string }
     | { kind: 'edge'; edgeId: string }
@@ -268,7 +284,11 @@ export default function MeshObservabilitySurface({
         : null
 
     useEffect(() => {
-        if (!selectedNodeId) return
+        // G5-4: this used to log unconditionally on every selected-node change
+        // (re-fires on any poll tick that changes selectedGraphNode/
+        // selectedNodeStatus identity while a node stays selected, not just on
+        // click) — gate it the same way useDevRenderTrace gates render traces.
+        if (!selectedNodeId || !isMeshGraphDebugEnabled()) return
         try {
             console.info('[RepoMeshGraphDebug]', {
                 event: 'selected_canonical_node',

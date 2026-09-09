@@ -907,11 +907,15 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
     const { t } = useTranslation('common')
     const summary = payloadSummary(entry.payload)
     const routing = readRoutingDecision(entry.payload as Record<string, unknown> | undefined)
+    // G5-2: JSON.stringify can throw on a circular payload; there is nothing
+    // useful to disclose in that case (String(obj) would just print
+    // "[object Object]"), so payloadJson stays empty and the raw-payload
+    // disclosure below doesn't render at all rather than showing that.
     let payloadJson = ''
     try {
         payloadJson = JSON.stringify(entry.payload ?? {}, null, 2)
     } catch {
-        payloadJson = String(entry.payload)
+        payloadJson = ''
     }
     return (
         <div className="flex flex-col gap-3">
@@ -929,10 +933,10 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
             {/* LEDGER-TASK-TRACEABILITY (E2): human-readable routing rationale (who/via/why). */}
             {routing && <RoutingDecisionDetail meshTheme={meshTheme} routing={routing} resolveNodeLabel={resolveNodeLabel} />}
             {payloadJson && payloadJson !== '{}' && (
-                <div>
-                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</div>
-                    <pre className={`max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
-                </div>
+                <details>
+                    <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</summary>
+                    <pre className={`mt-1 max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
+                </details>
             )}
         </div>
     )

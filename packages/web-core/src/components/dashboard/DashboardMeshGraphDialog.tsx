@@ -5,7 +5,7 @@ import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconHelp, IconInfo, IconMesh, IconRefresh, IconX } from '../Icons'
 import { DialogShell } from '../ui/Dialog'
-import { MeshObservabilitySurface, MeshSurfaceTabControls, type MeshSurfaceTab } from '../MeshGraph'
+import { MeshObservabilitySurface, MeshSurfaceTabControls, MeshHelpPanel, type MeshSurfaceTab } from '../MeshGraph'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -420,6 +420,13 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                         </div>
                     )}
                 </div>
+                {/* G5-5: the "?" help toggle in the header above sets helpOpen even
+                    in this empty-state branch, but MeshHelpPanel used to live only
+                    inside MeshObservabilitySurface — which isn't mounted here — so
+                    clicking "?" while empty silently did nothing. */}
+                {helpOpen && !displayedMeshStatus && (
+                    <MeshHelpPanel meshTheme={meshTheme} onClose={() => setHelpOpen(false)} />
+                )}
         </DialogShell>
     )
 }

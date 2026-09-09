@@ -983,7 +983,7 @@
             "refresh": "刷新",
             "refreshing": "正在刷新…",
             "loadingStatus": "正在加载实时网格状态…",
-            "noGraph": "此协调器暂无可用的实时网格图谱。",
+            "noGraph": "此协调器暂无可用的实时网格图谱。点击上方的 ? 了解 Repo Mesh 的作用。",
             "errorNoMeshId": "此协调器未公开实时网格 ID。",
             "errorUnexpectedPayload": "图数据加载失败，请稍后重试。"
         },
@@ -1056,14 +1056,12 @@
             "cancel": "取消",
             "loading": "正在加载网格...",
             "emptyTitle": "没有 Repo Mesh",
-            "emptyWithDaemons": "创建一个网格即可开始。",
-            "emptyNoDaemons": "请先连接一个 ADHDev 守护进程。",
+            "emptyWithDaemons": "Repo Mesh 让多台机器上的多个编码代理在同一个仓库上协同工作，并在一处统一调度。创建一个网格即可开始。",
+            "emptyNoDaemons": "Repo Mesh 让多台机器上的多个编码代理在同一个仓库上协同工作，并在一处统一调度。请先连接一个 ADHDev 守护进程。",
             "createFirst": "创建第一个网格",
             "noRepoIdentity": "无仓库标识",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "个节点",
-            "meshLimitReached": "Free 计划包含 {{max}} 个 Repo Mesh。升级到 Pro 可创建更多。",
-            "meshLimitBanner": "Free 计划包含 1 个 Repo Mesh。如需创建更多，请升级到 Pro。"
+            "nodesSuffix": "个节点"
         },
         "detail": {
             "back": "← 返回",
@@ -2782,7 +2780,7 @@
             "detailLabelDependsOn": "依赖任务",
             "detailLabelSession": "会话",
             "detailLabelProvider": "提供程序",
-            "detailLabelPayload": "负载",
+            "detailLabelPayload": "显示原始负载",
             "detailLabelTaskId": "任务 ID",
             "detailLabelFinalSummary": "最终摘要",
             "detailFinalSummaryLoading": "正在加载最终摘要…",

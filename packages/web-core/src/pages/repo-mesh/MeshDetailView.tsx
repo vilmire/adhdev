@@ -470,7 +470,9 @@ export function MeshDetailView({
                  (MagiPanelManager) and its magi_panel_* daemon commands were removed; only
                  magi_kind_panel_* remains. */}
             {displayedMeshStatus && (
-                <Section title={t('repoMesh.detail.magiTitle')} description={t('repoMesh.detail.magiDescription')}>
+                <Section title={t('repoMesh.detail.magiTitle')} collapsible defaultOpen={false}
+                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('repoMesh.detail.advanced')}</span>}
+                    description={t('repoMesh.detail.magiDescription')}>
                     <MagiKindPanelEditor
                         status={displayedMeshStatus}
                         daemonId={activeDaemonId}

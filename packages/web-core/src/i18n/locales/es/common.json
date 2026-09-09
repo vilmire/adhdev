@@ -988,7 +988,7 @@
             "refresh": "Actualizar",
             "refreshing": "Actualizando…",
             "loadingStatus": "Cargando el estado de la malla en vivo…",
-            "noGraph": "Todavía no hay un grafo de malla en vivo disponible para este coordinador.",
+            "noGraph": "Todavía no hay un grafo de malla en vivo disponible para este coordinador. Toca el ? de arriba para saber qué hace un Repo Mesh.",
             "errorNoMeshId": "Este coordinador no expone un ID de malla en vivo.",
             "errorUnexpectedPayload": "No se pudo cargar la información del grafo. Inténtalo de nuevo en unos momentos."
         },
@@ -1061,14 +1061,12 @@
             "cancel": "Cancelar",
             "loading": "Cargando mallas...",
             "emptyTitle": "No hay Repo Meshes",
-            "emptyWithDaemons": "Crea una malla para empezar.",
-            "emptyNoDaemons": "Conecta primero un daemon de ADHDev.",
+            "emptyWithDaemons": "Un Repo Mesh ejecuta varios agentes de código en tus máquinas sobre un mismo repositorio, coordinados desde un solo lugar. Crea uno para empezar.",
+            "emptyNoDaemons": "Un Repo Mesh ejecuta varios agentes de código en tus máquinas sobre un mismo repositorio, coordinados desde un solo lugar. Conecta primero un daemon de ADHDev.",
             "createFirst": "Crear la primera malla",
             "noRepoIdentity": "Sin identidad de repositorio",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "nodo(s)",
-            "meshLimitReached": "El plan Free incluye {{max}} Repo Mesh. Actualiza a Pro para más.",
-            "meshLimitBanner": "El plan Free incluye 1 Repo Mesh. Actualiza a Pro para crear más."
+            "nodesSuffix": "nodo(s)"
         },
         "detail": {
             "back": "← Atrás",
@@ -2787,7 +2785,7 @@
             "detailLabelDependsOn": "Depende de",
             "detailLabelSession": "Sesión",
             "detailLabelProvider": "Proveedor",
-            "detailLabelPayload": "Payload",
+            "detailLabelPayload": "Mostrar payload sin procesar",
             "detailLabelTaskId": "ID de tarea",
             "detailLabelFinalSummary": "Resumen final",
             "detailFinalSummaryLoading": "Cargando el resumen final…",
