@@ -100,15 +100,18 @@ export function buildChatPaneTailControllerOptions(options: {
     };
 }
 
-export function buildBusyChatInputStatusMessage(conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>): string | null {
+export function buildBusyChatInputStatusMessage(
+    conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>,
+    t: (key: string) => string,
+): string | null {
     if (conversation.status === 'no_progress' || conversation.status === 'long_generating') {
-        return 'Agent shows no progress.'
+        return t('chatPane.busyNoProgress')
     }
     if (conversation.status === 'generating' || conversation.status === 'streaming') {
-        return 'Agent is generating.'
+        return t('chatPane.busyGenerating')
     }
     if (conversation.status === 'waiting_approval' && (!conversation.modalButtons || conversation.modalButtons.length === 0)) {
-        return 'Agent is waiting for approval. Approval controls will appear when available.'
+        return t('chatPane.busyWaitingApproval')
     }
     return null
 }
@@ -235,7 +238,7 @@ export default function ChatPane({
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     const sendBlockMessage = getConversationSendBlockMessage(activeConv)
-    const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv)
+    const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv, t)
     // The blocked state lives in the placeholder as a short one-liner — the
     // approval banner above already explains itself, and a long placeholder
     // must never wrap and grow the box. The dedicated line below the input is

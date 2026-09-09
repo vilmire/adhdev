@@ -416,6 +416,7 @@
         "reconnectingItem": "正在重新连接…",
         "connectingItem": "正在连接…",
         "actionNeeded": "需要操作",
+        "needsAttention": "需要关注",
         "done": "完成",
         "openMeshGraphFor": "打开 {{title}} 的 mesh 图",
         "openLiveMeshGraph": "打开实时 repo mesh 图",
@@ -1401,7 +1402,17 @@
         }
     },
     "chat": {
-        "copyMessage": "复制消息"
+        "copyMessage": "复制消息",
+        "copyCode": "复制代码",
+        "showMore": "展开",
+        "showLess": "收起",
+        "thought": "思考",
+        "waitingToSend": "等待发送 —— 代理仍在处理中。",
+        "waitingToSendAria": "等待发送",
+        "sendNow": "立即发送",
+        "sending": "发送中…",
+        "sendNowAria": "中断代理当前的回合并立即发送",
+        "sendNowTitle": "中断代理当前的回合并立即发送此消息。进行中的回合将丢失。"
     },
     "chatPane": {
         "connectingToMachine": "正在连接到你的机器",
@@ -1415,7 +1426,10 @@
         "openPanel": "打开 {{label}} 面板",
         "switchingPanel": "正在切换...",
         "openingPanel": "正在打开...",
-        "replicaDegraded": "实时同步出现问题，正在以先前的方式显示消息"
+        "replicaDegraded": "实时同步出现问题，正在以先前的方式显示消息",
+        "busyNoProgress": "代理没有进展。",
+        "busyGenerating": "代理正在生成回复。",
+        "busyWaitingApproval": "代理正在等待批准。批准控件将在可用时显示。"
     },
     "chatInput": {
         "attachImage": "附加图片",

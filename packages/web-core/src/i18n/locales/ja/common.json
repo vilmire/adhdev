@@ -416,6 +416,7 @@
         "reconnectingItem": "再接続しています…",
         "connectingItem": "接続しています…",
         "actionNeeded": "操作が必要です",
+        "needsAttention": "確認が必要です",
         "done": "完了",
         "openMeshGraphFor": "{{title}} のメッシュグラフを開く",
         "openLiveMeshGraph": "ライブの repo mesh グラフを開く",
@@ -1401,7 +1402,17 @@
         }
     },
     "chat": {
-        "copyMessage": "メッセージをコピー"
+        "copyMessage": "メッセージをコピー",
+        "copyCode": "コードをコピー",
+        "showMore": "もっと見る",
+        "showLess": "折りたたむ",
+        "thought": "思考",
+        "waitingToSend": "送信待ち — エージェントはまだ作業中です。",
+        "waitingToSendAria": "送信待ち",
+        "sendNow": "今すぐ送信",
+        "sending": "送信中…",
+        "sendNowAria": "エージェントの現在のターンを中断して今すぐ送信",
+        "sendNowTitle": "エージェントの現在のターンを中断してこのメッセージを今すぐ送信します。進行中のターンは失われます。"
     },
     "chatPane": {
         "connectingToMachine": "マシンに接続中",
@@ -1415,7 +1426,10 @@
         "openPanel": "{{label}} パネルを開く",
         "switchingPanel": "切り替え中...",
         "openingPanel": "オープン中...",
-        "replicaDegraded": "リアルタイム同期に問題が発生しているため、以前の方式で表示しています"
+        "replicaDegraded": "リアルタイム同期に問題が発生しているため、以前の方式で表示しています",
+        "busyNoProgress": "エージェントに進捗がありません。",
+        "busyGenerating": "エージェントが応答を生成中です。",
+        "busyWaitingApproval": "エージェントが承認を待っています。承認コントロールは準備でき次第表示されます。"
     },
     "chatInput": {
         "attachImage": "画像を添付",

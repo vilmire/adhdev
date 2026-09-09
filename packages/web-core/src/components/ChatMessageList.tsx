@@ -684,6 +684,8 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.loadError === next.loadError
     && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
     && prev.isVisible === next.isVisible
+    && prev.onSendNow === next.onSendNow
+    && prev.isSendingNow === next.isSendingNow
 ));
 
 export default MemoizedChatMessageList;

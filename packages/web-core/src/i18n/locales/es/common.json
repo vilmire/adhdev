@@ -416,6 +416,7 @@
         "reconnectingItem": "Reconectando…",
         "connectingItem": "Conectando…",
         "actionNeeded": "Se requiere acción",
+        "needsAttention": "Necesita atención",
         "done": "Listo",
         "openMeshGraphFor": "Abrir el grafo de mesh de {{title}}",
         "openLiveMeshGraph": "Abrir el grafo de repo mesh en vivo",
@@ -1406,7 +1407,17 @@
         }
     },
     "chat": {
-        "copyMessage": "Copiar mensaje"
+        "copyMessage": "Copiar mensaje",
+        "copyCode": "Copiar código",
+        "showMore": "Mostrar más",
+        "showLess": "Mostrar menos",
+        "thought": "Pensamiento",
+        "waitingToSend": "Esperando para enviar — el agente todavía está trabajando.",
+        "waitingToSendAria": "Esperando para enviar",
+        "sendNow": "Enviar ahora",
+        "sending": "Enviando…",
+        "sendNowAria": "Enviar ahora interrumpiendo el turno actual del agente",
+        "sendNowTitle": "Interrumpe el turno actual del agente y envía este mensaje ahora. El turno en curso se perderá."
     },
     "chatPane": {
         "connectingToMachine": "Conectando con tu máquina",
@@ -1420,7 +1431,10 @@
         "openPanel": "Abrir panel de {{label}}",
         "switchingPanel": "Cambiando...",
         "openingPanel": "Abriendo...",
-        "replicaDegraded": "La sincronización en vivo tiene problemas: se muestran los mensajes del modo anterior"
+        "replicaDegraded": "La sincronización en vivo tiene problemas: se muestran los mensajes del modo anterior",
+        "busyNoProgress": "El agente no muestra progreso.",
+        "busyGenerating": "El agente está generando una respuesta.",
+        "busyWaitingApproval": "El agente está esperando aprobación. Los controles de aprobación aparecerán cuando estén disponibles."
     },
     "chatInput": {
         "attachImage": "Adjuntar imagen",

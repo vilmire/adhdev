@@ -84,10 +84,14 @@ export function getConversationStatusHint(
     conversation: ActiveConversation,
     options?: { requiresAction?: boolean },
 ): string | null {
-    const { isReconnecting, isConnecting } = getConversationViewStates(conversation)
+    const { isReconnecting, isConnecting, isErrored } = getConversationViewStates(conversation)
     if (isReconnecting) return 'Reconnecting…'
     if (isConnecting) return 'Connecting…'
     if (options?.requiresAction) return 'Action needed'
+    // G8-10: surfaced only after the higher-priority connection/action hints
+    // above — a session that's both reconnecting AND errored shows the more
+    // actionable "Reconnecting…" first.
+    if (isErrored) return 'Needs attention'
     return null
 }
 
