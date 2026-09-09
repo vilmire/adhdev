@@ -289,7 +289,8 @@
     },
     "approval": {
         "processing": "PROCESSING...",
-        "actionRequired": "ACTION REQUIRED"
+        "actionRequired": "ACTION REQUIRED",
+        "alwaysAllowWarning": "Grants this permission permanently — future runs will not ask again"
     },
     "newSession": {
         "title": "Start session",
@@ -416,7 +417,6 @@
         "reconnectingItem": "Reconnecting…",
         "connectingItem": "Connecting…",
         "actionNeeded": "Action needed",
-        "needsAttention": "Needs attention",
         "done": "Done",
         "openMeshGraphFor": "Open mesh graph for {{title}}",
         "openLiveMeshGraph": "Open live repo mesh graph",
@@ -1427,7 +1427,9 @@
         "replicaDegraded": "Live sync is having trouble — showing messages the previous way",
         "busyNoProgress": "Agent shows no progress.",
         "busyGenerating": "Agent is generating.",
-        "busyWaitingApproval": "Agent is waiting for approval. Approval controls will appear when available."
+        "busyWaitingApproval": "Agent is waiting for approval. Approval controls will appear when available.",
+        "activityToggleLabel": "Activity",
+        "activityToggleTitle": "Show tool, terminal, and thinking activity rows"
     },
     "chatInput": {
         "attachImage": "Attach image",
@@ -3307,7 +3309,13 @@
         "appearance": {
             "modeLabel": "Mode",
             "themeLabel": "Theme",
-            "mobileLabel": "Mobile"
+            "mobileLabel": "Mobile",
+            "chatLabel": "Chat"
+        },
+        "chatActivity": {
+            "rowLabel": "Show agent activity in chat",
+            "descriptionOn": "Tool calls, terminal output, and thinking are shown between chat messages.",
+            "descriptionOff": "Only chat messages are shown. Tool calls, terminal output, and thinking stay hidden."
         }
     },
     "historyModal": {

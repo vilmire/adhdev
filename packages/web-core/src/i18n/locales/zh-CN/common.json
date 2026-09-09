@@ -289,7 +289,8 @@
     },
     "approval": {
         "processing": "处理中...",
-        "actionRequired": "需要操作"
+        "actionRequired": "需要操作",
+        "alwaysAllowWarning": "永久授予此权限 — 后续运行将不再询问"
     },
     "newSession": {
         "title": "开始会话",
@@ -394,7 +395,7 @@
         "idle": "空闲",
         "unreadSuffix": " · {{count}} 条未读",
         "noActiveChats": "没有活跃的聊天",
-        "needsAttention": "需要处理",
+        "needsAttention": "需要关注",
         "taskComplete": "任务完成",
         "workingNow": "正在处理",
         "earlier": "更早",
@@ -416,7 +417,6 @@
         "reconnectingItem": "正在重新连接…",
         "connectingItem": "正在连接…",
         "actionNeeded": "需要操作",
-        "needsAttention": "需要关注",
         "done": "完成",
         "openMeshGraphFor": "打开 {{title}} 的 mesh 图",
         "openLiveMeshGraph": "打开实时 repo mesh 图",
@@ -1427,7 +1427,9 @@
         "replicaDegraded": "实时同步出现问题，正在以先前的方式显示消息",
         "busyNoProgress": "代理没有进展。",
         "busyGenerating": "代理正在生成回复。",
-        "busyWaitingApproval": "代理正在等待批准。批准控件将在可用时显示。"
+        "busyWaitingApproval": "代理正在等待批准。批准控件将在可用时显示。",
+        "activityToggleLabel": "活动",
+        "activityToggleTitle": "显示工具、终端和思考活动行"
     },
     "chatInput": {
         "attachImage": "附加图片",
@@ -3307,7 +3309,13 @@
         "appearance": {
             "modeLabel": "模式",
             "themeLabel": "主题",
-            "mobileLabel": "移动端"
+            "mobileLabel": "移动端",
+            "chatLabel": "聊天"
+        },
+        "chatActivity": {
+            "rowLabel": "在聊天中显示智能体活动",
+            "descriptionOn": "工具调用、终端输出和思考过程将显示在聊天消息之间。",
+            "descriptionOff": "仅显示聊天消息。工具调用、终端输出和思考过程保持隐藏。"
         }
     },
     "historyModal": {

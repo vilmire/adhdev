@@ -289,7 +289,8 @@
     },
     "approval": {
         "processing": "処理中...",
-        "actionRequired": "対応が必要です"
+        "actionRequired": "対応が必要です",
+        "alwaysAllowWarning": "この権限を永続的に許可します — 以降の実行では再確認されません"
     },
     "newSession": {
         "title": "セッションを開始",
@@ -394,7 +395,7 @@
         "idle": "アイドル",
         "unreadSuffix": " · 未読 {{count}} 件",
         "noActiveChats": "アクティブなチャットはありません",
-        "needsAttention": "対応が必要です",
+        "needsAttention": "確認が必要です",
         "taskComplete": "タスク完了",
         "workingNow": "実行中",
         "earlier": "これまで",
@@ -416,7 +417,6 @@
         "reconnectingItem": "再接続しています…",
         "connectingItem": "接続しています…",
         "actionNeeded": "操作が必要です",
-        "needsAttention": "確認が必要です",
         "done": "完了",
         "openMeshGraphFor": "{{title}} のメッシュグラフを開く",
         "openLiveMeshGraph": "ライブの repo mesh グラフを開く",
@@ -1427,7 +1427,9 @@
         "replicaDegraded": "リアルタイム同期に問題が発生しているため、以前の方式で表示しています",
         "busyNoProgress": "エージェントに進捗がありません。",
         "busyGenerating": "エージェントが応答を生成中です。",
-        "busyWaitingApproval": "エージェントが承認を待っています。承認コントロールは準備でき次第表示されます。"
+        "busyWaitingApproval": "エージェントが承認を待っています。承認コントロールは準備でき次第表示されます。",
+        "activityToggleLabel": "アクティビティ",
+        "activityToggleTitle": "ツール・ターミナル・思考のアクティビティ行を表示"
     },
     "chatInput": {
         "attachImage": "画像を添付",
@@ -3307,7 +3309,13 @@
         "appearance": {
             "modeLabel": "モード",
             "themeLabel": "テーマ",
-            "mobileLabel": "モバイル"
+            "mobileLabel": "モバイル",
+            "chatLabel": "チャット"
+        },
+        "chatActivity": {
+            "rowLabel": "チャットにエージェントの活動を表示",
+            "descriptionOn": "ツール呼び出し・ターミナル出力・思考過程がチャットメッセージの間に表示されます。",
+            "descriptionOff": "チャットメッセージのみ表示されます。ツール呼び出し・ターミナル出力・思考過程は非表示のままです。"
         }
     },
     "historyModal": {

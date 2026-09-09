@@ -193,3 +193,36 @@ export function writeChatActivityVisiblePreference(value: boolean, storage: Pick
         storage?.setItem(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY, value ? '1' : '0')
     } catch {}
 }
+
+export const CHAT_ACTIVITY_VISIBILITY_EVENT = 'adhdev:chat-activity-visibility-change'
+
+/**
+ * Write the preference AND notify same-document listeners. `storage` events only
+ * fire in OTHER tabs, so a Settings toggle would never reach an already-mounted
+ * ChatPane without this custom event (same split as MobileDashboardModeSection).
+ */
+export function setChatActivityVisiblePreference(value: boolean): void {
+    writeChatActivityVisiblePreference(value)
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent<boolean>(CHAT_ACTIVITY_VISIBILITY_EVENT, { detail: value }))
+    }
+}
+
+/** Subscribe to preference changes from this document (custom event) and other tabs (storage). */
+export function subscribeChatActivityVisiblePreference(listener: (visible: boolean) => void): () => void {
+    if (typeof window === 'undefined') return () => {}
+    const onCustom = (event: Event) => {
+        const detail = (event as CustomEvent<boolean>).detail
+        listener(typeof detail === 'boolean' ? detail : readChatActivityVisiblePreference())
+    }
+    const onStorage = (event: StorageEvent) => {
+        if (event.key && event.key !== CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) return
+        listener(readChatActivityVisiblePreference())
+    }
+    window.addEventListener(CHAT_ACTIVITY_VISIBILITY_EVENT, onCustom as EventListener)
+    window.addEventListener('storage', onStorage)
+    return () => {
+        window.removeEventListener(CHAT_ACTIVITY_VISIBILITY_EVENT, onCustom as EventListener)
+        window.removeEventListener('storage', onStorage)
+    }
+}

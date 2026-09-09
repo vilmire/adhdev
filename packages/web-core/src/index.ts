@@ -177,6 +177,7 @@ export {
 export type { AvailableCliProviderOption, ProviderPrioritySnapshot } from './utils/provider-priority'
 export { default as ProviderPriorityEditor } from './components/provider-priority/ProviderPriorityEditor'
 export { parseDaemonRouteId, applyRouteTarget, extractDaemonId, collectDaemonIds } from './utils/route-id'
+export { isSpecDebugEnabled, isMobileDebugBundleEnabled, isConnDebugEnabled, connDebugLog } from './utils/debug-flags'
 export {
     BUILTIN_IDES,
     BUILTIN_CLI_AGENTS,
@@ -244,6 +245,7 @@ export {
     setMobileDashboardMode,
 } from './components/settings/MobileDashboardModeSection'
 export type { MobileDashboardMode } from './components/settings/MobileDashboardModeSection'
+export { ChatActivitySection } from './components/settings/ChatActivitySection'
 export { AppearanceSettingsSection } from './components/settings/AppearanceSettingsSection'
 export type { AppearanceSettingsSectionProps } from './components/settings/AppearanceSettingsSection'
 

@@ -123,6 +123,37 @@ describe('ApprovalBanner', () => {
         expect(buttons).not.toContain('alate')
     })
 
+    it('(O6) ranks buttons by risk: one-time approve strongest, Always allow outline-only with a warning marker, order untouched', () => {
+        act(() => {
+            root.render(
+                <ApprovalBanner
+                    activeConv={conv({ modalButtons: ['Always allow', 'Approve', 'Reject'] })}
+                    onModalButton={() => {}}
+                />,
+            )
+        })
+        const buttons = Array.from(container.querySelectorAll('button'))
+        const labels = buttons.map((b) => b.textContent)
+        // Order must be exactly what the daemon reported — styling, not
+        // reordering, carries the hierarchy (muscle-memory protection).
+        expect(labels).toEqual(['Always allow', 'Approve', 'Reject'])
+
+        const [alwaysAllow, approve, reject] = buttons
+        // One-time approve keeps the strongest treatment.
+        expect(approve.className).toContain('font-extrabold')
+        expect(approve.style.background).not.toBe('transparent')
+        // Reject keeps the loud red safe-exit tint.
+        expect(reject.className).toContain('bg-red-500/30')
+        // Always allow: never primary, outline-only, flagged as irreversible.
+        expect(alwaysAllow.className).not.toContain('font-extrabold')
+        expect(alwaysAllow.style.background).toBe('transparent')
+        expect(alwaysAllow.querySelector('svg')).not.toBeNull()
+        expect(alwaysAllow.getAttribute('title')).toBeTruthy()
+        // The other two carry no warning icon.
+        expect(approve.querySelector('svg')).toBeNull()
+        expect(reject.querySelector('svg')).toBeNull()
+    })
+
     it('does not give "Always allow" primary/strong styling (G8-3 minimal de-emphasis)', () => {
         act(() => {
             root.render(
