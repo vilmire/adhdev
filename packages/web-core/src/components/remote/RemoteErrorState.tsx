@@ -25,7 +25,7 @@ export default function RemoteErrorState({ connState, onRetry }: RemoteErrorStat
             <div className="w-14 h-14 rounded-2xl flex items-center justify-center border border-red-500/25 bg-red-500/10 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
                 <IconWarning size={22} className="text-red-400" />
             </div>
-            <div className="text-white/90 text-[13px] font-semibold tracking-wide">{t('remote.error.title')}</div>
+            <div className="text-white/90 text-[13px] leading-[1.45] font-semibold tracking-wide">{t('remote.error.title')}</div>
             <div className="text-2xs text-white/50 max-w-[260px]">{t(reasonKey)}</div>
             {onRetry && (
                 <button
