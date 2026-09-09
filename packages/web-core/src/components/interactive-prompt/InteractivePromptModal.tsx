@@ -9,6 +9,10 @@ import {
 import type { InteractiveQuestion } from '../../interactive-prompt/types'
 import { IconCheckCircle, IconWarning, IconX } from '../Icons'
 import ModalPortal from '../ui/ModalPortal'
+import { installTopModalEscapeHandler } from '../../utils/modal-escape'
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // Ignore Submit clicks fired in this window right after a prompt renders. Without it, a
 // stray click/keypress left over from the previous view (or a just-dismissed prompt) can
@@ -98,6 +102,8 @@ export default function InteractivePromptModal({
   // Gate that blocks Submit for a short window right after a new prompt renders.
   const [submitReady, setSubmitReady] = useState(false)
   const submitReadyRef = useRef(false)
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const titleId = 'interactive-prompt-title'
 
   useEffect(() => {
     setSelection(defaultSelection(promptSession))
@@ -111,6 +117,44 @@ export default function InteractivePromptModal({
     }, SUBMIT_READY_DELAY_MS)
     return () => clearTimeout(timer)
   }, [promptSession?.prompt.promptId])
+
+  useEffect(() => {
+    if (!promptSession) return
+    return installTopModalEscapeHandler(window, onCancel)
+  }, [promptSession, onCancel])
+
+  // Focus trap: keep Tab/Shift+Tab cycling within the modal surface, and move
+  // initial focus into it so keyboard/screen-reader users aren't left on
+  // whatever was focused behind the overlay.
+  useEffect(() => {
+    if (!promptSession) return
+    const surface = surfaceRef.current
+    if (!surface) return
+
+    const getFocusable = () => Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    const focusable = getFocusable()
+    ;(focusable[0] || surface).focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const items = getFocusable()
+      if (items.length === 0) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey) {
+        if (active === first || !surface.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || !surface.contains(active)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    surface.addEventListener('keydown', onKeyDown)
+    return () => surface.removeEventListener('keydown', onKeyDown)
+  }, [promptSession])
 
   const questions = promptSession?.prompt.questions || []
   // A single question needs no section header/numbering; multiple questions are listed
@@ -169,14 +213,21 @@ export default function InteractivePromptModal({
   return (
     <ModalPortal>
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/50 px-4 pt-[calc(24px+env(safe-area-inset-top,0px))] pb-[calc(24px+env(safe-area-inset-bottom,0px))]">
-      <div className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-default bg-surface-primary shadow-2xl">
+      <div
+        ref={surfaceRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-48px)] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border-default bg-surface-primary shadow-2xl outline-none"
+      >
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-default px-5 py-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-normal text-status-warning">
               <IconWarning size={15} /> Action Required
             </div>
-            <h2 className="mt-1 text-lg font-bold text-text-primary">
+            <h2 id={titleId} className="mt-1 text-lg font-bold text-text-primary">
               {promptSession.title || promptSession.providerType}
             </h2>
           </div>
