@@ -575,6 +575,7 @@ export default function Dashboard() {
                     },
                     onConversationChange: setRemoteDialogActiveConv,
                     onClose: closeRemoteDialog,
+                    onRetryConnection: daemonCtx.retryConnection,
                 }}
                 cliStopDialog={{
                     open: cliStopDialogOpen,

@@ -2600,10 +2600,10 @@
         "mouse": "Ratón",
         "touch": "Táctil",
         "connected": "Conectado",
-        "ws": "WS",
+        "ws": "Reconectando",
         "direct": "Directo",
         "relay": "Relé",
-        "turnBlocked": "TURN bloqueado",
+        "turnBlocked": "Límite de relé alcanzado",
         "turnUsage": "TURN {{used}}/{{budget}}m",
         "typeAndEnter": "Escribe y pulsa Enter...",
         "settings": "AJUSTES",
@@ -2615,6 +2615,19 @@
         "dailyTurnTitle": "Uso diario del relé TURN",
         "waitingState": {
             "turnRelayActive": "Relé TURN activo"
+        },
+        "waiting": {
+            "connectedLabel": "Conectado. Esperando el primer fotograma...",
+            "connectingLabel": "Conectando con el host...",
+            "reconnectingLabel": "Reconectando con el host...",
+            "connectedHint": "El flujo remoto se está preparando",
+            "reconnectingHint": "Esperando a que el flujo remoto se ponga al día"
+        },
+        "error": {
+            "title": "Se perdió la conexión remota",
+            "reasonFailed": "No se pudo conectar con este host. Comprueba que el daemon esté en ejecución y vuelve a intentarlo.",
+            "reasonDisconnected": "Se perdió la conexión con el host y no se pudo reconectar tras 15 segundos.",
+            "retry": "Reintentar"
         }
     },
     "sessionNav": {

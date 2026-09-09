@@ -1,12 +1,17 @@
 import { useRef, useEffect, useState, KeyboardEvent, MouseEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import RemoteCursorOverlay from './remote/RemoteCursorOverlay';
 import RemoteViewToolbar from './remote/RemoteViewToolbar';
 import RemoteWaitingState from './remote/RemoteWaitingState';
+import RemoteErrorState from './remote/RemoteErrorState';
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace';
 import { useRemoteTouchControls } from '../hooks/useRemoteTouchControls';
 
 /** Connection state */
 type ConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed';
+
+/** Milliseconds a non-connected state may sit before we escalate from "reconnecting" to an explicit error. */
+const RECONNECT_ESCALATION_MS = 15000;
 
 interface RemoteViewProps {
     /** Action dispatcher for remote input (click, key, scroll, etc.) */
@@ -21,11 +26,14 @@ interface RemoteViewProps {
     screenshotUsage?: { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
     /** Current connection transport type for the active machine */
     transportType?: string;
+    /** Retry the underlying connection. Omitted when the host has no manual retry path. */
+    onRetry?: () => void;
 }
 
 type InputMode = 'touch' | 'mouse';
 
-export default function RemoteView({ onAction, addLog, connState, connScreenshot, screenshotUsage, transportType }: RemoteViewProps) {
+export default function RemoteView({ onAction, addLog, connState, connScreenshot, screenshotUsage, transportType, onRetry }: RemoteViewProps) {
+    const { t } = useTranslation('common');
     const containerRef = useRef<HTMLDivElement>(null);
     const viewportRef = useRef<HTMLDivElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
@@ -33,6 +41,15 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     const [lastActionStatus, setLastActionStatus] = useState<string | null>(null);
     const [imeText, setImeText] = useState('');
     const [, setIsFocused] = useState(false);
+    // Explicit "take control" gate: until the user interacts with the remote
+    // surface, keys (including Escape) are not forwarded, so Escape can still
+    // close the dialog. See G7-3 — do not widen this into a persistent
+    // view-only mode; that's a separate, not-yet-decided feature (O7).
+    const [hasControl, setHasControl] = useState(false);
+    // Reconnect escalation: promote a stuck non-connected state to an
+    // explicit error after RECONNECT_ESCALATION_MS instead of showing
+    // "Reconnecting to Host..." forever.
+    const [escalated, setEscalated] = useState(false);
     // Click ripple feedback
     const [ripples, setRipples] = useState<{ id: number; x: number; y: number; type: 'left' | 'right' | 'double' }[]>([]);
     const rippleIdRef = useRef(0);
@@ -70,20 +87,42 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     useEffect(() => { panXRef.current = panX; }, [panX]);
     useEffect(() => { panYRef.current = panY; }, [panY]);
 
-    // Auto-focus on mount
+    // Auto-focus on mount so the surface can receive input, but keys are only
+    // forwarded to the remote host after explicit take-control (see hasControl
+    // above) — a focused container alone must not swallow Escape.
     useEffect(() => { containerRef.current?.focus(); }, []);
+
+    // Drop the take-control gate whenever the connection stops being active,
+    // so a reconnect (or a new session) requires re-establishing control
+    // rather than inheriting it from a prior connection.
+    useEffect(() => {
+        if (connState !== 'connected') setHasControl(false);
+    }, [connState]);
+
+    // 15s escalation: if we're stuck outside 'connected' that long, stop
+    // saying "Reconnecting..." and show an explicit error instead.
+    useEffect(() => {
+        if (connState === 'connected') {
+            setEscalated(false);
+            return;
+        }
+        setEscalated(false);
+        const timer = setTimeout(() => setEscalated(true), RECONNECT_ESCALATION_MS);
+        return () => clearTimeout(timer);
+    }, [connState]);
 
     // Screenshot source: connection-based (P2P or WS adapter)
     const isConnActive = connState === 'connected';
     const displayScreenshot = connScreenshot;
+    const isErrorState = connState === 'failed' || (connState === 'disconnected' && escalated);
     const waitingLabel = isConnActive
-        ? 'Connected. Waiting for first frame...'
+        ? t('remote.waiting.connectedLabel')
         : connState === 'connecting'
-            ? 'Connecting to Host...'
-            : 'Reconnecting to Host...';
+            ? t('remote.waiting.connectingLabel')
+            : t('remote.waiting.reconnectingLabel');
     const waitingHint = isConnActive
-        ? 'The remote stream is warming up'
-        : 'Waiting for the remote stream to catch up';
+        ? t('remote.waiting.connectedHint')
+        : t('remote.waiting.reconnectingHint');
 
     // Mobile: auto-calculate fill zoom when first screenshot arrives
     // This makes the image height fill the viewport so there are no black bars
@@ -192,11 +231,17 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         const pos = getImageNormalizedPos(e.clientX, e.clientY);
         if (!pos) return;
         setLastActionStatus(`Click: ${Math.round(pos.nx * 100)}%, ${Math.round(pos.ny * 100)}%`);
-        spawnRipple(e.clientX, e.clientY, 'left');
         containerRef.current?.focus();
+        setHasControl(true);
         try {
             const res = await onAction('input_click', { nx: pos.nx, ny: pos.ny });
-            if (!res?.success) addLog(`❌ Click failed: ${res?.error}`);
+            if (!res?.success) {
+                addLog(`❌ Click failed: ${res?.error}`);
+                return;
+            }
+            // Only show the ripple once we know the click actually landed —
+            // rendering it before the await made failed clicks look successful.
+            spawnRipple(e.clientX, e.clientY, 'left');
         } catch (err: any) { addLog(`❌ Click error: ${err.message || err}`); }
     };
 
@@ -215,7 +260,17 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     const handleKeyDown = async (e: KeyboardEvent) => {
         const target = e.target as HTMLElement;
         if (target.tagName === 'INPUT') return;
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Tab', 'Enter', 'Escape'].includes(e.key)) {
+        // Before control is explicitly taken (a click/tap on the remote
+        // surface), let every key — Escape included — pass through untouched
+        // so the dialog's own Escape-to-close handler still fires. G7-3: this
+        // is the minimal fix, not a persistent view-only mode.
+        if (!hasControl) return;
+        if (e.key === 'Escape') {
+            // Even with control taken, Escape stays a local close shortcut —
+            // it is never a key the remote host needs from this dialog.
+            return;
+        }
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Tab', 'Enter'].includes(e.key)) {
             e.preventDefault();
         }
         let modifiers = 0;
@@ -303,7 +358,12 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         >
             {/* Full Screen View Area */}
             <div ref={viewportRef} className="flex-1 relative overflow-hidden flex items-center justify-center bg-black">
-                {displayScreenshot ? (
+                {isErrorState ? (
+                    <RemoteErrorState
+                        connState={connState}
+                        onRetry={onRetry}
+                    />
+                ) : displayScreenshot ? (
                     <img
                         ref={imgRef}
                         src={displayScreenshot}
@@ -332,7 +392,7 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
                     />
                 )}
 
-                {inputMode === 'mouse' && displayScreenshot && (
+                {inputMode === 'mouse' && !isErrorState && displayScreenshot && (
                     <RemoteCursorOverlay cursorPos={cursorPos} viewportRef={viewportRef} imgRef={imgRef} />
                 )}
 

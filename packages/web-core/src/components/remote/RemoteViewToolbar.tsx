@@ -1,6 +1,16 @@
 import type { Dispatch, KeyboardEvent, SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
-import { IconMousePointer, IconHand, IconSettings } from '../Icons'
+import { IconMousePointer, IconHand, IconSettings, IconKeyboard } from '../Icons'
+
+/** Space/Enter activation for the `<div role="button">` toggles below. */
+function handleToggleKeyDown(action: () => void) {
+    return (event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            action()
+        }
+    }
+}
 
 interface RemoteViewToolbarProps {
     inputMode: 'touch' | 'mouse'
@@ -53,7 +63,10 @@ export default function RemoteViewToolbar({
                 className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-1.5 px-3 py-2 bg-black/75 backdrop-blur-xl border-t border-white/[0.08] touch-none"
             >
                 <div
+                    role="button"
+                    tabIndex={0}
                     onClick={onToggleInputMode}
+                    onKeyDown={handleToggleKeyDown(onToggleInputMode)}
                     className={`h-8 px-2.5 rounded-lg flex items-center gap-[5px] cursor-pointer ${
                         inputMode === 'mouse' ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
                     }`}
@@ -66,12 +79,15 @@ export default function RemoteViewToolbar({
 
                 <div className="relative">
                     <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => { setIsImeOpen(prev => !prev); setIsMenuOpen(false) }}
+                        onKeyDown={handleToggleKeyDown(() => { setIsImeOpen(prev => !prev); setIsMenuOpen(false) })}
                         className={`w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer ${
                             isImeOpen ? 'bg-emerald-500/25 border border-emerald-500/40' : 'bg-white/[0.08] border border-white/10'
                         }`}
                     >
-                        <span className="text-sm">⌨️</span>
+                        <span className="text-sm"><IconKeyboard size={14} /></span>
                     </div>
                     {isImeOpen && (
                         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[220px] bg-neutral-950/[0.98] backdrop-blur-[30px] rounded-xl border border-white/20 p-[10px_12px] shadow-[0_10px_30px_rgba(0,0,0,0.8)] flex flex-col gap-2 z-20" style={{ animation: 'slideUp 0.15s ease-out' }}>
@@ -91,7 +107,10 @@ export default function RemoteViewToolbar({
 
                 <div className="relative">
                     <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => { setIsMenuOpen(prev => !prev); setIsImeOpen(false) }}
+                        onKeyDown={handleToggleKeyDown(() => { setIsMenuOpen(prev => !prev); setIsImeOpen(false) })}
                         className={`w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer ${
                             isMenuOpen ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
                         }`}

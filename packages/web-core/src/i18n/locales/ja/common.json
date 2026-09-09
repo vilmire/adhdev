@@ -2595,10 +2595,10 @@
         "mouse": "マウス",
         "touch": "タッチ",
         "connected": "接続済み",
-        "ws": "WS",
+        "ws": "再接続中",
         "direct": "直接",
         "relay": "リレー",
-        "turnBlocked": "TURN がブロックされました",
+        "turnBlocked": "リレー上限に達しました",
         "turnUsage": "TURN {{used}}/{{budget}}m",
         "typeAndEnter": "入力して Enter...",
         "settings": "設定",
@@ -2610,6 +2610,19 @@
         "dailyTurnTitle": "1日の TURN リレー使用量",
         "waitingState": {
             "turnRelayActive": "TURN リレー有効"
+        },
+        "waiting": {
+            "connectedLabel": "接続済み。最初のフレームを待機中...",
+            "connectingLabel": "ホストに接続中...",
+            "reconnectingLabel": "ホストに再接続中...",
+            "connectedHint": "リモートストリームを準備しています",
+            "reconnectingHint": "リモートストリームの追いつきを待っています"
+        },
+        "error": {
+            "title": "リモート接続が切断されました",
+            "reasonFailed": "このホストへの接続に失敗しました。デーモンが起動しているか確認して再試行してください。",
+            "reasonDisconnected": "ホストとの接続が切れ、15秒経っても再接続できませんでした。",
+            "retry": "再試行"
         }
     },
     "sessionNav": {
