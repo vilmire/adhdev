@@ -199,7 +199,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
         >
             <div className="flex flex-col gap-5">
                 {/* Intro */}
-                <div className="text-[12px] text-text-muted">
+                <div className="text-xs text-text-muted">
                     {t('standalone.onboarding.intro')}
                 </div>
 
@@ -226,13 +226,13 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
 
                 {/* Catalog */}
                 {loading && (
-                    <div className="text-text-muted text-[12px] py-8 text-center">{t('standalone.onboarding.loadingRegistry')}</div>
+                    <div className="text-text-muted text-xs py-8 text-center">{t('standalone.onboarding.loadingRegistry')}</div>
                 )}
                 {!loading && error && (
                     <AlertBanner variant="error">{t('standalone.onboarding.loadError', { error })}</AlertBanner>
                 )}
                 {!loading && !error && visible.length === 0 && (
-                    <div className="text-text-muted text-[12px] py-8 text-center">{t('standalone.onboarding.noProviders')}</div>
+                    <div className="text-text-muted text-xs py-8 text-center">{t('standalone.onboarding.noProviders')}</div>
                 )}
                 {!loading && !error && visible.length > 0 && (
                     <div className="flex flex-col gap-4">

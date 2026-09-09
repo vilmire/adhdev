@@ -335,7 +335,7 @@ export function MeshProviderAutoApproveSection({
                         >
                             {saving ? t('repoMesh.providerAutoApprove.saving') : t('repoMesh.providerAutoApprove.save')}
                         </button>
-                        {saved && <span className="text-[12px] text-status-online">{t('repoMesh.providerAutoApprove.saved')}</span>}
+                        {saved && <span className="text-xs text-status-online">{t('repoMesh.providerAutoApprove.saved')}</span>}
                     </div>
                 </div>
             )}
@@ -379,7 +379,7 @@ export function MeshProviderAutoApproveSection({
                 <div className="fixed inset-x-0 bottom-6 z-[60] mx-auto max-w-lg px-4">
                     <div className="rounded-xl border border-status-error/40 bg-bg-primary p-3.5 shadow-lg">
                         <div className="text-sm font-semibold text-status-error">{t('repoMesh.providerAutoApprove.dangerous.sharedWarningTitle')}</div>
-                        <div className="mt-1 text-[12px] text-text-muted">{t('repoMesh.providerAutoApprove.dangerous.sharedWarning')}</div>
+                        <div className="mt-1 text-xs text-text-muted">{t('repoMesh.providerAutoApprove.dangerous.sharedWarning')}</div>
                     </div>
                 </div>
             )}
@@ -431,7 +431,7 @@ function EffectiveResultRow({
             : 'border-border-subtle bg-surface-secondary/30 text-text-muted'
 
     return (
-        <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] ${toneClass}`}>
+        <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${toneClass}`}>
             {effective.effectiveMode && (
                 <AutoApproveRiskBadge risk={deriveAutoApproveModeRisk(effective.effectiveMode)} />
             )}

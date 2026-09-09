@@ -575,7 +575,7 @@ export default function ControlsBar({
                     const isOpen = openDropdown === ctrl.id;
                     const isLoading = loadingOption === ctrl.id;
                     const options = getControlOptions(ctrl, dynamicOptions);
-                    const baseButtonClassName = 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors whitespace-nowrap';
+                    const baseButtonClassName = 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors whitespace-nowrap';
 
                     switch (ctrl.type) {
                         case 'select':
@@ -607,7 +607,7 @@ export default function ControlsBar({
                                                     <button
                                                         key={opt.value}
                                                         type="button"
-                                                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] transition-colors"
+                                                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs transition-colors"
                                                         style={{
                                                             background: opt.value === currentValue ? `${accent}14` : 'transparent',
                                                             color: opt.value === currentValue ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -695,7 +695,7 @@ export default function ControlsBar({
                             return (
                                 <span
                                     key={ctrl.id}
-                                    className="inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium whitespace-nowrap"
+                                    className="inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium whitespace-nowrap"
                                     style={{
                                         borderColor: 'var(--border-default)',
                                         background: 'var(--surface-tertiary)',

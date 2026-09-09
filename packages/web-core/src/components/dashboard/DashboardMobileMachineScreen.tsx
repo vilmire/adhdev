@@ -298,7 +298,7 @@ export default function DashboardMobileMachineScreen({
                                                 </span>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-3xs font-bold uppercase tracking-[0.08em] text-text-muted mb-1">Selected folder</div>
-                                                    <div className="text-[12px] leading-relaxed text-text-primary break-all">
+                                                    <div className="text-xs leading-relaxed text-text-primary break-all">
                                                         {launcher.resolvedWorkspacePath || launcher.browseCurrentPath || 'No folder selected yet.'}
                                                     </div>
                                                 </div>
@@ -307,14 +307,14 @@ export default function DashboardMobileMachineScreen({
                                         <div className="flex flex-wrap gap-2">
                                             <button
                                                 type="button"
-                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-secondary text-[12px] font-bold"
+                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-secondary text-xs font-bold"
                                                 onClick={launcher.openBrowseDialog}
                                             >
                                                 Select workspace…
                                             </button>
                                             <button
                                                 type="button"
-                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-text-primary text-[12px] font-bold disabled:opacity-40"
+                                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-text-primary text-xs font-bold disabled:opacity-40"
                                                 onClick={() => {
                                                     if (!launcher.resolvedWorkspacePath) return
                                                     onAddWorkspace(launcher.resolvedWorkspacePath)

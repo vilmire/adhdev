@@ -762,7 +762,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
             {canFetchGoal && (
                 <button
                     type="button"
-                    className="self-start text-[12px] text-accent-primary hover:underline disabled:opacity-50"
+                    className="self-start text-xs text-accent-primary hover:underline disabled:opacity-50"
                     onClick={fetchFullGoal}
                     disabled={fetching}
                 >

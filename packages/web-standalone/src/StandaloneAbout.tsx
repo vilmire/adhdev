@@ -120,7 +120,7 @@ export default function StandaloneAbout() {
                             <div className="text-2xs font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>
                             <div className="flex flex-col gap-1.5">
                                 {group.items.map(item => (
-                                    <div key={item} className="rounded-md border border-border-subtle bg-bg-card px-2.5 py-1.5 text-[12px] text-text-secondary">
+                                    <div key={item} className="rounded-md border border-border-subtle bg-bg-card px-2.5 py-1.5 text-xs text-text-secondary">
                                         {item}
                                     </div>
                                 ))}

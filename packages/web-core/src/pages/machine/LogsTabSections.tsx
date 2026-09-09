@@ -133,7 +133,7 @@ export function LogsToolbar({
                     value={searchQuery}
                     onChange={(event) => onSearchQueryChange(event.target.value)}
                     placeholder={t('machine.logsTabSections.searchPlaceholder')}
-                    className="min-w-[220px] flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-[12px] text-text-primary placeholder:text-text-muted"
+                    className="min-w-[220px] flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-primary placeholder:text-text-muted"
                 />
             </div>
 
@@ -279,7 +279,7 @@ export function RepeatedPatternsPanel({ patterns }: { patterns: DiagnosticRepeat
             <div className="grid gap-2 md:grid-cols-2">
                 {patterns.map((pattern) => (
                     <div key={pattern.key} className="rounded-lg border border-border-subtle bg-bg-primary px-3 py-2">
-                        <div className="text-[12px] text-text-primary font-medium">{pattern.count}× {pattern.severity.toUpperCase()} · {sourceLabel(pattern.source, t)}</div>
+                        <div className="text-xs text-text-primary font-medium">{pattern.count}× {pattern.severity.toUpperCase()} · {sourceLabel(pattern.source, t)}</div>
                         <div className="text-2xs text-text-secondary mt-1 line-clamp-2">{pattern.message}</div>
                     </div>
                 ))}

@@ -132,7 +132,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     value={customType}
                                     onChange={e => handleTypeChange(e.target.value)}
                                     placeholder={t('machine.providerClone.typeIdPlaceholder')}
-                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
+                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-xs placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
                                 <p className="text-3xs text-text-muted mt-1">
                                     {t('machine.providerClone.typeIdHint')} <code className="text-accent-primary">~/.adhdev/providers/{customType || '...'}/</code>
@@ -148,7 +148,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                     value={displayName}
                                     onChange={e => setDisplayName(e.target.value)}
                                     placeholder={t('machine.providerClone.displayNamePlaceholder')}
-                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-[12px] placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
+                                    className="w-full px-3 py-2 rounded-lg border border-border-subtle bg-bg-secondary text-text-primary text-xs placeholder:text-text-muted/50 focus:outline-none focus:border-accent-primary/40"
                                 />
                             </div>
 
@@ -161,7 +161,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                     ) : (
                         <div className="text-center py-6">
                             <div className="mb-2 flex justify-center text-emerald-400"><IconCheckCircle size={30} /></div>
-                            <h3 className="text-[14px] font-semibold text-text-primary">{t('machine.providerClone.createdTitle')}</h3>
+                            <h3 className="text-sm font-semibold text-text-primary">{t('machine.providerClone.createdTitle')}</h3>
                             <p className="text-2xs text-text-muted mt-1">
                                 {t('machine.providerClone.createdDesc', { type: customType })} <code className="text-green-400">~/.adhdev/providers/{customType}/</code>
                             </p>

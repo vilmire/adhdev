@@ -58,7 +58,7 @@ export default function ConfirmExternalUntrustedModal({
                     <span aria-hidden className="text-amber-400"><IconWarning size={16} /></span>
                     <h2 className="text-sm font-semibold">{t('machine.confirmExternal.title')}</h2>
                 </div>
-                <div className="px-4 py-3 text-[12px] flex flex-col gap-3">
+                <div className="px-4 py-3 text-xs flex flex-col gap-3">
                     <p>
                         You're about to activate <span className="font-mono">{providerType}</span>
                         {sourceName ? <> from <span className="font-mono">{sourceName}</span></> : null}.

@@ -120,7 +120,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
 
     return (
         <Section title={t('repoMesh.missions.title')} description={t('repoMesh.missions.description')}>
-            {fetchError && <div className="mb-3 text-[12px] text-amber-400">{fetchError}</div>}
+            {fetchError && <div className="mb-3 text-xs text-amber-400">{fetchError}</div>}
             <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {STATUS_FILTERS.filter(s => (statusCounts[s] || 0) > 0).map(s => (
                     <button
@@ -149,7 +149,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                 </button>
             </div>
             {filtered.length === 0 && (
-                <div className="text-[12px] text-text-muted">{t('repoMesh.missions.empty', { status: statusFilter })}</div>
+                <div className="text-xs text-text-muted">{t('repoMesh.missions.empty', { status: statusFilter })}</div>
             )}
             <div className="flex flex-col gap-2">
                 {visible.map(mission => {
@@ -175,7 +175,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                 )}
                             </div>
                             {goalText && (
-                                <div className={`mt-1.5 whitespace-pre-wrap text-[12px] leading-5 text-text-secondary ${isOpen ? 'max-h-72 overflow-y-auto' : 'line-clamp-2'}`}>
+                                <div className={`mt-1.5 whitespace-pre-wrap text-xs leading-5 text-text-secondary ${isOpen ? 'max-h-72 overflow-y-auto' : 'line-clamp-2'}`}>
                                     {goalText}
                                     {stillTruncated && <span className="text-text-muted">{t('repoMesh.missions.goalUnavailable')}</span>}
                                 </div>
@@ -183,7 +183,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                             {(preview.truncated || full) && canCommand && (
                                 <button
                                     type="button"
-                                    className="mt-1.5 text-[12px] text-accent-primary hover:underline disabled:opacity-50"
+                                    className="mt-1.5 text-xs text-accent-primary hover:underline disabled:opacity-50"
                                     onClick={() => toggle(mission.id)}
                                     disabled={fetching}
                                 >
@@ -197,7 +197,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
             {hiddenCount > 0 && (
                 <button
                     type="button"
-                    className="mt-2 text-[12px] text-accent-primary hover:underline"
+                    className="mt-2 text-xs text-accent-primary hover:underline"
                     onClick={() => setShowAll(true)}
                 >
                     {t('repoMesh.missions.showMore', { count: hiddenCount })}

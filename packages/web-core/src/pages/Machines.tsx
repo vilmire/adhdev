@@ -592,7 +592,7 @@ export default function MachinesPage() {
 
                             <InstallCommand />
 
-                            <p className="text-[12px] text-text-muted mt-8">
+                            <p className="text-xs text-text-muted mt-8">
                                 <a href="https://docs.adhf.dev" target="_blank" rel="noopener noreferrer" className="text-accent font-semibold hover:underline flex items-center justify-center gap-1">
                                     {t('machine.card.emptyDocsLink')}
                                 </a>

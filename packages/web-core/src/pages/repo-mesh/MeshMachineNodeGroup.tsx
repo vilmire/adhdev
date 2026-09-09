@@ -199,10 +199,10 @@ export function MeshMachineNodeGroup({
 
                         {/* Read-only diagnostics (both modes) */}
                         <details className="mt-3 group" onClick={e => e.stopPropagation()}>
-                            <summary className="cursor-pointer select-none text-[12px] text-text-muted hover:text-text-secondary inline-flex items-center gap-1">
+                            <summary className="cursor-pointer select-none text-xs text-text-muted hover:text-text-secondary inline-flex items-center gap-1">
                                 <span className="transition-transform group-open:rotate-90" aria-hidden>▸</span> {t('repoMesh.nodeList.details')}
                             </summary>
-                            <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary/60 p-3 text-[12px] text-text-muted">
+                            <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary/60 p-3 text-xs text-text-muted">
                                 <div className="grid gap-2 sm:grid-cols-2">
                                     <div><span className="text-text-secondary">{t('repoMesh.nodeList.nodeId')}</span> <span className="font-mono break-all">{node.id}</span></div>
                                     <div><span className="text-text-secondary">{t('repoMesh.nodeList.launchReady')}</span> <span className={priorityStatus.configured ? 'text-green-400' : 'text-amber-400'}>{priorityStatus.configured ? t('repoMesh.nodeList.launchReadyYes') : t('repoMesh.nodeList.launchReadyNo')}</span></div>
