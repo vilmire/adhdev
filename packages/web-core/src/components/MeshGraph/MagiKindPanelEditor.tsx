@@ -312,7 +312,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     return (
         <div className="flex flex-col gap-3 p-1">
             <div className="flex flex-wrap items-center gap-2">
-                <p className={`text-[12px] ${meshTheme.textSecondary}`}>
+                <p className={`text-xs ${meshTheme.textSecondary}`}>
                     {t('meshGraph.magiKind.intro')}
                 </p>
                 <div className="ml-auto flex items-center gap-2">
@@ -323,13 +323,13 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
             </div>
 
             {!canCommand && (
-                <div className={`rounded-xl border p-3 text-[12px] ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                <div className={`rounded-xl border p-3 text-xs ${meshTheme.textSecondary} ${meshTheme.isDark ? 'border-white/10' : 'border-slate-200'}`}>
                     {t('meshGraph.magiKind.connectPrompt')}
                 </div>
             )}
 
             {error && (
-                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-300">{error}</div>
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</div>
             )}
 
             {/* ── Per-kind editors ── */}

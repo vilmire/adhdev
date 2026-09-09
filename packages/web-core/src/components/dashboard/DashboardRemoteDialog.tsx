@@ -204,7 +204,7 @@ export default function DashboardRemoteDialog({
                 <div className="sticky top-0 z-20 flex flex-col gap-3 md:flex-row md:items-center md:justify-between px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-3 border-b border-border-subtle bg-bg-primary/96 backdrop-blur-md shrink-0 overflow-visible">
                     <div className="flex items-center justify-between gap-3 min-w-0 w-full md:w-auto md:flex-1">
                         <div className="min-w-0 flex-1 flex flex-col justify-center">
-                            <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-[18px] md:text-xl tracking-tight text-text-primary">
+                            <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-lg md:text-xl tracking-tight text-text-primary">
                                 <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
                                     <IconMonitor size={16} />
                                 </span>

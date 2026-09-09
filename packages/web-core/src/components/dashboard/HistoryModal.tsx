@@ -237,7 +237,7 @@ export default function HistoryModal({
                                                 {formatSavedSessionTime(session.lastMessageAt)}
                                             </div>
                                         </div>
-                                        <div className="mt-2 text-[12px] text-text-muted line-clamp-2">
+                                        <div className="mt-2 text-xs text-text-muted line-clamp-2">
                                             {session.preview || t('historyModal.noSavedPreview')}
                                         </div>
                                         <div className="mt-3 flex items-center justify-between gap-3 text-2xs text-text-muted">

@@ -424,7 +424,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                                 <button
                                     onClick={() => { void handleInstallNewType(providerType) }}
                                     disabled={installingNewType !== null}
-                                    className="px-2.5 py-1 rounded-md text-[12px] font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
+                                    className="px-2.5 py-1 rounded-md text-xs font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
                                 >
                                     {installingNewType === providerType ? <IconSpinner size={11} /> : t('machine.providers.installNewType')}
                                 </button>
@@ -494,7 +494,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                 <div className="p-10 text-center text-text-muted">{t('machine.providers.loadingSettings')}</div>
             ) : filteredSettings.length === 0 ? (
                 <Card padding="none" className="px-4.5 py-8 text-center">
-                    <div className="text-[12px] text-text-muted">
+                    <div className="text-xs text-text-muted">
                         {filter === 'all'
                             ? t('machine.providers.noProviders')
                             : t('machine.providers.noFilteredProviders', { filter: filter.toUpperCase() })}

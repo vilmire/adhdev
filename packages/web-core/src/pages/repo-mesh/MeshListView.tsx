@@ -150,7 +150,7 @@ export function MeshListView({
                                         <IconMesh size={16} />
                                         <span className="font-bold text-sm">{mesh.name}</span>
                                     </div>
-                                    <div className="text-[12px] text-text-muted flex items-center gap-2">
+                                    <div className="text-xs text-text-muted flex items-center gap-2">
                                         <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('repoMesh.list.noRepoIdentity')}</span>
                                         {(mesh.defaultBranch || (mesh as any).default_branch) && (
                                             <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>

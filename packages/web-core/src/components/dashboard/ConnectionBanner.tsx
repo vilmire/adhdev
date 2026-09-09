@@ -192,7 +192,7 @@ export default function ConnectionBanner({
                         {showManualReconnectAction && (
                             <button
                                 type="button"
-                                className="basis-full sm:basis-auto mx-auto sm:mx-0 sm:ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                                className="basis-full sm:basis-auto mx-auto sm:mx-0 sm:ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-xs font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                                 onClick={handleReconnectClick}
                                 disabled={wsStatus === 'offline' || manualReconnectPending}
                             >

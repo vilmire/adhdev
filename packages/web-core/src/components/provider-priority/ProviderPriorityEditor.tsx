@@ -62,7 +62,7 @@ export default function ProviderPriorityEditor({
     <div className="rounded-lg border border-border-subtle bg-bg-secondary/60 p-3">
       <div className="flex flex-col gap-2">
         {orderedValue.length === 0 ? (
-          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
+          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             No provider priority configured. Launches without an explicit CLI provider will fail closed.
           </div>
         ) : orderedValue.map((type, index) => {
@@ -74,7 +74,7 @@ export default function ProviderPriorityEditor({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-3xs font-semibold text-text-muted">#{index + 1}</span>
                   <ProviderLogo type={type} label={provider?.label} size={14} />
-                  <span className={`font-mono text-[12px] ${detected ? 'text-text-primary' : 'text-text-muted'}`}>{type}</span>
+                  <span className={`font-mono text-xs ${detected ? 'text-text-primary' : 'text-text-muted'}`}>{type}</span>
                   {detected ? (
                     <span className="rounded border border-green-500/20 bg-green-500/10 px-1.5 py-px text-4xs font-semibold text-green-400">{t('settings.providerPriority.available')}</span>
                   ) : (

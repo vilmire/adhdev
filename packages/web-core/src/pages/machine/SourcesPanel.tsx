@@ -159,7 +159,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                         <li key={s.name} className="rounded border border-border-subtle bg-bg-primary/40 px-3 py-2">
                             <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
-                                    <div className="font-mono text-[12px] text-text-primary">{s.name}</div>
+                                    <div className="font-mono text-xs text-text-primary">{s.name}</div>
                                     <div className="text-3xs text-text-muted truncate">{s.url} <span className="opacity-60">@ {s.ref}</span></div>
                                 </div>
                                 <button

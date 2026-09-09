@@ -417,7 +417,7 @@ export default function SessionHostPanel({
                     <div className="text-2xs text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
                         <IconServer size={14} /> {t('sessionHost.title')}
                     </div>
-                    <div className="text-[12px] text-text-secondary mt-1">
+                    <div className="text-xs text-text-secondary mt-1">
                         {getHostedRuntimeRecoveryDescription()}
                     </div>
                 </div>
@@ -450,7 +450,7 @@ export default function SessionHostPanel({
             </div>
 
             {error && !diagnostics && (
-                <div className="rounded-xl border border-amber-500/[0.22] bg-amber-500/[0.08] px-3.5 py-3 text-[12px] text-amber-200 mb-3">
+                <div className="rounded-xl border border-amber-500/[0.22] bg-amber-500/[0.08] px-3.5 py-3 text-xs text-amber-200 mb-3">
                     <div className="flex items-start gap-2">
                         <IconWarning size={14} className="mt-0.5 text-amber-300 shrink-0" />
                         <div>
@@ -466,19 +466,19 @@ export default function SessionHostPanel({
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
                             <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statLive')}</div>
-                            <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.runtimeCount}</div>
+                            <div className="text-lg font-semibold text-text-primary mt-1">{diagnostics.runtimeCount}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
                             <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statRecovery')}</div>
-                            <div className="text-[18px] font-semibold text-text-primary mt-1">{recoverySessions.length}</div>
+                            <div className="text-lg font-semibold text-text-primary mt-1">{recoverySessions.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
                             <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statRequests')}</div>
-                            <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.recentRequests.length}</div>
+                            <div className="text-lg font-semibold text-text-primary mt-1">{diagnostics.recentRequests.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
                             <div className="text-3xs uppercase tracking-wider text-text-secondary">{t('sessionHost.statStarted')}</div>
-                            <div className="text-[12px] font-medium text-text-primary mt-1">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
+                            <div className="text-xs font-medium text-text-primary mt-1">{formatRelativeTime(diagnostics.hostStartedAt)}</div>
                             <div className="text-3xs text-text-secondary mt-0.5">{formatClock(diagnostics.hostStartedAt)}</div>
                         </div>
                     </div>
@@ -505,7 +505,7 @@ export default function SessionHostPanel({
                                 {getSessionHostSectionHint('live', t)}
                             </div>
                             {liveSessions.length === 0 ? (
-                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
+                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-xs text-text-secondary">
                                     {t('sessionHost.liveEmpty')}
                                 </div>
                             ) : (
@@ -523,7 +523,7 @@ export default function SessionHostPanel({
                                 {getSessionHostSectionHint('recovery', t)}
                             </div>
                             {recoverySessions.length === 0 ? (
-                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
+                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-xs text-text-secondary">
                                     {t('sessionHost.recoveryEmpty')}
                                 </div>
                             ) : (
@@ -553,7 +553,7 @@ export default function SessionHostPanel({
                             {t('sessionHost.recentActivity')}
                         </div>
                         {recentTransitions.length === 0 ? (
-                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3 text-[12px] text-text-secondary">
+                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3 text-xs text-text-secondary">
                                 {t('sessionHost.transitionsEmpty')}
                             </div>
                         ) : (

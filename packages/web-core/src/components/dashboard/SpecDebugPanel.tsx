@@ -611,7 +611,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                 {/* Body */}
                 {!editing && (
-                <div className="flex-1 overflow-y-auto px-4 py-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] space-y-3 text-[12px]">
+                <div className="flex-1 overflow-y-auto px-4 py-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] space-y-3 text-xs">
                     {error && (
                         <div className="text-status-error bg-status-error/20 border border-status-error/40 rounded p-2">{error}</div>
                     )}
@@ -679,7 +679,7 @@ export default function SpecDebugPanel({ activeConv, onClose }: Props) {
 
                             {/* State summary */}
                             <div className="flex items-center gap-2 flex-wrap bg-surface-secondary rounded-md px-3 py-2 border border-border-default">
-                                <span className={`font-semibold font-mono text-[12px] px-2 py-0.5 rounded ${snap.current_state ? stateBadge(snap.current_state.id) : 'text-text-muted'}`}>
+                                <span className={`font-semibold font-mono text-xs px-2 py-0.5 rounded ${snap.current_state ? stateBadge(snap.current_state.id) : 'text-text-muted'}`}>
                                     {snap.current_state ? snap.current_state.id : 'none'}
                                 </span>
                                 {snap.current_state?.label && snap.current_state.label !== snap.current_state.id && (

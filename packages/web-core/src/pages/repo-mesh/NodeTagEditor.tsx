@@ -86,7 +86,7 @@ export default function NodeTagEditor({ node, saving, onSave }: Props) {
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addDraft() } }}
                     placeholder={t('repoMesh.tagEditor.addPlaceholder')}
                     disabled={saving}
-                    className="min-w-[12rem] flex-1 px-2 py-1 rounded-lg bg-bg-secondary border border-border-subtle text-[12px] text-text-primary"
+                    className="min-w-[12rem] flex-1 px-2 py-1 rounded-lg bg-bg-secondary border border-border-subtle text-xs text-text-primary"
                 />
                 <button type="button" className="btn btn-secondary btn-sm" onClick={addDraft} disabled={saving || !draft.trim() || !!draftError}>{t('repoMesh.tagEditor.add')}</button>
                 {dirty && (

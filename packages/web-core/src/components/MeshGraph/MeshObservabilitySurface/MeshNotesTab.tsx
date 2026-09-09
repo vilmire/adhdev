@@ -223,7 +223,7 @@ export function MeshNotesTab({
 
     if (!canOperate) {
         return (
-            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-[12px] ${meshTheme.textSecondary}`}>
+            <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-xs ${meshTheme.textSecondary}`}>
                 {t('meshGraph.notes.unavailable')}
             </div>
         )

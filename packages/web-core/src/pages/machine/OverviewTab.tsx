@@ -72,7 +72,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                     const model = buildQuotaDisplayModel(quota)
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">
-                            <span className="text-[12px] text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
+                            <span className="text-xs text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
                             {/* Whose quota — omitted entirely for providers that
                                 report no account (Claude Code exposes none). */}
                             {formatQuotaAccount(quota) && (

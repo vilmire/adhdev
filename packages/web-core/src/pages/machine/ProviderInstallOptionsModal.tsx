@@ -93,7 +93,7 @@ export default function ProviderInstallOptionsModal({
                                 className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent-primary"
                             />
                             <span className="min-w-0">
-                                <span className="block text-[12px] font-medium text-text-primary">
+                                <span className="block text-xs font-medium text-text-primary">
                                     {t('machine.installOptions.quotaLabel')}
                                 </span>
                                 <span className="mt-0.5 block text-2xs text-text-muted">
@@ -116,7 +116,7 @@ export default function ProviderInstallOptionsModal({
                             className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent-primary"
                         />
                         <span className="min-w-0">
-                            <span className="block text-[12px] font-medium text-text-primary">
+                            <span className="block text-xs font-medium text-text-primary">
                                 {t('machine.installOptions.autoApproveLabel')}
                             </span>
                             {/* Spells out what is SKIPPED, not just that something

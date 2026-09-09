@@ -130,7 +130,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
     return (
         <div className="flex flex-col gap-2" onClick={e => e.stopPropagation()}>
             {drafts.length === 0 && (
-                <div className="text-[12px] text-text-muted">
+                <div className="text-xs text-text-muted">
                     {t('repoMesh.slotEditor.empty')}
                 </div>
             )}

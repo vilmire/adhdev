@@ -428,7 +428,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
                     {entries.map((prov, i) => (
                         <div
                             key={`${prov.machineId}-${prov.type}-${i}`}
-                            className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-glass border border-border-subtle text-[12px]"
+                            className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-glass border border-border-subtle text-xs"
                         >
                             <span className="text-base shrink-0">{prov.icon}</span>
                             <div className="flex-1 min-w-0">
