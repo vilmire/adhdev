@@ -3129,7 +3129,7 @@
             "notYetLoaded": "尚未加载",
             "rawFile": "原始文件",
             "sourceDaemon": "守护进程",
-            "sourceTrace": "trace",
+            "sourceTrace": "跟踪",
             "sourceBrowser": "浏览器",
             "repeatedIssuePatterns": "重复出现的问题模式",
             "unifiedTimeline": "统一时间线",
