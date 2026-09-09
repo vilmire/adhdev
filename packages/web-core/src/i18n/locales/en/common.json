@@ -1807,7 +1807,9 @@
             "updatePayment": "Please update your payment method",
             "managePayment": "Manage Payment & Invoices",
             "couldNotOpenPortal": "Could not open billing portal",
+            "checkoutSuccess": "Your subscription is active. Thanks for upgrading!",
             "statMachines": "Machines",
+            "statSharedSessions": "Shared Sessions",
             "statTurnPerDay": "TURN min/day",
             "resetsDailyUtc": "Resets daily at 00:00 UTC",
             "resetsInHours_one": "~{{count}}h left",
@@ -1818,11 +1820,13 @@
             "monthly": "Monthly",
             "yearly": "Yearly",
             "savePercent": "Save up to {{pct}}% yearly",
+            "pricesInUsd": "All prices in USD",
             "paddleLoading": "Paddle is loading, please try again.",
             "cancelConfirm": "Are you sure you want to cancel your subscription? You will retain access until the end of your billing period.",
             "cancelSubscription": "Cancel Subscription",
             "cancelRetainAccess": "You will retain access to {{plan}} features until the end of your current billing period.",
-            "cancelTeamDowngrade": " All team members will be downgraded to their personal plans."
+            "cancelTeamDowngrade": " All team members will be downgraded to their personal plans.",
+            "cancelFailed": "Failed to cancel subscription"
         },
         "about": {
             "title": "About",

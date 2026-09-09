@@ -1807,7 +1807,9 @@
             "updatePayment": "결제 수단을 업데이트해 주세요",
             "managePayment": "결제 및 청구서 관리",
             "couldNotOpenPortal": "결제 포털을 열 수 없습니다",
+            "checkoutSuccess": "구독이 활성화되었습니다. 업그레이드해 주셔서 감사합니다!",
             "statMachines": "머신",
+            "statSharedSessions": "공유 세션",
             "statTurnPerDay": "TURN 분/일",
             "resetsDailyUtc": "매일 UTC 00:00 초기화",
             "resetsInHours_one": "약 {{count}}시간 후",
@@ -1818,11 +1820,13 @@
             "monthly": "월간",
             "yearly": "연간",
             "savePercent": "연간 최대 {{pct}}% 절약",
+            "pricesInUsd": "모든 가격은 USD 기준입니다",
             "paddleLoading": "Paddle을 불러오는 중입니다. 다시 시도해 주세요.",
             "cancelConfirm": "정말 구독을 취소하시겠습니까? 결제 기간이 끝날 때까지는 계속 이용할 수 있습니다.",
             "cancelSubscription": "구독 취소",
             "cancelRetainAccess": "현재 결제 기간이 끝날 때까지 {{plan}} 기능을 계속 이용할 수 있습니다.",
-            "cancelTeamDowngrade": " 모든 팀 멤버는 개인 플랜으로 다운그레이드됩니다."
+            "cancelTeamDowngrade": " 모든 팀 멤버는 개인 플랜으로 다운그레이드됩니다.",
+            "cancelFailed": "구독 취소에 실패했습니다"
         },
         "about": {
             "title": "소개",
