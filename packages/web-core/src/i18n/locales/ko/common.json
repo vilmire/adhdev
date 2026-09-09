@@ -1445,7 +1445,9 @@
         "newSession": "새 세션",
         "newSessionDescription": "연결된 머신이 준비되었습니다. CLI, ACP, IDE 중 설치된 프로바이더로 새 세션을 시작하세요.",
         "noTabsInGroup": "이 그룹에 탭이 없습니다",
-        "pressEscToCancel": "Esc를 눌러 취소"
+        "pressEscToCancel": "Esc를 눌러 취소",
+        "noActiveAgent": "활성 에이전트 없음",
+        "moveTabHere": "탭을 이곳으로 옮기면 표시됩니다"
     },
     "terminal": {
         "loadOlderOutput": "이전 터미널 출력 불러오기",
@@ -1929,7 +1931,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "정말 로그아웃하시겠습니까?",
             "logout": "Logout",
-            "machineLimitBanner": "Free 플랜 머신 한도({{count}}개{{plural}})에 도달했습니다. 더 추가하려면 업그레이드하세요.",
             "upgradeArrow": "업그레이드 →",
             "machineLimitBadge": "머신 한도",
             "machineLimitBadgeTitle": "플랜 머신 한도({{count}}개{{plural}})에 도달했습니다 — 결제 페이지에서 업그레이드",
@@ -2149,7 +2150,14 @@
             "step2Desc": "데몬이 이 계정에 자동으로 연결됩니다. 토큰을 복사할 필요 없이 연결되는 순간 여기에 나타납니다.",
             "step3Title": "첫 세션을 시작하세요",
             "step3Desc": "머신이 온라인 상태가 되면 대시보드에서 Claude Code, Codex, Cursor 등을 바로 시작할 수 있습니다.",
-            "readDocs": "문서 읽기 →"
+            "readDocs": "문서 읽기 →",
+            "reconnectingLabel": "연결이 끊어졌습니다 — 다시 연결하는 중… 계속되면 네트워크를 확인하세요.",
+            "offlineLabel": "오프라인 상태입니다. 인터넷에 다시 연결되면 이 페이지가 자동으로 재개됩니다.",
+            "authFailedLabel": "세션이 만료되었습니다 — 계속하려면 다시 로그인하세요.",
+            "machineLimitLabel": "머신 한도 도달 — 현재 플랜은 최대 {{limit}}대까지 허용됩니다. 머신을 제거하거나 플랜을 업그레이드해 이 머신을 연결하세요.",
+            "machineLimitManage": "머신 관리 →",
+            "machineLimitUpgrade": "플랜 업그레이드 →",
+            "setupWizardLink": "단계별 안내가 필요하신가요? 설정 마법사 열기 →"
         },
         "legal": {
             "navHome": "홈",
@@ -2180,7 +2188,10 @@
             "registryPublishTitle": "레지스트리 게시 권한 승인",
             "authorizeRegistryPublishAs": "{{name}}(으)로 프로바이더 레지스트리 게시 권한을 승인하시겠습니까?",
             "registryPublishWarning": "레지스트리의 프로바이더 패키지를 게시·승격·철회할 수 있는 단기 토큰(15분)이 발급됩니다. 데몬 등록이 아닙니다. 직접 레지스트리 게시를 시작한 경우에만 승인하세요. 관리자 계정이 필요합니다.",
-            "signInFirstRegistryPublish": "레지스트리 게시를 승인하려면 관리자 계정으로 로그인해 주세요."
+            "signInFirstRegistryPublish": "레지스트리 게시를 승인하려면 관리자 계정으로 로그인해 주세요.",
+            "approving": "승인 중…",
+            "errorFriendly": "CLI 인증을 완료하지 못했습니다.",
+            "tryAgain": "다시 시도"
         },
         "privacy": {
             "title": "개인정보처리방침",
@@ -3007,7 +3018,7 @@
             "mem": "MEM",
             "loading": "머신을 불러오는 중…",
             "emptyHeadline": "ADHDev에 오신 것을 환영합니다",
-            "emptyBody": "대시보드에 첫 번째 머신을 연결하세요. 한 번만 설정하면 해당 머신에서 ADHDev를 시작할 수 있습니다:",
+            "emptyBody": "대시보드에 첫 번째 머신을 연결하세요. 해당 머신에 ADHDev를 설치하고 로그인하면 자동으로 페어링되어 여기에 표시됩니다:",
             "emptyDocsLink": "문서 읽기 →",
             "hidden": "숨김",
             "pageTitle": "머신",

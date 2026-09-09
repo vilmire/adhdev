@@ -5,28 +5,23 @@
  * macOS/Linux: curl | sh
  * Windows: PowerShell (irm | iex) or CMD
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { IconCheck, IconClipboard } from './Icons'
+import { getInstallCommands, type InstallShellType } from '../utils/install-base'
 
-type ShellType = 'unix' | 'powershell' | 'cmd'
 type PlatformTab = 'unix' | 'windows'
-
-const INSTALL_COMMANDS: Record<ShellType, { cmd: string; shell: string; prompt: string }> = {
-    unix: { cmd: 'curl -fsSL https://adhf.dev/install | sh', shell: 'Terminal', prompt: '$ ' },
-    powershell: { cmd: 'irm https://adhf.dev/install.ps1 | iex', shell: 'PowerShell', prompt: 'PS> ' },
-    cmd: { cmd: 'curl -fsSL https://adhf.dev/install.cmd -o %TEMP%\\adhdev.cmd && %TEMP%\\adhdev.cmd', shell: 'CMD', prompt: '> ' },
-}
 
 function detectPlatform(): PlatformTab {
     if (typeof navigator === 'undefined') return 'unix'
     return navigator.userAgent.toLowerCase().includes('win') ? 'windows' : 'unix'
 }
 
-export default function InstallCommand() {
+export default function InstallCommand({ isStandalone = false }: { isStandalone?: boolean } = {}) {
     const [platform, setPlatform] = useState<PlatformTab>('unix')
     const [winShell, setWinShell] = useState<'powershell' | 'cmd'>('powershell')
     const [copied, setCopied] = useState(false)
-    const shell: ShellType = platform === 'unix' ? 'unix' : winShell
+    const shell: InstallShellType = platform === 'unix' ? 'unix' : winShell
+    const INSTALL_COMMANDS = useMemo(() => getInstallCommands(), [])
 
     useEffect(() => { setPlatform(detectPlatform()) }, [])
 
@@ -93,9 +88,14 @@ export default function InstallCommand() {
                 </span>
             </div>
 
-            {/* npm fallback */}
+            {/* npm fallback — the standalone package is local-only; cloud surfaces
+                must point at the cloud CLI (`adhdev login` pairs the machine). */}
             <div className="text-text-muted text-3xs font-sans mt-2">
-                Or via npm: <span className="text-text-secondary font-mono">npm i -g @adhdev/daemon-standalone &amp;&amp; adhdev-standalone</span>
+                Or via npm: <span className="text-text-secondary font-mono">
+                    {isStandalone
+                        ? 'npm i -g @adhdev/daemon-standalone && adhdev-standalone'
+                        : 'npm i -g adhdev && adhdev login'}
+                </span>
             </div>
         </div>
     )

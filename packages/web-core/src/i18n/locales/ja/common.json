@@ -1445,7 +1445,9 @@
         "newSession": "新しいセッション",
         "newSessionDescription": "接続済みのマシンが準備できています。インストール済みの任意のプロバイダー（CLI、ACP、または IDE）で新しいセッションを開始してください。",
         "noTabsInGroup": "このグループにタブはありません",
-        "pressEscToCancel": "Esc を押してキャンセル"
+        "pressEscToCancel": "Esc を押してキャンセル",
+        "noActiveAgent": "アクティブなエージェントはありません",
+        "moveTabHere": "タブをここに移動すると表示されます"
     },
     "terminal": {
         "loadOlderOutput": "以前のターミナル出力を読み込む",
@@ -1929,7 +1931,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "ログアウトしてもよろしいですか？",
             "logout": "Logout",
-            "machineLimitBanner": "Free プランの上限である {{count}} 台{{plural}}のマシンに達しました。追加するにはアップグレードしてください。",
             "upgradeArrow": "アップグレード →",
             "machineLimitBadge": "マシン上限",
             "machineLimitBadgeTitle": "プランのマシン上限（{{count}} 台{{plural}}）に達しました — 請求ページでアップグレード",
@@ -2149,7 +2150,14 @@
             "step2Desc": "デーモンはこのアカウントに自動的にリンクされます。コピーするトークンは不要で、接続した瞬間にここに表示されます。",
             "step3Title": "最初のセッションを開始",
             "step3Desc": "マシンがオンラインになったら、ダッシュボードから直接 Claude Code、Codex、Cursor などのエージェントを起動できます。",
-            "readDocs": "ドキュメントを読む →"
+            "readDocs": "ドキュメントを読む →",
+            "reconnectingLabel": "接続が切断されました — 再接続中… 続く場合はネットワークをご確認ください。",
+            "offlineLabel": "オフラインです。インターネットに再接続すると、このページは自動的に再開します。",
+            "authFailedLabel": "セッションの有効期限が切れました — 続行するには再度サインインしてください。",
+            "machineLimitLabel": "マシン上限に達しました — 現在のプランでは最大 {{limit}} 台まで利用できます。マシンを削除するか、プランをアップグレードしてこのマシンを接続してください。",
+            "machineLimitManage": "マシンを管理 →",
+            "machineLimitUpgrade": "プランをアップグレード →",
+            "setupWizardLink": "ガイド付きセットアップをご希望ですか？セットアップウィザードを開く →"
         },
         "legal": {
             "navHome": "ホーム",
@@ -2180,7 +2188,10 @@
             "registryPublishTitle": "レジストリ公開の認可",
             "authorizeRegistryPublishAs": "{{name}} としてプロバイダーレジストリの公開権限を認可しますか？",
             "registryPublishWarning": "レジストリのプロバイダーパッケージを公開・昇格・取り下げできる短期トークン（15分）が発行されます。デーモン登録ではありません。ご自身でレジストリ公開を開始した場合のみ承認してください。管理者アカウントが必要です。",
-            "signInFirstRegistryPublish": "レジストリ公開を認可するには、管理者アカウントでサインインしてください。"
+            "signInFirstRegistryPublish": "レジストリ公開を認可するには、管理者アカウントでサインインしてください。",
+            "approving": "承認中…",
+            "errorFriendly": "CLI 認証を完了できませんでした。",
+            "tryAgain": "再試行"
         },
         "privacy": {
             "title": "プライバシーポリシー",
@@ -3007,7 +3018,7 @@
             "mem": "MEM",
             "loading": "マシンを読み込んでいます…",
             "emptyHeadline": "ADHDev へようこそ",
-            "emptyBody": "最初のマシンをダッシュボードに接続しましょう。セットアップを一度実行してから、そのマシンで ADHDev を起動してください:",
+            "emptyBody": "最初のマシンをダッシュボードに接続しましょう。そのマシンに ADHDev をインストールしてサインインすると、自動的にペアリングされてここに表示されます:",
             "emptyDocsLink": "ドキュメントを読む →",
             "hidden": "非表示",
             "pageTitle": "マシン",

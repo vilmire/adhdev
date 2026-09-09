@@ -1445,7 +1445,9 @@
         "newSession": "新建会话",
         "newSessionDescription": "一台已连接的机器已就绪。使用任何已安装的提供方（CLI、ACP 或 IDE）开始新会话。",
         "noTabsInGroup": "此分组中没有标签页",
-        "pressEscToCancel": "按 Esc 取消"
+        "pressEscToCancel": "按 Esc 取消",
+        "noActiveAgent": "没有活动的智能体",
+        "moveTabHere": "将标签页移到此处查看"
     },
     "terminal": {
         "loadOlderOutput": "加载更早的终端输出",
@@ -1929,7 +1931,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "确定要退出登录吗？",
             "logout": "Logout",
-            "machineLimitBanner": "您已达到 Free 套餐 {{count}} 台机器{{plural}}的上限。升级以添加更多。",
             "upgradeArrow": "升级 →",
             "machineLimitBadge": "机器已满",
             "machineLimitBadgeTitle": "已达到套餐 {{count}} 台机器{{plural}}的上限 — 打开账单页面升级",
@@ -2149,7 +2150,14 @@
             "step2Desc": "守护进程会自动关联到此账户。无需复制令牌；连接的瞬间它便会显示在这里。",
             "step3Title": "启动你的第一个会话",
             "step3Desc": "机器上线后，即可从仪表盘直接启动 Claude Code、Codex、Cursor 及其他智能体。",
-            "readDocs": "阅读文档 →"
+            "readDocs": "阅读文档 →",
+            "reconnectingLabel": "连接已断开 — 正在重新连接… 如果持续出现，请检查你的网络。",
+            "offlineLabel": "你已离线。重新连接到互联网后，此页面将自动恢复。",
+            "authFailedLabel": "会话已过期 — 请重新登录以继续。",
+            "machineLimitLabel": "已达到机器上限 — 你的套餐最多允许 {{limit}} 台。移除一台机器或升级套餐以连接这台机器。",
+            "machineLimitManage": "管理机器 →",
+            "machineLimitUpgrade": "升级套餐 →",
+            "setupWizardLink": "需要引导式设置？打开设置向导 →"
         },
         "legal": {
             "navHome": "首页",
@@ -2180,7 +2188,10 @@
             "registryPublishTitle": "授权注册表发布",
             "authorizeRegistryPublishAs": "以 {{name}} 身份授予提供程序注册表发布权限？",
             "registryPublishWarning": "这将授予一个短期令牌（15 分钟），可在注册表中发布、推广和撤回提供程序包。这不是守护进程注册。仅在您自己发起注册表发布时才批准。需要管理员账户。",
-            "signInFirstRegistryPublish": "请使用管理员账户登录以授权注册表发布。"
+            "signInFirstRegistryPublish": "请使用管理员账户登录以授权注册表发布。",
+            "approving": "正在批准…",
+            "errorFriendly": "无法完成 CLI 授权。",
+            "tryAgain": "重试"
         },
         "privacy": {
             "title": "隐私政策",
@@ -3007,7 +3018,7 @@
             "mem": "MEM",
             "loading": "正在加载你的机器…",
             "emptyHeadline": "欢迎使用 ADHDev",
-            "emptyBody": "将你的第一台机器连接到仪表板。运行一次设置，然后在该机器上启动 ADHDev：",
+            "emptyBody": "将你的第一台机器连接到仪表板。在该机器上安装 ADHDev 并登录，它会自动配对并显示在这里：",
             "emptyDocsLink": "阅读文档 →",
             "hidden": "已隐藏",
             "pageTitle": "机器",

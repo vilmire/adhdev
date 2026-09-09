@@ -35,7 +35,7 @@ export default function PaneGroupEmptyState({
 }: PaneGroupEmptyStateProps) {
     const { t } = useTranslation('common')
     if (suppressGuide) {
-        return <div className="text-sm text-text-muted opacity-0 select-none" aria-hidden="true">No active agent</div>
+        return <div className="text-sm text-text-muted opacity-0 select-none" aria-hidden="true">{t('paneGroup.noActiveAgent')}</div>
     }
 
     if (isLoading) {
@@ -78,7 +78,7 @@ export default function PaneGroupEmptyState({
                             <button
                                 type="button"
                                 onClick={onOpenNewSession}
-                                className="btn btn-secondary btn-sm inline-flex items-center gap-2"
+                                className="btn btn-primary btn-sm inline-flex items-center gap-2"
                                 title={t('paneGroup.newSession')}
                                 aria-label={t('paneGroup.newSession')}
                             >
@@ -98,7 +98,7 @@ export default function PaneGroupEmptyState({
                                 rel="noopener noreferrer"
                                 className="text-sm font-medium text-accent hover:opacity-80 transition-colors flex items-center justify-center gap-1.5"
                             >
-                                Read the documentation →
+                                {t('machine.card.emptyDocsLink')}
                             </a>
                         </div>
                     )}
@@ -109,7 +109,7 @@ export default function PaneGroupEmptyState({
 
     return (
         <div className="text-sm text-text-muted opacity-50">
-            {isSplitMode ? 'Move a tab here to view' : 'No active agent'}
+            {isSplitMode ? t('paneGroup.moveTabHere') : t('paneGroup.noActiveAgent')}
         </div>
     )
 }

@@ -45,7 +45,18 @@ import { compareMachineEntries } from '../utils/daemon-utils'
 import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
 
-export default function Dashboard() {
+export interface DashboardProps {
+    /**
+     * Suppress the dashboard-internal ConnectionBanner. Cloud mounts one
+     * app-shell-level banner (Layout) covering every authenticated route —
+     * including the zero-machine onboarding state where this page never
+     * renders — so the internal one would double up. Standalone keeps the
+     * default (banner rendered here).
+     */
+    suppressConnectionBanner?: boolean
+}
+
+export default function Dashboard({ suppressConnectionBanner = false }: DashboardProps = {}) {
     const { sendCommand: sendDaemonCommand } = useTransport()
     const loadDaemonMetadata = useDaemonMetadataLoader()
     const loadMachineRuntime = useDaemonMachineRuntimeLoader()
@@ -593,6 +604,7 @@ export default function Dashboard() {
                     showReconnected,
                     loginUrl: daemonCtx.connectionLoginUrl,
                     onReconnect: daemonCtx.retryServerConnection,
+                    suppress: suppressConnectionBanner,
                 }}
                 toastOverlay={{
                     toasts,

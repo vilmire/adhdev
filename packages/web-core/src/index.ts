@@ -148,6 +148,8 @@ export {
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
+export { getInstallBase, getInstallBaseForHost, getInstallCommands, PROD_INSTALL_BASE, PREVIEW_INSTALL_BASE } from './utils/install-base'
+export type { InstallCommandEntry, InstallShellType } from './utils/install-base'
 // Re-export daemon-core's managed-status normalizer (browser-safe /status/normalize subpath,
 // type-only deps) so UI consumers use web-core as the facade instead of reaching into daemon-core.
 export {

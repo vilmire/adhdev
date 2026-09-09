@@ -1450,7 +1450,9 @@
         "newSession": "Nueva sesión",
         "newSessionDescription": "Hay una máquina conectada lista. Inicia una nueva sesión con cualquier proveedor instalado — CLI, ACP o IDE.",
         "noTabsInGroup": "No hay pestañas en este grupo",
-        "pressEscToCancel": "Pulsa Esc para cancelar"
+        "pressEscToCancel": "Pulsa Esc para cancelar",
+        "noActiveAgent": "Ningún agente activo",
+        "moveTabHere": "Mueve una pestaña aquí para verla"
     },
     "terminal": {
         "loadOlderOutput": "Cargar salida anterior del terminal",
@@ -1934,7 +1936,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "¿Seguro que quieres cerrar sesión?",
             "logout": "Logout",
-            "machineLimitBanner": "Has alcanzado el límite de {{count}} máquina{{plural}} del plan Free. Mejora para añadir más.",
             "upgradeArrow": "Mejorar →",
             "machineLimitBadge": "Máquinas llenas",
             "machineLimitBadgeTitle": "Has alcanzado el límite de {{count}} máquina{{plural}} de tu plan — abre facturación para mejorar",
@@ -2154,7 +2155,14 @@
             "step2Desc": "El daemon se vincula a esta cuenta automáticamente. No hay ningún token que copiar; aparece aquí en cuanto se conecta.",
             "step3Title": "Inicia tu primera sesión",
             "step3Desc": "Una vez que una máquina esté en línea, inicia Claude Code, Codex, Cursor y otros agentes directamente desde el panel.",
-            "readDocs": "Lee la documentación →"
+            "readDocs": "Lee la documentación →",
+            "reconnectingLabel": "Conexión perdida — reconectando… Comprueba tu red si esto persiste.",
+            "offlineLabel": "Estás sin conexión. Vuelve a conectarte a internet y esta página se reanudará automáticamente.",
+            "authFailedLabel": "La sesión ha expirado — inicia sesión de nuevo para continuar.",
+            "machineLimitLabel": "Límite de máquinas alcanzado: tu plan permite hasta {{limit}}. Elimina una máquina o mejora tu plan para conectar esta.",
+            "machineLimitManage": "Gestionar máquinas →",
+            "machineLimitUpgrade": "Mejorar plan →",
+            "setupWizardLink": "¿Prefieres una configuración guiada? Abrir el asistente de configuración →"
         },
         "legal": {
             "navHome": "Inicio",
@@ -2185,7 +2193,10 @@
             "registryPublishTitle": "Autorizar publicación en el registro",
             "authorizeRegistryPublishAs": "¿Conceder acceso de publicación al registro de proveedores como {{name}}?",
             "registryPublishWarning": "Esto concede un token de corta duración (15 minutos) que puede publicar, promover y retirar paquetes de proveedores en el registro. No es un registro de daemon. Apruébalo solo si iniciaste una publicación en el registro. Requiere una cuenta de administrador.",
-            "signInFirstRegistryPublish": "Inicia sesión con una cuenta de administrador para autorizar la publicación en el registro."
+            "signInFirstRegistryPublish": "Inicia sesión con una cuenta de administrador para autorizar la publicación en el registro.",
+            "approving": "Aprobando…",
+            "errorFriendly": "No se pudo completar la autorización de la CLI.",
+            "tryAgain": "Reintentar"
         },
         "privacy": {
             "title": "Política de privacidad",
@@ -3012,7 +3023,7 @@
             "mem": "MEM",
             "loading": "Cargando tus máquinas…",
             "emptyHeadline": "Te damos la bienvenida a ADHDev",
-            "emptyBody": "Conecta tu primera máquina al panel. Ejecuta la configuración una vez y luego inicia ADHDev en esa máquina:",
+            "emptyBody": "Conecta tu primera máquina al panel. Instala ADHDev en esa máquina e inicia sesión: se emparejará automáticamente y aparecerá aquí:",
             "emptyDocsLink": "Leer la documentación →",
             "hidden": "Oculto",
             "pageTitle": "Máquinas",
