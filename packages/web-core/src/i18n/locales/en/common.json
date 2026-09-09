@@ -416,6 +416,7 @@
         "reconnectingItem": "Reconnecting…",
         "connectingItem": "Connecting…",
         "actionNeeded": "Action needed",
+        "needsAttention": "Needs attention",
         "done": "Done",
         "openMeshGraphFor": "Open mesh graph for {{title}}",
         "openLiveMeshGraph": "Open live repo mesh graph",
@@ -1401,7 +1402,17 @@
         }
     },
     "chat": {
-        "copyMessage": "Copy message"
+        "copyMessage": "Copy message",
+        "copyCode": "Copy code",
+        "showMore": "Show more",
+        "showLess": "Show less",
+        "thought": "Thought",
+        "waitingToSend": "Waiting to send — the agent is still working.",
+        "waitingToSendAria": "Waiting to send",
+        "sendNow": "Send now",
+        "sending": "Sending…",
+        "sendNowAria": "Send now by interrupting the agent's current turn",
+        "sendNowTitle": "Interrupt the agent's current turn and send this message now. The turn in progress will be lost."
     },
     "chatPane": {
         "connectingToMachine": "Connecting to your machine",
@@ -1415,7 +1426,10 @@
         "openPanel": "Open {{label}} Panel",
         "switchingPanel": "Switching...",
         "openingPanel": "Opening...",
-        "replicaDegraded": "Live sync is having trouble — showing messages the previous way"
+        "replicaDegraded": "Live sync is having trouble — showing messages the previous way",
+        "busyNoProgress": "Agent shows no progress.",
+        "busyGenerating": "Agent is generating.",
+        "busyWaitingApproval": "Agent is waiting for approval. Approval controls will appear when available."
     },
     "chatInput": {
         "attachImage": "Attach image",

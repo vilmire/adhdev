@@ -18,6 +18,7 @@ import { encodeTerminalKey } from '../../utils/terminal-key-encoding';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
 import SpecDebugPanel from './SpecDebugPanel';
+import { isSpecDebugEnabled } from '../../utils/debug-flags';
 
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
@@ -56,6 +57,7 @@ export default function CliTerminalPane({
     const [stickyAlt, setStickyAlt] = useState(false);
     const [stickyShift, setStickyShift] = useState(false);
     const [showSpecDebug, setShowSpecDebug] = useState(false);
+    const specDebugEnabled = isSpecDebugEnabled();
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalScrollMetrics, setTerminalScrollMetrics] = useState<{ scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }>({
@@ -625,14 +627,16 @@ export default function CliTerminalPane({
                             {copyStatusMessage}
                         </span>
                     )}
-                    <button
-                        type="button"
-                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
-                        onClick={() => setShowSpecDebug(v => !v)}
-                        title="Spec debug — inspect current state, sections, and transition history"
-                    >
-                        {t('terminal.debug')}
-                    </button>
+                    {specDebugEnabled && (
+                        <button
+                            type="button"
+                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                            onClick={() => setShowSpecDebug(v => !v)}
+                            title="Spec debug — inspect current state, sections, and transition history"
+                        >
+                            {t('terminal.debug')}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-2xs font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"

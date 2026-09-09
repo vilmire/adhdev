@@ -133,7 +133,7 @@ describe('useDashboardConversationCommands queued-send release (render site)', (
         const placeholder = (status: string, feedback: string | null) =>
             (sendBlockMessage ? SEND_BLOCKED_PLACEHOLDER : null)
             || feedback
-            || buildBusyChatInputStatusMessage({ status } as any)
+            || buildBusyChatInputStatusMessage({ status } as any, (key: string) => key)
         const statusLine = (feedback: string | null) => feedback || null
 
         const busyFeedback = scenario.current.sendFeedbackMessage

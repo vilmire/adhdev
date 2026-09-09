@@ -8,6 +8,7 @@ import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle, isMeshGraphConversation } from './conversation-presenters'
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard } from './chat-debug-bundle'
+import { isMobileDebugBundleEnabled } from '../../utils/debug-flags'
 import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
@@ -194,7 +195,7 @@ function DashboardMobileChatItem({
     const isWorking = type === 'working'
     const isEarlier = type === 'earlier'
     const isTaskComplete = type === 'task_complete'
-    const { isReconnecting, isConnecting } = getConversationViewStates(item.conversation)
+    const { isReconnecting, isConnecting, isErrored } = getConversationViewStates(item.conversation)
     const title = getConversationTitle(item.conversation)
     const metaText = getConversationMetaText(item.conversation)
     const statusHint = getConversationStatusHint(item.conversation, { requiresAction: type === 'needs_attention' })
@@ -221,6 +222,11 @@ function DashboardMobileChatItem({
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return
+        // G8-12: a long-press (Android fires `contextmenu` for it) used to run
+        // this unconditionally — sending a daemon command AND silently
+        // overwriting the user's clipboard just from trying to select text or
+        // open the native menu. Gate behind an explicit opt-in debug flag.
+        if (!isMobileDebugBundleEnabled()) return
         event.preventDefault()
         event.stopPropagation()
         const result = onCollectChatDebugBundle?.(item.conversation)
@@ -283,10 +289,15 @@ function DashboardMobileChatItem({
                                 <span className="mx-1 opacity-50">·</span>
                                 <span className="text-text-muted">{t('mobileInbox.connectingItem')}</span>
                             </>
-                        ) : statusHint === 'Action needed' && (
+                        ) : statusHint === 'Action needed' ? (
                             <>
                                 <span className="mx-1 opacity-50">·</span>
                                 <span className={warningTextClassName}>{t('mobileInbox.actionNeeded')}</span>
+                            </>
+                        ) : isErrored && (
+                            <>
+                                <span className="mx-1 opacity-50">·</span>
+                                <span className="text-[color:var(--status-error)]">{t('mobileInbox.needsAttention')}</span>
                             </>
                         )}
                     </div>

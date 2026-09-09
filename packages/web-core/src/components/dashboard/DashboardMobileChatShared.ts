@@ -142,6 +142,16 @@ const MANAGED_STATUS_IS_WORKING: Record<ManagedStatus, boolean> = {
     disconnected: false,
 }
 
+/**
+ * G8-10: `error`/`stopped`/`disconnected` previously fell through to the same
+ * render as a plain idle conversation — a session the agent gave up on looked
+ * identical to one nobody has touched yet, with no visual signal to go check
+ * it. These three ManagedStatus values are the ones that mean "this session
+ * needs attention because something went wrong", as opposed to `idle` (needs
+ * nothing) or `panel_hidden`/`not_monitored` (not an error, just not watched).
+ */
+const MANAGED_STATUS_IS_ERRORED: ReadonlySet<ManagedStatus> = new Set(['error', 'stopped', 'disconnected'])
+
 export function getConversationViewStates(conversation: { status?: string, connectionState?: string }) {
     const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
@@ -155,7 +165,8 @@ export function getConversationViewStates(conversation: { status?: string, conne
         : normalizeManagedStatus(conversation.status)
     const isGenerating = MANAGED_STATUS_IS_WORKING[managedStatus]
     const isWaiting = managedStatus === 'waiting_approval'
-    return { isReconnecting, isConnecting, isGenerating, isWaiting }
+    const isErrored = MANAGED_STATUS_IS_ERRORED.has(managedStatus)
+    return { isReconnecting, isConnecting, isGenerating, isWaiting, isErrored }
 }
 
 /**

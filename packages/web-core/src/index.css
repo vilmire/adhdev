@@ -1692,19 +1692,24 @@
     }
 
     .chat-markdown pre {
+        position: relative;
         margin: 0.6em 0;
         padding: 14px 16px;
         border-radius: 10px;
         background: var(--bg-glass);
         border: 1px solid var(--border-subtle);
-        overflow-x: hidden;
+        /* G8-8: was overflow-x:hidden + break-all/anywhere, which force-wrapped
+           every long line (URLs, identifiers, minified JSON) character-by-character
+           and made it impossible to read the intact line. A code block scrolls
+           horizontally like every other code viewer instead. */
+        overflow-x: auto;
         font-family: var(--chat-code-font-family);
         font-size: 0.86em;
         line-height: 1.65;
         box-shadow: none;
-        white-space: pre-wrap;
-        word-break: break-all;
-        overflow-wrap: anywhere;
+        white-space: pre;
+        word-break: normal;
+        overflow-wrap: normal;
     }
 
     .chat-markdown pre code {
@@ -1712,6 +1717,33 @@
         background: none;
         color: inherit;
         border: none;
+    }
+
+    .chat-code-copy-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-card);
+        color: var(--text-muted);
+        opacity: 0;
+        transition: opacity 0.12s ease, color 0.12s ease;
+        cursor: pointer;
+    }
+
+    .chat-markdown pre:hover .chat-code-copy-btn,
+    .chat-code-copy-btn:focus-visible {
+        opacity: 1;
+    }
+
+    .chat-code-copy-btn:hover {
+        color: var(--text-primary);
     }
 
     .chat-preformatted {

@@ -6,7 +6,8 @@
  * exactly. No logic change, no optimization, no bug fix.
  */
 
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, isValidElement } from 'react';
+import type { ComponentPropsWithoutRef, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -33,9 +34,13 @@ function CopyButton({ text }: { text: string }) {
     const { t } = useTranslation('common');
     const [copied, setCopied] = useState(false);
     const handleCopy = useCallback(() => {
-        navigator.clipboard.writeText(text).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        // The checkmark previously showed unconditionally even when the write
+        // rejected (denied clipboard permission, insecure context) — telling the
+        // user their copy worked when nothing was on their clipboard.
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
     }, [text]);
     return (
         <button
@@ -48,6 +53,59 @@ function CopyButton({ text }: { text: string }) {
         </button>
     );
 }
+
+function CodeBlockCopyButton({ text }: { text: string }) {
+    const { t } = useTranslation('common');
+    const [copied, setCopied] = useState(false);
+    const handleCopy = useCallback((event: ReactMouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+    }, [text]);
+    return (
+        <button
+            type="button"
+            onClick={handleCopy}
+            aria-label={t('chat.copyCode')}
+            title={t('chat.copyCode')}
+            className="chat-code-copy-btn"
+        >
+            {copied ? <IconCheck size={12} /> : <IconClipboard size={12} />}
+        </button>
+    );
+}
+
+/**
+ * G8-8: `pre` override for ReactMarkdown fenced code blocks — adds the
+ * hover-revealed copy button. `children` is the `<code>` element ReactMarkdown
+ * already produced; its text is extracted for the clipboard write rather than
+ * re-stringifying `props` (which would lose the exact rendered text).
+ */
+function ChatCodeBlock(props: ComponentPropsWithoutRef<'pre'>) {
+    const codeText = extractPlainTextFromReactNode(props.children);
+    return (
+        <pre {...props}>
+            {props.children}
+            <CodeBlockCopyButton text={codeText} />
+        </pre>
+    );
+}
+
+function extractPlainTextFromReactNode(node: ReactNode): string {
+    if (node === null || node === undefined || typeof node === 'boolean') return '';
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    if (Array.isArray(node)) return node.map(extractPlainTextFromReactNode).join('');
+    if (isValidElement(node)) {
+        const children = (node.props as { children?: ReactNode } | undefined)?.children;
+        return extractPlainTextFromReactNode(children);
+    }
+    return '';
+}
+
+const chatMarkdownComponents = { pre: ChatCodeBlock };
 
 const gfmRemarkPlugin: Pluggable = [remarkGfm, { singleTilde: false }];
 const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks];
@@ -70,7 +128,7 @@ function renderTextLikeContent(content: string, renderAsPreformatted: boolean): 
     }
     if (likelyNeedsMarkdownRender(content)) {
         return (
-            <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
+            <ReactMarkdown remarkPlugins={chatRemarkPlugins} components={chatMarkdownComponents}>
                 {content}
             </ReactMarkdown>
         );
@@ -102,7 +160,7 @@ const ChatMarkdownBody = memo(function ChatMarkdownBody({
     }
     if (renderAsMarkdown) {
         return (
-            <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
+            <ReactMarkdown remarkPlugins={chatRemarkPlugins} components={chatMarkdownComponents}>
                 {content}
             </ReactMarkdown>
         );
@@ -337,6 +395,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     onSendNow,
     isSendingNow,
 }: ChatMessageRowProps) {
+    const { t } = useTranslation('common');
     const isQueued = isQueuedPendingLocal(message);
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
@@ -366,7 +425,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     }
 
     if (kind === 'thought') {
-        const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Thought';
+        const label = typeof message.meta?.label === 'string' ? message.meta.label : t('chat.thought');
         return (
             <div className="self-start chat-msg-thought" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-header">
@@ -420,12 +479,31 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     }
 
     if (kind === 'system') {
+        // G8-9: system bubbles were hard-cut at 100 chars with no way to see the
+        // rest — a truncated audit/status line (e.g. a git error, a long file
+        // path) was simply lost. `title=` surfaces the full text on hover, and
+        // reusing the row's existing isTextExpanded/onToggleTextExpanded (already
+        // threaded in for the standard-bubble expand toggle) lets it expand in
+        // place, consistent with how a long assistant/user bubble expands.
+        const isTruncated = contentStr.length > 100;
+        const systemText = isTextExpanded || !isTruncated ? contentStr : `${contentStr.slice(0, 100)}…`;
         return (
-            <div className="self-center chat-msg-system">
+            <div className="self-center chat-msg-system" title={contentStr}>
                 {hasStructuredRenderer && structuredParts ? (
                     <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
                 ) : (
-                    contentStr.slice(0, 100)
+                    <>
+                        {systemText}
+                        {isTruncated && onToggleTextExpanded && (
+                            <button
+                                type="button"
+                                onClick={onToggleTextExpanded}
+                                className="chat-msg-system-expand ml-1.5 text-3xs font-semibold underline opacity-70 hover:opacity-100"
+                            >
+                                {isTextExpanded ? t('chat.showLess') : t('chat.showMore')}
+                            </button>
+                        )}
+                    </>
                 )}
             </div>
         );
@@ -494,8 +572,8 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         viewer renders the badge-free bubble unchanged. */}
                     {isQueued && (
                         <div className="chat-bubble-queued" data-chat-queued-row="true">
-                            <span className="chat-bubble-queued-label" aria-label="Waiting to send">
-                                Waiting to send — the agent is still working.
+                            <span className="chat-bubble-queued-label" aria-label={t('chat.waitingToSendAria')}>
+                                {t('chat.waitingToSend')}
                             </span>
                             {onSendNow && (
                                 <button
@@ -503,13 +581,13 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                                     onClick={onSendNow}
                                     disabled={isSendingNow}
                                     className="chat-bubble-send-now"
-                                    aria-label="Send now by interrupting the agent's current turn"
+                                    aria-label={t('chat.sendNowAria')}
                                     // The interrupt DISCARDS the turn in flight — that is
                                     // inherent to steering a running agent, not a defect,
                                     // so it is stated up front rather than after the fact.
-                                    title="Interrupt the agent's current turn and send this message now. The turn in progress will be lost."
+                                    title={t('chat.sendNowTitle')}
                                 >
-                                    {isSendingNow ? 'Sending…' : 'Send now'}
+                                    {isSendingNow ? t('chat.sending') : t('chat.sendNow')}
                                 </button>
                             )}
                         </div>

@@ -236,8 +236,12 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                     <GitStatusPill git={conv.git} compact className="max-w-[6.5rem] shrink-0" />
                 </span>
             </div>
+            {/* G8-14: `shortcut` is already the full stored combo (e.g. "⌘+1" on
+                Mac, "Ctrl+1" elsewhere — see the "Press a key combo" hint below and
+                tabShortcuts[...] display in the context menu), so it renders as-is
+                rather than re-prefixing with a literal "Ctrl+" that doubled up on Mac. */}
             {shortcut && (
-                <span className="text-4xs opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${shortcut}`}>{shortcut}</span>
+                <span className="text-4xs opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={shortcut}>{shortcut}</span>
             )}
         </div>
     )
