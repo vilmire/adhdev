@@ -69,10 +69,7 @@ describe('spawn argv logging', () => {
         expect(lines[0]).toContain('spec vunknown');
     });
 
-    it('never logs prompt or transcript text (content boundary)', () => {
-        // Args are provider flags and ids. If a caller ever routes user text
-        // through extraArgs this stays content-free only by that contract, so
-        // the assertion documents it: what we log is exactly the argv we spawn.
+    it('passes short args through unchanged (no over-truncation)', () => {
         const plan = resolveCliSpawnPlanFromParts({
             command: 'kimi',
             baseArgs: ['--flag'],
@@ -81,5 +78,33 @@ describe('spawn argv logging', () => {
             diagnosticCliType: 'kimi',
         });
         expect(spawnLines()[0]).toContain(plan.allArgs.join(' '));
+    });
+
+    it('truncates an oversized arg instead of logging it whole (cli_arg prompt injection)', () => {
+        // mode: 'cli_arg' (contracts.ts MeshCoordinatorSystemPromptInjection)
+        // pushes the full system prompt onto spawn args. That is NOT
+        // content-free, and logging it whole is what produced a 4.37MB daemon
+        // log during the autoLaunch runaway RCA — grepping that log returned
+        // 90 matching lines that were entirely prompt body, not spawn info.
+        const hugePrompt = 'You are the mesh coordinator. '.repeat(500); // ~15.5KB
+        resolveCliSpawnPlanFromParts({
+            command: 'claude',
+            baseArgs: ['--append-system-prompt'],
+            workingDir: '/tmp/ws',
+            extraArgs: [hugePrompt],
+            diagnosticCliType: 'claude-cli',
+        });
+
+        const line = spawnLines()[0];
+        // The logged line must not balloon to the size of the prompt.
+        expect(line.length).toBeLessThan(1000);
+        // Truncation must be visibly marked, distinguishable from a genuinely
+        // short arg, and must state how much was cut.
+        expect(line).toMatch(/…\(\+\d+ chars\)/);
+        // What survives should still be enough to identify the spawn: the
+        // prefix of the oversized arg, not just "(redacted)".
+        expect(line).toContain(hugePrompt.slice(0, 50));
+        // The prompt body must not appear whole in the log.
+        expect(line).not.toContain(hugePrompt);
     });
 });

@@ -102238,6 +102238,13 @@ ${marker}`,
     function isFlagToken(arg) {
       return typeof arg === "string" && arg.startsWith("-") && arg !== "-" && arg !== "--";
     }
+    function renderArgsForLog(args) {
+      return args.map((arg) => {
+        if (arg.length <= SPAWN_LOG_ARG_MAX_CHARS) return arg;
+        const omitted = arg.length - SPAWN_LOG_ARG_MAX_CHARS;
+        return `${arg.slice(0, SPAWN_LOG_ARG_MAX_CHARS)}\u2026(+${omitted} chars)`;
+      }).join(" ");
+    }
     function collectDeclaredFlags(extraArgs) {
       const flags = /* @__PURE__ */ new Set();
       for (const arg of extraArgs) {
@@ -102313,7 +102320,7 @@ ${marker}`,
       env2.TERMINAL_CWD = workingDir;
       LOG.info(
         "CLI",
-        `[${diagnosticCliType || "cli"}] Spawning (spec v${diagnosticProviderVersion || "unknown"}) in ${workingDir}: ${binaryPath} ${allArgs.join(" ")}`
+        `[${diagnosticCliType || "cli"}] Spawning (spec v${diagnosticProviderVersion || "unknown"}) in ${workingDir}: ${binaryPath} ${renderArgsForLog(allArgs)}`
       );
       return {
         binaryPath,
@@ -102333,6 +102340,7 @@ ${marker}`,
     var os19;
     var path29;
     var import_session_host_core8;
+    var SPAWN_LOG_ARG_MAX_CHARS;
     var init_provider_cli_runtime = __esm2({
       "src/cli-adapters/provider-cli-runtime.ts"() {
         "use strict";
@@ -102341,6 +102349,7 @@ ${marker}`,
         init_logger();
         import_session_host_core8 = require_dist();
         init_provider_cli_shared();
+        SPAWN_LOG_ARG_MAX_CHARS = 200;
       }
     });
     function kimiHome2(env2 = process.env) {
