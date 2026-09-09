@@ -40072,6 +40072,12 @@ var require_dist3 = __commonJS({
     function resolveAutoConvergeCodeChange(policy) {
       return policy?.autoConvergeCodeChange === true;
     }
+    function resolveNodeMaxConcurrentSessions(value) {
+      if (value === void 0 || value === null) return DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) return DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
+      return Math.floor(n);
+    }
     function resolveQuotaRoutingPolicy(value) {
       const staleAfterMs = Number(value?.staleAfterMs);
       const sessionMin = Number(value?.sessionMinRemainingPercent);
@@ -40320,6 +40326,7 @@ var require_dist3 = __commonJS({
     var DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES;
+    var DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
     var DEFAULT_MESH_POLICY;
     var DEFAULT_QUOTA_ROUTING_POLICY2;
     var SILENT_IDLE_PUSH_TTL_MS;
@@ -40346,6 +40353,7 @@ var require_dist3 = __commonJS({
         DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES = 30;
         MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES = 5;
         MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES = 7 * 24 * 60;
+        DEFAULT_NODE_MAX_CONCURRENT_SESSIONS = 12;
         DEFAULT_MESH_POLICY = {
           requirePreTaskCheckpoint: false,
           requirePostTaskCheckpoint: true,
@@ -84987,8 +84995,8 @@ ${block2.text}`,
               markSkip(nodeId, "node_has_active_assignment");
               continue;
             }
-            const maxConcurrentSessions = Number(node?.policy?.maxConcurrentSessions);
-            if (Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0 && liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+            const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
+            if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
               markSkip(nodeId, "max_concurrent_sessions_reached");
               continue;
             }
@@ -89496,6 +89504,8 @@ ${cleanBody}`;
                       role: "worker",
                       meshNodeFor: args.meshId,
                       meshNodeId: node.id,
+                      // LAUNCH-ACCOUNTING: labels the funnel's session_launched entry.
+                      meshLaunchSource: "recovery_relaunch",
                       spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || "hidden",
                       // Coordinator-dispatched recovery relaunch: same auto-approve
                       // policy as the primary worker launch path.
@@ -118491,6 +118501,7 @@ ${rawInput}` : rawInput;
         init_hash();
         init_coordinator_registry();
         init_mesh_duplicate_dispatch();
+        init_mesh_ledger();
         init_delegated_worker_mode_delivery();
         init_saved_sessions();
         init_summary_metadata();
@@ -119382,6 +119393,31 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     ...typeof args?.initialThinkingLevel === "string" && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}
                   }
                 );
+                let ledgerLaunchRecorded = false;
+                if (delegatedMeshId) {
+                  try {
+                    const autoLaunchTaskId = typeof settingsOverride?.autoLaunchedForQueueTaskId === "string" ? settingsOverride.autoLaunchedForQueueTaskId.trim() : "";
+                    const declaredSource = typeof settingsOverride?.meshLaunchSource === "string" ? settingsOverride.meshLaunchSource.trim() : "";
+                    const meshNodeId = typeof settingsOverride?.meshNodeId === "string" ? settingsOverride.meshNodeId.trim() : "";
+                    appendLedgerEntry3(delegatedMeshId, {
+                      kind: "session_launched",
+                      ...meshNodeId ? { nodeId: meshNodeId } : {},
+                      sessionId: started.runtimeSessionId,
+                      providerType,
+                      ...autoLaunchTaskId ? { taskId: autoLaunchTaskId } : {},
+                      payload: {
+                        ...started.providerSessionId ? { providerSessionId: started.providerSessionId } : {},
+                        // Path discriminator: explicit launchSource from the initiator wins;
+                        // the queue auto-launch is derived from its task marker (its envelope
+                        // predates launchSource and lives in a line-frozen file); anything
+                        // else (legacy caller / version skew) is labeled as such.
+                        source: declaredSource || (autoLaunchTaskId ? "auto_launch" : "unlabeled_delegated_launch")
+                      }
+                    });
+                    ledgerLaunchRecorded = true;
+                  } catch {
+                  }
+                }
                 return {
                   success: true,
                   cliType,
@@ -119389,7 +119425,8 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   id: started.runtimeSessionId,
                   sessionId: started.runtimeSessionId,
                   providerSessionId: started.providerSessionId,
-                  launchSource
+                  launchSource,
+                  ...ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {}
                 };
               }
               case "stop_cli": {
@@ -133588,13 +133625,12 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           if (!providerRoles.length) providerRoles = void 0;
         }
-        const maxConcurrentSessions = Number(policy?.maxConcurrentSessions);
-        const hasSessionCap = Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0;
+        const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(policy?.maxConcurrentSessions);
         nodes.push({
           nodeId,
           load: load2,
           schedulingPriority,
-          ...hasSessionCap ? { maxConcurrentSessions: Math.floor(maxConcurrentSessions) } : {},
+          maxConcurrentSessions,
           ...providerRoles ? { providerRoles } : {},
           capReached: capReasons.length > 0,
           capReasons
@@ -173510,6 +173546,9 @@ async function meshLaunchSession(ctx, args) {
           role: "worker",
           meshNodeFor: ctx.mesh.id,
           meshNodeId: args.node_id,
+          // LAUNCH-ACCOUNTING: path discriminator for the daemon-side
+          // session_launched funnel (cli-manager launch_cli).
+          meshLaunchSource: "mesh_launch_session",
           spawnedSessionVisibility,
           // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
           // Lands in settingsOverride and beats the global per-provider autoApprove.
@@ -173547,15 +173586,17 @@ async function meshLaunchSession(ctx, args) {
         expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS
       });
     }
-    try {
-      (0, import_daemon_core8.appendLedgerEntry)(ctx.mesh.id, {
-        kind: "session_launched",
-        nodeId: args.node_id,
-        sessionId: runtimeSessionId || void 0,
-        providerType: resolvedProviderType,
-        payload: { providerSessionId }
-      });
-    } catch {
+    if (launchPayload?.ledgerLaunchRecorded !== true) {
+      try {
+        (0, import_daemon_core8.appendLedgerEntry)(ctx.mesh.id, {
+          kind: "session_launched",
+          nodeId: args.node_id,
+          sessionId: runtimeSessionId || void 0,
+          providerType: resolvedProviderType,
+          payload: { providerSessionId, source: "mesh_launch_session_coordinator_fallback" }
+        });
+      } catch {
+      }
     }
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
     return JSON.stringify({

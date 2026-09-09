@@ -130,6 +130,9 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
     role: 'worker',
     meshNodeFor: 'mesh-worktree-flow',
     meshNodeId: 'node-worktree',
+    // Launch-source discriminator for daemon-side ledger accounting/dedup
+    // (cli-manager skips its own launch append when the envelope declares one).
+    meshLaunchSource: 'mesh_launch_session',
     spawnedSessionVisibility: 'visible',
     // Delegated worker sessions auto-approve by default (no policy opt-out here),
     // so the launch envelope stamps autoApprove=true; it wins over the global

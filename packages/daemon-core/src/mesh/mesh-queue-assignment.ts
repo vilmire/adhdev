@@ -22,7 +22,7 @@ import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-tr
 import { buildRedriveProvenance, describeRedriveProviderFlip } from './mesh-redrive-provenance.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmup-deadline.js';
-import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy, resolveQuotaRoutingPolicy } from '../repo-mesh-types.js';
+import { delegatedWorkerAutoApproveSettings, resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveCoordinatorIdlePushPolicy, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions } from '../repo-mesh-types.js';
 import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshDeclarativeConfig } from '../config/mesh-json-config.js';
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
@@ -2218,8 +2218,8 @@ async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, mesh
                     markSkip(nodeId, 'node_has_active_assignment');
                     continue;
                 }
-                const maxConcurrentSessions = Number(node?.policy?.maxConcurrentSessions);
-                if (Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0 && liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+                const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
+                if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
                     markSkip(nodeId, 'max_concurrent_sessions_reached');
                     continue;
                 }

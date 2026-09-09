@@ -1483,6 +1483,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     role: 'worker',
                                     meshNodeFor: args.meshId,
                                     meshNodeId: node.id,
+                                    // LAUNCH-ACCOUNTING: labels the funnel's session_launched entry.
+                                    meshLaunchSource: 'recovery_relaunch',
                                     spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
                                     // Coordinator-dispatched recovery relaunch: same auto-approve
                                     // policy as the primary worker launch path.

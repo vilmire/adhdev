@@ -596,6 +596,12 @@ export interface MeshReportedMemberState {
 export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
+    /**
+     * Live worker-session ceiling for this node (scope: liveSessionCountForNode —
+     * this mesh's worker sessions only). Unset/invalid resolves to
+     * DEFAULT_NODE_MAX_CONCURRENT_SESSIONS via resolveNodeMaxConcurrentSessions;
+     * an explicit finite value >= 0 always wins (0 blocks all auto-launches).
+     */
     maxConcurrentSessions?: number;
     /**
      * Soft scheduling priority used as the PRIORITY rank key (higher = preferred)
@@ -669,6 +675,39 @@ export const DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES = 30;
 export const MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES = 5;
 /** Ceiling (7 days). Beyond this the reaper is effectively off; use 0 to say so explicitly. */
 export const MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES = 7 * 24 * 60;
+
+/**
+ * Default per-node live worker-session ceiling (RepoMeshNodePolicy.maxConcurrentSessions)
+ * applied when a node declares no explicit cap. Before this default existed, an unset cap
+ * made the auto-launch gate compare against Number(undefined) = NaN — every comparison
+ * false, gate silently skipped, unlimited spawns (2026-09-08 runaway: 23 live sessions
+ * piled onto one daemon until EMFILE killed it).
+ *
+ * Why 12: it must sit ABOVE legitimate per-node fan-out — per-provider slot caps
+ * (slots[].maxParallel, typically 1-4 per provider, a few providers per node) put real
+ * concurrent worker load at ~6-10 including launched-but-unclaimed sessions — and safely
+ * BELOW the ~23-session EMFILE crash point, so the gate fires while the daemon is still
+ * healthy. The count scope is liveSessionCountForNode: mesh WORKER sessions of one node
+ * only (coordinator sessions and non-mesh user sessions are not counted).
+ */
+export const DEFAULT_NODE_MAX_CONCURRENT_SESSIONS = 12;
+
+/**
+ * Resolve the effective per-node concurrent-session cap from a raw node-policy value.
+ * An explicit finite value >= 0 always wins (0 = block all auto-launches, preserved);
+ * missing/NaN/negative falls back to DEFAULT_NODE_MAX_CONCURRENT_SESSIONS. Both the
+ * auto-launch gate (mesh-queue-assignment) and the scheduling status surface
+ * (mesh-scheduling-runtime) read through here so enforcement and observability can
+ * never disagree on what the cap is.
+ */
+export function resolveNodeMaxConcurrentSessions(value: unknown): number {
+    // Explicit null/undefined guard: Number(null) is 0, which would silently read an
+    // unset (hand-edited JSON null) cap as "block every launch" instead of the default.
+    if (value === undefined || value === null) return DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
+    return Math.floor(n);
+}
 
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requirePreTaskCheckpoint: false,
