@@ -1753,7 +1753,6 @@
             "planLimits": "Límites del plan",
             "limitMachines": "Máquinas",
             "limitP2P": "Conexiones P2P",
-            "limitWebhooks": "Webhooks",
             "limitPushNotifications": "Notificaciones push diarias",
             "limitTurnRelay": "Relé TURN",
             "enabled": "Habilitado",
@@ -1800,8 +1799,6 @@
             "frozenFeatureTitle": "Congelado — esta función está en pausa y no está disponible. Consulta docs/FROZEN_SURFACES.md"
         },
         "billing": {
-            "title": "Billing",
-            "subtitle": "Gestiona tu suscripción y tu plan",
             "currentPlan": "Plan actual:",
             "statusTrial": "Prueba",
             "statusActive": "Activo",
@@ -1814,18 +1811,7 @@
             "managePayment": "Gestionar pagos y facturas",
             "couldNotOpenPortal": "No se pudo abrir el portal de facturación",
             "statMachines": "Máquinas",
-            "statTeam": "Equipo",
             "statTurnPerDay": "min TURN/día",
-            "planLimitsTitle": "Límites del plan",
-            "limitApiCalls": "Llamadas API",
-            "limitSharedSessions": "Sesiones compartidas",
-            "limitScreenshotMinutes": "Minutos de captura",
-            "limitDescMachines": "Máquinas conectadas a la vez",
-            "limitDescPush": "Notificaciones push por día",
-            "limitDescWebhooks": "Endpoints de webhook registrados",
-            "limitDescApiCalls": "Llamadas a la API REST por mes",
-            "limitDescSharedSessions": "Sesiones compartidas simultáneas",
-            "limitDescScreenshotMinutes": "Minutos de transmisión de capturas por día",
             "resetsDailyUtc": "Se reinicia a diario a las 00:00 UTC",
             "resetsInHours_one": "~{{count}} h restante",
             "resetsInHours_other": "~{{count}} h restantes",
@@ -1837,12 +1823,6 @@
             "savePercent": "Ahorra hasta un {{pct}} % al año",
             "paddleLoading": "Paddle se está cargando, inténtalo de nuevo.",
             "cancelConfirm": "¿Seguro que quieres cancelar tu suscripción? Conservarás el acceso hasta el final de tu período de facturación.",
-            "teamSeats": "Puestos del equipo",
-            "seatsUsed": "{{used}} / {{total}} puestos usados",
-            "pricePerMonth": "${{price}}/mes",
-            "cannotReduceSeats": "No se puede reducir por debajo de {{count}} puestos (actualmente en uso). Elimina miembros primero.",
-            "removeSeat": "− Quitar puesto",
-            "addSeat": "+ Añadir puesto",
             "cancelSubscription": "Cancelar suscripción",
             "cancelRetainAccess": "Conservarás el acceso a las funciones de {{plan}} hasta el final de tu período de facturación actual.",
             "cancelTeamDowngrade": " Todos los miembros del equipo pasarán a sus planes personales."
@@ -1911,11 +1891,9 @@
                 "freeFeature1": "1 máquina",
                 "freeFeature2": "Relé de chat en tiempo real",
                 "freeFeature3": "Control web de tus agentes locales",
-                "freeFeature4": "1 Repo Mesh",
                 "proFeature1": "2 máquinas",
                 "proFeature2": "Agentes de IA ilimitados",
                 "proFeature3": "Vista remota P2P",
-                "proFeature4": "Repo Meshes ilimitados",
                 "ultraFeature1": "5 máquinas — tarifa plana, no por puesto",
                 "ultraFeature2": "Todo lo de Pro",
                 "ultraFeature3": "Mayor concurrencia y límites de uso",
@@ -3378,8 +3356,7 @@
             "docs": "Documentación",
             "getStarted": "Comenzar",
             "toggleMenu": "Alternar menú",
-            "mainNavigation": "Navegación principal",
-            "magi": "MAGI"
+            "mainNavigation": "Navegación principal"
         },
         "hero": {
             "badge": "El plano de control de agentes multiproveedor y multimáquina",
@@ -3560,8 +3537,7 @@
                         "p2p": "Chat, comandos, capturas y entrada remota por P2P",
                         "providers": "Todos los proveedores: agentes CLI, IDE y ACP",
                         "push": "Notificaciones push para aprobaciones y finalizaciones",
-                        "share": "Un enlace de sesión compartida",
-                        "mesh": "1 Repo Mesh"
+                        "share": "Un enlace de sesión compartida"
                     }
                 },
                 "pro": {
@@ -3573,7 +3549,6 @@
                         "p2p": "Más sesiones P2P simultáneas",
                         "push": "Notificaciones push ilimitadas",
                         "turn": "Relay TURN para redes restrictivas",
-                        "mesh": "Repo Meshes ilimitados",
                         "share": "Más sesiones compartidas"
                     }
                 },
@@ -3586,7 +3561,7 @@
                         "everything": "Todo lo de Pro",
                         "p2p": "El mayor número de sesiones P2P simultáneas",
                         "screenshots": "Minutos diarios de captura de pantalla ilimitados",
-                        "webhooks": "Más webhooks y llamadas a la API",
+                        "webhooks": "Límites más altos de llamadas a la API",
                         "share": "Más sesiones compartidas"
                     }
                 }
@@ -3664,17 +3639,6 @@
             "point1": "Presets por dificultad: fácil / media / difícil",
             "point2": "Cada preset elige proveedor, modelo y nivel de razonamiento",
             "point3": "Ahorra tokens sin ajustar cada tarea a mano"
-        },
-        "magi": {
-            "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
-            "sectionSubtitle": "Lanza la misma consulta de solo lectura a un panel de agentes independientes en distintas máquinas y modelos, y luego sintetiza dónde coinciden y dónde divergen —para que la alucinación segura de un modelo no se cuele como respuesta.",
-            "point1": "La misma pregunta, réplicas independientes de máquina × modelo",
-            "point2": "Muestra acuerdo, desacuerdo y evidencia única",
-            "point3": "Detecta al agente que se equivoca con seguridad",
-            "origin": "La verificación cruzada multimodelo estaba en Repo Mesh antes de que se pusiera de moda.",
-            "diagramAlt": "Diagrama MAGI: una pregunta de solo lectura se distribuye a réplicas independientes de máquina × modelo y se sintetiza en acuerdos, discrepancias y afirmaciones únicas",
-            "synthesisAlt": "Síntesis MAGI real en el chat del coordinador: causa raíz consensuada con evidencia file:line, una réplica fallida reportada con honestidad y la conclusión principal marcada como source-coupled",
-            "mediaCaption": "Salida real de una ejecución MAGI — la réplica fallida y la marca source-coupled son honestidad, no un error."
         },
         "scenario": {
             "sectionTitle": "Un prompt. Mac construye, Windows prueba, main aterriza.",

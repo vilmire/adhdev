@@ -1748,7 +1748,6 @@
             "planLimits": "プランの上限",
             "limitMachines": "マシン",
             "limitP2P": "P2P 接続",
-            "limitWebhooks": "Webhook",
             "limitPushNotifications": "1日のプッシュ通知",
             "limitTurnRelay": "TURN リレー",
             "enabled": "有効",
@@ -1795,8 +1794,6 @@
             "frozenFeatureTitle": "凍結中 — この機能は一時停止されており利用できません。docs/FROZEN_SURFACES.md を参照してください"
         },
         "billing": {
-            "title": "Billing",
-            "subtitle": "サブスクリプションとプランを管理します",
             "currentPlan": "現在のプラン:",
             "statusTrial": "トライアル",
             "statusActive": "有効",
@@ -1809,18 +1806,7 @@
             "managePayment": "お支払いと請求書を管理",
             "couldNotOpenPortal": "お支払いポータルを開けませんでした",
             "statMachines": "マシン",
-            "statTeam": "チーム",
             "statTurnPerDay": "TURN 分/日",
-            "planLimitsTitle": "プランの上限",
-            "limitApiCalls": "API 呼び出し",
-            "limitSharedSessions": "共有セッション",
-            "limitScreenshotMinutes": "スクリーンショット時間",
-            "limitDescMachines": "同時に接続するマシン数",
-            "limitDescPush": "1日のプッシュ通知数",
-            "limitDescWebhooks": "登録済み Webhook エンドポイント",
-            "limitDescApiCalls": "月間 REST API 呼び出し数",
-            "limitDescSharedSessions": "同時共有セッション数",
-            "limitDescScreenshotMinutes": "1日のスクリーンショット配信分数",
             "resetsDailyUtc": "毎日 UTC 00:00 にリセット",
             "resetsInHours_one": "約{{count}}時間後",
             "resetsInHours_other": "約{{count}}時間後",
@@ -1832,12 +1818,6 @@
             "savePercent": "年払いで最大 {{pct}}% お得",
             "paddleLoading": "Paddle を読み込み中です。もう一度お試しください。",
             "cancelConfirm": "サブスクリプションを解約してもよろしいですか？請求期間の終了まではアクセスを維持できます。",
-            "teamSeats": "チームシート",
-            "seatsUsed": "{{used}} / {{total}} シート使用中",
-            "pricePerMonth": "${{price}}/月",
-            "cannotReduceSeats": "{{count}} シート未満には減らせません（現在使用中）。先にメンバーを削除してください。",
-            "removeSeat": "− シートを削除",
-            "addSeat": "+ シートを追加",
             "cancelSubscription": "サブスクリプションを解約",
             "cancelRetainAccess": "現在の請求期間の終了まで {{plan}} の機能へのアクセスを維持できます。",
             "cancelTeamDowngrade": " すべてのチームメンバーは個人プランにダウングレードされます。"
@@ -1906,11 +1886,9 @@
                 "freeFeature1": "1 マシン",
                 "freeFeature2": "リアルタイムチャットリレー",
                 "freeFeature3": "ローカルエージェントの Web 操作",
-                "freeFeature4": "Repo Mesh 1 つ",
                 "proFeature1": "2 マシン",
                 "proFeature2": "AI エージェント無制限",
                 "proFeature3": "P2P リモートビュー",
-                "proFeature4": "Repo Mesh 無制限",
                 "ultraFeature1": "5 マシン — シート単位ではなく定額",
                 "ultraFeature2": "Pro のすべての機能",
                 "ultraFeature3": "より高い同時実行数と使用上限",
@@ -3373,8 +3351,7 @@
             "docs": "ドキュメント",
             "getStarted": "始める",
             "toggleMenu": "メニューを切り替え",
-            "mainNavigation": "メインナビゲーション",
-            "magi": "MAGI"
+            "mainNavigation": "メインナビゲーション"
         },
         "hero": {
             "badge": "マルチベンダー・マルチマシン対応のエージェント制御プレーン",
@@ -3555,8 +3532,7 @@
                         "p2p": "P2P チャット、コマンド、スクリーンショット、リモート入力",
                         "providers": "すべてのプロバイダー — CLI、IDE、ACP エージェント",
                         "push": "承認・完了のプッシュ通知",
-                        "share": "共有セッションリンク 1 つ",
-                        "mesh": "Repo Mesh 1 つ"
+                        "share": "共有セッションリンク 1 つ"
                     }
                 },
                 "pro": {
@@ -3568,7 +3544,6 @@
                         "p2p": "同時 P2P セッション数の増加",
                         "push": "無制限のプッシュ通知",
                         "turn": "制限の厳しいネットワーク向けの TURN リレー",
-                        "mesh": "Repo Mesh 無制限",
                         "share": "共有セッション数の増加"
                     }
                 },
@@ -3581,7 +3556,7 @@
                         "everything": "Pro のすべて",
                         "p2p": "最多の同時 P2P セッション数",
                         "screenshots": "1 日のスクリーンショット時間が無制限",
-                        "webhooks": "より多くの webhook と API コール",
+                        "webhooks": "より高い API コール上限",
                         "share": "共有セッション数の増加"
                     }
                 }
@@ -3659,17 +3634,6 @@
             "point1": "難易度ベースのプリセット: 簡単 / 中程度 / 難しい",
             "point2": "各プリセットが provider、model、thinking レベルを選択",
             "point3": "タスクごとに手で調整せずトークンを節約"
-        },
-        "magi": {
-            "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
-            "sectionSubtitle": "同じ読み取り専用の問いを、異なるマシンとモデルにまたがる独立したエージェントのパネルに投げ、一致する点と食い違う点を統合します — 1 つのモデルの自信満々な幻覚が答えとしてすり抜けないように。",
-            "point1": "同じ問い、独立したマシン × モデルのレプリカ",
-            "point2": "一致・不一致・固有の証拠を明らかにする",
-            "point3": "自信満々に間違えている 1 つのエージェントを捕まえる",
-            "origin": "マルチモデルのクロスチェックは、それがトレンドになる前から Repo Mesh に組み込まれていました。",
-            "diagramAlt": "MAGI ファンアウト図: 1つの読み取り専用の質問を独立したマシン×モデルのレプリカへ配布し、合意・不一致・単独主張に合成",
-            "synthesisAlt": "コーディネーターのチャットに届いた実際の MAGI 合成: file:line の根拠付き合意、失敗レプリカの正直な報告、source-coupled フラグ",
-            "mediaCaption": "実際の MAGI 実行結果そのままです — 失敗したレプリカも source-coupled フラグも、演出ではなく誠実さです。"
         },
         "scenario": {
             "sectionTitle": "プロンプト一つ。Macがビルド、Windowsがテスト、mainに着地。",

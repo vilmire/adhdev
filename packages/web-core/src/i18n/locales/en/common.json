@@ -1748,7 +1748,6 @@
             "planLimits": "Plan limits",
             "limitMachines": "Machines",
             "limitP2P": "P2P Connections",
-            "limitWebhooks": "Webhooks",
             "limitPushNotifications": "Daily Push Notifications",
             "limitTurnRelay": "TURN Relay",
             "enabled": "Enabled",
@@ -1795,8 +1794,6 @@
             "frozenFeatureTitle": "Frozen — this feature is paused and not available. See docs/FROZEN_SURFACES.md"
         },
         "billing": {
-            "title": "Billing",
-            "subtitle": "Manage your subscription and plan",
             "currentPlan": "Current Plan:",
             "statusTrial": "Trial",
             "statusActive": "Active",
@@ -1809,18 +1806,7 @@
             "managePayment": "Manage Payment & Invoices",
             "couldNotOpenPortal": "Could not open billing portal",
             "statMachines": "Machines",
-            "statTeam": "Team",
             "statTurnPerDay": "TURN min/day",
-            "planLimitsTitle": "Plan limits",
-            "limitApiCalls": "API Calls",
-            "limitSharedSessions": "Shared Sessions",
-            "limitScreenshotMinutes": "Screenshot Minutes",
-            "limitDescMachines": "Machines connected at once",
-            "limitDescPush": "Push notifications per day",
-            "limitDescWebhooks": "Registered webhook endpoints",
-            "limitDescApiCalls": "REST API calls per month",
-            "limitDescSharedSessions": "Concurrent shared sessions",
-            "limitDescScreenshotMinutes": "Screenshot streaming minutes per day",
             "resetsDailyUtc": "Resets daily at 00:00 UTC",
             "resetsInHours_one": "~{{count}}h left",
             "resetsInHours_other": "~{{count}}h left",
@@ -1832,12 +1818,6 @@
             "savePercent": "Save up to {{pct}}% yearly",
             "paddleLoading": "Paddle is loading, please try again.",
             "cancelConfirm": "Are you sure you want to cancel your subscription? You will retain access until the end of your billing period.",
-            "teamSeats": "Team Seats",
-            "seatsUsed": "{{used}} / {{total}} seats used",
-            "pricePerMonth": "${{price}}/mo",
-            "cannotReduceSeats": "Cannot reduce below {{count}} seats (currently in use). Remove members first.",
-            "removeSeat": "− Remove Seat",
-            "addSeat": "+ Add Seat",
             "cancelSubscription": "Cancel Subscription",
             "cancelRetainAccess": "You will retain access to {{plan}} features until the end of your current billing period.",
             "cancelTeamDowngrade": " All team members will be downgraded to their personal plans."
@@ -1906,11 +1886,9 @@
                 "freeFeature1": "1 machine",
                 "freeFeature2": "Real-time chat relay",
                 "freeFeature3": "Web control for your local agents",
-                "freeFeature4": "1 Repo Mesh",
                 "proFeature1": "2 machines",
                 "proFeature2": "Unlimited AI agents",
                 "proFeature3": "P2P remote view",
-                "proFeature4": "Unlimited Repo Meshes",
                 "ultraFeature1": "5 machines — flat, not per-seat",
                 "ultraFeature2": "Everything in Pro",
                 "ultraFeature3": "Higher concurrency & usage limits",
@@ -3373,8 +3351,7 @@
             "docs": "Docs",
             "getStarted": "Get started",
             "toggleMenu": "Toggle menu",
-            "mainNavigation": "Main navigation",
-            "magi": "MAGI"
+            "mainNavigation": "Main navigation"
         },
         "hero": {
             "badge": "Multi-vendor, multi-machine agent control plane",
@@ -3555,8 +3532,7 @@
                         "p2p": "P2P chat, commands, screenshots, remote input",
                         "providers": "Every provider — CLI, IDE, and ACP agents",
                         "push": "Push notifications for approvals & completions",
-                        "share": "One shared session link",
-                        "mesh": "1 Repo Mesh"
+                        "share": "One shared session link"
                     }
                 },
                 "pro": {
@@ -3568,7 +3544,6 @@
                         "p2p": "More concurrent P2P sessions",
                         "push": "Unlimited push notifications",
                         "turn": "TURN relay for restrictive networks",
-                        "mesh": "Unlimited Repo Meshes",
                         "share": "More shared sessions"
                     }
                 },
@@ -3581,7 +3556,7 @@
                         "everything": "Everything in Pro",
                         "p2p": "Highest concurrent P2P sessions",
                         "screenshots": "Unlimited daily screenshot minutes",
-                        "webhooks": "More webhooks & API calls",
+                        "webhooks": "Higher API call limits",
                         "share": "More shared sessions"
                     }
                 }
@@ -3659,17 +3634,6 @@
             "point1": "Difficulty-based presets: easy / medium / difficult",
             "point2": "Each preset picks provider, model, and thinking level",
             "point3": "Save tokens without hand-tuning every task"
-        },
-        "magi": {
-            "sectionTitle": "MAGI: Multi-Agent Ground-truth Insight",
-            "sectionSubtitle": "Fan the same read-only question out to a panel of independent agents across different machines and models, then synthesize where they agree and where they diverge — so one model's confident hallucination doesn't slip through as the answer.",
-            "point1": "Same question, independent machine × model replicas",
-            "point2": "Surfaces agreement, disagreement, and unique evidence",
-            "point3": "Catches the one agent that's confidently wrong",
-            "origin": "Multi-model cross-checking was built into Repo Mesh before it became a trend.",
-            "diagramAlt": "MAGI fan-out diagram: one read-only question dispatched to independent machine × model replicas, synthesized into agreed, contested, and singleton claims",
-            "synthesisAlt": "Real MAGI synthesis in the coordinator chat: consensus root cause with file:line evidence, one failed replica reported honestly, and the main conclusion flagged as source-coupled",
-            "mediaCaption": "Real output from a MAGI run — the failed replica and the source-coupled flag are the honesty, not a bug."
         },
         "scenario": {
             "sectionTitle": "One prompt. Mac builds, Windows tests, main lands.",
