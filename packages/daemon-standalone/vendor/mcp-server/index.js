@@ -81338,129 +81338,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2e3;
       }
     });
-    function classifiedDifficultiesForSlot(slot) {
-      const highest = slot.difficulty?.reduce((rank, value) => {
-        const candidate = CLASSIFIED_DIFFICULTIES.indexOf(value);
-        return Math.max(rank, candidate);
-      }, -1) ?? -1;
-      return highest < 0 ? [] : CLASSIFIED_DIFFICULTIES.slice(0, highest + 1);
-    }
-    function allowedClassifiedDifficultiesForSession(node, slots, providerType, model) {
-      if (normalizeNodeCapabilitySlots2(node?.policy?.slots).length === 0) return void 0;
-      const providerSlots = slots.filter((slot) => slot.provider?.trim() === providerType);
-      const possibleSlots = model ? providerSlots.filter((slot) => isModelAllowedBySlot(model, slot)) : providerSlots;
-      if (possibleSlots.length === 0) return [];
-      const supported = possibleSlots.map((slot) => new Set(classifiedDifficultiesForSlot(slot)));
-      return CLASSIFIED_DIFFICULTIES.filter((difficulty) => model ? supported.some((grades) => grades.has(difficulty)) : supported.every((grades) => grades.has(difficulty)));
-    }
-    function taskMeetsSessionDifficultyFloor(task, allowed) {
-      if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
-      return allowed.includes(task.difficulty);
-    }
-    function readSessionModel(state2) {
-      const controlModel = typeof state2?.controlValues?.model === "string" ? state2.controlValues.model.trim() : "";
-      if (controlModel) return controlModel;
-      const modelItem = Array.isArray(state2?.summaryMetadata?.items) ? state2.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
-      const summaryModel = typeof modelItem?.shortValue === "string" && modelItem.shortValue.trim() ? modelItem.shortValue.trim() : typeof modelItem?.value === "string" ? modelItem.value.trim() : "";
-      return summaryModel || void 0;
-    }
-    function isDifficultyFloorWaitReason(reason) {
-      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || BOUNDED_WAIT_SKIP_REASONS.some((prefix) => reason.startsWith(prefix)));
-    }
-    function handleClaimPathDifficultyFloorRefusal(args) {
-      if (args.refusalReason !== "difficulty_floor_unmet" || !args.claimRefusal.taskId) return;
-      handleDifficultyFloorSkip({
-        meshId: args.meshId,
-        taskId: args.claimRefusal.taskId,
-        nodeId: args.nodeId,
-        coordinatorDaemonId: args.coordinatorDaemonId,
-        reason: `task_difficulty_floor_unavailable:${args.claimRefusal.difficulty || "classified"}`
-      });
-    }
-    function handleDifficultyFloorSkip(args) {
-      let previousTask;
-      try {
-        previousTask = getQueue3(args.meshId).find((task2) => task2.id === args.taskId);
-      } catch {
-      }
-      if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
-      const continuing = previousTask?.autoLaunch?.status === "skipped" && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
-      if (!continuing) {
-        recordTaskAutoLaunch(args.meshId, args.taskId, {
-          status: "skipped",
-          reason: args.reason,
-          nodeId: args.nodeId
-        });
-      }
-      const waitStartedAt = Date.parse(previousTask?.autoLaunch?.updatedAt || (/* @__PURE__ */ new Date()).toISOString());
-      const waitedMs = Number.isFinite(waitStartedAt) ? Date.now() - waitStartedAt : 0;
-      const reportKey = `${args.meshId}:${args.taskId}`;
-      if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
-      const task = previousTask ?? getQueue3(args.meshId).find((candidate) => candidate.id === args.taskId);
-      const difficulty = task?.difficulty || args.reason.split(":")[1] || "classified";
-      const waitedMinutes = Math.round(waitedMs / 6e4);
-      const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some((prefix) => args.reason.startsWith(prefix));
-      const coordinatorMessage = capacityStall ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.` : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
-      const queued = queuePendingMeshCoordinatorEvent({
-        event: "mesh:dispatch_blocked",
-        meshId: args.meshId,
-        nodeLabel: args.nodeId || args.meshId,
-        ...args.nodeId ? { nodeId: args.nodeId } : {},
-        metadataEvent: {
-          source: capacityStall ? "mesh_queue_capacity_stall_timeout" : "mesh_queue_difficulty_floor_timeout",
-          taskId: args.taskId,
-          reason: capacityStall ? "task_claim_capacity_stall_timeout" : "task_difficulty_floor_timeout",
-          ...capacityStall ? { skipReason: args.reason } : {},
-          difficulty,
-          waitedMs,
-          coordinatorMessage
-        },
-        coordinatorMessage,
-        queuedAt: Date.now(),
-        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
-        ...task?.sourceCoordinatorSessionId ? { targetCoordinatorSessionId: task.sourceCoordinatorSessionId } : {}
-      });
-      if (queued) {
-        if (difficultyFloorTimeoutReported.size >= DIFFICULTY_FLOOR_REPORT_DEDUP_MAX) {
-          const oldest = difficultyFloorTimeoutReported.values().next().value;
-          if (oldest) difficultyFloorTimeoutReported.delete(oldest);
-        }
-        difficultyFloorTimeoutReported.add(reportKey);
-        recordTaskAutoLaunch(args.meshId, args.taskId, {
-          status: "skipped",
-          reason: `${TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX}${difficulty}`,
-          nodeId: args.nodeId
-        });
-      }
-    }
-    var DIFFICULTY_FLOOR_REPORT_AFTER_MS;
-    var TASK_DIFFICULTY_FLOOR_REASON_PREFIX;
-    var TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX;
-    var difficultyFloorTimeoutReported;
-    var DIFFICULTY_FLOOR_REPORT_DEDUP_MAX;
-    var CLASSIFIED_DIFFICULTIES;
-    var BOUNDED_WAIT_SKIP_REASONS;
-    var init_mesh_difficulty_floor = __esm2({
-      "src/mesh/mesh-difficulty-floor.ts"() {
-        "use strict";
-        init_mesh_work_queue();
-        init_mesh_events_pending();
-        init_slot_model_enforcement();
-        init_mesh_quota_routing();
-        init_dist();
-        DIFFICULTY_FLOOR_REPORT_AFTER_MS = 10 * 6e4;
-        TASK_DIFFICULTY_FLOOR_REASON_PREFIX = "task_difficulty_floor_";
-        TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX = "task_difficulty_floor_reported:";
-        difficultyFloorTimeoutReported = /* @__PURE__ */ new Set();
-        DIFFICULTY_FLOOR_REPORT_DEDUP_MAX = 2e3;
-        CLASSIFIED_DIFFICULTIES = ["easy", "medium", "difficult"];
-        BOUNDED_WAIT_SKIP_REASONS = [
-          SLOT_MODEL_BUSY_SKIP_REASON,
-          "max_concurrent_sessions_reached",
-          "max_provider_parallel_reached"
-        ];
-      }
-    });
     function nodesForMesh(meshId) {
       try {
         const nodes = getMesh(meshId)?.nodes;
@@ -81802,16 +81679,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       LOG.info("MeshQueue", `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
       return true;
     }
-    function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, status) {
-      if (status !== "skipped") return false;
-      let existing;
-      try {
-        existing = getQueue3(meshId).find((t) => t.id === taskId)?.autoLaunch;
-      } catch {
-        return false;
-      }
-      return existing?.status === "skipped" && isDifficultyFloorWaitReason(existing.reason);
-    }
     function awaitClaimWindowMs(cycles) {
       return AUTO_LAUNCH_AWAIT_CLAIM_MS * Math.pow(2, Math.min(cycles, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES));
     }
@@ -81932,7 +81799,6 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_logger();
         init_dist();
         init_mesh_work_queue();
-        init_mesh_difficulty_floor();
         init_mesh_events_utils();
         init_mesh_events_pending();
         init_mesh_queue_observability();
@@ -81947,6 +81813,150 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         AUTO_LAUNCH_ORPHAN_GRACE_MS = 3e4;
         autoLaunchAwaitClaimBackoff = /* @__PURE__ */ new Map();
         remoteGeneratingSessions = /* @__PURE__ */ new Set();
+      }
+    });
+    function classifiedDifficultiesForSlot(slot) {
+      const highest = slot.difficulty?.reduce((rank, value) => {
+        const candidate = CLASSIFIED_DIFFICULTIES.indexOf(value);
+        return Math.max(rank, candidate);
+      }, -1) ?? -1;
+      return highest < 0 ? [] : CLASSIFIED_DIFFICULTIES.slice(0, highest + 1);
+    }
+    function allowedClassifiedDifficultiesForSession(node, slots, providerType, model) {
+      if (normalizeNodeCapabilitySlots2(node?.policy?.slots).length === 0) return void 0;
+      const providerSlots = slots.filter((slot) => slot.provider?.trim() === providerType);
+      const possibleSlots = model ? providerSlots.filter((slot) => isModelAllowedBySlot(model, slot)) : providerSlots;
+      if (possibleSlots.length === 0) return [];
+      const supported = possibleSlots.map((slot) => new Set(classifiedDifficultiesForSlot(slot)));
+      return CLASSIFIED_DIFFICULTIES.filter((difficulty) => model ? supported.some((grades) => grades.has(difficulty)) : supported.every((grades) => grades.has(difficulty)));
+    }
+    function taskMeetsSessionDifficultyFloor(task, allowed) {
+      if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
+      return allowed.includes(task.difficulty);
+    }
+    function launchSideDifficultyFloorMismatch(node, slots, providerType, model, task, nodeId) {
+      const allowed = allowedClassifiedDifficultiesForSession(node, slots, providerType, model);
+      if (taskMeetsSessionDifficultyFloor(task, allowed)) return void 0;
+      LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
+      return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
+    }
+    function readSessionModel(state2) {
+      const controlModel = typeof state2?.controlValues?.model === "string" ? state2.controlValues.model.trim() : "";
+      if (controlModel) return controlModel;
+      const modelItem = Array.isArray(state2?.summaryMetadata?.items) ? state2.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
+      const summaryModel = typeof modelItem?.shortValue === "string" && modelItem.shortValue.trim() ? modelItem.shortValue.trim() : typeof modelItem?.value === "string" ? modelItem.value.trim() : "";
+      return summaryModel || void 0;
+    }
+    function isDifficultyFloorWaitReason(reason) {
+      return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || BOUNDED_WAIT_SKIP_REASONS.some((prefix) => reason.startsWith(prefix)));
+    }
+    function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, status) {
+      if (status !== "skipped") return false;
+      let existing;
+      try {
+        existing = getQueue3(meshId).find((t) => t.id === taskId)?.autoLaunch;
+      } catch {
+        return false;
+      }
+      return existing?.status === "skipped" && isDifficultyFloorWaitReason(existing.reason);
+    }
+    function handleClaimPathDifficultyFloorRefusal(args) {
+      if (args.refusalReason !== "difficulty_floor_unmet" || !args.claimRefusal.taskId) return;
+      handleDifficultyFloorSkip({
+        meshId: args.meshId,
+        taskId: args.claimRefusal.taskId,
+        nodeId: args.nodeId,
+        coordinatorDaemonId: args.coordinatorDaemonId,
+        reason: `task_difficulty_floor_unavailable:${args.claimRefusal.difficulty || "classified"}`
+      });
+    }
+    function handleDifficultyFloorSkip(args) {
+      let previousTask;
+      try {
+        previousTask = getQueue3(args.meshId).find((task2) => task2.id === args.taskId);
+      } catch {
+      }
+      if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
+      const continuing = previousTask?.autoLaunch?.status === "skipped" && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
+      if (!continuing && !autoLaunchWriteWouldClobberWinner(args.meshId, args.taskId, {
+        status: "skipped",
+        nodeId: args.nodeId
+      }, AUTO_LAUNCH_AWAIT_CLAIM_MS)) {
+        recordTaskAutoLaunch(args.meshId, args.taskId, {
+          status: "skipped",
+          reason: args.reason,
+          nodeId: args.nodeId
+        });
+      }
+      const waitStartedAt = Date.parse(previousTask?.autoLaunch?.updatedAt || (/* @__PURE__ */ new Date()).toISOString());
+      const waitedMs = Number.isFinite(waitStartedAt) ? Date.now() - waitStartedAt : 0;
+      const reportKey = `${args.meshId}:${args.taskId}`;
+      if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
+      const task = previousTask ?? getQueue3(args.meshId).find((candidate) => candidate.id === args.taskId);
+      const difficulty = task?.difficulty || args.reason.split(":")[1] || "classified";
+      const waitedMinutes = Math.round(waitedMs / 6e4);
+      const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some((prefix) => args.reason.startsWith(prefix));
+      const coordinatorMessage = capacityStall ? `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because every capable slot has stayed at capacity (${args.reason}). It remains pending and will still be claimed automatically the moment a slot frees. Check whether the occupying sessions are genuinely working or stuck; consider re-targeting the task to another node rather than widening a mesh-wide cap.` : `[System] Queued task ${args.taskId} has waited ${waitedMinutes} minutes because no available slot meets its ${difficulty} difficulty floor. It remains pending and was not downgraded. Ask the user whether to grant an explicit task-scoped downgrade; do not change a mesh-wide policy.`;
+      const queued = queuePendingMeshCoordinatorEvent({
+        event: "mesh:dispatch_blocked",
+        meshId: args.meshId,
+        nodeLabel: args.nodeId || args.meshId,
+        ...args.nodeId ? { nodeId: args.nodeId } : {},
+        metadataEvent: {
+          source: capacityStall ? "mesh_queue_capacity_stall_timeout" : "mesh_queue_difficulty_floor_timeout",
+          taskId: args.taskId,
+          reason: capacityStall ? "task_claim_capacity_stall_timeout" : "task_difficulty_floor_timeout",
+          ...capacityStall ? { skipReason: args.reason } : {},
+          difficulty,
+          waitedMs,
+          coordinatorMessage
+        },
+        coordinatorMessage,
+        queuedAt: Date.now(),
+        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
+        ...task?.sourceCoordinatorSessionId ? { targetCoordinatorSessionId: task.sourceCoordinatorSessionId } : {}
+      });
+      if (queued) {
+        if (difficultyFloorTimeoutReported.size >= DIFFICULTY_FLOOR_REPORT_DEDUP_MAX) {
+          const oldest = difficultyFloorTimeoutReported.values().next().value;
+          if (oldest) difficultyFloorTimeoutReported.delete(oldest);
+        }
+        difficultyFloorTimeoutReported.add(reportKey);
+        recordTaskAutoLaunch(args.meshId, args.taskId, {
+          status: "skipped",
+          reason: `${TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX}${difficulty}`,
+          nodeId: args.nodeId
+        });
+      }
+    }
+    var DIFFICULTY_FLOOR_REPORT_AFTER_MS;
+    var TASK_DIFFICULTY_FLOOR_REASON_PREFIX;
+    var TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX;
+    var difficultyFloorTimeoutReported;
+    var DIFFICULTY_FLOOR_REPORT_DEDUP_MAX;
+    var CLASSIFIED_DIFFICULTIES;
+    var BOUNDED_WAIT_SKIP_REASONS;
+    var init_mesh_difficulty_floor = __esm2({
+      "src/mesh/mesh-difficulty-floor.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_work_queue();
+        init_mesh_autolaunch_integrity();
+        init_mesh_events_pending();
+        init_slot_model_enforcement();
+        init_mesh_quota_routing();
+        init_dist();
+        DIFFICULTY_FLOOR_REPORT_AFTER_MS = 10 * 6e4;
+        TASK_DIFFICULTY_FLOOR_REASON_PREFIX = "task_difficulty_floor_";
+        TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX = "task_difficulty_floor_reported:";
+        difficultyFloorTimeoutReported = /* @__PURE__ */ new Set();
+        DIFFICULTY_FLOOR_REPORT_DEDUP_MAX = 2e3;
+        CLASSIFIED_DIFFICULTIES = ["easy", "medium", "difficult"];
+        BOUNDED_WAIT_SKIP_REASONS = [
+          SLOT_MODEL_BUSY_SKIP_REASON,
+          "max_concurrent_sessions_reached",
+          "max_provider_parallel_reached"
+        ];
       }
     });
     function normalizeProviderPriority2(policy) {
@@ -85022,6 +85032,11 @@ ${block2.text}`,
               const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType) ? rawEffectiveModel : void 0;
               if (rawEffectiveModel && effectiveModel === void 0) {
                 LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
+              }
+              const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+              if (floorMiss) {
+                markSkip(nodeId, floorMiss, { providerType: effectiveProviderType });
+                continue;
               }
               const providerCap = effectiveSlotCap(
                 resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
