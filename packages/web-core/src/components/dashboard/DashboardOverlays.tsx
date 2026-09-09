@@ -59,6 +59,12 @@ interface DashboardOverlaysProps {
         showReconnected: boolean
         loginUrl?: string
         onReconnect?: () => void
+        /**
+         * Skip rendering the banner here. For hosts (cloud) that mount a single
+         * app-shell-level ConnectionBanner covering every route — mounting both
+         * would stack two overlapping toasts on the dashboard.
+         */
+        suppress?: boolean
     }
     toastOverlay: {
         toasts: Toast[]
@@ -84,12 +90,14 @@ export default function DashboardOverlays({
 }: DashboardOverlaysProps) {
     return (
         <>
-            <ConnectionBanner
-                wsStatus={connectionBanner.wsStatus}
-                showReconnected={connectionBanner.showReconnected}
-                loginUrl={connectionBanner.loginUrl}
-                onReconnect={connectionBanner.onReconnect}
-            />
+            {!connectionBanner.suppress && (
+                <ConnectionBanner
+                    wsStatus={connectionBanner.wsStatus}
+                    showReconnected={connectionBanner.showReconnected}
+                    loginUrl={connectionBanner.loginUrl}
+                    onReconnect={connectionBanner.onReconnect}
+                />
+            )}
 
             {historyModal.open && historyModal.targetConv && (
                 <HistoryModal

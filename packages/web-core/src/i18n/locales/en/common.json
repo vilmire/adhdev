@@ -1445,7 +1445,9 @@
         "newSession": "New session",
         "newSessionDescription": "A connected machine is ready. Start a new session with any installed provider — CLI, ACP, or IDE.",
         "noTabsInGroup": "No tabs in this group",
-        "pressEscToCancel": "Press Esc to cancel"
+        "pressEscToCancel": "Press Esc to cancel",
+        "noActiveAgent": "No active agent",
+        "moveTabHere": "Move a tab here to view"
     },
     "terminal": {
         "loadOlderOutput": "Load older terminal output",
@@ -1929,7 +1931,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "Are you sure you want to logout?",
             "logout": "Logout",
-            "machineLimitBanner": "You've reached your Free plan limit of {{count}} machine{{plural}}. Upgrade to add more.",
             "upgradeArrow": "Upgrade →",
             "machineLimitBadge": "Machines full",
             "machineLimitBadgeTitle": "You've reached your plan limit of {{count}} machine{{plural}} — open billing to upgrade",
@@ -2149,7 +2150,14 @@
             "step2Desc": "The daemon links to this account automatically. No token to copy; it appears here the moment it connects.",
             "step3Title": "Launch your first session",
             "step3Desc": "Once a machine is online, start Claude Code, Codex, Cursor, and other agents straight from the dashboard.",
-            "readDocs": "Read the documentation →"
+            "readDocs": "Read the documentation →",
+            "reconnectingLabel": "Connection lost — reconnecting… Check your network if this persists.",
+            "offlineLabel": "You're offline. Reconnect to the internet and this page will resume automatically.",
+            "authFailedLabel": "Session expired — sign in again to continue.",
+            "machineLimitLabel": "Machine limit reached — your plan allows up to {{limit}}. Remove a machine or upgrade your plan to connect this one.",
+            "machineLimitManage": "Manage machines →",
+            "machineLimitUpgrade": "Upgrade plan →",
+            "setupWizardLink": "Prefer a guided setup? Open the Setup Wizard →"
         },
         "legal": {
             "navHome": "Home",
@@ -2180,7 +2188,10 @@
             "registryPublishTitle": "Authorize Registry Publishing",
             "authorizeRegistryPublishAs": "Grant provider registry publishing access as {{name}}?",
             "registryPublishWarning": "This grants a short-lived token (15 minutes) that can publish, promote and yank provider packages in the registry. It is not a daemon registration. Only approve this if you started a registry publish yourself. Requires an admin account.",
-            "signInFirstRegistryPublish": "Please sign in with an admin account to authorize registry publishing."
+            "signInFirstRegistryPublish": "Please sign in with an admin account to authorize registry publishing.",
+            "approving": "Approving…",
+            "errorFriendly": "Couldn't complete CLI authorization.",
+            "tryAgain": "Try again"
         },
         "privacy": {
             "title": "Privacy Policy",
@@ -3007,7 +3018,7 @@
             "mem": "MEM",
             "loading": "Loading your machines…",
             "emptyHeadline": "Welcome to ADHDev",
-            "emptyBody": "Connect your first machine to the dashboard. Run setup once, then start ADHDev on that machine:",
+            "emptyBody": "Connect your first machine to the dashboard. Install ADHDev on that machine and sign in — it pairs automatically and appears here:",
             "emptyDocsLink": "Read the documentation →",
             "hidden": "Hidden",
             "pageTitle": "Machines",
