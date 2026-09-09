@@ -55760,6 +55760,30 @@ ${lines.join("\n")}
         };
       }
     });
+    function autoLaunchUnclaimedSpawnCount(task) {
+      const count = task.autoLaunchUnclaimedCount;
+      return typeof count === "number" && Number.isFinite(count) && count > 0 ? count : 0;
+    }
+    function maybeParkSpawnCappedTask(meshId, task, park, markSkip) {
+      const count = autoLaunchUnclaimedSpawnCount(task);
+      if (count < AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP) return false;
+      const parked = park(meshId, task.id, { reason: SPAWN_CAP_PARK_REASON, allowUntargeted: true });
+      if (parked) {
+        LOG.warn("MeshQueue", `AUTOLAUNCH-SPAWN-CAP: task ${task.id} (mesh ${meshId}) recorded ${count} auto-launches with no successful claim (cap ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}) \u2014 PARKED. No further sessions will be spawned for it; the coordinator is paged. mesh_queue_requeue unparks it and resets the budget.`);
+      }
+      markSkip(SPAWN_CAP_PARK_REASON);
+      return true;
+    }
+    var AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP;
+    var SPAWN_CAP_PARK_REASON;
+    var init_mesh_autolaunch_spawn_cap = __esm2({
+      "src/mesh/mesh-autolaunch-spawn-cap.ts"() {
+        "use strict";
+        init_logger();
+        AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP = 5;
+        SPAWN_CAP_PARK_REASON = "auto_launch_spawn_cap_parked";
+      }
+    });
     function taskIsParked(task) {
       return !!readNonEmptyString(task?.parked?.reason);
     }
@@ -55794,8 +55818,9 @@ ${lines.join("\n")}
       const taskId = task.id;
       const addressee = readNonEmptyString(task.parked?.targetSessionId);
       const hours = Math.round(PARKED_TASK_RETENTION_MS / 36e5);
+      const parkCause = task.parked?.reason === SPAWN_CAP_PARK_REASON ? "it exhausted its auto-launch spawn budget: every session launched for it failed to claim it (a launch/claim mismatch), so launching was stopped to break the loop" : `its delta was addressed to session '${addressee || "(unknown)"}' and that pin went stale`;
       const coordinatorMessage = `[System] A PARKED mesh task was dropped after ${hours}h with no coordinator decision.
-Task ${taskId} was parked because its delta was addressed to session '${addressee || "(unknown)"}' and that pin went stale. It was held \u2014 claimable by nobody \u2014 waiting for you to re-target, rewrite, or cancel it. That never happened, so it is now marked FAILED (${PARK_RETENTION_EXPIRED_REASON}) and any dependent tasks have been unblocked.
+Task ${taskId} was parked because ${parkCause}. It was held \u2014 claimable by nobody \u2014 waiting for you to re-target, rewrite, or cancel it. That never happened, so it is now marked FAILED (${PARK_RETENTION_EXPIRED_REASON}) and any dependent tasks have been unblocked.
 The instruction it carried was never delivered to anyone. If it still matters, re-enqueue it (mesh_enqueue_task) against a live session; the failed row remains in the queue as the audit record. To avoid this next time, check parkedTasks in mesh_view_queue \u2014 parked rows are surfaced there from the moment they park.`;
       const nodeLabel = readNonEmptyString(task.targetNodeId) || readNonEmptyString(task.parked?.targetNodeId) || meshId;
       try {
@@ -55842,7 +55867,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         notifyCoordinatorOfParkedTaskDropped(meshId, task);
         return "swept";
       }
-      markSkip(PARKED_SKIP_REASON);
+      markSkip(task.parked?.reason === SPAWN_CAP_PARK_REASON ? SPAWN_CAP_PARK_REASON : PARKED_SKIP_REASON);
       return "held";
     }
     function logTaskParked(meshId, taskId, reason, targetSessionId) {
@@ -55861,6 +55886,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_mesh_turn_ledger();
         init_mesh_event_trace();
         init_config();
+        init_mesh_autolaunch_spawn_cap();
         PARKED_TASK_RETENTION_MS = 24 * 60 * 6e4;
         PARK_REASON_PIN_EXPIRED = "target_session_pin_expired_parked";
         PARKED_SKIP_REASON = "target_session_pin_parked";
@@ -65161,6 +65187,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         const now = (/* @__PURE__ */ new Date()).toISOString();
+        if (autoLaunch.status === "started") {
+          entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
+        }
         entry.autoLaunch = { ...autoLaunch, updatedAt: now };
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         return entry;
@@ -65257,6 +65286,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (opts?.reason) entry.requeueReason = opts.reason;
           applyRequeueMessageEdit(entry, opts?.message);
           delete entry.parked;
+          delete entry.autoLaunchUnclaimedCount;
           const backoffMs = DISPATCH_RETRY_BACKOFF_BASE_MS * Math.pow(2, dispatchFailures - 1);
           entry.notBefore = resolveNotBefore2(Math.min(backoffMs, DISPATCH_RETRY_BACKOFF_MAX_MS));
           MeshRuntimeStore.getInstance().updateQueueEntry(entry);
@@ -65287,6 +65317,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (opts?.reason) entry.requeueReason = opts.reason;
         applyRequeueMessageEdit(entry, opts?.message);
         delete entry.parked;
+        delete entry.autoLaunchUnclaimedCount;
         const notBefore = resolveNotBefore2(opts?.notBefore);
         if (notBefore) entry.notBefore = notBefore;
         else delete entry.notBefore;
@@ -65302,7 +65333,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         if (entry.status !== "pending") return null;
-        if (!entry.targetSessionId && !entry.targetNodeId) return null;
+        if (!opts?.allowUntargeted && !entry.targetSessionId && !entry.targetNodeId) return null;
         if (taskIsParked(entry)) return null;
         const reason = opts?.reason || PARK_REASON_PIN_EXPIRED;
         const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -70878,6 +70909,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               if (opts?.assignedTranscriptProfile) entry.assignedTranscriptProfile = opts.assignedTranscriptProfile;
               entry.dispatchTimestamp = now;
               entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+              delete entry.autoLaunchUnclaimedCount;
               entry.updatedAt = now;
               this.db.prepare(`
                 UPDATE mesh_queue SET
@@ -82669,6 +82701,12 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign."
       };
+      if (reason === SPAWN_CAP_PARK_REASON) {
+        return {
+          summary: `the daemon auto-launched ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}+ worker sessions for it and NONE ever claimed the task, so its durable spawn cap PARKED it to break the launch loop (each further launch would only produce another idle orphan session)`,
+          nextAction: `Diagnose why launched sessions cannot claim it \u2014 check mesh_view_queue (parkedTasks) and the claim-refusal reasons in the node logs (mesh_read_node_logs): typical causes are a difficulty/model floor the launched sessions cannot satisfy, a provider/tag mismatch, or a claim gate refusing every candidate. Fix the mismatch, then mesh_queue_requeue(task_id='...') \u2014 any requeue unparks it and resets the spawn budget \u2014 or mesh_queue_cancel it if no longer wanted. Do NOT just requeue without changing anything: the same mismatch will burn the fresh budget the same way.`
+        };
+      }
       if (reason === PARKED_SKIP_REASON) {
         const base = "it was pinned to a specific session, that pin went stale, and the task is now PARKED \u2014 deliberately held for you rather than re-homed onto another session, because a delta written for one session's context becomes a context-free instruction anywhere else";
         if (evidence === "consumed") return {
@@ -82734,7 +82772,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const { summary, nextAction } = actionableSkipGuidance(reason, evidence);
       const providerAvailabilityResult = reason.startsWith("provider") || reason === "missing_provider_priority";
       const reachabilityResult = reason.startsWith("remote_auto_launch");
-      const closing = reason === PARKED_SKIP_REASON ? `This task is claimable by NOBODY until you act on it \u2014 no session will pick it up and no timer will re-home it. It is held for ${Math.round(PARKED_TASK_RETENTION_MS / 36e5)}h and then failed (with another notification), so it is never silently discarded. Parked rows are listed under parkedTasks in mesh_view_queue, and any mesh_queue_requeue unparks it \u2014 including one that only rewrites its message.` : reason === "target_session_pin_expired" ? "The stale pin has already been cleared, so the task is now claimable by any compatible session \u2014 the action above is about the session it was originally addressed to." : providerAvailabilityResult ? "This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration." : reachabilityResult ? "This result needs action if it persists: the node reconnecting (or re-registering its daemon id) clears it on its own, but a node that stays unreachable will keep the task pending until you bring it back or re-target the task." : "This is an actionable blocker \u2014 it will NOT clear on its own; the task stays pending until you resolve it.";
+      const closing = reason === PARKED_SKIP_REASON || reason === SPAWN_CAP_PARK_REASON ? `This task is claimable by NOBODY until you act on it \u2014 no session will pick it up and no timer will re-home it. It is held for ${Math.round(PARKED_TASK_RETENTION_MS / 36e5)}h and then failed (with another notification), so it is never silently discarded. Parked rows are listed under parkedTasks in mesh_view_queue, and any mesh_queue_requeue unparks it \u2014 including one that only rewrites its message.` : reason === "target_session_pin_expired" ? "The stale pin has already been cleared, so the task is now claimable by any compatible session \u2014 the action above is about the session it was originally addressed to." : providerAvailabilityResult ? "This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration." : reachabilityResult ? "This result needs action if it persists: the node reconnecting (or re-registering its daemon id) clears it on its own, but a node that stays unreachable will keep the task pending until you bring it back or re-target the task." : "This is an actionable blocker \u2014 it will NOT clear on its own; the task stays pending until you resolve it.";
       const coordinatorMessage = `[System] A queued mesh task${nodeLabel ? ` for node ${nodeLabel}` : ""} is not being dispatched because ${summary}. ${nextAction} ${closing}`;
       try {
         queuePendingMeshCoordinatorEvent({
@@ -82780,6 +82818,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_mesh_queue_assignment();
         init_mesh_queue_observability();
         init_mesh_task_parking();
+        init_mesh_autolaunch_spawn_cap();
         ACTIONABLE_SKIP_REASON_PREFIXES = [
           "target_node_id_unmatched",
           "no_node_satisfies_required_tags",
@@ -82810,6 +82849,11 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           // lost exactly as surely as if it had been dropped. Both reasons stay listed —
           // the old one so a version-skewed daemon's rows still page.
           PARKED_SKIP_REASON,
+          // AUTOLAUNCH-SPAWN-CAP (P3): the task exhausted its durable launch budget —
+          // N sessions were spawned for it and none ever claimed it — so it PARKED.
+          // Like the pin park above, nothing in the daemon will ever move it again;
+          // silence here is loss, so it must page.
+          SPAWN_CAP_PARK_REASON,
           // SLOT MODEL GUARD (absent): no slot on the node declares the task's model.
           // Permanent — no amount of waiting produces a slot, so the coordinator must
           // re-drive (adjust difficulty, target another node, ask the owner). Its
@@ -84854,6 +84898,7 @@ ${block2.text}`,
               if (outcome === "backoff") continue;
             }
           }
+          if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
           const candidateNodes = Array.isArray(mesh?.nodes) ? mesh.nodes.filter((node) => {
             if (task.targetNodeId && !meshNodeIdMatches4(node, task.targetNodeId)) return false;
             if (task.taskMode === "convergence" && node?.isLocalWorktree === true) return false;
@@ -85409,6 +85454,7 @@ ${block2.text}`,
         init_mesh_quota_fallback();
         init_mesh_autolaunch_integrity();
         init_mesh_difficulty_floor();
+        init_mesh_autolaunch_spawn_cap();
         init_worker_mcp_isolation();
         init_worker_handoff_dispatch();
         init_mesh_candidacy_predicates();
