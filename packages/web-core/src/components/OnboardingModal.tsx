@@ -22,7 +22,7 @@ const SHARED_STEPS: OnboardingStep[] = [
   {
     icon: IconRocket,
     title: 'Welcome to ADHDev',
-    desc: 'Drive any local CLI coding agent — Claude Code, Codex, Gemini — straight from your browser or phone. The agents keep running on your machine; you control them from the web.',
+    desc: 'Drive any local CLI coding agent — Claude Code, Codex, Antigravity CLI — straight from your browser or phone. The agents keep running on your machine; you control them from the web.',
     visual: IconGlobe,
   },
   {

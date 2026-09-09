@@ -36,7 +36,7 @@ import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
  * (offline / pre-handshake). Live providers always take precedence; this is only
  * the empty-mesh escape hatch so the dropdown never dead-ends.
  */
-const FALLBACK_PROVIDERS = ['claude-cli', 'codex-cli', 'gemini-cli', 'hermes-cli', 'antigravity-cli']
+const FALLBACK_PROVIDERS = ['claude-cli', 'codex-cli', 'hermes-cli', 'antigravity-cli']
 
 /**
  * The four task_kinds surfaced by the editor, in a stable display order. `hint`

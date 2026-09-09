@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addProviderPriorityItem,
   defaultProviderPriorityFromInventory,
+  DEFAULT_REPO_MESH_PROVIDER_PRIORITY,
   describeRepoMeshNodeProviderPriority,
   formatRepoMeshNodeProviderPriority,
   isAvailableCliProvider,
@@ -103,6 +104,11 @@ describe('provider priority utilities', () => {
       'codex-cli',
     ])
     expect(moveProviderPriorityItem(['hermes-cli', 'codex-cli'], 'hermes-cli', 'bottom')).toEqual(['codex-cli', 'hermes-cli'])
+  })
+
+  it('does not default new users onto the retired Gemini vendor (2026-07-24 retirement)', () => {
+    expect(DEFAULT_REPO_MESH_PROVIDER_PRIORITY.toLowerCase()).not.toContain('gemini')
+    expect(parseProviderPriorityInput(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)).not.toContain('gemini-cli')
   })
 })
 

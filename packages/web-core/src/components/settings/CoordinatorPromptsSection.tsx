@@ -40,7 +40,6 @@ const DEFAULT_KNOWN_CLI_TYPES = [
     'codex-cli',
     'antigravity-cli',
     'hermes-cli',
-    'gemini-cli',
 ]
 
 export default function CoordinatorPromptsSection({ daemonId, knownCliTypes = DEFAULT_KNOWN_CLI_TYPES }: Props) {
