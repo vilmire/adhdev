@@ -119,6 +119,7 @@ interface OverviewTabProps {
 export default function OverviewTab({
     machine, ideSessions, cliSessions, acpSessions,
 }: OverviewTabProps) {
+    const { t } = useTranslation('common')
     const hasRuntimeStats = typeof machine.uptime === 'number'
         || typeof machine.freeMem === 'number'
         || typeof machine.availableMem === 'number'
@@ -144,8 +145,8 @@ export default function OverviewTab({
                     Resource Usage
                 </div>
                 <div className="flex gap-6">
-                    <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label="CPU Load" color="#8b5cf6" detail={hasRuntimeStats ? `${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores` : 'Polled from machine page'} />
-                    <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : `Polled from machine page · ${formatBytes(machine.totalMem)} total`} />
+                    <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label="CPU Load" color="#8b5cf6" detail={hasRuntimeStats ? `${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores` : t('machine.overview.waitingForStats')} />
+                    <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : t('machine.overview.waitingForStatsWithTotal', { total: formatBytes(machine.totalMem) })} />
                 </div>
             </Card>
 

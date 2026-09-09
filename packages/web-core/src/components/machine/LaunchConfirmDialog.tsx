@@ -6,7 +6,7 @@ import type { LaunchWorkspaceOption } from '../../pages/machine/types'
 interface LaunchConfirmDialogProps {
     title: string
     description: string
-    details: Array<{ label: string; value: string }>
+    details: Array<{ label: string; value: React.ReactNode }>
     workspaceOptions?: LaunchWorkspaceOption[]
     selectedWorkspaceKey?: string
     onWorkspaceChange?: (key: string) => void
@@ -102,8 +102,8 @@ export default function LaunchConfirmDialog({
                         </div>
                     )}
                     {historyProviderNode}
-                    {details.map((detail) => (
-                        <div key={`${detail.label}:${detail.value}`} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                    {details.map((detail, index) => (
+                        <div key={`${detail.label}:${index}`} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-3xs uppercase tracking-[0.08em] text-text-muted mb-1">
                                 {detail.label}
                             </div>

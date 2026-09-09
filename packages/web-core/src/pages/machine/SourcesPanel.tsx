@@ -8,8 +8,10 @@
  * and the installed-providers list.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Card from '../../components/Card'
 import { IconSpinner } from '../../components/Icons'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 
 interface Source {
     name: string
@@ -37,6 +39,8 @@ function unwrap(raw: any) {
 }
 
 export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }: SourcesPanelProps) {
+    const { t } = useTranslation('common')
+    const { confirm, confirmDialog } = useConfirmDialog()
     const [sources, setSources] = useState<Source[]>([])
     const [conflicts, setConflicts] = useState<Conflict[]>([])
     const [loading, setLoading] = useState(false)
@@ -56,17 +60,17 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
         try {
             const r = unwrap(await sendDaemonCommand(machineId, 'list_provider_sources', {}))
             if (!r?.success) {
-                setError(r?.error || 'Failed to load sources')
+                setError(r?.error || t('machine.sourcesPanel.loadFailed'))
                 return
             }
             setSources(r.sources || [])
             setConflicts(r.conflicts || [])
         } catch (e: any) {
-            setError(e?.message || String(e))
+            setError(e?.message || t('machine.sourcesPanel.loadFailed'))
         } finally {
             setLoading(false)
         }
-    }, [machineId, sendDaemonCommand])
+    }, [machineId, sendDaemonCommand, t])
 
     useEffect(() => { void load() }, [load])
 
@@ -81,29 +85,36 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                 ...(addName.trim() ? { name: addName.trim() } : {}),
             }))
             if (!r?.success) {
-                setError(r?.error || 'Failed to add source')
+                setError(r?.error || t('machine.sourcesPanel.addFailed'))
             } else {
                 setAddOpen(false); setAddUrl(''); setAddRef('main'); setAddName('')
                 await load()
                 onChange?.()
             }
         } catch (e: any) {
-            setError(e?.message || String(e))
+            setError(e?.message || t('machine.sourcesPanel.addFailed'))
         } finally {
             setAdding(false)
         }
     }
 
     const remove = async (name: string) => {
-        if (!confirm(`Remove provider source ${name}? This deletes the cloned manifests and clears any active-source entries that pointed here.`)) return
+        const confirmed = await confirm({
+            title: t('machine.sourcesPanel.removeConfirmTitle', { name }),
+            description: t('machine.sourcesPanel.removeConfirmDescription'),
+            confirmLabel: t('machine.sourcesPanel.removeConfirmLabel'),
+            cancelLabel: t('machine.sourcesPanel.cancel'),
+            tone: 'danger',
+        })
+        if (!confirmed) return
         setRemovingName(name)
         setError(null)
         try {
             const r = unwrap(await sendDaemonCommand(machineId, 'remove_provider_source', { name }))
-            if (!r?.success) setError(r?.error || 'Failed to remove source')
+            if (!r?.success) setError(r?.error || t('machine.sourcesPanel.removeFailed'))
             else { await load(); onChange?.() }
         } catch (e: any) {
-            setError(e?.message || String(e))
+            setError(e?.message || t('machine.sourcesPanel.removeFailed'))
         } finally {
             setRemovingName(null)
         }
@@ -114,10 +125,10 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
         setError(null)
         try {
             const r = unwrap(await sendDaemonCommand(machineId, 'set_active_provider_source', { type, sourceName }))
-            if (!r?.success) setError(r?.error || 'Failed to set active source')
+            if (!r?.success) setError(r?.error || t('machine.sourcesPanel.setActiveFailed'))
             else { await load(); onChange?.() }
         } catch (e: any) {
-            setError(e?.message || String(e))
+            setError(e?.message || t('machine.sourcesPanel.setActiveFailed'))
         } finally {
             setSettingActive(null)
         }
@@ -127,21 +138,21 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
         <Card padding="none" className="px-4.5 py-3.5">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
-                    <div className="text-2xs font-semibold uppercase tracking-wider text-sky-400">External sources</div>
+                    <div className="text-2xs font-semibold uppercase tracking-wider text-sky-400">{t('machine.sourcesPanel.title')}</div>
                     <div className="text-2xs text-text-muted mt-1">
-                        3rd-party git URLs you've added. Providers here may ship JavaScript the daemon will execute — activation requires a confirmation.
+                        {t('machine.sourcesPanel.description')}
                     </div>
                 </div>
                 <div className="flex gap-1.5">
-                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-3xs">{loading ? <IconSpinner size={11} /> : '↻'} Refresh</button>
-                    <button onClick={() => setAddOpen(true)} className="machine-btn text-3xs bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">+ Add source</button>
+                    <button onClick={() => void load()} disabled={loading} className="machine-btn text-3xs">{loading ? <IconSpinner size={11} /> : '↻'} {t('machine.sourcesPanel.refresh')}</button>
+                    <button onClick={() => setAddOpen(true)} className="machine-btn text-3xs bg-sky-500/[0.08] border-sky-500/20 text-sky-300 hover:bg-sky-500/[0.14]">{t('machine.sourcesPanel.addSource')}</button>
                 </div>
             </div>
 
             {error && <div className="mb-2 text-2xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">{error}</div>}
 
             {sources.length === 0 ? (
-                <div className="text-2xs text-text-muted italic">No external sources registered. Use "+ Add source" to register a 3rd-party provider git URL.</div>
+                <div className="text-2xs text-text-muted italic">{t('machine.sourcesPanel.empty')}</div>
             ) : (
                 <ul className="flex flex-col gap-2">
                     {sources.map(s => (
@@ -156,7 +167,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                                     onClick={() => void remove(s.name)}
                                     disabled={removingName === s.name}
                                     className="machine-btn text-3xs text-red-400 hover:bg-red-500/[0.10]"
-                                >{removingName === s.name ? '…' : 'Remove'}</button>
+                                >{removingName === s.name ? t('machine.sourcesPanel.removing') : t('machine.sourcesPanel.remove')}</button>
                             </div>
                             <div className="mt-1.5 text-3xs text-text-muted">
                                 {Object.entries(s.providers).map(([cat, types]) => (
@@ -170,9 +181,9 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
 
             {conflicts.length > 0 && (
                 <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2">
-                    <div className="text-2xs font-semibold text-amber-300 mb-1.5">Conflicts</div>
+                    <div className="text-2xs font-semibold text-amber-300 mb-1.5">{t('machine.sourcesPanel.conflictsTitle')}</div>
                     <div className="text-3xs text-text-muted mb-2">
-                        Multiple sources expose the same provider type. Pick which source's copy should be active.
+                        {t('machine.sourcesPanel.conflictsDescription')}
                     </div>
                     <ul className="flex flex-col gap-1.5">
                         {conflicts.map(c => (
@@ -190,7 +201,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                                                     ? 'bg-amber-500/[0.18] border-amber-500/40 text-amber-200'
                                                     : 'border-border-subtle text-text-secondary hover:bg-amber-500/[0.06]'
                                             }`}
-                                            title={c.active === cand ? 'Active' : `Switch active to ${cand}`}
+                                            title={c.active === cand ? t('machine.sourcesPanel.active') : t('machine.sourcesPanel.switchActiveTo', { name: cand })}
                                         >
                                             {c.active === cand ? '● ' : ''}{cand}
                                         </button>
@@ -204,10 +215,10 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
 
             {addOpen && (
                 <div className="mt-3 rounded border border-sky-500/30 bg-sky-500/[0.06] px-3 py-3">
-                    <div className="text-2xs font-semibold text-sky-300 mb-2">Add external source</div>
+                    <div className="text-2xs font-semibold text-sky-300 mb-2">{t('machine.sourcesPanel.addTitle')}</div>
                     <div className="grid md:grid-cols-3 gap-2">
                         <label className="flex flex-col gap-1 text-3xs text-text-secondary md:col-span-3">
-                            <span>Git URL</span>
+                            <span>{t('machine.sourcesPanel.gitUrl')}</span>
                             <input
                                 type="text"
                                 value={addUrl}
@@ -217,7 +228,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                             />
                         </label>
                         <label className="flex flex-col gap-1 text-3xs text-text-secondary">
-                            <span>Ref (branch/tag)</span>
+                            <span>{t('machine.sourcesPanel.ref')}</span>
                             <input
                                 type="text"
                                 value={addRef}
@@ -227,7 +238,7 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                             />
                         </label>
                         <label className="flex flex-col gap-1 text-3xs text-text-secondary md:col-span-2">
-                            <span>Name (optional, auto-derived from URL)</span>
+                            <span>{t('machine.sourcesPanel.name')}</span>
                             <input
                                 type="text"
                                 value={addName}
@@ -238,16 +249,17 @@ export default function SourcesPanel({ machineId, sendDaemonCommand, onChange }:
                         </label>
                     </div>
                     <div className="mt-3 flex items-center justify-end gap-2">
-                        <button type="button" onClick={() => setAddOpen(false)} className="machine-btn text-3xs">Cancel</button>
+                        <button type="button" onClick={() => setAddOpen(false)} className="machine-btn text-3xs">{t('machine.sourcesPanel.cancel')}</button>
                         <button
                             type="button"
                             onClick={() => void add()}
                             disabled={adding || !addUrl.trim()}
                             className="machine-btn text-3xs bg-sky-500/[0.10] border-sky-500/30 text-sky-200 hover:bg-sky-500/[0.18]"
-                        >{adding ? 'Cloning…' : 'Clone + register'}</button>
+                        >{adding ? t('machine.sourcesPanel.cloning') : t('machine.sourcesPanel.cloneAndRegister')}</button>
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </Card>
     )
 }
