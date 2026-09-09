@@ -240,7 +240,6 @@ export default function RepoMesh() {
         features: { addNodeDaemonPicker: features.addNodeDaemonPicker },
         loadMeshes,
         loadQueue,
-        queueSection: features.queueSection,
         setError,
     })
 
@@ -646,13 +645,13 @@ export default function RepoMesh() {
         }
     }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs])
 
-    // Standalone: auto-load queue on mesh selection. The dedicated Queue settings
-    // section is gone, but meshQueue still feeds per-node assignment diagnostics and
-    // the scheduler, so the standalone path keeps loading it.
+    // Auto-load queue on mesh selection (both platforms). The dedicated Queue
+    // settings section is gone, but meshQueue still feeds per-node assignment
+    // diagnostics (MeshMachineNodeGroup) and the scheduler in
+    // useMeshNodeActions, so both platforms need it loaded.
     useEffect(() => {
-        if (features.queueSection) return
         void loadQueue(selectedMeshId)
-    }, [selectedMeshId, features.queueSection])
+    }, [selectedMeshId, loadQueue])
 
     // Mesh list load. The first mount (no meshes held yet) does a plain load that
     // shows the 'Loading meshes...' state; every subsequent re-fire — triggered
@@ -692,7 +691,7 @@ export default function RepoMesh() {
                 error={error}
                 onDismissError={() => setError(null)}
                 daemons={daemons}
-                features={{ createDaemonPicker: features.createDaemonPicker, maxMeshes: features.maxMeshes }}
+                features={{ createDaemonPicker: features.createDaemonPicker }}
                 showCreate={showCreate}
                 onToggleCreate={() => setShowCreate(!showCreate)}
                 createName={createName}

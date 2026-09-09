@@ -983,7 +983,7 @@
             "refresh": "Refresh",
             "refreshing": "Refreshing…",
             "loadingStatus": "Loading live mesh status…",
-            "noGraph": "No live mesh graph is available for this coordinator yet.",
+            "noGraph": "No live mesh graph is available for this coordinator yet. Tap the ? above to learn what a Repo Mesh does.",
             "errorNoMeshId": "This coordinator does not expose a live mesh id.",
             "errorUnexpectedPayload": "Couldn't load graph data. Please try again shortly."
         },
@@ -1056,14 +1056,12 @@
             "cancel": "Cancel",
             "loading": "Loading meshes...",
             "emptyTitle": "No Repo Meshes",
-            "emptyWithDaemons": "Create a mesh to get started.",
-            "emptyNoDaemons": "Connect an ADHDev daemon first.",
+            "emptyWithDaemons": "A Repo Mesh runs multiple coding agents across your machines on one repo, coordinated from a single place. Create one to get started.",
+            "emptyNoDaemons": "A Repo Mesh runs multiple coding agents across your machines on one repo, coordinated from a single place. Connect an ADHDev daemon first.",
             "createFirst": "Create First Mesh",
             "noRepoIdentity": "No repo identity",
             "repoMeshFallback": "Repo Mesh",
-            "nodesSuffix": "node(s)",
-            "meshLimitReached": "Free plan includes {{max}} mesh. Upgrade to Pro for unlimited meshes.",
-            "meshLimitBanner": "Free plan includes 1 Repo Mesh. Upgrade to Pro to create more."
+            "nodesSuffix": "node(s)"
         },
         "detail": {
             "back": "← Back",
@@ -2782,7 +2780,7 @@
             "detailLabelDependsOn": "Depends on",
             "detailLabelSession": "Session",
             "detailLabelProvider": "Provider",
-            "detailLabelPayload": "Payload",
+            "detailLabelPayload": "Show raw payload",
             "detailLabelTaskId": "Task id",
             "detailLabelFinalSummary": "Final summary",
             "detailFinalSummaryLoading": "Loading final summary…",

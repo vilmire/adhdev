@@ -8,6 +8,7 @@ import { AlertBanner } from '../../components/ui/AlertBanner'
 import { FormField, Input } from '../../components/ui/FormField'
 import { IconX, IconFolder } from '../../components/Icons'
 import ProviderPriorityEditor from '../../components/provider-priority/ProviderPriorityEditor'
+import { describeOnboardingPlanFailure } from '../../utils/onboarding-plan-label'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import {
     defaultProviderPriorityFromInventory,
@@ -399,7 +400,7 @@ export function MeshNodeList({
                                 ? 'Inspecting Git repository (read-only)…'
                                 : nodeOnboardingPlan?.success
                                     ? `${nodeOnboardingPlan.plan?.summary || 'Compatible Git workspace detected.'} Adding remains an explicit action.`
-                                    : `${nodeOnboardingPlan?.code || 'onboarding_blocked'}: ${nodeOnboardingPlan?.error || 'Git discovery failed'} ${nodeOnboardingPlan?.action || ''}`}
+                                    : describeOnboardingPlanFailure(nodeOnboardingPlan)}
                         </AlertBanner>
                     )}
 

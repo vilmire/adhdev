@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { FormField, Input } from '../ui/FormField'
 import { AlertBanner } from '../ui/AlertBanner'
+import { describeOnboardingPlanFailure } from '../../utils/onboarding-plan-label'
 import WorkspacePicker, { PlanStatus, planTargetsExistingMesh, meshOnboardingInputCls, useSettledLoading, type WorkspaceOption } from './WorkspacePicker'
 
 export interface MeshCreateFormProps {
@@ -218,7 +219,7 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
                     {showPlanLoading
                         ? t('setupWizard.machines.planChecking')
                         : plan?.success === false
-                            ? `${plan?.code || 'onboarding_blocked'}: ${plan?.error || 'Git discovery failed'} ${plan?.action || ''}`
+                            ? describeOnboardingPlanFailure(plan)
                             : planTargetsExistingMesh(plan)
                                 ? (plan.plan?.summary || t('setupWizard.machines.planExists'))
                                 : `${plan.plan?.summary || 'Git repository detected.'} No changes will be made until you click Create.`}

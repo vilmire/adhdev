@@ -12,6 +12,7 @@ import {
 import type { RepoMeshContextValue, RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { MeshEntry, MeshNode, NodeCapabilitySlot } from './types'
 import { readMeshPolicy } from './types'
+import { describeOnboardingPlanFailure } from '../../utils/onboarding-plan-label'
 
 interface UseMeshNodeActionsOptions {
     /** Modal confirm injected by the page (useConfirmDialog.confirm);
@@ -33,7 +34,6 @@ interface UseMeshNodeActionsOptions {
     }
     loadMeshes: () => Promise<void>
     loadQueue: (meshId: string | null) => Promise<void>
-    queueSection: boolean
     setError: (msg: string | null) => void
 }
 
@@ -51,7 +51,6 @@ export function useMeshNodeActions({
     features,
     loadMeshes,
     loadQueue,
-    queueSection,
     setError,
     confirmAction,
 }: UseMeshNodeActionsOptions) {
@@ -152,7 +151,7 @@ export function useMeshNodeActions({
             const plan = unwrapResult(planRaw)
             setNodeOnboardingPlan(plan)
             if (plan?.success === false) {
-                throw new Error(`${plan.code || 'onboarding_blocked'}: ${plan.error}${plan.action ? ` ${plan.action}` : ''}`)
+                throw new Error(describeOnboardingPlanFailure(plan))
             }
             const payload: any = {
                 meshId: selectedMeshId,
@@ -176,7 +175,7 @@ export function useMeshNodeActions({
             setNodeDaemonId('')
             setNodeCustomPath(false)
             await loadMeshes()
-            if (!queueSection) await loadQueue(selectedMeshId)
+            await loadQueue(selectedMeshId)
         } catch (e: any) { setError(e?.message || 'Add node failed') }
     }
 
@@ -207,7 +206,7 @@ export function useMeshNodeActions({
             if (result?.success === false) throw new Error(result.error || 'Remove failed')
             if (selectedNodeId === nodeId) setSelectedNodeId(null)
             await loadMeshes()
-            if (!queueSection) await loadQueue(selectedMeshId)
+            await loadQueue(selectedMeshId)
         } catch (e: any) { setError(e?.message || 'Remove node failed') }
     }
 
