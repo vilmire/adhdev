@@ -57,7 +57,7 @@ export default function SlotsStep({ nodes, providersByNodeId, stagedSlots, onSta
                 return (
                     <div key={node.id} className="rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2.5">
                         <div className="mb-2 flex items-center gap-2">
-                            <span className="text-[13px] font-medium text-text-primary">{nodeLabel(node)}</span>
+                            <span className="text-xxs font-medium text-text-primary">{nodeLabel(node)}</span>
                             <span className="truncate text-2xs text-text-muted">{node.workspace}</span>
                             {staged && (
                                 <span className="ml-auto rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">

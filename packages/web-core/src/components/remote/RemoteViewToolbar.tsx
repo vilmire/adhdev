@@ -99,7 +99,7 @@ export default function RemoteViewToolbar({
                                 onTouchStart={e => e.stopPropagation()}
                                 onChange={e => setImeText(e.target.value)}
                                 onKeyDown={event => { void handleImeSubmit(event) }}
-                                className="w-full bg-black/60 border border-white/15 rounded-lg px-2.5 py-2 text-white text-[13px] outline-none"
+                                className="w-full bg-black/60 border border-white/15 rounded-lg px-2.5 py-2 text-white text-xxs outline-none"
                             />
                         </div>
                     )}

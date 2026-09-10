@@ -83,7 +83,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                     only dismissal paths were the footer Cancel and backdrop). */}
                 <div className="px-5 py-4 border-b border-border-subtle flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                        <h2 className="text-[15px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
+                        <h2 className="text-[15px] leading-[22px] font-semibold text-text-primary">{t('machine.providerClone.title')}</h2>
                         <p className="text-2xs text-text-muted mt-0.5">{t('machine.providerClone.subtitle')}</p>
                     </div>
                     <button
