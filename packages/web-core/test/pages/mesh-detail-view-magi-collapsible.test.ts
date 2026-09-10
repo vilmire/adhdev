@@ -20,7 +20,7 @@ const read = (rel: string) => fs.readFileSync(path.join(import.meta.dirname, rel
 describe('MeshDetailView — G5-7 MAGI section is collapsible, matching sibling advanced sections', () => {
     it('the MAGI Section has collapsible + defaultOpen={false}, like Safety & Git', () => {
         const source = read('../../src/pages/repo-mesh/MeshDetailView.tsx')
-        const magiIdx = source.indexOf("t('repoMesh.detail.magiTitle')")
+        const magiIdx = source.indexOf("t('mesh.detail.magiTitle')")
         expect(magiIdx).toBeGreaterThan(-1)
         // Look at the <Section ...> opening tag surrounding the magiTitle usage.
         const sectionStart = source.lastIndexOf('<Section', magiIdx)
@@ -28,6 +28,6 @@ describe('MeshDetailView — G5-7 MAGI section is collapsible, matching sibling 
         const sectionTag = source.slice(sectionStart, sectionOpenEnd)
         expect(sectionTag).toContain('collapsible')
         expect(sectionTag).toContain('defaultOpen={false}')
-        expect(sectionTag).toContain("t('repoMesh.detail.advanced')")
+        expect(sectionTag).toContain("t('mesh.detail.advanced')")
     })
 })

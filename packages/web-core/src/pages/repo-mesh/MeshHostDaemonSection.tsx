@@ -77,16 +77,16 @@ export function MeshHostDaemonSection({
     // ── Host already pinned: read-only display (never a picker) ──
     if (hostPinned) {
         return (
-            <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionSet')}>
+            <Section title={t('mesh.host.title')} description={t('mesh.host.descriptionSet')}>
                 <div className="flex flex-wrap items-center gap-3">
                     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xxs text-text-primary ${hostOnline ? 'border-accent-primary/40 bg-accent-primary/10' : 'border-amber-500/40 bg-amber-500/10'}`}>
-                        <span className="text-text-muted">{t('repoMesh.host.hostLabel')}</span>
-                        <span className="font-medium">{hostLabel || t('repoMesh.host.unknown')}</span>
-                        <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? t('repoMesh.host.online') : t('repoMesh.host.offline')}</span>
+                        <span className="text-text-muted">{t('mesh.host.hostLabel')}</span>
+                        <span className="font-medium">{hostLabel || t('mesh.host.unknown')}</span>
+                        <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? t('mesh.host.online') : t('mesh.host.offline')}</span>
                     </span>
                     {selectedHostNode?.workspace && (
                         <span className="text-xs text-text-muted">
-                            {t('repoMesh.host.hostNode')} <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span>
+                            {t('mesh.host.hostNode')} <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span>
                         </span>
                     )}
                 </div>
@@ -95,14 +95,14 @@ export function MeshHostDaemonSection({
                 {!hostOnline && (
                     <div className="mt-4">
                         <AlertBanner variant="warning" className="mb-3">
-                            <strong>{t('repoMesh.host.hostOffline')}</strong>{' '}
-                            {t('repoMesh.host.hostOfflineText')}
+                            <strong>{t('mesh.host.hostOffline')}</strong>{' '}
+                            {t('mesh.host.hostOfflineText')}
                         </AlertBanner>
                         {daemons.length > 0 ? (
-                            <FormField label={t('repoMesh.host.reconnectToCommand')} hint={t('repoMesh.host.reconnectToCommandHint')}>
+                            <FormField label={t('mesh.host.reconnectToCommand')} hint={t('mesh.host.reconnectToCommandHint')}>
                                 <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                     value={hostRebindDaemonId} onChange={e => onHostRebindDaemonIdChange(e.target.value)}>
-                                    <option value="">{t('repoMesh.host.waitForHost')}</option>
+                                    <option value="">{t('mesh.host.waitForHost')}</option>
                                     {daemons.map(d => (
                                         <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
                                     ))}
@@ -110,7 +110,7 @@ export function MeshHostDaemonSection({
                             </FormField>
                         ) : (
                             <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
-                                {t('repoMesh.host.noDaemonsToRoute')}
+                                {t('mesh.host.noDaemonsToRoute')}
                             </div>
                         )}
                     </div>
@@ -131,14 +131,14 @@ export function MeshHostDaemonSection({
     const setHostButton = onSetMeshHost && coordinatorDaemonId ? (
         <button className="btn btn-primary btn-sm" onClick={() => onSetMeshHost(coordinatorDaemonId)}
             disabled={!!settingMeshHost}>
-            {settingMeshHost ? t('repoMesh.host.settingHost') : t('repoMesh.host.setHostAction')}
+            {settingMeshHost ? t('mesh.host.settingHost') : t('mesh.host.setHostAction')}
         </button>
     ) : null
     return (
-        <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionUnset')}>
+        <Section title={t('mesh.host.title')} description={t('mesh.host.descriptionUnset')}>
             <AlertBanner variant="info" className="mb-4">
-                <strong>{t('repoMesh.host.setHostBanner')}</strong>{' '}
-                {t('repoMesh.host.setHostBannerText')}
+                <strong>{t('mesh.host.setHostBanner')}</strong>{' '}
+                {t('mesh.host.setHostBannerText')}
             </AlertBanner>
             {daemons.length > 0 ? (
                 <>
@@ -147,18 +147,18 @@ export function MeshHostDaemonSection({
                         // seed named a specific daemon. Show it as the host-to-be.
                         <div className="mb-3 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
                             {isHostNodeAttached
-                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('repoMesh.host.confirmSetsHost')}</>
-                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('repoMesh.host.attachNodeThenSetHost')}</>}
+                                ? <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>{selectedHostNode?.workspace ? <> · setup node <span className="font-mono text-text-secondary">{selectedHostNode.workspace}</span></> : null}. {t('mesh.host.confirmSetsHost')}</>
+                                : <>Will host on <span className="font-medium text-text-primary">{daemonLabel(setupDaemon)}</span>. {t('mesh.host.attachNodeThenSetHost')}</>}
                         </div>
                     ) : (
                         // No authoritative host signal yet. We deliberately do NOT auto-seed
                         // an arbitrary connected daemon (HOST-MISSEED-FIRSTSETUP) — that is
                         // what flashed a wrong remote node (e.g. moltbot) in the header on
                         // cold entry. Let the operator explicitly pick the host instead.
-                        <FormField label={t('repoMesh.host.hostDaemon')} hint={t('repoMesh.host.hostDaemonHint')}>
+                        <FormField label={t('mesh.host.hostDaemon')} hint={t('mesh.host.hostDaemonHint')}>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                 value="" onChange={e => onCoordinatorDaemonIdChange(e.target.value)}>
-                                <option value="">{t('repoMesh.host.resolvingHost')}</option>
+                                <option value="">{t('mesh.host.resolvingHost')}</option>
                                 {daemons.map(d => (
                                     <option key={d.id} value={d.id}>{daemonLabel(d)}</option>
                                 ))}
@@ -170,13 +170,13 @@ export function MeshHostDaemonSection({
                     {setHostButton && (
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                             {setHostButton}
-                            <span className="text-xs text-text-muted">{t('repoMesh.host.setHostActionHint')}</span>
+                            <span className="text-xs text-text-muted">{t('mesh.host.setHostActionHint')}</span>
                         </div>
                     )}
                 </>
             ) : (
                 <div className="rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 text-xs text-text-muted">
-                    {t('repoMesh.host.noDaemonsToHost')}
+                    {t('mesh.host.noDaemonsToHost')}
                 </div>
             )}
         </Section>

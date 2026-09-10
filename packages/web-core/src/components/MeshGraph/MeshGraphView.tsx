@@ -321,10 +321,10 @@ function getDifficultyBadgeClasses(difficulty: string, isDark: boolean): string 
 
 function difficultyLabel(difficulty: string, t: (key: string) => string): string {
     switch (difficulty) {
-        case 'easy': return t('meshGraph.difficulty.easy')
-        case 'medium': return t('meshGraph.difficulty.medium')
-        case 'difficult': return t('meshGraph.difficulty.difficult')
-        case 'freeform': return t('meshGraph.difficulty.freeform')
+        case 'easy': return t('mesh.difficulty.easy')
+        case 'medium': return t('mesh.difficulty.medium')
+        case 'difficult': return t('mesh.difficulty.difficult')
+        case 'freeform': return t('mesh.difficulty.freeform')
         default: return difficulty
     }
 }
@@ -364,11 +364,11 @@ function getSessionSummaryLabel(node: MeshGraphNode, t: (key: string, opts?: Rec
     const generatingCount = node.sessionDetails.filter(session => formatSessionStatusLabel(session) === 'generating').length
     const coordinatorCount = node.sessionDetails.filter(session => session.isSelfCoordinator).length
     const workerCount = node.sessionDetails.length - coordinatorCount
-    const parts = [t('meshGraph.panel.chats', { count: node.sessionDetails.length })]
-    if (generatingCount > 0) parts.push(t('meshGraph.panel.generatingCount', { count: generatingCount }))
-    if (coordinatorCount > 0) parts.push(coordinatorCount === 1 ? t('meshGraph.panel.coordinatorAttached') : t('meshGraph.panel.coordinators', { count: coordinatorCount }))
-    if (workerCount > 0) parts.push(t('meshGraph.panel.workers', { count: workerCount }))
-    if (generatingCount === 0 && coordinatorCount > 0) parts.push(t('meshGraph.panel.sampledStatus'))
+    const parts = [t('mesh.panel.chats', { count: node.sessionDetails.length })]
+    if (generatingCount > 0) parts.push(t('mesh.panel.generatingCount', { count: generatingCount }))
+    if (coordinatorCount > 0) parts.push(coordinatorCount === 1 ? t('mesh.panel.coordinatorAttached') : t('mesh.panel.coordinators', { count: coordinatorCount }))
+    if (workerCount > 0) parts.push(t('mesh.panel.workers', { count: workerCount }))
+    if (generatingCount === 0 && coordinatorCount > 0) parts.push(t('mesh.panel.sampledStatus'))
     return parts.join(' · ')
 }
 
@@ -379,19 +379,19 @@ function getSessionSummaryLabel(node: MeshGraphNode, t: (key: string, opts?: Rec
  * formatter; anything unknown falls through untranslated.
  */
 const ATTENTION_LABEL_KEYS: Record<string, string> = {
-    'submodule drift': 'meshGraph.attention.submoduleDrift',
-    'submodule dirty': 'meshGraph.attention.submoduleDirty',
-    'conflicts present': 'meshGraph.attention.conflictsPresent',
-    'dirty workspace': 'meshGraph.attention.dirtyWorkspace',
-    'upstream unverified': 'meshGraph.attention.upstreamUnverified',
-    'push branch': 'meshGraph.attention.pushBranch',
-    'blocked review': 'meshGraph.attention.blockedReview',
-    'refine failed': 'meshGraph.attention.refineFailed',
-    'refining…': 'meshGraph.attention.refining',
-    'needs merge': 'meshGraph.attention.needsMerge',
-    'refine worktree': 'meshGraph.attention.refineWorktree',
-    'needs follow-up': 'meshGraph.attention.needsFollowUp',
-    'offline': 'meshGraph.attention.offline',
+    'submodule drift': 'mesh.attention.submoduleDrift',
+    'submodule dirty': 'mesh.attention.submoduleDirty',
+    'conflicts present': 'mesh.attention.conflictsPresent',
+    'dirty workspace': 'mesh.attention.dirtyWorkspace',
+    'upstream unverified': 'mesh.attention.upstreamUnverified',
+    'push branch': 'mesh.attention.pushBranch',
+    'blocked review': 'mesh.attention.blockedReview',
+    'refine failed': 'mesh.attention.refineFailed',
+    'refining…': 'mesh.attention.refining',
+    'needs merge': 'mesh.attention.needsMerge',
+    'refine worktree': 'mesh.attention.refineWorktree',
+    'needs follow-up': 'mesh.attention.needsFollowUp',
+    'offline': 'mesh.attention.offline',
 }
 
 function translateAttentionLabel(label: string, node: MeshGraphNode, t: (key: string, opts?: Record<string, unknown>) => string): string {
@@ -423,7 +423,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     // Card context line. Machine identity only earns a spot when the graph spans
     // machines (single-machine meshes were repeating the same machine name on
     // every card); locality only when it is the exceptional case (remote).
-    const machineContext = [node.machineLabel, node.locality === 'remote' ? t('meshGraph.panel.remote') : null].filter(Boolean).join(' · ')
+    const machineContext = [node.machineLabel, node.locality === 'remote' ? t('mesh.panel.remote') : null].filter(Boolean).join(' · ')
     const workspaceTail = formatWorkspaceTail(node.workspace)
     const subtitle = multiMachine
         ? (machineContext || workspaceTail || node.workspace)
@@ -447,7 +447,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <div className="flex min-w-0 items-center justify-center gap-2">
                     <span className={`shrink-0 text-sm ${meshTheme.isDark ? 'text-sky-200' : 'text-sky-600'}`} aria-hidden><IconGitBranch size={13} /></span>
                     <span className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{node.label}</span>
-                    <span className={`shrink-0 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.panel.defaultBranch')}</span>
+                    <span className={`shrink-0 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.panel.defaultBranch')}</span>
                     {attention && (
                         <span className={`shrink-0 h-2 w-2 rounded-full ${attention.tone === 'danger' ? 'bg-rose-400' : attention.tone === 'warn' ? 'bg-amber-400' : 'bg-sky-400'}`} title={translateAttentionLabel(attention.label, node, t)} aria-hidden />
                     )}
@@ -462,10 +462,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     //    made N checkouts × M submodules read as a wall of duplicate machines. ──
     if (isSubmoduleNode) {
         const stateLabel = node.outOfSync
-            ? t('meshGraph.panel.outOfSyncBadge')
+            ? t('mesh.panel.outOfSyncBadge')
             : node.dirty
-                ? t('meshGraph.panel.tooltipLocalChanges')
-                : t('meshGraph.panel.submoduleSynced')
+                ? t('mesh.panel.tooltipLocalChanges')
+                : t('mesh.panel.submoduleSynced')
         const stateClass = node.outOfSync
             ? getBadgeClasses('conflict', meshTheme.isDark)
             : node.dirty
@@ -535,10 +535,10 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 style={{ width: getMeshGraphNodeCardWidth(node, true) }}
                 title={[
                     node.label,
-                    node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
+                    node.branch ? `${t('mesh.panel.tooltipPrefixBranch')} ${node.branch}` : null,
                     node.machineLabel ? `Machine: ${node.machineLabel}` : null,
                     node.workspace ? `Workspace: ${node.workspace}` : null,
-                    attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
+                    attentionBadge ? `${t('mesh.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
                     nodeSummary,
                     ...sessionTooltipLines,
                 ].filter(Boolean).join('\n')}
@@ -565,7 +565,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 </div>
                 {node.health === 'unknown' && !attentionBadge && (
                     <div className={`mt-1.5 inline-flex min-w-0 max-w-full items-center rounded-full border px-1.5 py-px text-4xs italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                        <span className="truncate">{t('meshGraph.obs.connecting')}</span>
+                        <span className="truncate">{t('mesh.obs.connecting')}</span>
                     </div>
                 )}
                 {attentionBadge && (
@@ -597,14 +597,14 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                     t('sessionNav.openChatHint'),
                                     `Session ID: ${session.sessionId}`,
                                     session.providerType ? `Provider: ${session.providerType}` : null,
-                                    `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
+                                    `${t('mesh.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                     `Role: ${getSessionRoleLabel(session)}`,
                                     session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
                                 ].filter(Boolean).join('\n')}
                             >
                                 <div className="flex min-w-0 items-center justify-between gap-1.5">
                                     <span className={`min-w-0 truncate text-4xs ${meshTheme.textMuted}`}>
-                                        {session.providerType || t('meshGraph.panel.providerUnknown')}
+                                        {session.providerType || t('mesh.panel.providerUnknown')}
                                     </span>
                                     <span className={`shrink-0 rounded-full border px-1 py-0 text-5xs font-semibold uppercase tracking-[0.1em] ${getSessionStatusBadgeClasses(session, meshTheme.isDark)}`}>
                                         {formatSessionStatusLabel(session)}
@@ -620,7 +620,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         ))}
                         {visibleCardSessions.length > CARD_SESSION_ROW_CAP && (
                             <div className={`text-5xs ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
-                                {t('meshGraph.panel.moreChats', { count: visibleCardSessions.length - CARD_SESSION_ROW_CAP })}
+                                {t('mesh.panel.moreChats', { count: visibleCardSessions.length - CARD_SESSION_ROW_CAP })}
                             </div>
                         )}
                     </div>
@@ -633,15 +633,15 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
     const tooltipLines = [
         node.label,
         subtitle,
-        attentionBadge ? `${t('meshGraph.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
+        attentionBadge ? `${t('mesh.panel.tooltipPrefixStatus')} ${attentionLabel}` : null,
         nodeSummary,
-        node.branch ? `${t('meshGraph.panel.tooltipPrefixBranch')} ${node.branch}` : null,
-        node.dirty ? (isSubmoduleNode ? t('meshGraph.panel.tooltipLocalChanges') : `${node.dirtyFiles} dirty`) : null,
-        node.hasConflicts ? t('meshGraph.panel.tooltipHasConflicts') : null,
-        node.outOfSync ? t('meshGraph.panel.tooltipOutOfSync') : null,
-        !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? t('meshGraph.panel.tooltipUpstreamUnverified') : null,
-        node.isOrphan ? t('meshGraph.panel.tooltipNeedsFollowUp') : null,
-        shouldShowCallout && calloutText ? `${t('meshGraph.panel.tooltipPrefixNote')} ${calloutText}` : null,
+        node.branch ? `${t('mesh.panel.tooltipPrefixBranch')} ${node.branch}` : null,
+        node.dirty ? (isSubmoduleNode ? t('mesh.panel.tooltipLocalChanges') : `${node.dirtyFiles} dirty`) : null,
+        node.hasConflicts ? t('mesh.panel.tooltipHasConflicts') : null,
+        node.outOfSync ? t('mesh.panel.tooltipOutOfSync') : null,
+        !isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' ? t('mesh.panel.tooltipUpstreamUnverified') : null,
+        node.isOrphan ? t('mesh.panel.tooltipNeedsFollowUp') : null,
+        shouldShowCallout && calloutText ? `${t('mesh.panel.tooltipPrefixNote')} ${calloutText}` : null,
         ...sessionTooltipLines,
     ].filter(Boolean).join('\n')
 
@@ -704,7 +704,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         a healthy mesh and loud exactly where something is off. */}
                     {node.health === 'unknown' ? (
                         <span className={`rounded-full border px-1.5 py-px italic ${getBadgeClasses('health', meshTheme.isDark)}`}>
-                            {t('meshGraph.obs.connecting')}
+                            {t('mesh.obs.connecting')}
                         </span>
                     ) : node.health !== 'online' ? (
                         <span className={`rounded-full border px-1.5 py-px capitalize ${getBadgeClasses('health', meshTheme.isDark)}`}>
@@ -719,7 +719,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     {(connectionTransport || connectionRtt) && (
                         <span
                             className={`rounded-full border px-1.5 py-px ${getBadgeClasses('meta', meshTheme.isDark)}`}
-                            title={connectionTransport === 'relay' ? t('meshGraph.panel.tooltipP2PRelayed') : t('meshGraph.panel.tooltipP2PRtt')}
+                            title={connectionTransport === 'relay' ? t('mesh.panel.tooltipP2PRelayed') : t('mesh.panel.tooltipP2PRtt')}
                         >
                             {[connectionTransport, connectionRtt].filter(Boolean).join(' · ')}
                         </span>
@@ -731,29 +731,29 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     )}
                     {node.outOfSync && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
-                            {t('meshGraph.panel.outOfSyncBadge')}
+                            {t('mesh.panel.outOfSyncBadge')}
                         </span>
                     )}
                     {node.hasConflicts && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('conflict', meshTheme.isDark)}`}>
-                            {t('meshGraph.panel.conflictBadge')}
+                            {t('mesh.panel.conflictBadge')}
                         </span>
                     )}
                     {!isSubmoduleNode && node.upstream && node.upstreamStatus !== 'fresh' && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
-                            {t('meshGraph.panel.upstreamUnverified')}
+                            {t('mesh.panel.upstreamUnverified')}
                         </span>
                     )}
                     {node.isOrphan && (
                         <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('orphan', meshTheme.isDark)}`}>
-                            {t('meshGraph.panel.needsFollowUp')}
+                            {t('mesh.panel.needsFollowUp')}
                         </span>
                     )}
                     {/* The attention badge above already surfaces in-progress/failed refine state;
                         the card only adds the recent-completed case it does not show. */}
                     {!isSubmoduleNode && node.refineJobStatus === 'completed' && (
-                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('meshGraph.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('meshGraph.panel.tooltipRefineCompleted')}>
-                            {t('meshGraph.panel.refined')}
+                        <span className={`rounded-full border px-1.5 py-px ${getBadgeClasses('refineDone', meshTheme.isDark)}`} title={node.refineJobBranch ? t('mesh.panel.tooltipRefinedBranch', { branch: `${node.refineJobBranch}${node.refineJobInto ? ` → ${node.refineJobInto}` : ''}` }) : t('mesh.panel.tooltipRefineCompleted')}>
+                            {t('mesh.panel.refined')}
                         </span>
                     )}
                 </div>
@@ -765,7 +765,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 {visibleSessions.length > 0 && (
                     <div className="mt-3">
                         <div className={`mb-1.5 text-4xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>
-                            {t('meshGraph.panel.attachedChats')}
+                            {t('mesh.panel.attachedChats')}
                         </div>
                         <div className="flex flex-col gap-1.5">
                             {visibleSessions.slice(0, CARD_SESSION_ROW_CAP).map(session => {
@@ -780,11 +780,11 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             t('sessionNav.openChatHint'),
                                             `Session ID: ${session.sessionId}`,
                                             session.providerType ? `Provider: ${session.providerType}` : null,
-                                            `${t('meshGraph.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
+                                            `${t('mesh.panel.tooltipPrefixStatus')} ${formatSessionStatusLabel(session)}`,
                                             `Role: ${roleLabel}`,
                                             session.difficulty ? `${t('mesh.overview.routingDifficulty')}: ${difficultyLabel(session.difficulty, t)}` : null,
-                                            startedAt ? `Started: ${startedAt}` : t('meshGraph.panel.tooltipStartedNotReported'),
-                                            session.statusNote ? `${t('meshGraph.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
+                                            startedAt ? `Started: ${startedAt}` : t('mesh.panel.tooltipStartedNotReported'),
+                                            session.statusNote ? `${t('mesh.panel.tooltipPrefixNote')} ${session.statusNote}` : null,
                                         ].filter(Boolean).join('\n')}
                                     >
                                         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -796,7 +796,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                                             </span>
                                         </div>
                                         <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-4xs ${meshTheme.textMuted}`}>
-                                            <span className="truncate">{session.providerType || t('meshGraph.panel.providerUnknown')}</span>
+                                            <span className="truncate">{session.providerType || t('mesh.panel.providerUnknown')}</span>
                                             <span>{roleLabel}</span>
                                             <span>{formatElapsedSince(startedAt)}</span>
                                             {session.difficulty && (
@@ -815,7 +815,7 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
                             })}
                             {visibleSessions.length > CARD_SESSION_ROW_CAP && (
                                 <div className={`text-4xs ${meshTheme.textMuted}`} title={sessionTooltipLines.join('\n')}>
-                                    {t('meshGraph.panel.moreChats', { count: visibleSessions.length - CARD_SESSION_ROW_CAP })}
+                                    {t('mesh.panel.moreChats', { count: visibleSessions.length - CARD_SESSION_ROW_CAP })}
                                 </div>
                             )}
                         </div>
@@ -1215,12 +1215,12 @@ const LEGEND_EDGE_ORDER: MeshGraphEdge['type'][] = [
 ]
 
 const LEGEND_EDGE_LABEL_KEY: Record<MeshGraphEdge['type'], string> = {
-    parentBranch: 'meshGraph.legendEdge.parentBranch',
-    cloneLink: 'meshGraph.legendEdge.cloneLink',
-    worktreeLink: 'meshGraph.legendEdge.worktreeLink',
-    submoduleLink: 'meshGraph.legendEdge.submoduleLink',
-    sessionLink: 'meshGraph.legendEdge.sessionLink',
-    orphanLink: 'meshGraph.legendEdge.orphanLink',
+    parentBranch: 'mesh.legendEdge.parentBranch',
+    cloneLink: 'mesh.legendEdge.cloneLink',
+    worktreeLink: 'mesh.legendEdge.worktreeLink',
+    submoduleLink: 'mesh.legendEdge.submoduleLink',
+    sessionLink: 'mesh.legendEdge.sessionLink',
+    orphanLink: 'mesh.legendEdge.orphanLink',
 }
 
 const LEGEND_EDGE_DASH: Partial<Record<MeshGraphEdge['type'], string>> = {
@@ -1380,7 +1380,7 @@ export default function MeshGraphView({
                 className={`pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 px-3 py-1 text-3xs transition-opacity duration-700 ${meshTheme.graphStatChipClass} ${showPanHint ? 'opacity-100' : 'opacity-0'}`}
                 aria-hidden={!showPanHint}
             >
-                {t('meshGraph.obs.panHint')}
+                {t('mesh.obs.panHint')}
             </div>
             {presentEdgeTypes.length > 0 && (
                 <div className={`pointer-events-none absolute right-3 top-2 z-10 flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1 rounded-xl border px-2.5 py-1.5 text-4xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/75 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>

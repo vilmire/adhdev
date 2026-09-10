@@ -112,7 +112,7 @@ function groupNodesByMachine(nodes: MeshNode[], daemons: RepoMeshDaemonEntry[]):
 function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]; activeKey: string; onChange: (key: string) => void }) {
     const { t } = useTranslation('common')
     return (
-        <div className="flex items-center gap-1 px-1 border-b border-border-subtle mb-4 overflow-x-auto" role="tablist" aria-label={t('repoMesh.nodeList.machineTabsLabel')}>
+        <div className="flex items-center gap-1 px-1 border-b border-border-subtle mb-4 overflow-x-auto" role="tablist" aria-label={t('mesh.nodeList.machineTabsLabel')}>
             {groups.map(group => {
                 const isActive = group.key === activeKey
                 return (
@@ -131,7 +131,7 @@ function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${group.online ? 'bg-green-400' : 'bg-neutral-500'}`} />
                         <span className="truncate max-w-[160px]">{group.label}</span>
                         <span className="text-2xs text-text-muted font-normal">
-                            {t('repoMesh.nodeList.machineTabCounts', { nodes: group.nodes.length, slots: group.slotCount })}
+                            {t('mesh.nodeList.machineTabCounts', { nodes: group.nodes.length, slots: group.slotCount })}
                         </span>
                     </button>
                 )
@@ -255,25 +255,25 @@ export function MeshNodeList({
 
     return (
         <Section
-            title={features.addNodeDaemonPicker ? t('repoMesh.nodeList.title', { count: machineNodes.length }) : t('repoMesh.nodeList.titleNoCount')}
+            title={features.addNodeDaemonPicker ? t('mesh.nodeList.title', { count: machineNodes.length }) : t('mesh.nodeList.titleNoCount')}
             description={features.addNodeDaemonPicker
-                ? t('repoMesh.nodeList.descriptionCloud')
-                : t('repoMesh.nodeList.descriptionStandalone')}
+                ? t('mesh.nodeList.descriptionCloud')
+                : t('mesh.nodeList.descriptionStandalone')}
         >
             {/* Cloud: daemon candidate picker */}
             {features.addNodeDaemonPicker && (
                 <div className="mb-4 rounded-xl border border-border-subtle bg-bg-secondary/60 p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="min-w-0">
-                            <div className="text-sm font-semibold text-text-primary">{t('repoMesh.nodeList.daemonCandidates')}</div>
-                            <div className="text-xs text-text-muted">{t('repoMesh.nodeList.daemonCandidatesHint')}</div>
+                            <div className="text-sm font-semibold text-text-primary">{t('mesh.nodeList.daemonCandidates')}</div>
+                            <div className="text-xs text-text-muted">{t('mesh.nodeList.daemonCandidatesHint')}</div>
                         </div>
-                        <span className="text-2xs text-text-muted shrink-0">{t('repoMesh.nodeList.available', { count: attachableDaemons.length })}</span>
+                        <span className="text-2xs text-text-muted shrink-0">{t('mesh.nodeList.available', { count: attachableDaemons.length })}</span>
                     </div>
                     {daemons.length === 0 ? (
-                        <div className="text-xs text-text-muted">{t('repoMesh.nodeList.noDaemonsAvailable')}</div>
+                        <div className="text-xs text-text-muted">{t('mesh.nodeList.noDaemonsAvailable')}</div>
                     ) : attachableDaemons.length === 0 ? (
-                        <div className="text-xs text-text-muted">{t('repoMesh.nodeList.allDaemonsAttached')}</div>
+                        <div className="text-xs text-text-muted">{t('mesh.nodeList.allDaemonsAttached')}</div>
                     ) : (
                         <div className="grid gap-2 md:grid-cols-2">
                             {attachableDaemons.map(d => (
@@ -293,10 +293,10 @@ export function MeshNodeList({
                                         {/* min-w-0 on the truncating child; shrink-0 on the badge so the
                                             label yields first instead of the badge wrapping. */}
                                         <span className="text-sm font-medium truncate min-w-0">{daemonLabel(d)}</span>
-                                        {d.id === coordinatorDaemonId && <span className="text-3xs text-accent-primary shrink-0">{t('repoMesh.nodeList.selectedHost')}</span>}
+                                        {d.id === coordinatorDaemonId && <span className="text-3xs text-accent-primary shrink-0">{t('mesh.nodeList.selectedHost')}</span>}
                                     </div>
                                     <div className="mt-1 text-2xs text-text-muted font-mono truncate">{d.id}</div>
-                                    <div className="mt-1 text-2xs text-text-muted">{t('repoMesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
+                                    <div className="mt-1 text-2xs text-text-muted">{t('mesh.nodeList.workspacesDetected', { count: (d.workspaces || []).length })}</div>
                                 </button>
                             ))}
                         </div>
@@ -307,7 +307,7 @@ export function MeshNodeList({
             {/* Add node button */}
             {!showAddNode && (
                 <button className="btn btn-primary btn-sm mb-4 inline-flex items-center gap-1.5" onClick={onShowAddNode}>
-                    <IconPlus size={13} /> {features.addNodeDaemonPicker ? t('repoMesh.nodeList.attachMachine') : t('repoMesh.nodeList.addNode')}
+                    <IconPlus size={13} /> {features.addNodeDaemonPicker ? t('mesh.nodeList.attachMachine') : t('mesh.nodeList.addNode')}
                 </button>
             )}
 
@@ -315,13 +315,13 @@ export function MeshNodeList({
             {showAddNode && (
                 <div className="mb-4 p-4 rounded-xl border border-accent-primary/30 bg-bg-glass animate-[fadeIn_0.3s_ease-out]">
                     <div className="flex justify-between items-center mb-3">
-                        <h4 className="text-sm font-bold">{features.addNodeDaemonPicker ? t('repoMesh.nodeList.attachMachineTitle') : t('repoMesh.nodeList.addNodeTitle')}</h4>
+                        <h4 className="text-sm font-bold">{features.addNodeDaemonPicker ? t('mesh.nodeList.attachMachineTitle') : t('mesh.nodeList.addNodeTitle')}</h4>
                         <button onClick={() => { onCancelAddNode(); onNodeDaemonIdChange(''); onNodeCustomPathChange(false) }} className="text-text-muted cursor-pointer bg-transparent border-none"><IconX size={16} /></button>
                     </div>
 
                     {/* Cloud: machine picker */}
                     {features.addNodeDaemonPicker && (
-                        <FormField label={t('repoMesh.nodeList.machine')}>
+                        <FormField label={t('mesh.nodeList.machine')}>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
                                 value={nodeDaemonId} onChange={e => {
                                     onNodeDaemonIdChange(e.target.value)
@@ -329,7 +329,7 @@ export function MeshNodeList({
                                     onNodeCustomPathChange(false)
                                     onNodeProviderPriorityChange(defaultProviderPriorityFromInventory(normalizeAvailableCliProviders((daemons.find(d => d.id === e.target.value) as any)?.availableProviders || [])))
                                 }}>
-                                <option value="">{t('repoMesh.nodeList.selectMachine')}</option>
+                                <option value="">{t('mesh.nodeList.selectMachine')}</option>
                                 {daemons.map(d => <option key={d.id} value={d.id}>{daemonLabel(d)}</option>)}
                             </select>
                         </FormField>
@@ -337,7 +337,7 @@ export function MeshNodeList({
 
                     {/* Workspace picker */}
                     {(features.addNodeDaemonPicker ? nodeDaemonId : true) && (
-                        <FormField label={t('repoMesh.nodeList.workspacePath')}>
+                        <FormField label={t('mesh.nodeList.workspacePath')}>
                             {features.addNodeDaemonPicker && !nodeCustomPath && nodePickerWorkspaces.length > 0 ? (
                                 <>
                                     <div className="flex flex-col gap-1.5 mb-2">
@@ -350,7 +350,7 @@ export function MeshNodeList({
                                             </button>
                                         ))}
                                     </div>
-                                    <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0" onClick={() => { onNodeCustomPathChange(true); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.enterCustomPath')}</button>
+                                    <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0" onClick={() => { onNodeCustomPathChange(true); onNodeWorkspaceChange('') }}>{t('mesh.nodeList.enterCustomPath')}</button>
                                 </>
                             ) : (
                                 <>
@@ -382,7 +382,7 @@ export function MeshNodeList({
                                         <>
                                             <Input value={nodeWorkspace} onChange={e => onNodeWorkspaceChange(e.target.value)} placeholder="/Users/dev/projects/myapp" onKeyDown={e => { if (e.key === 'Enter') onAddNode() }} />
                                             {nodePickerWorkspaces.length > 0 && (
-                                                <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0 mt-1" onClick={() => { onNodeCustomPathChange(false); onNodeWorkspaceChange('') }}>{t('repoMesh.nodeList.pickFromSaved')}</button>
+                                                <button type="button" className="text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0 mt-1" onClick={() => { onNodeCustomPathChange(false); onNodeWorkspaceChange('') }}>{t('mesh.nodeList.pickFromSaved')}</button>
                                             )}
                                         </>
                                     )}
@@ -404,7 +404,7 @@ export function MeshNodeList({
                         </AlertBanner>
                     )}
 
-                    <FormField label={t('repoMesh.nodeList.preferredTools')} hint={t('repoMesh.nodeList.preferredToolsHint')}>
+                    <FormField label={t('mesh.nodeList.preferredTools')} hint={t('mesh.nodeList.preferredToolsHint')}>
                         <ProviderPriorityEditor
                             value={nodeProviderPriority}
                             availableProviders={features.addNodeDaemonPicker ? nodePickerProviders : availableCliProviders}
@@ -413,14 +413,14 @@ export function MeshNodeList({
                     </FormField>
 
                     <div className="flex gap-2 mt-3">
-                        <button onClick={onAddNode} disabled={nodePlanLoading || nodeOnboardingPlan?.success === false || !nodeWorkspace.trim() || (features.addNodeDaemonPicker && !nodeDaemonId)} className="btn btn-primary btn-sm">{t('repoMesh.nodeList.add')}</button>
-                        <button onClick={() => { onCancelAddNode(); onNodeDaemonIdChange(''); onNodeCustomPathChange(false) }} className="btn btn-secondary btn-sm">{t('repoMesh.nodeList.cancel')}</button>
+                        <button onClick={onAddNode} disabled={nodePlanLoading || nodeOnboardingPlan?.success === false || !nodeWorkspace.trim() || (features.addNodeDaemonPicker && !nodeDaemonId)} className="btn btn-primary btn-sm">{t('mesh.nodeList.add')}</button>
+                        <button onClick={() => { onCancelAddNode(); onNodeDaemonIdChange(''); onNodeCustomPathChange(false) }} className="btn btn-secondary btn-sm">{t('mesh.nodeList.cancel')}</button>
                     </div>
                 </div>
             )}
 
             {machineNodes.length === 0 ? (
-                <EmptyState icon={<IconFolder />} title={t('repoMesh.nodeList.emptyTitle')} description={t('repoMesh.nodeList.emptyDescription')} />
+                <EmptyState icon={<IconFolder />} title={t('mesh.nodeList.emptyTitle')} description={t('mesh.nodeList.emptyDescription')} />
             ) : features.addNodeDaemonPicker ? (
                 <>
                     {/* Per-machine tabs — one tab per daemon_id, hidden entirely when

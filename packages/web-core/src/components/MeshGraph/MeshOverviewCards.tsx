@@ -193,10 +193,10 @@ function difficultyTone(difficulty: string): Tone {
 /** Label for a task's difficulty badge — falls back to the raw value for forward-compat with an unrecognized future difficulty. */
 function difficultyLabel(difficulty: string, t: (key: string) => string): string {
     switch (difficulty) {
-        case 'easy': return t('meshGraph.difficulty.easy')
-        case 'medium': return t('meshGraph.difficulty.medium')
-        case 'difficult': return t('meshGraph.difficulty.difficult')
-        case 'freeform': return t('meshGraph.difficulty.freeform')
+        case 'easy': return t('mesh.difficulty.easy')
+        case 'medium': return t('mesh.difficulty.medium')
+        case 'difficult': return t('mesh.difficulty.difficult')
+        case 'freeform': return t('mesh.difficulty.freeform')
         default: return difficulty
     }
 }
@@ -1221,7 +1221,7 @@ function GateDetail({ meshTheme, graph, nodeId, gate, queueTasks, onOpenTask }: 
                 </div>
             )}
             {(state === 'awaiting_coordinator' || state === 'claimed') && (
-                <div className={`text-2xs ${meshTheme.textSecondary}`}>{t('meshGraph.blueprint.gateActsViaCoordinator')}</div>
+                <div className={`text-2xs ${meshTheme.textSecondary}`}>{t('mesh.blueprint.gateActsViaCoordinator')}</div>
             )}
         </div>
     )

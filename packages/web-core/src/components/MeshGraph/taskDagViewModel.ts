@@ -245,10 +245,10 @@ export function formatRelativeTime(
     t: (key: string, options?: Record<string, unknown>) => string,
 ): string {
     const seconds = Math.max(0, Math.round((now - at) / 1000))
-    if (seconds < 45) return t('meshGraph.taskDag.time.now')
+    if (seconds < 45) return t('mesh.taskDag.time.now')
     const minutes = Math.round(seconds / 60)
-    if (minutes < 60) return t('meshGraph.taskDag.time.minutes', { count: minutes })
+    if (minutes < 60) return t('mesh.taskDag.time.minutes', { count: minutes })
     const hours = Math.round(minutes / 60)
-    if (hours < 24) return t('meshGraph.taskDag.time.hours', { count: hours })
-    return t('meshGraph.taskDag.time.days', { count: Math.round(hours / 24) })
+    if (hours < 24) return t('mesh.taskDag.time.hours', { count: hours })
+    return t('mesh.taskDag.time.days', { count: Math.round(hours / 24) })
 }

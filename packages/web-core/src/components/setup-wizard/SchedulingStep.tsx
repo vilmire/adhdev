@@ -34,7 +34,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
             {/* Markup mirrors MeshDetailView's distribution radio group so both
                 surfaces read and behave identically. */}
             <fieldset className="border-none p-0 m-0">
-                <legend className="text-xxs font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
+                <legend className="text-xxs font-medium text-text-secondary mb-2">{t('mesh.detail.distribution')}</legend>
                 <div className="flex flex-col gap-2">
                     {DISTRIBUTION_OPTIONS.map(opt => {
                         const selected = value === opt.value
@@ -48,7 +48,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
                                     <span className="flex items-center gap-2 text-sm text-text-primary">
                                         {t(opt.labelKey)}
                                         {recommended === opt.value && (
-                                            <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">{t('repoMesh.detail.recommended')}</span>
+                                            <span className="rounded-full border border-accent-primary/40 bg-accent-primary/10 px-1.5 py-0.5 text-3xs font-medium text-accent-primary">{t('mesh.detail.recommended')}</span>
                                         )}
                                     </span>
                                     <span className="block text-xs text-text-muted">{t(opt.descriptionKey)}</span>

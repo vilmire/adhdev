@@ -46,10 +46,10 @@ const CATEGORY_TONE: Record<NoteCategory, 'warn' | 'danger' | 'good'> = {
 }
 
 function categoryLabel(t: (k: string) => string, category?: string): string {
-    if (category === 'provider_quirk') return t('meshGraph.notes.categoryProviderQuirk')
-    if (category === 'pattern_to_avoid') return t('meshGraph.notes.categoryPatternToAvoid')
-    if (category === 'recovery_lesson') return t('meshGraph.notes.categoryRecoveryLesson')
-    return t('meshGraph.notes.categoryUncategorized')
+    if (category === 'provider_quirk') return t('mesh.notes.categoryProviderQuirk')
+    if (category === 'pattern_to_avoid') return t('mesh.notes.categoryPatternToAvoid')
+    if (category === 'recovery_lesson') return t('mesh.notes.categoryRecoveryLesson')
+    return t('mesh.notes.categoryUncategorized')
 }
 
 function formatCreatedAt(iso?: string): string {
@@ -101,7 +101,7 @@ export function MeshNotesTab({
             // Cloud wraps the daemon response in { success, result }; standalone returns it directly.
             const res = raw?.result ?? raw
             if (res && res.success === false) {
-                setError(typeof res.error === 'string' ? res.error : t('meshGraph.notes.loadFailed'))
+                setError(typeof res.error === 'string' ? res.error : t('mesh.notes.loadFailed'))
                 setNotes([])
                 return
             }
@@ -109,7 +109,7 @@ export function MeshNotesTab({
             // Freshest first for the operator; the ledger returns oldest→newest.
             setNotes([...list].reverse())
         } catch (e) {
-            setError(e instanceof Error ? e.message : t('meshGraph.notes.loadFailed'))
+            setError(e instanceof Error ? e.message : t('mesh.notes.loadFailed'))
             setNotes([])
         } finally {
             setLoading(false)
@@ -134,7 +134,7 @@ export function MeshNotesTab({
             })
             const res = raw?.result ?? raw
             if (res && res.success === false) {
-                setError(typeof res.error === 'string' ? res.error : t('meshGraph.notes.saveFailed'))
+                setError(typeof res.error === 'string' ? res.error : t('mesh.notes.saveFailed'))
                 return
             }
             setDraftText('')
@@ -142,7 +142,7 @@ export function MeshNotesTab({
             setAddOpen(false)
             await loadNotes()
         } catch (e) {
-            setError(e instanceof Error ? e.message : t('meshGraph.notes.saveFailed'))
+            setError(e instanceof Error ? e.message : t('mesh.notes.saveFailed'))
         } finally {
             setBusy(false)
         }
@@ -156,12 +156,12 @@ export function MeshNotesTab({
             const raw = await sendDaemonCommand(daemonId, 'forget_mesh_note', { meshId, noteId })
             const res = raw?.result ?? raw
             if (res && res.success === false) {
-                setError(typeof res.error === 'string' ? res.error : t('meshGraph.notes.deleteFailed'))
+                setError(typeof res.error === 'string' ? res.error : t('mesh.notes.deleteFailed'))
                 return
             }
             await loadNotes()
         } catch (e) {
-            setError(e instanceof Error ? e.message : t('meshGraph.notes.deleteFailed'))
+            setError(e instanceof Error ? e.message : t('mesh.notes.deleteFailed'))
         } finally {
             setBusy(false)
         }
@@ -190,7 +190,7 @@ export function MeshNotesTab({
             const forgetRaw = await sendDaemonCommand(daemonId, 'forget_mesh_note', { meshId, noteId })
             const forgetRes = forgetRaw?.result ?? forgetRaw
             if (forgetRes && forgetRes.success === false) {
-                setError(typeof forgetRes.error === 'string' ? forgetRes.error : t('meshGraph.notes.editFailed'))
+                setError(typeof forgetRes.error === 'string' ? forgetRes.error : t('mesh.notes.editFailed'))
                 return
             }
             const recordRaw = await sendDaemonCommand(daemonId, 'record_mesh_note', {
@@ -200,13 +200,13 @@ export function MeshNotesTab({
             })
             const recordRes = recordRaw?.result ?? recordRaw
             if (recordRes && recordRes.success === false) {
-                setError(typeof recordRes.error === 'string' ? recordRes.error : t('meshGraph.notes.editFailed'))
+                setError(typeof recordRes.error === 'string' ? recordRes.error : t('mesh.notes.editFailed'))
                 return
             }
             cancelEdit()
             await loadNotes()
         } catch (e) {
-            setError(e instanceof Error ? e.message : t('meshGraph.notes.editFailed'))
+            setError(e instanceof Error ? e.message : t('mesh.notes.editFailed'))
         } finally {
             setBusy(false)
         }
@@ -224,7 +224,7 @@ export function MeshNotesTab({
     if (!canOperate) {
         return (
             <div className={`${meshTheme.cardClass} rounded-2xl p-4 text-xs ${meshTheme.textSecondary}`}>
-                {t('meshGraph.notes.unavailable')}
+                {t('mesh.notes.unavailable')}
             </div>
         )
     }
@@ -239,17 +239,17 @@ export function MeshNotesTab({
                         onClick={() => setAddOpen(true)}
                         className={actionClass('info')}
                     >
-                        + {t('meshGraph.notes.addTitle')}
+                        + {t('mesh.notes.addTitle')}
                     </button>
                 </div>
             ) : (
                 <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
-                    <div className={`mb-2 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.notes.addTitle')}</div>
+                    <div className={`mb-2 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('mesh.notes.addTitle')}</div>
                     <textarea
                         value={draftText}
                         onChange={e => setDraftText(e.target.value)}
                         rows={2}
-                        placeholder={t('meshGraph.notes.textPlaceholder')}
+                        placeholder={t('mesh.notes.textPlaceholder')}
                         className={textInputClass}
                         autoFocus
                     />
@@ -258,9 +258,9 @@ export function MeshNotesTab({
                             value={draftCategory}
                             onChange={e => setDraftCategory(e.target.value as NoteCategory | '')}
                             className={categorySelectClass}
-                            aria-label={t('meshGraph.notes.categoryLabel')}
+                            aria-label={t('mesh.notes.categoryLabel')}
                         >
-                            <option value="">{t('meshGraph.notes.categoryUncategorized')}</option>
+                            <option value="">{t('mesh.notes.categoryUncategorized')}</option>
                             {NOTE_CATEGORIES.map(c => (
                                 <option key={c} value={c}>{categoryLabel(t, c)}</option>
                             ))}
@@ -271,7 +271,7 @@ export function MeshNotesTab({
                             disabled={busy || !draftText.trim()}
                             className={actionClass('success')}
                         >
-                            {t('meshGraph.notes.add')}
+                            {t('mesh.notes.add')}
                         </button>
                         <button
                             type="button"
@@ -279,7 +279,7 @@ export function MeshNotesTab({
                             disabled={busy}
                             className={actionClass('default')}
                         >
-                            {t('meshGraph.notes.cancel')}
+                            {t('mesh.notes.cancel')}
                         </button>
                     </div>
                 </div>
@@ -294,20 +294,20 @@ export function MeshNotesTab({
             {/* List */}
             <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
                 <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className={`text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.notes.listTitle')}</div>
+                    <div className={`text-sm font-semibold ${meshTheme.textPrimary}`}>{t('mesh.notes.listTitle')}</div>
                     <button
                         type="button"
                         onClick={() => { void loadNotes() }}
                         disabled={loading || busy}
                         className={actionClass('default')}
                     >
-                        {t('meshGraph.notes.refresh')}
+                        {t('mesh.notes.refresh')}
                     </button>
                 </div>
                 {loading ? (
-                    <div className={`py-6 text-center text-sm ${meshTheme.textMuted}`}>{t('meshGraph.notes.loading')}</div>
+                    <div className={`py-6 text-center text-sm ${meshTheme.textMuted}`}>{t('mesh.notes.loading')}</div>
                 ) : notes.length === 0 ? (
-                    <div className={`py-6 text-center text-sm ${meshTheme.textMuted}`}>{t('meshGraph.notes.empty')}</div>
+                    <div className={`py-6 text-center text-sm ${meshTheme.textMuted}`}>{t('mesh.notes.empty')}</div>
                 ) : (
                     <div className="flex flex-col gap-2">
                         {notes.map(note => (
@@ -328,9 +328,9 @@ export function MeshNotesTab({
                                                 value={editCategory}
                                                 onChange={e => setEditCategory(e.target.value as NoteCategory | '')}
                                                 className={categorySelectClass}
-                                                aria-label={t('meshGraph.notes.categoryLabel')}
+                                                aria-label={t('mesh.notes.categoryLabel')}
                                             >
-                                                <option value="">{t('meshGraph.notes.categoryUncategorized')}</option>
+                                                <option value="">{t('mesh.notes.categoryUncategorized')}</option>
                                                 {NOTE_CATEGORIES.map(c => (
                                                     <option key={c} value={c}>{categoryLabel(t, c)}</option>
                                                 ))}
@@ -341,7 +341,7 @@ export function MeshNotesTab({
                                                 disabled={busy || !editText.trim()}
                                                 className={actionClass('success')}
                                             >
-                                                {t('meshGraph.notes.save')}
+                                                {t('mesh.notes.save')}
                                             </button>
                                             <button
                                                 type="button"
@@ -349,7 +349,7 @@ export function MeshNotesTab({
                                                 disabled={busy}
                                                 className={actionClass('default')}
                                             >
-                                                {t('meshGraph.notes.cancel')}
+                                                {t('mesh.notes.cancel')}
                                             </button>
                                         </div>
                                     </div>
@@ -378,7 +378,7 @@ export function MeshNotesTab({
                                                             })}
                                                             className={`mt-1 text-2xs font-medium ${meshTheme.isDark ? 'text-sky-300 hover:text-sky-200' : 'text-sky-600 hover:text-sky-700'}`}
                                                         >
-                                                            {expanded ? t('meshGraph.notes.showLess') : t('meshGraph.notes.showMore')}
+                                                            {expanded ? t('mesh.notes.showLess') : t('mesh.notes.showMore')}
                                                         </button>
                                                     )}
                                                 </>
@@ -389,15 +389,15 @@ export function MeshNotesTab({
                                                 label={categoryLabel(t, note.category)}
                                                 tone={NOTE_CATEGORIES.includes(note.category as NoteCategory) ? CATEGORY_TONE[note.category as NoteCategory] : 'default'}
                                             />
-                                            {note.pinned && <Badge label={t('meshGraph.notes.pinned')} tone="info" />}
+                                            {note.pinned && <Badge label={t('mesh.notes.pinned')} tone="info" />}
                                             {/* Expiry is what decides whether a note keeps reaching
                                                 coordinators, so it belongs next to the pin, not hidden.
                                                 Pinned notes are exempt by rule, hence the explicit
                                                 "never expires" rather than a blank. */}
                                             {note.expired
-                                                ? <Badge label={t('meshGraph.notes.expired')} tone="danger" />
+                                                ? <Badge label={t('mesh.notes.expired')} tone="danger" />
                                                 : note.pinned
-                                                    ? <Badge label={t('meshGraph.notes.neverExpires')} tone="default" />
+                                                    ? <Badge label={t('mesh.notes.neverExpires')} tone="default" />
                                                     : formatCreatedAt(note.effectiveExpiresAt)
                                                         ? (
                                                             // formatCreatedAt returns '' (not undefined) for an
@@ -405,10 +405,10 @@ export function MeshNotesTab({
                                                             // a `?? fallback` here could never fire and rendered
                                                             // a blank "expires  " instead.
                                                             <span className={`text-2xs ${meshTheme.textMuted}`} title={note.effectiveExpiresAt}>
-                                                                {t('meshGraph.notes.expiresIn', { when: formatCreatedAt(note.effectiveExpiresAt) })}
+                                                                {t('mesh.notes.expiresIn', { when: formatCreatedAt(note.effectiveExpiresAt) })}
                                                             </span>
                                                         )
-                                                        : <Badge label={t('meshGraph.notes.durable')} tone="default" />}
+                                                        : <Badge label={t('mesh.notes.durable')} tone="default" />}
                                             {formatCreatedAt(note.createdAt) && (
                                                 <span className={`text-2xs ${meshTheme.textMuted}`}>{formatCreatedAt(note.createdAt)}</span>
                                             )}
@@ -419,7 +419,7 @@ export function MeshNotesTab({
                                                     disabled={busy}
                                                     className={actionClass('info')}
                                                 >
-                                                    {t('meshGraph.notes.edit')}
+                                                    {t('mesh.notes.edit')}
                                                 </button>
                                                 <button
                                                     type="button"
@@ -427,7 +427,7 @@ export function MeshNotesTab({
                                                     disabled={busy}
                                                     className={actionClass('default')}
                                                 >
-                                                    {t('meshGraph.notes.delete')}
+                                                    {t('mesh.notes.delete')}
                                                 </button>
                                             </div>
                                         </div>

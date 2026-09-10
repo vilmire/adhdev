@@ -106,7 +106,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
             }
             setFullGoals(prev => ({ ...prev, ...next }))
         } catch (err) {
-            setFetchError(err instanceof Error ? err.message : t('repoMesh.missions.errorFetch'))
+            setFetchError(err instanceof Error ? err.message : t('mesh.missions.errorFetch'))
         } finally {
             setFetching(false)
         }
@@ -119,7 +119,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
     }, [expanded, fullGoals, fetchFullGoals])
 
     return (
-        <Section title={t('repoMesh.missions.title')} description={t('repoMesh.missions.description')}>
+        <Section title={t('mesh.missions.title')} description={t('mesh.missions.description')}>
             {fetchError && <div className="mb-3 text-xs text-amber-400">{fetchError}</div>}
             <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {STATUS_FILTERS.filter(s => (statusCounts[s] || 0) > 0).map(s => (
@@ -149,7 +149,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                 </button>
             </div>
             {filtered.length === 0 && (
-                <div className="text-xs text-text-muted">{t('repoMesh.missions.empty', { status: statusFilter })}</div>
+                <div className="text-xs text-text-muted">{t('mesh.missions.empty', { status: statusFilter })}</div>
             )}
             <div className="flex flex-col gap-2">
                 {visible.map(mission => {
@@ -171,13 +171,13 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                     </span>
                                 )}
                                 {total > 0 && (
-                                    <span className="shrink-0 text-2xs text-text-muted">{t('repoMesh.missions.taskCount', { count: total })}</span>
+                                    <span className="shrink-0 text-2xs text-text-muted">{t('mesh.missions.taskCount', { count: total })}</span>
                                 )}
                             </div>
                             {goalText && (
                                 <div className={`mt-1.5 whitespace-pre-wrap text-xs leading-5 text-text-secondary ${isOpen ? 'max-h-72 overflow-y-auto' : 'line-clamp-2'}`}>
                                     {goalText}
-                                    {stillTruncated && <span className="text-text-muted">{t('repoMesh.missions.goalUnavailable')}</span>}
+                                    {stillTruncated && <span className="text-text-muted">{t('mesh.missions.goalUnavailable')}</span>}
                                 </div>
                             )}
                             {(preview.truncated || full) && canCommand && (
@@ -187,7 +187,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                                     onClick={() => toggle(mission.id)}
                                     disabled={fetching}
                                 >
-                                    {isOpen ? t('repoMesh.missions.showLess') : fetching && !full ? t('repoMesh.missions.loading') : t('repoMesh.missions.showFullGoal')}
+                                    {isOpen ? t('mesh.missions.showLess') : fetching && !full ? t('mesh.missions.loading') : t('mesh.missions.showFullGoal')}
                                 </button>
                             )}
                         </div>
@@ -200,7 +200,7 @@ export function MeshMissionsSection({ status, daemonId, meshId, sendCommand }: M
                     className="mt-2 text-xs text-accent-primary hover:underline"
                     onClick={() => setShowAll(true)}
                 >
-                    {t('repoMesh.missions.showMore', { count: hiddenCount })}
+                    {t('mesh.missions.showMore', { count: hiddenCount })}
                 </button>
             )}
         </Section>

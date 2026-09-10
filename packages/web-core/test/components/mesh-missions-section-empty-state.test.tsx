@@ -25,7 +25,7 @@ afterEach(() => {
  *
  * `if (missions.length === 0) return null` unmounted the entire Section —
  * title, description, filter chips, and the dedicated
- * `repoMesh.missions.empty` message — whenever a mesh had zero missions.
+ * `mesh.missions.empty` message — whenever a mesh had zero missions.
  * That i18n key existed and was reachable via the filtered-to-zero branch,
  * but never via the zero-total-missions branch, because the early return
  * intercepted first. A mesh with no missions yet looked like the Missions

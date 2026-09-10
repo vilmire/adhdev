@@ -71,7 +71,7 @@ describe('mesh graph view interaction boundaries', () => {
 
         expect(source).toContain('getMeshGraphAttentionBadge(node)')
         expect(viewModelSource).toContain('formatMeshGraphAheadBehind(node)')
-        expect(source).toContain("t('meshGraph.panel.needsFollowUp')")
+        expect(source).toContain("t('mesh.panel.needsFollowUp')")
     })
 
     it('keeps graph node cards on the shared mesh-theme helper instead of hardcoding page-theme tokens', () => {
@@ -117,7 +117,7 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain('CARD_SESSION_ROW_CAP')
         expect(source).toContain('visibleSessions.slice(0, CARD_SESSION_ROW_CAP)')
         expect(source).toContain('visibleCardSessions.slice(0, CARD_SESSION_ROW_CAP)')
-        expect(source).toContain("t('meshGraph.panel.moreChats'")
+        expect(source).toContain("t('mesh.panel.moreChats'")
         expect(source).toContain('title={sessionTooltipLines.join')
         // The old unbounded in-card scroll region must not come back.
         expect(source).not.toContain('max-h-44 min-w-0 flex-col gap-1.5 overflow-y-auto')

@@ -135,7 +135,7 @@ export function MeshProviderAutoApproveSection({
             }
             setRepoDefaults(next)
         } catch (e: any) {
-            setLoadError(e?.message || t('repoMesh.providerAutoApprove.loadError'))
+            setLoadError(e?.message || t('mesh.providerAutoApprove.loadError'))
         } finally {
             setLoading(false)
         }
@@ -189,12 +189,12 @@ export function MeshProviderAutoApproveSection({
             // Unwrap the cloud { success, result } wrapper (standalone returns raw) so a real
             // write failure on the daemon surfaces instead of being masked by the outer success.
             const body = res?.result ?? res
-            if (body?.success === false) throw new Error(body?.error || t('repoMesh.providerAutoApprove.saveError'))
+            if (body?.success === false) throw new Error(body?.error || t('mesh.providerAutoApprove.saveError'))
             setSaved(true)
             // Re-read so the UI reflects exactly what landed on disk (normalized).
             await loadDefaults()
         } catch (e: any) {
-            setSaveError(e?.message || t('repoMesh.providerAutoApprove.saveError'))
+            setSaveError(e?.message || t('mesh.providerAutoApprove.saveError'))
         } finally {
             setSaving(false)
         }
@@ -202,8 +202,8 @@ export function MeshProviderAutoApproveSection({
 
     return (
         <Section
-            title={t('repoMesh.providerAutoApprove.title')}
-            description={t('repoMesh.providerAutoApprove.subtitle')}
+            title={t('mesh.providerAutoApprove.title')}
+            description={t('mesh.providerAutoApprove.subtitle')}
             collapsible
             defaultOpen={false}
         >
@@ -211,33 +211,33 @@ export function MeshProviderAutoApproveSection({
                 Rendered unconditionally: this machine's opt-in must stay reachable
                 even when the host is offline or advertises no providers. */}
             <div className="rounded-xl border border-border-subtle bg-bg-secondary/40 p-3.5">
-                <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.machineSection.title')}</div>
-                <div className="mt-1 text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.machineSection.hint')}</div>
+                <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.machineSection.title')}</div>
+                <div className="mt-1 text-2xs text-text-muted">{t('mesh.providerAutoApprove.machineSection.hint')}</div>
                 <div className="mt-3 flex flex-wrap gap-2 text-2xs">
                     <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineAutoApproveEnabled ? 'border-status-online/25 bg-status-online/10 text-status-online' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
                         {machineAutoApproveEnabled
-                            ? t('repoMesh.providerAutoApprove.machineSection.autoApproveOn')
-                            : t('repoMesh.providerAutoApprove.machineSection.autoApproveOff')}
+                            ? t('mesh.providerAutoApprove.machineSection.autoApproveOn')
+                            : t('mesh.providerAutoApprove.machineSection.autoApproveOff')}
                     </span>
                     <span className={`rounded-full border px-2 py-0.5 font-semibold ${machineDangerousAllowed ? 'border-status-error/30 bg-status-error/10 text-status-error' : 'border-border-subtle bg-surface-secondary/40 text-text-muted'}`}>
                         {machineDangerousAllowed
-                            ? t('repoMesh.providerAutoApprove.machineSection.dangerousOn')
-                            : t('repoMesh.providerAutoApprove.machineSection.dangerousOff')}
+                            ? t('mesh.providerAutoApprove.machineSection.dangerousOn')
+                            : t('mesh.providerAutoApprove.machineSection.dangerousOff')}
                     </span>
                 </div>
                 <div className="mt-3 space-y-2">
                     <MachinePolicyToggle
-                        label={t('repoMesh.providerAutoApprove.machineSection.autoApproveToggleLabel')}
-                        hint={t('repoMesh.providerAutoApprove.machineSection.autoApproveToggleHint')}
+                        label={t('mesh.providerAutoApprove.machineSection.autoApproveToggleLabel')}
+                        hint={t('mesh.providerAutoApprove.machineSection.autoApproveToggleHint')}
                         checked={machineAutoApproveEnabled}
                         disabled={!canEditPolicy}
                         onChange={next => onUpdatePolicy?.({ delegatedWorkerAutoApprove: next })}
                     />
                     <MachinePolicyToggle
-                        label={t('repoMesh.providerAutoApprove.machineSection.dangerousToggleLabel')}
+                        label={t('mesh.providerAutoApprove.machineSection.dangerousToggleLabel')}
                         hint={machineAutoApproveEnabled
-                            ? t('repoMesh.providerAutoApprove.machineSection.dangerousToggleHint')
-                            : t('repoMesh.providerAutoApprove.machineSection.dangerousDisabledHint')}
+                            ? t('mesh.providerAutoApprove.machineSection.dangerousToggleHint')
+                            : t('mesh.providerAutoApprove.machineSection.dangerousDisabledHint')}
                         checked={machineDangerousAllowed}
                         disabled={!canEditPolicy || !machineAutoApproveEnabled}
                         onChange={next => {
@@ -250,17 +250,17 @@ export function MeshProviderAutoApproveSection({
             </div>
 
             {!canConfigure ? (
-                <div className="text-xxs text-text-muted">{t('repoMesh.providerAutoApprove.noHostDaemon')}</div>
+                <div className="text-xxs text-text-muted">{t('mesh.providerAutoApprove.noHostDaemon')}</div>
             ) : loading ? (
-                <div className="text-xxs text-text-muted">{t('repoMesh.providerAutoApprove.loading')}</div>
+                <div className="text-xxs text-text-muted">{t('mesh.providerAutoApprove.loading')}</div>
             ) : providers.length === 0 ? (
                 // An empty list is only "no providers" once every node has actually
                 // reported. While any node's inventory is still outstanding, say so
                 // instead of asserting none exist — the reading isn't in yet.
                 <div className="text-xxs text-text-muted">
                     {unreportedNodeCount > 0
-                        ? t('repoMesh.providerAutoApprove.awaitingNodes', { count: unreportedNodeCount })
-                        : t('repoMesh.providerAutoApprove.noProviders')}
+                        ? t('mesh.providerAutoApprove.awaitingNodes', { count: unreportedNodeCount })
+                        : t('mesh.providerAutoApprove.noProviders')}
                 </div>
             ) : (
                 <div className="space-y-6">
@@ -268,14 +268,14 @@ export function MeshProviderAutoApproveSection({
                     {/* The union is complete only when every node has reported. */}
                     {unreportedNodeCount > 0 && (
                         <div className="text-2xs text-text-muted">
-                            {t('repoMesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}
+                            {t('mesh.providerAutoApprove.partialInventory', { count: unreportedNodeCount })}
                         </div>
                     )}
 
                     {/* ── Section 1: repository default (editable) + Section 3 per provider ── */}
                     <div className="space-y-1">
-                        <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.repoSection.title')}</div>
-                        <div className="text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.repoSection.hint')}</div>
+                        <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.repoSection.title')}</div>
+                        <div className="text-2xs text-text-muted">{t('mesh.providerAutoApprove.repoSection.hint')}</div>
                     </div>
 
                     <div className="space-y-5">
@@ -297,7 +297,7 @@ export function MeshProviderAutoApproveSection({
                                             onClick={() => applyDefault(provider.type, undefined)}
                                             disabled={!requestedModeId || saving}
                                         >
-                                            {t('repoMesh.providerAutoApprove.repoSection.clear')}
+                                            {t('mesh.providerAutoApprove.repoSection.clear')}
                                         </button>
                                     </div>
 
@@ -309,7 +309,7 @@ export function MeshProviderAutoApproveSection({
                                     />
                                     {!requestedModeId && (
                                         <div className="mt-1.5 text-2xs text-text-muted">
-                                            {t('repoMesh.providerAutoApprove.repoSection.usesProviderDefault')}
+                                            {t('mesh.providerAutoApprove.repoSection.usesProviderDefault')}
                                         </div>
                                     )}
 
@@ -321,8 +321,8 @@ export function MeshProviderAutoApproveSection({
                     </div>
 
                     <div className="space-y-1">
-                        <div className="text-sm font-semibold text-text-primary">{t('repoMesh.providerAutoApprove.effectiveSection.title')}</div>
-                        <div className="text-2xs text-text-muted">{t('repoMesh.providerAutoApprove.effectiveSection.hint')}</div>
+                        <div className="text-sm font-semibold text-text-primary">{t('mesh.providerAutoApprove.effectiveSection.title')}</div>
+                        <div className="text-2xs text-text-muted">{t('mesh.providerAutoApprove.effectiveSection.hint')}</div>
                     </div>
 
                     {saveError && <AlertBanner variant="error" onDismiss={() => setSaveError(null)}>{saveError}</AlertBanner>}
@@ -333,9 +333,9 @@ export function MeshProviderAutoApproveSection({
                             onClick={() => void save()}
                             disabled={saving}
                         >
-                            {saving ? t('repoMesh.providerAutoApprove.saving') : t('repoMesh.providerAutoApprove.save')}
+                            {saving ? t('mesh.providerAutoApprove.saving') : t('mesh.providerAutoApprove.save')}
                         </button>
-                        {saved && <span className="text-xs text-status-online">{t('repoMesh.providerAutoApprove.saved')}</span>}
+                        {saved && <span className="text-xs text-status-online">{t('mesh.providerAutoApprove.saved')}</span>}
                     </div>
                 </div>
             )}
@@ -345,19 +345,19 @@ export function MeshProviderAutoApproveSection({
                 // opt-in copy: the machine-wide opt-in is not tied to one provider
                 // mode, so the mode-specific dialog (warning + launchArgs) does not fit.
                 <LaunchConfirmDialog
-                    title={t('repoMesh.providerAutoApprove.machineSection.confirmTitle')}
-                    description={t('repoMesh.providerAutoApprove.machineSection.confirmDescription')}
+                    title={t('mesh.providerAutoApprove.machineSection.confirmTitle')}
+                    description={t('mesh.providerAutoApprove.machineSection.confirmDescription')}
                     details={[
                         {
-                            label: t('repoMesh.providerAutoApprove.machineSection.confirmScopeLabel'),
-                            value: t('repoMesh.providerAutoApprove.machineSection.confirmScopeValue'),
+                            label: t('mesh.providerAutoApprove.machineSection.confirmScopeLabel'),
+                            value: t('mesh.providerAutoApprove.machineSection.confirmScopeValue'),
                         },
                         {
-                            label: t('repoMesh.providerAutoApprove.machineSection.confirmEffectLabel'),
-                            value: t('repoMesh.providerAutoApprove.machineSection.confirmEffectValue'),
+                            label: t('mesh.providerAutoApprove.machineSection.confirmEffectLabel'),
+                            value: t('mesh.providerAutoApprove.machineSection.confirmEffectValue'),
                         },
                     ]}
-                    confirmLabel={t('repoMesh.providerAutoApprove.machineSection.confirmConfirm')}
+                    confirmLabel={t('mesh.providerAutoApprove.machineSection.confirmConfirm')}
                     onConfirm={() => {
                         setConfirmDangerousOptIn(false)
                         onUpdatePolicy?.({ delegatedWorkerDangerousModeAllow: true })
@@ -378,8 +378,8 @@ export function MeshProviderAutoApproveSection({
                 // opt-in — non-opted-in machines still downgrade to pty-parse.
                 <div className="fixed inset-x-0 bottom-6 z-[60] mx-auto max-w-lg px-4">
                     <div className="rounded-xl border border-status-error/40 bg-bg-primary p-3.5 shadow-lg">
-                        <div className="text-sm font-semibold text-status-error">{t('repoMesh.providerAutoApprove.dangerous.sharedWarningTitle')}</div>
-                        <div className="mt-1 text-xs text-text-muted">{t('repoMesh.providerAutoApprove.dangerous.sharedWarning')}</div>
+                        <div className="text-sm font-semibold text-status-error">{t('mesh.providerAutoApprove.dangerous.sharedWarningTitle')}</div>
+                        <div className="mt-1 text-xs text-text-muted">{t('mesh.providerAutoApprove.dangerous.sharedWarning')}</div>
                     </div>
                 </div>
             )}
@@ -402,25 +402,25 @@ function EffectiveResultRow({
     let tone: 'ok' | 'warn' | 'muted' = 'ok'
     switch (effective.status) {
         case 'requested':
-            text = t('repoMesh.providerAutoApprove.effectiveSection.statusRequested', { mode: effective.effectiveMode?.label || '' })
+            text = t('mesh.providerAutoApprove.effectiveSection.statusRequested', { mode: effective.effectiveMode?.label || '' })
             break
         case 'invalid_fallback':
-            text = t('repoMesh.providerAutoApprove.effectiveSection.statusInvalidFallback', { mode: effective.effectiveMode?.label || '' })
+            text = t('mesh.providerAutoApprove.effectiveSection.statusInvalidFallback', { mode: effective.effectiveMode?.label || '' })
             tone = 'warn'
             break
         case 'downgraded':
-            text = t('repoMesh.providerAutoApprove.effectiveSection.statusDowngraded', {
+            text = t('mesh.providerAutoApprove.effectiveSection.statusDowngraded', {
                 requested: modeLabel(effective.requestedModeId) || modeLabel(effective.providerDefaultModeId),
                 mode: effective.effectiveMode?.label || '',
             })
             tone = 'warn'
             break
         case 'disabled':
-            text = t('repoMesh.providerAutoApprove.effectiveSection.statusDisabled')
+            text = t('mesh.providerAutoApprove.effectiveSection.statusDisabled')
             tone = 'muted'
             break
         default:
-            text = t('repoMesh.providerAutoApprove.effectiveSection.statusNone')
+            text = t('mesh.providerAutoApprove.effectiveSection.statusNone')
             tone = 'muted'
     }
 
