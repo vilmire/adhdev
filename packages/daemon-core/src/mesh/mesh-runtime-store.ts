@@ -3010,6 +3010,31 @@ export class MeshRuntimeStore {
     }
 
     /**
+     * ENTER-LOSS layer ③ (composer-residue recovery) — the row-id twin of
+     * requeueDrainedPendingEventByFingerprint, with identical semantics: flip the
+     * EXISTING drained row back to drained=0 IN PLACE. Never a re-insert — the
+     * UNIQUE (mesh_id, fingerprint) index stays occupied by this very row, so no
+     * duplicate can be created and the DUPNOTIF suppressors are never in play.
+     * `queued_at` is preserved (age keeps measuring from the original enqueue) and
+     * `drained_by` is cleared with `drained_at` (the previous drainer is no longer
+     * the consumer of record).
+     *
+     * The sweep identifies residue from `recentDrainedPendingEventPayloads`, which
+     * returns row ids — an id is a strictly more precise handle than the
+     * fingerprint (fingerprints can be NULL on legacy rows), hence this variant.
+     * Returns true when a drained row was found and returned to the queue.
+     */
+    requeueDrainedPendingEventById(rowId: string): boolean {
+        if (!rowId) return false;
+        const changes = this.db.prepare(
+            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
+             WHERE id = ? AND drained = 1`
+        ).run(rowId).changes;
+        if (changes > 0) this.maybeCheckpointWal();
+        return changes > 0;
+    }
+
+    /**
      * Hard-delete pending-event rows by id (including the dedup fingerprint history).
      * Used to expire an unresolved-delegate outbox entry that has exhausted its retry
      * budget — fully removing it frees the fingerprint so a genuinely new completion
