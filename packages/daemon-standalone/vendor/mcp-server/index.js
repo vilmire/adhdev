@@ -72144,6 +72144,37 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               drainedAt: r.drained_at ?? null
             }));
           }
+          /**
+           * ENTER-LOSS layer ③ (boot-time composer-residue sweep) — recently-DRAINED
+           * pending-event rows across ALL meshes, payloads included. The sweep matches
+           * each payload's coordinatorMessage against the composer text of restored
+           * idle sessions: an event is marked drained BEFORE its body is written to the
+           * PTY (the consume-before-submit ordering this incident class exploits), so a
+           * body stranded in a composer by a mid-submit daemon death is identifiable
+           * ONLY from these drained rows — the undrained queue no longer holds it.
+           * Drained rows are soft-marked (retained until mesh deletion), so this reads
+           * history, not live queue state.
+           */
+          recentDrainedPendingEventPayloads(sinceEpochMs, limit = 200) {
+            const rows = this.db.prepare(
+              `SELECT id, mesh_id, event, payload, drained_at FROM mesh_pending_events
+             WHERE drained = 1 AND drained_at IS NOT NULL AND drained_at >= ?
+             ORDER BY drained_at DESC LIMIT ?`
+            ).all(sinceEpochMs, Math.max(1, limit));
+            return rows.map((r) => ({
+              id: r.id,
+              meshId: r.mesh_id,
+              event: r.event,
+              payload: (() => {
+                try {
+                  return JSON.parse(r.payload);
+                } catch {
+                  return {};
+                }
+              })(),
+              drainedAt: r.drained_at
+            }));
+          }
           hasPendingEventFingerprint(meshId, fingerprint) {
             const row = this.db.prepare(
               "SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1"
@@ -102515,11 +102546,6 @@ ${marker}`,
       for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
       return n;
     }
-    function hashSendText(text) {
-      let h = 5381;
-      for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h ^ text.charCodeAt(i)) >>> 0;
-      return `${h.toString(36)}:${text.length}`;
-    }
     function shouldUseVerifiedSubmit(text, platform11 = process.platform) {
       if (platform11 === "win32") return true;
       return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
@@ -102544,6 +102570,35 @@ ${marker}`,
       if (/gif/i.test(mime)) return ".gif";
       if (/webp/i.test(mime)) return ".webp";
       return ".bin";
+    }
+    var SUBMIT_DELAY_FLOOR_MS;
+    var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS;
+    var VERIFIED_SUBMIT_MIN_CHARS;
+    var WIN32_BRACKETED_PASTE_OPEN;
+    var WIN32_BRACKETED_PASTE_CLOSE;
+    var BRACKETED_PASTE_OPEN;
+    var BRACKETED_PASTE_CLOSE;
+    var WIN32_SOFT_NEWLINE;
+    var chunkPreservingSurrogates2;
+    var init_submit_policy = __esm2({
+      "src/providers/spec/submit-policy.ts"() {
+        "use strict";
+        init_pty_write_chunking();
+        SUBMIT_DELAY_FLOOR_MS = 200;
+        SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
+        VERIFIED_SUBMIT_MIN_CHARS = 512;
+        WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
+        WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
+        BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
+        BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
+        WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
+        chunkPreservingSurrogates2 = chunkPreservingSurrogates;
+      }
+    });
+    function hashSendText(text) {
+      let h = 5381;
+      for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h ^ text.charCodeAt(i)) >>> 0;
+      return `${h.toString(36)}:${text.length}`;
     }
     function sameModal(a, b) {
       if (!a && !b) return true;
@@ -102633,7 +102688,6 @@ ${marker}`,
     var os21;
     var path32;
     var import_session_host_core9;
-    var SUBMIT_DELAY_FLOOR_MS;
     var DEFAULT_SPAWN_PRIME_MAX_WAIT_MS;
     var STALL_REFOCUS_INFO_LIMIT;
     var SEND_IN_FLIGHT_MAX_MS;
@@ -102645,13 +102699,6 @@ ${marker}`,
     var WIN32_SUBMIT_SETTLE_POLL_MS;
     var WIN32_ECHO_PROBE_CHARS;
     var WIN32_ECHO_MAX_WAIT_MS;
-    var VERIFIED_SUBMIT_MIN_CHARS;
-    var WIN32_BRACKETED_PASTE_OPEN;
-    var WIN32_BRACKETED_PASTE_CLOSE;
-    var BRACKETED_PASTE_OPEN;
-    var BRACKETED_PASTE_CLOSE;
-    var WIN32_SOFT_NEWLINE;
-    var chunkPreservingSurrogates2;
     var FsmDriver;
     var init_fsm_driver = __esm2({
       "src/providers/spec/fsm-driver.ts"() {
@@ -102673,7 +102720,8 @@ ${marker}`,
         init_debug_trace();
         init_debug_config();
         init_pty_write_chunking();
-        SUBMIT_DELAY_FLOOR_MS = 200;
+        init_submit_policy();
+        init_submit_policy();
         DEFAULT_SPAWN_PRIME_MAX_WAIT_MS = 2e3;
         STALL_REFOCUS_INFO_LIMIT = 3;
         SEND_IN_FLIGHT_MAX_MS = 3e4;
@@ -102685,13 +102733,6 @@ ${marker}`,
         WIN32_SUBMIT_SETTLE_POLL_MS = 120;
         WIN32_ECHO_PROBE_CHARS = 16;
         WIN32_ECHO_MAX_WAIT_MS = 2e4;
-        VERIFIED_SUBMIT_MIN_CHARS = 512;
-        WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
-        WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
-        BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
-        BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
-        WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
-        chunkPreservingSurrogates2 = chunkPreservingSurrogates;
         FsmDriver = class {
           constructor(opts) {
             this.opts = opts;
@@ -102786,6 +102827,11 @@ ${marker}`,
            *  lastSubmitUnconfirmed() so a supervisor can distinguish "agent is thinking"
            *  from "the prompt was never actually submitted". */
           submitUnconfirmed = false;
+          /** ENTER-LOSS layer ①: the short-body / perChar paths' submit-key timer.
+           *  Previously a bare setTimeout — invisible to shutdown() (a CR could fire
+           *  into a killed PTY) and to the drain gate (a body written with its CR
+           *  still scheduled did not count as in flight). Tracked so both see it. */
+          plainSubmitTimer = null;
           currentEval = null;
           stateHistory = [];
           prevStateAt = 0;
@@ -103061,6 +103107,10 @@ ${marker}`,
             if (this.win32WriteTimer) {
               clearTimeout(this.win32WriteTimer);
               this.win32WriteTimer = null;
+            }
+            if (this.plainSubmitTimer) {
+              clearTimeout(this.plainSubmitTimer);
+              this.plainSubmitTimer = null;
             }
             if (this.win32ModalConfirmTimer) {
               clearTimeout(this.win32ModalConfirmTimer);
@@ -103715,6 +103765,53 @@ ${marker}`,
           lastSubmitUnconfirmed() {
             return this.submitUnconfirmed;
           }
+          /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
+           *  tracked timer so the shutdown drain gate can see it and shutdown() can
+           *  cancel it instead of letting it fire into a killed PTY. */
+          schedulePlainSubmit(submitKey, delayMs) {
+            if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
+            this.plainSubmitTimer = setTimeout(() => {
+              this.plainSubmitTimer = null;
+              this.adapter.send_keys(submitKey);
+            }, delayMs);
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
+           *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
+           *  the body (or part of it) is in the composer and its submit key has not yet
+           *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
+           *  written yet — the composer holds nothing of theirs; they are discarded with
+           *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
+           *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
+           *  would hold shutdown for a whole turn boundary, not a submit). */
+          hasInFlightSubmit() {
+            return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
+           *  than callback-wiring: the four timers above re-arm each other across
+           *  several phases (write → echo-gate → resend net) and a poll is the only
+           *  join point that needs no knowledge of which phase is active. */
+          whenSubmitDrained(timeoutMs) {
+            if (!this.hasInFlightSubmit()) return Promise.resolve(true);
+            const deadline = Date.now() + Math.max(0, timeoutMs);
+            return new Promise((resolve34) => {
+              const poll = () => {
+                if (!this.hasInFlightSubmit()) {
+                  resolve34(true);
+                  return;
+                }
+                if (Date.now() >= deadline) {
+                  resolve34(false);
+                  return;
+                }
+                setTimeout(poll, 100);
+              };
+              setTimeout(poll, 100);
+            });
+          }
+          /** ENTER-LOSS layer ③ — see ISpecDriver.snapshotWithScrollback. */
+          snapshotWithScrollback() {
+            return this.adapter.snapshotWithScrollback();
+          }
           actuallySendMessage(text, bracketedPaste) {
             const sm = this.spec.send_message;
             this.submitUnconfirmed = false;
@@ -103740,7 +103837,7 @@ ${marker}`,
             }
             if (perChar === 0) {
               this.adapter.send_keys(text);
-              if (beforeSubmit > 0) setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
+              if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
               else this.adapter.send_keys(sm.submit_key);
               return;
             }
@@ -103748,7 +103845,7 @@ ${marker}`,
             const iv = setInterval(() => {
               if (i >= text.length) {
                 clearInterval(iv);
-                setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
+                this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
                 return;
               }
               this.adapter.send_keys(text[i]);
@@ -109006,6 +109103,30 @@ ${text}` : text;
           claimQueuedSends(text) {
             if (typeof this.driver.claimQueuedSends !== "function") return 0;
             return this.driver.claimQueuedSends(text);
+          }
+          /** ENTER-LOSS layer ① — see CliAdapter.hasInFlightSubmit. */
+          hasInFlightSubmit() {
+            if (typeof this.driver.hasInFlightSubmit !== "function") return false;
+            return this.driver.hasInFlightSubmit();
+          }
+          /** ENTER-LOSS layer ① — see CliAdapter.whenSubmitDrained. */
+          whenSubmitDrained(timeoutMs) {
+            if (typeof this.driver.whenSubmitDrained !== "function") return Promise.resolve(true);
+            return this.driver.whenSubmitDrained(timeoutMs);
+          }
+          /** ENTER-LOSS layer ③ — scrollback-inclusive screen text for the boot-time
+           *  composer-residue sweep. Falls back to the viewport when the driver has no
+           *  scrollback surface (test doubles). Same security posture as
+           *  getTerminalScreenSnapshot: raw terminal text — callers must never log it. */
+          getScrollbackText() {
+            try {
+              if (typeof this.driver.snapshotWithScrollback === "function") {
+                return this.driver.snapshotWithScrollback() || "";
+              }
+              return this.driver.snapshot() || "";
+            } catch {
+              return "";
+            }
           }
           getStatus(_options) {
             const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
@@ -117562,6 +117683,44 @@ ${rawInput}` : rawInput;
         };
       }
     });
+    async function drainInFlightSubmits(adapters, timeoutMs) {
+      const inFlight2 = [];
+      for (const [key2, adapter] of adapters) {
+        try {
+          if (typeof adapter.hasInFlightSubmit === "function" && adapter.hasInFlightSubmit()) {
+            inFlight2.push({ key: key2, adapter });
+          }
+        } catch {
+        }
+      }
+      if (inFlight2.length === 0) return { clean: true, waitedMs: 0, pendingKeys: [] };
+      const startedAt = Date.now();
+      LOG.info("CLI", `Shutdown submit-drain gate: waiting up to ${timeoutMs}ms for ${inFlight2.length} in-flight submit(s) [${inFlight2.map((e) => e.key).join(", ")}]`);
+      await Promise.all(inFlight2.map(({ key: key2, adapter }) => (typeof adapter.whenSubmitDrained === "function" ? adapter.whenSubmitDrained(timeoutMs) : Promise.resolve(true)).catch((e) => {
+        LOG.warn("CLI", `Submit-drain wait failed for ${key2}: ${e?.message || e}`);
+        return false;
+      })));
+      const waitedMs = Date.now() - startedAt;
+      const pendingKeys = inFlight2.filter(({ adapter }) => {
+        try {
+          return typeof adapter.hasInFlightSubmit === "function" && adapter.hasInFlightSubmit();
+        } catch {
+          return false;
+        }
+      }).map(({ key: key2 }) => key2);
+      if (pendingKeys.length > 0) {
+        LOG.error("CLI", `Shutdown submit-drain gate TIMED OUT after ${waitedMs}ms \u2014 ${pendingKeys.length} submit(s) still unconfirmed [${pendingKeys.join(", ")}]. Their bodies may remain unsubmitted in the composer; the boot-time composer-residue sweep will report them.`);
+      } else {
+        LOG.info("CLI", `Shutdown submit-drain gate: all in-flight submits completed in ${waitedMs}ms`);
+      }
+      return { clean: pendingKeys.length === 0, waitedMs, pendingKeys };
+    }
+    var init_cli_manager_submit_drain = __esm2({
+      "src/commands/cli-manager-submit-drain.ts"() {
+        "use strict";
+        init_logger();
+      }
+    });
     function shouldRestoreHostedRuntime(record2, managerTag) {
       if (!managerTag) return true;
       const managedBy = typeof record2.managedBy === "string" ? record2.managedBy.trim() : "";
@@ -118485,6 +118644,7 @@ ${rawInput}` : rawInput;
         init_acp_provider_instance();
         init_contracts2();
         init_provider_input_support();
+        init_cli_manager_submit_drain();
         init_logger();
         init_hosted_runtime_restore();
         init_mesh_stop_task_scope();
@@ -119037,6 +119197,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
           shutdownAll() {
             for (const adapter of this.adapters.values()) adapter.shutdown();
             this.adapters.clear();
+          }
+          /** ENTER-LOSS layer ① — shutdown drain gate for in-flight submits (the
+           *  2026-09-10 stranded-composer incident). Awaited by
+           *  shutdownDaemonComponents BEFORE detachAll(); immediate no-op when nothing
+           *  is in flight. Rationale + limitation: ./cli-manager-submit-drain.ts. */
+          drainInFlightSubmits(timeoutMs) {
+            return drainInFlightSubmits(this.adapters, timeoutMs);
           }
           detachAll() {
             for (const adapter of this.adapters.values()) {
@@ -160419,6 +160586,192 @@ data: ${JSON.stringify(msg.data)}
       configureSessionTerminationObserver(null);
     }
     init_mesh_refine_executor_liveness();
+    init_fsm_driver();
+    init_logger();
+    init_fsm_driver();
+    init_mesh_runtime_store();
+    var RESIDUE_PROBE_CHARS = 24;
+    var RESIDUE_MIN_BODY_CHARS = 64;
+    var RESIDUE_LOOKBACK_MS = 24 * 60 * 6e4;
+    var DEFAULT_SWEEP_DELAY_MS = 45e3;
+    var COMPOSER_RESIDUE_AUTOSUBMIT_ENV = "ADHDEV_COMPOSER_RESIDUE_AUTOSUBMIT";
+    var COMPOSER_PROMPT_MARKERS = ["\u276F", "\u203A", ">"];
+    function detectNonEmptyComposerTail(viewportText) {
+      const lines = viewportText.split("\n").map((l) => l.trimEnd());
+      const tail = lines.filter((l) => l.trim().length > 0).slice(-6);
+      for (const line of tail) {
+        const trimmed = line.trimStart();
+        for (const marker of COMPOSER_PROMPT_MARKERS) {
+          if (!trimmed.startsWith(marker)) continue;
+          const content = trimmed.slice(marker.length).trim();
+          if (content.length >= 8) return content.length;
+        }
+      }
+      return 0;
+    }
+    function matchCandidate(session, body) {
+      const norm = normalizeForEcho(body);
+      if (norm.length === 0) return null;
+      const head = norm.slice(0, RESIDUE_PROBE_CHARS);
+      const tail = norm.slice(-RESIDUE_PROBE_CHARS);
+      const viewport = normalizeForEcho(session.viewportText);
+      if (!viewport.includes(tail)) return null;
+      const full = normalizeForEcho(session.scrollbackText);
+      if (!full.includes(head)) return null;
+      return full.includes(norm) ? "full" : "partial";
+    }
+    function runComposerResidueSweep(deps) {
+      const findings = [];
+      const candidates = deps.candidates.filter(
+        (c) => typeof c.coordinatorMessage === "string" && c.coordinatorMessage.length >= RESIDUE_MIN_BODY_CHARS
+      );
+      for (const session of deps.sessions) {
+        if (session.status !== "idle") continue;
+        let best = null;
+        for (const candidate of candidates) {
+          const verdict = matchCandidate(session, candidate.coordinatorMessage);
+          if (!verdict) continue;
+          if (!best || verdict === "full" && best.integrity === "partial" || verdict === best.integrity && candidate.coordinatorMessage.length > best.candidate.coordinatorMessage.length) {
+            best = { candidate, integrity: verdict };
+          }
+        }
+        if (best) {
+          const { candidate, integrity } = best;
+          const recoverable = integrity === "full";
+          let recovered = false;
+          if (recoverable && deps.autoRecoverEnabled && typeof session.submitComposer === "function") {
+            try {
+              session.submitComposer();
+              recovered = true;
+            } catch (e) {
+              LOG.warn("ComposerResidue", `Recovery submit failed for session ${session.key}: ${e?.message || e}`);
+            }
+          }
+          LOG.warn(
+            "ComposerResidue",
+            `COMPOSER RESIDUE detected on idle session ${session.key} (${session.cliType}): matches drained ${candidate.event} mesh=${candidate.meshId} eventId=${candidate.eventId ?? "n/a"} taskId=${candidate.taskId ?? "n/a"} drainedAt=${new Date(candidate.drainedAt).toISOString()} bodyLen=${candidate.coordinatorMessage.length} integrity=${integrity}. ` + (recovered ? `Auto-recovery pressed Enter (${COMPOSER_RESIDUE_AUTOSUBMIT_ENV} enabled, full-body match).` : recoverable ? `NOT auto-submitted (default OFF \u2014 set ${COMPOSER_RESIDUE_AUTOSUBMIT_ENV}=1 to enable full-match recovery). The body remains in the composer.` : "NOT recoverable: the full body is NOT present (possible truncated write) \u2014 submitting would inject a corrupted message. Manual review required.")
+          );
+          findings.push({
+            sessionKey: session.key,
+            cliType: session.cliType,
+            kind: "identified",
+            candidate: {
+              meshId: candidate.meshId,
+              event: candidate.event,
+              eventId: candidate.eventId,
+              taskId: candidate.taskId,
+              drainedAt: candidate.drainedAt,
+              bodyLength: candidate.coordinatorMessage.length
+            },
+            integrity,
+            recovered
+          });
+          continue;
+        }
+        const residueLength = detectNonEmptyComposerTail(session.viewportText);
+        if (residueLength > 0) {
+          LOG.warn(
+            "ComposerResidue",
+            `Unidentified composer residue on idle session ${session.key} (${session.cliType}): ~${residueLength} chars on the composer line, matching no recently-drained notification. Origin unknown \u2014 left untouched.`
+          );
+          findings.push({
+            sessionKey: session.key,
+            cliType: session.cliType,
+            kind: "unidentified",
+            recovered: false,
+            residueLength
+          });
+        }
+      }
+      return findings;
+    }
+    function readAutoRecoverEnabled(env2) {
+      const v = (env2[COMPOSER_RESIDUE_AUTOSUBMIT_ENV] ?? "").trim().toLowerCase();
+      return v === "1" || v === "true";
+    }
+    function collectSweepSessions(components) {
+      const sessions = [];
+      for (const [key2, adapter] of components.cliManager.adapters) {
+        if (typeof adapter.getScrollbackText !== "function") continue;
+        let status;
+        try {
+          status = adapter.getStatus()?.status;
+        } catch {
+          status = void 0;
+        }
+        let viewportText = "";
+        try {
+          viewportText = adapter.getTerminalScreenSnapshot?.()?.text ?? "";
+        } catch {
+          viewportText = "";
+        }
+        let scrollbackText = "";
+        try {
+          scrollbackText = adapter.getScrollbackText() || viewportText;
+        } catch {
+          scrollbackText = viewportText;
+        }
+        sessions.push({
+          key: key2,
+          cliType: adapter.cliType,
+          status,
+          viewportText,
+          scrollbackText,
+          ...typeof adapter.writeRaw === "function" ? { submitComposer: () => adapter.writeRaw("\r") } : {}
+        });
+      }
+      return sessions;
+    }
+    function collectSweepCandidates(now) {
+      let rows;
+      try {
+        rows = MeshRuntimeStore.getInstance().recentDrainedPendingEventPayloads(now - RESIDUE_LOOKBACK_MS);
+      } catch (e) {
+        LOG.debug("ComposerResidue", `Ledger unavailable \u2014 sweep skipped: ${e?.message || e}`);
+        return [];
+      }
+      const candidates = [];
+      for (const row of rows) {
+        const payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+        const coordinatorMessage = typeof payload.coordinatorMessage === "string" ? payload.coordinatorMessage : "";
+        if (coordinatorMessage.length < RESIDUE_MIN_BODY_CHARS) continue;
+        const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" ? payload.metadataEvent : {};
+        candidates.push({
+          rowId: row.id,
+          meshId: row.meshId,
+          event: row.event,
+          eventId: typeof payload.eventId === "string" ? payload.eventId : null,
+          taskId: typeof metadataEvent.taskId === "string" ? metadataEvent.taskId : null,
+          drainedAt: row.drainedAt,
+          coordinatorMessage
+        });
+      }
+      return candidates;
+    }
+    function scheduleComposerResidueSweep(components, opts = {}) {
+      const env2 = opts.env ?? process.env;
+      const delayMs = opts.delayMs ?? DEFAULT_SWEEP_DELAY_MS;
+      const timer = setTimeout(() => {
+        try {
+          const now = Date.now();
+          const candidates = collectSweepCandidates(now);
+          const sessions = collectSweepSessions(components);
+          if (sessions.length === 0) return;
+          const findings = runComposerResidueSweep({
+            sessions,
+            candidates,
+            autoRecoverEnabled: readAutoRecoverEnabled(env2)
+          });
+          if (findings.length === 0) {
+            LOG.debug("ComposerResidue", `Boot sweep clean: ${sessions.length} idle-checked session(s), ${candidates.length} drained candidate(s)`);
+          }
+        } catch (e) {
+          LOG.warn("ComposerResidue", `Boot sweep failed: ${e?.message || e}`);
+        }
+      }, delayMs);
+      timer.unref?.();
+      return { stop: () => clearTimeout(timer) };
+    }
     var _hardened = false;
     var HARDENED_PROTOS = [
       { name: "Object", proto: Object.prototype },
@@ -162712,6 +163065,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       setImmediate(() => void router.resumePendingRefineJobsOnStartup());
       components.eventLoopMonitor = startEventLoopMonitor();
       setImmediate(() => router.resumeDeferredRestartsOnStartup());
+      components.composerResidueSweep = scheduleComposerResidueSweep(components);
       return components;
     }
     async function startDaemonDevSupport(options) {
@@ -162747,10 +163101,15 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         seqscribeParityLoop,
         seqscribeCollector,
         seqscribeFleetStatusPeerView,
-        transcriptReplicaStore
+        transcriptReplicaStore,
+        composerResidueSweep
       } = components;
       poller.stop();
       cdpInitializer.stop();
+      try {
+        composerResidueSweep?.stop();
+      } catch {
+      }
       try {
         eventLoopMonitor?.stop();
       } catch {
@@ -162837,6 +163196,11 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         }
       } catch (e) {
         LOG.warn("Shutdown", `AgentStream dispose: ${e?.message}`);
+      }
+      try {
+        await cliManager.drainInFlightSubmits(SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS);
+      } catch (e) {
+        LOG.warn("Shutdown", `Submit-drain gate error (proceeding): ${e?.message || e}`);
       }
       try {
         cliManager.detachAll();

@@ -147,6 +147,26 @@ export interface CliAdapter {
         | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
         | { ok: false; reason: string; message: string }
     >;
+    /**
+     * ENTER-LOSS layer ① (2026-09-10 incident: a body written to the PTY lost its
+     * CR to a daemon restart and sat in the composer for 1h42m). True while a
+     * message body has been written but its submit key is not yet confirmed.
+     * Optional — only the spec/FSM adapter implements it; callers typeof-guard
+     * and treat absence as "nothing in flight".
+     */
+    hasInFlightSubmit?(): boolean;
+    /**
+     * ENTER-LOSS layer ①: resolve once no submit is in flight, or after
+     * `timeoutMs` (true = drained, false = timed out). The shutdown path awaits
+     * this BEFORE tearing the adapter down, so an in-flight CR gets to fire.
+     */
+    whenSubmitDrained?(timeoutMs: number): Promise<boolean>;
+    /**
+     * ENTER-LOSS layer ③ (boot-time composer-residue sweep): scrollback-inclusive
+     * raw terminal text. Same security posture as getTerminalScreenSnapshot —
+     * may carry user data / tokens; callers MUST NOT log it.
+     */
+    getScrollbackText?(): string;
     getStatus(options?: { allowParse?: boolean }): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
     getDebugSnapshot?(): unknown;

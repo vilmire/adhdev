@@ -2752,6 +2752,38 @@ export class MeshRuntimeStore {
         }));
     }
 
+    /**
+     * ENTER-LOSS layer ③ (boot-time composer-residue sweep) — recently-DRAINED
+     * pending-event rows across ALL meshes, payloads included. The sweep matches
+     * each payload's coordinatorMessage against the composer text of restored
+     * idle sessions: an event is marked drained BEFORE its body is written to the
+     * PTY (the consume-before-submit ordering this incident class exploits), so a
+     * body stranded in a composer by a mid-submit daemon death is identifiable
+     * ONLY from these drained rows — the undrained queue no longer holds it.
+     * Drained rows are soft-marked (retained until mesh deletion), so this reads
+     * history, not live queue state.
+     */
+    recentDrainedPendingEventPayloads(sinceEpochMs: number, limit = 200): Array<{
+        id: string;
+        meshId: string;
+        event: string;
+        payload: unknown;
+        drainedAt: number;
+    }> {
+        const rows = this.db.prepare(
+            `SELECT id, mesh_id, event, payload, drained_at FROM mesh_pending_events
+             WHERE drained = 1 AND drained_at IS NOT NULL AND drained_at >= ?
+             ORDER BY drained_at DESC LIMIT ?`
+        ).all(sinceEpochMs, Math.max(1, limit)) as Array<{ id: string; mesh_id: string; event: string; payload: string; drained_at: number }>;
+        return rows.map(r => ({
+            id: r.id,
+            meshId: r.mesh_id,
+            event: r.event,
+            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
+            drainedAt: r.drained_at,
+        }));
+    }
+
     hasPendingEventFingerprint(meshId: string, fingerprint: string): boolean {
         const row = this.db.prepare(
             'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1'
