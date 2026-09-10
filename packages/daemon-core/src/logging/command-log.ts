@@ -28,6 +28,11 @@ export interface CommandLogEntry {
     ts: string;           // ISO timestamp
     cmd: string;          // command name
     source: 'ws' | 'p2p' | 'ext' | 'api' | 'standalone' | 'unknown';  // where it came from
+    /** Transport-level peer identifier for src:'p2p' commands (the DataChannel
+     *  connection id, e.g. `peer_…`). Identifier ONLY — never a username, email
+     *  or any other PII. Answers "which connected peer sent this" where `src`
+     *  alone only answers "it came over P2P". */
+    peerId?: string;
     interactionId?: string;
     args?: Record<string, unknown>;  // command arguments (sensitive values masked)
     success?: boolean;    // result
@@ -154,6 +159,7 @@ export function logCommand(entry: CommandLogEntry): void {
             ts: entry.ts,
             cmd: entry.cmd,
             src: entry.source,
+            ...(entry.peerId ? { peer: entry.peerId } : {}),
             ...(entry.interactionId ? { interactionId: entry.interactionId } : {}),
             ...(entry.args ? { args: maskArgs(entry.args) } : {}),
             ...(entry.success !== undefined ? { ok: entry.success } : {}),
@@ -181,6 +187,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
                     ts: parsed.ts,
                     cmd: parsed.cmd,
                     source: parsed.src,
+                    peerId: parsed.peer,
                     interactionId: parsed.interactionId,
                     args: parsed.args,
                     success: parsed.ok,
