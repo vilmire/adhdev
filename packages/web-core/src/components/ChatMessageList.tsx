@@ -553,7 +553,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
             {items.length === 0 && !hasMoreVisibleContent && (
                 emptyState || (
-                    <div className="text-center mt-16 opacity-20 text-[13px]">
+                    <div className="text-center mt-16 opacity-20 text-xxs">
                         {t('chatList.waitingForMessages')}
                     </div>
                 )

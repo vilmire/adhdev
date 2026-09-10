@@ -250,14 +250,14 @@ export function MeshProviderAutoApproveSection({
             </div>
 
             {!canConfigure ? (
-                <div className="text-[13px] text-text-muted">{t('repoMesh.providerAutoApprove.noHostDaemon')}</div>
+                <div className="text-xxs text-text-muted">{t('repoMesh.providerAutoApprove.noHostDaemon')}</div>
             ) : loading ? (
-                <div className="text-[13px] text-text-muted">{t('repoMesh.providerAutoApprove.loading')}</div>
+                <div className="text-xxs text-text-muted">{t('repoMesh.providerAutoApprove.loading')}</div>
             ) : providers.length === 0 ? (
                 // An empty list is only "no providers" once every node has actually
                 // reported. While any node's inventory is still outstanding, say so
                 // instead of asserting none exist — the reading isn't in yet.
-                <div className="text-[13px] text-text-muted">
+                <div className="text-xxs text-text-muted">
                     {unreportedNodeCount > 0
                         ? t('repoMesh.providerAutoApprove.awaitingNodes', { count: unreportedNodeCount })
                         : t('repoMesh.providerAutoApprove.noProviders')}
@@ -464,7 +464,7 @@ function MachinePolicyToggle({
             disabled={disabled}
         >
             <span>
-                <span className="block text-[13px] font-semibold text-text-primary">{label}</span>
+                <span className="block text-xxs font-semibold text-text-primary">{label}</span>
                 <span className="mt-0.5 block text-2xs text-text-muted">{hint}</span>
             </span>
             <span className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-accent-primary' : 'bg-surface-secondary'}`}>

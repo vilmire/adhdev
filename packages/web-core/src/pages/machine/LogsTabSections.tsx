@@ -221,7 +221,7 @@ export function DiagnosticsSummaryCards({
         <div className="grid gap-3 md:grid-cols-3">
             <div className={`rounded-xl border p-3 ${summaryCardTone(diagnosticsSummary.issueCount > 0 ? 'warning' : 'good')}`}>
                 <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">{t('machine.logsTabSections.diagnosticsTimeline')}</div>
-                <div className="text-[13px] text-text-primary font-medium">
+                <div className="text-xxs text-text-primary font-medium">
                     {t('machine.logsTabSections.visibleEventsIssues', { events: diagnosticEventsCount, issues: diagnosticsSummary.issueCount })}
                 </div>
                 <div className="text-2xs text-text-secondary mt-1">
@@ -233,7 +233,7 @@ export function DiagnosticsSummaryCards({
                 <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">{t('machine.logsTabSections.latestIssue')}</div>
                 {diagnosticsSummary.latestIssue ? (
                     <>
-                        <div className="text-[13px] text-text-primary font-medium">
+                        <div className="text-xxs text-text-primary font-medium">
                             {sourceLabel(diagnosticsSummary.latestIssue.source, t)} · {diagnosticsSummary.latestIssue.severity.toUpperCase()}
                         </div>
                         <div className="text-2xs text-text-secondary mt-1 line-clamp-2">
@@ -245,7 +245,7 @@ export function DiagnosticsSummaryCards({
                     </>
                 ) : (
                     <>
-                        <div className="text-[13px] text-text-primary font-medium">{t('machine.logsTabSections.noVisibleIssue')}</div>
+                        <div className="text-xxs text-text-primary font-medium">{t('machine.logsTabSections.noVisibleIssue')}</div>
                         <div className="text-2xs text-text-secondary mt-1">{t('machine.logsTabSections.useIssuesOrAll')}</div>
                     </>
                 )}
@@ -253,7 +253,7 @@ export function DiagnosticsSummaryCards({
 
             <div className={`rounded-xl border p-3 ${summaryCardTone(statusTone)}`}>
                 <div className="text-3xs uppercase tracking-wider text-text-muted mb-2">{t('machine.logsTabSections.sourceStatus')}</div>
-                <div className="text-[13px] text-text-primary font-medium">
+                <div className="text-xxs text-text-primary font-medium">
                     {daemonFetchError || traceFetchError ? t('machine.logsTabSections.needsAttention') : autoRefresh ? t('machine.logsTabSections.livePolling') : t('machine.logsTabSections.paused')}
                 </div>
                 <div className="text-2xs text-text-secondary mt-1">

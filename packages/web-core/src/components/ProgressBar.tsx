@@ -43,7 +43,7 @@ export default function ProgressBar({
         <div className="flex-1">
             <div className="flex justify-between mb-1.5">
                 <span className="text-2xs text-text-secondary font-medium">{label}</span>
-                <span className="text-[13px] text-text-primary font-bold">{pct}%</span>
+                <span className="text-xxs text-text-primary font-bold">{pct}%</span>
             </div>
             <div className="h-1.5 bg-white/[0.04] rounded-sm overflow-hidden">
                 <div

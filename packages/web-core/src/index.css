@@ -93,6 +93,22 @@
     --text-5xs: 8px;
     --text-5xs--line-height: 11px;
 
+    /* ── Between-xs-and-sm token (2026-09-10 type-scale paydown) ──
+       13px sits at the exact midpoint of Tailwind's built-in xs (12px/16px)
+       and sm (14px/20px) steps. Its line-height is the linear interpolation
+       of those two neighbors' line-heights (16 + (13-12)/(14-12)*(20-16) =
+       18px), which lands on a whole pixel and on the same 4px baseline grid
+       every other step in this scale already uses. 67 unpaired text-[13px]
+       lines across 47 files (the largest single value in the 2026-08-23
+       type-scale audit's unpaired backlog) converge on this token instead of
+       each guessing a leading-* independently. Other unpaired values in that
+       backlog (15/17/22/28px, 0.6em) had zero existing leading-* precedent
+       and/or don't interpolate to a clean grid value, so they were paired
+       with a direct leading-[N] (or left alone) instead of tokenized — see
+       scripts/check-type-scale.mjs BASELINE comment. */
+    --text-xxs: 13px;
+    --text-xxs--line-height: 18px;
+
     /* Transition */
     --transition-base: 180ms cubic-bezier(0.4, 0, 0.2, 1);
 

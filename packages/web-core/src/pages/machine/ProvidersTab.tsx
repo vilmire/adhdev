@@ -419,7 +419,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     <div className="text-2xs text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
                     <div className="flex flex-col gap-1.5">
                         {channelNewTypes.map((providerType) => (
-                            <div key={providerType} className="flex items-center justify-between gap-3 text-[13px]">
+                            <div key={providerType} className="flex items-center justify-between gap-3 text-xxs">
                                 <span className="font-mono text-text-primary">{providerType}</span>
                                 <button
                                     onClick={() => { void handleInstallNewType(providerType) }}

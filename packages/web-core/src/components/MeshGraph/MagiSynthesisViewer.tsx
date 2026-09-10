@@ -135,7 +135,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                     <div key={group.consensusGroupId} className={`rounded-2xl border p-4 ${dk ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
                         {/* Header */}
                         <div className="flex flex-wrap items-center gap-2">
-                            <span className={`min-w-0 flex-1 truncate text-[13px] font-semibold ${meshTheme.textPrimary}`} title={group.question || group.consensusGroupId}>
+                            <span className={`min-w-0 flex-1 truncate text-xxs font-semibold ${meshTheme.textPrimary}`} title={group.question || group.consensusGroupId}>
                                 {group.question || group.panel || group.consensusGroupId}
                             </span>
                             <span className={`shrink-0 rounded-full border px-2 py-0.5 text-3xs font-semibold uppercase tracking-[0.14em] ${
