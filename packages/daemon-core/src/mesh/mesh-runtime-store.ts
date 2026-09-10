@@ -21,9 +21,23 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // below, and re-exported at the bottom of this file so every existing import path
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
-import { meshTurnAttemptFromRow, meshTurnHeldSuspensionFromRow, notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
+import { notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, type TurnEventRow } from './mesh-turn-event-queries.js';
 import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
+// TURN-LEDGER pure move (file-size gate): the Stage 5 turn-attempt / turn-event /
+// held-suspension persistence lives in mesh-runtime-store-turn-attempts.ts; the
+// class methods below delegate with `this` as `self` (router.ts → router-refine.ts
+// pattern). No behavior change — SQL strings and WAL-checkpoint order are verbatim.
+import {
+    insertTurnAttempt, getTurnAttempt, getCurrentTurnAttempt, getLatestTurnAttemptForSession,
+    getTurnAttemptBySeq, listTurnAttemptsForTask, listSupersededNonterminalTurnAttempts,
+    listQueueTerminatedNonterminalTurnAttempts, listActiveTurnAttempts, advanceTurnAttemptStage,
+    commitTurnAttemptTerminal, markTurnAttemptRedriven, rebindTurnAttemptSession,
+    insertTurnEvent, hasTurnEvent, insertHeldTurnSuspension, getHeldTurnSuspension,
+    listHeldTurnSuspensionsForAttempt, listHeldTurnSuspensionsForMesh, resolveHeldTurnSuspension,
+    type MeshTurnAttemptInsert, type MeshTurnAttemptStageOpts,
+    type MeshTurnEventInsert, type MeshHeldTurnSuspensionInsert,
+} from './mesh-runtime-store-turn-attempts.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -128,7 +142,8 @@ function meshRuntimeStorePath(): string {
 
 export class MeshRuntimeStore {
     private static instance: MeshRuntimeStore | undefined;
-    private readonly db: DatabaseHandle;
+    /** Readonly (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
+    readonly db: DatabaseHandle;
     private readonly dbPath: string;
     private readonly migratedMeshIds = new Set<string>();
     // Idle-active-mission-reminder debounce (mesh-idle-reminder.ts). In-memory only:
@@ -812,7 +827,8 @@ export class MeshRuntimeStore {
         this.db.prepare('DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?').run(Date.now());
     }
 
-    private maybeCheckpointWal(): void {
+    /** Public (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
+    maybeCheckpointWal(): void {
         if (++this.walWriteCounter < MeshRuntimeStore.WAL_CHECK_INTERVAL) return;
         this.walWriteCounter = 0;
         try {
@@ -3084,323 +3100,30 @@ export class MeshRuntimeStore {
     }
 
     // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
+    // Implementation lives in ./mesh-runtime-store-turn-attempts.ts (behavior-
+    // preserving code move, file-size gate). Kept here as thin delegators so the
+    // public surface and every call site are unchanged; the extracted functions
+    // reach the db handle via `self` (same pattern as router.ts → router-refine.ts).
 
-    /**
-     * Insert a new turn attempt. INSERT OR IGNORE on the PRIMARY KEY / the
-     * UNIQUE(mesh_id, task_id, attempt_seq) constraint makes a retried open (e.g. a
-     * dispatch restarted after a crash between the queue claim and this write)
-     * idempotent: returns true when this call inserted the row, false when an
-     * attempt for that identity already exists (caller then reads it back).
-     */
-    insertTurnAttempt(row: {
-        attemptId: string; meshId: string; taskId: string; attemptSeq: number;
-        nodeId?: string; sessionId?: string; providerType?: string;
-        coordinatorDaemonId?: string; coordinatorSessionId?: string;
-        dispatchNonce?: number; stage: string; leaseDeadlineMs?: number | null;
-        acceptedAt?: string; createdAt: string; updatedAt: string;
-    }): boolean {
-        const res = this.db.prepare(`
-            INSERT OR IGNORE INTO mesh_turn_attempts (
-                attempt_id, mesh_id, task_id, attempt_seq, node_id, session_id,
-                provider_type, coordinator_daemon_id, coordinator_session_id,
-                dispatch_nonce, stage, lease_deadline_ms, accepted_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            row.attemptId, row.meshId, row.taskId, row.attemptSeq,
-            row.nodeId ?? null, row.sessionId ?? null, row.providerType ?? null,
-            row.coordinatorDaemonId ?? null, row.coordinatorSessionId ?? null,
-            row.dispatchNonce ?? null, row.stage, row.leaseDeadlineMs ?? null,
-            row.acceptedAt ?? null, row.createdAt, row.updatedAt,
-        );
-        this.maybeCheckpointWal();
-        return res.changes > 0;
-    }
-
-    getTurnAttempt(attemptId: string): MeshTurnAttemptRow | null {
-        const row = this.db.prepare('SELECT * FROM mesh_turn_attempts WHERE attempt_id = ?')
-            .get(attemptId) as Record<string, unknown> | undefined;
-        return row ? meshTurnAttemptFromRow(row) : null;
-    }
-
-    /**
-     * The CURRENT attempt for a task: the highest attempt_seq row. Reassignment
-     * monotonically increases the seq (it is the dispatch nonce), so the max-seq row
-     * is the only attempt late events may still mutate.
-     */
-    getCurrentTurnAttempt(meshId: string, taskId: string): MeshTurnAttemptRow | null {
-        const row = this.db.prepare(`
-            SELECT * FROM mesh_turn_attempts
-            WHERE mesh_id = ? AND task_id = ?
-            ORDER BY attempt_seq DESC LIMIT 1
-        `).get(meshId, taskId) as Record<string, unknown> | undefined;
-        return row ? meshTurnAttemptFromRow(row) : null;
-    }
-
-    /**
-     * The CURRENT attempt bound to a worker session, across meshes/tasks: the
-     * nonterminal row if one exists, else the most recently touched terminal row.
-     * Stage 6's presentation layer resolves sessions (not tasks) — read_chat,
-     * session status, dashboard and the restart gate all key on sessionId.
-     */
-    /**
-     * The attempt that governs a session's presented execution status.
-     *
-     * A nonterminal attempt is preferred (an in-flight turn outranks a finished
-     * one), but ONLY when it is its task's CURRENT attempt — i.e. no higher
-     * attempt_seq exists for the same task.
-     *
-     * ORPHAN-LEGACY-ATTEMPT (fix ③): without that restriction, a stranded
-     * lower-seq row (classically a `legacy-<taskId>-0` minted mid-turn while the
-     * real dispatch already held seq >= 1) outranks the real, COMPLETED attempt
-     * purely because it is nonterminal. Such a row is unreachable by
-     * construction — every ACK and every completion targets the current attempt,
-     * and the reducer's stale-attempt guard refuses to mutate a non-current row —
-     * so it stays `generating` forever and pins the session's presented status to
-     * `generating` even though its turn finished. Fixes ① (no new orphans) and ②
-     * (close the existing ones) address the rows themselves; this guard is the
-     * read-side safety net for any that still slip through, e.g. mid-flight
-     * before the reclaim sweep runs.
-     *
-     * `attempt_seq DESC` is the final tie-break, not decoration: attempts of one
-     * task are routinely written inside the same millisecond, so `updated_at`
-     * alone leaves ties that SQLite may resolve either way — which would make
-     * the selection (and therefore the presented session status) flap between
-     * runs. Preferring the newer attempt is the correct resolution.
-     */
-    getLatestTurnAttemptForSession(sessionId: string): MeshTurnAttemptRow | null {
-        const row = this.db.prepare(`
-            SELECT a.* FROM mesh_turn_attempts a
-            WHERE a.session_id = ?
-            ORDER BY
-                (a.terminal_outcome IS NULL AND NOT EXISTS (
-                    SELECT 1 FROM mesh_turn_attempts b
-                    WHERE b.mesh_id = a.mesh_id AND b.task_id = a.task_id
-                      AND b.attempt_seq > a.attempt_seq
-                )) DESC,
-                a.updated_at DESC,
-                a.attempt_seq DESC
-            LIMIT 1
-        `).get(sessionId) as Record<string, unknown> | undefined;
-        return row ? meshTurnAttemptFromRow(row) : null;
-    }
-
-    getTurnAttemptBySeq(meshId: string, taskId: string, attemptSeq: number): MeshTurnAttemptRow | null {
-        const row = this.db.prepare(`
-            SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? AND attempt_seq = ?
-        `).get(meshId, taskId, attemptSeq) as Record<string, unknown> | undefined;
-        return row ? meshTurnAttemptFromRow(row) : null;
-    }
-
-    listTurnAttemptsForTask(meshId: string, taskId: string): MeshTurnAttemptRow[] {
-        const rows = this.db.prepare(`
-            SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_seq ASC
-        `).all(meshId, taskId) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnAttemptFromRow);
-    }
-
-    /**
-     * ORPHAN-LEGACY-ATTEMPT (fix ②): nonterminal attempts that a HIGHER-seq
-     * attempt of the same task has superseded.
-     *
-     * Such a row is unreachable by construction: `getCurrentTurnAttempt` returns
-     * the max-seq row, so every ACK and every completion proposal resolves to the
-     * newer attempt and the reducer's stale-attempt guard explicitly refuses to
-     * mutate the older one. Nothing in the system can ever move it to terminal —
-     * it would sit at `generating` indefinitely, and (before fix ③) outrank the
-     * real completed attempt when presenting the session's status.
-     *
-     * Deliberately keyed on seq supersession rather than on the `legacy-` id
-     * prefix: the id form is a symptom of one known minting path, whereas
-     * "a newer attempt exists for this task" is the actual unreachability
-     * condition and covers any future path that strands a row the same way.
-     */
-    listSupersededNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
-        const rows = this.db.prepare(`
-            SELECT a.* FROM mesh_turn_attempts a
-            WHERE a.mesh_id = ?
-              AND a.terminal_outcome IS NULL
-              AND EXISTS (
-                  SELECT 1 FROM mesh_turn_attempts b
-                  WHERE b.mesh_id = a.mesh_id AND b.task_id = a.task_id
-                    AND b.attempt_seq > a.attempt_seq
-              )
-            ORDER BY a.created_at ASC
-        `).all(meshId) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnAttemptFromRow);
-    }
-
-    /**
-     * QUEUE-TERMINAL-ATTEMPT: nonterminal attempts whose task's `mesh_queue` row
-     * is ALREADY terminal (`completed` / `failed` / `cancelled`).
-     *
-     * The queue row is an independent writer from the turn-ledger reducer — see
-     * Stage 5's rollout gate (some paths, e.g. mission cascade / requeueTask auto-
-     * fail, flip the queue row through the legacy/shadow path without ever
-     * routing a completion proposal through the reducer). When the queue has
-     * already recorded a terminal outcome for a task, that is independent proof
-     * the work is done, so an attempt row still sitting nonterminal is not a live
-     * turn being protected — it is a finished task that was never told. Closing
-     * it cannot kill a real in-flight turn: a genuinely active turn has its queue
-     * row still `pending`/`assigned`, which this predicate excludes by
-     * construction (only `completed`/`failed`/`cancelled` queue rows qualify).
-     *
-     * `EXISTS` (not a JOIN) so a task_id with NO matching queue row — nothing to
-     * compare against — is excluded rather than treated as a false match; a NULL
-     * comparison in a JOIN would silently drop or wrongly include such rows
-     * depending on the join type, which is exactly the ambiguity this predicate
-     * must not have. Measured on the live ledger (RCA 2b3d260d): 14 of 735
-     * nonterminal attempts match, 2 of 721 `delivered`-stage rows — a live turn
-     * is essentially never caught by this condition.
-     *
-     * Deliberately independent of `attempt_seq` / current-vs-superseded: unlike
-     * listSupersededNonterminalTurnAttempts, this predicate targets the SOLE
-     * (and therefore trivially "current") attempt of a task just as often as a
-     * stale one — a task with only ONE attempt whose queue row is terminal is
-     * exactly the residue class this exists to close (confirmed case: a
-     * `waiting_choice` attempt whose queue row already reads `cancelled`).
-     * `reclaimOrphanedTurnAttempts` (seq supersession) runs first in the same
-     * restart-recovery sweep, so a stale non-current sibling row is already
-     * closed by the time this predicate's SELECT runs.
-     */
-    listQueueTerminatedNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
-        const rows = this.db.prepare(`
-            SELECT a.* FROM mesh_turn_attempts a
-            WHERE a.mesh_id = ?
-              AND a.terminal_outcome IS NULL
-              AND EXISTS (
-                  SELECT 1 FROM mesh_queue q
-                  WHERE q.mesh_id = a.mesh_id AND q.id = a.task_id
-                    AND q.status IN ('completed', 'failed', 'cancelled')
-              )
-            ORDER BY a.created_at ASC
-        `).all(meshId) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnAttemptFromRow);
-    }
-
-    /** Nonterminal attempts — the restart-recovery reconstruction set. */
-    listActiveTurnAttempts(meshId: string): MeshTurnAttemptRow[] {
-        const rows = this.db.prepare(`
-            SELECT * FROM mesh_turn_attempts
-            WHERE mesh_id = ? AND terminal_outcome IS NULL
-            ORDER BY created_at ASC
-        `).all(meshId) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnAttemptFromRow);
-    }
-
-    /**
-     * Monotonic, idempotent nonterminal stage advance. The SQL guard accepts the
-     * write only when `allowedFrom` (a comma-free SQL CASE whitelist built by the
-     * reducer) matches the CURRENT stage — the transition rules live in exactly one
-     * place (mesh-turn-ledger.ts) and are enforced inside the DB write so a
-     * concurrent reducer instance cannot sneak a regression past the check.
-     * Returns the stage the row is in AFTER this call (post-write read-back), so
-     * idempotent/reordered events converge on the same observable result.
-     */
-    advanceTurnAttemptStage(
-        attemptId: string,
-        toStage: string,
-        allowedFromCsv: string,
-        opts: { updatedAt: string; leaseDeadlineMs?: number | null; deliveredAt?: string; consumedAt?: string },
-    ): string | null {
-        const fromList = allowedFromCsv.split(',').map(s => `'${s}'`).join(',');
-        this.db.prepare(`
-            UPDATE mesh_turn_attempts
-            SET stage = @toStage, updated_at = @updatedAt,
-                lease_deadline_ms = COALESCE(@leaseDeadlineMs, lease_deadline_ms),
-                delivered_at = COALESCE(@deliveredAt, delivered_at),
-                consumed_at = COALESCE(@consumedAt, consumed_at)
-            WHERE attempt_id = @attemptId
-              AND terminal_outcome IS NULL
-              AND stage IN (${fromList})
-        `).run({
-            attemptId, toStage, updatedAt: opts.updatedAt,
-            leaseDeadlineMs: opts.leaseDeadlineMs ?? null,
-            deliveredAt: opts.deliveredAt ?? null,
-            consumedAt: opts.consumedAt ?? null,
-        });
-        this.maybeCheckpointWal();
-        const after = this.getTurnAttempt(attemptId);
-        return after ? after.stage : null;
-    }
-
-    /**
-     * EXACTLY-ONCE terminal commit. The conditional UPDATE wins only while
-     * terminal_outcome IS NULL, so two concurrent completion proposals commit at
-     * most one terminal transaction; the loser reads back the winner's outcome.
-     * Returns the row after the attempt (always re-read).
-     */
-    commitTurnAttemptTerminal(
-        attemptId: string,
-        outcome: string,
-        reason: string | null,
-        terminalAt: string,
-    ): { committed: boolean; row: MeshTurnAttemptRow | null } {
-        const res = this.db.prepare(`
-            UPDATE mesh_turn_attempts
-            SET terminal_outcome = ?, terminal_reason = ?, terminal_at = ?, stage = ?, updated_at = ?
-            WHERE attempt_id = ? AND terminal_outcome IS NULL
-        `).run(outcome, reason, terminalAt, outcome, terminalAt, attemptId);
-        this.maybeCheckpointWal();
-        return { committed: res.changes > 0, row: this.getTurnAttempt(attemptId) };
-    }
-
-    /** Redrive bookkeeping: bump the durable redrive counter and set the next lease deadline. */
-    markTurnAttemptRedriven(attemptId: string, leaseDeadlineMs: number, updatedAt: string): void {
-        this.db.prepare(`
-            UPDATE mesh_turn_attempts
-            SET redrive_count = redrive_count + 1, lease_deadline_ms = ?, updated_at = ?
-            WHERE attempt_id = ? AND terminal_outcome IS NULL
-        `).run(leaseDeadlineMs, updatedAt, attemptId);
-        this.maybeCheckpointWal();
-    }
-
-    /**
-     * DUP-CLAIM-REBIND: point a still-open attempt at the session that is ACTUALLY
-     * working it. Used when a node refuses a duplicate dispatch and names the live
-     * holder — the attempt was opened against the session we tried to dispatch to,
-     * but the work is running on the holder, so the binding (not the attempt) is what
-     * is wrong. Conditional on `terminal_outcome IS NULL` so a settled attempt is
-     * never rewritten; returns whether the rebind landed.
-     */
-    rebindTurnAttemptSession(attemptId: string, sessionId: string, updatedAt: string): boolean {
-        const res = this.db.prepare(`
-            UPDATE mesh_turn_attempts
-            SET session_id = ?, updated_at = ?
-            WHERE attempt_id = ? AND terminal_outcome IS NULL
-        `).run(sessionId, updatedAt, attemptId);
-        this.maybeCheckpointWal();
-        return res.changes > 0;
-    }
+    insertTurnAttempt(row: MeshTurnAttemptInsert): boolean { return insertTurnAttempt(this, row); }
+    getTurnAttempt(attemptId: string): MeshTurnAttemptRow | null { return getTurnAttempt(this, attemptId); }
+    getCurrentTurnAttempt(meshId: string, taskId: string): MeshTurnAttemptRow | null { return getCurrentTurnAttempt(this, meshId, taskId); }
+    getLatestTurnAttemptForSession(sessionId: string): MeshTurnAttemptRow | null { return getLatestTurnAttemptForSession(this, sessionId); }
+    getTurnAttemptBySeq(meshId: string, taskId: string, attemptSeq: number): MeshTurnAttemptRow | null { return getTurnAttemptBySeq(this, meshId, taskId, attemptSeq); }
+    listTurnAttemptsForTask(meshId: string, taskId: string): MeshTurnAttemptRow[] { return listTurnAttemptsForTask(this, meshId, taskId); }
+    listSupersededNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listSupersededNonterminalTurnAttempts(this, meshId); }
+    listQueueTerminatedNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listQueueTerminatedNonterminalTurnAttempts(this, meshId); }
+    listActiveTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listActiveTurnAttempts(this, meshId); }
+    advanceTurnAttemptStage(attemptId: string, toStage: string, allowedFromCsv: string, opts: MeshTurnAttemptStageOpts): string | null { return advanceTurnAttemptStage(this, attemptId, toStage, allowedFromCsv, opts); }
+    commitTurnAttemptTerminal(attemptId: string, outcome: string, reason: string | null, terminalAt: string): { committed: boolean; row: MeshTurnAttemptRow | null } { return commitTurnAttemptTerminal(this, attemptId, outcome, reason, terminalAt); }
+    markTurnAttemptRedriven(attemptId: string, leaseDeadlineMs: number, updatedAt: string): void { markTurnAttemptRedriven(this, attemptId, leaseDeadlineMs, updatedAt); }
+    rebindTurnAttemptSession(attemptId: string, sessionId: string, updatedAt: string): boolean { return rebindTurnAttemptSession(this, attemptId, sessionId, updatedAt); }
 
     // ── TURN-LEDGER (Stage 5): idempotency-keyed causal events ───────────────
+    // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).
 
-    /**
-     * Append a causal event. INSERT OR IGNORE on UNIQUE(attempt_id, kind, dedupe_key)
-     * makes repeated/reordered arrivals insert-once. Returns true when this call
-     * inserted (first arrival), false on a duplicate.
-     */
-    insertTurnEvent(row: {
-        eventId: string; meshId: string; attemptId: string; taskId: string;
-        kind: string; dedupeKey?: string; payload?: string;
-        occurredAtMs?: number | null; recordedAt: string;
-    }): boolean {
-        const res = this.db.prepare(`
-            INSERT OR IGNORE INTO mesh_turn_events (
-                event_id, mesh_id, attempt_id, task_id, kind, dedupe_key, payload, occurred_at_ms, recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            row.eventId, row.meshId, row.attemptId, row.taskId, row.kind,
-            row.dedupeKey ?? '', row.payload ?? '{}', row.occurredAtMs ?? null, row.recordedAt,
-        );
-        return res.changes > 0;
-    }
-
-    hasTurnEvent(attemptId: string, kind: string, dedupeKey = ''): boolean {
-        const row = this.db.prepare(
-            'SELECT 1 FROM mesh_turn_events WHERE attempt_id = ? AND kind = ? AND dedupe_key = ? LIMIT 1',
-        ).get(attemptId, kind, dedupeKey);
-        return row !== undefined;
-    }
+    insertTurnEvent(row: MeshTurnEventInsert): boolean { return insertTurnEvent(this, row); }
+    hasTurnEvent(attemptId: string, kind: string, dedupeKey = ''): boolean { return hasTurnEvent(this, attemptId, kind, dedupeKey); }
 
     /** Turn events for one task, oldest first. SQL: mesh-turn-event-queries.ts. */
     listTurnEventsForTask(meshId: string, taskId: string): Omit<TurnEventRow, 'taskId'>[] { return selectTurnEventsForTask(this.db, meshId, taskId); }
@@ -3411,77 +3134,13 @@ export class MeshRuntimeStore {
     deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
 
     // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
+    // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).
 
-    /**
-     * Hold a pre-consumed suspension edge. INSERT OR IGNORE on the hold id
-     * (`<attemptId>:<stage>`) makes duplicate/reordered suspension arrivals
-     * insert-once. Returns true when this call inserted (first hold).
-     */
-    insertHeldTurnSuspension(row: {
-        holdId: string; meshId: string; attemptId: string; taskId: string;
-        stage: string; sessionId?: string; dispatchNonce?: number | null;
-        occurredAtMs?: number | null; recordedAt: string;
-    }): boolean {
-        const res = this.db.prepare(`
-            INSERT OR IGNORE INTO mesh_turn_held_suspensions (
-                hold_id, mesh_id, attempt_id, task_id, stage, session_id, dispatch_nonce, occurred_at_ms, recorded_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')
-        `).run(
-            row.holdId, row.meshId, row.attemptId, row.taskId, row.stage,
-            row.sessionId ?? null, row.dispatchNonce ?? null, row.occurredAtMs ?? null, row.recordedAt,
-        );
-        this.maybeCheckpointWal();
-        return res.changes > 0;
-    }
-
-    /** The hold row for one (attempt, stage) pair, any status (held/applied/dropped). */
-    getHeldTurnSuspension(attemptId: string, stage: string): MeshTurnHeldSuspensionRow | null {
-        const row = this.db.prepare(
-            'SELECT * FROM mesh_turn_held_suspensions WHERE hold_id = ? LIMIT 1',
-        ).get(`${attemptId}:${stage}`) as Record<string, unknown> | undefined;
-        return row ? meshTurnHeldSuspensionFromRow(row) : null;
-    }
-
-    /** Hold rows for an attempt, oldest occurrence first (drain order). */
-    listHeldTurnSuspensionsForAttempt(attemptId: string, status?: string): MeshTurnHeldSuspensionRow[] {
-        const rows = (status
-            ? this.db.prepare(`
-                SELECT * FROM mesh_turn_held_suspensions
-                WHERE attempt_id = ? AND status = ?
-                ORDER BY occurred_at_ms ASC, hold_id ASC
-            `).all(attemptId, status)
-            : this.db.prepare(`
-                SELECT * FROM mesh_turn_held_suspensions
-                WHERE attempt_id = ?
-                ORDER BY occurred_at_ms ASC, hold_id ASC
-            `).all(attemptId)) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnHeldSuspensionFromRow);
-    }
-
-    /** Hold rows for a mesh by status (the restart-reconcile drain set). */
-    listHeldTurnSuspensionsForMesh(meshId: string, status: string): MeshTurnHeldSuspensionRow[] {
-        const rows = this.db.prepare(`
-            SELECT * FROM mesh_turn_held_suspensions
-            WHERE mesh_id = ? AND status = ?
-            ORDER BY occurred_at_ms ASC, hold_id ASC
-        `).all(meshId, status) as Array<Record<string, unknown>>;
-        return rows.map(meshTurnHeldSuspensionFromRow);
-    }
-
-    /**
-     * Resolve a hold exactly once: the status='held' guard makes a concurrent
-     * drain/terminal resolution converge on a single winner. Returns true when
-     * this call flipped the row.
-     */
-    resolveHeldTurnSuspension(holdId: string, status: 'applied' | 'dropped', resolution: string, resolvedAt: string): boolean {
-        const res = this.db.prepare(`
-            UPDATE mesh_turn_held_suspensions
-            SET status = ?, resolution = ?, resolved_at = ?
-            WHERE hold_id = ? AND status = 'held'
-        `).run(status, resolution, resolvedAt, holdId);
-        this.maybeCheckpointWal();
-        return res.changes > 0;
-    }
+    insertHeldTurnSuspension(row: MeshHeldTurnSuspensionInsert): boolean { return insertHeldTurnSuspension(this, row); }
+    getHeldTurnSuspension(attemptId: string, stage: string): MeshTurnHeldSuspensionRow | null { return getHeldTurnSuspension(this, attemptId, stage); }
+    listHeldTurnSuspensionsForAttempt(attemptId: string, status?: string): MeshTurnHeldSuspensionRow[] { return listHeldTurnSuspensionsForAttempt(this, attemptId, status); }
+    listHeldTurnSuspensionsForMesh(meshId: string, status: string): MeshTurnHeldSuspensionRow[] { return listHeldTurnSuspensionsForMesh(this, meshId, status); }
+    resolveHeldTurnSuspension(holdId: string, status: 'applied' | 'dropped', resolution: string, resolvedAt: string): boolean { return resolveHeldTurnSuspension(this, holdId, status, resolution, resolvedAt); }
 }
 
 // Re-export barrel: row shapes/mappers + the retention sweep moved to
