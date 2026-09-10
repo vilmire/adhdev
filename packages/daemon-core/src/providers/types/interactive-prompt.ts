@@ -563,6 +563,35 @@ export function readFocusedClaudeTuiPickerRegion(screenText: string): string | n
   return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join('\n');
 }
 
+/**
+ * True when the focused claude TUI picker is rendering the side-by-side
+ * PREVIEW panel layout (AskUserQuestion options carrying `preview` fields).
+ *
+ * Why this matters: in that layout a digit key only moves the cursor onto the
+ * option — it never commits — so the answer protocol needs one explicit Enter
+ * after the digit (measured live against claude-cli v2.1.220, 2026-09-11).
+ * The keystroke builder handles prompts whose captured options still carry
+ * `preview` metadata (native JSONL capture); this screen probe is the
+ * fallback for prompts captured by the TUI scrape, which strips the panel and
+ * therefore has no preview metadata to key off.
+ *
+ * Signature: the panel is a box-drawing frame beside/below the option rows,
+ * so require BOTH a top corner (`┌─`) and a bottom corner (`└─`) at or after
+ * the first option row of the focused picker region. Scanning only from the
+ * option block down keeps transcript scrollback (⏺ output boxes above the
+ * question) and the rounded welcome banner (╭╮╰╯, │ verticals) from
+ * false-positiving — neither draws square corners inside the option block.
+ */
+export function claudeTuiPreviewPanelVisible(screenText: string): boolean {
+  const region = readFocusedClaudeTuiPickerRegion(screenText);
+  if (region === null) return false;
+  const lines = region.split(/\r?\n/);
+  const firstOptionIndex = lines.findIndex(line => CLAUDE_TUI_OPTION_PATTERN.test(line));
+  if (firstOptionIndex < 0) return false;
+  const block = lines.slice(firstOptionIndex);
+  return block.some(line => /┌─/.test(line)) && block.some(line => /└─/.test(line));
+}
+
 // Exported for testing
 export function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage, index: number): InteractiveQuestion | null {
   const lines = readClaudeTuiScreenLines(page.screenText);
@@ -765,6 +794,17 @@ export function buildClaudeInteractiveTuiAnswerSteps(
       // cursor-position drift between questions that arrow-key navigation suffers
       // from — the TUI accepts a digit key to jump straight to that option index.
       steps.push(String(selectedIndex + 1));
+      // PREVIEW (side-by-side) LAYOUT — measured live against claude-cli
+      // v2.1.220 (2026-09-11, isolated stub-API session): when any option
+      // carries a `preview`, the TUI renders the side-by-side preview panel,
+      // and a digit key only MOVES THE CURSOR onto that option — it never
+      // commits. One explicit Enter commits the highlighted option and
+      // advances (to the next question, or to immediate submission on a
+      // single-question prompt, which then shows no review page at all).
+      // Without previews the digit alone commits and auto-advances, so this
+      // Enter must stay preview-only: an unconditional Enter would land on
+      // the NEXT page of the non-preview flow and double-advance it.
+      if (question.options.some(option => option.preview)) steps.push('\r');
     }
   }
   // After all questions are answered, Claude TUI shows a final confirm screen

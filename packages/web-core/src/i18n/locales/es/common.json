@@ -3721,7 +3721,7 @@
         "answersRequired_one": "{{count}} pregunta aún necesita respuesta",
         "answersRequired_other": "{{count}} preguntas aún necesitan respuesta",
         "errorReviewPageNotFocused": "La terminal está mostrando otra pantalla, así que la respuesta no se envió — revisa la pantalla de la terminal o cierra esto e inténtalo de nuevo.",
-        "errorReviewUnconfirmed": "Tu respuesta se envió, pero la terminal no la confirmó a tiempo. Revisa la pantalla de la terminal antes de responder de nuevo — reenviarla podría enviarla dos veces."
+        "errorReviewUnconfirmed": "Las teclas de tu respuesta llegaron a la terminal, pero la pregunta sigue en pantalla — puede que la respuesta no se haya enviado. Revisa la terminal: si no se envió, responde allí; reenviarla desde aquí podría enviarla dos veces."
     },
     "git": {
         "changeList": {
