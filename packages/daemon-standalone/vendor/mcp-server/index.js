@@ -72360,6 +72360,30 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return changes > 0;
           }
           /**
+           * ENTER-LOSS layer ③ (composer-residue recovery) — the row-id twin of
+           * requeueDrainedPendingEventByFingerprint, with identical semantics: flip the
+           * EXISTING drained row back to drained=0 IN PLACE. Never a re-insert — the
+           * UNIQUE (mesh_id, fingerprint) index stays occupied by this very row, so no
+           * duplicate can be created and the DUPNOTIF suppressors are never in play.
+           * `queued_at` is preserved (age keeps measuring from the original enqueue) and
+           * `drained_by` is cleared with `drained_at` (the previous drainer is no longer
+           * the consumer of record).
+           *
+           * The sweep identifies residue from `recentDrainedPendingEventPayloads`, which
+           * returns row ids — an id is a strictly more precise handle than the
+           * fingerprint (fingerprints can be NULL on legacy rows), hence this variant.
+           * Returns true when a drained row was found and returned to the queue.
+           */
+          requeueDrainedPendingEventById(rowId) {
+            if (!rowId) return false;
+            const changes = this.db.prepare(
+              `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
+             WHERE id = ? AND drained = 1`
+            ).run(rowId).changes;
+            if (changes > 0) this.maybeCheckpointWal();
+            return changes > 0;
+          }
+          /**
            * Hard-delete pending-event rows by id (including the dedup fingerprint history).
            * Used to expire an unresolved-delegate outbox entry that has exhausted its retry
            * budget — fully removing it frees the fingerprint so a genuinely new completion
@@ -134691,6 +134715,7 @@ ${ptyResult.output.slice(-2e3)}`);
           ts: entry.ts,
           cmd: entry.cmd,
           src: entry.source,
+          ...entry.peerId ? { peer: entry.peerId } : {},
           ...entry.interactionId ? { interactionId: entry.interactionId } : {},
           ...entry.args ? { args: maskArgs(entry.args) } : {},
           ...entry.success !== void 0 ? { ok: entry.success } : {},
@@ -134714,6 +134739,7 @@ ${ptyResult.output.slice(-2e3)}`);
               ts: parsed.ts,
               cmd: parsed.cmd,
               source: parsed.src,
+              peerId: parsed.peer,
               interactionId: parsed.interactionId,
               args: parsed.args,
               success: parsed.ok,
@@ -139529,10 +139555,15 @@ ${e?.stderr || ""}`;
            * @param cmd Command name
            * @param args Command arguments
            * @param source Log source ('ws' | 'p2p' | 'standalone' | etc.)
+           * @param opts.peerId Transport peer identifier for src:'p2p' commands (the
+           *   DataChannel connection id) — recorded in the command audit log so a P2P
+           *   command is attributable to a specific connected peer, not just "p2p".
+           *   Identifier only; never a username/email.
            */
-          async execute(cmd, args, source = "unknown") {
+          async execute(cmd, args, source = "unknown", opts) {
             const cmdStart = Date.now();
             const logSource = normalizeCommandSource(source);
+            const peerId = typeof opts?.peerId === "string" && opts.peerId.length > 0 ? opts.peerId : void 0;
             const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
             const interactionId = typeof normalizedArgs._interactionId === "string" ? normalizedArgs._interactionId : void 0;
             const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
@@ -139555,7 +139586,7 @@ ${e?.stderr || ""}`;
             try {
               const daemonResult = await this.executeDaemonCommand(cmd, normalizedArgs);
               if (daemonResult) {
-                logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
+                logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
                 recordDebugTrace({
                   interactionId,
                   category: "command",
@@ -139566,7 +139597,7 @@ ${e?.stderr || ""}`;
                 return daemonResult;
               }
               const handlerResult = await this.deps.commandHandler.handle(cmd, normalizedArgs);
-              logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+              logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
               recordDebugTrace({
                 interactionId,
                 category: "command",
@@ -139581,7 +139612,7 @@ ${e?.stderr || ""}`;
               }
               return handlerResult;
             } catch (e) {
-              logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
+              logCommand({ ts: (/* @__PURE__ */ new Date()).toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
               recordDebugTrace({
                 interactionId,
                 category: "command",
@@ -160594,7 +160625,10 @@ data: ${JSON.stringify(msg.data)}
     var RESIDUE_MIN_BODY_CHARS = 64;
     var RESIDUE_LOOKBACK_MS = 24 * 60 * 6e4;
     var DEFAULT_SWEEP_DELAY_MS = 45e3;
+    var DEFAULT_STABILITY_CONFIRM_DELAY_MS = 5e3;
+    var CLEAR_BACKSPACE_SLACK = 256;
     var COMPOSER_RESIDUE_AUTOSUBMIT_ENV = "ADHDEV_COMPOSER_RESIDUE_AUTOSUBMIT";
+    var COMPOSER_RESIDUE_RECOVERY_ENV = "ADHDEV_COMPOSER_RESIDUE_RECOVERY";
     var COMPOSER_PROMPT_MARKERS = ["\u276F", "\u203A", ">"];
     function detectNonEmptyComposerTail(viewportText) {
       const lines = viewportText.split("\n").map((l) => l.trimEnd());
@@ -160639,17 +160673,45 @@ data: ${JSON.stringify(msg.data)}
           const { candidate, integrity } = best;
           const recoverable = integrity === "full";
           let recovered = false;
-          if (recoverable && deps.autoRecoverEnabled && typeof session.submitComposer === "function") {
+          let recoveredBy;
+          let recoveryNote = "";
+          const preBootDrain = typeof deps.bootAt !== "number" || candidate.drainedAt < deps.bootAt;
+          const undrainEligible = recoverable && deps.recoveryEnabled === true && preBootDrain && session.stable === true && session.submitInFlight !== true && typeof session.clearComposer === "function" && typeof deps.undrainRow === "function";
+          if (undrainEligible) {
+            try {
+              session.clearComposer(candidate.coordinatorMessage.length + CLEAR_BACKSPACE_SLACK);
+              if (deps.undrainRow(candidate)) {
+                recovered = true;
+                recoveredBy = "undrain";
+              } else {
+                LOG.error(
+                  "ComposerResidue",
+                  `Undrain FAILED for row ${candidate.rowId} (mesh=${candidate.meshId}) after the composer was cleared \u2014 the notification was NOT returned to the queue. Requeue it manually from the pending-event ledger.`
+                );
+                recoveryNote = " Undrain recovery FAILED after clear \u2014 see error above.";
+              }
+            } catch (e) {
+              LOG.error("ComposerResidue", `Undrain recovery failed for session ${session.key}: ${e?.message || e}`);
+              recoveryNote = " Undrain recovery threw \u2014 see error above.";
+            }
+          } else if (recoverable && deps.recoveryEnabled === true && !preBootDrain) {
+            recoveryNote = " Not undrained: row was drained after this process booted (live delivery, not residue).";
+          } else if (recoverable && deps.recoveryEnabled === true && session.stable !== true) {
+            recoveryNote = " Not undrained: viewport not confirmed stable (possible active typing / in-flight write).";
+          }
+          const undrainRan = undrainEligible;
+          if (!undrainRan && recoverable && deps.autoRecoverEnabled && typeof session.submitComposer === "function") {
             try {
               session.submitComposer();
               recovered = true;
+              recoveredBy = "autosubmit";
             } catch (e) {
               LOG.warn("ComposerResidue", `Recovery submit failed for session ${session.key}: ${e?.message || e}`);
             }
           }
           LOG.warn(
             "ComposerResidue",
-            `COMPOSER RESIDUE detected on idle session ${session.key} (${session.cliType}): matches drained ${candidate.event} mesh=${candidate.meshId} eventId=${candidate.eventId ?? "n/a"} taskId=${candidate.taskId ?? "n/a"} drainedAt=${new Date(candidate.drainedAt).toISOString()} bodyLen=${candidate.coordinatorMessage.length} integrity=${integrity}. ` + (recovered ? `Auto-recovery pressed Enter (${COMPOSER_RESIDUE_AUTOSUBMIT_ENV} enabled, full-body match).` : recoverable ? `NOT auto-submitted (default OFF \u2014 set ${COMPOSER_RESIDUE_AUTOSUBMIT_ENV}=1 to enable full-match recovery). The body remains in the composer.` : "NOT recoverable: the full body is NOT present (possible truncated write) \u2014 submitting would inject a corrupted message. Manual review required.")
+            `COMPOSER RESIDUE detected on idle session ${session.key} (${session.cliType}): matches drained ${candidate.event} mesh=${candidate.meshId} eventId=${candidate.eventId ?? "n/a"} taskId=${candidate.taskId ?? "n/a"} drainedAt=${new Date(candidate.drainedAt).toISOString()} bodyLen=${candidate.coordinatorMessage.length} integrity=${integrity}. ` + (recoveredBy === "undrain" ? "Recovered: composer cleared and the drained row returned to the queue \u2014 normal redelivery will re-deliver it." : recoveredBy === "autosubmit" ? `Auto-recovery pressed Enter (${COMPOSER_RESIDUE_AUTOSUBMIT_ENV} enabled, full-body match).` : recoverable ? `NOT recovered.${recoveryNote || ` Undrain recovery inactive (set ${COMPOSER_RESIDUE_RECOVERY_ENV}=1/unset to enable) and autosubmit is opt-in (${COMPOSER_RESIDUE_AUTOSUBMIT_ENV}).`} The body remains in the composer.` : "NOT recoverable: the full body is NOT present (possible truncated write) \u2014 recovering would propagate a corrupted state. Manual review required.")
           );
           findings.push({
             sessionKey: session.key,
@@ -160664,7 +160726,8 @@ data: ${JSON.stringify(msg.data)}
               bodyLength: candidate.coordinatorMessage.length
             },
             integrity,
-            recovered
+            recovered,
+            ...recoveredBy ? { recoveredBy } : {}
           });
           continue;
         }
@@ -160689,7 +160752,11 @@ data: ${JSON.stringify(msg.data)}
       const v = (env2[COMPOSER_RESIDUE_AUTOSUBMIT_ENV] ?? "").trim().toLowerCase();
       return v === "1" || v === "true";
     }
-    function collectSweepSessions(components) {
+    function readRecoveryEnabled(env2) {
+      const v = (env2[COMPOSER_RESIDUE_RECOVERY_ENV] ?? "").trim().toLowerCase();
+      return v !== "0" && v !== "false";
+    }
+    function collectSweepSessions(components, priorViewports) {
       const sessions = [];
       for (const [key2, adapter] of components.cliManager.adapters) {
         if (typeof adapter.getScrollbackText !== "function") continue;
@@ -160711,13 +160778,27 @@ data: ${JSON.stringify(msg.data)}
         } catch {
           scrollbackText = viewportText;
         }
+        let submitInFlight = false;
+        try {
+          submitInFlight = adapter.hasInFlightSubmit?.() === true;
+        } catch {
+          submitInFlight = true;
+        }
         sessions.push({
           key: key2,
           cliType: adapter.cliType,
           status,
           viewportText,
           scrollbackText,
-          ...typeof adapter.writeRaw === "function" ? { submitComposer: () => adapter.writeRaw("\r") } : {}
+          submitInFlight,
+          stable: priorViewports ? priorViewports.get(key2) === viewportText : false,
+          ...typeof adapter.writeRaw === "function" ? {
+            submitComposer: () => adapter.writeRaw("\r"),
+            // \x7f (DEL/backspace) is a no-op past an empty composer in
+            // every shipped TUI, so overshoot is safe and the clear needs
+            // no per-provider keymap.
+            clearComposer: (count) => adapter.writeRaw("\x7F".repeat(Math.max(0, count)))
+          } : {}
         });
       }
       return sessions;
@@ -160751,16 +160832,29 @@ data: ${JSON.stringify(msg.data)}
     function scheduleComposerResidueSweep(components, opts = {}) {
       const env2 = opts.env ?? process.env;
       const delayMs = opts.delayMs ?? DEFAULT_SWEEP_DELAY_MS;
-      const timer = setTimeout(() => {
+      const stabilityDelayMs = opts.stabilityDelayMs ?? DEFAULT_STABILITY_CONFIRM_DELAY_MS;
+      const bootAt = Date.now();
+      let timer = null;
+      const runSweepPass = (priorViewports) => {
         try {
           const now = Date.now();
           const candidates = collectSweepCandidates(now);
-          const sessions = collectSweepSessions(components);
+          const sessions = collectSweepSessions(components, priorViewports);
           if (sessions.length === 0) return;
           const findings = runComposerResidueSweep({
             sessions,
             candidates,
-            autoRecoverEnabled: readAutoRecoverEnabled(env2)
+            autoRecoverEnabled: readAutoRecoverEnabled(env2),
+            recoveryEnabled: readRecoveryEnabled(env2),
+            bootAt,
+            undrainRow: (candidate) => {
+              try {
+                return MeshRuntimeStore.getInstance().requeueDrainedPendingEventById(candidate.rowId);
+              } catch (e) {
+                LOG.error("ComposerResidue", `Undrain store call failed for row ${candidate.rowId}: ${e?.message || e}`);
+                return false;
+              }
+            }
           });
           if (findings.length === 0) {
             LOG.debug("ComposerResidue", `Boot sweep clean: ${sessions.length} idle-checked session(s), ${candidates.length} drained candidate(s)`);
@@ -160768,9 +160862,26 @@ data: ${JSON.stringify(msg.data)}
         } catch (e) {
           LOG.warn("ComposerResidue", `Boot sweep failed: ${e?.message || e}`);
         }
+      };
+      timer = setTimeout(() => {
+        let priorViewports = /* @__PURE__ */ new Map();
+        try {
+          priorViewports = new Map(collectSweepSessions(components).map((s2) => [s2.key, s2.viewportText]));
+        } catch {
+        }
+        timer = setTimeout(() => {
+          timer = null;
+          runSweepPass(priorViewports);
+        }, stabilityDelayMs);
+        timer.unref?.();
       }, delayMs);
       timer.unref?.();
-      return { stop: () => clearTimeout(timer) };
+      return { stop: () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      } };
     }
     var _hardened = false;
     var HARDENED_PROTOS = [
