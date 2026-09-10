@@ -119,7 +119,7 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
     if (layer.sourceType === 'invalid') {
         return (
             <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                {t('repoMesh.detail.repoMeshJsonInvalid')}
+                {t('mesh.detail.repoMeshJsonInvalid')}
                 {layer.error && <span className="ml-1 font-mono text-2xs opacity-80">{layer.error}</span>}
             </div>
         )
@@ -128,20 +128,20 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
     return (
         <div className="mt-3 rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-                <span className="text-[13px] leading-tight font-semibold">{t('repoMesh.detail.repoMeshJsonTitle')}</span>
+                <span className="text-[13px] leading-tight font-semibold">{t('mesh.detail.repoMeshJsonTitle')}</span>
                 <span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">
-                    {t('repoMesh.detail.repoMeshJsonReadOnly')}
+                    {t('mesh.detail.repoMeshJsonReadOnly')}
                 </span>
             </div>
             <p className="mb-2 text-xs text-text-muted">
-                {t('repoMesh.detail.repoMeshJsonHint')}
+                {t('mesh.detail.repoMeshJsonHint')}
                 {layer.path && <span className="ml-1 font-mono text-2xs">{layer.path}</span>}
             </p>
 
             {layer.override.trim() && (
                 <div className="mb-2">
                     <label className="mb-1 block text-2xs uppercase tracking-wide text-text-muted">
-                        {t('repoMesh.detail.repoMeshJsonOverrideLabel')}
+                        {t('mesh.detail.repoMeshJsonOverrideLabel')}
                     </label>
                     <textarea
                         readOnly
@@ -156,7 +156,7 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
             {layer.append.trim() && (
                 <div>
                     <label className="mb-1 block text-2xs uppercase tracking-wide text-text-muted">
-                        {t('repoMesh.detail.repoMeshJsonAppendLabel')}
+                        {t('mesh.detail.repoMeshJsonAppendLabel')}
                     </label>
                     <textarea
                         readOnly

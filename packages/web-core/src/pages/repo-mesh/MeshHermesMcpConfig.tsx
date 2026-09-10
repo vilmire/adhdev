@@ -13,8 +13,8 @@ export function RepoMeshHermesMcpConfig({ meshId, availableCliAgents }: { meshId
     const manualSetup = buildManualCoordinatorSetup(hermesAgent?.meshCoordinator, { meshId })
     if (!manualSetup) return null
     return (
-        <Section title={t('repoMesh.hermesMcp.title')} description={t('repoMesh.hermesMcp.description')}>
-            <MeshCoordinatorManualSetupPanel setup={manualSetup} providerName={hermesAgent?.name || t('repoMesh.hermesMcp.fallbackProvider')} />
+        <Section title={t('mesh.hermesMcp.title')} description={t('mesh.hermesMcp.description')}>
+            <MeshCoordinatorManualSetupPanel setup={manualSetup} providerName={hermesAgent?.name || t('mesh.hermesMcp.fallbackProvider')} />
         </Section>
     )
 }

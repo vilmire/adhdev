@@ -263,7 +263,7 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                             : (theme.isDark
                                 ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-px text-4xs text-emerald-200'
                                 : 'rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-px text-4xs text-emerald-700')}
-                        title={t(predictedSlotPinned ? 'meshGraph.taskDag.predictedSlotPinned' : 'meshGraph.taskDag.predictedSlot')}
+                        title={t(predictedSlotPinned ? 'mesh.taskDag.predictedSlotPinned' : 'mesh.taskDag.predictedSlot')}
                     >
                         {predictedSlotPinned ? '📌 ' : '→ '}{predictedSlot}
                     </span>
@@ -277,7 +277,7 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                             : 'rounded-full border border-amber-300 bg-amber-50 px-1.5 py-px text-4xs text-amber-700'}
                         title={dagNode.waitingOn.join(', ')}
                     >
-                        {t('meshGraph.taskDag.waitsOn', { count: dagNode.waitingOn.length })}
+                        {t('mesh.taskDag.waitsOn', { count: dagNode.waitingOn.length })}
                     </span>
                 )}
                 {dagNode.blocked && (
@@ -287,12 +287,12 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
                             : 'rounded-full border border-rose-300 bg-rose-50 px-1.5 py-px text-4xs text-rose-700'}
                         title={task.blockedReason}
                     >
-                        {t('meshGraph.taskDag.blocked')}
+                        {t('mesh.taskDag.blocked')}
                     </span>
                 )}
                 {dagNode.missingDeps.length > 0 && (
                     <span className={chipClass} title={dagNode.missingDeps.join(', ')}>
-                        {t('meshGraph.taskDag.missingDeps', { count: dagNode.missingDeps.length })}
+                        {t('mesh.taskDag.missingDeps', { count: dagNode.missingDeps.length })}
                     </span>
                 )}
             </div>
@@ -490,7 +490,7 @@ function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
                 tasks looked identical to one holding nothing. */}
             {blocking && overlay.gate?.blocking?.length ? (
                 <div className="mt-0.5 truncate text-4xs opacity-75">
-                    {t('meshGraph.taskDag.gate.holding', { count: overlay.gate.blocking.length })}
+                    {t('mesh.taskDag.gate.holding', { count: overlay.gate.blocking.length })}
                 </div>
             ) : null}
             {/* Convergence probe: are this gate's commits already on main?
@@ -503,13 +503,13 @@ function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
                     title={overlay.gate.convergenceEvidence.hint ?? overlay.gate.convergenceEvidence.probedAgainst}
                 >
                     {overlay.gate.convergenceEvidence.allReachedMain
-                        ? t('meshGraph.taskDag.gate.converged')
-                        : t('meshGraph.taskDag.gate.notConverged', { count: overlay.gate.convergenceEvidence.commits.length })}
+                        ? t('mesh.taskDag.gate.converged')
+                        : t('mesh.taskDag.gate.notConverged', { count: overlay.gate.convergenceEvidence.commits.length })}
                 </div>
             )}
             {blocking && overlay.gate?.deadlineAt && (
                 <div className="mt-0.5 truncate text-4xs opacity-75" title={overlay.gate.deadlineAt}>
-                    {t('meshGraph.taskDag.gate.deadline', {
+                    {t('mesh.taskDag.gate.deadline', {
                         time: new Date(overlay.gate.deadlineAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                         onTimeout: overlay.gate.onTimeout,
                     })}
@@ -520,7 +520,7 @@ function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
                 moving?" without opening the detail panel. */}
             {blocking && (
                 <div className="mt-1 text-4xs font-medium opacity-90">
-                    <div>{t('meshGraph.taskDag.gate.needsYou')}</div>
+                    <div>{t('mesh.taskDag.gate.needsYou')}</div>
                     {/* What the coordinator is actually being asked to decide.
                         Without it a waiting gate is just a coloured box. */}
                     {overlay.gate?.instructions && (
@@ -563,7 +563,7 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
                 ? `border-slate-400/30 bg-white/[0.02] text-slate-300 ${openable ? 'hover:border-sky-400/60 hover:bg-sky-500/10' : ''}`
                 : `border-slate-300 bg-white/70 text-slate-600 ${openable ? 'hover:border-sky-400 hover:bg-sky-50' : ''}`}`}
             style={{ width: PLAN_NODE_WIDTH, minHeight: PLAN_NODE_HEIGHT }}
-            title={openable ? t('meshGraph.taskDag.plan.openTask') : undefined}
+            title={openable ? t('mesh.taskDag.plan.openTask') : undefined}
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
@@ -572,7 +572,7 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
                 {/* A conditional step is not simply "not started" — it runs
                     only if its run_if holds. Without this marker a planned
                     branch and a skipped one look identical. */}
-                {overlay.conditional && <span className="shrink-0 normal-case opacity-90" title={t('meshGraph.taskDag.edge.conditional')}>· if</span>}
+                {overlay.conditional && <span className="shrink-0 normal-case opacity-90" title={t('mesh.taskDag.edge.conditional')}>· if</span>}
             </div>
             <div className="mt-1 truncate text-2xs font-medium" title={overlay.ref}>{overlay.ref}</div>
             {/* The queue row's LIVE status, when it differs from the graph
@@ -602,7 +602,7 @@ function PlanNodeCard({ data }: NodeProps<PlanFlowNode>) {
                 step that is merely waiting its turn. */}
             {!overlay.failureReason && overlay.blockedByDeps ? (
                 <div className={`mt-0.5 truncate text-4xs ${theme.isDark ? 'text-rose-300' : 'text-rose-600'}`}>
-                    {t('meshGraph.taskDag.plan.depsFailed', { count: overlay.blockedByDeps })}
+                    {t('mesh.taskDag.plan.depsFailed', { count: overlay.blockedByDeps })}
                 </div>
             ) : null}
         </div>
@@ -701,7 +701,7 @@ function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
             onClick={event => { event.stopPropagation(); onToggle(summary.graphId) }}
             className={`flex flex-col justify-center gap-0.5 rounded-xl border border-dashed px-3 py-1.5 text-left transition-colors hover:border-solid ${tone}`}
             style={{ width: COLLAPSED_GRAPH_WIDTH, minHeight: COLLAPSED_GRAPH_HEIGHT }}
-            title={t('meshGraph.taskDag.collapsed.expand')}
+            title={t('mesh.taskDag.collapsed.expand')}
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
@@ -711,7 +711,7 @@ function CollapsedGraphNode({ data }: NodeProps<CollapsedGraphFlowNode>) {
                 <span className="shrink-0 opacity-70">· {summary.status}</span>
             </span>
             <span className="flex items-center gap-2 text-4xs opacity-70">
-                <span>{t('meshGraph.taskDag.collapsed.counts', { nodes: summary.nodeCount, gates: summary.gateCount })}</span>
+                <span>{t('mesh.taskDag.collapsed.counts', { nodes: summary.nodeCount, gates: summary.gateCount })}</span>
                 {timeLabel && <span className="font-mono tabular-nums">{timeLabel}</span>}
             </span>
         </button>
@@ -751,7 +751,7 @@ function ConditionNode({ data }: NodeProps<ConditionFlowNode>) {
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <div className="flex items-center gap-1 text-4xs font-semibold uppercase tracking-wide opacity-80">
-                <span>{t('meshGraph.taskDag.edge.conditional')}</span>
+                <span>{t('mesh.taskDag.edge.conditional')}</span>
                 {condition.negated && <span className="opacity-90">· not</span>}
                 {condition.combinator !== 'single' && <span className="opacity-90">· {condition.combinator}</span>}
             </div>
@@ -765,7 +765,7 @@ function ConditionNode({ data }: NodeProps<ConditionFlowNode>) {
                 </div>
             ))}
             {condition.truncated && (
-                <div className="mt-0.5 text-4xs opacity-70">{t('meshGraph.taskDag.edge.conditionMore')}</div>
+                <div className="mt-0.5 text-4xs opacity-70">{t('mesh.taskDag.edge.conditionMore')}</div>
             )}
         </div>
     )
@@ -1409,7 +1409,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 // Non-dependency edge kinds keep a small text label; a
                 // conditional one never reaches here (it has a card instead).
                 ...(edge.kind ? {
-                    label: edge.kind === 'conditional' ? t('meshGraph.taskDag.edge.conditional') : edge.kind,
+                    label: edge.kind === 'conditional' ? t('mesh.taskDag.edge.conditional') : edge.kind,
                     labelStyle: { fontSize: 10, fontWeight: 600, fill: meshTheme.edgeLabelTextColor },
                     labelBgStyle: { fill: meshTheme.edgeLabelBackgroundColor },
                     labelBgPadding: [4, 2] as [number, number],
@@ -1613,7 +1613,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     if (dag.nodes.length === 0 && fused.gates.length === 0 && fused.planned.length === 0) {
         return (
             <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">
-                {emptyMessage ?? t('meshGraph.taskDag.empty')}
+                {emptyMessage ?? t('mesh.taskDag.empty')}
             </div>
         )
     }
@@ -1635,7 +1635,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
         // State chips double as navigation: each click centers the next card in
         // that bucket, so "1 blocked" is an entry point, not just a count.
         return (
-            <button type="button" onClick={onJump} title={t('meshGraph.taskDag.jumpToState')}
+            <button type="button" onClick={onJump} title={t('mesh.taskDag.jumpToState')}
                 className={`${chipBase} transition-transform hover:scale-105`}>
                 {label}
             </button>
@@ -1656,21 +1656,21 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 hidden history that is itself the load-more action. */}
             {!compact && (() => {
                 const statsRow = <div className={statsContainer ? 'flex min-w-0 items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'flex flex-wrap items-center gap-1.5 px-1 pb-1'}>
-                {statBadge(t('meshGraph.taskDag.statsTasks', { count: dag.stats.total }))}
-                {dag.stats.pending > 0 && statBadge(t('meshGraph.taskDag.statsPending', { count: dag.stats.pending }), 'default', () => jumpToState('pending'))}
-                {dag.stats.assigned > 0 && statBadge(t('meshGraph.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info', () => jumpToState('assigned'))}
-                {dag.stats.waiting > 0 && statBadge(t('meshGraph.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn', () => jumpToState('waiting'))}
-                {dag.stats.blocked > 0 && statBadge(t('meshGraph.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger', () => jumpToState('blocked'))}
+                {statBadge(t('mesh.taskDag.statsTasks', { count: dag.stats.total }))}
+                {dag.stats.pending > 0 && statBadge(t('mesh.taskDag.statsPending', { count: dag.stats.pending }), 'default', () => jumpToState('pending'))}
+                {dag.stats.assigned > 0 && statBadge(t('mesh.taskDag.statsAssigned', { count: dag.stats.assigned }), 'info', () => jumpToState('assigned'))}
+                {dag.stats.waiting > 0 && statBadge(t('mesh.taskDag.statsWaiting', { count: dag.stats.waiting }), 'warn', () => jumpToState('waiting'))}
+                {dag.stats.blocked > 0 && statBadge(t('mesh.taskDag.statsBlocked', { count: dag.stats.blocked }), 'danger', () => jumpToState('blocked'))}
                 {scoped.hiddenCount > 0 && (
                     <button
                         type="button"
                         onClick={() => setTerminalLimit(limit => limit + TASK_DAG_LOAD_MORE_STEP)}
-                        title={t('meshGraph.taskDag.hiddenTasks', { count: scoped.hiddenCount })}
+                        title={t('mesh.taskDag.hiddenTasks', { count: scoped.hiddenCount })}
                         className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${meshTheme.isDark
                             ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                             : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                     >
-                        {t('meshGraph.taskDag.loadMore', { count: Math.min(TASK_DAG_LOAD_MORE_STEP, scoped.hiddenCount) })}
+                        {t('mesh.taskDag.loadMore', { count: Math.min(TASK_DAG_LOAD_MORE_STEP, scoped.hiddenCount) })}
                     </button>
                 )}
             </div>
@@ -1732,7 +1732,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                             style={{ backgroundColor: meshTheme.isDark ? EDGE_COLORS[state].dark : EDGE_COLORS[state].light }}
                             aria-hidden
                         />
-                        {t(`meshGraph.taskDag.legend.${state}`)}
+                        {t(`mesh.taskDag.legend.${state}`)}
                     </span>
                 ))}
             </div>
@@ -1741,7 +1741,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             {selectedNode && (
                 <div className={`absolute right-3 top-3 z-20 w-72 max-w-[calc(100%-24px)] overflow-y-auto rounded-2xl border p-3.5 shadow-xl backdrop-blur ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95 text-slate-200' : 'border-slate-200 bg-white/95 text-slate-700'}`} style={{ maxHeight: 'calc(100% - 24px)' }}>
                     <div className="mb-2 flex items-start justify-between gap-2">
-                        <span className={`text-3xs font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.selectedTask')}</span>
+                        <span className={`text-3xs font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.selectedTask')}</span>
                         <button
                             type="button"
                             onClick={() => setSelectedTaskId(null)}
@@ -1762,17 +1762,17 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     </div>
                     {!onTaskOpen && selectedTaskIsTerminal && (
                         <div className="mt-2">
-                            <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummary')}</div>
+                            <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummary')}</div>
                             {selectedOutput?.finalSummary
                                 ? <div className={`whitespace-pre-wrap rounded-lg border px-2 py-1.5 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{selectedOutput.finalSummary}</div>
                                 : selectedOutputFetching
-                                    ? <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummaryLoading')}</div>
-                                    : <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('meshGraph.taskDag.finalSummaryUnavailable')}</div>}
+                                    ? <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummaryLoading')}</div>
+                                    : <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummaryUnavailable')}</div>}
                         </div>
                     )}
                     {selectedNode.waitingOn.length > 0 && (
                         <div className="mt-2 text-3xs">
-                            <span className="font-semibold">{t('meshGraph.taskDag.waitsOn', { count: selectedNode.waitingOn.length })}:</span>
+                            <span className="font-semibold">{t('mesh.taskDag.waitsOn', { count: selectedNode.waitingOn.length })}:</span>
                             <span className="ml-1 font-mono opacity-80">{selectedNode.waitingOn.map(id => id.slice(0, 8)).join(', ')}</span>
                         </div>
                     )}

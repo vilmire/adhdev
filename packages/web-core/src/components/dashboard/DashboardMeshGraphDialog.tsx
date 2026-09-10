@@ -131,7 +131,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
 
     const loadGraph = useCallback(async (refresh = false, isAutoRetry = false) => {
         if (!daemonId || !meshId) {
-            setError(t('meshGraph.dialog.errorNoMeshId'))
+            setError(t('mesh.dialog.errorNoMeshId'))
             setMeshStatus(null)
             return
         }
@@ -168,7 +168,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 : await sendDaemonCommand(daemonId, 'mesh_status', { meshId, refresh })
             const status = extractRepoMeshStatus(response)
             if (!status) {
-                setError(t('meshGraph.dialog.errorUnexpectedPayload'))
+                setError(t('mesh.dialog.errorUnexpectedPayload'))
                 return
             }
             if (cacheKey) dashboardMeshGraphStatusCache.set(cacheKey, status)
@@ -276,7 +276,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     })
     const lastLoadedLabel = lastLoadedAt ? new Date(lastLoadedAt).toLocaleTimeString() : null
     const emptyMessage = useMemo(
-        () => (loading ? t('meshGraph.dialog.loadingStatus') : t('meshGraph.dialog.noGraph')),
+        () => (loading ? t('mesh.dialog.loadingStatus') : t('mesh.dialog.noGraph')),
         [loading, t],
     )
 
@@ -307,8 +307,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             type="button"
                             onClick={() => setHelpOpen(prev => !prev)}
                             aria-expanded={helpOpen}
-                            aria-label={t('meshGraph.help.toggleAria')}
-                            title={t('meshGraph.help.toggleTitle')}
+                            aria-label={t('mesh.help.toggleAria')}
+                            title={t('mesh.help.toggleTitle')}
                             className={helpOpen
                                 ? (meshTheme.isDark
                                     ? 'inline-flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/40 bg-sky-500/15 text-sky-100 transition'
@@ -322,8 +322,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             onClick={() => { void loadGraph(true) }}
                             disabled={loading || refreshing}
                             className={meshTheme.dialogCloseButtonClass}
-                            aria-label={t('meshGraph.dialog.refreshTitle')}
-                            title={t('meshGraph.dialog.refreshTitle')}
+                            aria-label={t('mesh.dialog.refreshTitle')}
+                            title={t('mesh.dialog.refreshTitle')}
                         >
                             <IconRefresh size={15} className={loading || refreshing ? 'animate-spin' : undefined} />
                         </button>
@@ -352,9 +352,9 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                         type="button"
                                         onClick={() => setShowHeaderMeta(prev => !prev)}
                                         aria-expanded={showHeaderMeta}
-                                        aria-label={showHeaderMeta ? t('meshGraph.dialog.hideDetails') : t('meshGraph.dialog.showDetails')}
+                                        aria-label={showHeaderMeta ? t('mesh.dialog.hideDetails') : t('mesh.dialog.showDetails')}
                                         className="btn btn-secondary btn-sm rounded-lg px-1.5 py-1 md:hidden"
-                                        title={showHeaderMeta ? t('meshGraph.dialog.hideDetails') : t('meshGraph.dialog.showDetails')}
+                                        title={showHeaderMeta ? t('mesh.dialog.hideDetails') : t('mesh.dialog.showDetails')}
                                     >
                                         <IconInfo size={14} />
                                     </button>
@@ -372,8 +372,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                         beside the tab controls: variable-width chips next to
                                         the tabs shifted the whole tab group on every refresh
                                         cycle, so a tab click could land on the wrong tab. */}
-                                    {lastLoadedLabel ? ` · ${t('meshGraph.dialog.refreshedAt', { time: lastLoadedLabel })}` : ''}
-                                    {!refreshing && meshStatus ? ` · ${sendData && !error ? t('meshGraph.dialog.liveMetadata') : t('meshGraph.dialog.metadataUnavailable')}` : ''}
+                                    {lastLoadedLabel ? ` · ${t('mesh.dialog.refreshedAt', { time: lastLoadedLabel })}` : ''}
+                                    {!refreshing && meshStatus ? ` · ${sendData && !error ? t('mesh.dialog.liveMetadata') : t('mesh.dialog.metadataUnavailable')}` : ''}
                                 </p>
                             </div>
                         </div>

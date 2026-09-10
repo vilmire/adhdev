@@ -75,9 +75,9 @@ export function MeshHelpToggle({ meshTheme, open, onToggle }: {
         <button
             type="button"
             onClick={onToggle}
-            aria-label={t('meshGraph.help.toggleAria')}
+            aria-label={t('mesh.help.toggleAria')}
             aria-expanded={open}
-            title={t('meshGraph.help.toggleTitle')}
+            title={t('mesh.help.toggleTitle')}
             className={`${base} ${cls}`}
         >
             <IconHelp size={15} />
@@ -99,9 +99,9 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
 
     const sections: HelpSection[] = useMemo(
         () => MESH_HELP_SECTION_IDS.map(id => ({
-            term: t(`meshGraph.help.sections.${id}.term`),
-            summary: t(`meshGraph.help.sections.${id}.summary`),
-            details: t(`meshGraph.help.sections.${id}.details`, { returnObjects: true }) as string[],
+            term: t(`mesh.help.sections.${id}.term`),
+            summary: t(`mesh.help.sections.${id}.summary`),
+            details: t(`mesh.help.sections.${id}.details`, { returnObjects: true }) as string[],
         })),
         [t],
     )
@@ -118,17 +118,17 @@ export function MeshHelpPanel({ meshTheme, onClose }: {
         <div
             className={`shrink-0 rounded-2xl border p-4 ${dk ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}
             role="region"
-            aria-label={t('meshGraph.help.regionAria')}
+            aria-label={t('mesh.help.regionAria')}
         >
             <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <div className={`text-3xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{t('meshGraph.help.kicker')}</div>
-                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('meshGraph.help.title')}</div>
+                    <div className={`text-3xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{t('mesh.help.kicker')}</div>
+                    <div className={`mt-0.5 text-sm font-semibold ${meshTheme.textPrimary}`}>{t('mesh.help.title')}</div>
                 </div>
                 <button
                     type="button"
                     onClick={onClose}
-                    aria-label={t('meshGraph.help.close')}
+                    aria-label={t('mesh.help.close')}
                     className={dk
                         ? 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white'
                         : 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}

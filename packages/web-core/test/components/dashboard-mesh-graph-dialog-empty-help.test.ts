@@ -38,7 +38,7 @@ describe('DashboardMeshGraphDialog — G5-5 help panel reachable from the empty 
 
     it('the noGraph empty message points the user at the help toggle', () => {
         const en = JSON.parse(read('../../src/i18n/locales/en/common.json'))
-        const noGraph: string = en.meshGraph.dialog.noGraph
+        const noGraph: string = en.mesh.dialog.noGraph
         expect(noGraph.length).toBeGreaterThan('No live mesh graph is available for this coordinator yet.'.length)
     })
 })

@@ -55,10 +55,10 @@ export default function ApprovalsStep({ policy, stagedPatch, onStage, autoApprov
     // Same row config as MeshDetailView's Safety & Git selects (there is no
     // destructive-git approval row — see header).
     const rows: Array<{ label: string; key: string; opts: Array<[string, string]>; val: (v: any) => string; parse: (v: string) => unknown }> = [
-        { label: t('repoMesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-        { label: t('repoMesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-        { label: t('repoMesh.detail.pushApproval'), key: 'requireApprovalForPush', opts: [['required', t('repoMesh.detail.requireApprovalBeforePush')], ['not_required', t('repoMesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-        { label: t('repoMesh.detail.uncommittedChanges'), key: 'dirtyWorkspaceBehavior', opts: [['warn', t('repoMesh.detail.warnAndContinue')], ['block', t('repoMesh.detail.blockTask')], ['checkpoint_then_continue', t('repoMesh.detail.checkpointThenContinue')]], val: (v: any) => v || 'warn', parse: (v: string) => v },
+        { label: t('mesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', 'No'], ['yes', 'Yes']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+        { label: t('mesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', 'Yes'], ['no', 'No']], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
+        { label: t('mesh.detail.pushApproval'), key: 'requireApprovalForPush', opts: [['required', t('mesh.detail.requireApprovalBeforePush')], ['not_required', t('mesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
+        { label: t('mesh.detail.uncommittedChanges'), key: 'dirtyWorkspaceBehavior', opts: [['warn', t('mesh.detail.warnAndContinue')], ['block', t('mesh.detail.blockTask')], ['checkpoint_then_continue', t('mesh.detail.checkpointThenContinue')]], val: (v: any) => v || 'warn', parse: (v: string) => v },
     ]
 
     return (

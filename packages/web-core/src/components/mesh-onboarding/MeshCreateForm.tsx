@@ -142,10 +142,10 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
 
     const manualBlock = manualExpanded ? (
         <>
-            <FormField label={t('repoMesh.list.remoteUrl')} hint={t('repoMesh.list.remoteUrlHint')}>
+            <FormField label={t('mesh.list.remoteUrl')} hint={t('mesh.list.remoteUrlHint')}>
                 <Input value={repoRemoteUrl} onChange={e => onRepoRemoteUrlChange(e.target.value)} placeholder="https://github.com/user/repo" />
             </FormField>
-            <FormField label={t('repoMesh.list.repoIdentity')} hint={t('repoMesh.list.repoIdentityHint')}>
+            <FormField label={t('mesh.list.repoIdentity')} hint={t('mesh.list.repoIdentityHint')}>
                 <Input value={repoIdentity} onChange={e => onRepoIdentityChange(e.target.value)} placeholder="github.com/user/repo" />
             </FormField>
         </>
@@ -155,7 +155,7 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
             className="self-start text-xs text-text-muted hover:text-text-primary underline underline-offset-2 mb-3 bg-transparent border-none cursor-pointer p-0"
             onClick={() => onManualOpenChange(true)}
         >
-            {t('repoMesh.list.advancedIdentityToggle')}
+            {t('mesh.list.advancedIdentityToggle')}
         </button>
     )
 
@@ -193,17 +193,17 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
 
     return (
         <>
-            <h3 className="text-base font-bold mb-4">{t('repoMesh.list.createTitle')}</h3>
+            <h3 className="text-base font-bold mb-4">{t('mesh.list.createTitle')}</h3>
 
             {showDaemonPicker && (
-                <FormField label={t('repoMesh.list.createOnMachine')} hint={t('repoMesh.list.createOnMachineHint')}>
+                <FormField label={t('mesh.list.createOnMachine')} hint={t('mesh.list.createOnMachineHint')}>
                     {daemons.length === 0
-                        ? <select className="input w-full" disabled><option value="">{t('repoMesh.list.noConnectedDaemon')}</option></select>
+                        ? <select className="input w-full" disabled><option value="">{t('mesh.list.noConnectedDaemon')}</option></select>
                         : machinePicker}
                 </FormField>
             )}
 
-            <FormField label={t('repoMesh.list.workspace')} hint={t('repoMesh.list.workspaceHint')}>
+            <FormField label={t('mesh.list.workspace')} hint={t('mesh.list.workspaceHint')}>
                 <WorkspacePicker workspaces={workspaces} value={workspace} onChange={onWorkspaceChange} />
             </FormField>
 
@@ -226,7 +226,7 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
                 </AlertBanner>
             )}
 
-            <FormField label={t('repoMesh.list.name')}>
+            <FormField label={t('mesh.list.name')}>
                 <Input value={name} onChange={e => onNameChange(e.target.value)} placeholder="my-project-mesh" autoFocus />
             </FormField>
 
@@ -234,11 +234,11 @@ export default function MeshCreateForm(props: MeshCreateFormProps) {
 
             <div className="flex gap-2 mt-3">
                 <button className="btn btn-primary btn-sm" onClick={onCreate} disabled={disabled}>
-                    {creating ? t('repoMesh.list.creating') : t('repoMesh.list.create')}
+                    {creating ? t('mesh.list.creating') : t('mesh.list.create')}
                 </button>
                 {onCancel && (
                     <button className="btn btn-secondary btn-sm" onClick={onCancel} disabled={creating}>
-                        {t('repoMesh.list.cancel')}
+                        {t('mesh.list.cancel')}
                     </button>
                 )}
             </div>

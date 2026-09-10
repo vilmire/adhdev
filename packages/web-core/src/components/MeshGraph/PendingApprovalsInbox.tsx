@@ -211,12 +211,12 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
         >
             <div className="flex items-center gap-2 mb-2 font-black text-xs" style={{ color: 'var(--status-warning)' }}>
                 <IconWarning size={14} />
-                {t('meshGraph.approvals.title')}
+                {t('mesh.approvals.title')}
                 <span className="opacity-70 font-semibold">({items.length})</span>
             </div>
 
             {items.length === 0 ? (
-                <div className="text-2xs opacity-70">{t('meshGraph.approvals.empty')}</div>
+                <div className="text-2xs opacity-70">{t('mesh.approvals.empty')}</div>
             ) : (
                 <ul className="flex flex-col gap-2">
                     {items.map(item => {
@@ -239,7 +239,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                             <span
                                                 className="ml-2 font-bold text-3xs"
                                                 style={{ color: 'var(--status-warning)' }}
-                                                title={t('meshGraph.approvals.waitingFor', { duration: waitLabel })}
+                                                title={t('mesh.approvals.waitingFor', { duration: waitLabel })}
                                             >
                                                 {waitLabel}
                                             </span>
@@ -248,7 +248,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     <div className="text-3xs opacity-60 truncate">
                                         {item.detail
                                             ? item.detail.replace(/[\n\r]+/g, ' ').slice(0, 120)
-                                            : t('meshGraph.approvals.sessionFallback', { id: item.sessionId })}
+                                            : t('mesh.approvals.sessionFallback', { id: item.sessionId })}
                                     </div>
                                     {item.options && item.options.length > 0 && (
                                         <div className="mt-1 flex flex-wrap gap-1">
@@ -271,14 +271,14 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-extrabold ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                         style={{ color: 'var(--status-warning)', background: 'var(--surface-primary)' }}
                                     >
-                                        {active === 'approve' ? <IconSpinner size={12} /> : t('meshGraph.approvals.approve')}
+                                        {active === 'approve' ? <IconSpinner size={12} /> : t('mesh.approvals.approve')}
                                     </button>
                                     <button
                                         onClick={() => handle(item, 'reject')}
                                         disabled={disabled}
                                         className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 font-semibold text-white bg-red-500/30 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                     >
-                                        {active === 'reject' ? <IconSpinner size={12} /> : t('meshGraph.approvals.reject')}
+                                        {active === 'reject' ? <IconSpinner size={12} /> : t('mesh.approvals.reject')}
                                     </button>
                                 </div>
                             </li>

@@ -133,7 +133,7 @@ export function MeshSurfaceTabControls({
     return (
         <div className="flex items-center gap-2">
             <div className={`inline-flex w-fit items-center gap-1 rounded-xl border p-1 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`} role="tablist" aria-label="Mesh view">
-                <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>{t('meshGraph.obs.tabOverview')}</button>
+                <button type="button" role="tab" aria-selected={activeTab === 'overview'} className={tabButtonClass(activeTab === 'overview')} onClick={() => onActiveTabChange('overview')}>{t('mesh.obs.tabOverview')}</button>
                 <button
                     type="button"
                     role="tab"
@@ -141,7 +141,7 @@ export function MeshSurfaceTabControls({
                     className={tabButtonClass(activeTab === 'tasks')}
                     onClick={() => onActiveTabChange('tasks')}
                 >
-                    {t('meshGraph.obs.tabTasks')}
+                    {t('mesh.obs.tabTasks')}
                 </button>
                 <button
                     type="button"
@@ -150,7 +150,7 @@ export function MeshSurfaceTabControls({
                     className={tabButtonClass(activeTab === 'status')}
                     onClick={() => onActiveTabChange('status')}
                 >
-                    {t('meshGraph.obs.tabStatus')}
+                    {t('mesh.obs.tabStatus')}
                 </button>
                 <button
                     type="button"
@@ -159,7 +159,7 @@ export function MeshSurfaceTabControls({
                     className={tabButtonClass(activeTab === 'notes')}
                     onClick={() => onActiveTabChange('notes')}
                 >
-                    {t('meshGraph.notes.tab')}
+                    {t('mesh.notes.tab')}
                 </button>
                 <button
                     type="button"
@@ -168,7 +168,7 @@ export function MeshSurfaceTabControls({
                     className={tabButtonClass(activeTab === 'graph')}
                     onClick={() => onActiveTabChange('graph')}
                 >
-                    {t('meshGraph.obs.tabGraph')}
+                    {t('mesh.obs.tabGraph')}
                 </button>
             </div>
             {!hideHelpToggle && <MeshHelpToggle meshTheme={meshTheme} open={helpOpen} onToggle={() => onHelpOpenChange(!helpOpen)} />}
@@ -192,13 +192,13 @@ export default function MeshObservabilitySurface({
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const branchConvergenceLabel = useMemo<Record<string, string>>(() => ({
-        merged_to_main: t('meshGraph.obs.convergenceMergedToMain'),
-        pushed_feature_branch_needs_merge: t('meshGraph.obs.convergenceNeedsMerge'),
-        blocked_review: t('meshGraph.obs.convergenceBlockedReview'),
-        cleanup_candidate: t('meshGraph.obs.convergenceCleanup'),
-        not_mergeable: t('meshGraph.obs.convergenceNotMergeable'),
+        merged_to_main: t('mesh.obs.convergenceMergedToMain'),
+        pushed_feature_branch_needs_merge: t('mesh.obs.convergenceNeedsMerge'),
+        blocked_review: t('mesh.obs.convergenceBlockedReview'),
+        cleanup_candidate: t('mesh.obs.convergenceCleanup'),
+        not_mergeable: t('mesh.obs.convergenceNotMergeable'),
     }), [t])
-    const resolvedEmptyMessage = emptyMessage ?? t('meshGraph.obs.emptyGraph')
+    const resolvedEmptyMessage = emptyMessage ?? t('mesh.obs.emptyGraph')
     // Canonicalize once at the boundary; everything below consumes canonicalStatus
     // (nodes guaranteed an array) rather than the raw prop, so no consumer re-guards
     // against a null/missing nodes array (MESH-PAGE-NULL-NODES-CRASH class).
@@ -379,8 +379,8 @@ export default function MeshObservabilitySurface({
             })
             if (!dryRun?.success || dryRun.code !== 'fast_forward_available') return
             const ok = await confirm({
-                title: t('meshGraph.obs.fastForwardConfirmTitle', { label: selectedGraphNode.label }),
-                confirmLabel: t('meshGraph.obs.fastForwardConfirmLabel'),
+                title: t('mesh.obs.fastForwardConfirmTitle', { label: selectedGraphNode.label }),
+                confirmLabel: t('mesh.obs.fastForwardConfirmLabel'),
             })
             if (!ok) return
             const executedRaw = await sendDaemonCommand(selectedHealDaemonId, 'fast_forward_mesh_node', {
@@ -468,10 +468,10 @@ export default function MeshObservabilitySurface({
     ]
     const hasSnapshotGaps = canonicalGraph.stats.incompleteSnapshotNodes > 0
     const headlineLabel = canonicalGraph.stats.followUpNodes > 0
-        ? t('meshGraph.obs.headlineFollowUp', { count: canonicalGraph.stats.followUpNodes })
+        ? t('mesh.obs.headlineFollowUp', { count: canonicalGraph.stats.followUpNodes })
         : hasSnapshotGaps
-            ? t('meshGraph.obs.headlineIncomplete')
-            : t('meshGraph.obs.headlineConverged')
+            ? t('mesh.obs.headlineIncomplete')
+            : t('mesh.obs.headlineConverged')
     const headlineTone = canonicalGraph.stats.followUpNodes > 0 ? 'danger' : hasSnapshotGaps ? 'warn' : 'good'
 
     /* Direction is the USER's choice, defaulting to TB (owner call 2026-09-02).
@@ -549,7 +549,7 @@ export default function MeshObservabilitySurface({
                             />
                         </div>
                     ) : (
-                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('meshGraph.obs.loadingGraph')}</div>
+                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('mesh.obs.loadingGraph')}</div>
                     )}
                 </div>
             </div>
@@ -589,38 +589,38 @@ export default function MeshObservabilitySurface({
                     <div className={`flex w-full min-w-0 basis-full flex-wrap gap-2 text-xs sm:w-auto sm:flex-1 sm:basis-auto ${meshTheme.textSecondary}`}>
                         <Badge label={headlineLabel} tone={headlineTone} className="shrink-0" />
                         {canonicalGraph.stats.blockedReviewNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeBlocked', { count: canonicalGraph.stats.blockedReviewNodes })} title={t('meshGraph.obs.badgeBlockedTitle', { count: canonicalGraph.stats.blockedReviewNodes })} tone="danger" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeBlocked', { count: canonicalGraph.stats.blockedReviewNodes })} title={t('mesh.obs.badgeBlockedTitle', { count: canonicalGraph.stats.blockedReviewNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.notMergeableNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeNotMergeable', { count: canonicalGraph.stats.notMergeableNodes })} tone="danger" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeNotMergeable', { count: canonicalGraph.stats.notMergeableNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.mergeReadyNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeNeedMerge', { count: canonicalGraph.stats.mergeReadyNodes })} tone="warn" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeNeedMerge', { count: canonicalGraph.stats.mergeReadyNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.cleanupCandidateNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeCleanup', { count: canonicalGraph.stats.cleanupCandidateNodes })} title={t('meshGraph.obs.badgeCleanupTitle', { count: canonicalGraph.stats.cleanupCandidateNodes })} tone="info" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeCleanup', { count: canonicalGraph.stats.cleanupCandidateNodes })} title={t('mesh.obs.badgeCleanupTitle', { count: canonicalGraph.stats.cleanupCandidateNodes })} tone="info" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.offlineNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeOffline', { count: canonicalGraph.stats.offlineNodes })} tone="danger" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeOffline', { count: canonicalGraph.stats.offlineNodes })} tone="danger" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.incompleteSnapshotNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeIncomplete', { count: canonicalGraph.stats.incompleteSnapshotNodes })} title={t('meshGraph.obs.badgeIncompleteTitle', { count: canonicalGraph.stats.incompleteSnapshotNodes })} tone="warn" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeIncomplete', { count: canonicalGraph.stats.incompleteSnapshotNodes })} title={t('mesh.obs.badgeIncompleteTitle', { count: canonicalGraph.stats.incompleteSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingGitSnapshotNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeNoGit', { count: canonicalGraph.stats.missingGitSnapshotNodes })} title={t('meshGraph.obs.badgeNoGitTitle', { count: canonicalGraph.stats.missingGitSnapshotNodes })} tone="warn" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeNoGit', { count: canonicalGraph.stats.missingGitSnapshotNodes })} title={t('mesh.obs.badgeNoGitTitle', { count: canonicalGraph.stats.missingGitSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.missingSubmoduleSnapshotNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeNoSubmod', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} title={t('meshGraph.obs.badgeNoSubmodTitle', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} tone="warn" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeNoSubmod', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} title={t('mesh.obs.badgeNoSubmodTitle', { count: canonicalGraph.stats.missingSubmoduleSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {canonicalGraph.stats.staleGitSnapshotNodes > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeStale', { count: canonicalGraph.stats.staleGitSnapshotNodes })} title={t('meshGraph.obs.badgeStaleTitle', { count: canonicalGraph.stats.staleGitSnapshotNodes })} tone="warn" className="shrink-0" />
+                            <Badge label={t('mesh.obs.badgeStale', { count: canonicalGraph.stats.staleGitSnapshotNodes })} title={t('mesh.obs.badgeStaleTitle', { count: canonicalGraph.stats.staleGitSnapshotNodes })} tone="warn" className="shrink-0" />
                         )}
                         {(queueSummary?.active ?? 0) > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeActiveQueue', { count: queueSummary?.active ?? 0 })} tone="info" className="shrink-0 hidden sm:inline-flex" />
+                            <Badge label={t('mesh.obs.badgeActiveQueue', { count: queueSummary?.active ?? 0 })} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
-                        <Badge label={t('meshGraph.obs.badgeNodes', { count: canonicalGraph.stats.totalNodes })} tone="default" className="shrink-0 hidden sm:inline-flex" />
+                        <Badge label={t('mesh.obs.badgeNodes', { count: canonicalGraph.stats.totalNodes })} tone="default" className="shrink-0 hidden sm:inline-flex" />
                         {canonicalGraph.stats.totalActiveSessions > 0 && (
-                            <Badge label={t('meshGraph.obs.badgeAttachedChats', { count: canonicalGraph.stats.totalActiveSessions })} tone="info" className="shrink-0 hidden sm:inline-flex" />
+                            <Badge label={t('mesh.obs.badgeAttachedChats', { count: canonicalGraph.stats.totalActiveSessions })} tone="info" className="shrink-0 hidden sm:inline-flex" />
                         )}
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -632,8 +632,8 @@ export default function MeshObservabilitySurface({
                             role="group"
                             aria-label="Graph layout direction"
                         >
-                            <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title={t('meshGraph.obs.directionLRTitle')}>LR</button>
-                            <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title={t('meshGraph.obs.directionTBTitle')}>TB</button>
+                            <button type="button" onClick={() => setDirectionPref('LR')} className={directionToggleButtonClass(directionPref === 'LR')} title={t('mesh.obs.directionLRTitle')}>LR</button>
+                            <button type="button" onClick={() => setDirectionPref('TB')} className={directionToggleButtonClass(directionPref === 'TB')} title={t('mesh.obs.directionTBTitle')}>TB</button>
                         </div>
                         {/* Health panel button */}
                         <div className="relative">
@@ -642,9 +642,9 @@ export default function MeshObservabilitySurface({
                                     {(() => {
                                         const failedRefine = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined)?.filter(j => j.status === 'failed').length ?? 0
                                         const recentFail = ledgerSummary.recentFailures
-                                        if (failedRefine > 0) return <span className={meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}>{t('meshGraph.obs.healthRefineFailed', { count: failedRefine })}</span>
-                                        if (recentFail > 0) return <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('meshGraph.obs.healthFailures', { count: recentFail })}</span>
-                                        return t('meshGraph.obs.health')
+                                        if (failedRefine > 0) return <span className={meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}>{t('mesh.obs.healthRefineFailed', { count: failedRefine })}</span>
+                                        if (recentFail > 0) return <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('mesh.obs.healthFailures', { count: recentFail })}</span>
+                                        return t('mesh.obs.health')
                                     })()}
                                 </summary>
                                 {/* Mobile: the header is a scroll container, so an absolutely-
@@ -666,24 +666,24 @@ export default function MeshObservabilitySurface({
                         <div className="relative">
                             <details className={`rounded-xl px-3 py-1.5 text-xs ${meshTheme.isDark ? 'border border-white/10 bg-white/[0.03] text-slate-300' : 'border border-slate-200 bg-slate-50 text-slate-600'}`}>
                                 <summary className={`cursor-pointer list-none font-medium ${meshTheme.textSecondary} [&::-webkit-details-marker]:hidden`}>
-                                    {t('meshGraph.obs.legend')}
+                                    {t('mesh.obs.legend')}
                                 </summary>
                                 <div className={`fixed inset-x-4 top-28 z-50 max-h-[70dvh] overflow-y-auto rounded-xl border p-3 shadow-xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-72 sm:max-h-none sm:overflow-visible ${meshTheme.isDark ? 'border-white/10 bg-slate-950/96' : 'border-slate-200 bg-white/98 shadow-slate-900/10'}`}>
                                     <div className="flex flex-col gap-3">
                                         <div className="flex flex-wrap gap-2">
-                                            <Badge label={t('meshGraph.obs.legendDirty', { count: canonicalGraph.stats.dirtyNodes })} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
-                                            <Badge label={t('meshGraph.obs.legendOrphan', { count: canonicalGraph.stats.orphanNodes })} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
-                                            <Badge label={t('meshGraph.obs.legendRecentFailures', { count: ledgerSummary.recentFailures })} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
+                                            <Badge label={t('mesh.obs.legendDirty', { count: canonicalGraph.stats.dirtyNodes })} tone={canonicalGraph.stats.dirtyNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={t('mesh.obs.legendOrphan', { count: canonicalGraph.stats.orphanNodes })} tone={canonicalGraph.stats.orphanNodes > 0 ? 'warn' : 'good'} />
+                                            <Badge label={t('mesh.obs.legendRecentFailures', { count: ledgerSummary.recentFailures })} tone={ledgerSummary.recentFailures > 0 ? 'danger' : 'good'} />
                                             {stateCounts.length === 0 ? (
-                                                <Badge label={t('meshGraph.obs.legendNoSessionMeta')} />
+                                                <Badge label={t('mesh.obs.legendNoSessionMeta')} />
                                             ) : stateCounts.slice(0, 2).map(([label, count]) => (
                                                 <Badge key={label} label={`${count} ${label}`} tone={sessionTone(label)} />
                                             ))}
                                         </div>
                                         <div className="flex flex-wrap gap-2">
-                                            <Badge label={t('meshGraph.obs.legendAnchor')} tone="info" />
-                                            <Badge label={t('meshGraph.obs.legendPeerLink')} tone="default" />
-                                            <Badge label={t('meshGraph.obs.legendSubmoduleLink')} tone="warn" />
+                                            <Badge label={t('mesh.obs.legendAnchor')} tone="info" />
+                                            <Badge label={t('mesh.obs.legendPeerLink')} tone="default" />
+                                            <Badge label={t('mesh.obs.legendSubmoduleLink')} tone="warn" />
                                         </div>
                                         {statusWarnings.length > 0 && (
                                             <div className="flex flex-wrap gap-2">
@@ -693,7 +693,7 @@ export default function MeshObservabilitySurface({
                                             </div>
                                         )}
                                         <div className={`text-xs ${meshTheme.textMuted}`}>
-                                            {t('meshGraph.obs.legendClickHint')}
+                                            {t('mesh.obs.legendClickHint')}
                                         </div>
                                     </div>
                                 </div>
@@ -706,7 +706,7 @@ export default function MeshObservabilitySurface({
                 {isBootstrapMode && canonicalGraph.nodes.length > 0 && (
                     <div className={`shrink-0 mx-4 mt-2 flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs ${meshTheme.isDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
                         <span className={`h-2 w-2 shrink-0 rounded-full animate-pulse ${meshTheme.isDark ? 'bg-amber-400' : 'bg-amber-500'}`} aria-hidden />
-                        <span>{t('meshGraph.obs.bootstrapBanner')}</span>
+                        <span>{t('mesh.obs.bootstrapBanner')}</span>
                     </div>
                 )}
 
@@ -715,7 +715,7 @@ export default function MeshObservabilitySurface({
                     {/* Graph */}
                     <div className="flex-1 min-w-0">
                         {!graphMounted ? (
-                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('meshGraph.obs.loadingGraph')}</div>
+                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('mesh.obs.loadingGraph')}</div>
                         ) : canonicalGraph.nodes.length > 0 ? (
                             <MeshGraphView
                                 data={canonicalGraph}
@@ -750,7 +750,7 @@ export default function MeshObservabilitySurface({
                     {/* Right sidebar — selected node detail */}
                     {selectedGraphNode && detailSelection?.kind === 'node' && (
                         <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
-                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedNode')}</div>
+                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.selectedNode')}</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphNode.label}</div>
@@ -764,7 +764,7 @@ export default function MeshObservabilitySurface({
                                             disabled={!canHealSelectedNode || healingNodeId === selectedGraphNode.id}
                                             className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-45' : 'rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45'}
                                         >
-                                            {healingNodeId === selectedGraphNode.id ? t('meshGraph.obs.checking') : t('meshGraph.obs.heal')}
+                                            {healingNodeId === selectedGraphNode.id ? t('mesh.obs.checking') : t('mesh.obs.heal')}
                                         </button>
                                     )}
                                     <button
@@ -781,7 +781,7 @@ export default function MeshObservabilitySurface({
                                 {(() => {
                                     const h = selectedNodeStatus?.health ?? selectedGraphNode.health
                                     return h === 'unknown'
-                                        ? <Badge label={t('meshGraph.obs.connecting')} tone="default" />
+                                        ? <Badge label={t('mesh.obs.connecting')} tone="default" />
                                         : <Badge label={h} tone={healthTone(h)} />
                                 })()}
                                 {selectedGraphNode.branch && <Badge label={selectedGraphNode.branch} tone="default" />}
@@ -792,50 +792,50 @@ export default function MeshObservabilitySurface({
                                     <Badge label={describeConnection(selectedNodeStatus)} tone={connectionTone(selectedNodeStatus.connection)} />
                                 )}
                                 {selectedNodeStatus?.connection?.state === 'unknown' && (
-                                    <Badge label={t('meshGraph.obs.meshConnecting')} tone="warn" />
+                                    <Badge label={t('mesh.obs.meshConnecting')} tone="warn" />
                                 )}
                                 {selectedNodeSessionEntries.length > 0 && <Badge label={`${selectedNodeSessionEntries.length} sessions`} tone="info" />}
                             </div>
                             <div className="grid gap-1.5 text-xs">
                                 {selectedGraphNode.machineLabel && (
-                                    <Row label={t('meshGraph.obs.fieldMachine')} value={selectedGraphNode.machineLabel} />
+                                    <Row label={t('mesh.obs.fieldMachine')} value={selectedGraphNode.machineLabel} />
                                 )}
                                 {selectedGraphNode.locality && selectedGraphNode.locality !== 'unknown' && (
-                                    <Row label={t('meshGraph.obs.fieldLocality')} value={selectedGraphNode.locality} />
+                                    <Row label={t('mesh.obs.fieldLocality')} value={selectedGraphNode.locality} />
                                 )}
-                                <Row label={t('meshGraph.obs.fieldWorkspace')} value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
+                                <Row label={t('mesh.obs.fieldWorkspace')} value={selectedNodeStatus?.workspace ?? selectedGraphNode.workspace} />
                                 {selectedHeadSummary && (
-                                    <Row label={t('meshGraph.obs.fieldHead')} value={selectedHeadSummary} />
+                                    <Row label={t('mesh.obs.fieldHead')} value={selectedHeadSummary} />
                                 )}
                                 {(selectedGraphNode.dirtyFiles > 0 || selectedGraphNode.ahead > 0 || selectedGraphNode.behind > 0) && (
-                                    <Row label={t('meshGraph.obs.fieldDirtyAheadBehind')} value={`${selectedGraphNode.dirtyFiles}/${selectedGraphNode.ahead}/${selectedGraphNode.behind}`} />
+                                    <Row label={t('mesh.obs.fieldDirtyAheadBehind')} value={`${selectedGraphNode.dirtyFiles}/${selectedGraphNode.ahead}/${selectedGraphNode.behind}`} />
                                 )}
                                 {selectedNodeSessionEntries.length > 0 && (
-                                    <Row label={t('meshGraph.obs.fieldSessions')} value={String(selectedNodeSessionEntries.length)} />
+                                    <Row label={t('mesh.obs.fieldSessions')} value={String(selectedNodeSessionEntries.length)} />
                                 )}
                                 {selectedGraphNode.upstream && (
-                                    <Row label={t('meshGraph.obs.fieldUpstream')} value={selectedGraphNode.upstream} />
+                                    <Row label={t('mesh.obs.fieldUpstream')} value={selectedGraphNode.upstream} />
                                 )}
                                 {(() => {
                                     const src = selectedNodeStatus?.connection?.source ?? describeGraphNodeSource(selectedGraphNode)
-                                    return src && src !== 'unknown' ? <Row label={t('meshGraph.obs.fieldSource')} value={String(src)} /> : null
+                                    return src && src !== 'unknown' ? <Row label={t('mesh.obs.fieldSource')} value={String(src)} /> : null
                                 })()}
                                 {(() => {
                                     const transport = selectedNodeStatus?.connection?.transport
-                                    return transport && transport !== 'unknown' ? <Row label={t('meshGraph.obs.fieldTransport')} value={transport} /> : null
+                                    return transport && transport !== 'unknown' ? <Row label={t('mesh.obs.fieldTransport')} value={transport} /> : null
                                 })()}
                                 {(() => {
                                     const mid = selectedGraphNode.machineId ?? selectedNodeStatus?.machineId
-                                    return mid ? <Row label={t('meshGraph.obs.fieldMachineId')} value={mid} /> : null
+                                    return mid ? <Row label={t('mesh.obs.fieldMachineId')} value={mid} /> : null
                                 })()}
                                 {(() => {
                                     const did = selectedGraphNode.daemonId ?? selectedNodeStatus?.daemonId
-                                    return did ? <Row label={t('meshGraph.obs.fieldDaemonId')} value={did} /> : null
+                                    return did ? <Row label={t('mesh.obs.fieldDaemonId')} value={did} /> : null
                                 })()}
                             </div>
                             {selectedNodeSessionEntries.length > 0 && (
                                 <div className="mt-3">
-                                    <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.activeSessions')}</div>
+                                    <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.activeSessions')}</div>
                                     <div className="flex flex-col gap-1.5">
                                         {selectedNodeSessionEntries.map(entry => (
                                             <div key={entry.session.sessionId} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
@@ -844,7 +844,7 @@ export default function MeshObservabilitySurface({
                                                     <Badge label={sessionStatusLabel(entry.session)} tone={sessionTone(sessionStatusLabel(entry.session))} />
                                                 </div>
                                                 <div className={`mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 ${meshTheme.textMuted}`}>
-                                                    <span className="truncate">{entry.session.providerType || t('meshGraph.obs.providerUnknown')}</span>
+                                                    <span className="truncate">{entry.session.providerType || t('mesh.obs.providerUnknown')}</span>
                                                     <span>{sessionRoleLabel(entry.session)}</span>
                                                     <span>{sessionElapsedLabel(entry.session)}</span>
                                                 </div>
@@ -862,12 +862,12 @@ export default function MeshObservabilitySurface({
                                 </div>
                             )}
                             <div className="mt-3">
-                                <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.ledger')}</div>
+                                <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.ledger')}</div>
                                 <div className="grid grid-cols-2 gap-1.5">
-                                    <Row label={t('meshGraph.obs.fieldCompleted')} value={String(ledgerSummary.taskCompleted)} />
-                                    <Row label={t('meshGraph.obs.fieldFailed')} value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
-                                    <Row label={t('meshGraph.obs.fieldLaunched')} value={String(ledgerSummary.sessionLaunched)} />
-                                    <Row label={t('meshGraph.obs.fieldRecentFailures')} value={<span className={ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}>{ledgerSummary.recentFailures}</span>} />
+                                    <Row label={t('mesh.obs.fieldCompleted')} value={String(ledgerSummary.taskCompleted)} />
+                                    <Row label={t('mesh.obs.fieldFailed')} value={<span className={ledgerSummary.taskFailed > 0 ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600') : ''}>{ledgerSummary.taskFailed}</span>} />
+                                    <Row label={t('mesh.obs.fieldLaunched')} value={String(ledgerSummary.sessionLaunched)} />
+                                    <Row label={t('mesh.obs.fieldRecentFailures')} value={<span className={ledgerSummary.recentFailures > 0 ? (meshTheme.isDark ? 'text-amber-300' : 'text-amber-600') : ''}>{ledgerSummary.recentFailures}</span>} />
                                 </div>
                             </div>
                             {(() => {
@@ -877,7 +877,7 @@ export default function MeshObservabilitySurface({
                                 if (nodeTasks.length === 0) return null
                                 return (
                                     <div className="mt-3">
-                                        <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.queueTasks')}</div>
+                                        <div className={`mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.queueTasks')}</div>
                                         <div className="flex flex-col gap-1.5">
                                             {nodeTasks.map(task => (
                                                 <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
@@ -896,13 +896,13 @@ export default function MeshObservabilitySurface({
                             })()}
                             {selectedGraphNode.snapshotWarnings.length > 0 && (
                                 <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
-                                    <div className="font-medium">{t('meshGraph.obs.keyWarning')}</div>
+                                    <div className="font-medium">{t('mesh.obs.keyWarning')}</div>
                                     <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
                                 </div>
                             )}
                             {selectedGraphNode.branchConvergence && (selectedGraphNode.branchConvergence.reason || selectedGraphNode.branchConvergence.nextStep) && (
                                 <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
-                                    <div className="font-medium">{t('meshGraph.obs.followUpLabel', { status: branchConvergenceLabel[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status })}</div>
+                                    <div className="font-medium">{t('mesh.obs.followUpLabel', { status: branchConvergenceLabel[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status })}</div>
                                     {selectedGraphNode.branchConvergence.reason && (
                                         <div className="mt-1">{selectedGraphNode.branchConvergence.reason}</div>
                                     )}
@@ -913,8 +913,8 @@ export default function MeshObservabilitySurface({
                             )}
                             {healPreview && (
                                 <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100' : 'mt-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800'}>
-                                    <div className="font-medium">{healPreview.phase === 'execute' ? t('meshGraph.obs.healResult') : t('meshGraph.obs.healPreview')}</div>
-                                    <div className="mt-1">{healPreview.code ?? healPreview.error ?? t('meshGraph.obs.noResultCode')}</div>
+                                    <div className="font-medium">{healPreview.phase === 'execute' ? t('mesh.obs.healResult') : t('mesh.obs.healPreview')}</div>
+                                    <div className="mt-1">{healPreview.code ?? healPreview.error ?? t('mesh.obs.noResultCode')}</div>
                                 </div>
                             )}
                         </div>
@@ -924,7 +924,7 @@ export default function MeshObservabilitySurface({
                         old hover preview; click is the primary drill-down path). */}
                     {selectedGraphEdge && detailSelection?.kind === 'edge' && (
                         <div role="dialog" className={`absolute inset-x-3 bottom-3 top-20 z-20 rounded-2xl border shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:w-72 sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none overflow-y-auto p-4 ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`}>
-                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('meshGraph.obs.selectedEdge')}</div>
+                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.selectedEdge')}</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className={`truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{selectedGraphEdge.label || edgeTypeLabel(selectedGraphEdge)}</div>
@@ -944,9 +944,9 @@ export default function MeshObservabilitySurface({
                                 <Badge label={edgeDirectionLabel(selectedGraphEdge)} tone="info" />
                             </div>
                             <div className="grid gap-1.5 text-xs">
-                                <Row label={t('meshGraph.obs.fieldFrom')} value={selectedEdgeSource?.label ?? selectedGraphEdge.source} />
-                                <Row label={t('meshGraph.obs.fieldTo')} value={selectedEdgeTarget?.label ?? selectedGraphEdge.target} />
-                                <Row label={t('meshGraph.obs.fieldLabel')} value={selectedGraphEdge.label ?? 'none'} />
+                                <Row label={t('mesh.obs.fieldFrom')} value={selectedEdgeSource?.label ?? selectedGraphEdge.source} />
+                                <Row label={t('mesh.obs.fieldTo')} value={selectedEdgeTarget?.label ?? selectedGraphEdge.target} />
+                                <Row label={t('mesh.obs.fieldLabel')} value={selectedGraphEdge.label ?? 'none'} />
                             </div>
                         </div>
                     )}

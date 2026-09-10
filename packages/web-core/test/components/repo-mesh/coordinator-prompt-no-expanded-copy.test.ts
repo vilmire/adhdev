@@ -53,25 +53,25 @@ describe('coordinator prompt Override never receives the expanded default', () =
     for (const [name, bundle] of Object.entries(LOCALES)) {
         describe(name, () => {
             it('removes the obsolete "Start from default" i18n keys', () => {
-                const detail = bundle?.repoMesh?.detail ?? {}
+                const detail = bundle?.mesh?.detail ?? {}
                 expect(detail.startFromDefault).toBeUndefined()
                 expect(detail.startFromDefaultTitle).toBeUndefined()
                 expect(detail.startFromDefaultConfirm).toBeUndefined()
             })
 
             it('keeps the placeholder-token glossary that replaces the copy button', () => {
-                const detail = bundle?.repoMesh?.detail ?? {}
+                const detail = bundle?.mesh?.detail ?? {}
                 for (const key of ['availablePlaceholders', 'placeholdersIntro']) {
-                    expect(typeof detail[key], `repoMesh.detail.${key}`).toBe('string')
-                    expect(detail[key].trim().length, `repoMesh.detail.${key}`).toBeGreaterThan(0)
+                    expect(typeof detail[key], `mesh.detail.${key}`).toBe('string')
+                    expect(detail[key].trim().length, `mesh.detail.${key}`).toBeGreaterThan(0)
                 }
             })
 
             it('keeps the read-only default-prompt preview keys', () => {
-                const preview = bundle?.repoMesh?.promptPreview ?? {}
+                const preview = bundle?.mesh?.promptPreview ?? {}
                 for (const key of ['view', 'hide', 'rendering', 'info', 'launchScopeNote']) {
-                    expect(typeof preview[key], `repoMesh.promptPreview.${key}`).toBe('string')
-                    expect(preview[key].trim().length, `repoMesh.promptPreview.${key}`).toBeGreaterThan(0)
+                    expect(typeof preview[key], `mesh.promptPreview.${key}`).toBe('string')
+                    expect(preview[key].trim().length, `mesh.promptPreview.${key}`).toBeGreaterThan(0)
                 }
             })
         })

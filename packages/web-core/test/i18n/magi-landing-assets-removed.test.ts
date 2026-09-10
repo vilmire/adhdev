@@ -5,7 +5,7 @@
 // `landing.nav.magi` i18n entries, two /public images, and their CSS rules
 // orphaned. Owner decision (2026-09, O9): delete the dead assets.
 //
-// `meshGraph.help.sections.magi` and `landing.mesh.crossSubtitle` are a
+// `mesh.help.sections.magi` and `landing.mesh.crossSubtitle` are a
 // SEPARATE, live namespace (the Repo Mesh MAGI cross-verification feature,
 // docs/CONCEPTS.md §5) and must never be touched by this cleanup.
 import { describe, expect, it } from 'vitest'
@@ -33,8 +33,8 @@ describe('MAGI landing section stays removed (O9)', () => {
 
         it(`${locale}: the live Repo Mesh MAGI glossary entry is untouched`, async () => {
             const common = await loadCommon(locale)
-            expect(common.meshGraph.help.sections.magi).toBeDefined()
-            expect(common.meshGraph.help.sections.magi.term).toBe('MAGI')
+            expect(common.mesh.help.sections.magi).toBeDefined()
+            expect(common.mesh.help.sections.magi.term).toBe('MAGI')
         })
 
         it(`${locale}: the live mesh-card MAGI mention is untouched`, async () => {

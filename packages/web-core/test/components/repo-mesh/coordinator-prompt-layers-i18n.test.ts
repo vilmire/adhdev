@@ -17,7 +17,7 @@ import es from '../../../src/i18n/locales/es/common.json'
 
 const LOCALES: Record<string, any> = { en, ko, ja, 'zh-CN': zhCN, es }
 
-/** Keys for the read-only `.adhdev/mesh.json` layer notice (repoMesh.detail.*). */
+/** Keys for the read-only `.adhdev/mesh.json` layer notice (mesh.detail.*). */
 const REPO_MESH_JSON_KEYS = [
     'repoMeshJsonTitle',
     'repoMeshJsonReadOnly',
@@ -43,16 +43,16 @@ describe('coordinator prompt layer i18n', () => {
     for (const [name, bundle] of Object.entries(LOCALES)) {
         describe(name, () => {
             it('defines every repo mesh.json notice key', () => {
-                const detail = bundle?.repoMesh?.detail ?? {}
+                const detail = bundle?.mesh?.detail ?? {}
                 for (const key of REPO_MESH_JSON_KEYS) {
-                    expect(typeof detail[key], `repoMesh.detail.${key}`).toBe('string')
-                    expect(detail[key].trim().length, `repoMesh.detail.${key}`).toBeGreaterThan(0)
+                    expect(typeof detail[key], `mesh.detail.${key}`).toBe('string')
+                    expect(detail[key].trim().length, `mesh.detail.${key}`).toBeGreaterThan(0)
                 }
             })
 
             it('defines the preview launch-scope note', () => {
-                const note = bundle?.repoMesh?.promptPreview?.launchScopeNote
-                expect(typeof note, 'repoMesh.promptPreview.launchScopeNote').toBe('string')
+                const note = bundle?.mesh?.promptPreview?.launchScopeNote
+                expect(typeof note, 'mesh.promptPreview.launchScopeNote').toBe('string')
                 expect(note.trim().length).toBeGreaterThan(0)
             })
 

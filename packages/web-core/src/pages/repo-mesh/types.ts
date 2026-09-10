@@ -102,8 +102,8 @@ export type MeshSchedulingStrategy = 'first_eligible' | 'least_loaded' | 'round_
 export type MeshDistribution = 'smart' | 'in_order'
 
 export const DISTRIBUTION_OPTIONS: Array<{ value: MeshDistribution; labelKey: string; descriptionKey: string }> = [
-    { value: 'smart', labelKey: 'repoMesh.detail.distributionSmart', descriptionKey: 'repoMesh.detail.distributionSmartDescription' },
-    { value: 'in_order', labelKey: 'repoMesh.detail.distributionInOrder', descriptionKey: 'repoMesh.detail.distributionInOrderDescription' },
+    { value: 'smart', labelKey: 'mesh.detail.distributionSmart', descriptionKey: 'mesh.detail.distributionSmartDescription' },
+    { value: 'in_order', labelKey: 'mesh.detail.distributionInOrder', descriptionKey: 'mesh.detail.distributionInOrderDescription' },
 ]
 
 /** Map a distribution mode to the raw scheduling strategy persisted in policy. */

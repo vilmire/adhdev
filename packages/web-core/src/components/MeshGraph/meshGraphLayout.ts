@@ -171,40 +171,40 @@ function trOr(t: MeshSummaryTranslator | undefined, key: string, fallback: strin
 export function formatMeshGraphAheadBehindLocalized(node: MeshGraphNode, t?: MeshSummaryTranslator): string | null {
     if (node.ahead <= 0 && node.behind <= 0) return null
     if (node.ahead > 0 && node.behind > 0) {
-        return trOr(t, 'meshGraph.attention.aheadBehind', `ahead ${node.ahead} / behind ${node.behind}`, { ahead: node.ahead, behind: node.behind })
+        return trOr(t, 'mesh.attention.aheadBehind', `ahead ${node.ahead} / behind ${node.behind}`, { ahead: node.ahead, behind: node.behind })
     }
-    if (node.behind > 0) return trOr(t, 'meshGraph.attention.behind', `behind ${node.behind}`, { count: node.behind })
-    return trOr(t, 'meshGraph.attention.ahead', `ahead ${node.ahead}`, { count: node.ahead })
+    if (node.behind > 0) return trOr(t, 'mesh.attention.behind', `behind ${node.behind}`, { count: node.behind })
+    return trOr(t, 'mesh.attention.ahead', `ahead ${node.ahead}`, { count: node.ahead })
 }
 
 export function getNodeSummaryForLayout(node: MeshGraphNode, t?: MeshSummaryTranslator): string {
     if (node.type === 'defaultBranchNode') {
-        return node.nextStepHint || trOr(t, 'meshGraph.summary.anchor', 'Default branch anchor')
+        return node.nextStepHint || trOr(t, 'mesh.summary.anchor', 'Default branch anchor')
     }
 
     if (node.type === 'submoduleNode') {
-        const parts = [node.machineLabel ? trOr(t, 'meshGraph.summary.parent', `parent ${node.machineLabel}`, { label: node.machineLabel }) : null]
-        if (node.outOfSync) parts.push(trOr(t, 'meshGraph.panel.outOfSyncBadge', 'out of sync'))
-        else if (node.dirty) parts.push(trOr(t, 'meshGraph.summary.localChanges', 'local changes'))
-        else parts.push(trOr(t, 'meshGraph.panel.submoduleSynced', 'synced'))
+        const parts = [node.machineLabel ? trOr(t, 'mesh.summary.parent', `parent ${node.machineLabel}`, { label: node.machineLabel }) : null]
+        if (node.outOfSync) parts.push(trOr(t, 'mesh.panel.outOfSyncBadge', 'out of sync'))
+        else if (node.dirty) parts.push(trOr(t, 'mesh.summary.localChanges', 'local changes'))
+        else parts.push(trOr(t, 'mesh.panel.submoduleSynced', 'synced'))
         return parts.filter(Boolean).join(' · ')
     }
 
     const parts: string[] = []
     if (node.upstream) parts.push(node.upstream)
     if (node.upstream && node.upstreamStatus !== 'fresh') {
-        parts.push(trOr(t, 'meshGraph.attention.upstreamUnverified', 'upstream unverified'))
+        parts.push(trOr(t, 'mesh.attention.upstreamUnverified', 'upstream unverified'))
     } else {
         const drift = formatMeshGraphAheadBehindLocalized(node, t)
         if (drift) parts.push(drift)
     }
-    if (node.activeSessionCount > 0) parts.push(trOr(t, 'meshGraph.summary.sessions', `${node.activeSessionCount} session${node.activeSessionCount === 1 ? '' : 's'}`, { count: node.activeSessionCount }))
-    if (node.dirtyFiles > 0) parts.push(trOr(t, 'meshGraph.summary.dirtyCount', `${node.dirtyFiles} dirty`, { count: node.dirtyFiles }))
-    if (node.hasConflicts) parts.push(trOr(t, 'meshGraph.summary.conflicts', 'conflicts'))
+    if (node.activeSessionCount > 0) parts.push(trOr(t, 'mesh.summary.sessions', `${node.activeSessionCount} session${node.activeSessionCount === 1 ? '' : 's'}`, { count: node.activeSessionCount }))
+    if (node.dirtyFiles > 0) parts.push(trOr(t, 'mesh.summary.dirtyCount', `${node.dirtyFiles} dirty`, { count: node.dirtyFiles }))
+    if (node.hasConflicts) parts.push(trOr(t, 'mesh.summary.conflicts', 'conflicts'))
     if (parts.length === 0) {
         return node.branchConvergence?.needsConvergence
-            ? trOr(t, 'meshGraph.attention.needsFollowUp', 'Needs follow-up')
-            : trOr(t, 'meshGraph.summary.clean', 'Clean and even with upstream')
+            ? trOr(t, 'mesh.attention.needsFollowUp', 'Needs follow-up')
+            : trOr(t, 'mesh.summary.clean', 'Clean and even with upstream')
     }
     return parts.join(' · ')
 }

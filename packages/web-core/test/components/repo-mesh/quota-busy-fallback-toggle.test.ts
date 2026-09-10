@@ -46,7 +46,7 @@ function schedulingTabSource(): string {
 describe('quota-busy fallback toggle — placement', () => {
     it('renders inside the scheduling tab', () => {
         // Owner: "메시세팅하는곳 스케줄링 탭에 만들어 두면 좋아보임".
-        expect(schedulingTabSource()).toContain('repoMesh.detail.quotaBusyFallback')
+        expect(schedulingTabSource()).toContain('mesh.detail.quotaBusyFallback')
     })
 
     it('is registered as a real tab the operator can open', () => {
@@ -55,8 +55,8 @@ describe('quota-busy fallback toggle — placement', () => {
 
     it('offers exactly the two on/off choices', () => {
         const tab = schedulingTabSource()
-        expect(tab).toContain('repoMesh.detail.quotaBusyFallbackOn')
-        expect(tab).toContain('repoMesh.detail.quotaBusyFallbackOff')
+        expect(tab).toContain('mesh.detail.quotaBusyFallbackOn')
+        expect(tab).toContain('mesh.detail.quotaBusyFallbackOff')
     })
 })
 
@@ -89,9 +89,9 @@ describe('quota-busy fallback toggle — i18n', () => {
     for (const [locale, bundle] of Object.entries(LOCALES)) {
         it(`${locale} ships every string (no raw key leaking into the UI)`, () => {
             for (const key of KEYS) {
-                const value = bundle?.repoMesh?.detail?.[key]
-                expect(typeof value, `${locale}.repoMesh.detail.${key}`).toBe('string')
-                expect(value.length, `${locale}.repoMesh.detail.${key}`).toBeGreaterThan(0)
+                const value = bundle?.mesh?.detail?.[key]
+                expect(typeof value, `${locale}.mesh.detail.${key}`).toBe('string')
+                expect(value.length, `${locale}.mesh.detail.${key}`).toBeGreaterThan(0)
             }
         })
     }

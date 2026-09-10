@@ -110,14 +110,14 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
             const replicas = Array.isArray(synthesis?.replicas) ? synthesis!.replicas : []
             setRawByGroup(prev => ({ ...prev, [consensusGroupId]: { loading: false, error: null, replicas, fetched: true } }))
         } catch (err) {
-            setRawByGroup(prev => ({ ...prev, [consensusGroupId]: { loading: false, error: err instanceof Error ? err.message : t('meshGraph.synthesis.errorLoadRaw'), replicas: null, fetched: true } }))
+            setRawByGroup(prev => ({ ...prev, [consensusGroupId]: { loading: false, error: err instanceof Error ? err.message : t('mesh.synthesis.errorLoadRaw'), replicas: null, fetched: true } }))
         }
     }, [daemonId, sendDaemonCommand, meshId, t])
 
     if (groups.length === 0) {
         return (
             <div className={`rounded-xl border p-4 text-xs ${meshTheme.textSecondary} ${dk ? 'border-white/10 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
-                {t('meshGraph.synthesis.empty')}
+                {t('mesh.synthesis.empty')}
             </div>
         )
     }
@@ -143,7 +143,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                     ? (dk ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
                                     : (dk ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
                             }`}>
-                                {isSynthesized ? t('meshGraph.synthesis.synthesized') : t('meshGraph.synthesis.running')}
+                                {isSynthesized ? t('mesh.synthesis.synthesized') : t('mesh.synthesis.running')}
                             </span>
                         </div>
 
@@ -151,22 +151,22 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-2xs">
                             {typeof group.answered === 'number' && (
                                 <span className={meshTheme.textSecondary}>
-                                    {t('meshGraph.synthesis.answered', { answered: group.answered, total: group.replicaCount ?? '?' })}
+                                    {t('mesh.synthesis.answered', { answered: group.answered, total: group.replicaCount ?? '?' })}
                                 </span>
                             )}
                             {typeof group.needsVerificationCount === 'number' && group.needsVerificationCount > 0 && (
                                 <span className={`rounded-md px-1.5 py-0.5 ${dk ? 'bg-amber-500/12 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
-                                    {t('meshGraph.synthesis.needsVerificationCount', { count: group.needsVerificationCount })}
+                                    {t('mesh.synthesis.needsVerificationCount', { count: group.needsVerificationCount })}
                                 </span>
                             )}
                             {typeof group.agreedCount === 'number' && group.agreedCount > 0 && (
                                 <span className={`rounded-md px-1.5 py-0.5 ${dk ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}>
-                                    {t('meshGraph.synthesis.agreedCount', { count: group.agreedCount })}
+                                    {t('mesh.synthesis.agreedCount', { count: group.agreedCount })}
                                 </span>
                             )}
                             {typeof group.staleReplicas === 'number' && group.staleReplicas > 0 && (
                                 <span className={`rounded-md px-1.5 py-0.5 ${dk ? 'bg-rose-500/12 text-rose-200' : 'bg-rose-50 text-rose-700'}`}>
-                                    {t('meshGraph.synthesis.staleCount', { count: group.staleReplicas })}
+                                    {t('mesh.synthesis.staleCount', { count: group.staleReplicas })}
                                 </span>
                             )}
                         </div>
@@ -181,15 +181,15 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Git skew */}
                         {group.gitSkew?.skewed && (
                             <div className={`mt-2 text-2xs ${meshTheme.textSecondary}`}>
-                                <span className={dk ? 'text-amber-300' : 'text-amber-600'}>{t('meshGraph.synthesis.gitSkewLabel')}</span>
-                                {group.gitSkew.note || t('meshGraph.synthesis.gitSkewNote', { count: branches.length, branches: branches.join(', ') })}
+                                <span className={dk ? 'text-amber-300' : 'text-amber-600'}>{t('mesh.synthesis.gitSkewLabel')}</span>
+                                {group.gitSkew.note || t('mesh.synthesis.gitSkewNote', { count: branches.length, branches: branches.join(', ') })}
                             </div>
                         )}
 
                         {/* needs_verification preview (bounded) */}
                         {group.needsVerification && group.needsVerification.length > 0 && (
                             <div className={`mt-3 pt-3 ${sepClass}`}>
-                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.needsVerification')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('mesh.synthesis.needsVerification')}</span>
                                 <ul className="mt-1.5 flex flex-col gap-1">
                                     {group.needsVerification.map((item, i) => (
                                         <li key={i} className={`flex items-start gap-2 text-xs ${meshTheme.textPrimary}`}>
@@ -204,7 +204,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Open questions */}
                         {group.openQuestions && group.openQuestions.length > 0 && (
                             <div className={`mt-3 pt-3 ${sepClass}`}>
-                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.openQuestions')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('mesh.synthesis.openQuestions')}</span>
                                 <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4">
                                     {group.openQuestions.map((q, i) => (
                                         <li key={i} className={`text-xs ${meshTheme.textPrimary}`}>{q}</li>
@@ -216,28 +216,28 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                         {/* Raw answers — live-only, not persisted */}
                         <div className={`mt-3 pt-3 ${sepClass}`}>
                             <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('meshGraph.synthesis.rawReplicaAnswers')}</span>
+                                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{t('mesh.synthesis.rawReplicaAnswers')}</span>
                                 <Button
                                     variant="secondary"
                                     size="sm"
                                     onClick={() => void loadRaw(group.consensusGroupId)}
                                     disabled={!canCommand || rawState?.loading}
                                     title={canCommand
-                                        ? t('meshGraph.synthesis.rawTitleLive')
-                                        : t('meshGraph.synthesis.rawTitleOffline')}
+                                        ? t('mesh.synthesis.rawTitleLive')
+                                        : t('mesh.synthesis.rawTitleOffline')}
                                 >
-                                    {rawState?.loading ? t('meshGraph.synthesis.loading') : rawState?.fetched ? t('meshGraph.synthesis.reloadRaw') : t('meshGraph.synthesis.loadRaw')}
+                                    {rawState?.loading ? t('mesh.synthesis.loading') : rawState?.fetched ? t('mesh.synthesis.reloadRaw') : t('mesh.synthesis.loadRaw')}
                                 </Button>
                             </div>
                             <p className={`mt-1 text-2xs ${meshTheme.textMuted}`}>
-                                {t('meshGraph.synthesis.rawNotice')}
+                                {t('mesh.synthesis.rawNotice')}
                             </p>
                             {rawState?.error && (
                                 <div className={`mt-2 text-2xs ${dk ? 'text-rose-300' : 'text-rose-600'}`}>{rawState.error}</div>
                             )}
                             {rawState?.fetched && !rawState.error && rawReplicas.length === 0 && (
                                 <div className={`mt-2 text-2xs ${meshTheme.textMuted}`}>
-                                    {t('meshGraph.synthesis.rawEmpty')}
+                                    {t('mesh.synthesis.rawEmpty')}
                                 </div>
                             )}
                             {rawReplicas.length > 0 && (
@@ -246,7 +246,7 @@ export default function MagiSynthesisViewer({ status, daemonId, meshId, sendDaem
                                         <details key={replica.taskId || i} className={`rounded-lg border text-xs ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
                                             <summary className={`flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 [&::-webkit-details-marker]:hidden ${meshTheme.textSecondary}`}>
                                                 <span className="flex-1 truncate" title={replica.nodeId || undefined}>{replica.provider || '?'}{replica.nodeId ? ` @ ${resolveNodeLabel(replica.nodeId)}` : ''}</span>
-                                                {replica.rawAnswerTruncated && <span className={meshTheme.textMuted}>{t('meshGraph.synthesis.truncated')}</span>}
+                                                {replica.rawAnswerTruncated && <span className={meshTheme.textMuted}>{t('mesh.synthesis.truncated')}</span>}
                                             </summary>
                                             <pre className={`max-h-64 overflow-auto whitespace-pre-wrap px-2.5 pb-2 font-mono text-2xs ${meshTheme.textPrimary}`}>{replica.rawAnswer}</pre>
                                         </details>

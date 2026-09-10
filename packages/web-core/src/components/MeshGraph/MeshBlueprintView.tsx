@@ -340,7 +340,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                 </div>
                 {includeTerminal && !graphsLoading && (
                     <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-3xs text-text-muted">
-                        <span>{t('repoMesh.graphs.shown', { count: graphs.length })}</span>
+                        <span>{t('mesh.graphs.shown', { count: graphs.length })}</span>
                         {graphPagination.canLoadMore && (
                             <button
                                 type="button"
@@ -349,14 +349,14 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
                                     : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
                             >
-                                {t('repoMesh.graphs.loadMore', {
+                                {t('mesh.graphs.loadMore', {
                                     count: Math.min(BLUEPRINT_GRAPH_LOAD_MORE_STEP, graphPagination.hiddenCount),
                                 })}
                             </button>
                         )}
                         {graphPagination.atServerLimit && (
-                            <span title={t('repoMesh.graphs.serverLimitReached')}>
-                                · {t('repoMesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount })}
+                            <span title={t('mesh.graphs.serverLimitReached')}>
+                                · {t('mesh.graphs.serverLimitHidden', { count: graphPagination.hiddenCount })}
                             </span>
                         )}
                     </div>
@@ -367,9 +367,9 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         setIncludeTerminal(checked)
                         if (checked) setGraphLimit(BLUEPRINT_GRAPH_INITIAL_LIMIT)
                     }} />
-                    {t('repoMesh.graphs.includeTerminal')}
+                    {t('mesh.graphs.includeTerminal')}
                 </label>
-                <button type="button" className="btn btn-sm btn-secondary flex shrink-0 items-center" disabled={graphsLoading || !canCommand} onClick={() => void refreshGraphs()} title={t('repoMesh.graphs.refresh')} aria-label={t('repoMesh.graphs.refresh')}>
+                <button type="button" className="btn btn-sm btn-secondary flex shrink-0 items-center" disabled={graphsLoading || !canCommand} onClick={() => void refreshGraphs()} title={t('mesh.graphs.refresh')} aria-label={t('mesh.graphs.refresh')}>
                     <IconRefresh size={13} />
                 </button>
             </div>
@@ -423,8 +423,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             {/* Premise of the generic forecast: a hypothetical
                                 dispatch with NO pin. Pinned tasks carry their
                                 own 📌 forecast on their cards. */}
-                            <div className="px-2 pt-1 text-4xs uppercase tracking-wide opacity-60" title={t('meshGraph.blueprint.schedUnpinnedTitle')}>
-                                {t('meshGraph.blueprint.schedUnpinned')}
+                            <div className="px-2 pt-1 text-4xs uppercase tracking-wide opacity-60" title={t('mesh.blueprint.schedUnpinnedTitle')}>
+                                {t('mesh.blueprint.schedUnpinned')}
                             </div>
                             {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
                                 <button
@@ -435,7 +435,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         setSchedDetailOpen(open => !open || schedDetailDifficulty !== difficulty)
                                     }}
                                     className={`flex items-center gap-1.5 px-2 py-0.5 text-left transition-colors ${meshTheme.isDark ? 'hover:bg-slate-900' : 'hover:bg-slate-50'} ${schedDetailOpen && schedDetailDifficulty === difficulty ? (meshTheme.isDark ? 'bg-white/[0.06]' : 'bg-slate-100') : ''}`}
-                                    title={t('meshGraph.blueprint.scheduling')}
+                                    title={t('mesh.blueprint.scheduling')}
                                 >
                                     <span className="w-14 uppercase tracking-wide text-4xs opacity-60">{difficulty}</span>
                                     <span className="text-green-500">→ {predictedSlots[difficulty] ?? '—'}</span>
@@ -458,11 +458,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         className={`rounded-md px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${schedQuotaOpen
                                             ? (meshTheme.isDark ? 'bg-white/10 text-slate-100' : 'bg-slate-200 text-slate-800')
                                             : 'text-text-muted hover:bg-bg-glass'}`}
-                                        title={t('meshGraph.blueprint.schedQuotaButtonTitle')}
+                                        title={t('mesh.blueprint.schedQuotaButtonTitle')}
                                         onClick={() => setSchedQuotaOpen(open => !open)}>
-                                        {t('meshGraph.blueprint.schedQuotaButton')}
+                                        {t('mesh.blueprint.schedQuotaButton')}
                                     </button>
-                                    {schedObservedAt && <span className="ml-auto text-4xs text-text-muted">{t('meshGraph.blueprint.schedObservedAt', { time: schedObservedAt.slice(11, 19) })}</span>}
+                                    {schedObservedAt && <span className="ml-auto text-4xs text-text-muted">{t('mesh.blueprint.schedObservedAt', { time: schedObservedAt.slice(11, 19) })}</span>}
                                     <label className="flex items-center gap-1 text-3xs text-text-muted cursor-pointer">
                                         <input type="checkbox" checked={schedReadonly} onChange={e => setSchedReadonly(e.target.checked)} />
                                         read-only
@@ -483,7 +483,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                             <MeshMachineQuotaCard key={machine.machineKey} machine={machine} />
                                         ))}
                                         {collectMachineQuotaGroups(status).length === 0 && (
-                                            <div className="py-2 text-3xs text-text-muted">{t('meshGraph.blueprint.schedNoNodes')}</div>
+                                            <div className="py-2 text-3xs text-text-muted">{t('mesh.blueprint.schedNoNodes')}</div>
                                         )}
                                     </div>
                                 )}
@@ -545,31 +545,31 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     })
                                     const statusBadge = (row: DetailRow) => {
                                         switch (row.status) {
-                                            case 'next': return <span className="rounded bg-green-500/15 px-1.5 py-px text-3xs font-semibold text-green-500" title={t('meshGraph.blueprint.schedNextTitle')}>{t('meshGraph.blueprint.schedNext')}</span>
-                                            case 'full': return <span className="rounded bg-amber-500/15 px-1.5 py-px text-3xs text-amber-500">{t('meshGraph.blueprint.schedFull')}</span>
-                                            case 'floor': return <span className="rounded bg-bg-glass px-1.5 py-px text-3xs text-text-muted">{t('meshGraph.blueprint.schedFloorExcluded')}</span>
-                                            default: return <span className="rounded bg-bg-glass px-1.5 py-px text-3xs text-text-secondary">{t('meshGraph.blueprint.schedWaiting')}</span>
+                                            case 'next': return <span className="rounded bg-green-500/15 px-1.5 py-px text-3xs font-semibold text-green-500" title={t('mesh.blueprint.schedNextTitle')}>{t('mesh.blueprint.schedNext')}</span>
+                                            case 'full': return <span className="rounded bg-amber-500/15 px-1.5 py-px text-3xs text-amber-500">{t('mesh.blueprint.schedFull')}</span>
+                                            case 'floor': return <span className="rounded bg-bg-glass px-1.5 py-px text-3xs text-text-muted">{t('mesh.blueprint.schedFloorExcluded')}</span>
+                                            default: return <span className="rounded bg-bg-glass px-1.5 py-px text-3xs text-text-secondary">{t('mesh.blueprint.schedWaiting')}</span>
                                         }
                                     }
                                     const capacityLabel = (row: DetailRow) => {
                                         const capacity = row.score?.capacity
                                         if (!capacity) return '—'
                                         const cap = capacity.slotCap ?? capacity.providerCap
-                                        if (capacity.available !== false) return cap != null ? `${t('meshGraph.blueprint.schedCapFree')} · ${cap}` : t('meshGraph.blueprint.schedCapFree')
-                                        return cap != null ? `${t('meshGraph.blueprint.schedFull')} (${cap})` : t('meshGraph.blueprint.schedFull')
+                                        if (capacity.available !== false) return cap != null ? `${t('mesh.blueprint.schedCapFree')} · ${cap}` : t('mesh.blueprint.schedCapFree')
+                                        return cap != null ? `${t('mesh.blueprint.schedFull')} (${cap})` : t('mesh.blueprint.schedFull')
                                     }
-                                    if (rows.length === 0) return <div className="py-2 text-3xs text-text-muted">{t('meshGraph.blueprint.schedNoNodes')}</div>
+                                    if (rows.length === 0) return <div className="py-2 text-3xs text-text-muted">{t('mesh.blueprint.schedNoNodes')}</div>
                                     const showNodeCol = machineGroups.length > 1
                                     const scoreSummary = (row: DetailRow): string => {
                                         if (!row.score) return '—'
                                         const parts = [
-                                            `${t('meshGraph.blueprint.schedColScore')} ${row.score.total ?? '—'}`,
+                                            `${t('mesh.blueprint.schedColScore')} ${row.score.total ?? '—'}`,
                                             `base ${row.score.base ?? '—'}`,
                                             `difficulty ${row.score.difficulty ?? '—'}`,
                                             `tags ${row.score.tags ?? '—'}`,
                                             // Zero bonus names its cause (stale / no-data / …) — an
                                             // unexplained "+0" is exactly the question it provoked.
-                                            `${t('meshGraph.blueprint.schedColQuota')} ${row.quotaBonus != null ? `+${row.quotaBonus}` : '—'}${row.quotaBonus === 0 && row.quotaZeroReason ? ` (${row.quotaZeroReason})` : ''}`,
+                                            `${t('mesh.blueprint.schedColQuota')} ${row.quotaBonus != null ? `+${row.quotaBonus}` : '—'}${row.quotaBonus === 0 && row.quotaZeroReason ? ` (${row.quotaZeroReason})` : ''}`,
                                         ]
                                         return parts.join(' · ')
                                     }
@@ -578,10 +578,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         <table className="w-full min-w-[300px] border-collapse text-left">
                                             <thead>
                                                 <tr className="text-4xs uppercase tracking-wide text-text-muted">
-                                                    {showNodeCol && <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColMachine')}</th>}
-                                                    <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColSlot')}</th>
-                                                    <th className="py-1 pr-2 font-medium">{t('meshGraph.blueprint.schedColParallel')}</th>
-                                                    <th className="py-1 font-medium">{t('meshGraph.blueprint.schedColStatus')}</th>
+                                                    {showNodeCol && <th className="py-1 pr-2 font-medium">{t('mesh.blueprint.schedColMachine')}</th>}
+                                                    <th className="py-1 pr-2 font-medium">{t('mesh.blueprint.schedColSlot')}</th>
+                                                    <th className="py-1 pr-2 font-medium">{t('mesh.blueprint.schedColParallel')}</th>
+                                                    <th className="py-1 font-medium">{t('mesh.blueprint.schedColStatus')}</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -602,8 +602,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                                                 <td className="py-1">
                                                                     <span className="flex items-center gap-1">
                                                                         {statusBadge(row)}
-                                                                        {quotaGated && <span className="rounded bg-red-500/10 px-1.5 py-px text-3xs text-red-400" title={row.quotaOutcome}>{t('meshGraph.blueprint.schedQuotaGated')}</span>}
-                                                                        {row.target && <span className="text-3xs text-text-muted" title={t('meshGraph.blueprint.schedTargetWorktreeTitle')}>{row.target}</span>}
+                                                                        {quotaGated && <span className="rounded bg-red-500/10 px-1.5 py-px text-3xs text-red-400" title={row.quotaOutcome}>{t('mesh.blueprint.schedQuotaGated')}</span>}
+                                                                        {row.target && <span className="text-3xs text-text-muted" title={t('mesh.blueprint.schedTargetWorktreeTitle')}>{row.target}</span>}
                                                                     </span>
                                                                 </td>
                                                             </tr>

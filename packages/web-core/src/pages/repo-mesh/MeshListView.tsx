@@ -92,10 +92,10 @@ export function MeshListView({
     return (
         <AppPage
             icon={<IconMesh />}
-            title={t('repoMesh.list.title')}
-            subtitle={t('repoMesh.list.count', { count: meshes.length })}
+            title={t('mesh.list.title')}
+            subtitle={t('mesh.list.count', { count: meshes.length })}
             widthClassName="max-w-5xl"
-            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>{t('repoMesh.list.createMesh')}</button>}
+            actions={<button className="btn btn-primary btn-sm" onClick={onToggleCreate}>{t('mesh.list.createMesh')}</button>}
         >
             {error && <AlertBanner variant="error" onDismiss={onDismissError} className="mb-4">{error}</AlertBanner>}
             {createWarning && <AlertBanner variant="warning" onDismiss={onDismissCreateWarning} className="mb-4">{createWarning}</AlertBanner>}
@@ -134,11 +134,11 @@ export function MeshListView({
             )}
 
             {loading ? (
-                <div className="text-sm text-text-muted p-4">{t('repoMesh.list.loading')}</div>
+                <div className="text-sm text-text-muted p-4">{t('mesh.list.loading')}</div>
             ) : meshes.length === 0 ? (
-                <EmptyState icon={<IconMesh />} title={t('repoMesh.list.emptyTitle')}
-                    description={daemons.length > 0 ? t('repoMesh.list.emptyWithDaemons') : t('repoMesh.list.emptyNoDaemons')}
-                    action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>{t('repoMesh.list.createFirst')}</button>} />
+                <EmptyState icon={<IconMesh />} title={t('mesh.list.emptyTitle')}
+                    description={daemons.length > 0 ? t('mesh.list.emptyWithDaemons') : t('mesh.list.emptyNoDaemons')}
+                    action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>{t('mesh.list.createFirst')}</button>} />
             ) : (
                 <div className="flex flex-col gap-2.5">
                     {meshes.map(mesh => (
@@ -151,7 +151,7 @@ export function MeshListView({
                                         <span className="font-bold text-sm">{mesh.name}</span>
                                     </div>
                                     <div className="text-xs text-text-muted flex items-center gap-2">
-                                        <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('repoMesh.list.noRepoIdentity')}</span>
+                                        <span className="font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('mesh.list.noRepoIdentity')}</span>
                                         {(mesh.defaultBranch || (mesh as any).default_branch) && (
                                             <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>
                                         )}
@@ -159,7 +159,7 @@ export function MeshListView({
                                 </div>
                                 <div className="text-right text-2xs text-text-muted shrink-0 ml-4">
                                     <div>{new Date(mesh.createdAt || (mesh as any).created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                                    <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} {t('repoMesh.list.nodesSuffix')}</div>
+                                    <div className="text-text-muted/60">{mesh.nodes?.length ?? (mesh as any).nodeCount ?? 0} {t('mesh.list.nodesSuffix')}</div>
                                 </div>
                             </div>
                         </button>
