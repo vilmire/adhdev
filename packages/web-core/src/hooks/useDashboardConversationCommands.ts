@@ -6,6 +6,13 @@ import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-
 import { isConversationGenerating } from '../components/dashboard/DashboardMobileChatShared'
 import type { PendingLocalMessage } from '../components/dashboard/conversation-message-snapshot'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
+import {
+    createPendingQueuedMessageId,
+    readPendingQueuedMessages,
+    writePendingQueuedMessages,
+    MAX_PENDING_QUEUED_MESSAGES,
+    type PendingQueuedMessage,
+} from '../utils/pendingQueuedMessages'
 
 /**
  * The full conversation-command surface, passed to render sites as ONE required
@@ -28,8 +35,25 @@ export interface DashboardConversationCommands {
     sendFeedbackMessage: string | null
     /** True when the last send was PARKED by the daemon rather than submitted. */
     lastSendQueued: boolean
-    /** Optimistic local bubble; feed to `withPendingLocalMessage`. */
+    /**
+     * Newest optimistic local bubble.
+     *
+     * ★ Retained for the surfaces that only ever showed one. The AUTHORITY is
+     * `pendingLocalMessages` below — this is its last element, kept so a caller
+     * that has not been migrated still renders something correct rather than
+     * nothing.
+     */
     pendingLocalMessage: PendingLocalMessage | null
+    /**
+     * (MULTI-QUEUE) Every body still waiting, oldest first, restored from
+     * localStorage on mount. Feed to `withPendingLocalMessages`.
+     *
+     * ★ This replaced a single `useState` slot. The daemon's own queue
+     * (`FsmDriver.pendingSends`) has always been a FIFO array, so a second send
+     * while the agent was busy parked correctly in the daemon but OVERWROTE the
+     * one UI slot — the first message vanished from screen while still queued.
+     */
+    pendingLocalMessages: PendingQueuedMessage[]
     isFocusingAgent: boolean
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     /**
@@ -42,7 +66,16 @@ export interface DashboardConversationCommands {
      * invoked it, and every adapter fell through to a plain send. The button was
      * wired to nothing.
      */
-    handleSendNowQueued: () => Promise<boolean>
+    handleSendNowQueued: (pendingId?: string) => Promise<boolean>
+    /**
+     * (QUEUED-SEND-CANCEL) Drop ONE waiting body — the owner changed their mind
+     * before the agent ever saw it.
+     *
+     * Addressed by entry id so cancelling the second queued message can never
+     * remove the first. Clears BOTH the local store and the daemon's FIFO; see
+     * the handler for why a local-only removal would be a lie.
+     */
+    handleCancelQueued: (pendingId: string) => Promise<boolean>
     handleRelaunch: () => void
     handleModalButton: (button: string) => void
     handleFocusAgent: () => Promise<void>
@@ -129,6 +162,13 @@ export function unwrapCommandResult(raw: any): any {
  * IS accepted; it is waiting for the agent to stop generating.
  */
 export const QUEUED_SEND_MESSAGE = 'Waiting to send — the agent is still working.'
+
+/**
+ * Shown when a cancel lost the race: the daemon had already taken the body out
+ * of its queue and written it to the agent. Phrased as a fact about what
+ * happened, not as an error the owner can retry.
+ */
+export const CANCEL_QUEUED_TOO_LATE_MESSAGE = 'Too late to cancel — this message was already sent to the agent.'
 
 export function isQueuedSendResult(res: any): boolean {
     if (!res || typeof res !== 'object') return false
@@ -242,27 +282,61 @@ export function useDashboardConversationCommands({
     const [isSendingChat, setIsSendingChat] = useState(false)
     const [sendFeedbackMessage, setSendFeedbackMessage] = useState<string | null>(null)
     const [lastSendQueued, setLastSendQueued] = useState(false)
-    // (OPTIMISTIC-USER-BUBBLE) The owner's message, rendered locally from the
+    // (OPTIMISTIC-USER-BUBBLE + MULTI-QUEUE) Every body the owner submitted that
+    // has not yet been echoed back, oldest first. Rendered locally from the
     // moment it is submitted until the daemon's echo carries it back. See
-    // `withPendingLocalMessage` for the dedup contract that retires it.
-    const [pendingLocalMessage, setPendingLocalMessage] = useState<PendingLocalMessage | null>(null)
+    // `withPendingLocalMessages` for the dedup contract that retires them.
+    const [pendingLocalMessages, setPendingLocalMessages] = useState<PendingQueuedMessage[]>([])
     const sendInFlightRef = useRef(false)
     const lastSendRef = useRef<RecentSendAttempt | null>(null)
-    // SEND-NOW reads the parked bubble through a ref rather than closing over
-    // the state, so `handleSendNowQueued` keeps a stable identity across the
-    // queued flip. The bubble's memo comparator compares the handler by
-    // reference (chatMessageBubbles.tsx), so a new function every render would
-    // re-render every row on every tick.
-    const pendingLocalMessageRef = useRef<PendingLocalMessage | null>(null)
-    pendingLocalMessageRef.current = pendingLocalMessage
+    // SEND-NOW / CANCEL read the parked queue through a ref rather than closing
+    // over the state, so the handlers keep a stable identity across the queued
+    // flip. The bubble's memo comparator compares handlers by reference
+    // (chatMessageBubbles.tsx), so a new function every render would re-render
+    // every row on every tick.
+    const pendingLocalMessagesRef = useRef<PendingQueuedMessage[]>([])
+    pendingLocalMessagesRef.current = pendingLocalMessages
+
+    /**
+     * The localStorage bucket for the ACTIVE conversation.
+     *
+     * `tabKey` is the same identity the per-conversation reset below already
+     * used, so a restored queue lands on exactly the tab that queued it.
+     */
+    const pendingStoreKey = activeConv?.tabKey || ''
+    const pendingStoreKeyRef = useRef(pendingStoreKey)
+    pendingStoreKeyRef.current = pendingStoreKey
+
+    /**
+     * ★ Single writer for the pending queue. Every mutation goes through here so
+     * React state and the persisted copy can never drift — drift between "what
+     * is rendered" and "what is remembered" is precisely the class of defect
+     * this change fixes.
+     */
+    const updatePendingMessages = useCallback((
+        updater: (prev: PendingQueuedMessage[]) => PendingQueuedMessage[],
+    ) => {
+        setPendingLocalMessages(prev => {
+            const next = updater(prev)
+            if (next === prev) return prev
+            writePendingQueuedMessages(pendingStoreKeyRef.current, next)
+            return next
+        })
+    }, [])
 
     useEffect(() => {
         setSendFeedbackMessage(null)
         setLastSendQueued(false)
         // Scoped per conversation: a pending bubble belongs to the tab it was
         // typed in and must not follow the user to another session.
-        setPendingLocalMessage(null)
-    }, [activeConv?.tabKey])
+        //
+        // ★ RESTART FIX: rather than clearing to empty, REHYDRATE from the
+        // durable store. On a fresh app start this is the whole repair — the
+        // bodies are still parked in the daemon's FIFO, and this is what puts
+        // them back on screen instead of leaving the owner staring at a
+        // conversation with their message missing.
+        setPendingLocalMessages(pendingStoreKey ? readPendingQueuedMessages(pendingStoreKey) : [])
+    }, [activeConv?.tabKey, pendingStoreKey])
 
     // (QUEUED-SEND-STICKY) Release the parked-send notice when the agent stops
     // generating. Subscribes to the live status so BOTH surfaces that render
@@ -317,14 +391,24 @@ export function useDashboardConversationCommands({
         // full round trip, and on a busy agent the daemon parks the body and
         // the echo waits for the queue to drain. Appending after the await
         // would reproduce exactly the latency this fixes.
-        setPendingLocalMessage({ content: message, sentAt: now })
+        //
+        // ★ APPEND, not replace. The previous single-slot assignment dropped an
+        // already-waiting bubble the moment a second message was sent, even
+        // though the daemon had both parked in its FIFO.
+        const pendingId = createPendingQueuedMessageId(now)
+        updatePendingMessages(prev => [
+            ...prev,
+            { id: pendingId, content: message, sentAt: now },
+        ].slice(-MAX_PENDING_QUEUED_MESSAGES))
 
         try {
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
                 // Nothing was sent, so no echo will ever retire the bubble.
-                setPendingLocalMessage(null)
+                // Remove only THIS entry — other bodies may still be legitimately
+                // parked in the daemon queue.
+                updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
@@ -349,7 +433,9 @@ export function useDashboardConversationCommands({
             // waiting rather than delivered.
             if (isQueuedSendResult(res)) {
                 setLastSendQueued(true)
-                setPendingLocalMessage(prev => (prev ? { ...prev, queued: true } : prev))
+                updatePendingMessages(prev => prev.map(entry => (
+                    entry.id === pendingId ? { ...entry, queued: true } : entry
+                )))
                 setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
                 return true
             }
@@ -375,20 +461,25 @@ export function useDashboardConversationCommands({
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
             // The send failed, so the daemon will never echo this text back.
             // Leaving the optimistic bubble would show a message that was never
-            // delivered as though it had been.
-            setPendingLocalMessage(null)
+            // delivered as though it had been. Scoped to THIS entry so a
+            // concurrent failure cannot wipe bodies that are still queued.
+            updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
             sendInFlightRef.current = false
             setIsSendingChat(false)
         }
-    }, [activeConv, sendDaemonCommand])
+    }, [activeConv, sendDaemonCommand, updatePendingMessages])
 
     /**
      * SEND-NOW. The message is already PARKED in the daemon's driver FIFO
-     * (`pendingLocalMessage.queued`); the user pressed the button inside that
+     * (`pendingLocalMessages[n].queued`); the user pressed the button inside that
      * bubble to stop waiting for the agent to finish on its own.
+     *
+     * ★ Takes the entry id so a multi-entry queue acts on the bubble that was
+     * actually pressed. Omitting it keeps the historical behaviour (act on the
+     * oldest queued entry — the one the daemon will drain next).
      *
      * ★ This does NOT write the body into the generating PTY. That path was
      * retired after measured data loss (oss 6cca365b): the bytes are never
@@ -401,14 +492,18 @@ export function useDashboardConversationCommands({
      * Takes no message argument on purpose: it re-sends the body the bubble is
      * already showing, so the two can never disagree.
      */
-    const handleSendNowQueued = useCallback(async (): Promise<boolean> => {
+    const handleSendNowQueued = useCallback(async (pendingId?: string): Promise<boolean> => {
         if (!activeConv) return false
         if (sendInFlightRef.current) return false
-        const pending = pendingLocalMessageRef.current
+        const queue = pendingLocalMessagesRef.current
+        const pending = pendingId
+            ? queue.find(entry => entry.id === pendingId)
+            : queue.find(entry => entry.queued === true)
         if (!pending || !pending.queued) return false
 
         const message = pending.content.trim()
         if (!message) return false
+        const targetId = pending.id
 
         sendInFlightRef.current = true
         setIsSendingChat(true)
@@ -452,7 +547,9 @@ export function useDashboardConversationCommands({
             // happen.
             if (isQueuedSendResult(res)) {
                 setLastSendQueued(true)
-                setPendingLocalMessage(prev => (prev ? { ...prev, queued: true } : prev))
+                updatePendingMessages(prev => prev.map(entry => (
+                    entry.id === targetId ? { ...entry, queued: true } : entry
+                )))
                 setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
                 return true
             }
@@ -460,7 +557,9 @@ export function useDashboardConversationCommands({
             // Delivered as a real turn: drop the queued badge. The bubble stays
             // until the daemon's echo retires it, exactly as a normal send.
             setLastSendQueued(false)
-            setPendingLocalMessage(prev => (prev ? { ...prev, queued: false } : prev))
+            updatePendingMessages(prev => prev.map(entry => (
+                entry.id === targetId ? { ...entry, queued: false } : entry
+            )))
             setSendFeedbackMessage(null)
             return true
         } catch (e) {
@@ -471,7 +570,75 @@ export function useDashboardConversationCommands({
             sendInFlightRef.current = false
             setIsSendingChat(false)
         }
-    }, [activeConv, sendDaemonCommand])
+    }, [activeConv, sendDaemonCommand, updatePendingMessages])
+
+    /**
+     * (QUEUED-SEND-CANCEL) Withdraw ONE waiting body.
+     *
+     * ★ Why this must reach the daemon, and cannot be a local removal.
+     *
+     * The body is not merely "displayed" as waiting — it is genuinely parked in
+     * `FsmDriver.pendingSends`, and `drainPendingSends()` WILL write it to the
+     * PTY as soon as the agent goes idle. Removing only the local bubble would
+     * produce the worst possible outcome: the owner is told the message is
+     * cancelled, sees it disappear, and then the agent answers it anyway some
+     * time later. So the local entry is dropped only AFTER the daemon confirms
+     * it actually removed the body from its queue.
+     *
+     * The daemon side reuses `claimQueuedSends(text)`, the same primitive the
+     * interrupt path already uses to take a body out of the FIFO.
+     *
+     * ★ Failure is NOT silent. If the daemon cannot find the body — most often
+     * because it already drained and is being answered right now — the bubble
+     * STAYS and the owner is told, rather than being shown a cancellation that
+     * did not happen.
+     */
+    const handleCancelQueued = useCallback(async (pendingId: string): Promise<boolean> => {
+        if (!activeConv || !pendingId) return false
+        const pending = pendingLocalMessagesRef.current.find(entry => entry.id === pendingId)
+        if (!pending) return false
+
+        const message = pending.content.trim()
+
+        // A bubble that was never confirmed as parked has nothing to cancel in
+        // the daemon (the send is still in its round trip, or it failed). Drop
+        // it locally — there is no remote state to contradict.
+        if (!pending.queued) {
+            updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+            return true
+        }
+
+        try {
+            const routeTarget = getRouteTarget(activeConv)
+            if (!routeTarget) {
+                setSendFeedbackMessage('Unable to cancel this message right now.')
+                return false
+            }
+
+            const raw = await sendDaemonCommand(routeTarget, 'cancel_queued_chat', {
+                message,
+                ...getProviderArgs(activeConv),
+            })
+            const res = unwrapCommandResult(raw)
+
+            // `cancelled: 0` means the FIFO no longer held this body — it drained
+            // while the owner was deciding. Keep the bubble: the agent has it.
+            if (res?.success === false || (typeof res?.cancelled === 'number' && res.cancelled === 0)) {
+                setSendFeedbackMessage(CANCEL_QUEUED_TOO_LATE_MESSAGE)
+                return false
+            }
+
+            updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+            // The parked-send notice describes a wait that no longer exists once
+            // nothing is queued.
+            setSendFeedbackMessage(prev => (prev === QUEUED_SEND_MESSAGE ? null : prev))
+            return true
+        } catch (e) {
+            console.warn('Cancel queued send failed', e)
+            setSendFeedbackMessage(getInlineSendFailureMessage(e))
+            return false
+        }
+    }, [activeConv, sendDaemonCommand, updatePendingMessages])
 
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return
@@ -554,14 +721,23 @@ export function useDashboardConversationCommands({
     //
     // The five handlers below are already `useCallback`-stable, so this memo
     // recomputes only when a value the consumers actually render changes.
+    // Compatibility view for surfaces that render only one bubble: the NEWEST
+    // entry. Derived (not separate state) so it can never disagree with the
+    // authoritative array.
+    const pendingLocalMessage = pendingLocalMessages.length > 0
+        ? pendingLocalMessages[pendingLocalMessages.length - 1]
+        : null
+
     return useMemo<DashboardConversationCommands>(() => ({
         isSendingChat,
         sendFeedbackMessage,
         lastSendQueued,
         pendingLocalMessage,
+        pendingLocalMessages,
         isFocusingAgent,
         handleSendChat,
         handleSendNowQueued,
+        handleCancelQueued,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,
@@ -570,9 +746,11 @@ export function useDashboardConversationCommands({
         sendFeedbackMessage,
         lastSendQueued,
         pendingLocalMessage,
+        pendingLocalMessages,
         isFocusingAgent,
         handleSendChat,
         handleSendNowQueued,
+        handleCancelQueued,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,

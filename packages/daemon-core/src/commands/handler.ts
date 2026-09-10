@@ -434,6 +434,11 @@ export class DaemonCommandHandler implements CommandHelpers {
             'read_chat',
             'get_chat_debug_bundle',
             'send_chat',
+            // Cancelling a queued send addresses ONE session's driver FIFO, so it
+            // must fail closed exactly like send_chat when the session is gone —
+            // silently "succeeding" against no session would tell the dashboard a
+            // body was withdrawn that is still parked somewhere else.
+            'cancel_queued_chat',
             'list_chats',
             'new_chat',
             'switch_chat',
@@ -515,6 +520,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'get_chat_debug_bundle': return Chat.handleGetChatDebugBundle(this, args);
             case 'chat_history': return Chat.handleChatHistory(this, args);
             case 'send_chat': return Chat.handleSendChat(this, args);
+            case 'cancel_queued_chat': return Chat.handleCancelQueuedChat(this, args);
             case 'list_chats': return Chat.handleListChats(this, args);
             case 'new_chat': return Chat.handleNewChat(this, args);
             case 'switch_chat': return Chat.handleSwitchChat(this, args);

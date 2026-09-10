@@ -1538,7 +1538,10 @@
         "sendNow": "Send now",
         "sending": "Sending…",
         "sendNowAria": "Send now by interrupting the agent's current turn",
-        "sendNowTitle": "Interrupt the agent's current turn and send this message now. The turn in progress will be lost."
+        "sendNowTitle": "Interrupt the agent's current turn and send this message now. The turn in progress will be lost.",
+        "cancelQueued": "Cancel",
+        "cancelQueuedAria": "Cancel this queued message",
+        "cancelQueuedTitle": "Remove this message from the queue. It will not be sent to the agent."
     },
     "chatPane": {
         "connectingToMachine": "Connecting to your machine",

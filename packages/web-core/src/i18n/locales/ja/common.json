@@ -1538,7 +1538,10 @@
         "sendNow": "今すぐ送信",
         "sending": "送信中…",
         "sendNowAria": "エージェントの現在のターンを中断して今すぐ送信",
-        "sendNowTitle": "エージェントの現在のターンを中断してこのメッセージを今すぐ送信します。進行中のターンは失われます。"
+        "sendNowTitle": "エージェントの現在のターンを中断してこのメッセージを今すぐ送信します。進行中のターンは失われます。",
+        "cancelQueued": "キャンセル",
+        "cancelQueuedAria": "この待機中のメッセージをキャンセル",
+        "cancelQueuedTitle": "このメッセージをキューから削除します。エージェントには送信されません。"
     },
     "chatPane": {
         "connectingToMachine": "マシンに接続中",

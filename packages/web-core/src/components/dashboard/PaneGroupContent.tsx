@@ -56,9 +56,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
         handleRelaunch,
         handleSendChat,
         handleSendNowQueued,
+        handleCancelQueued,
         isSendingChat,
         sendFeedbackMessage,
         pendingLocalMessage,
+        pendingLocalMessages,
         handleFocusAgent,
         isFocusingAgent,
     } = commands
@@ -94,9 +96,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
             ideEntry={ideEntry}
             handleSendChat={handleSendChat}
             handleSendNowQueued={handleSendNowQueued}
+            handleCancelQueued={handleCancelQueued}
             isSendingChat={isSendingChat}
             sendFeedbackMessage={sendFeedbackMessage}
             pendingLocalMessage={pendingLocalMessage}
+            pendingLocalMessages={pendingLocalMessages}
             handleFocusAgent={handleFocusAgent}
             isFocusingAgent={isFocusingAgent}
             actionLogs={actionLogs}
