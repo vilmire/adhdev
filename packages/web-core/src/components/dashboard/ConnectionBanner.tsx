@@ -160,7 +160,7 @@ export default function ConnectionBanner({
             {showDisconnected && (
                 <div className={overlayClassName} style={overlayStyle}>
                     <div
-                        className="pointer-events-auto max-w-[min(720px,calc(100vw-24px))] rounded-2xl border px-3 py-2.5 sm:px-4 sm:py-3 text-[13px] font-semibold flex flex-wrap items-center gap-x-2.5 gap-y-2 justify-center shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
+                        className="pointer-events-auto max-w-[min(720px,calc(100vw-24px))] rounded-2xl border px-3 py-2.5 sm:px-4 sm:py-3 text-xxs font-semibold flex flex-wrap items-center gap-x-2.5 gap-y-2 justify-center shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
                         style={{
                             background: gradients[bannerColor],
                             border: borders[bannerColor],

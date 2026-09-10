@@ -388,7 +388,7 @@ export function MeshDetailView({
                     defaults high — set it via the API only if you genuinely need a
                     mesh-wide ceiling. */}
                 <fieldset className="border-none p-0 m-0">
-                    <legend className="text-[13px] font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
+                    <legend className="text-xxs font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
                     <div className="flex flex-col gap-2">
                         {DISTRIBUTION_OPTIONS.map(opt => {
                             const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
@@ -540,7 +540,7 @@ export function MeshDetailView({
                     description={t('repoMesh.detail.coordinatorPromptDescription')}>
 
                     <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 p-3">
-                        <div className="text-[13px] font-semibold mb-1">{t('repoMesh.detail.thisMesh')}</div>
+                        <div className="text-xxs font-semibold mb-1">{t('repoMesh.detail.thisMesh')}</div>
                         <p className="text-xs text-text-muted mb-3">{t('repoMesh.detail.thisMeshHint', { name: selectedMesh.name })}</p>
 
                         <CoordinatorPromptDefaultPreview

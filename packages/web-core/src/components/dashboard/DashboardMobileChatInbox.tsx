@@ -274,7 +274,7 @@ function DashboardMobileChatItem({
                     type="button"
                 >
                     <div className="flex items-center gap-2 pr-[124px]">
-                        <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
+                        <span className={`text-[15px] leading-[22px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                     </div>
                     <div className={`text-xs font-medium truncate flex items-center ${metaClassName}`}>
                         <span className="truncate">{metaText}</span>
@@ -301,7 +301,7 @@ function DashboardMobileChatItem({
                             </>
                         )}
                     </div>
-                    <div className={`mt-0.5 truncate text-[13px] ${previewClassName}`}>
+                    <div className={`mt-0.5 truncate text-xxs ${previewClassName}`}>
                         {item.preview}
                     </div>
                 </button>
@@ -564,7 +564,7 @@ export default function DashboardMobileChatInbox({
                                         </span>
                                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                                             <div className="flex items-center justify-between gap-2">
-                                                <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
+                                                <span className="text-[15px] leading-[22px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
                                                 <span className="flex items-center gap-2 text-2xs font-medium text-text-muted shrink-0">
                                                     <MobileGeneratingIndicator
                                                         count={machine.generatingCount}
@@ -575,15 +575,15 @@ export default function DashboardMobileChatInbox({
                                             </div>
                                             <div className="text-xs font-medium text-text-secondary truncate">{machine.subtitle}</div>
                                             {machine.total > 0 ? (
-                                                <div className="text-[13px] text-text-muted mt-0.5">
+                                                <div className="text-xxs text-text-muted mt-0.5">
                                                     {t('mobileInbox.chatCount', { count: machine.total })}{machine.unread > 0 ? t('mobileInbox.unreadSuffix', { count: machine.unread }) : ''}{machine.generatingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: machine.generatingCount }) : ''}
                                                 </div>
                                             ) : machine.generatingCount > 0 ? (
-                                                <div className="text-[13px] text-accent-primary mt-0.5 font-medium">
+                                                <div className="text-xxs text-accent-primary mt-0.5 font-medium">
                                                     {t('mobileInbox.generatingCount', { count: machine.generatingCount })}
                                                 </div>
                                             ) : (
-                                                <div className="text-[13px] text-text-muted mt-0.5 italic opacity-70">
+                                                <div className="text-xxs text-text-muted mt-0.5 italic opacity-70">
                                                     {t('mobileInbox.noActiveChats')}
                                                 </div>
                                             )}
@@ -762,7 +762,7 @@ export default function DashboardMobileChatInbox({
                                             label={t('mobileInbox.generatingCount', { count: hiddenGeneratingCount })}
                                         />
                                     </div>
-                                    <div className="mt-0.5 text-[13px] text-text-muted">
+                                    <div className="mt-0.5 text-xxs text-text-muted">
                                         {t('mobileInbox.collapsedCount', { count: hiddenConversations.length })}
                                         {hiddenGeneratingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: hiddenGeneratingCount }) : ''}
                                     </div>

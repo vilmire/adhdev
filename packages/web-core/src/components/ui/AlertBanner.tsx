@@ -28,7 +28,7 @@ const VARIANT_ICONS: Record<AlertVariant, typeof IconInfo> = {
 export function AlertBanner({ variant, children, onDismiss, className }: AlertBannerProps) {
     return (
         <div className={cn(
-            "flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-[13px]",
+            "flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xxs",
             VARIANT_STYLES[variant],
             className
         )}>

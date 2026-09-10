@@ -264,7 +264,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                                                 />
                                                 <ProviderLogo type={p.type} label={p.displayName ?? p.type} size={18} className="shrink-0" />
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="text-[13px] font-medium text-text-primary truncate">{p.displayName}</div>
+                                                    <div className="text-xxs font-medium text-text-primary truncate">{p.displayName}</div>
                                                     {details && (
                                                         <div className="text-3xs text-text-muted truncate">{details}</div>
                                                     )}

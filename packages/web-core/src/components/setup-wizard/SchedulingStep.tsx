@@ -34,7 +34,7 @@ export default function SchedulingStep({ value, onChange, recommended, disabled 
             {/* Markup mirrors MeshDetailView's distribution radio group so both
                 surfaces read and behave identically. */}
             <fieldset className="border-none p-0 m-0">
-                <legend className="text-[13px] font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
+                <legend className="text-xxs font-medium text-text-secondary mb-2">{t('repoMesh.detail.distribution')}</legend>
                 <div className="flex flex-col gap-2">
                     {DISTRIBUTION_OPTIONS.map(opt => {
                         const selected = value === opt.value

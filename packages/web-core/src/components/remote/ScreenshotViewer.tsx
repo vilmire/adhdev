@@ -85,7 +85,7 @@ export default function ScreenshotViewer({
         </div>
         <p className="text-base">{emptyMessage || t('remote.screenshotViewer.waitingForStream')}</p>
         {connectionState && (
-          <p className="text-[13px] mt-2 opacity-50">{t('remote.screenshotViewer.p2pStatus', { state: connectionState })}</p>
+          <p className="text-xxs mt-2 opacity-50">{t('remote.screenshotViewer.p2pStatus', { state: connectionState })}</p>
         )}
         <style>{`
           @keyframes remote-float {

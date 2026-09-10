@@ -122,7 +122,7 @@ function MachineTabBar({ groups, activeKey, onChange }: { groups: MachineGroup[]
                         role="tab"
                         aria-selected={isActive}
                         onClick={() => onChange(group.key)}
-                        className={`flex items-center gap-2 px-3 py-2.5 text-[13px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
+                        className={`flex items-center gap-2 px-3 py-2.5 text-xxs font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
                             isActive
                                 ? 'border-accent text-accent'
                                 : 'border-transparent text-text-muted hover:text-text-secondary'

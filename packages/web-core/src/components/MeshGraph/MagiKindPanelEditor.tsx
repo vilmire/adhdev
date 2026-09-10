@@ -341,7 +341,7 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
                     return (
                         <div key={kind} className={`${meshTheme.cardClass} rounded-2xl p-4 flex flex-col gap-3`}>
                             <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-[13px] font-semibold ${meshTheme.textPrimary}`}>{t(labelKey)}</span>
+                                <span className={`text-xxs font-semibold ${meshTheme.textPrimary}`}>{t(labelKey)}</span>
                                 <span className={`font-mono text-3xs ${meshTheme.textMuted}`}>{hint}</span>
                                 <span className={`rounded-full border px-2 py-0.5 text-3xs uppercase tracking-[0.14em] ${isBound
                                     ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'

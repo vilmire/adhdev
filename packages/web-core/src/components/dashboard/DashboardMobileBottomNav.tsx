@@ -38,7 +38,7 @@ export default function DashboardMobileBottomNav({
                 return (
                     <button
                         key={key}
-                        className={`min-h-[46px] rounded-[16px] px-3 flex items-center justify-center gap-2.5 text-[13px] font-semibold tracking-tight transition-all border ${
+                        className={`min-h-[46px] rounded-[16px] px-3 flex items-center justify-center gap-2.5 text-xxs font-semibold tracking-tight transition-all border ${
                             isActive 
                                 ? 'bg-surface-primary border-border-default/90 text-text-primary shadow-[0_4px_14px_rgba(15,23,42,0.08)]'
                                 : 'bg-transparent border-transparent text-text-muted hover:text-text-primary'

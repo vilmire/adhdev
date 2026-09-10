@@ -76,7 +76,7 @@ export default function ProviderInstallOptionsModal({
                 role="dialog"
                 aria-modal="true"
             >
-                <div className="text-[13px] font-semibold text-text-primary">
+                <div className="text-xxs font-semibold text-text-primary">
                     {t('machine.installOptions.title', { provider: displayName })}
                 </div>
                 <div className="mt-1 text-2xs text-text-muted">
