@@ -53,6 +53,8 @@ import {
     uninstallMeshTerminationObserver,
 } from '../mesh/mesh-termination-bridge.js';
 import { currentRefineExecutorBootId } from '../mesh/mesh-refine-executor-liveness.js';
+import { SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS } from '../providers/spec/fsm-driver.js';
+import { scheduleComposerResidueSweep, type ComposerResidueSweepHandle } from './composer-residue-sweep.js';
 import { applyProcessHardening } from './process-hardening.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
 import { installProviderProcessShim } from '../providers/sdk/v1/sandbox/require-whitelist.js';
@@ -221,6 +223,11 @@ export interface DaemonComponents {
     // Verified-channel staleness probe (24h read-only listing → dashboard
     // badge data). Stopped during shutdownDaemonComponents.
     providerStalenessProbe?: { stop(): void };
+    // ENTER-LOSS layer ③: one-shot boot sweep that checks restored idle
+    // sessions' composers for the stranded body of a drained notification
+    // (see boot/composer-residue-sweep.ts). Stopped during shutdown so it can
+    // never fire into a tearing-down daemon.
+    composerResidueSweep?: ComposerResidueSweepHandle;
     // EVENT-LOOP-LAG-HEARTBEAT: periodic perf_hooks event-loop-lag sampler.
     // Emits a WARN naming the blackout duration when the whole process was
     // frozen (machine saturation) — turning "handler slow vs process frozen"
@@ -1309,6 +1316,13 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // pending when this daemon last exited (expired ones are audited + dropped).
     setImmediate(() => router.resumeDeferredRestartsOnStartup());
 
+    // 14. ENTER-LOSS layer ③: one-shot composer-residue sweep, delayed past the
+    // hosts' restoreHostedSessions + screen replay + FSM settle. Detects (and,
+    // strictly gated, recovers) a notification body stranded in a session-host
+    // composer by a daemon death inside the submit window — the path the
+    // shutdown drain gate (layer ①, step 2.5 of shutdown) cannot cover.
+    components.composerResidueSweep = scheduleComposerResidueSweep(components);
+
     return components;
 }
 
@@ -1352,11 +1366,13 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         meshReconcileLoop, quotaRefreshLoop, quotaEventRefresh, providerStalenessProbe,
         eventLoopMonitor, seqscribeNode, seqscribeProbe, seqscribeParityLoop,
         seqscribeCollector, seqscribeFleetStatusPeerView, transcriptReplicaStore,
+        composerResidueSweep,
     } = components;
 
     // 1. Stop timers
     poller.stop();
     cdpInitializer.stop();
+    try { composerResidueSweep?.stop(); } catch { /* noop */ }
     try { eventLoopMonitor?.stop(); } catch { /* noop */ }
     try { meshReconcileLoop?.stop(); } catch { /* noop */ }
     try { quotaRefreshLoop?.stop(); } catch { /* noop */ }
@@ -1415,6 +1431,20 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
             await agentStreamManager.dispose(cdpManagers);
         }
     } catch (e: any) { LOG.warn('Shutdown', `AgentStream dispose: ${e?.message}`); }
+
+    // 2.5 ENTER-LOSS layer ①: wait (bounded) for any in-flight submit — a message
+    // body already written to a PTY whose submit key has not yet been confirmed —
+    // before the teardown below clears the submit timers. Without this, a daemon
+    // upgrade/restart landing inside the large-body submit window (body write →
+    // ≥1800ms delayed CR) silently strands the body in the session-host composer
+    // (2026-09-10 incident: 10,937 chars stranded 1h42m, then merge-submitted with
+    // the owner's next input). No-op (zero wait) when nothing is in flight.
+    // The ceiling and its derivation live on SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS.
+    // LIMITATION: graceful shutdown only — SIGKILL/crash paths never run this,
+    // which is what the boot-time composer-residue sweep (layer ③) backstops.
+    try {
+        await cliManager.drainInFlightSubmits(SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS);
+    } catch (e: any) { LOG.warn('Shutdown', `Submit-drain gate error (proceeding): ${e?.message || e}`); }
 
     // 3. Detach CLIs (persistent runtimes survive daemon restarts)
     try { cliManager.detachAll(); } catch { /* noop */ }

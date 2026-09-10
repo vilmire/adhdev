@@ -33,6 +33,7 @@ import { ProviderLoader } from '../providers/provider-loader.js';
 import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
+import { drainInFlightSubmits, type SubmitDrainResult } from './cli-manager-submit-drain.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
@@ -1337,6 +1338,14 @@ export class DaemonCliManager {
     shutdownAll(): void {
         for (const adapter of this.adapters.values()) adapter.shutdown();
         this.adapters.clear();
+    }
+
+    /** ENTER-LOSS layer ① — shutdown drain gate for in-flight submits (the
+     *  2026-09-10 stranded-composer incident). Awaited by
+     *  shutdownDaemonComponents BEFORE detachAll(); immediate no-op when nothing
+     *  is in flight. Rationale + limitation: ./cli-manager-submit-drain.ts. */
+    drainInFlightSubmits(timeoutMs: number): Promise<SubmitDrainResult> {
+        return drainInFlightSubmits(this.adapters, timeoutMs);
     }
 
     detachAll(): void {

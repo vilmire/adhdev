@@ -320,6 +320,31 @@ export class SpecCliAdapter implements CliAdapter {
         return this.driver.claimQueuedSends(text);
     }
 
+    /** ENTER-LOSS layer ① — see CliAdapter.hasInFlightSubmit. */
+    hasInFlightSubmit(): boolean {
+        if (typeof this.driver.hasInFlightSubmit !== 'function') return false;
+        return this.driver.hasInFlightSubmit();
+    }
+
+    /** ENTER-LOSS layer ① — see CliAdapter.whenSubmitDrained. */
+    whenSubmitDrained(timeoutMs: number): Promise<boolean> {
+        if (typeof this.driver.whenSubmitDrained !== 'function') return Promise.resolve(true);
+        return this.driver.whenSubmitDrained(timeoutMs);
+    }
+
+    /** ENTER-LOSS layer ③ — scrollback-inclusive screen text for the boot-time
+     *  composer-residue sweep. Falls back to the viewport when the driver has no
+     *  scrollback surface (test doubles). Same security posture as
+     *  getTerminalScreenSnapshot: raw terminal text — callers must never log it. */
+    getScrollbackText(): string {
+        try {
+            if (typeof this.driver.snapshotWithScrollback === 'function') {
+                return this.driver.snapshotWithScrollback() || '';
+            }
+            return this.driver.snapshot() || '';
+        } catch { return ''; }
+    }
+
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
         // A strong live Kimi auth/billing marker outranks generic process liveness.

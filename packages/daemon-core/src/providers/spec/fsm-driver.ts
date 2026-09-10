@@ -51,7 +51,6 @@ import { shouldCollectTraceCategory } from '../../logging/debug-config.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
     WIN32_PTY_WRITE_CHUNK_GAP_MS,
-    chunkPreservingSurrogates as chunkPreservingSurrogatesShared,
 } from '../../cli-adapters/pty-write-chunking.js';
 
 // ── Shared driver types (formerly in driver.ts) ───────────────────────────
@@ -210,6 +209,27 @@ export interface ISpecDriver {
      * verdict of `signal` conditions exclusively; it cannot gate a transition.
      */
     setSignalObservation?(snapshot: SignalSnapshot | null): void;
+    /**
+     * ENTER-LOSS shutdown drain gate (2026-09-10 incident, layer ①). True while a
+     * message body has been written to the PTY but its submit key has not yet been
+     * confirmed (echo-gate waiting, resend loop running, chunked body still being
+     * written, or a queued-send drain about to write). Optional so test doubles need
+     * not provide it; callers typeof-guard and treat absence as "nothing in flight".
+     */
+    hasInFlightSubmit?(): boolean;
+    /**
+     * ENTER-LOSS layer ①: resolve once no submit is in flight, or after `timeoutMs`
+     * — whichever comes first. Resolves `true` when drained, `false` on timeout
+     * (the caller must log and proceed; never wait unboundedly).
+     */
+    whenSubmitDrained?(timeoutMs: number): Promise<boolean>;
+    /**
+     * ENTER-LOSS layer ③ (composer-residue sweep): scrollback-inclusive screen
+     * text, so a tall residue body whose head scrolled off-viewport can still be
+     * integrity-checked against the ledger original. Optional — test doubles and
+     * non-FSM drivers may omit it; callers fall back to snapshot().
+     */
+    snapshotWithScrollback?(): string;
 }
 
 export interface SpecDriverOpts {
@@ -264,13 +284,6 @@ export interface SpecDriverOpts {
     removeSpawnArgs?: string[];
 }
 
-function countNewlines(s: string): number {
-    let n = 0;
-    for (let i = 0; i < s.length; i += 1) if (s.charCodeAt(i) === 10) n += 1;
-    return n;
-}
-
-const SUBMIT_DELAY_FLOOR_MS = 200;
 /** No-output escape hatch for spawn priming. Live agy startup output arrived at
  *  +335ms / +612ms; 2s is >3x the slower observation while still bounding a
  *  focus-gated startup cycle to a short, human-visible pause. */
@@ -395,179 +408,36 @@ const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 const WIN32_ECHO_PROBE_CHARS = 16;
 const WIN32_ECHO_MAX_WAIT_MS = 20_000;
 
-// ── POSIX-ENTER-DROP (2026-08-23, grok-cli/darwin) ───────────────────────────
-//
-// Live defect: a ~several-KB coordinator brief was injected into a grok-cli
-// session and the submit CR never took — the body sat unsent in the composer
-// until the owner pressed Enter by hand. Coordinator-side the session read
-// `runtimeInputAck: true`, 1 user message, 0 assistant messages, status
-// `generating` — i.e. a SILENT submit failure that looks like healthy work.
-//
-// Root cause: the verification machinery above (echo-gate → resend-until-observed)
-// was gated on `process.platform === 'win32'`. Every POSIX send took the blind
-// branch in actuallySendMessage: write the whole body in ONE send_keys, then fire
-// the CR from a bare setTimeout(beforeSubmit). That timer was NOT a function of
-// body size — resolveSubmitDelayMs scaled on newline COUNT only — so a multi-KB
-// single-paragraph body (few newlines) scored the 200ms floor. On a TUI that is
-// still ingesting and re-rendering kilobytes of pasted text, a CR at 200ms is
-// absorbed by the composer as part of the paste rather than acting as submit.
-//
-// Why grok and not claude/kimi on the same day: this is a race, not a per-provider
-// bug. Its margin is (echo+render time) vs (a fixed 200ms). grok's manifest asks
-// for 1200ms via `sendDelayMs`/`submitStrategy: wait_for_echo`, but BOTH fields were
-// dead on the spec path — they were only read by cli-adapters/provider-cli-config.ts,
-// which belonged to the legacy ProviderCliAdapter engine deleted in 48e5ed1a. kimi
-// and opencode happen to carry delay_ms_before_submit: 1200 in their SPEC (the field
-// that is still live), which is why they clear the same payload; grok/claude/codex/
-// antigravity ship 200 and are all exposed. So the fix must be platform-general and
-// provider-general, not a grok special case.
-//
-// UPDATE (MANIFEST-SEND-DELAY): `sendDelayMs` is no longer dead — route.ts now threads
-// it in as SpecDriverOpts.manifestSendDelayMs and resolveSubmitDelayMs folds it into
-// its max(), so grok's declared 1200 is finally the value it runs at. `submitStrategy`
-// is deliberately still not consulted; see resolveEchoConfirmPolicy below for why
-// wiring it would be either a no-op or a regression.
-//
-// Fix: the win32 gate is not win32-specific in nature — it verifies an EFFECT
-// (body echoed, then agent left the composer) instead of guessing a duration. It is
-// now shared by both platforms for bodies at or above VERIFIED_SUBMIT_MIN_CHARS.
-// Below that threshold the legacy immediate path is kept verbatim so the overwhelming
-// majority of sends ("y", "continue", a one-line question) are byte-for-byte
-// unchanged and pay ZERO added latency — the over-correction guard the owner asked
-// for. Above it we trade a few hundred ms for a confirmed submit, which is exactly
-// the owner's stated preference: "입력이 늦는 것보단 확실하게 동작하는 게 더 중요함."
-//
-// The threshold is deliberately well below the observed failure size (thousands of
-// chars) and well above an interactive one-liner. 512 chars is larger than any
-// realistic hand-typed reply but far smaller than any pasted brief.
-export const VERIFIED_SUBMIT_MIN_CHARS = 512;
-
-/** True when `text` is large enough that the blind timed CR is unsafe and the
- *  echo-verified submit path should be used. Platform-independent: the win32
- *  path always verifies (its ConPTY failure modes are worse), POSIX verifies
- *  only from the threshold up. */
-export function shouldUseVerifiedSubmit(text: string, platform: NodeJS.Platform = process.platform): boolean {
-    if (platform === 'win32') return true;
-    return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
-}
-
-/**
- * MANIFEST-SUBMIT-STRATEGY — why the manifest's `submitStrategy` is NOT wired to
- * the echo-gate, decided deliberately rather than overlooked.
- *
- * `submitStrategy: 'wait_for_echo'` means "confirm the text echoed before pressing
- * Enter". That is precisely what scheduleVerifiedSubmit's echo-gate does, and since
- * d7332b84 it runs unconditionally for every body at/above VERIFIED_SUBMIT_MIN_CHARS
- * on BOTH platforms. So the two mechanisms are not complementary — they are the same
- * guarantee, one declared and one implemented. Wiring the declaration on top yields:
- *
- *  - 'wait_for_echo' → a NO-OP. All 8 shipped manifests declare exactly this, and the
- *    gate they are asking for is already running for them.
- *  - 'immediate'     → a REGRESSION. It would let a manifest switch OFF the echo
- *    verification that d7332b84 added to fix a silent submit failure — reintroducing
- *    that defect for any provider carrying the schema's default. Note the JSON Schema
- *    defaults this field to "immediate", so honouring it as an off-switch would break
- *    every out-of-tree provider that simply omits the field.
- *
- * The safety property is therefore: echo verification is decided by BODY SIZE and
- * PLATFORM (facts about the risk), never by provider self-declaration. This function
- * exists to make that contract explicit and testable — it maps any declared strategy
- * to whether verification may be skipped, and the answer is always "no".
- */
-export function resolveEchoConfirmPolicy(
-    _submitStrategy?: 'wait_for_echo' | 'immediate',
-): { mayDisableEchoConfirm: false } {
-    return { mayDisableEchoConfirm: false };
-}
-
-// FIX-B-v2 — how a newline-bearing win32 body's OWN embedded newlines are written
-// (see concern (B) above). 'paste' (default) wraps the body in a bracketed-paste so
-// the Ink composer absorbs the whole thing as text; 'soft_newline' rewrites each
-// embedded newline as a non-submitting Shift+Enter. Whether THIS ConPTY honors
-// bracketed-paste can only be confirmed by the live deploy A/B (we cannot A/B it via
-// delegation — win32 truncates any newline-bearing task), so both modes ship and the
-// fallback is selectable at runtime via ADHDEV_WIN32_SUBMIT_MODE.
-export type Win32SubmitMode = 'paste' | 'soft_newline';
-const WIN32_BRACKETED_PASTE_OPEN = '\x1b[200~';
-const WIN32_BRACKETED_PASTE_CLOSE = '\x1b[201~';
-// Platform-agnostic aliases: the same bracketed-paste region is used on POSIX
-// for image-bearing bodies (see actuallySendMessage's bracketedPaste branch).
-const BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
-const BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
-// Non-submitting soft-newline for the claude-cli Ink composer. The spec
-// (cli/claude-cli/specs/4.0.json) declares no soft-newline keycode, so we use the
-// CSI-u encoding of Shift+Enter (modifyOtherKeys form: keycode 13 = Enter, modifier
-// 2 = Shift). This inserts a literal newline into the composer WITHOUT submitting,
-// unlike a bare CR (\r) which is reserved for the single real submit via (A).
-const WIN32_SOFT_NEWLINE = '\x1b[27;2;13~';
-
-export function resolveWin32SubmitMode(env: NodeJS.ProcessEnv = process.env): Win32SubmitMode {
-    return env.ADHDEV_WIN32_SUBMIT_MODE === 'soft_newline' ? 'soft_newline' : 'paste';
-}
-
-/** Collapse a string to its non-whitespace characters for echo comparison: the
- *  composer wraps, indents, and prefixes the body (with the `❯ ` prompt), so a raw
- *  substring test against the rendered screen fails. Stripping all whitespace makes
- *  "❯ hello world" reliably contain the probe "helloworld". */
-function normalizeForEcho(s: string): string {
-    return s.replace(/\s+/g, '');
-}
-
-/**
- * The opening wait before the submit key, in ms.
- *
- * Three inputs, combined with max() so no source can shorten another:
- *  - `specBeforeSubmit` — the spec's `send_message.delay_ms_before_submit`.
- *  - `manifestSendDelayMs` — the provider manifest's `sendDelayMs` (MANIFEST-SEND-DELAY).
- *    Previously dead on this path; see SpecDriverOpts.manifestSendDelayMs.
- *  - the size-derived floor+bonus below.
- *
- * max() rather than precedence is deliberate: the size bonus exists because a
- * multi-KB body needs more time than any static declaration anticipated, so a
- * static manifest value must not be able to undercut it. Equally, a manifest that
- * asks for longer than the spec wins. Providers that declare nothing are byte-for-byte
- * unchanged, since an absent value contributes 0 to the max.
- */
-export function resolveSubmitDelayMs(
-    specBeforeSubmit: number | undefined,
-    text: string,
-    manifestSendDelayMs?: number,
-): number {
-    const lines = countNewlines(text);
-    const linesBonus = Math.min(800, lines * 80);
-    // LENGTH bonus (POSIX-ENTER-DROP). The line-count bonus alone misses the exact
-    // shape that failed live: a MULTI-KILOBYTE body on FEW lines (a pasted task
-    // brief is one long wrapped paragraph). Such a body scored only the 200ms floor
-    // while taking far longer than that to stream through the PTY and echo into the
-    // composer, so the CR fired mid-arrival. Length is the dimension that actually
-    // predicts echo time, so it gets its own bonus — capped, because the echo-gate
-    // (scheduleVerifiedSubmit) is what guarantees correctness; this only sets a
-    // sane opening wait before the gate starts polling.
-    const lengthBonus = Math.min(800, Math.floor(text.length / 1000) * 200);
-    const spec = typeof specBeforeSubmit === 'number' && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
-    // Guard against a hostile/typo'd manifest: NaN and Infinity would poison the max
-    // (NaN silently, Infinity by hanging the send), so only finite positives count.
-    const manifest = typeof manifestSendDelayMs === 'number'
-        && Number.isFinite(manifestSendDelayMs)
-        && manifestSendDelayMs > 0
-        ? manifestSendDelayMs
-        : 0;
-    return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
-}
-
-/** Re-export of the shared surrogate-safe splitter so existing imports of
- *  `chunkPreservingSurrogates` from this module keep working. The implementation
- *  lives in ../../cli-adapters/pty-write-chunking (originally shared with the
- *  legacy adapter engine, deleted in 48e5ed1a). */
-export const chunkPreservingSurrogates = chunkPreservingSurrogatesShared;
-
-export function guessExt(mime: string): string {
-    if (/png/i.test(mime)) return '.png';
-    if (/jpe?g/i.test(mime)) return '.jpg';
-    if (/gif/i.test(mime)) return '.gif';
-    if (/webp/i.test(mime)) return '.webp';
-    return '.bin';
-}
+// Submit policy (thresholds, delay resolution, win32 paste/newline encoding,
+// echo normalization, drain ceiling) was pure-moved to ./submit-policy.ts
+// (file-size gate). Re-exported below so existing imports from this module
+// keep working; the stateful consumers (scheduleVerifiedSubmit, writeWin32Body,
+// the drain gate) remain in this file.
+import {
+    BRACKETED_PASTE_OPEN,
+    BRACKETED_PASTE_CLOSE,
+    WIN32_BRACKETED_PASTE_OPEN,
+    WIN32_BRACKETED_PASTE_CLOSE,
+    WIN32_SOFT_NEWLINE,
+    chunkPreservingSurrogates,
+    guessExt,
+    normalizeForEcho,
+    resolveSubmitDelayMs,
+    resolveWin32SubmitMode,
+    shouldUseVerifiedSubmit,
+} from './submit-policy.js';
+export {
+    SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS,
+    VERIFIED_SUBMIT_MIN_CHARS,
+    chunkPreservingSurrogates,
+    guessExt,
+    normalizeForEcho,
+    resolveEchoConfirmPolicy,
+    resolveSubmitDelayMs,
+    resolveWin32SubmitMode,
+    shouldUseVerifiedSubmit,
+} from './submit-policy.js';
+export type { Win32SubmitMode } from './submit-policy.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -668,6 +538,11 @@ export class FsmDriver implements ISpecDriver {
      *  lastSubmitUnconfirmed() so a supervisor can distinguish "agent is thinking"
      *  from "the prompt was never actually submitted". */
     private submitUnconfirmed = false;
+    /** ENTER-LOSS layer ①: the short-body / perChar paths' submit-key timer.
+     *  Previously a bare setTimeout — invisible to shutdown() (a CR could fire
+     *  into a killed PTY) and to the drain gate (a body written with its CR
+     *  still scheduled did not count as in flight). Tracked so both see it. */
+    private plainSubmitTimer: ReturnType<typeof setTimeout> | null = null;
 
     private currentEval: CurrentEval | null = null;
     private stateHistory: HistoryEntry[] = [];
@@ -942,8 +817,16 @@ export class FsmDriver implements ISpecDriver {
         this.spawnPrimeAwaitingOutput = false;
         this.spawnPrimePending = false;
         this.flushStallRefocusLogSummary();
+        // ENTER-LOSS layer ① scope note: clearing these timers DROPS any submit
+        // still in flight — which is exactly why shutdownDaemonComponents runs
+        // the drain gate (cliManager.drainInFlightSubmits) BEFORE the teardown
+        // that reaches here. The gate only covers the graceful shutdown path: a
+        // SIGKILL / crash / power loss never runs it (nor this method), which is
+        // why the boot-time composer-residue sweep (layer ③) exists as the
+        // backstop for those paths.
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
+        if (this.plainSubmitTimer) { clearTimeout(this.plainSubmitTimer); this.plainSubmitTimer = null; }
         if (this.win32ModalConfirmTimer) { clearTimeout(this.win32ModalConfirmTimer); this.win32ModalConfirmTimer = null; }
         // SEND-OVERLAP: drop the queued-send drain and its backlog — a torn-down
         // driver must never write a queued body into a dead PTY.
@@ -1788,6 +1671,54 @@ export class FsmDriver implements ISpecDriver {
         return this.submitUnconfirmed;
     }
 
+    /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
+     *  tracked timer so the shutdown drain gate can see it and shutdown() can
+     *  cancel it instead of letting it fire into a killed PTY. */
+    private schedulePlainSubmit(submitKey: string, delayMs: number): void {
+        if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
+        this.plainSubmitTimer = setTimeout(() => {
+            this.plainSubmitTimer = null;
+            this.adapter.send_keys(submitKey);
+        }, delayMs);
+    }
+
+    /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
+     *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
+     *  the body (or part of it) is in the composer and its submit key has not yet
+     *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
+     *  written yet — the composer holds nothing of theirs; they are discarded with
+     *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
+     *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
+     *  would hold shutdown for a whole turn boundary, not a submit). */
+    hasInFlightSubmit(): boolean {
+        return this.win32SubmitTimer !== null
+            || this.win32WriteTimer !== null
+            || this.plainSubmitTimer !== null
+            || this.pendingSendDrainTimer !== null;
+    }
+
+    /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
+     *  than callback-wiring: the four timers above re-arm each other across
+     *  several phases (write → echo-gate → resend net) and a poll is the only
+     *  join point that needs no knowledge of which phase is active. */
+    whenSubmitDrained(timeoutMs: number): Promise<boolean> {
+        if (!this.hasInFlightSubmit()) return Promise.resolve(true);
+        const deadline = Date.now() + Math.max(0, timeoutMs);
+        return new Promise((resolve) => {
+            const poll = (): void => {
+                if (!this.hasInFlightSubmit()) { resolve(true); return; }
+                if (Date.now() >= deadline) { resolve(false); return; }
+                setTimeout(poll, 100);
+            };
+            setTimeout(poll, 100);
+        });
+    }
+
+    /** ENTER-LOSS layer ③ — see ISpecDriver.snapshotWithScrollback. */
+    snapshotWithScrollback(): string {
+        return this.adapter.snapshotWithScrollback();
+    }
+
     private actuallySendMessage(text: string, bracketedPaste?: boolean): void {
         const sm = this.spec.send_message;
         this.submitUnconfirmed = false;
@@ -1850,7 +1781,7 @@ export class FsmDriver implements ISpecDriver {
 
         if (perChar === 0) {
             this.adapter.send_keys(text);
-            if (beforeSubmit > 0) setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
+            if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
             else this.adapter.send_keys(sm.submit_key);
             return;
         }
@@ -1858,7 +1789,7 @@ export class FsmDriver implements ISpecDriver {
         const iv = setInterval(() => {
             if (i >= text.length) {
                 clearInterval(iv);
-                setTimeout(() => this.adapter.send_keys(sm.submit_key), beforeSubmit);
+                this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
                 return;
             }
             this.adapter.send_keys(text[i]);
