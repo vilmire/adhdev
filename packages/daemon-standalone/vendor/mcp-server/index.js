@@ -138981,6 +138981,11 @@ ${e?.stderr || ""}`;
         MESH_FORWARDABLE_SESSION_COMMANDS = /* @__PURE__ */ new Set([
           "invoke_provider_script",
           "resolve_action",
+          // cancel_queued_chat must reach the OWNING worker: the parked body lives in
+          // that daemon's driver FIFO, and the coordinator has no adapter to claim it
+          // from. Unlike send_chat (excluded above because it already reaches the
+          // worker by its own route), this command has no route of its own.
+          "cancel_queued_chat",
           "set_mode",
           "change_model",
           "set_thought_level",
@@ -148479,6 +148484,33 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       _log("All methods failed");
       return { success: false, error: "No provider method could send the message" };
     }
+    async function handleCancelQueuedChat(h, args) {
+      const text = typeof args?.message === "string" ? args.message : "";
+      if (!text.trim()) return { success: false, error: "message required" };
+      const _log = (msg) => LOG.debug("Command", `[cancel_queued_chat] ${msg}`);
+      const provider = h.getProvider(args?.agentType);
+      const transport = getTargetTransport(h, provider);
+      if (transport !== "pty") {
+        return { success: false, error: `cancel_queued_chat is only supported on PTY sessions (got ${transport || "unknown"})` };
+      }
+      const adapter = getTargetedCliAdapter(h, args, provider?.type);
+      if (!adapter) {
+        return { success: false, error: "CLI adapter not found for this session" };
+      }
+      const claim = adapter.claimQueuedSends;
+      if (typeof claim !== "function") {
+        return { success: false, error: "This session does not support cancelling a queued send" };
+      }
+      const cancelled = claim.call(adapter, text);
+      _log(`cancelled ${cancelled} queued send(s) for ${adapter.cliType} (len=${text.length})`);
+      return {
+        success: true,
+        cancelled,
+        // `false` is the honest answer to "did I stop it?" when the FIFO had
+        // already drained — the caller must not clear its bubble on this.
+        removed: cancelled > 0
+      };
+    }
     async function handleListChats(h, args) {
       const provider = h.getProvider(args?.agentType);
       const transport = getTargetTransport(h, provider);
@@ -150335,6 +150367,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           "read_chat",
           "get_chat_debug_bundle",
           "send_chat",
+          // Cancelling a queued send addresses ONE session's driver FIFO, so it
+          // must fail closed exactly like send_chat when the session is gone —
+          // silently "succeeding" against no session would tell the dashboard a
+          // body was withdrawn that is still parked somewhere else.
+          "cancel_queued_chat",
           "list_chats",
           "new_chat",
           "switch_chat",
@@ -150398,6 +150435,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             return handleChatHistory(this, args);
           case "send_chat":
             return handleSendChat(this, args);
+          case "cancel_queued_chat":
+            return handleCancelQueuedChat(this, args);
           case "list_chats":
             return handleListChats(this, args);
           case "new_chat":
