@@ -35,7 +35,7 @@ import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../..
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
-import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessage, type PendingLocalMessage } from './conversation-message-snapshot';
+import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessages, type PendingLocalMessage } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
@@ -55,11 +55,19 @@ export interface ChatPaneProps {
      * bubble is delivered as a real turn. Rendered inside that bubble by
      * ChatMessageRow, which is why every layout gets it from this one prop.
      */
-    handleSendNowQueued?: () => Promise<boolean>;
+    handleSendNowQueued?: (pendingId?: string) => Promise<boolean>;
+    /** (QUEUED-SEND-CANCEL) Withdraw one still-waiting body by its pending id. */
+    handleCancelQueued?: (pendingId: string) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
-    /** (OPTIMISTIC-USER-BUBBLE) Locally-rendered message awaiting its daemon echo. */
+    /** (OPTIMISTIC-USER-BUBBLE) Newest locally-rendered message awaiting its echo. */
     pendingLocalMessage?: PendingLocalMessage | null;
+    /**
+     * (MULTI-QUEUE) Every body still waiting, oldest first. Takes precedence over
+     * `pendingLocalMessage` when provided — that single-entry prop remains only
+     * for surfaces that have not been migrated.
+     */
+    pendingLocalMessages?: readonly PendingLocalMessage[] | null;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
     actionLogs: { routeId: string; text: string; timestamp: number }[];
@@ -121,9 +129,11 @@ export default function ChatPane({
     activeConv, ideEntry,
     handleSendChat,
     handleSendNowQueued,
+    handleCancelQueued,
     isSendingChat = false,
     sendFeedbackMessage = null,
     pendingLocalMessage = null,
+    pendingLocalMessages = null,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     scrollToBottomRequestNonce,
     isInputActive = true,
@@ -215,9 +225,16 @@ export default function ChatPane({
     // be wiped by the next update AND would corrupt the shrink-defense/dedup
     // signatures computed over it. This is a render-time overlay, so the
     // controller's contract is untouched.
-    const liveMessages = withPendingLocalMessage(
+    //
+    // ★ BOTTOM PINNING: the waiting bubbles are appended to the END of the live
+    // tail here, and `buildVisibleConversationMessages` sorts the live+history
+    // set BEFORE this overlay is applied — so a queued body always renders last,
+    // regardless of scroll position or how the tail was windowed.
+    const liveMessages = withPendingLocalMessages(
         getConversationLiveMessages(activeConv, chatTailState),
-        pendingLocalMessage,
+        // MULTI-QUEUE: prefer the full list; fall back to the single-entry prop
+        // for callers that still pass only the newest bubble.
+        pendingLocalMessages ?? (pendingLocalMessage ? [pendingLocalMessage] : null),
     );
     // Only the COUNT is consumed (activity-toggle affordance), but the filter
     // classifies every live message. Memoized on `liveMessages` so it runs when
@@ -590,6 +607,7 @@ export default function ChatPane({
                 isVisible={isVisible}
                 onSendNow={handleSendNowQueued}
                 isSendingNow={isSendingChat}
+                onCancelQueued={handleCancelQueued}
             />
 
             <ChatControlsSection

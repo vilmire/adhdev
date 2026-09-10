@@ -1538,7 +1538,10 @@
         "sendNow": "立即发送",
         "sending": "发送中…",
         "sendNowAria": "中断代理当前的回合并立即发送",
-        "sendNowTitle": "中断代理当前的回合并立即发送此消息。进行中的回合将丢失。"
+        "sendNowTitle": "中断代理当前的回合并立即发送此消息。进行中的回合将丢失。",
+        "cancelQueued": "取消",
+        "cancelQueuedAria": "取消此排队中的消息",
+        "cancelQueuedTitle": "将此消息从队列中移除。它不会被发送给代理。"
     },
     "chatPane": {
         "connectingToMachine": "正在连接到你的机器",

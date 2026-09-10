@@ -416,6 +416,71 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     return { success: false, error: 'No provider method could send the message' };
 }
 
+/**
+ * (QUEUED-SEND-CANCEL) Withdraw a body that is parked in the driver's FIFO but
+ * has NOT been written to the PTY yet.
+ *
+ * ★ Why the daemon has to be involved at all.
+ *
+ * A queued send is not just a UI state. `FsmDriver.pendingSends` genuinely holds
+ * the body and `drainPendingSends()` will write it to the agent the moment the
+ * machine returns to idle. So a dashboard that merely hid its own bubble would
+ * be lying: the owner would be told the message was cancelled and the agent
+ * would answer it anyway, minutes later, with no bubble on screen to explain
+ * where it came from. Cancellation has to remove the body at the only place
+ * that actually holds it.
+ *
+ * ★ Content-keyed, matching every other identity in this path. The dashboard
+ * cannot know an id for a queued body — the driver mints none, and the FIFO
+ * stores `{text, bracketedPaste}` — and the daemon's own dedup windows are
+ * likewise content-keyed. `claimQueuedSends(text)` is the existing primitive
+ * (the interrupt path already uses it to take a body out of the queue), so this
+ * command adds no new removal semantics; it only exposes them.
+ *
+ * ★ Reports `cancelled: 0` rather than failing when nothing matched. That is
+ * not an error — it is the race the caller must distinguish: the queue drained
+ * while the owner was deciding, and the agent already has the message. The
+ * dashboard keeps the bubble and says so.
+ *
+ * PTY-only by construction. Queueing exists because a PTY has one composer that
+ * can only accept a body at an idle prompt; the ACP/extension transports have
+ * no such FIFO and so have nothing to cancel.
+ */
+export async function handleCancelQueuedChat(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const text = typeof args?.message === 'string' ? args.message : '';
+    if (!text.trim()) return { success: false, error: 'message required' };
+
+    const _log = (msg: string) => LOG.debug('Command', `[cancel_queued_chat] ${msg}`);
+    const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
+
+    if (transport !== 'pty') {
+        return { success: false, error: `cancel_queued_chat is only supported on PTY sessions (got ${transport || 'unknown'})` };
+    }
+
+    const adapter = getTargetedCliAdapter(h, args, provider?.type);
+    if (!adapter) {
+        return { success: false, error: 'CLI adapter not found for this session' };
+    }
+
+    const claim = (adapter as unknown as { claimQueuedSends?: (t: string) => number }).claimQueuedSends;
+    if (typeof claim !== 'function') {
+        return { success: false, error: 'This session does not support cancelling a queued send' };
+    }
+
+    // Content-free log: a count, never the body.
+    const cancelled = claim.call(adapter, text);
+    _log(`cancelled ${cancelled} queued send(s) for ${adapter.cliType} (len=${text.length})`);
+
+    return {
+        success: true,
+        cancelled,
+        // `false` is the honest answer to "did I stop it?" when the FIFO had
+        // already drained — the caller must not clear its bubble on this.
+        removed: cancelled > 0,
+    };
+}
+
 export async function handleListChats(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);

@@ -299,10 +299,26 @@ export interface ChatMessageRowProps {
      * SEND-NOW: interrupt the agent's current turn so this queued body is
      * delivered as a real turn. Optional — read-only viewers (SessionShare)
      * pass nothing and the affordance simply does not render.
+     *
+     * Receives the row's own pending id so a MULTI-QUEUE pane acts on the
+     * bubble that was actually pressed, not on whichever entry the hook
+     * happens to consider current.
      */
-    onSendNow?: () => void;
+    onSendNow?: (pendingId?: string) => void;
     /** True while a send-now request for this row is in flight. */
     isSendingNow?: boolean;
+    /**
+     * (QUEUED-SEND-CANCEL) Withdraw this still-waiting body. Optional for the
+     * same read-only reason as `onSendNow`.
+     */
+    onCancelQueued?: (pendingId: string) => void;
+}
+
+/** The per-entry id `withPendingLocalMessages` stamps onto a pending bubble. */
+function getPendingId(message: ChatMessage): string {
+    const meta = message.meta as (Record<string, unknown> | undefined);
+    const value = meta?.pendingId;
+    return typeof value === 'string' ? value : '';
 }
 
 /**
@@ -390,6 +406,10 @@ function computeChatMessageRowSignature(message: ChatMessage): string {
         // button would never appear.
         meta ? String(meta.pendingLocal ?? '') : '',
         meta ? String(meta.queued ?? '') : '',
+        // MULTI-QUEUE: two entries can carry identical content and timestamps
+        // (the same text queued twice). Without the id in the signature their
+        // rows hash identically and the memo would render one for both.
+        meta ? String(meta.pendingId ?? '') : '',
     ].join('');
 }
 
@@ -403,9 +423,11 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     onToggleTextExpanded,
     onSendNow,
     isSendingNow,
+    onCancelQueued,
 }: ChatMessageRowProps) {
     const { t } = useTranslation('common');
     const isQueued = isQueuedPendingLocal(message);
+    const pendingId = getPendingId(message);
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
     const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
@@ -587,7 +609,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                             {onSendNow && (
                                 <button
                                     type="button"
-                                    onClick={onSendNow}
+                                    onClick={() => onSendNow(pendingId || undefined)}
                                     disabled={isSendingNow}
                                     className="chat-bubble-send-now"
                                     aria-label={t('chat.sendNowAria')}
@@ -597,6 +619,22 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                                     title={t('chat.sendNowTitle')}
                                 >
                                     {isSendingNow ? t('chat.sending') : t('chat.sendNow')}
+                                </button>
+                            )}
+                            {/* QUEUED-SEND-CANCEL: the owner queued this body and changed
+                                their mind before the agent ever saw it. Requires a
+                                pendingId — cancelling is destructive and must address
+                                exactly one entry, never "whatever is current". */}
+                            {onCancelQueued && pendingId && (
+                                <button
+                                    type="button"
+                                    onClick={() => onCancelQueued(pendingId)}
+                                    disabled={isSendingNow}
+                                    className="chat-bubble-cancel-queued"
+                                    aria-label={t('chat.cancelQueuedAria')}
+                                    title={t('chat.cancelQueuedTitle')}
+                                >
+                                    {t('chat.cancelQueued')}
                                 </button>
                             )}
                         </div>
@@ -620,4 +658,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     // reach the row, or pressing it would call a stale closure.
     && prev.isSendingNow === next.isSendingNow
     && prev.onSendNow === next.onSendNow
+    // QUEUED-SEND-CANCEL: same stale-closure hazard as onSendNow — a cancel
+    // wired to a previous render's handler would address the wrong queue.
+    && prev.onCancelQueued === next.onCancelQueued
 ));

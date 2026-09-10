@@ -102,9 +102,14 @@ export interface ChatMessageListProps {
      * bubble is delivered as a real turn. Rendered only on the queued bubble
      * itself (ChatMessageRow), so a read-only host that omits it loses nothing.
      */
-    onSendNow?: () => void;
+    onSendNow?: (pendingId?: string) => void;
     /** True while a send-now request is in flight; disables the button. */
     isSendingNow?: boolean;
+    /**
+     * (QUEUED-SEND-CANCEL) Withdraw one still-waiting body, addressed by its
+     * pending id. Rendered on the queued bubble alongside Send now.
+     */
+    onCancelQueued?: (pendingId: string) => void;
 }
 
 export interface ChatMessageListRef {
@@ -118,7 +123,7 @@ export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage)
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -611,6 +616,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         isTextExpanded={isTextExpanded}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
+                        onCancelQueued={onCancelQueued}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);
                             isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
@@ -686,6 +692,9 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.isVisible === next.isVisible
     && prev.onSendNow === next.onSendNow
     && prev.isSendingNow === next.isSendingNow
+    // (G8-6 class) A handler missing from this comparator never reaches the row:
+    // the list short-circuits and the button keeps calling a stale closure.
+    && prev.onCancelQueued === next.onCancelQueued
 ));
 
 export default MemoizedChatMessageList;
