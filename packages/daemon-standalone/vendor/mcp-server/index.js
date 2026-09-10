@@ -39807,6 +39807,15 @@ var require_dist3 = __commonJS({
       if (lastFooterIndex < 0) return null;
       return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join("\n");
     }
+    function claudeTuiPreviewPanelVisible(screenText) {
+      const region = readFocusedClaudeTuiPickerRegion(screenText);
+      if (region === null) return false;
+      const lines = region.split(/\r?\n/);
+      const firstOptionIndex = lines.findIndex((line) => CLAUDE_TUI_OPTION_PATTERN.test(line));
+      if (firstOptionIndex < 0) return false;
+      const block2 = lines.slice(firstOptionIndex);
+      return block2.some((line) => /┌─/.test(line)) && block2.some((line) => /└─/.test(line));
+    }
     function parseClaudeInteractiveTuiQuestion(page, index) {
       const lines = readClaudeTuiScreenLines(page.screenText);
       let navIndex = -1;
@@ -39917,6 +39926,7 @@ var require_dist3 = __commonJS({
           const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
           if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
           steps.push(String(selectedIndex + 1));
+          if (question.options.some((option) => option.preview)) steps.push("\r");
         }
       }
       steps.push("\r");
@@ -109509,6 +109519,7 @@ ${text}` : text;
             if (this.interactivePromptTransport === "tui") {
               const allowsFreeform = prompt.questions.some((q) => q.allowFreeform);
               let completedWithoutReview = false;
+              let previewLayoutAnswer = prompt.questions.some((q) => q.options.some((o) => o.preview));
               questionLoop: for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                   ...prompt,
@@ -109522,10 +109533,22 @@ ${text}` : text;
                   this.driver.dispatch({ kind: "pty_write", data: step });
                   await new Promise((resolve34) => setTimeout(resolve34, 180));
                 }
+                const answer = response.answers[question.questionId];
+                const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
+                if (singleSelectDigitOnly && !question.options.some((o) => o.preview)) {
+                  const screenText = this.readClaudeTuiSnapshotForAnswer();
+                  const focused = readFocusedClaudeTuiQuestion(screenText);
+                  if (focused && claudeTuiQuestionMatches(question, focused) && claudeTuiPreviewPanelVisible(screenText)) {
+                    previewLayoutAnswer = true;
+                    LOG.info("SpecAdapter", `[${this.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
+                    this.driver.dispatch({ kind: "pty_write", data: "\r" });
+                    await new Promise((resolve34) => setTimeout(resolve34, 180));
+                  }
+                }
               }
               if (!completedWithoutReview) {
                 try {
-                  await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                  await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform || previewLayoutAnswer);
                 } catch (error48) {
                   if (error48 instanceof _SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal) return;
                   throw error48;
@@ -110346,15 +110369,19 @@ ${text}` : text;
            * as the review page; on timeout fall through to the last frame so a
            * genuinely wrong screen still fails closed with its real content.
            *
-           * `allowsFreeform` widens the budget to CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
-           * (residual gap, live defect 2026-08-29): a picker that allows freeform
-           * input ("Type something." / Other) carries a heavier layout burden even if
-           * the user selects a standard option. The wider budget accounts for this
-           * extra layout time when validating the review echo screen.
+           * `widenSettleBudget` widens the budget to
+           * CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS in two measured cases:
+           *   - freeform-capable pickers ("Type something." / Other) carry a heavier
+           *     layout burden even when a standard option is selected (residual gap,
+           *     live defect 2026-08-29);
+           *   - preview-layout answers (2026-09-11): a single-question preview
+           *     prompt submits directly with NO review page, so its resolution
+           *     signal is native tool_result / busy-advance / the 1500ms lost-grace
+           *     clear — the 600ms page budget can never observe that last one.
            */
-          async snapshotSettledClaudeTuiReview(prompt, allowsFreeform) {
+          async snapshotSettledClaudeTuiReview(prompt, widenSettleBudget) {
             let screenText = this.readClaudeTuiSnapshotForAnswer();
-            const budgetMs = allowsFreeform ? _SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS : _SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
+            const budgetMs = widenSettleBudget ? _SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS : _SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
             const deadline = Date.now() + budgetMs;
             let poll = 0;
             while (true) {
@@ -110385,7 +110412,7 @@ ${text}` : text;
               }
               LOG.debug(
                 "SpecAdapter",
-                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, "utf8")} providerState=${this.latestState?.id ?? "unknown"} providerStatus=${this.latestState?.status ?? "unknown"} allowsFreeform=${allowsFreeform}`
+                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, "utf8")} providerState=${this.latestState?.id ?? "unknown"} providerStatus=${this.latestState?.status ?? "unknown"} widenSettleBudget=${widenSettleBudget}`
               );
               if (review) return screenText;
               if (directSubmitted) return null;
@@ -110410,8 +110437,8 @@ ${text}` : text;
               this.name = "ClaudeTuiAnswerDeliveredSignal";
             }
           };
-          async assertFocusedClaudeTuiReview(prompt, allowsFreeform) {
-            const screenText = await this.snapshotSettledClaudeTuiReview(prompt, allowsFreeform);
+          async assertFocusedClaudeTuiReview(prompt, widenSettleBudget) {
+            const screenText = await this.snapshotSettledClaudeTuiReview(prompt, widenSettleBudget);
             if (screenText === null) return;
             const focused = readFocusedClaudeTuiQuestion(screenText);
             if (focused || !isClaudeTuiReviewScreen(screenText)) {
@@ -110419,17 +110446,17 @@ ${text}` : text;
               const boundQuestionStillFocused = !!focused && prompt.questions.some((question) => claudeTuiQuestionMatches(question, focused));
               if (boundQuestionStillFocused) {
                 if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
-                  LOG.info("SpecAdapter", `[${this.cliType}] review page unsettled but native tool_result confirms delivery \u2014 accepting (allowsFreeform=${allowsFreeform})`);
+                  LOG.info("SpecAdapter", `[${this.cliType}] review page unsettled but native tool_result confirms delivery \u2014 accepting (widenSettleBudget=${widenSettleBudget})`);
                   this.activeInteractivePrompt = null;
                   this.interactivePromptTransport = null;
                   this.interactivePromptLostAt = null;
                   this.statusCallback?.();
                   throw new _SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
                 }
-                LOG.warn("SpecAdapter", `[${this.cliType}] review page did not settle within budget while our own bound question stayed focused \u2014 answer delivered, confirmation unavailable (allowsFreeform=${allowsFreeform})${observed}`);
-                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} \u2014 the answer keys reached the terminal but the review page did not settle in time${observed}`);
+                LOG.warn("SpecAdapter", `[${this.cliType}] picker still shows our bound question after the settle budget \u2014 answer keys were written but submission is unconfirmed and may not have happened (widenSettleBudget=${widenSettleBudget})${observed}`);
+                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} \u2014 the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again${observed}`);
               }
-              LOG.warn("SpecAdapter", `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
+              LOG.warn("SpecAdapter", `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (widenSettleBudget=${widenSettleBudget})${observed}`);
               throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
             }
             const expectedHeaders = prompt.questions.map((q) => q.header && normalizeClaudeTuiIdentity(q.header)).filter((header) => !!header);

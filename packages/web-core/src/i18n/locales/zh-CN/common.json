@@ -3716,7 +3716,7 @@
         "answersRequired_one": "还有{{count}}个问题需要回答",
         "answersRequired_other": "还有{{count}}个问题需要回答",
         "errorReviewPageNotFocused": "终端正在显示其他画面，回答未能提交——请检查终端画面，或关闭此窗口后重试。",
-        "errorReviewUnconfirmed": "回答已发送，但终端未及时确认。再次回答前请先检查终端画面——重新发送可能会提交两次。"
+        "errorReviewUnconfirmed": "回答按键已送达终端，但问题仍显示在屏幕上——回答可能尚未提交。请检查终端：如果未提交，请直接在终端中回答；从这里重新发送可能会提交两次。"
     },
     "git": {
         "changeList": {

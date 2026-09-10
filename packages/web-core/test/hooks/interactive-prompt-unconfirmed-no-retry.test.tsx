@@ -105,7 +105,7 @@ describe('interactive prompt — delivered but unconfirmed', () => {
   it('does not tell the user the answer failed, and does not invite a retry', async () => {
     sendCommandImpl = async () => ({
       success: false,
-      error: `${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys reached the terminal but the review page did not settle in time`,
+      error: `${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again`,
     })
     await act(async () => { root.render(<Probe />) })
 
@@ -114,11 +114,15 @@ describe('interactive prompt — delivered but unconfirmed', () => {
     const banner = latest.responseError ?? ''
     expect(banner).not.toBe('')
 
-    // (1) Never framed as a failure...
+    // (1) Never framed as a hard failure...
     expect(banner).not.toMatch(/verification failed|\bfailed\b/i)
-    // ...but as delivered-yet-unconfirmed.
-    expect(banner).toMatch(/sent|delivered/i)
-    expect(banner).toMatch(/did not confirm|not confirm/i)
+    // ...and never as confirmed delivery either (2026-09-11 correction: the
+    // preview layout reached this state with NOTHING submitted, so "your
+    // answer was sent" was a false claim). The copy states the keys reached
+    // the terminal and the outcome is unknown.
+    expect(banner).toMatch(/keys reached the terminal/i)
+    expect(banner).toMatch(/may not have been submitted/i)
+    expect(banner).not.toMatch(/answer was sent|was delivered/i)
 
     // (2) No "try again" instruction, and an explicit double-submit warning.
     expect(banner).not.toMatch(/try again/i)

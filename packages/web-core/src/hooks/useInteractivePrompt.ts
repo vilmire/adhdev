@@ -103,17 +103,19 @@ export function useInteractivePrompt(
       setDismissedPromptId(promptSession.prompt.promptId)
     } catch (error) {
       let msg = error instanceof Error ? error.message : String(error)
-      // DELIVERED-BUT-UNCONFIRMED (live defect 2026-09-06). The daemon reaches
-      // this class only AFTER writing every answer keystroke to the terminal,
-      // with our own bound question still on screen — so the answer did land.
-      // The old copy called that "verification failed" and told the user to
-      // "try again", which resends an answer the agent has already acted on.
-      // Report it as unconfirmed, and dismiss the modal: leaving it open is
-      // itself a resubmit invitation.
+      // KEYS-WRITTEN-BUT-UNCONFIRMED (live defect 2026-09-06, corrected
+      // 2026-09-11). The daemon reaches this class only AFTER writing every
+      // answer keystroke to the terminal, with our own bound question still on
+      // screen. That does NOT prove the answer was submitted: the preview
+      // (side-by-side) layout reached exactly this state with nothing
+      // submitted (09-10 incident). So the copy must not claim delivery —
+      // only that the keys reached the terminal and the outcome is unknown.
+      // Still no "try again" invitation: if the answer DID land, resending
+      // would submit it twice. Dismiss the modal for the same reason.
       if (msg.includes(CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX)) {
         setDismissedPromptId(promptSession.prompt.promptId)
         setResponseError(t('interactivePrompt.errorReviewUnconfirmed', {
-          defaultValue: 'Your answer was sent, but the terminal did not confirm it in time. Check the terminal screen before answering again — resending may submit it twice.'
+          defaultValue: 'The answer keys reached the terminal, but the question is still on screen — the answer may not have been submitted. Check the terminal: if it was not submitted, answer there; resending from here could submit it twice.'
         }))
         throw error
       }

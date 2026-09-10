@@ -3716,7 +3716,7 @@
         "answersRequired_one": "답변이 필요한 질문이 {{count}}개 있습니다",
         "answersRequired_other": "답변이 필요한 질문이 {{count}}개 있습니다",
         "errorReviewPageNotFocused": "터미널이 다른 화면을 표시 중이라 답변이 제출되지 않았습니다 — 화면을 확인하거나 닫고 다시 시도하세요",
-        "errorReviewUnconfirmed": "답변은 전달됐으나 터미널이 제때 확인해주지 않았습니다. 다시 답하기 전에 터미널 화면을 확인하세요 — 재전송하면 두 번 제출될 수 있습니다"
+        "errorReviewUnconfirmed": "답변 키는 터미널에 전달됐지만 질문이 아직 화면에 남아 있습니다 — 답변이 제출되지 않았을 수 있습니다. 터미널을 확인하세요: 제출되지 않았다면 터미널에서 직접 답하세요. 여기서 재전송하면 두 번 제출될 수 있습니다"
     },
     "git": {
         "changeList": {

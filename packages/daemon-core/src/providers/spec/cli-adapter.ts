@@ -57,6 +57,7 @@ import { publishSessionTermination } from '../../shared/session-termination-sink
 import {
     buildClaudeInteractiveTuiAnswerSteps,
     buildClaudeInteractiveToolResult,
+    claudeTuiPreviewPanelVisible,
     detectClaudeAskUserQuestionPromptFromJson,
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
@@ -862,6 +863,17 @@ export class SpecCliAdapter implements CliAdapter {
             // intact so a stale response cannot operate another picker.
             const allowsFreeform = prompt.questions.some(q => q.allowFreeform);
             let completedWithoutReview = false;
+            // PREVIEW (side-by-side) LAYOUT (measured live against claude-cli
+            // v2.1.220, 2026-09-11): with `preview` options a digit key only
+            // highlights — the commit key is one explicit Enter. When the
+            // captured options still carry preview metadata (native JSONL
+            // capture) the keystroke builder already appends that Enter; this
+            // flag additionally covers the TUI-scrape capture below and widens
+            // the review settle budget: a single-question preview prompt shows
+            // NO review page, so its confirmation can only arrive via native
+            // tool_result / busy-advance / the 1500ms lost-grace clear, which
+            // structurally exceeds the 600ms page budget.
+            let previewLayoutAnswer = prompt.questions.some(q => q.options.some(o => o.preview));
             questionLoop: for (const question of prompt.questions) {
                 const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                     ...prompt,
@@ -875,10 +887,35 @@ export class SpecCliAdapter implements CliAdapter {
                     this.driver.dispatch({ kind: 'pty_write', data: step });
                     await new Promise(resolve => setTimeout(resolve, 180));
                 }
+                // Screen fallback for the preview layout: a TUI-scrape-captured
+                // prompt has no preview metadata (the scrape strips the panel),
+                // so its single-select steps end with a bare digit that only
+                // highlighted the option. If our own bound question is STILL the
+                // focused picker after that digit AND the frame shows the
+                // side-by-side preview panel, commit it with the one Enter the
+                // layout requires. Both conditions are read off the live frame,
+                // so the digit-auto-advances non-preview flow (question already
+                // gone or panel-less) never receives this Enter.
+                const answer = response.answers[question.questionId];
+                const singleSelectDigitOnly = !question.multiSelect
+                    && (answer?.selectedLabels.length ?? 0) === 1
+                    && !answer?.freeformText?.trim();
+                if (singleSelectDigitOnly && !question.options.some(o => o.preview)) {
+                    const screenText = this.readClaudeTuiSnapshotForAnswer();
+                    const focused = readFocusedClaudeTuiQuestion(screenText);
+                    if (focused
+                        && claudeTuiQuestionMatches(question, focused)
+                        && claudeTuiPreviewPanelVisible(screenText)) {
+                        previewLayoutAnswer = true;
+                        LOG.info('SpecAdapter', `[${this.cliType}] preview panel layout detected on screen after digit — sending commit Enter (question "${question.questionId}")`);
+                        this.driver.dispatch({ kind: 'pty_write', data: '\r' });
+                        await new Promise(resolve => setTimeout(resolve, 180));
+                    }
+                }
             }
             if (!completedWithoutReview) {
                 try {
-                    await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform);
+                    await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform || previewLayoutAnswer);
                 } catch (error) {
                     // The review gate proved (via native tool_result) that the
                     // answer already landed with no review page to confirm. It has
@@ -1930,15 +1967,19 @@ export class SpecCliAdapter implements CliAdapter {
      * as the review page; on timeout fall through to the last frame so a
      * genuinely wrong screen still fails closed with its real content.
      *
-     * `allowsFreeform` widens the budget to CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
-     * (residual gap, live defect 2026-08-29): a picker that allows freeform
-     * input ("Type something." / Other) carries a heavier layout burden even if
-     * the user selects a standard option. The wider budget accounts for this
-     * extra layout time when validating the review echo screen.
+     * `widenSettleBudget` widens the budget to
+     * CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS in two measured cases:
+     *   - freeform-capable pickers ("Type something." / Other) carry a heavier
+     *     layout burden even when a standard option is selected (residual gap,
+     *     live defect 2026-08-29);
+     *   - preview-layout answers (2026-09-11): a single-question preview
+     *     prompt submits directly with NO review page, so its resolution
+     *     signal is native tool_result / busy-advance / the 1500ms lost-grace
+     *     clear — the 600ms page budget can never observe that last one.
      */
-    private async snapshotSettledClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<string | null> {
+    private async snapshotSettledClaudeTuiReview(prompt: InteractivePrompt, widenSettleBudget: boolean): Promise<string | null> {
         let screenText = this.readClaudeTuiSnapshotForAnswer();
-        const budgetMs = allowsFreeform
+        const budgetMs = widenSettleBudget
             ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
             : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
         const deadline = Date.now() + budgetMs;
@@ -1986,7 +2027,7 @@ export class SpecCliAdapter implements CliAdapter {
             // UTF-8 byte count, poll index, and spec-defined provider state.
             LOG.debug(
                 'SpecAdapter',
-                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, 'utf8')} providerState=${this.latestState?.id ?? 'unknown'} providerStatus=${this.latestState?.status ?? 'unknown'} allowsFreeform=${allowsFreeform}`,
+                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, 'utf8')} providerState=${this.latestState?.id ?? 'unknown'} providerStatus=${this.latestState?.status ?? 'unknown'} widenSettleBudget=${widenSettleBudget}`,
             );
 
             if (review) return screenText;
@@ -2014,8 +2055,8 @@ export class SpecCliAdapter implements CliAdapter {
         }
     };
 
-    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, allowsFreeform: boolean): Promise<void> {
-        const screenText = await this.snapshotSettledClaudeTuiReview(prompt, allowsFreeform);
+    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, widenSettleBudget: boolean): Promise<void> {
+        const screenText = await this.snapshotSettledClaudeTuiReview(prompt, widenSettleBudget);
         if (screenText === null) return;
         const focused = readFocusedClaudeTuiQuestion(screenText);
         if (focused || !isClaudeTuiReviewScreen(screenText)) {
@@ -2027,10 +2068,14 @@ export class SpecCliAdapter implements CliAdapter {
             //
             // By the time this gate runs, every answer keystroke has ALREADY been
             // written to the PTY by setInteractivePromptResponse's key loop — only
-            // the final review Enter is outstanding. So a timeout here never means
-            // "the answer did not arrive"; the owner's 2026-09-06 report is exactly
-            // this: the modal said verification failed while the coordinator had
-            // received the answer and already dispatched work from it.
+            // the final review Enter is outstanding. A timeout here therefore
+            // means "the keys arrived but the picker did not visibly advance".
+            // That is NOT proof the answer was submitted: in the preview
+            // (side-by-side) layout a digit only highlights, so pre-2026-09-11
+            // this very state was reached with NOTHING submitted (the 09-10
+            // incident). The preview protocol fix above (commit Enter) removes
+            // the known cause, but this branch must still describe both
+            // possibilities honestly instead of claiming delivery.
             //
             // Two outcomes have to be told apart, and the previous code collapsed
             // them into one hard failure:
@@ -2061,17 +2106,21 @@ export class SpecCliAdapter implements CliAdapter {
                 // a rendering lag. Treat that as success and release the prompt the
                 // same way the direct-submit path does.
                 if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
-                    LOG.info('SpecAdapter', `[${this.cliType}] review page unsettled but native tool_result confirms delivery — accepting (allowsFreeform=${allowsFreeform})`);
+                    LOG.info('SpecAdapter', `[${this.cliType}] review page unsettled but native tool_result confirms delivery — accepting (widenSettleBudget=${widenSettleBudget})`);
                     this.activeInteractivePrompt = null;
                     this.interactivePromptTransport = null;
                     this.interactivePromptLostAt = null;
                     this.statusCallback?.();
                     throw new SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
                 }
-                // Delivered, still unconfirmed. Distinct error class so the UI can
-                // say "could not confirm" instead of "failed", and suppress retry.
-                LOG.warn('SpecAdapter', `[${this.cliType}] review page did not settle within budget while our own bound question stayed focused — answer delivered, confirmation unavailable (allowsFreeform=${allowsFreeform})${observed}`);
-                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys reached the terminal but the review page did not settle in time${observed}`);
+                // Keys written, submission unconfirmed. Distinct error class so
+                // the UI can say "could not confirm" instead of "failed", and
+                // suppress retry. Do NOT claim delivery: with the question
+                // still on screen the answer may equally well not have been
+                // submitted at all (the pre-fix preview layout produced exactly
+                // this state with nothing submitted — 09-10 incident).
+                LOG.warn('SpecAdapter', `[${this.cliType}] picker still shows our bound question after the settle budget — answer keys were written but submission is unconfirmed and may not have happened (widenSettleBudget=${widenSettleBudget})${observed}`);
+                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again${observed}`);
             }
 
             // Log here, not just throw: the caller (mesh-events.ts
@@ -2081,7 +2130,7 @@ export class SpecCliAdapter implements CliAdapter {
             // leaves NO trace in the daemon log — confirmed live 2026-08-29,
             // where a dashboard-visible "review page is not focused" error had
             // zero matching log output.
-            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (allowsFreeform=${allowsFreeform})${observed}`);
+            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (widenSettleBudget=${widenSettleBudget})${observed}`);
             throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
         }
 
