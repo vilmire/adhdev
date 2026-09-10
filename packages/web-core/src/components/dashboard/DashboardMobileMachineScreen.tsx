@@ -186,7 +186,7 @@ export default function DashboardMobileMachineScreen({
                         <IconChevronLeft size={18} />
                     </button>
                     <div className="min-w-0 flex flex-col gap-0.5">
-                        <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
+                        <div className="flex items-center gap-2 text-[17px] leading-[26px] font-extrabold tracking-tight text-text-primary truncate">
                             {getMachineDisplayName(selectedMachineEntry, { fallbackId: selectedMachineEntry.id })}
                         </div>
                         <div className="min-w-0 flex items-center flex-wrap gap-1.5 text-xs text-text-secondary truncate">
@@ -406,7 +406,7 @@ export default function DashboardMobileMachineScreen({
                                                     })
                                                 }}
                                             >
-                                                <span className="text-[13px] font-bold text-text-primary">{ide.name}</span>
+                                                <span className="text-xxs font-bold text-text-primary">{ide.name}</span>
                                                 <span className="text-2xs leading-relaxed text-text-muted break-all">
                                                     {launcher.resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
@@ -459,7 +459,7 @@ export default function DashboardMobileMachineScreen({
                                                     })
                                                 }}
                                             >
-                                                <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-text-primary">
+                                                <span className="inline-flex items-center gap-1.5 text-xxs font-bold text-text-primary">
                                                     <ProviderLogo type={provider.type} label={provider.displayName} size={15} />{provider.displayName}
                                                 </span>
                                                 <span className="text-2xs leading-relaxed text-text-muted break-all">

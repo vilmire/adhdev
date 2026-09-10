@@ -96,13 +96,13 @@ export function SettingsTabs({
                             className={cn(
                                 isUnderline
                                     ? [
-                                        '-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] font-medium transition-colors',
+                                        '-mb-px flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2.5 text-xxs font-medium transition-colors',
                                         isActive
                                             ? 'border-accent text-accent'
                                             : 'border-transparent text-text-muted hover:text-text-secondary',
                                     ]
                                     : [
-                                        'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors sm:flex-none',
+                                        'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xxs font-medium transition-colors sm:flex-none',
                                         isActive
                                             ? 'bg-bg-card text-text-primary shadow-sm border border-border-default'
                                             : 'text-text-muted border border-transparent hover:text-text-secondary hover:bg-white/[0.03]',

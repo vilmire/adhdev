@@ -19,7 +19,7 @@ export default function StatCard({ label, value, sub, icon }: StatCardProps) {
                 <span className="text-base flex items-center">{icon}</span>
                 <span className="text-3xs text-text-muted uppercase tracking-wide font-semibold">{label}</span>
             </div>
-            <div className="text-[22px] font-bold text-text-primary tracking-tight">{value}</div>
+            <div className="text-[22px] leading-[30px] font-bold text-text-primary tracking-tight">{value}</div>
             {sub && <div className="text-2xs text-text-muted mt-0.5">{sub}</div>}
         </Card>
     )

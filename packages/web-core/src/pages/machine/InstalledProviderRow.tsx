@@ -238,7 +238,7 @@ export default function InstalledProviderRow({
                 className="w-full px-4 py-2.5 flex items-center gap-3 text-left"
             >
                 <ProviderLogo type={prov.type} label={prov.displayName} size={20} className="shrink-0" />
-                <span className="text-[13px] font-semibold text-text-primary truncate">{prov.displayName}</span>
+                <span className="text-xxs font-semibold text-text-primary truncate">{prov.displayName}</span>
                 <span className={`text-4xs font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}
                 </span>

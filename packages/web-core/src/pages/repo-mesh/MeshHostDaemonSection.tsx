@@ -79,7 +79,7 @@ export function MeshHostDaemonSection({
         return (
             <Section title={t('repoMesh.host.title')} description={t('repoMesh.host.descriptionSet')}>
                 <div className="flex flex-wrap items-center gap-3">
-                    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] text-text-primary ${hostOnline ? 'border-accent-primary/40 bg-accent-primary/10' : 'border-amber-500/40 bg-amber-500/10'}`}>
+                    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xxs text-text-primary ${hostOnline ? 'border-accent-primary/40 bg-accent-primary/10' : 'border-amber-500/40 bg-amber-500/10'}`}>
                         <span className="text-text-muted">{t('repoMesh.host.hostLabel')}</span>
                         <span className="font-medium">{hostLabel || t('repoMesh.host.unknown')}</span>
                         <span className={hostOnline ? 'text-text-muted' : 'text-amber-400'}>· {hostOnline ? t('repoMesh.host.online') : t('repoMesh.host.offline')}</span>

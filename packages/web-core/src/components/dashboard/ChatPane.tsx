@@ -439,7 +439,7 @@ export default function ChatPane({
                         </div>
                     </div>
                     <div className="flex flex-col items-center gap-1.5">
-                        <div className="text-[13px] text-blue-400 font-medium">{t('chatPane.connectingToMachine')}<span className="connecting-dots"></span></div>
+                        <div className="text-xxs text-blue-400 font-medium">{t('chatPane.connectingToMachine')}<span className="connecting-dots"></span></div>
                         <div className="text-2xs opacity-35">{t('chatPane.establishingP2P')}</div>
                     </div>
                 </div>
@@ -452,7 +452,7 @@ export default function ChatPane({
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
-                    <div className="text-[13px] opacity-50">{t('chatPane.agentNotMonitored')}</div>
+                    <div className="text-xxs opacity-50">{t('chatPane.agentNotMonitored')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
                         {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.switchingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
@@ -464,7 +464,7 @@ export default function ChatPane({
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconEye size={28} /></div>
-                    <div className="text-[13px] opacity-50">{t('chatPane.agentPanelHidden')}</div>
+                    <div className="text-xxs opacity-50">{t('chatPane.agentPanelHidden')}</div>
                     <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
                         {isFocusingAgent ? <span className="inline-flex items-center gap-1.5"><IconSpinner size={12} />{t('chatPane.openingPanel')}</span> : <span className="flex items-center gap-1.5"><IconFolder size={14} /> {t('chatPane.openPanel', { label: panelLabel })}</span>}
                     </button>
@@ -478,14 +478,14 @@ export default function ChatPane({
                 return (
                     <div className="text-center mt-16 flex flex-col items-center gap-3">
                         <div className="opacity-40"><IconChat size={26} /></div>
-                        <div className="text-[13px] opacity-40">{t('chatPane.noMessagesYet')}</div>
+                        <div className="text-xxs opacity-40">{t('chatPane.noMessagesYet')}</div>
                     </div>
                 );
             }
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="opacity-40 animate-pulse"><IconChat size={26} /></div>
-                    <div className="text-[13px] opacity-40">{t('chatPane.loadingChat')}</div>
+                    <div className="text-xxs opacity-40">{t('chatPane.loadingChat')}</div>
                 </div>
             );
         }

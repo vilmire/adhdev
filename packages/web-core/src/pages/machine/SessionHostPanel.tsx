@@ -338,7 +338,7 @@ export default function SessionHostPanel({
                 <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                            <div className="font-medium text-[13px] text-text-primary">
+                            <div className="font-medium text-xxs text-text-primary">
                                 {session.displayName || linkedCli?.cliName || session.providerType}
                             </div>
                             <span className={`px-2 py-0.5 rounded-md text-3xs font-semibold ${lifecyclePillClass(session.lifecycle)}`}>

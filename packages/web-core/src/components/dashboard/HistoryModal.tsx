@@ -293,7 +293,7 @@ export default function HistoryModal({
                     {((isSavedSessionMode && !isSavedSessionsLoading && filteredSavedSessions.length === 0) || (!isSavedSessionMode && chats.length === 0)) && (
                         <div className="py-10 px-5 text-center text-text-muted">
                             <div className="text-3xl mb-3 opacity-60"><IconCandle size={32} /></div>
-                            <div className="text-[13px]">
+                            <div className="text-xxs">
                                 {isSavedSessionMode
                                     ? (savedSessions.length > 0 ? t('historyModal.noMatchingHistory') : getSavedHistoryEmptyStateLabel(t))
                                     : t('historyModal.noRecentChats')}
@@ -302,7 +302,7 @@ export default function HistoryModal({
                     )}
                     {isSavedSessionMode && isSavedSessionsLoading && (
                         <div className="py-10 px-5 text-center text-text-muted">
-                            <div className="text-[13px]">{getRefreshingSavedHistoryLabel(t)}</div>
+                            <div className="text-xxs">{getRefreshingSavedHistoryLabel(t)}</div>
                         </div>
                     )}
                 </div>

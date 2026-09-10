@@ -31,7 +31,7 @@ export function Section({ title, icon, description, accentColor, className, coll
                     </h3>
                 )}
                 {description && (
-                    <p className="text-[13px] text-text-muted mt-1">{description}</p>
+                    <p className="text-xxs text-text-muted mt-1">{description}</p>
                 )}
             </div>
             {collapsible && (

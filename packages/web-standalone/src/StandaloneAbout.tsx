@@ -148,7 +148,7 @@ export default function StandaloneAbout() {
 
             <Section title={t('standalone.about.comparisonSection')} description={t('standalone.about.comparisonDescription')}>
                 <div className="overflow-x-auto rounded-xl border border-border-subtle">
-                    <table className="w-full text-[13px]">
+                    <table className="w-full text-xxs">
                         <thead>
                             <tr className="bg-bg-secondary">
                                 <th className="text-left px-4 py-3 font-semibold text-text-muted text-2xs uppercase tracking-wider">{t('standalone.about.featureHeader')}</th>
