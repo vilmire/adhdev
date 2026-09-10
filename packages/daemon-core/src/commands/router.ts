@@ -1098,10 +1098,15 @@ export class DaemonCommandRouter {
      * @param cmd Command name
      * @param args Command arguments
      * @param source Log source ('ws' | 'p2p' | 'standalone' | etc.)
+     * @param opts.peerId Transport peer identifier for src:'p2p' commands (the
+     *   DataChannel connection id) — recorded in the command audit log so a P2P
+     *   command is attributable to a specific connected peer, not just "p2p".
+     *   Identifier only; never a username/email.
      */
-    async execute(cmd: string, args: any, source: string = 'unknown'): Promise<CommandRouterResult> {
+    async execute(cmd: string, args: any, source: string = 'unknown', opts?: { peerId?: string }): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
+        const peerId = typeof opts?.peerId === 'string' && opts.peerId.length > 0 ? opts.peerId : undefined;
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         const interactionId = typeof normalizedArgs._interactionId === 'string' ? normalizedArgs._interactionId : undefined;
 
@@ -1133,7 +1138,7 @@ export class DaemonCommandRouter {
             // 1. Try daemon-level command
             const daemonResult = await this.executeDaemonCommand(cmd, normalizedArgs);
             if (daemonResult) {
-                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
+                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
                 recordDebugTrace({
                     interactionId,
                     category: 'command',
@@ -1146,7 +1151,7 @@ export class DaemonCommandRouter {
 
             // 2. Delegate to DaemonCommandHandler
             const handlerResult = await this.deps.commandHandler.handle(cmd, normalizedArgs);
-            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
             recordDebugTrace({
                 interactionId,
                 category: 'command',
@@ -1173,7 +1178,7 @@ export class DaemonCommandRouter {
 
             return handlerResult;
         } catch (e: any) {
-            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
             recordDebugTrace({
                 interactionId,
                 category: 'command',
