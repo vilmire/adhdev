@@ -312,6 +312,63 @@ export interface ChatMessageRowProps {
      * same read-only reason as `onSendNow`.
      */
     onCancelQueued?: (pendingId: string) => void;
+    /**
+     * (TOOL-EXPAND) Fetch the untruncated body of this tool bubble. Optional —
+     * a pane with no daemon transport (static share views) simply renders the
+     * summary with no expand affordance.
+     */
+    onExpandToolBlock?: (ref: NonNullable<ChatMessage['toolBlockRef']>) => void;
+    /** Collapse back to the summary. */
+    onCollapseToolBlock?: () => void;
+    /** This row's expansion state, owned by the pane that does the fetching. */
+    toolExpand?: ToolExpandState;
+}
+
+/**
+ * (TOOL-EXPAND) Per-row expansion state. `text` replaces the summary once the
+ * daemon answers; `error` carries a typed refusal — most importantly
+ * `source_changed`, which must be SHOWN rather than silently swallowed, because
+ * the honest answer is "that output is gone", not an empty box.
+ */
+export interface ToolExpandState {
+    status: 'loading' | 'expanded' | 'error';
+    text?: string;
+    error?: string;
+}
+
+/** The expand / collapse footer of a truncated tool bubble. */
+function ToolExpandControl({
+    state,
+    onExpand,
+    onCollapse,
+}: {
+    state?: ToolExpandState;
+    onExpand: () => void;
+    onCollapse?: () => void;
+}) {
+    const { t } = useTranslation('common');
+    if (state?.status === 'loading') {
+        return <div className="chat-msg-tool-expand" aria-live="polite">{t('chat.toolExpandLoading')}</div>;
+    }
+    if (state?.status === 'error') {
+        return (
+            <div className="chat-msg-tool-expand chat-msg-tool-expand-error" role="status">
+                {t('chat.toolExpandUnavailable')}
+            </div>
+        );
+    }
+    if (state?.status === 'expanded') {
+        return (
+            <button type="button" className="chat-msg-tool-expand" onClick={onCollapse}>
+                {t('chat.toolCollapse')}
+            </button>
+        );
+    }
+    return (
+        <button type="button" className="chat-msg-tool-expand" onClick={onExpand}>
+            {t('chat.toolExpand')}
+        </button>
+    );
 }
 
 /** The per-entry id `withPendingLocalMessages` stamps onto a pending bubble. */
@@ -424,6 +481,9 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     onSendNow,
     isSendingNow,
     onCancelQueued,
+    onExpandToolBlock,
+    onCollapseToolBlock,
+    toolExpand,
 }: ChatMessageRowProps) {
     const { t } = useTranslation('common');
     const isQueued = isQueuedPendingLocal(message);
@@ -471,6 +531,11 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     }
 
     if (kind === 'tool') {
+        // (TOOL-EXPAND) The parser caps tool summaries and stamps a content-free
+        // ref only on bubbles it actually truncated, so the affordance appears
+        // exactly where there is more text to fetch — and never on a bubble
+        // whose expanded form would be identical.
+        const expandableRef = message.toolBlockRef;
         return (
             <div className="self-start chat-msg-tool" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
@@ -482,8 +547,17 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
                     </div>
                 ) : (
-                    <div className="tool-text w-full" style={{ whiteSpace: 'pre-wrap' }}>{contentStr}</div>
+                    <div className="tool-text w-full" style={{ whiteSpace: 'pre-wrap' }}>
+                        {toolExpand?.text ?? contentStr}
+                    </div>
                 )}
+                {expandableRef && onExpandToolBlock ? (
+                    <ToolExpandControl
+                        state={toolExpand}
+                        onExpand={() => onExpandToolBlock(expandableRef)}
+                        onCollapse={onCollapseToolBlock}
+                    />
+                ) : null}
             </div>
         );
     }
@@ -661,4 +735,15 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     // QUEUED-SEND-CANCEL: same stale-closure hazard as onSendNow — a cancel
     // wired to a previous render's handler would address the wrong queue.
     && prev.onCancelQueued === next.onCancelQueued
+    // TOOL-EXPAND: the expansion STATE drives what this row renders (summary vs
+    // full body vs error), so it must defeat memoization.
+    //
+    // The two handlers are deliberately NOT compared: the list binds them per
+    // row as fresh closures (`(ref) => onExpandToolBlock(messageKey, ref)`),
+    // exactly like `onToggleTextExpanded` above, so their identity changes every
+    // render and comparing them would disable memoization for every tool row.
+    // They are safe to omit for the same reason that one is: each closure only
+    // captures this row's own messageKey, so a "stale" one still addresses the
+    // right bubble — unlike onSendNow/onCancelQueued, which capture queue state.
+    && prev.toolExpand === next.toolExpand
 ));

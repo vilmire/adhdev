@@ -1421,6 +1421,48 @@
         min-width: 0;
     }
 
+    /* (TOOL-EXPAND) Expand/collapse footer. The bubble is a flex ROW, so this
+       wraps onto its own line rather than competing with the text for width;
+       an expanded body can be long, so it scrolls inside the bubble instead of
+       pushing the page sideways. */
+    .chat-msg-tool {
+        flex-wrap: wrap;
+    }
+
+    .chat-msg-tool .chat-msg-tool-expand {
+        flex: 0 0 100%;
+        margin-top: 4px;
+        padding: 0;
+        background: none;
+        border: none;
+        color: var(--chat-tool-accent);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-align: left;
+        text-transform: uppercase;
+        cursor: pointer;
+        opacity: 0.75;
+    }
+
+    .chat-msg-tool button.chat-msg-tool-expand:hover {
+        opacity: 1;
+        text-decoration: underline;
+    }
+
+    /* A refusal is informational text, not an action — no pointer, no hover. */
+    .chat-msg-tool .chat-msg-tool-expand-error {
+        cursor: default;
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 500;
+    }
+
+    .chat-msg-tool .tool-text {
+        max-height: 60vh;
+        overflow: auto;
+    }
+
     .chat-msg-terminal {
         max-width: min(82ch, 92%);
         min-width: 0;

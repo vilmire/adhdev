@@ -370,6 +370,10 @@ const SESSION_TARGET_COMMANDS = new Set([
   // cancel would report "adapter not found" for a body that is really queued.
   'cancel_queued_chat',
   'read_chat',
+  // (TOOL-EXPAND) Addresses one session's transcript file, so it needs the same
+  // sessionId → targetSessionId normalization read_chat gets — otherwise the
+  // ref would be resolved against whichever session happens to be current.
+  'expand_tool_block',
   'get_chat_debug_bundle',
   'chat_history',
   'resolve_action',
