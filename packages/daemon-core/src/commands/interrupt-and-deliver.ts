@@ -89,6 +89,13 @@ export const INTERRUPT_IDLE_POLL_MS = 120;
  *  never been observed live, a second unexplained control byte at an unknown TUI
  *  state is a change we have no evidence is safe — those keep the single press. */
 export const INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
+/** Head-room added to the idle timeout when reserving the driver's FIFO drain.
+ *
+ *  The reservation must outlive the idle wait AND the send that follows it, or
+ *  it would lapse in the window between the two and let a leftover entry take
+ *  the idle prompt — the very race it exists to close. It is only a backstop:
+ *  the normal path releases it explicitly in a `finally`. */
+export const DRAIN_RESERVE_SLACK_MS = 5_000;
 
 /** Statuses that mean the session is not free to accept a new turn. */
 const BUSY_STATUSES = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
@@ -130,6 +137,12 @@ export interface InterruptibleAdapter {
      *  FIFO, returning how many were taken. Optional: an adapter without it
      *  simply has no second delivery route to reconcile. */
     claimQueuedSends?(text: string): number;
+    /** SEND-NOW-WRONG-ITEM: suspend the driver's autonomous FIFO drain so this
+     *  call owns the next write. Optional — an adapter without it simply has no
+     *  competing drain (and no multi-entry queue) to hold back. */
+    reserveDrain?(ttlMs: number): void;
+    /** SEND-NOW-WRONG-ITEM: end the hold from reserveDrain(). */
+    releaseDrain?(): void;
 }
 
 function readStatus(adapter: InterruptibleAdapter): string | undefined {
@@ -227,43 +240,66 @@ export async function interruptAndDeliver(
         LOG.info('SendNow', `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body — this call is now its only delivery route`);
     }
 
-    // Step 2 — wait for the FSM to observe busy→idle before writing anything.
-    // A provider with a live-proven stop key gets one extra press partway
-    // through: see INTERRUPT_SECOND_PRESS_DELAY_MS.
-    const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
-        secondPress: interrupted.confidence === 'proven'
-            ? () => { void adapter.interruptTurn?.(); }
-            : undefined,
-        secondPressAfterMs: options?.secondPressAfterMs,
-    });
-    if (!wentIdle) {
-        // The stop key WAS written, so the turn is very likely already aborted;
-        // only the observation timed out. The body was deliberately NOT sent, and
-        // step 0 removed the queued copy that would otherwise have been drained
-        // behind our back — so "not delivered, retry is safe" is now literally
-        // true rather than the half-truth that produced a duplicate send live.
-        LOG.warn('SendNow', `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
-        return {
-            ok: false,
-            reason: 'idle_timeout',
-            message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. `
-                + 'Nothing was sent — send it again when the agent settles.',
-        };
-    }
+    // Step 0b — SEND-NOW-WRONG-ITEM: hold back the driver's own FIFO drain.
+    //
+    // Claiming this body is not enough when the owner has OTHER bodies queued.
+    // Interrupting is precisely what drives the machine to idle, and the driver
+    // drains on the same FSM frame it observes idle — strictly before step 2's
+    // poll can see it. So the entry queued AHEAD of this one gets written first,
+    // takes the in-flight latch, and step 3 re-parks the body the owner actually
+    // pressed. Live 2026-09-11 (rc.10): two bodies queued, Send now pressed on
+    // the second, the first was sent.
+    //
+    // The reservation spans exactly this sequence and is always released below,
+    // so the untouched entries keep their ordinary drain the moment we are done.
+    // It carries its own TTL as a backstop against a caller that never releases.
+    const reserveMs = (options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS) + DRAIN_RESERVE_SLACK_MS;
+    adapter.reserveDrain?.(reserveMs);
 
-    // Step 3 — ordinary send. Same call an idle send makes; the driver's own
-    // gates still apply and a re-park is reported as queued, not as delivered.
-    const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : undefined);
-    const queued = sendResult?.status === 'queued';
-    LOG.info(
-        'SendNow',
-        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'} (claimed=${claimed})`,
-    );
-    return {
-        ok: true,
-        delivered: !queued,
-        queued,
-        keyName: interrupted.keyName,
-        confidence: interrupted.confidence,
-    };
+    try {
+        // Step 2 — wait for the FSM to observe busy→idle before writing anything.
+        // A provider with a live-proven stop key gets one extra press partway
+        // through: see INTERRUPT_SECOND_PRESS_DELAY_MS.
+        const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+            secondPress: interrupted.confidence === 'proven'
+                ? () => { void adapter.interruptTurn?.(); }
+                : undefined,
+            secondPressAfterMs: options?.secondPressAfterMs,
+        });
+        if (!wentIdle) {
+            // The stop key WAS written, so the turn is very likely already aborted;
+            // only the observation timed out. The body was deliberately NOT sent, and
+            // step 0 removed the queued copy that would otherwise have been drained
+            // behind our back — so "not delivered, retry is safe" is now literally
+            // true rather than the half-truth that produced a duplicate send live.
+            LOG.warn('SendNow', `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
+            return {
+                ok: false,
+                reason: 'idle_timeout',
+                message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. `
+                    + 'Nothing was sent — send it again when the agent settles.',
+            };
+        }
+
+        // Step 3 — ordinary send. Same call an idle send makes; the driver's own
+        // gates still apply and a re-park is reported as queued, not as delivered.
+        const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : undefined);
+        const queued = sendResult?.status === 'queued';
+        LOG.info(
+            'SendNow',
+            `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'} (claimed=${claimed})`,
+        );
+        return {
+            ok: true,
+            delivered: !queued,
+            queued,
+            keyName: interrupted.keyName,
+            confidence: interrupted.confidence,
+        };
+    } finally {
+        // Release on EVERY exit, including the idle_timeout return and a throw.
+        // The owner's remaining queue is not this call's to hold: whatever
+        // happened to the pressed body, the rest must drain normally.
+        adapter.releaseDrain?.();
+    }
 }
