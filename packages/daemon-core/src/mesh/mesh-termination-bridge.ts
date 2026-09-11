@@ -218,6 +218,56 @@ export function resolveMeshTerminationBinding(settings: Record<string, unknown> 
 }
 
 /**
+ * SESSION-LIFECYCLE-LOG (defect 1) — write the session's END to the daemon log.
+ *
+ * The gap this closes: session lifecycle was observable ONLY in the mesh ledger (a
+ * per-mesh JSONL/SQLite store), never in the daemon log an operator actually greps
+ * when a session disappears. Measured 2026-09-11: across 14,715 lines of
+ * daemon-19223-2026-09-11.log spanning a coordinator's death by SIGTERM, a grep for
+ * `SIGTERM|terminat|kill|tombstone|coordinator` returned ZERO hits — the log's
+ * subsystems were Seqscribe/EventLoop/Mesh/ServerConn/P2P/MeshCommand/Quota/Provider
+ * and none of them says a session started or ended. The tombstone existed on disk the
+ * whole time; nothing surfaced it where it would be found.
+ *
+ * Field choices mirror what that investigation needed and could not get: which
+ * session, what provider, whether it was THE coordinator (the difference between "a
+ * worker died" and "the mesh lost its driver"), how it died (exitCode/signal, with
+ * 143 decoded to SIGTERM), and the OS pid to join against external process records.
+ *
+ * `requestedStop` is logged as the origin path when present: it is set only when the
+ * death followed a stop/delete/restart/prune request through the session-host API, so
+ * it distinguishes "the daemon asked for this" from "something outside killed it" —
+ * the first question asked of any unexpected session death.
+ *
+ * ★Content boundary: this logs identifiers, enums, numbers and timestamps ONLY. No
+ * chat content, no agent output, no prompt text, not even a message preview ever
+ * enters this line. Keep it that way — a log file is not a content sink.
+ */
+function logMeshSessionTerminated(input: MeshSessionTerminationLedgerInput): void {
+    try {
+        const { termination } = input;
+        const classified = classifyMeshTerminationStop(termination);
+        const parts = [
+            `session=${input.sessionId}`,
+            `mesh=${input.meshId}`,
+            ...(input.nodeId ? [`node=${input.nodeId}`] : []),
+            ...(input.providerType ? [`provider=${input.providerType}`] : []),
+            `coordinatorSession=${input.isCoordinator === true}`,
+            `reason=${classified.reason}`,
+            `intentional=${classified.intentional}`,
+            `exitCode=${termination.exitCode ?? 'unknown'}`,
+            `signal=${classified.signalName ?? classified.signal ?? 'none'}`,
+            ...(termination.requestedStop ? [`stopRequestedVia=${termination.requestedStop}`] : []),
+            ...(typeof termination.osPid === 'number' ? [`osPid=${termination.osPid}`] : []),
+            ...(termination.previousLifecycle ? [`previousLifecycle=${termination.previousLifecycle}`] : []),
+        ];
+        LOG.info('SessionLifecycle', `Session ENDED — ${parts.join(' ')}`);
+    } catch {
+        // Observability must never propagate into the PTY exit path.
+    }
+}
+
+/**
  * Append the `session_stopped` ledger entry for a terminated mesh session.
  *
  * Best-effort by construction: a ledger write must never propagate back into the
@@ -231,6 +281,12 @@ export function resolveMeshTerminationBinding(settings: Record<string, unknown> 
 export async function recordMeshSessionTerminationStop(
     input: MeshSessionTerminationLedgerInput,
 ): Promise<void> {
+    // SESSION-LIFECYCLE-LOG (defect 1): log BEFORE the requestedStop guard below.
+    // That guard exists only to avoid a DOUBLE LEDGER ROW (the mesh cleanup path
+    // already wrote `operator_cleanup`), which is a ledger concern — the daemon log
+    // has no such row and a daemon-requested stop is exactly the case the operator
+    // most needs to see, because it names who asked for the kill.
+    if (input.meshId && input.sessionId) logMeshSessionTerminated(input);
     if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
     try {
         const { appendLedgerEntry } = await import('./mesh-ledger.js');

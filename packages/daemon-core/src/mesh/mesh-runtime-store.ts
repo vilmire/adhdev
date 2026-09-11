@@ -3010,6 +3010,35 @@ export class MeshRuntimeStore {
     }
 
     /**
+     * COORD-GENERATION-HANDOFF (defect 3): rewrite a queued row's payload in place,
+     * used to strip the `targetCoordinatorSessionId` of a coordinator confirmed dead
+     * so the event falls through to daemon-level delivery.
+     *
+     * Why a payload rewrite is required rather than just re-queuing: the in-memory
+     * event the caller holds is a COPY. requeueDrainedPendingEventByFingerprint flips
+     * `drained` but never touches `payload`, so without this the dead session stamp
+     * survives in SQLite and the very next drain re-reads it, re-enters the strict-
+     * unmatched branch, and the event loops on every 4s tick until the TTL kills it —
+     * i.e. the reattribution would silently not stick.
+     *
+     * Scoped by fingerprint + drained = 0, so it can only ever touch the row this
+     * caller just returned to the queue. `queued_at` and `fingerprint` are untouched:
+     * the row keeps its identity (no duplicate can be created, all fingerprint-keyed
+     * dedup continues to match) and its true age.
+     *
+     * Returns true when a queued row was found and rewritten.
+     */
+    updatePendingEventPayloadByFingerprint(meshId: string, fingerprint: string, payload: unknown): boolean {
+        if (!fingerprint) return false;
+        const changes = this.db.prepare(
+            `UPDATE mesh_pending_events SET payload = ?
+             WHERE mesh_id = ? AND fingerprint = ? AND drained = 0`
+        ).run(JSON.stringify(payload), meshId, fingerprint).changes;
+        if (changes > 0) this.maybeCheckpointWal();
+        return changes > 0;
+    }
+
+    /**
      * ENTER-LOSS layer ③ (composer-residue recovery) — the row-id twin of
      * requeueDrainedPendingEventByFingerprint, with identical semantics: flip the
      * EXISTING drained row back to drained=0 IN PLACE. Never a re-insert — the
