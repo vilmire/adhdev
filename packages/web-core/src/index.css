@@ -1411,6 +1411,7 @@
     }
 
     .chat-msg-tool .tool-icon {
+        display: inline-block;
         width: 6px;
         height: 6px;
         border-radius: 999px;
