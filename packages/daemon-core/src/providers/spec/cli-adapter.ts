@@ -283,6 +283,38 @@ export class SpecCliAdapter implements CliAdapter {
         this.driver.start();
         this.spawned = true;
         this.spawnedAtMs = Date.now();
+        // SESSION-LIFECYCLE-LOG (defect 1): the START half of the session lifecycle
+        // pair. Its END is logged by the mesh termination bridge off the tombstone.
+        // Without this line the daemon log has no record that a session ever existed,
+        // so an operator grepping for a session id after it dies finds nothing to
+        // anchor on — measured 2026-09-11 across 14,715 log lines spanning a
+        // coordinator's death: zero session lifecycle lines of either kind.
+        //
+        // The mesh binding is read from runtimeSettings rather than imported, because
+        // `providers/**` must not value-import `mesh/**` (enforced by
+        // scripts/check-import-boundaries.mjs) — the same constraint that inverted the
+        // termination seam. These are plain string reads of stamps the instance
+        // already mirrors here, so no layering arrow is created.
+        //
+        // ★Content boundary: identifiers and enums only — never prompt or chat text,
+        // matching the content-free convention already used by sendMessage below.
+        try {
+            const settings = this.runtimeSettings as Record<string, unknown>;
+            const read = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+            const meshId = read(settings?.meshNodeFor) || read(settings?.meshCoordinatorFor);
+            const isCoordinator = !read(settings?.meshNodeFor) && !!read(settings?.meshCoordinatorFor);
+            const nodeId = read(settings?.meshNodeId);
+            const parts = [
+                `session=${this.owningSessionId || 'unknown'}`,
+                `provider=${this.cliType}`,
+                ...(meshId ? [`mesh=${meshId}`] : []),
+                ...(nodeId ? [`node=${nodeId}`] : []),
+                `coordinatorSession=${isCoordinator}`,
+            ];
+            LOG.info('SessionLifecycle', `Session STARTED — ${parts.join(' ')}`);
+        } catch {
+            // Observability must never break a spawn.
+        }
     }
 
     async sendMessage(text: string, _opts?: { force?: boolean; bracketedPaste?: boolean }): Promise<{ status: 'queued' | 'delivered' } | void> {

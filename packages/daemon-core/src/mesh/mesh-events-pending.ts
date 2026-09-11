@@ -1512,6 +1512,44 @@ export function requeueDrainedPendingMeshCoordinatorEvent(event: PendingMeshCoor
 }
 
 /**
+ * COORD-GENERATION-HANDOFF (defect 3): persist a queued event WITHOUT its
+ * `targetCoordinatorSessionId`, so an event addressed to a coordinator session
+ * confirmed dead becomes deliverable to any live coordinator on the mesh instead of
+ * expiring undelivered.
+ *
+ * Call only after the row has been returned to the queue
+ * (requeueDrainedPendingMeshCoordinatorEvent): that call flips `drained` but leaves
+ * `payload` alone, so the dead session stamp would otherwise be re-read from SQLite
+ * on the next drain and the release would not stick.
+ *
+ * This does NOT create a row and does NOT alter the fingerprint — the fingerprint
+ * builder never reads targetCoordinatorSessionId, so the row keeps its identity and
+ * every fingerprint-keyed dedup layer continues to treat it as the same event. That
+ * is what makes the release safe against double delivery.
+ *
+ * Returns true when the stored payload was rewritten.
+ */
+export function clearPendingEventCoordinatorSession(
+    meshId: string,
+    event: PendingMeshCoordinatorEvent,
+): boolean {
+    const fingerprint = buildPendingEventFingerprint(event);
+    if (!fingerprint.trim()) return false;
+    const { targetCoordinatorSessionId: _dead, ...released } = event;
+    try {
+        return MeshRuntimeStore.getInstance().updatePendingEventPayloadByFingerprint(meshId, fingerprint, released);
+    } catch (e: any) {
+        // Best-effort: the row is already back in the queue, so the worst case is the
+        // pre-fix behaviour (the stamp survives and the event follows the TTL path).
+        LOG.warn(
+            'MeshEvents',
+            `Failed to clear coordinator session stamp on queued ${event.event} for mesh ${meshId}: ${e?.message || e}`,
+        );
+        return false;
+    }
+}
+
+/**
  * Drain and return pending coordinator events for meshId, marking the drained rows
  * consumed in the SQLite inbox.
  *

@@ -21,9 +21,10 @@ import {
     getPendingMeshCoordinatorEvents,
     buildPendingEventFingerprint,
     requeueDrainedPendingMeshCoordinatorEvent,
+    clearPendingEventCoordinatorSession,
 } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { appendLedgerEntry, readLedgerEntriesByKind } from './mesh-ledger.js';
 import { readApprovalResolutionEntries, type ProjectedLedgerView } from './mesh-read-model-consumers.js';
 import { shouldForceInjectMeshEvent } from './mesh-events-coordinator.js';
 import { isMeshApprovalEvent, MESH_APPROVAL_EVENTS } from './mesh-event-classify.js';
@@ -769,12 +770,124 @@ const STRICT_SESSION_MATCH_TTL_MS = 60_000;
 // existing row back to drained=0 makes the hold survive a restart. queuedAt is preserved so
 // the TTL still measures the event's true age across holds.
 
+// COORD-GENERATION-HANDOFF (defect 3) — "is this coordinator session confirmed dead?"
+//
+// The discriminator is a `session_stopped` ledger row for the session, which is
+// written by exactly two authorities: the tombstone bridge (an observed PTY death,
+// mesh-termination-bridge) and the operator-cleanup path. Both mean the session is
+// gone for good — unlike mere absence from the live set, which a modal-parked or
+// mid-restore coordinator also produces and which MUST keep using the TTL hold.
+//
+// Deliberately conservative: no row → not tombstoned → unchanged TTL behaviour. A
+// read failure is likewise treated as "not tombstoned", so a ledger hiccup can only
+// ever fall back to the pre-existing hold/expire path, never strand or misroute an
+// event. That asymmetry is the safety property worth keeping in review.
+function isCoordinatorSessionTombstoned(meshId: string, sessionId: string): boolean {
+    if (!sessionId) return false;
+    try {
+        return readLedgerEntriesByKind(meshId, ['session_stopped'], TOMBSTONE_LOOKBACK_ENTRIES)
+            .some(entry => sessionIdsEquivalent(readNonEmptyString(entry.sessionId), sessionId));
+    } catch {
+        return false; // best-effort — a read failure must not change routing
+    }
+}
+
+// How far back to scan `session_stopped` rows when answering the question above.
+// Bounded so a long-lived mesh's ledger cannot turn a 4s reconcile tick into a full
+// history scan; generous enough that a coordinator that died within the window of
+// any still-held event (strict holds expire after 60s) is always found.
+const TOMBSTONE_LOOKBACK_ENTRIES = 200;
+
+/**
+ * Release a strict-routed event whose target coordinator session is confirmed dead,
+ * so a live successor coordinator can receive it instead of the event expiring.
+ *
+ * The release strips ONLY the session stamp. Everything else — queuedAt (so age and
+ * any downstream TTL still measure from the original enqueue), the daemon target, the
+ * v2 envelope, the metadata — rides through untouched, and the fingerprint is
+ * unchanged, so this is the same event landing on the ordinary session-less delivery
+ * rule rather than a new one.
+ */
+function releaseStrictRouteToDaemonLevel(
+    pending: PendingMeshCoordinatorEvent,
+    wantSession: string,
+    meshId: string,
+    queuedAt: number,
+): void {
+    // Drop the stamp that names the dead session; keep every other field.
+    const { targetCoordinatorSessionId: _dead, ...released } = pending;
+    const reattributed: PendingMeshCoordinatorEvent = { ...released, queuedAt };
+    try {
+        // Same durable in-place undrain the TTL hold uses: the row was already
+        // drained=1, and the normal persist path cannot re-queue a drained row (the
+        // UNIQUE (mesh_id, fingerprint) index carries no `drained` qualifier, so
+        // INSERT OR IGNORE would silently discard the copy while the drained=0 probe
+        // reported no duplicate — a hold that looks successful but writes nothing).
+        const requeued = requeueDrainedPendingMeshCoordinatorEvent(reattributed);
+        // The payload still carries the dead session stamp until the row is rewritten,
+        // so clear it there too; otherwise the next drain re-reads the stamp from
+        // SQLite and re-enters the strict-unmatched branch on every tick.
+        const cleared = requeued && clearPendingEventCoordinatorSession(meshId, reattributed);
+        LOG.warn(
+            'MeshReconcile',
+            `Strict route reattribution: coordinator session ${wantSession} is TOMBSTONED (confirmed dead) on mesh ${meshId} — `
+            + `released ${pending.event} to daemon-level delivery so a live successor coordinator receives it `
+            + `instead of expiring undelivered (durable=${requeued} stampCleared=${cleared})`,
+        );
+        // EVTTRACE: not a drop — the event stays queued and becomes deliverable to any
+        // live coordinator on this mesh. Traced under its own stage so the reattribution
+        // is distinguishable from both the TTL hold and the expiry in an audit.
+        traceMeshEventDrop('strict_route_reattributed', {
+            taskId: pending.metadataEvent?.taskId,
+            sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+            nodeId: pending.nodeId,
+            meshId,
+            event: pending.event,
+        }, `coordinatorSession=${wantSession} tombstoned → released to daemon-level durable=${requeued}`);
+    } catch (e: any) {
+        LOG.warn('MeshReconcile', `Strict route reattribution failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
+    }
+}
+
 export function holdOrExpireStrictUnmatchedEvent(
     pending: PendingMeshCoordinatorEvent,
     wantSession: string,
     meshId: string,
 ): void {
     const queuedAt = typeof pending.queuedAt === 'number' ? pending.queuedAt : Date.now();
+
+    // COORD-GENERATION-HANDOFF (defect 3): a coordinator session that is merely
+    // absent from this daemon's live set may still come back (modal-parked, brief
+    // restart, not-yet-restored), so the TTL hold above is correct for it. A
+    // coordinator whose death is CONFIRMED by a tombstone never will — holding the
+    // event for it only burns the TTL and then expires a completion that a live
+    // successor coordinator was sitting right there to receive. Observed twice on
+    // 2026-09-11: target 270c7cf7 (dead 4min, successor live since 10:26) and target
+    // 6b290e86 (dead 13min, successor live) both expired undelivered.
+    //
+    // The reattribution is deliberately a RELEASE, not a re-address: we strip the
+    // session stamp and let the event fall through the pre-existing session-less
+    // rule (daemon-level target set), rather than inventing a "who inherits" policy
+    // inside strict routing. That choice matters — picking an heir would be a new
+    // misroute surface in a multi-coordinator mesh, which is the exact failure
+    // strict routing exists to prevent. With the stamp cleared the outcome is
+    // whatever the ordinary rules already say: one live coordinator receives it, N
+    // live coordinators follow the established session-less delivery rule, and zero
+    // live coordinators leaves it queued for a later tick.
+    //
+    // Dedup is unaffected by construction: buildPendingEventFingerprint does NOT
+    // read targetCoordinatorSessionId, so the released copy keeps the SAME
+    // fingerprint. All three layers therefore still see it as the same event —
+    // the pre-insert hasPendingCoordinatorEventDuplicate probe, the
+    // UNIQUE (mesh_id, fingerprint) index, and the durable DUPN record. This is
+    // also why the release goes through requeueDrainedPendingMeshCoordinatorEvent
+    // (flip the existing row back to drained=0 in place) rather than a fresh
+    // insert: the row keeps its identity, so no duplicate can be created at all.
+    if (isCoordinatorSessionTombstoned(meshId, wantSession)) {
+        releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt);
+        return;
+    }
+
     if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
         try {
             const requeued = requeueDrainedPendingMeshCoordinatorEvent(pending); // preserves queuedAt → true age retained
@@ -810,6 +923,17 @@ export function holdOrExpireStrictUnmatchedEvent(
                 ...(pending.workspace ? { workspace: pending.workspace } : {}),
                 queuedAt,
                 ...(finalSummary ? { finalSummary } : {}),
+                // NOTIF-LOSS (defect 2): the machine recovery copy. This writer was the
+                // ONE `event_held` feeder that omitted it while still claiming
+                // `recoverable: true`, so mesh_requeue_held_events — which reconstructs
+                // solely from payload.heldEvent — reported every strict_route_expired
+                // entry as `unrecoverable: no restorable original event`, breaking the
+                // tool's documented "Lossless: the full original event is restored"
+                // contract. Measured 2026-09-11: held entry ec6cace0 (a worker's
+                // agent:generating_completed) was permanently unrecoverable. The flat
+                // fields above remain the human-readable audit; this is the machine copy,
+                // matching ledgerRecordQuarantinedEvent / the C1 and hold-ceiling feeders.
+                heldEvent: pending,
             },
         });
         LOG.warn('MeshReconcile', `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} — recorded to ledger (recoverable), dropped (${pending.event})`);

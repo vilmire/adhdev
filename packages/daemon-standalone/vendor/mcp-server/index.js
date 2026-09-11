@@ -55485,6 +55485,20 @@ ${lines.join("\n")}
       }
       return requeued;
     }
+    function clearPendingEventCoordinatorSession(meshId, event) {
+      const fingerprint = buildPendingEventFingerprint(event);
+      if (!fingerprint.trim()) return false;
+      const { targetCoordinatorSessionId: _dead, ...released } = event;
+      try {
+        return MeshRuntimeStore.getInstance().updatePendingEventPayloadByFingerprint(meshId, fingerprint, released);
+      } catch (e) {
+        LOG.warn(
+          "MeshEvents",
+          `Failed to clear coordinator session stamp on queued ${event.event} for mesh ${meshId}: ${e?.message || e}`
+        );
+        return false;
+      }
+    }
     function drainPendingMeshCoordinatorEvents3(meshId, coordinatorDaemonId, opts) {
       if (!meshId) return [];
       const daemonIds = normalizeCoordinatorDaemonIds(coordinatorDaemonId);
@@ -72366,6 +72380,34 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
              WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
             ).run(meshId, fingerprint).changes;
+            if (changes > 0) this.maybeCheckpointWal();
+            return changes > 0;
+          }
+          /**
+           * COORD-GENERATION-HANDOFF (defect 3): rewrite a queued row's payload in place,
+           * used to strip the `targetCoordinatorSessionId` of a coordinator confirmed dead
+           * so the event falls through to daemon-level delivery.
+           *
+           * Why a payload rewrite is required rather than just re-queuing: the in-memory
+           * event the caller holds is a COPY. requeueDrainedPendingEventByFingerprint flips
+           * `drained` but never touches `payload`, so without this the dead session stamp
+           * survives in SQLite and the very next drain re-reads it, re-enters the strict-
+           * unmatched branch, and the event loops on every 4s tick until the TTL kills it —
+           * i.e. the reattribution would silently not stick.
+           *
+           * Scoped by fingerprint + drained = 0, so it can only ever touch the row this
+           * caller just returned to the queue. `queued_at` and `fingerprint` are untouched:
+           * the row keeps its identity (no duplicate can be created, all fingerprint-keyed
+           * dedup continues to match) and its true age.
+           *
+           * Returns true when a queued row was found and rewritten.
+           */
+          updatePendingEventPayloadByFingerprint(meshId, fingerprint, payload) {
+            if (!fingerprint) return false;
+            const changes = this.db.prepare(
+              `UPDATE mesh_pending_events SET payload = ?
+             WHERE mesh_id = ? AND fingerprint = ? AND drained = 0`
+            ).run(JSON.stringify(payload), meshId, fingerprint).changes;
             if (changes > 0) this.maybeCheckpointWal();
             return changes > 0;
           }
@@ -94251,8 +94293,41 @@ ${cleanBody}`;
       }
       return delivered;
     }
+    function isCoordinatorSessionTombstoned(meshId, sessionId) {
+      if (!sessionId) return false;
+      try {
+        return readLedgerEntriesByKind(meshId, ["session_stopped"], TOMBSTONE_LOOKBACK_ENTRIES).some((entry) => sessionIdsEquivalent(readNonEmptyString(entry.sessionId), sessionId));
+      } catch {
+        return false;
+      }
+    }
+    function releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt) {
+      const { targetCoordinatorSessionId: _dead, ...released } = pending;
+      const reattributed = { ...released, queuedAt };
+      try {
+        const requeued = requeueDrainedPendingMeshCoordinatorEvent(reattributed);
+        const cleared = requeued && clearPendingEventCoordinatorSession(meshId, reattributed);
+        LOG.warn(
+          "MeshReconcile",
+          `Strict route reattribution: coordinator session ${wantSession} is TOMBSTONED (confirmed dead) on mesh ${meshId} \u2014 released ${pending.event} to daemon-level delivery so a live successor coordinator receives it instead of expiring undelivered (durable=${requeued} stampCleared=${cleared})`
+        );
+        traceMeshEventDrop("strict_route_reattributed", {
+          taskId: pending.metadataEvent?.taskId,
+          sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+          nodeId: pending.nodeId,
+          meshId,
+          event: pending.event
+        }, `coordinatorSession=${wantSession} tombstoned \u2192 released to daemon-level durable=${requeued}`);
+      } catch (e) {
+        LOG.warn("MeshReconcile", `Strict route reattribution failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
+      }
+    }
     function holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId) {
       const queuedAt = typeof pending.queuedAt === "number" ? pending.queuedAt : Date.now();
+      if (isCoordinatorSessionTombstoned(meshId, wantSession)) {
+        releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt);
+        return;
+      }
       if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
         try {
           const requeued = requeueDrainedPendingMeshCoordinatorEvent(pending);
@@ -94283,7 +94358,18 @@ ${cleanBody}`;
             nodeLabel: pending.nodeLabel,
             ...pending.workspace ? { workspace: pending.workspace } : {},
             queuedAt,
-            ...finalSummary ? { finalSummary } : {}
+            ...finalSummary ? { finalSummary } : {},
+            // NOTIF-LOSS (defect 2): the machine recovery copy. This writer was the
+            // ONE `event_held` feeder that omitted it while still claiming
+            // `recoverable: true`, so mesh_requeue_held_events — which reconstructs
+            // solely from payload.heldEvent — reported every strict_route_expired
+            // entry as `unrecoverable: no restorable original event`, breaking the
+            // tool's documented "Lossless: the full original event is restored"
+            // contract. Measured 2026-09-11: held entry ec6cace0 (a worker's
+            // agent:generating_completed) was permanently unrecoverable. The flat
+            // fields above remain the human-readable audit; this is the machine copy,
+            // matching ledgerRecordQuarantinedEvent / the C1 and hold-ceiling feeders.
+            heldEvent: pending
           }
         });
         LOG.warn("MeshReconcile", `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} \u2014 recorded to ledger (recoverable), dropped (${pending.event})`);
@@ -94304,6 +94390,7 @@ ${cleanBody}`;
     var HOLD_CEILING_EXCEEDED_HOLD_REASON;
     var holdCeilingLedgerRecorded;
     var STRICT_SESSION_MATCH_TTL_MS;
+    var TOMBSTONE_LOOKBACK_ENTRIES;
     var init_mesh_reconcile_coordinator_drain = __esm2({
       "src/mesh/mesh-reconcile-coordinator-drain.ts"() {
         "use strict";
@@ -94323,6 +94410,7 @@ ${cleanBody}`;
         HOLD_CEILING_EXCEEDED_HOLD_REASON = "hold_ceiling_exceeded";
         holdCeilingLedgerRecorded = /* @__PURE__ */ new Set();
         STRICT_SESSION_MATCH_TTL_MS = 6e4;
+        TOMBSTONE_LOOKBACK_ENTRIES = 200;
       }
     });
     function resolveConsumeGraceMs(profile) {
@@ -109290,6 +109378,22 @@ ${text}` : text;
             this.driver.start();
             this.spawned = true;
             this.spawnedAtMs = Date.now();
+            try {
+              const settings = this.runtimeSettings;
+              const read = (v) => typeof v === "string" ? v.trim() : "";
+              const meshId = read(settings?.meshNodeFor) || read(settings?.meshCoordinatorFor);
+              const isCoordinator = !read(settings?.meshNodeFor) && !!read(settings?.meshCoordinatorFor);
+              const nodeId = read(settings?.meshNodeId);
+              const parts = [
+                `session=${this.owningSessionId || "unknown"}`,
+                `provider=${this.cliType}`,
+                ...meshId ? [`mesh=${meshId}`] : [],
+                ...nodeId ? [`node=${nodeId}`] : [],
+                `coordinatorSession=${isCoordinator}`
+              ];
+              LOG.info("SessionLifecycle", `Session STARTED \u2014 ${parts.join(" ")}`);
+            } catch {
+            }
           }
           async sendMessage(text, _opts) {
             LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length})`);
@@ -160938,7 +161042,30 @@ data: ${JSON.stringify(msg.data)}
       if (coordinatorMeshId) return { meshId: coordinatorMeshId, isCoordinator: true };
       return null;
     }
+    function logMeshSessionTerminated(input) {
+      try {
+        const { termination } = input;
+        const classified = classifyMeshTerminationStop(termination);
+        const parts = [
+          `session=${input.sessionId}`,
+          `mesh=${input.meshId}`,
+          ...input.nodeId ? [`node=${input.nodeId}`] : [],
+          ...input.providerType ? [`provider=${input.providerType}`] : [],
+          `coordinatorSession=${input.isCoordinator === true}`,
+          `reason=${classified.reason}`,
+          `intentional=${classified.intentional}`,
+          `exitCode=${termination.exitCode ?? "unknown"}`,
+          `signal=${classified.signalName ?? classified.signal ?? "none"}`,
+          ...termination.requestedStop ? [`stopRequestedVia=${termination.requestedStop}`] : [],
+          ...typeof termination.osPid === "number" ? [`osPid=${termination.osPid}`] : [],
+          ...termination.previousLifecycle ? [`previousLifecycle=${termination.previousLifecycle}`] : []
+        ];
+        LOG.info("SessionLifecycle", `Session ENDED \u2014 ${parts.join(" ")}`);
+      } catch {
+      }
+    }
     async function recordMeshSessionTerminationStop(input) {
+      if (input.meshId && input.sessionId) logMeshSessionTerminated(input);
       if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
       try {
         const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
