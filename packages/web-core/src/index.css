@@ -1213,6 +1213,42 @@
         cursor: default;
     }
 
+    /* QUEUED-SEND-CANCEL: withdraw a body that is still parked in the daemon's
+       FIFO. Deliberately quieter than Send now — Send now is the action the
+       owner usually wants on a message they just typed, and cancel is the
+       destructive one, so it must not read as the primary control. It shares the
+       pill geometry so the two sit together as one control group; the label-vs-
+       buttons split is handled by `margin-left: auto` on the first button rather
+       than `space-between`, which mis-distributes three children. */
+    .chat-bubble-send-now {
+        margin-left: auto;
+    }
+
+    .chat-bubble-cancel-queued {
+        flex: 0 0 auto;
+        min-height: 28px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+        background: transparent;
+        color: inherit;
+        opacity: 0.75;
+        font-size: var(--chat-header-font-size);
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, opacity 0.15s;
+    }
+
+    .chat-bubble-cancel-queued:hover:not(:disabled) {
+        background: color-mix(in srgb, currentColor 12%, transparent);
+        opacity: 1;
+    }
+
+    .chat-bubble-cancel-queued:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+
     .chat-copy-btn {
         display: inline-flex;
         align-items: center;

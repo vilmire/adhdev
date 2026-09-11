@@ -1538,7 +1538,10 @@
         "sendNow": "지금 보내기",
         "sending": "보내는 중…",
         "sendNowAria": "에이전트의 현재 턴을 중단하고 지금 보내기",
-        "sendNowTitle": "에이전트의 현재 턴을 중단하고 이 메시지를 지금 보냅니다. 진행 중인 턴은 사라집니다."
+        "sendNowTitle": "에이전트의 현재 턴을 중단하고 이 메시지를 지금 보냅니다. 진행 중인 턴은 사라집니다.",
+        "cancelQueued": "취소",
+        "cancelQueuedAria": "대기 중인 이 메시지 취소",
+        "cancelQueuedTitle": "이 메시지를 대기열에서 제거합니다. 에이전트에게 전송되지 않습니다."
     },
     "chatPane": {
         "connectingToMachine": "머신에 연결 중",

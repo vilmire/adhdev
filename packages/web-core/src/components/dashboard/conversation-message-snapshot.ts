@@ -35,6 +35,12 @@ export function getConversationLiveMessages(
  * "my message was lost" and provokes a resend.
  */
 export interface PendingLocalMessage {
+    /**
+     * Stable per-entry identity (MULTI-QUEUE). Optional so a caller holding a
+     * legacy single entry still type-checks; `withPendingLocalMessages` falls
+     * back to `sentAt` for the bubble id when it is absent.
+     */
+    id?: string
     /** Exact text submitted, used both to render and to match the echo. */
     content: string
     /** `Date.now()` at submit — orders the bubble and bounds its lifetime. */
@@ -99,22 +105,30 @@ export function hasEchoedPendingMessage(
 }
 
 /**
- * Append the optimistic bubble to the live tail, unless it has been echoed,
- * has expired, or is empty.
+ * How many live echoes match this body?
  *
- * Returns the input array unchanged in every no-op case so React reference
- * equality still short-circuits renders on the common path.
+ * MULTI-QUEUE needs a COUNT, not the boolean `hasEchoedPendingMessage` answers.
+ * With several queued entries the owner can legitimately queue the same text
+ * twice ("continue", "continue"); a boolean would let ONE echo retire BOTH
+ * bubbles, hiding a body that is still parked in the daemon FIFO — reproducing
+ * the very disappearance this change exists to fix, just one message later.
+ * Counting lets each echo retire exactly one entry.
  */
-export function withPendingLocalMessage(
-    liveMessages: DashboardMessage[],
-    pending: PendingLocalMessage | null | undefined,
-    now: number = Date.now(),
-): DashboardMessage[] {
-    if (!pending || !pending.content.trim()) return liveMessages
-    if (now - pending.sentAt > PENDING_LOCAL_MESSAGE_MAX_AGE_MS) return liveMessages
-    if (hasEchoedPendingMessage(liveMessages, pending)) return liveMessages
-    const bubble = {
-        id: `pending-local:${pending.sentAt}`,
+function countEchoedMessages(liveMessages: DashboardMessage[], target: string): number {
+    if (!target) return 0
+    let count = 0
+    for (const message of liveMessages) {
+        if (String(message.role || '').toLowerCase() !== 'user') continue
+        if (normalizeForEchoMatch(message.content) === target) count += 1
+    }
+    return count
+}
+
+function buildPendingBubble(pending: PendingLocalMessage): DashboardMessage {
+    return {
+        // Per-entry id so React keys stay unique across a multi-entry queue.
+        // `sentAt` alone collided when two sends landed in the same millisecond.
+        id: `pending-local:${pending.id || pending.sentAt}`,
         role: 'user',
         kind: 'standard',
         content: pending.content,
@@ -123,10 +137,76 @@ export function withPendingLocalMessage(
         receivedAt: pending.sentAt,
         // Read by the renderer to show a "sending"/"queued" affordance. The
         // bubble is real text the owner typed, so it renders as a normal user
-        // message; only the affordance distinguishes it.
-        meta: { pendingLocal: true, queued: pending.queued === true },
+        // message; only the affordance distinguishes it. `pendingId` is what the
+        // per-item Send now / Cancel handlers address.
+        meta: {
+            pendingLocal: true,
+            queued: pending.queued === true,
+            pendingId: pending.id || String(pending.sentAt),
+        },
     } as unknown as DashboardMessage
-    return [...liveMessages, bubble]
+}
+
+/**
+ * Append every still-waiting optimistic bubble to the END of the live tail.
+ *
+ * ★ BOTTOM PINNING is structural, not a scroll trick. These bubbles are appended
+ * after `liveMessages`, and `buildVisibleConversationMessages` runs its
+ * chronological sort BEFORE they are added — so nothing can reorder a waiting
+ * message above delivered history. A queued body is, by definition, the newest
+ * thing in the conversation until it is delivered, and it stays visible at the
+ * bottom no matter where the owner has scrolled.
+ *
+ * Entries are emitted in FIFO order (oldest first), matching the daemon's own
+ * drain order, so the displayed order is the delivery order.
+ *
+ * Returns the input array unchanged in every no-op case so React reference
+ * equality still short-circuits renders on the common path.
+ */
+export function withPendingLocalMessages(
+    liveMessages: DashboardMessage[],
+    pending: readonly PendingLocalMessage[] | null | undefined,
+    now: number = Date.now(),
+): DashboardMessage[] {
+    if (!pending || pending.length === 0) return liveMessages
+
+    // Echo budget per distinct body: each live echo retires at most one entry.
+    const echoBudget = new Map<string, number>()
+    const bubbles: DashboardMessage[] = []
+
+    for (const entry of pending) {
+        const target = entry.content.trim()
+        if (!target) continue
+        if (now - entry.sentAt > PENDING_LOCAL_MESSAGE_MAX_AGE_MS) continue
+        if (!echoBudget.has(target)) echoBudget.set(target, countEchoedMessages(liveMessages, target))
+        const remaining = echoBudget.get(target) || 0
+        if (remaining > 0) {
+            // This entry is accounted for by an echo already on screen — retire it
+            // rather than rendering the owner's message twice.
+            echoBudget.set(target, remaining - 1)
+            continue
+        }
+        bubbles.push(buildPendingBubble(entry))
+    }
+
+    if (bubbles.length === 0) return liveMessages
+    return [...liveMessages, ...bubbles]
+}
+
+/**
+ * Single-entry compatibility wrapper.
+ *
+ * Kept because the read-only share viewer and older call sites pass one entry,
+ * and because the dedup contract documented above is easier to reason about in
+ * its original one-message form.
+ */
+export function withPendingLocalMessage(
+    liveMessages: DashboardMessage[],
+    pending: PendingLocalMessage | null | undefined,
+    now: number = Date.now(),
+): DashboardMessage[] {
+    if (!pending) return liveMessages
+    return withPendingLocalMessages(liveMessages, [pending], now)
 }
 
 function isConversationAnchorMessage(message: DashboardMessage): boolean {

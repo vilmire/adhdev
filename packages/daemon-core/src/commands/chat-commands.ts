@@ -14,6 +14,7 @@ export { sanitizeDebugBundleValue, handleGetChatDebugBundle } from './chat-comma
 export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read.js';
 export {
     handleSendChat,
+    handleCancelQueuedChat,
     handleListChats,
     handleNewChat,
     handleSwitchChat,

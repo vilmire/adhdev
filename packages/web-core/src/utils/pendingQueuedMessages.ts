@@ -1,0 +1,204 @@
+/**
+ * (QUEUED-SEND-RESTART-LOSS) Durable store for the owner's PARKED chat bodies.
+ *
+ * ★ WHAT WAS ACTUALLY BROKEN — the body was never lost, the UI's memory of it was.
+ *
+ * When the agent is busy the daemon parks the body in `FsmDriver.pendingSends`
+ * (a real FIFO array, in the daemon process) and answers `{queued:true}`. That
+ * FIFO drains on its own and the message IS eventually delivered. But the
+ * dashboard rendered the waiting bubble from `useState<PendingLocalMessage>` —
+ * pure React memory — and the daemon never reports queue depth back to any
+ * surface. So reloading the dashboard erased every trace of the wait: the owner
+ * saw their message simply gone while it was still sitting in the daemon queue,
+ * which reads as "my message was lost" and provokes a resend.
+ *
+ * ★ WHY localStorage and NOT the server.
+ *
+ * These bodies are chat content the OWNER TYPED. `CLAUDE.md`'s server content
+ * boundary is explicit that the status path carries no user chat content, and
+ * the two standing exceptions (approval-modal text for push actionability,
+ * Beacon's topic-name keys) are both narrow and both were decided deliberately.
+ * Persisting drafts server-side would open a third, far wider hole — the full
+ * body of arbitrary user prompts — for a purely local presentation concern.
+ * localStorage keeps the text on the machine that typed it and travels through
+ * no transport at all, so this change cannot touch that boundary.
+ *
+ * ★ Why not sessionStorage: the reported case is closing and reopening the app,
+ * which is exactly what sessionStorage does not survive.
+ */
+
+const PENDING_QUEUED_MESSAGES_KEY = 'adhdev-pending-queued-messages-v1'
+
+/**
+ * Per-conversation cap. The daemon's own FIFO is unbounded, but a runaway local
+ * store would be a silent quota leak, and a queue this deep is already a
+ * pathological state the owner should see and clear rather than accumulate.
+ */
+export const MAX_PENDING_QUEUED_MESSAGES = 20
+
+/**
+ * Upper bound on how long a persisted entry may survive.
+ *
+ * Restart persistence has no echo-matching until the pane remounts and the
+ * transcript loads, so a body whose delivery we never observed would otherwise
+ * be pinned forever. A day is far above any plausible queue drain while still
+ * guaranteeing the store self-empties.
+ */
+export const PENDING_QUEUED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+export interface PendingQueuedMessage {
+    /**
+     * Stable per-entry identity, minted at submit.
+     *
+     * ★ Required for MULTI-QUEUE. The pre-existing single-slot state keyed the
+     * bubble by `sentAt` alone; with several entries in flight that is both a
+     * collision risk (two sends inside the same millisecond) and useless as a
+     * React key. Per-item Send now / Cancel both address an entry by this id, so
+     * acting on the second queued message can never hit the first.
+     */
+    id: string
+    /** Exact text submitted — used to render, to match the echo, and to cancel. */
+    content: string
+    /** `Date.now()` at submit. Orders the queue (FIFO) and bounds its lifetime. */
+    sentAt: number
+    /** True once the daemon answered `queued` (parked, not yet written to the PTY). */
+    queued?: boolean
+}
+
+interface PendingQueuedMessagesStore {
+    byKey: Record<string, PendingQueuedMessage[]>
+}
+
+function readStore(): PendingQueuedMessagesStore {
+    if (typeof window === 'undefined') return { byKey: {} }
+    try {
+        const parsed = JSON.parse(
+            window.localStorage.getItem(PENDING_QUEUED_MESSAGES_KEY) || '{}',
+        ) as Partial<PendingQueuedMessagesStore>
+        return { byKey: parsed.byKey && typeof parsed.byKey === 'object' ? parsed.byKey : {} }
+    } catch {
+        return { byKey: {} }
+    }
+}
+
+function writeStore(store: PendingQueuedMessagesStore): void {
+    if (typeof window === 'undefined') return
+    try {
+        window.localStorage.setItem(PENDING_QUEUED_MESSAGES_KEY, JSON.stringify(store))
+    } catch {
+        /* quota / private mode — persistence is best-effort, never a send blocker */
+    }
+}
+
+/**
+ * Drop malformed and expired rows.
+ *
+ * Applied on every read as well as every write, so a store written by an older
+ * build (or hand-edited) can never crash the pane or resurrect an ancient body.
+ */
+function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
+    if (!Array.isArray(raw)) return []
+    const seen = new Set<string>()
+    const entries: { entry: PendingQueuedMessage; index: number }[] = []
+    let index = 0
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') continue
+        const candidate = item as Partial<PendingQueuedMessage>
+        const content = typeof candidate.content === 'string' ? candidate.content : ''
+        const sentAt = typeof candidate.sentAt === 'number' && Number.isFinite(candidate.sentAt)
+            ? candidate.sentAt
+            : 0
+        const id = typeof candidate.id === 'string' && candidate.id ? candidate.id : ''
+        if (!content.trim() || !sentAt || !id) continue
+        if (now - sentAt > PENDING_QUEUED_MESSAGE_MAX_AGE_MS) continue
+        if (seen.has(id)) continue
+        seen.add(id)
+        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true }, index })
+        index += 1
+    }
+    // FIFO: oldest first, matching the daemon's own drain order so the rendered
+    // order is the order the bodies will actually be delivered in.
+    //
+    // ★ The tie-break is ARRAY POSITION, not the id. Two sends inside the same
+    // millisecond share a `sentAt` — common, since queueing happens exactly when
+    // the user is firing messages at a busy agent — and ids are random UUIDs, so
+    // breaking ties by id sorts same-millisecond entries into random order and
+    // silently scrambles the queue across a reload. Position is the only key
+    // that carries the real insertion order.
+    entries.sort((a, b) => (a.entry.sentAt - b.entry.sentAt) || (a.index - b.index))
+    return entries.map(e => e.entry).slice(-MAX_PENDING_QUEUED_MESSAGES)
+}
+
+/**
+ * Mint an entry id.
+ *
+ * `crypto.randomUUID` where available; otherwise a timestamp+counter fallback,
+ * because the id only has to be unique within one browser's store — it is never
+ * sent anywhere and the daemon never sees it.
+ */
+let idCounter = 0
+export function createPendingQueuedMessageId(now: number = Date.now()): string {
+    try {
+        const cryptoRef = (typeof globalThis !== 'undefined' ? globalThis.crypto : undefined) as
+            | { randomUUID?: () => string }
+            | undefined
+        if (typeof cryptoRef?.randomUUID === 'function') return cryptoRef.randomUUID()
+    } catch {
+        /* fall through */
+    }
+    idCounter += 1
+    return `pq-${now}-${idCounter}`
+}
+
+export function readPendingQueuedMessages(
+    storeKey: string,
+    now: number = Date.now(),
+): PendingQueuedMessage[] {
+    const key = String(storeKey || '').trim()
+    if (!key) return []
+    return sanitizeEntries(readStore().byKey[key], now)
+}
+
+/**
+ * Replace one conversation's queue wholesale.
+ *
+ * The hook owns the array and treats React state as the authority, so writes are
+ * whole-list rather than incremental — that keeps the persisted copy and the
+ * rendered copy from drifting apart, which is the failure mode that produced
+ * this defect in the first place.
+ */
+export function writePendingQueuedMessages(
+    storeKey: string,
+    entries: PendingQueuedMessage[],
+    now: number = Date.now(),
+): void {
+    const key = String(storeKey || '').trim()
+    if (!key) return
+    const store = readStore()
+    const sanitized = sanitizeEntries(entries, now)
+    if (sanitized.length > 0) {
+        store.byKey[key] = sanitized
+    } else {
+        // Never leave an empty array behind: an emptied conversation should stop
+        // occupying the store at all.
+        delete store.byKey[key]
+    }
+    writeStore(store)
+}
+
+/** Drop every persisted queue whose newest entry has aged out. Cheap store hygiene. */
+export function prunePendingQueuedMessages(now: number = Date.now()): void {
+    const store = readStore()
+    let changed = false
+    for (const key of Object.keys(store.byKey)) {
+        const sanitized = sanitizeEntries(store.byKey[key], now)
+        if (sanitized.length === 0) {
+            delete store.byKey[key]
+            changed = true
+        } else if (sanitized.length !== (store.byKey[key] || []).length) {
+            store.byKey[key] = sanitized
+            changed = true
+        }
+    }
+    if (changed) writeStore(store)
+}

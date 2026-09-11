@@ -255,6 +255,11 @@ const CHAT_COMMANDS = [
 const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
     'invoke_provider_script',
     'resolve_action',
+    // cancel_queued_chat must reach the OWNING worker: the parked body lives in
+    // that daemon's driver FIFO, and the coordinator has no adapter to claim it
+    // from. Unlike send_chat (excluded above because it already reaches the
+    // worker by its own route), this command has no route of its own.
+    'cancel_queued_chat',
     'set_mode',
     'change_model',
     'set_thought_level',

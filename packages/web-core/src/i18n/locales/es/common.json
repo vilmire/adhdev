@@ -1543,7 +1543,10 @@
         "sendNow": "Enviar ahora",
         "sending": "Enviando…",
         "sendNowAria": "Enviar ahora interrumpiendo el turno actual del agente",
-        "sendNowTitle": "Interrumpe el turno actual del agente y envía este mensaje ahora. El turno en curso se perderá."
+        "sendNowTitle": "Interrumpe el turno actual del agente y envía este mensaje ahora. El turno en curso se perderá.",
+        "cancelQueued": "Cancelar",
+        "cancelQueuedAria": "Cancelar este mensaje en cola",
+        "cancelQueuedTitle": "Quita este mensaje de la cola. No se enviará al agente."
     },
     "chatPane": {
         "connectingToMachine": "Conectando con tu máquina",
