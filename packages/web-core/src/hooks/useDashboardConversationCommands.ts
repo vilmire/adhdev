@@ -234,6 +234,50 @@ function getActionFailureText(buttonText: string, error?: unknown): string {
 }
 
 /**
+ * How long a cancel may wait for an in-flight `send_chat` to resolve.
+ *
+ * Long enough to cover an ordinary P2P round trip (the common case resolves in
+ * well under a second), short enough that a wedged transport cannot leave the
+ * owner staring at an unresponsive Cancel button. On expiry the cancel proceeds
+ * anyway — see the call site for why timing out must not imply "nothing parked".
+ */
+const CANCEL_SETTLE_WAIT_MS = 5_000
+
+/** What an in-flight `send_chat` turned out to be, once it answered. */
+type SendSettlement = 'parked' | 'not-parked'
+
+/**
+ * (CANCEL-INFLIGHT-LEAK) Await an in-flight `send_chat` directly.
+ *
+ * ★ Why a promise registry and not the rendered entry's `settled` flag.
+ *
+ * `settled` lives in React state, so it only becomes visible to a handler after
+ * a re-render. A cancel that waited on it would be waiting on the render loop,
+ * not on the network — and in a test (or any synchronously-batched update) the
+ * wait can starve the very render that would end it. Recording the promise in a
+ * ref keeps the dependency where it belongs: the cancel awaits the same round
+ * trip the send is awaiting, and rendering is free to happen whenever it likes.
+ *
+ * Resolves rather than rejects on timeout; the caller must treat "still unknown"
+ * as "may be parked", which is the safe direction.
+ */
+function awaitSendSettlement(
+    registry: Map<string, Promise<SendSettlement>>,
+    pendingId: string,
+    timeoutMs: number = CANCEL_SETTLE_WAIT_MS,
+): Promise<SendSettlement | 'unknown'> {
+    const inFlight = registry.get(pendingId)
+    if (!inFlight) return Promise.resolve('unknown')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<'unknown'>(resolve => {
+        timer = setTimeout(() => resolve('unknown'), timeoutMs)
+    })
+    return Promise.race([inFlight, timeout]).finally(() => {
+        if (timer) clearTimeout(timer)
+    })
+}
+
+/**
  * Build the payload for a send_chat command.
  * When attachments are present, build a structured InputEnvelope so the daemon
  * can route image data to the correct provider input path.
@@ -296,6 +340,13 @@ export function useDashboardConversationCommands({
     // every row on every tick.
     const pendingLocalMessagesRef = useRef<PendingQueuedMessage[]>([])
     pendingLocalMessagesRef.current = pendingLocalMessages
+    /**
+     * (CANCEL-INFLIGHT-LEAK) Entry id → its unresolved `send_chat`, so a cancel
+     * arriving mid-round-trip can await the real outcome instead of guessing
+     * from a `queued` flag that has not been written yet. Entries are deleted as
+     * they settle, so this holds only genuinely open sends.
+     */
+    const inFlightSendsRef = useRef<Map<string, Promise<SendSettlement>>>(new Map())
 
     /**
      * The localStorage bucket for the ACTIVE conversation.
@@ -396,6 +447,14 @@ export function useDashboardConversationCommands({
         // already-waiting bubble the moment a second message was sent, even
         // though the daemon had both parked in its FIFO.
         const pendingId = createPendingQueuedMessageId(now)
+        // (CANCEL-INFLIGHT-LEAK) Publish this send's outcome BEFORE awaiting it,
+        // so a cancel pressed during the round trip has something to await. It
+        // is resolved exactly once, in the finally below.
+        let settleSend: (settlement: SendSettlement) => void = () => {}
+        inFlightSendsRef.current.set(pendingId, new Promise<SendSettlement>(resolve => {
+            settleSend = resolve
+        }))
+        let sendSettlement: SendSettlement = 'not-parked'
         updatePendingMessages(prev => [
             ...prev,
             { id: pendingId, content: message, sentAt: now },
@@ -432,6 +491,9 @@ export function useDashboardConversationCommands({
             // seeing it. It carries the queued flag so the pane can mark it as
             // waiting rather than delivered.
             if (isQueuedSendResult(res)) {
+                // The daemon PARKED the body — this is the state a concurrent
+                // cancel has to know about, and the only one that needs a claim.
+                sendSettlement = 'parked'
                 setLastSendQueued(true)
                 updatePendingMessages(prev => prev.map(entry => (
                     entry.id === pendingId ? { ...entry, queued: true } : entry
@@ -467,6 +529,19 @@ export function useDashboardConversationCommands({
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
+            // (CANCEL-INFLIGHT-LEAK) The round trip is over, whatever it decided.
+            // Releasing here rather than on the success paths covers the throw
+            // and early-return exits too — a send that never settled would leave
+            // a waiting cancel to burn its whole timeout.
+            //
+            // `not-parked` is the default: every path that did not observe an
+            // explicit `queued` answer either delivered the body or failed, and
+            // in both cases the daemon FIFO holds nothing to claim.
+            inFlightSendsRef.current.delete(pendingId)
+            settleSend(sendSettlement)
+            updatePendingMessages(prev => prev.map(entry => (
+                entry.id === pendingId ? { ...entry, settled: true } : entry
+            )))
             sendInFlightRef.current = false
             setIsSendingChat(false)
         }
@@ -600,12 +675,45 @@ export function useDashboardConversationCommands({
 
         const message = pending.content.trim()
 
-        // A bubble that was never confirmed as parked has nothing to cancel in
-        // the daemon (the send is still in its round trip, or it failed). Drop
-        // it locally — there is no remote state to contradict.
-        if (!pending.queued) {
+        // ★ (CANCEL-INFLIGHT-LEAK) A local-only drop is correct ONLY for an
+        // entry whose send has already RESOLVED without parking: the daemon
+        // delivered it or refused it, so there is no remote state to contradict.
+        //
+        // An UNSETTLED entry is the opposite case and used to take this same
+        // branch. Its `send_chat` is still in flight, so the daemon may be
+        // parking the body at this very moment — and the old code removed the
+        // bubble and issued no command, leaving that body in the FIFO to be
+        // drained minutes later. The owner saw a clean cancellation and the
+        // agent answered the message anyway, with no bubble left to explain it.
+        // Unknown must therefore fall through to the daemon: asking to cancel a
+        // body that was never parked costs one command and answers
+        // `cancelled: 0`, while skipping the ask costs the owner a message they
+        // believed they had withdrawn.
+        if (pending.settled && !pending.queued) {
             updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
             return true
+        }
+
+        // ★ Order the two commands rather than racing them. `cancel_queued_chat`
+        // can only claim a body that is ALREADY in the FIFO, so firing it while
+        // `send_chat` is still travelling would answer `cancelled: 0` for a body
+        // that gets parked a moment later — a cancel that reports "too late"
+        // and then lets the message through anyway, which is the same silent
+        // delivery in a new disguise. Waiting for the send to resolve makes the
+        // claim meaningful; if the wait times out we still ask (a stale bubble
+        // the owner wants gone beats a body nobody tried to withdraw).
+        if (!pending.settled) {
+            const settlement = await awaitSendSettlement(inFlightSendsRef.current, pendingId)
+            // Resolved without parking: delivered as a real turn, or refused.
+            // The FIFO holds nothing, so a claim would be noise — drop locally.
+            if (settlement === 'not-parked') {
+                updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+                return true
+            }
+            // `parked` and `unknown` both fall through to the daemon. `unknown`
+            // deliberately does NOT drop locally: an unresolved send is exactly
+            // the state whose body may be sitting in the FIFO, and assuming
+            // "nothing was parked" there is the original defect.
         }
 
         try {

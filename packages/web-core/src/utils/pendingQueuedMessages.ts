@@ -63,6 +63,29 @@ export interface PendingQueuedMessage {
     sentAt: number
     /** True once the daemon answered `queued` (parked, not yet written to the PTY). */
     queued?: boolean
+    /**
+     * (CANCEL-INFLIGHT-LEAK) True once the `send_chat` round trip has RESOLVED —
+     * whichever way it went. False/absent means the outcome is still unknown.
+     *
+     * ★ Why `queued` alone cannot answer "is anything parked daemon-side?".
+     *
+     * `queued` is only set AFTER the round trip answers. Before that it is
+     * falsy for two states that demand opposite handling: a send that already
+     * failed (nothing parked — a local drop is correct) and a send still in
+     * flight (the daemon may be parking the body right now). Cancelling on the
+     * second one used to drop the bubble locally and issue no command at all,
+     * so the daemon kept the body, drained it minutes later, and the agent
+     * answered a message the owner had watched disappear — the owner's
+     * "취소한거까지 같이 감" report. Queueing happens exactly when the owner is
+     * firing messages at a busy agent, and Cancel sits inside that bubble, so
+     * the window is small but routinely hit.
+     *
+     * Not persisted as `true` by default on read: an entry restored from a
+     * previous page load can have no round trip outstanding in THIS one, so
+     * `sanitizeEntries` settles it — an unsettled flag would otherwise survive
+     * a reload forever and force a daemon call for a body nothing is tracking.
+     */
+    settled?: boolean
 }
 
 interface PendingQueuedMessagesStore {
@@ -113,7 +136,11 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
         if (now - sentAt > PENDING_QUEUED_MESSAGE_MAX_AGE_MS) continue
         if (seen.has(id)) continue
         seen.add(id)
-        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true }, index })
+        // `settled: true` on every restored row. The in-flight state it guards
+        // is a property of a live `send_chat` promise, and no promise survives a
+        // reload — a row read back from the store has no round trip pending by
+        // construction, whatever the tab that wrote it was doing at the time.
+        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true, settled: true }, index })
         index += 1
     }
     // FIFO: oldest first, matching the daemon's own drain order so the rendered
