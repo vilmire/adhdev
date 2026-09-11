@@ -1022,6 +1022,7 @@
             "schedTargetWorktreeTitle": "任务将在此工作树中运行",
             "schedUnpinned": "未固定",
             "schedUnpinnedTitle": "未固定节点时的假设性预测 — 固定到节点的任务会在卡片上显示各自的预测",
+            "schedPointInTime": "这是当前时点的预测，而非已确定的分配 — 槽位被占用或释放后，容量信息可能立即过时",
             "schedulingShort": "调度"
         },
         "page": {
