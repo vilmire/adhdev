@@ -70,6 +70,7 @@ describe('stampTranscriptObservation', () => {
             senderName: null,
             toolName: null,
             streaming: null,
+            toolBlockRef: null,
         }]);
     });
 });
