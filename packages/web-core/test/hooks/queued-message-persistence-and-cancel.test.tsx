@@ -246,15 +246,20 @@ describe('CANCEL — per-item withdrawal', () => {
         expect(h.get().pendingLocalMessages).toHaveLength(1)
     })
 
-    it('an unconfirmed (not-yet-parked) entry is dropped locally without a daemon call', async () => {
-        // Nothing is queued daemon-side yet, so there is no remote state to
-        // contradict — and no command should be issued.
+    it('a RESOLVED not-parked entry is dropped locally without a daemon call', async () => {
+        // The send has answered "submitted": nothing is in the daemon FIFO, so
+        // there is no remote state to contradict and no command should issue.
+        //
+        // ★ "resolved" is load-bearing. The same check without it also matched
+        // sends still in flight, whose bodies the daemon may be parking — see
+        // the CANCEL-INFLIGHT-LEAK block below.
         const send = vi.fn().mockResolvedValue({ success: true, sent: true, submitted: true })
         const h = renderHarness(send)
         await queueBodies(h, ['delivered immediately'])
 
         const entry = h.get().pendingLocalMessages[0]
         expect(entry.queued).toBeFalsy()
+        expect(entry.settled).toBe(true)
 
         send.mockClear()
         await act(async () => { await h.get().handleCancelQueued(entry.id) })
@@ -273,6 +278,150 @@ describe('CANCEL — per-item withdrawal', () => {
 
         expect(outcome).toBe(false)
         expect(h.get().pendingLocalMessages).toHaveLength(1)
+    })
+})
+
+/**
+ * (CANCEL-INFLIGHT-LEAK) The owner's 2026-09-11 report: "취소하고나서 다른 메세지
+ * 보내니 취소한거까지 같이 감" — with "다 보였음 취소도 잘 되었음", i.e. the UI showed a
+ * clean cancellation and the agent answered the message anyway.
+ *
+ * ★ The window. `queued` is only set AFTER `send_chat` resolves, so between
+ * submit and that answer the entry is un-queued but NOT harmless: the daemon may
+ * be parking the body right then. The old cancel treated un-queued as "nothing
+ * to withdraw", dropped the bubble locally and issued NO command — so the body
+ * stayed in `FsmDriver.pendingSends` and drained minutes later. Queueing happens
+ * precisely when the owner is firing messages at a busy agent and Cancel lives
+ * inside that bubble, so this is ordinary use, not a contrived interleaving.
+ *
+ * ★ These assert the DAEMON was asked, not merely that the bubble went away.
+ * A test that only checked local state is what let this ship.
+ */
+describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reaches the daemon', () => {
+    /** Hold `send_chat` open so the cancel lands mid-round-trip. */
+    function deferredSend() {
+        let release: (value: unknown) => void = () => {}
+        const gate = new Promise(resolve => { release = resolve })
+        const send = vi.fn().mockImplementation((_target: unknown, command: string) => {
+            if (command === 'send_chat') return gate
+            return Promise.resolve(DAEMON_CANCEL_OK)
+        })
+        return { send, release: () => release(DAEMON_QUEUED_RESULT) }
+    }
+
+    it('★ issues cancel_queued_chat for a body whose send has not answered yet', async () => {
+        const { send, release } = deferredSend()
+        const h = renderHarness(send)
+
+        // Submit without awaiting: the round trip is still open.
+        let sendPromise: Promise<boolean> | undefined
+        await act(async () => {
+            sendPromise = h.get().handleSendChat('WITHDRAW ME')
+            await Promise.resolve()
+        })
+        const entry = h.get().pendingLocalMessages[0]
+        expect(entry.queued).toBeFalsy()
+        expect(entry.settled).toBeFalsy()
+
+        // Cancel now, then let the daemon answer that it PARKED the body.
+        let cancelPromise: Promise<boolean> | undefined
+        await act(async () => {
+            cancelPromise = h.get().handleCancelQueued(entry.id)
+            await Promise.resolve()
+            release()
+            await sendPromise
+            await cancelPromise
+        })
+
+        // ★ The assertion the live defect needed: the daemon was told.
+        const cancelCall = send.mock.calls.find(call => call[1] === 'cancel_queued_chat')
+        expect(cancelCall).toBeTruthy()
+        expect(cancelCall![2]).toMatchObject({ message: 'WITHDRAW ME' })
+        expect(h.get().pendingLocalMessages).toEqual([])
+    })
+
+    it('★ waits for the send to resolve before claiming, so the claim can find the body', async () => {
+        // Ordering, not just presence. `cancel_queued_chat` claims from a FIFO
+        // the body has to be IN — firing it while send_chat is still travelling
+        // answers `cancelled: 0` for a message that gets parked a moment later,
+        // which reports "too late" and then delivers it anyway.
+        const order: string[] = []
+        let release: (value: unknown) => void = () => {}
+        const gate = new Promise(resolve => { release = resolve })
+        const send = vi.fn().mockImplementation((_target: unknown, command: string) => {
+            if (command === 'send_chat') return gate.then(v => { order.push('send_chat:resolved'); return v })
+            order.push('cancel_queued_chat:issued')
+            return Promise.resolve(DAEMON_CANCEL_OK)
+        })
+        const h = renderHarness(send)
+
+        let sendPromise: Promise<boolean> | undefined
+        await act(async () => {
+            sendPromise = h.get().handleSendChat('ORDERED BODY')
+            await Promise.resolve()
+        })
+        const entry = h.get().pendingLocalMessages[0]
+
+        let cancelPromise: Promise<boolean> | undefined
+        await act(async () => {
+            cancelPromise = h.get().handleCancelQueued(entry.id)
+            await Promise.resolve()
+            release(DAEMON_QUEUED_RESULT)
+            await sendPromise
+            await cancelPromise
+        })
+
+        expect(order).toEqual(['send_chat:resolved', 'cancel_queued_chat:issued'])
+    })
+
+    it('★ a send that resolves as DELIVERED needs no claim — and the bubble still goes', async () => {
+        // The other side of the wait: once the send answers "submitted", nothing
+        // is parked, so a cancel command would be noise. Guards against
+        // over-correcting into a claim on every cancel.
+        let release: (value: unknown) => void = () => {}
+        const gate = new Promise(resolve => { release = resolve })
+        const send = vi.fn().mockImplementation((_target: unknown, command: string) => {
+            if (command === 'send_chat') return gate
+            return Promise.resolve(DAEMON_CANCEL_OK)
+        })
+        const h = renderHarness(send)
+
+        let sendPromise: Promise<boolean> | undefined
+        await act(async () => {
+            sendPromise = h.get().handleSendChat('ALREADY DELIVERED')
+            await Promise.resolve()
+        })
+        const entry = h.get().pendingLocalMessages[0]
+
+        let cancelPromise: Promise<boolean> | undefined
+        await act(async () => {
+            cancelPromise = h.get().handleCancelQueued(entry.id)
+            await Promise.resolve()
+            release({ success: true, sent: true, submitted: true })
+            await sendPromise
+            await cancelPromise
+        })
+
+        expect(send.mock.calls.some(call => call[1] === 'cancel_queued_chat')).toBe(false)
+        expect(h.get().pendingLocalMessages).toEqual([])
+    })
+
+    it('★ a restored entry is settled, so cancelling it never waits on a promise that cannot exist', async () => {
+        // No `send_chat` survives a reload. An entry read back unsettled would
+        // stall every cancel for the full timeout before doing the right thing.
+        const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
+        const first = renderHarness(send)
+        await queueBodies(first, ['survives reload'])
+        first.unmount()
+
+        const reopened = renderHarness(send)
+        const restored = reopened.get().pendingLocalMessages[0]
+        expect(restored.settled).toBe(true)
+        expect(restored.queued).toBe(true)
+
+        send.mockResolvedValueOnce(DAEMON_CANCEL_OK)
+        await act(async () => { await reopened.get().handleCancelQueued(restored.id) })
+        expect(reopened.get().pendingLocalMessages).toEqual([])
     })
 })
 
