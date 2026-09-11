@@ -215,6 +215,121 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
             expect(disposition).toEqual({ status: 'queued' });
         }
 
+        // ── SEND-NOW-WRONG-ITEM ───────────────────────────────────────────
+        // Owner-reported live (2026-09-11, rc.10): two bodies queued, "Send
+        // now" pressed on the SECOND bubble, and the FIRST one was sent.
+        //
+        // The dashboard addresses the entry by id and the daemon claims it by
+        // text, so both ends were already per-item. The wrong body was sent by
+        // the DRIVER, not by either of them: interruptAndDeliver's step 0
+        // removes only the pressed body, leaving the other one in the FIFO, and
+        // the FSM evaluation loop calls drainPendingSends() on the very frame it
+        // reaches idle — before the interrupt caller's poll observes the same
+        // idle. So the leftover entry wins the race, takes the in-flight latch,
+        // and the pressed body is re-parked behind it.
+        it('sends the PRESSED body, not the one queued ahead of it', async () => {
+            const { adapter, pty } = await makeRunningAdapter();
+            try {
+                const first = 'queue test one';
+                const second = 'queue test two';
+                await queueWhileBusy(adapter, first);
+                await queueWhileBusy(adapter, second);
+                const before = pty.writes.length;
+
+                const settle = (async () => {
+                    for (let i = 0; i < 200; i += 1) {
+                        if (pty.writes.slice(before).includes(CTRL_C)) {
+                            pty.feed('\n>\n? for shortcuts');
+                            return true;
+                        }
+                        await sleep(10);
+                    }
+                    return false;
+                })();
+
+                // Press Send now on the SECOND entry.
+                const outcome = await interruptAndDeliver(adapter as never, second);
+                expect(await settle).toBe(true);
+                expect(outcome.ok).toBe(true);
+                if (outcome.ok) expect(outcome.delivered).toBe(true);
+
+                // Let any drain timer fire before reading the tape.
+                await sleep(600);
+
+                const written = pty.writes.slice(before);
+                const secondAt = written.findIndex(w => w.includes(second));
+                const firstAt = written.findIndex(w => w.includes(first));
+
+                // ★ The pressed body must actually have been written.
+                expect(secondAt).toBeGreaterThanOrEqual(0);
+                // ★ And it must be written FIRST. Before the fix `firstAt` was
+                //   the earlier index: the leftover entry drained ahead of it.
+                if (firstAt >= 0) expect(secondAt).toBeLessThan(firstAt);
+
+                // The untouched entry stays queued — Send now steers one body,
+                // it does not discard the rest of the owner's queue.
+                expect(written.filter(w => w.includes(second))).toHaveLength(1);
+            } finally {
+                adapter.shutdown();
+            }
+        }, 25_000);
+
+        // The drain hold that fixes the case above must be strictly temporary.
+        // Holding the FIFO is how the pressed body wins the idle prompt, but the
+        // owner's OTHER messages are not this call's to keep — if the hold
+        // outlived the sequence it would trade a wrong-item send for a stranded
+        // queue, which is the worse defect (silent, and unbounded in time).
+        it('releases the drain hold so the untouched entry still gets delivered', async () => {
+            const { adapter, pty } = await makeRunningAdapter();
+            try {
+                const first = 'left in the queue';
+                const second = 'pressed send now';
+                await queueWhileBusy(adapter, first);
+                await queueWhileBusy(adapter, second);
+                const before = pty.writes.length;
+
+                const settle = (async () => {
+                    for (let i = 0; i < 200; i += 1) {
+                        if (pty.writes.slice(before).includes(CTRL_C)) {
+                            pty.feed('\n>\n? for shortcuts');
+                            return true;
+                        }
+                        await sleep(10);
+                    }
+                    return false;
+                })();
+
+                const outcome = await interruptAndDeliver(adapter as never, second);
+                expect(await settle).toBe(true);
+                expect(outcome.ok).toBe(true);
+
+                // Run the pressed body's turn to completion, which is what frees
+                // the prompt for the entry that stayed queued. The FSM only
+                // drains on an observed frame, so each state is fed and awaited
+                // rather than assumed.
+                await sleep(200);
+                pty.feed('\n>\nesc to interrupt');
+                await sleep(400);
+                expect(adapter.getStatus().status).toBe('generating');
+                pty.feed('\n>\n? for shortcuts');
+
+                // ★ The leftover entry must eventually reach the PTY.
+                const delivered = await (async () => {
+                    for (let i = 0; i < 100; i += 1) {
+                        if (pty.writes.slice(before).some(w => w.includes(first))) return true;
+                        // Keep the idle prompt repainting: a real CLI redraws,
+                        // and the drain runs on an FSM frame.
+                        pty.feed('\n>\n? for shortcuts');
+                        await sleep(20);
+                    }
+                    return false;
+                })();
+                expect(delivered).toBe(true);
+            } finally {
+                adapter.shutdown();
+            }
+        }, 25_000);
+
         it('does not double-send: on idle_timeout the queued copy is NOT drained later', async () => {
             const { adapter, pty } = await makeRunningAdapter();
             try {

@@ -102894,6 +102894,9 @@ ${marker}`,
           /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
            *  send the CLI never visibly consumed cannot wedge the queue forever. */
           sendInFlightAt = 0;
+          /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
+           *  suspended, or 0 when it is free to run. See reserveDrain(). */
+          drainReservedUntil = 0;
           /** Content hash → wall-clock of the last PTY write, for the pre-write
            *  duplicate gate (see isDuplicateResend). */
           recentSendHashes = /* @__PURE__ */ new Map();
@@ -103064,6 +103067,31 @@ ${marker}`,
           /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
           sendMessageWithDisposition(text, bracketedPaste) {
             return this.handleSendMessage(text, bracketedPaste);
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
+          reserveDrain(ttlMs) {
+            this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
+            LOG.info(
+              "FsmDriver",
+              `[${this.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`
+            );
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
+          releaseDrain() {
+            if (this.drainReservedUntil === 0) return;
+            this.drainReservedUntil = 0;
+            this.drainPendingSends();
+          }
+          /** True while an out-of-band caller still owns the next write. The TTL is a
+           *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
+          isDrainReserved() {
+            if (this.drainReservedUntil === 0) return false;
+            if (Date.now() >= this.drainReservedUntil) {
+              LOG.warn("FsmDriver", `[${this.specTag()}] drain reservation expired \u2014 releasing`);
+              this.drainReservedUntil = 0;
+              return false;
+            }
+            return true;
           }
           /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
           claimQueuedSends(text) {
@@ -103793,6 +103821,13 @@ ${marker}`,
               this.sendInFlight = false;
             }
             if (status !== "idle") return;
+            if (this.isDrainReserved()) {
+              LOG.info(
+                "FsmDriver",
+                `[${this.specTag()}] drain held \u2014 an out-of-band send owns the next write (queued=${this.pendingSends.length})`
+              );
+              return;
+            }
             if (this.isSendInFlight()) return;
             if (this.pendingSends.length === 0) return;
             const next = this.pendingSends.shift();
@@ -109149,6 +109184,20 @@ ${text}` : text;
           claimQueuedSends(text) {
             if (typeof this.driver.claimQueuedSends !== "function") return 0;
             return this.driver.claimQueuedSends(text);
+          }
+          /**
+           * SEND-NOW-WRONG-ITEM: hold the driver's FIFO drain so this caller owns the
+           * next write. See ISpecDriver.reserveDrain for why claiming the pressed body
+           * alone lets an entry queued ahead of it win the idle frame.
+           */
+          reserveDrain(ttlMs) {
+            if (typeof this.driver.reserveDrain !== "function") return;
+            this.driver.reserveDrain(ttlMs);
+          }
+          /** SEND-NOW-WRONG-ITEM: release a reserveDrain() hold. */
+          releaseDrain() {
+            if (typeof this.driver.releaseDrain !== "function") return;
+            this.driver.releaseDrain();
           }
           /** ENTER-LOSS layer ① — see CliAdapter.hasInFlightSubmit. */
           hasInFlightSubmit() {
@@ -117858,37 +117907,44 @@ ${rawInput}` : rawInput;
       if (claimed > 0) {
         LOG.info("SendNow", `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body \u2014 this call is now its only delivery route`);
       }
-      const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
-        secondPress: interrupted.confidence === "proven" ? () => {
-          void adapter.interruptTurn?.();
-        } : void 0,
-        secondPressAfterMs: options?.secondPressAfterMs
-      });
-      if (!wentIdle) {
-        LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
+      const reserveMs = (options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS) + DRAIN_RESERVE_SLACK_MS;
+      adapter.reserveDrain?.(reserveMs);
+      try {
+        const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+          secondPress: interrupted.confidence === "proven" ? () => {
+            void adapter.interruptTurn?.();
+          } : void 0,
+          secondPressAfterMs: options?.secondPressAfterMs
+        });
+        if (!wentIdle) {
+          LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
+          return {
+            ok: false,
+            reason: "idle_timeout",
+            message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. Nothing was sent \u2014 send it again when the agent settles.`
+          };
+        }
+        const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0);
+        const queued = sendResult?.status === "queued";
+        LOG.info(
+          "SendNow",
+          `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) \u2192 idle \u2192 ${queued ? "requeued" : "delivered"} (claimed=${claimed})`
+        );
         return {
-          ok: false,
-          reason: "idle_timeout",
-          message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. Nothing was sent \u2014 send it again when the agent settles.`
+          ok: true,
+          delivered: !queued,
+          queued,
+          keyName: interrupted.keyName,
+          confidence: interrupted.confidence
         };
+      } finally {
+        adapter.releaseDrain?.();
       }
-      const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0);
-      const queued = sendResult?.status === "queued";
-      LOG.info(
-        "SendNow",
-        `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) \u2192 idle \u2192 ${queued ? "requeued" : "delivered"} (claimed=${claimed})`
-      );
-      return {
-        ok: true,
-        delivered: !queued,
-        queued,
-        keyName: interrupted.keyName,
-        confidence: interrupted.confidence
-      };
     }
     var INTERRUPT_IDLE_TIMEOUT_MS;
     var INTERRUPT_IDLE_POLL_MS;
     var INTERRUPT_SECOND_PRESS_DELAY_MS;
+    var DRAIN_RESERVE_SLACK_MS;
     var BUSY_STATUSES2;
     var init_interrupt_and_deliver = __esm2({
       "src/commands/interrupt-and-deliver.ts"() {
@@ -117897,6 +117953,7 @@ ${rawInput}` : rawInput;
         INTERRUPT_IDLE_TIMEOUT_MS = 15e3;
         INTERRUPT_IDLE_POLL_MS = 120;
         INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
+        DRAIN_RESERVE_SLACK_MS = 5e3;
         BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
       }
     });

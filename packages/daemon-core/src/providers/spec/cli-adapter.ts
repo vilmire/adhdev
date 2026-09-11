@@ -321,6 +321,22 @@ export class SpecCliAdapter implements CliAdapter {
         return this.driver.claimQueuedSends(text);
     }
 
+    /**
+     * SEND-NOW-WRONG-ITEM: hold the driver's FIFO drain so this caller owns the
+     * next write. See ISpecDriver.reserveDrain for why claiming the pressed body
+     * alone lets an entry queued ahead of it win the idle frame.
+     */
+    reserveDrain(ttlMs: number): void {
+        if (typeof this.driver.reserveDrain !== 'function') return;
+        this.driver.reserveDrain(ttlMs);
+    }
+
+    /** SEND-NOW-WRONG-ITEM: release a reserveDrain() hold. */
+    releaseDrain(): void {
+        if (typeof this.driver.releaseDrain !== 'function') return;
+        this.driver.releaseDrain();
+    }
+
     /** ENTER-LOSS layer ① — see CliAdapter.hasInFlightSubmit. */
     hasInFlightSubmit(): boolean {
         if (typeof this.driver.hasInFlightSubmit !== 'function') return false;

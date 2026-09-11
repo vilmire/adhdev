@@ -179,6 +179,30 @@ export interface ISpecDriver {
      * so test doubles implementing ISpecDriver need not provide it.
      */
     claimQueuedSends?(text: string): number;
+    /**
+     * SEND-NOW-WRONG-ITEM: suspend the autonomous pendingSends drain for up to
+     * `ttlMs`, so an out-of-band caller owns the next write to the PTY.
+     *
+     * Exists because claiming the pressed body (claimQueuedSends) is not enough
+     * when the FIFO holds OTHER entries. The interrupt path reaches idle by
+     * design, and `drainPendingSends()` runs on the same FSM frame that observes
+     * idle — strictly before the caller's own poll sees it. So the leftover
+     * entry is written first and takes the in-flight latch, and the pressed body
+     * is re-parked behind it.
+     *
+     * Measured live (2026-09-11, owner report, rc.10): two bodies queued, "Send
+     * now" pressed on the second, and the first was delivered. The driver log
+     * reads `draining queued send` immediately followed by
+     * `send queued — previous send still in flight`.
+     *
+     * The TTL is mandatory and self-healing: a caller that dies between reserve
+     * and release must not wedge the owner's queue forever. Optional so test
+     * doubles implementing ISpecDriver need not provide it.
+     */
+    reserveDrain?(ttlMs: number): void;
+    /** SEND-NOW-WRONG-ITEM: end a reserveDrain() early and drain immediately if
+     *  the machine is idle. Safe to call when no reservation is held. */
+    releaseDrain?(): void;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -561,6 +585,9 @@ export class FsmDriver implements ISpecDriver {
     /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
      *  send the CLI never visibly consumed cannot wedge the queue forever. */
     private sendInFlightAt = 0;
+    /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
+     *  suspended, or 0 when it is free to run. See reserveDrain(). */
+    private drainReservedUntil = 0;
     /** Content hash → wall-clock of the last PTY write, for the pre-write
      *  duplicate gate (see isDuplicateResend). */
     private recentSendHashes = new Map<string, number>();
@@ -747,6 +774,38 @@ export class FsmDriver implements ISpecDriver {
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
     sendMessageWithDisposition(text: string, bracketedPaste?: boolean): SendDisposition {
         return this.handleSendMessage(text, bracketedPaste);
+    }
+
+    /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
+    reserveDrain(ttlMs: number): void {
+        this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
+        LOG.info(
+            'FsmDriver',
+            `[${this.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`,
+        );
+    }
+
+    /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
+    releaseDrain(): void {
+        if (this.drainReservedUntil === 0) return;
+        this.drainReservedUntil = 0;
+        // The reservation was held across a busy→idle transition, so the frame
+        // that would normally have drained is already gone. Drain now rather
+        // than waiting for a PTY frame a quiet CLI may never produce — the same
+        // hazard drainPendingSends' own call sites document.
+        this.drainPendingSends();
+    }
+
+    /** True while an out-of-band caller still owns the next write. The TTL is a
+     *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
+    private isDrainReserved(): boolean {
+        if (this.drainReservedUntil === 0) return false;
+        if (Date.now() >= this.drainReservedUntil) {
+            LOG.warn('FsmDriver', `[${this.specTag()}] drain reservation expired — releasing`);
+            this.drainReservedUntil = 0;
+            return false;
+        }
+        return true;
     }
 
     /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
@@ -1647,6 +1706,16 @@ export class FsmDriver implements ISpecDriver {
             this.sendInFlight = false;
         }
         if (status !== 'idle') return;
+        // SEND-NOW-WRONG-ITEM: an interrupt caller owns the next write. Draining
+        // here would hand the idle prompt to whatever else is queued and re-park
+        // the body the owner actually pressed — see reserveDrain().
+        if (this.isDrainReserved()) {
+            LOG.info(
+                'FsmDriver',
+                `[${this.specTag()}] drain held — an out-of-band send owns the next write (queued=${this.pendingSends.length})`,
+            );
+            return;
+        }
         if (this.isSendInFlight()) return;
         if (this.pendingSends.length === 0) return;
         const next = this.pendingSends.shift()!;
