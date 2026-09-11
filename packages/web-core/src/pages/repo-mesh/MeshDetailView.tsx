@@ -468,19 +468,25 @@ export function MeshDetailView({
                  Placed after Nodes & Scheduling: MAGI panels reference the nodes/providers
                  configured above. The sole MAGI panel surface — the named-panel CRUD
                  (MagiPanelManager) and its magi_panel_* daemon commands were removed; only
-                 magi_kind_panel_* remains. */}
-            {displayedMeshStatus && (
-                <Section title={t('mesh.detail.magiTitle')} collapsible defaultOpen={false}
-                    badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.detail.advanced')}</span>}
-                    description={t('mesh.detail.magiDescription')}>
-                    <MagiKindPanelEditor
-                        status={displayedMeshStatus}
-                        daemonId={activeDaemonId}
-                        sendDaemonCommand={sendCommand}
-                        availableProviders={availableCliProviders}
-                    />
-                </Section>
-            )}
+                 magi_kind_panel_* remains.
+                 Intentionally NOT gated on `displayedMeshStatus`: the editor talks to the
+                 daemon directly via magi_kind_panel_list/set/remove and needs no mesh
+                 status/graph truth to function (status only feeds the optional "Machine"
+                 node picker). Gating this on status meant one offline mesh peer — which
+                 fails mesh_status's direct-peer-truth and makes displayedMeshStatus null —
+                 hid MAGI config entirely, even though it still worked. `meshId` is passed
+                 explicitly (selectedMesh.id) so scoping survives status being null. */}
+            <Section title={t('mesh.detail.magiTitle')} collapsible defaultOpen={false}
+                badge={<span className="rounded-full border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-muted">{t('mesh.detail.advanced')}</span>}
+                description={t('mesh.detail.magiDescription')}>
+                <MagiKindPanelEditor
+                    status={displayedMeshStatus}
+                    daemonId={activeDaemonId}
+                    meshId={selectedMesh.id}
+                    sendDaemonCommand={sendCommand}
+                    availableProviders={availableCliProviders}
+                />
+            </Section>
 
             {/* ── Quota-aware routing thresholds (policy.quotaRouting) ──
                  Placed next to MAGI: both are coordinator-side routing knobs that

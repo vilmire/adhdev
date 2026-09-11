@@ -55,6 +55,14 @@ interface MagiKindPanelEditorProps {
     daemonId?: string | null
     sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
     /**
+     * Mesh being edited, independent of `status`. `status` (mesh_status
+     * direct-peer-truth) can be null while a live daemon connection still
+     * exists — e.g. one mesh node is offline — so callers should pass the
+     * selected mesh's id here rather than relying on `status?.meshId`. Falls
+     * back to `status?.meshId` when omitted, for callers that only have status.
+     */
+    meshId?: string | null
+    /**
      * Detected CLI providers with their advisory modelOptions. Drives the
      * per-slot Model suggestion list so the datalist offers the models the
      * slot's *own* provider actually supports (codex → gpt-*, claude → opus/…)
@@ -138,7 +146,7 @@ function draftsToSlots(drafts: SlotDraft[]): { slots: MagiSlot[] } | { error: Dr
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function MagiKindPanelEditor({ status, daemonId, sendDaemonCommand, availableProviders }: MagiKindPanelEditorProps) {
+export default function MagiKindPanelEditor({ status, daemonId, sendDaemonCommand, availableProviders, meshId: meshIdProp }: MagiKindPanelEditorProps) {
     const { t } = useTranslation()
     const { theme } = useTheme()
     const meshTheme: MeshGraphTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
@@ -213,8 +221,9 @@ export default function MagiKindPanelEditor({ status, daemonId, sendDaemonComman
     // Kind-panels are stored PER MESH, so every call names the mesh being edited.
     // Without it the daemon falls back to "the sole mesh", which is only correct on a
     // single-mesh machine — on a two-mesh machine an unscoped write used to clobber
-    // the other mesh's binding for the same kind.
-    const meshId = status?.meshId
+    // the other mesh's binding for the same kind. Prefer the explicit `meshId` prop
+    // (works even when `status` is null, e.g. a mesh peer is offline) over `status.meshId`.
+    const meshId = meshIdProp ?? status?.meshId
 
     const loadKindPanels = useCallback(async () => {
         if (!daemonId || !sendDaemonCommand) return
