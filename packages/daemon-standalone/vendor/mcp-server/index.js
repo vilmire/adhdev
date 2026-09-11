@@ -93960,6 +93960,92 @@ ${cleanBody}`;
         nonIdleEscapeTracks = /* @__PURE__ */ new Map();
       }
     });
+    function renderMeshStatusLine(inputs) {
+      const total = inputs.totalActiveCount;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      const parts = [];
+      for (const status of STATUS_RENDER_ORDER) {
+        const count = inputs.statusCounts?.[status] ?? 0;
+        if (count > 0) parts.push(`${count} ${status}`);
+      }
+      const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
+      const ids = [];
+      for (const record2 of inputs.activeWork) {
+        const id = typeof record2?.taskId === "string" ? record2.taskId.trim() : "";
+        if (!id) continue;
+        ids.push(id.slice(0, TASK_ID_PREFIX_CHARS));
+      }
+      if (ids.length === 0) return clampToBound(head);
+      let line = head;
+      const shown = [];
+      for (let i = 0; i < ids.length; i++) {
+        const isLast = i === ids.length - 1;
+        const candidate = [...shown, ids[i]];
+        const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
+        if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
+        shown.push(ids[i]);
+        line = head + suffix;
+      }
+      if (shown.length === 0) return clampToBound(head);
+      return clampToBound(line);
+    }
+    function clampToBound(line) {
+      if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
+      return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
+    }
+    function buildMeshStatusLineForNotification(meshId, now) {
+      if (!meshId) return null;
+      try {
+        const built = buildMeshActiveWork3({
+          meshId,
+          queue: getQueue3(meshId),
+          directDispatches: getActiveDirectDispatches3(meshId),
+          ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+          now: now ?? Date.now()
+        });
+        return renderMeshStatusLine({
+          activeWork: built.activeWork,
+          statusCounts: built.summary.statusCounts,
+          totalActiveCount: built.summary.totalActiveCount
+        });
+      } catch (e) {
+        LOG.debug("MeshReconcile", `Mesh status line build failed for mesh ${meshId}: ${e?.message || e}`);
+        return null;
+      }
+    }
+    var MESH_STATUS_LINE_MAX_CHARS;
+    var TASK_ID_PREFIX_CHARS;
+    var ACTIVE_WORK_LEDGER_KINDS;
+    var STATUS_RENDER_ORDER;
+    var init_mesh_notification_status_line = __esm2({
+      "src/mesh/mesh-notification-status-line.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_active_work();
+        init_mesh_work_queue();
+        init_mesh_ledger();
+        MESH_STATUS_LINE_MAX_CHARS = 200;
+        TASK_ID_PREFIX_CHARS = 7;
+        ACTIVE_WORK_LEDGER_KINDS = [
+          "task_dispatched",
+          "task_completed",
+          "task_failed",
+          "task_stalled",
+          "task_approval_needed",
+          "task_question_pending"
+        ];
+        STATUS_RENDER_ORDER = [
+          "generating",
+          "awaiting_approval",
+          "awaiting_choice",
+          "pending",
+          "assigned",
+          "finalizing",
+          "failed",
+          "idle"
+        ];
+      }
+    });
     function findLiveCoordinators(components) {
       const out = [];
       for (const inst of components.instanceManager.getByCategory("cli")) {
@@ -94043,6 +94129,12 @@ ${cleanBody}`;
         });
         if (!coordinatorMessage) return;
         LOG.warn("MeshReconcile", `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time \u2014 a queued terminal event arrived message-less`);
+      }
+      if (shouldForceInjectMeshEvent(pending.event)) {
+        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
+        if (statusLine) coordinatorMessage = `${coordinatorMessage}
+
+${statusLine}`;
       }
       const force = opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event);
       traceMeshEventStage("surfaced", {
@@ -94402,6 +94494,7 @@ ${cleanBody}`;
         init_mesh_events_coordinator();
         init_mesh_event_classify();
         init_mesh_events_utils();
+        init_mesh_notification_status_line();
         init_mesh_event_trace();
         init_dist();
         coordinatorModalParkState = /* @__PURE__ */ new Map();

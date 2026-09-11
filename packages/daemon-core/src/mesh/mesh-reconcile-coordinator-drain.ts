@@ -29,6 +29,7 @@ import { readApprovalResolutionEntries, type ProjectedLedgerView } from './mesh-
 import { shouldForceInjectMeshEvent } from './mesh-events-coordinator.js';
 import { isMeshApprovalEvent, MESH_APPROVAL_EVENTS } from './mesh-event-classify.js';
 import { readNonEmptyString, readMeshCompletionSummary, buildMeshSystemMessage } from './mesh-events-utils.js';
+import { buildMeshStatusLineForNotification } from './mesh-notification-status-line.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { expandDaemonIdForms, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
@@ -303,6 +304,29 @@ export function injectPendingIntoCoordinator(
         });
         if (!coordinatorMessage) return; // builder produced nothing — nothing to surface
         LOG.warn('MeshReconcile', `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time — a queued terminal event arrived message-less`);
+    }
+    // NOTIF-STATUS-LINE: append a one-line mesh snapshot to TERMINAL notifications
+    // (completion / approval / choice / stop / refine · bootstrap), so the coordinator
+    // reads "what else is in flight" from the notification itself instead of spending an
+    // extra mesh_status / mesh_view_queue round-trip on it.
+    //
+    // Snapshotted HERE, at inject time — not at emit time. A held event can sit at
+    // drained=0 for a very long time while the coordinator is busy (measured: 1h42m), so
+    // a line stamped at emit would deliver hours-stale counts and actively mislead. This
+    // is the same reason buildMeshSystemMessage above is synthesized lazily at inject.
+    //
+    // Terminal-only: shouldForceInjectMeshEvent gates it, so a silent lifecycle event
+    // (agent:ready / generating_started) never carries one. Note this is the EVENT's own
+    // classification, deliberately NOT `force` below — forceOverride:false (the approval
+    // nudge's non-force delivery) still produces a real coordinator turn and should carry
+    // the snapshot; it only changes HOW the message reaches the PTY, not whether it does.
+    //
+    // The rendered line is bounded (MESH_STATUS_LINE_MAX_CHARS) and content-free —
+    // taskId prefixes, status enums and counts only, never taskTitle (which is
+    // summarizeMessage'd free text from the task message).
+    if (shouldForceInjectMeshEvent(pending.event)) {
+        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
+        if (statusLine) coordinatorMessage = `${coordinatorMessage}\n\n${statusLine}`;
     }
     // forceOverride lets the APPROVAL-Q1-REALTIME nudge path deliver into a busy
     // coordinator WITHOUT a raw PTY force-write (force-inject-into-generating stays
