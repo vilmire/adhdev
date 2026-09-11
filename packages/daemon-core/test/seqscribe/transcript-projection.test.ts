@@ -262,8 +262,12 @@ describe('canonicalizeTranscriptSnapshot / hashTranscriptSnapshot — determinis
         // is the CORRECT signal for a wire-shape change — it must only ever be
         // updated alongside a deliberate allow-list edit, never to "make the test
         // pass".
+        //
+        // Re-pinned again when `toolBlockRef` joined (TOOL-EXPAND): a three-integer
+        // content-free address of a truncated tool block, `null` here since this
+        // fixture is a standard bubble with no ref.
         expect(hashTranscriptSnapshot(encoded)).toBe(
-            '856b51baf1d31f9ad0118fc1a18469b05d66975a85da8a3a7af79d1ba7a25836',
+            '6151a1365d2c397888ba4fa4fba5d1a3154f948b524a607a1bd81f7048b274f0',
         );
     });
 });

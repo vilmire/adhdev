@@ -55,6 +55,14 @@ export interface ChatMessage {
    *  uses this as the native peak watermark for regression detection. */
   sequence?: number;
   _turnKey?: string;
+  /**
+   * (TOOL-EXPAND) Content-free address of the native-history tool block this
+   * bubble summarises — three integers, set only on `kind:'tool'` bubbles whose
+   * text the parser actually truncated. Readers trade it back to the daemon
+   * (`expand_tool_block`) for the untruncated body, which is deliberately not
+   * carried on any transcript payload.
+   */
+  toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
   /** Tool calls associated with this message */
   toolCalls?: ToolCallInfo[];
   /** Optional: fiber metadata */

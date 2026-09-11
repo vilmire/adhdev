@@ -45,6 +45,30 @@ import {
 } from '../native-history/transcript-claim-registry.js';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import { readJsonlLines } from './native-history-jsonl-cache.js';
+import {
+    projectToolBlock as projectToolBlockImpl,
+    TOOL_CALL_SUMMARY_MAX,
+    TOOL_RESULT_SUMMARY_MAX,
+} from './native-history-tool-blocks.js';
+import type { NativeHistoryMessage, NativeHistoryToolBlockRef } from './native-history-types.js';
+// Re-exported so existing importers of these names keep working after the
+// tool-block/type split (pure move — no call-site churn).
+export type { NativeHistoryMessage, NativeHistoryToolBlockRef };
+export { TOOL_CALL_SUMMARY_MAX, TOOL_RESULT_SUMMARY_MAX };
+
+/**
+ * Bind the tool-block projector to this module's own `jsonPathGet` /
+ * `stringifyContent`, so the extracted module stays free of an import cycle
+ * back into the executor while still resolving spec fields identically.
+ */
+function projectToolBlock(
+    block: any,
+    role: 'user' | 'assistant' | 'system',
+    tmap: NativeHistoryToolMap,
+    ref?: NativeHistoryToolBlockRef,
+): NativeHistoryMessage | null {
+    return projectToolBlockImpl(block, role, tmap, { jsonPathGet, stringifyContent }, ref);
+}
 
 export {
     __getParsedJsonlCacheStatsForTests,
@@ -84,13 +108,6 @@ export interface NativeHistoryInput {
     args?: Record<string, unknown>;
 }
 
-export interface NativeHistoryMessage {
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    receivedAt: number;
-    kind?: string;
-    workspace?: string;
-}
 
 export interface NativeHistoryResult {
     messages: NativeHistoryMessage[];
@@ -986,7 +1003,10 @@ function sameSessionUuid(a: string, b: string): boolean {
  * picks the first entry whose `where` matches a record; single-shape falls back
  * to the top-level `message_map` gated by the optional `message_filter`.
  */
-function compileRecordShapes(src: NativeHistoryJsonlSource): {
+// Exported for `tool-block-expand.ts`: a multi-shape (`records[]`) store picks
+// the content/tools map PER RECORD, so the expand path must pick the shape with
+// this same matcher rather than assuming the top-level `message_map`.
+export function compileRecordShapes(src: NativeHistoryJsonlSource): {
     pick: (record: any) => { map: NativeHistoryMessageMap } | null;
 } {
     if (Array.isArray(src.records) && src.records.length > 0) {
@@ -2002,7 +2022,10 @@ function pickSessionBoundFileAcrossDateWindow(
  * entry can pick the first non-empty value across alternative locations
  * (e.g. agy's content vs. thinking).
  */
-function jsonPathGet(record: any, expr: string): unknown {
+// Exported for `tool-block-expand.ts`: the on-demand expand path MUST resolve
+// spec field locations with the same reader the parser used, or the two could
+// disagree about which field a `message_map` entry names.
+export function jsonPathGet(record: any, expr: string): unknown {
     if (typeof expr !== 'string') return undefined;
     if (expr.includes('||')) {
         for (const alt of expr.split('||')) {
@@ -2072,7 +2095,13 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
     // tool record we emit only that bubble (it has no prose). Otherwise emit
     // the text bubble plus a tool bubble per matching content block.
     if (map.tools) {
-        const recordTool = projectToolBlock(record, role, map.tools);
+        // blockIndex -1: the record itself is the tool block, so there is no
+        // content-array position to name.
+        const recordTool = projectToolBlock(record, role, map.tools, {
+            sourceMtimeMs,
+            recordIndex: index,
+            blockIndex: -1,
+        });
         if (recordTool) {
             out.push({ ...recordTool, receivedAt });
             return out;
@@ -2097,8 +2126,15 @@ function projectMessages(record: any, map: NativeHistoryMessageMap, index: numbe
     // with the next record's timestamp.
     if (map.tools && Array.isArray(contentRaw)) {
         let nudge = 1;
-        for (const block of contentRaw) {
-            const tool = projectToolBlock(block, role, map.tools);
+        // blockIndex is the position in the RAW content array, not a count of
+        // emitted bubbles: non-tool blocks (prose) are skipped here, so the two
+        // diverge, and the expand path indexes back into the raw array.
+        for (let blockIndex = 0; blockIndex < contentRaw.length; blockIndex += 1) {
+            const tool = projectToolBlock(contentRaw[blockIndex], role, map.tools, {
+                sourceMtimeMs,
+                recordIndex: index,
+                blockIndex,
+            });
             if (tool) {
                 out.push({ ...tool, receivedAt: receivedAt + nudge });
                 nudge += 1;
@@ -2130,48 +2166,6 @@ function cleanContent(input: string, map: NativeHistoryMessageMap): string {
     return content ? content.trim() : '';
 }
 
-const DEFAULT_TOOL_CALL_TYPES = ['tool_use', 'function_call', 'custom_tool_call'];
-const DEFAULT_TOOL_RESULT_TYPES = ['tool_result', 'function_call_output', 'custom_tool_call_output'];
-
-/**
- * Turn a single content block into a `kind:'tool'` message, or null if the
- * block is not a tool call/result. Field locations come from the spec's
- * `tools` map with Anthropic-block defaults.
- *
- * Both tool calls and tool results render on the assistant side: a tool call
- * is the agent's action, and a tool result is part of the agent's work, not a
- * user turn (claude/codex persist results under the user / no role, which would
- * otherwise misattribute them). Calls render as `↗ {name}: {one-line args}`,
- * results as `↘ {one-line result}`. The `role` param is accepted for symmetry
- * but tool bubbles are always assistant.
- */
-function projectToolBlock(block: any, role: 'user' | 'assistant' | 'system', tmap: NativeHistoryToolMap): NativeHistoryMessage | null {
-    void role;
-    if (block == null || typeof block !== 'object') return null;
-    const typeVal = String(jsonPathGet(block, tmap.block_type || '$.type') ?? '');
-    if (!typeVal) return null;
-    const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
-    const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
-
-    if (callTypes.includes(typeVal)) {
-        const name = String(jsonPathGet(block, tmap.call_name || '$.name') ?? 'tool').trim() || 'tool';
-        const args = oneLine(stringifyContent(jsonPathGet(block, tmap.call_args || '$.input')), 240);
-        const content = args ? `↗ ${name}: ${args}` : `↗ ${name}`;
-        return { role: 'assistant', content, receivedAt: 0, kind: 'tool' };
-    }
-    if (resultTypes.includes(typeVal)) {
-        const result = oneLine(stringifyContent(jsonPathGet(block, tmap.result_content || '$.content')), 600);
-        if (!result) return null;
-        return { role: 'assistant', content: `↘ ${result}`, receivedAt: 0, kind: 'tool' };
-    }
-    return null;
-}
-
-/** Collapse whitespace to single spaces and cap length for a tool summary. */
-function oneLine(s: string, max: number): string {
-    const flat = s.replace(/\s+/g, ' ').trim();
-    return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
-}
 
 /**
  * Coerce a timestamp value to epoch milliseconds. Accepts:
@@ -2224,7 +2218,9 @@ function normalizeRole(r: unknown): 'user' | 'assistant' | 'system' {
  *   3. object with a top-level `text`  → that string
  *   4. last resort                     → JSON.stringify
  */
-function stringifyContent(v: unknown): string {
+// Exported alongside `jsonPathGet` for `tool-block-expand.ts` — same reason:
+// the expanded text must be stringified identically to the summarised text.
+export function stringifyContent(v: unknown): string {
     if (v == null) return '';
     if (typeof v === 'string') return v;
     if (Array.isArray(v)) {

@@ -93,6 +93,19 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
   // v1 producers omit it; the daemon derives it in normalizeNativeHistoryMessages.
   if (isFiniteNumber(message.sequence)) normalized.sequence = message.sequence
   if (typeof message._turnKey === 'string') normalized._turnKey = message._turnKey
+  // (TOOL-EXPAND) Carried through by NAME and only when every component is a
+  // finite number — a partial or string-bearing ref is dropped rather than
+  // forwarded, since the daemon would refuse it downstream anyway.
+  if (isPlainObject(message.toolBlockRef)) {
+    const ref = message.toolBlockRef as Record<string, unknown>
+    if (isFiniteNumber(ref.sourceMtimeMs) && isFiniteNumber(ref.recordIndex) && isFiniteNumber(ref.blockIndex)) {
+      normalized.toolBlockRef = {
+        sourceMtimeMs: ref.sourceMtimeMs,
+        recordIndex: ref.recordIndex,
+        blockIndex: ref.blockIndex,
+      }
+    }
+  }
   if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls as ChatMessage['toolCalls']
   if (isPlainObject(message.meta)) normalized.meta = message.meta as ChatMessage['meta']
   if (typeof message.senderName === 'string') normalized.senderName = message.senderName

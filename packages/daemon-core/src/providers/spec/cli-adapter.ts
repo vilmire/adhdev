@@ -30,6 +30,7 @@ import {
 import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
 import { lastContiguousNumberedBlock } from './evaluator.js';
 import { executeNativeHistory } from './native-history-executor.js';
+import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
 import { readJsonlLines } from './native-history-jsonl-cache.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
 import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
@@ -1317,6 +1318,26 @@ export class SpecCliAdapter implements CliAdapter {
         try { this.driver.updateMeta(meta); } catch { /* transport may not support meta */ }
     }
     refreshProviderDefinition(_provider?: unknown): void { /* hot reload handled by SpecDriver fs.watch */ }
+
+    /**
+     * (TOOL-EXPAND) Re-read one truncated tool bubble at full length.
+     *
+     * Tool summaries are capped by the parser and the full text is carried on
+     * no transcript payload, so this is the only way a reader can see the whole
+     * command or result. The session→transcript binding is resolved from the
+     * SAME inputs the routine read path uses, so an expand can never resolve to
+     * a different session's file than the bubble came from.
+     */
+    expandToolBlock(ref: unknown): ToolBlockExpandResult {
+        return expandToolBlock(this.spec.native_history, {
+            agentType: this.cliType,
+            providerSessionId: this.providerSessionId,
+            sessionStartedAtMs: this.spawnedAtMs,
+            envOverrides: this.spawnedEnv,
+            workspace: this.workingDir,
+            instanceId: this.owningSessionId,
+        }, ref);
+    }
 
     /**
      * TX-FSM Stage 0 (shadow): forward the daemon's normalized signal

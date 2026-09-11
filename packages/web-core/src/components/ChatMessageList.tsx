@@ -45,6 +45,7 @@ import {
 import {
     ActionLogRow,
     ChatMessageRow,
+    type ToolExpandState,
 } from './ChatMessageList/chatMessageBubbles';
 import { classifyChatMessageForDisplay, mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
 
@@ -110,6 +111,16 @@ export interface ChatMessageListProps {
      * pending id. Rendered on the queued bubble alongside Send now.
      */
     onCancelQueued?: (pendingId: string) => void;
+    /**
+     * (TOOL-EXPAND) Fetch the untruncated body of a truncated tool bubble.
+     * Rendered only on bubbles the parser actually truncated, so a host that
+     * omits it (read-only share views) loses no affordance that would work.
+     */
+    onExpandToolBlock?: (messageKey: string, ref: NonNullable<ChatMessage['toolBlockRef']>) => void;
+    /** Collapse an expanded tool bubble back to its summary. */
+    onCollapseToolBlock?: (messageKey: string) => void;
+    /** Expansion state per message key, owned by the host that fetches. */
+    toolExpansions?: Record<string, ToolExpandState>;
 }
 
 export interface ChatMessageListRef {
@@ -123,7 +134,7 @@ export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage)
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, onExpandToolBlock, onCollapseToolBlock, toolExpansions },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -620,6 +631,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
+                        toolExpand={toolExpansions?.[messageKey]}
+                        onExpandToolBlock={onExpandToolBlock ? (ref) => onExpandToolBlock(messageKey, ref) : undefined}
+                        onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(messageKey) : undefined}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);
                             isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
@@ -714,6 +728,13 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     // (G8-6 class) A handler missing from this comparator never reaches the row:
     // the list short-circuits and the button keeps calling a stale closure.
     && prev.onCancelQueued === next.onCancelQueued
+    // (TOOL-EXPAND) Same class: without these the list short-circuits and an
+    // expanded body — or the refusal notice — never reaches the row that asked
+    // for it. `toolExpansions` is replaced (not mutated) on every state change,
+    // so reference equality is the correct test.
+    && prev.toolExpansions === next.toolExpansions
+    && prev.onExpandToolBlock === next.onExpandToolBlock
+    && prev.onCollapseToolBlock === next.onCollapseToolBlock
 ));
 
 export default MemoizedChatMessageList;

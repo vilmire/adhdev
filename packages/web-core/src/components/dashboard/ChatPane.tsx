@@ -17,8 +17,9 @@ import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommand
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import { eventManager } from '../../managers/EventManager';
 import { getConversationViewStates } from './DashboardMobileChatShared';
+import type { ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
 import type { ActiveConversation } from './types';
-import type { DaemonData } from '../../types';
+import type { ChatMessage, DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconChat, IconEye, IconFolder, IconPlug, IconSpinner } from '../Icons';
@@ -361,6 +362,66 @@ export default function ChatPane({
         [actionLogs, activeConv.tabKey],
     );
 
+    /**
+     * (TOOL-EXPAND) Per-bubble expansion state, keyed by the same stable message
+     * key the list uses for React keys, so an expansion follows its bubble as
+     * the transcript tail grows rather than sliding onto a neighbour.
+     */
+    const [toolExpansions, setToolExpansions] = useState<Record<string, ToolExpandState>>({});
+
+    // Expansions are transcript-position-specific; when the conversation changes
+    // the old keys describe bubbles that are no longer on screen.
+    useEffect(() => {
+        setToolExpansions({});
+    }, [activeConv.tabKey]);
+
+    const handleExpandToolBlock = useCallback(async (
+        messageKey: string,
+        ref: NonNullable<ChatMessage['toolBlockRef']>,
+    ) => {
+        if (!daemonId) return;
+        setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'loading' } }));
+        try {
+            const raw = await sendCommand(daemonId, 'expand_tool_block', {
+                targetSessionId: activeConv.sessionId,
+                agentType: controlsContext.providerType || activeConv.agentType,
+                toolBlockRef: ref,
+            });
+            const body = unwrapCommandResult(raw) as {
+                success?: boolean;
+                toolName?: string;
+                callArgs?: string;
+                result?: string;
+            } | null;
+            // A refusal (most importantly `source_changed`) is surfaced as an
+            // error rather than an empty expansion: the daemon declined to guess
+            // which block the ref now names, and the UI must not imply the
+            // output was empty.
+            const text = body?.success
+                ? (body.callArgs !== undefined
+                    ? `${body.toolName ? `${body.toolName}: ` : ''}${body.callArgs}`
+                    : body.result)
+                : undefined;
+            setToolExpansions(prev => ({
+                ...prev,
+                [messageKey]: text !== undefined
+                    ? { status: 'expanded', text }
+                    : { status: 'error' },
+            }));
+        } catch {
+            setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'error' } }));
+        }
+    }, [activeConv.agentType, activeConv.sessionId, controlsContext.providerType, daemonId, sendCommand]);
+
+    const handleCollapseToolBlock = useCallback((messageKey: string) => {
+        setToolExpansions(prev => {
+            if (!prev[messageKey]) return prev;
+            const next = { ...prev };
+            delete next[messageKey];
+            return next;
+        });
+    }, []);
+
     const collectChatDebugBundle = useCallback(async () => {
         if (!daemonId) return;
         const frontendSnapshot = buildChatFrontendDebugSnapshot({
@@ -616,6 +677,9 @@ export default function ChatPane({
                 onSendNow={handleSendNowQueued}
                 isSendingNow={isSendingChat}
                 onCancelQueued={handleCancelQueued}
+                toolExpansions={toolExpansions}
+                onExpandToolBlock={handleExpandToolBlock}
+                onCollapseToolBlock={handleCollapseToolBlock}
             />
 
             {/* (QUEUE-PINNED-COMPOSER) Outside the scroll container by design: a
