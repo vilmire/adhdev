@@ -117877,13 +117877,22 @@ ${rawInput}` : rawInput;
       const startedAt = Date.now();
       const deadline = startedAt + timeoutMs;
       const secondPressAt = options?.secondPress ? startedAt + (options.secondPressAfterMs ?? INTERRUPT_SECOND_PRESS_DELAY_MS) : Number.POSITIVE_INFINITY;
+      const minBusyDwellMs = options?.minBusyDwellMs ?? INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS;
       let pressed = false;
+      let busySince = null;
       for (; ; ) {
         const status = readStatus(adapter);
+        if (status !== void 0 && TERMINAL_STATUSES2.has(status)) {
+          options?.onTerminalStatus?.(status);
+          return false;
+        }
         if (status !== void 0 && !BUSY_STATUSES2.has(status)) return true;
         const now = Date.now();
+        if (status === void 0) busySince = null;
+        else if (busySince === null) busySince = now;
         if (now >= deadline) return false;
-        if (!pressed && now >= secondPressAt) {
+        const busyLongEnough = busySince !== null && now - busySince >= minBusyDwellMs;
+        if (!pressed && now >= secondPressAt && busyLongEnough) {
           pressed = true;
           options?.secondPress?.();
         }
@@ -117910,12 +117919,25 @@ ${rawInput}` : rawInput;
       const reserveMs = (options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS) + DRAIN_RESERVE_SLACK_MS;
       adapter.reserveDrain?.(reserveMs);
       try {
+        let terminalStatus = null;
         const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+          onTerminalStatus: (status) => {
+            terminalStatus = status;
+          },
           secondPress: interrupted.confidence === "proven" ? () => {
             void adapter.interruptTurn?.();
           } : void 0,
-          secondPressAfterMs: options?.secondPressAfterMs
+          secondPressAfterMs: options?.secondPressAfterMs,
+          minBusyDwellMs: options?.minBusyDwellMs
         });
+        if (!wentIdle && terminalStatus !== null) {
+          LOG.warn("SendNow", `[${adapter.cliType}] session reported '${String(terminalStatus)}' after the stop key \u2014 body NOT delivered (claimed=${claimed})`);
+          return {
+            ok: false,
+            reason: "session_exited",
+            message: `The ${adapter.cliType} session ended (${String(terminalStatus)}) before the message could be delivered, so nothing was sent. Start the session again and resend.`
+          };
+        }
         if (!wentIdle) {
           LOG.warn("SendNow", `[${adapter.cliType}] interrupt sent but session never reported idle within ${options?.timeoutMs ?? INTERRUPT_IDLE_TIMEOUT_MS}ms (claimed=${claimed}, body NOT delivered)`);
           return {
@@ -117944,8 +117966,10 @@ ${rawInput}` : rawInput;
     var INTERRUPT_IDLE_TIMEOUT_MS;
     var INTERRUPT_IDLE_POLL_MS;
     var INTERRUPT_SECOND_PRESS_DELAY_MS;
+    var INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS;
     var DRAIN_RESERVE_SLACK_MS;
     var BUSY_STATUSES2;
+    var TERMINAL_STATUSES2;
     var init_interrupt_and_deliver = __esm2({
       "src/commands/interrupt-and-deliver.ts"() {
         "use strict";
@@ -117953,8 +117977,10 @@ ${rawInput}` : rawInput;
         INTERRUPT_IDLE_TIMEOUT_MS = 15e3;
         INTERRUPT_IDLE_POLL_MS = 120;
         INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
+        INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS = 260;
         DRAIN_RESERVE_SLACK_MS = 5e3;
         BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
+        TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["stopped", "error", "exited", "crashed"]);
       }
     });
     function hashSignatureParts(parts) {
