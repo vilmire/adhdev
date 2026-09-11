@@ -1249,6 +1249,67 @@
         cursor: default;
     }
 
+    /* (QUEUE-PINNED-COMPOSER) The waiting queue, pinned between the transcript
+       and the composer.
+
+       It is a SIBLING of the scrolling message list, not a descendant, so it
+       needs no sticky positioning to stay put — the flex column simply keeps it
+       adjacent to the composer while the transcript scrolls behind it. A body
+       parked in the daemon FIFO has not entered the conversation, and this is
+       what keeps it (and its Send now / Cancel controls) reachable no matter how
+       much the agent emits while it works. */
+    .chat-pending-queue-strip {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        /* Bounded so a deep queue cannot eat the transcript above it or push the
+           composer off screen; past ~3 rows it scrolls internally instead. The
+           store caps the queue at MAX_PENDING_QUEUED_MESSAGES, so this is a
+           layout guard, not the real bound. */
+        max-height: 30vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: 6px 10px;
+        border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+        background: color-mix(in srgb, currentColor 4%, transparent);
+    }
+
+    .chat-pending-queue-row {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 5px 8px;
+        border-radius: 8px;
+        border: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
+        /* Dashed + translucent reads as "not delivered yet", visually distinct
+           from a real transcript bubble without inventing a new colour. */
+        background: color-mix(in srgb, currentColor 5%, transparent);
+    }
+
+    .chat-pending-queue-body {
+        font-size: var(--chat-body-font-size, 0.8125rem);
+        line-height: 1.35;
+        opacity: 0.85;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        /* A long body must not turn one waiting row into a wall of text; the
+           full text stays available via the row's title attribute. */
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    /* Reuses .chat-bubble-queued for the label/button row so the pinned controls
+       and the in-bubble ones stay identical; only the bubble-internal divider is
+       dropped, the row already has its own border. */
+    .chat-pending-queue-actions {
+        margin-top: 2px;
+        padding-top: 0;
+        border-top: none;
+    }
+
     .chat-copy-btn {
         display: inline-flex;
         align-items: center;
