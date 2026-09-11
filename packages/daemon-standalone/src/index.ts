@@ -364,6 +364,11 @@ interface ChatTailSubscriptionState {
 
 const SESSION_TARGET_COMMANDS = new Set([
   'send_chat',
+  // Cancelling a queued send targets one session's driver FIFO, so it needs the
+  // same sessionId → targetSessionId normalization send_chat gets; without it a
+  // standalone caller passing `sessionId` would route to no session and the
+  // cancel would report "adapter not found" for a body that is really queued.
+  'cancel_queued_chat',
   'read_chat',
   'get_chat_debug_bundle',
   'chat_history',
