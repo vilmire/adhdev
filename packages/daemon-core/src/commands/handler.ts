@@ -433,6 +433,10 @@ export class DaemonCommandHandler implements CommandHelpers {
         const sessionScopedCommands = new Set([
             'read_chat',
             'get_chat_debug_bundle',
+            // Addresses ONE session's transcript file. Failing closed when that
+            // session is gone is the point: resolving the ref against whatever
+            // session is current instead would expand the wrong transcript.
+            'expand_tool_block',
             'send_chat',
             // Cancelling a queued send addresses ONE session's driver FIFO, so it
             // must fail closed exactly like send_chat when the session is gone —
@@ -517,6 +521,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         switch (cmd) {
             // ─── Chat commands (chat-commands.ts) ───────────────
             case 'read_chat': return Chat.handleReadChat(this, args);
+            case 'expand_tool_block': return Chat.handleExpandToolBlock(this, args);
             case 'get_chat_debug_bundle': return Chat.handleGetChatDebugBundle(this, args);
             case 'chat_history': return Chat.handleChatHistory(this, args);
             case 'send_chat': return Chat.handleSendChat(this, args);

@@ -1,6 +1,7 @@
 /**
  * Chat Commands — readChat, sendChat, listChats, newChat, switchChat,
- *                 setMode, changeModel, setThoughtLevel, resolveAction, chatHistory
+ *                 setMode, changeModel, setThoughtLevel, resolveAction,
+ *                 chatHistory, expandToolBlock
  *
  * This module is a re-export barrel. The implementation was split into focused
  * sub-modules (chat-commands-shared / -scope / -debug-bundle / -read / -write)
@@ -12,6 +13,7 @@ export { READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, buildSendInputSignature } from './c
 export { evaluateReadChatNodeWorkspaceScope } from './chat-commands-scope.js';
 export { sanitizeDebugBundleValue, handleGetChatDebugBundle } from './chat-commands-debug-bundle.js';
 export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read.js';
+export { handleExpandToolBlock } from './chat-commands-expand-tool.js';
 export {
     handleSendChat,
     handleCancelQueuedChat,

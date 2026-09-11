@@ -91641,6 +91641,16 @@ ${cleanBody}`;
       if (isFiniteNumber(message.receivedAt)) normalized.receivedAt = message.receivedAt;
       if (isFiniteNumber(message.sequence)) normalized.sequence = message.sequence;
       if (typeof message._turnKey === "string") normalized._turnKey = message._turnKey;
+      if (isPlainObject3(message.toolBlockRef)) {
+        const ref = message.toolBlockRef;
+        if (isFiniteNumber(ref.sourceMtimeMs) && isFiniteNumber(ref.recordIndex) && isFiniteNumber(ref.blockIndex)) {
+          normalized.toolBlockRef = {
+            sourceMtimeMs: ref.sourceMtimeMs,
+            recordIndex: ref.recordIndex,
+            blockIndex: ref.blockIndex
+          };
+        }
+      }
       if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls;
       if (isPlainObject3(message.meta)) normalized.meta = message.meta;
       if (typeof message.senderName === "string") normalized.senderName = message.senderName;
@@ -92115,6 +92125,17 @@ ${cleanBody}`;
     function coverageModeField(value) {
       return typeof value === "string" && COVERAGE_MODES.includes(value) ? value : "tail";
     }
+    function toolBlockRefField(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const raw = value;
+      const sourceMtimeMs = numberField(raw.sourceMtimeMs);
+      const recordIndex = numberField(raw.recordIndex);
+      const blockIndex = numberField(raw.blockIndex);
+      if (sourceMtimeMs == null || recordIndex == null || blockIndex == null) return null;
+      if (!Number.isInteger(recordIndex) || !Number.isInteger(blockIndex)) return null;
+      if (recordIndex < 0 || blockIndex < -1) return null;
+      return { sourceMtimeMs, recordIndex, blockIndex };
+    }
     function stringArrayField(value) {
       if (!Array.isArray(value)) return [];
       return value.filter((item) => typeof item === "string");
@@ -92135,7 +92156,8 @@ ${cleanBody}`;
         bubbleState: bubbleStateField(candidate.bubbleState),
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
-        streaming
+        streaming,
+        toolBlockRef: toolBlockRefField(candidate.toolBlockRef)
       };
     }
     function encodeTranscriptTerminalMarker(candidate) {
@@ -104496,6 +104518,52 @@ ${marker}`,
         };
       }
     });
+    function projectToolBlock(block2, role, tmap, deps, ref) {
+      void role;
+      if (block2 == null || typeof block2 !== "object") return null;
+      const { jsonPathGet: jsonPathGet2, stringifyContent: stringifyContent2 } = deps;
+      const typeVal = String(jsonPathGet2(block2, tmap.block_type || "$.type") ?? "");
+      if (!typeVal) return null;
+      const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
+      const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
+      if (callTypes.includes(typeVal)) {
+        const name = String(jsonPathGet2(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
+        const { text: args, truncated } = oneLine(stringifyContent2(jsonPathGet2(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
+        const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
+        const msg = { role: "assistant", content, receivedAt: 0, kind: "tool" };
+        if (truncated && ref) msg.toolBlockRef = ref;
+        return msg;
+      }
+      if (resultTypes.includes(typeVal)) {
+        const { text: result, truncated } = oneLine(stringifyContent2(jsonPathGet2(block2, tmap.result_content || "$.content")), TOOL_RESULT_SUMMARY_MAX);
+        if (!result) return null;
+        const msg = { role: "assistant", content: `\u2198 ${result}`, receivedAt: 0, kind: "tool" };
+        if (truncated && ref) msg.toolBlockRef = ref;
+        return msg;
+      }
+      return null;
+    }
+    function oneLine(s2, max) {
+      const flat = s2.replace(/\s+/g, " ").trim();
+      if (flat.length <= max) return { text: flat, truncated: false };
+      return { text: flat.slice(0, max - 1) + "\u2026", truncated: true };
+    }
+    var DEFAULT_TOOL_CALL_TYPES;
+    var DEFAULT_TOOL_RESULT_TYPES;
+    var TOOL_CALL_SUMMARY_MAX;
+    var TOOL_RESULT_SUMMARY_MAX;
+    var init_native_history_tool_blocks = __esm2({
+      "src/providers/spec/native-history-tool-blocks.ts"() {
+        "use strict";
+        DEFAULT_TOOL_CALL_TYPES = ["tool_use", "function_call", "custom_tool_call"];
+        DEFAULT_TOOL_RESULT_TYPES = ["tool_result", "function_call_output", "custom_tool_call_output"];
+        TOOL_CALL_SUMMARY_MAX = 240;
+        TOOL_RESULT_SUMMARY_MAX = 600;
+      }
+    });
+    function projectToolBlock2(block2, role, tmap, ref) {
+      return projectToolBlock(block2, role, tmap, { jsonPathGet, stringifyContent }, ref);
+    }
     function executeNativeHistory(cfg, input) {
       if (!cfg?.source) return null;
       if (cfg.source.kind === "jsonl") return executeJsonl(cfg.source, input);
@@ -105649,7 +105717,11 @@ ${marker}`,
       const kind = typeof kindRaw === "string" && kindRaw ? kindRaw : "standard";
       const out = [];
       if (map3.tools) {
-        const recordTool = projectToolBlock(record2, role, map3.tools);
+        const recordTool = projectToolBlock2(record2, role, map3.tools, {
+          sourceMtimeMs,
+          recordIndex: index,
+          blockIndex: -1
+        });
         if (recordTool) {
           out.push({ ...recordTool, receivedAt });
           return out;
@@ -105662,8 +105734,12 @@ ${marker}`,
       if (content) out.push(workspace ? { role, content, receivedAt, kind, workspace } : { role, content, receivedAt, kind });
       if (map3.tools && Array.isArray(contentRaw)) {
         let nudge = 1;
-        for (const block2 of contentRaw) {
-          const tool = projectToolBlock(block2, role, map3.tools);
+        for (let blockIndex = 0; blockIndex < contentRaw.length; blockIndex += 1) {
+          const tool = projectToolBlock2(contentRaw[blockIndex], role, map3.tools, {
+            sourceMtimeMs,
+            recordIndex: index,
+            blockIndex
+          });
           if (tool) {
             out.push({ ...tool, receivedAt: receivedAt + nudge });
             nudge += 1;
@@ -105690,30 +105766,6 @@ ${marker}`,
         }
       }
       return content ? content.trim() : "";
-    }
-    function projectToolBlock(block2, role, tmap) {
-      void role;
-      if (block2 == null || typeof block2 !== "object") return null;
-      const typeVal = String(jsonPathGet(block2, tmap.block_type || "$.type") ?? "");
-      if (!typeVal) return null;
-      const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
-      const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
-      if (callTypes.includes(typeVal)) {
-        const name = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
-        const args = oneLine(stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input")), 240);
-        const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
-        return { role: "assistant", content, receivedAt: 0, kind: "tool" };
-      }
-      if (resultTypes.includes(typeVal)) {
-        const result = oneLine(stringifyContent(jsonPathGet(block2, tmap.result_content || "$.content")), 600);
-        if (!result) return null;
-        return { role: "assistant", content: `\u2198 ${result}`, receivedAt: 0, kind: "tool" };
-      }
-      return null;
-    }
-    function oneLine(s2, max) {
-      const flat = s2.replace(/\s+/g, " ").trim();
-      return flat.length > max ? flat.slice(0, max - 1) + "\u2026" : flat;
     }
     function parseTimestamp(v) {
       if (v == null) return null;
@@ -105857,8 +105909,6 @@ ${marker}`,
     var globCache;
     var globCacheHits;
     var globCacheMisses;
-    var DEFAULT_TOOL_CALL_TYPES;
-    var DEFAULT_TOOL_RESULT_TYPES;
     var init_native_history_executor = __esm2({
       "src/providers/spec/native-history-executor.ts"() {
         "use strict";
@@ -105871,6 +105921,7 @@ ${marker}`,
         init_usage_normalize();
         init_transcript_claim_registry();
         init_native_history_jsonl_cache();
+        init_native_history_tool_blocks();
         init_native_history_jsonl_cache();
         UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
         GLOB_CACHE_TTL_MS = 3e3;
@@ -105879,8 +105930,87 @@ ${marker}`,
         globCache = /* @__PURE__ */ new Map();
         globCacheHits = 0;
         globCacheMisses = 0;
-        DEFAULT_TOOL_CALL_TYPES = ["tool_use", "function_call", "custom_tool_call"];
-        DEFAULT_TOOL_RESULT_TYPES = ["tool_result", "function_call_output", "custom_tool_call_output"];
+      }
+    });
+    function isValidRef(ref) {
+      if (!ref || typeof ref !== "object") return false;
+      const r = ref;
+      return Number.isFinite(r.sourceMtimeMs) && Number.isInteger(r.recordIndex) && Number.isInteger(r.blockIndex) && r.recordIndex >= 0 && r.blockIndex >= -1;
+    }
+    function expandToolBlock(cfg, input, ref) {
+      if (!isValidRef(ref)) return { ok: false, reason: "block_not_found" };
+      if (cfg?.source?.kind !== "jsonl") return { ok: false, reason: "unsupported_source" };
+      const src = cfg.source;
+      let resolved;
+      try {
+        resolved = executeNativeHistory(cfg, input);
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      if (!resolved?.sourcePath) return { ok: false, reason: "source_unavailable" };
+      if (resolved.sourceMtimeMs !== ref.sourceMtimeMs) {
+        return { ok: false, reason: "source_changed" };
+      }
+      let lines;
+      try {
+        lines = readJsonlLines(resolved.sourcePath);
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      if (ref.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
+      const record2 = lines[ref.recordIndex];
+      if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
+      const shape = compileRecordShapes(src).pick(record2);
+      const tmap = shape?.map.tools;
+      if (!tmap) return { ok: false, reason: "unsupported_source" };
+      let block2;
+      if (ref.blockIndex === -1) {
+        block2 = record2;
+      } else {
+        const contentRaw = jsonPathGet(record2, shape.map.content);
+        if (!Array.isArray(contentRaw)) return { ok: false, reason: "block_not_found" };
+        if (ref.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
+        block2 = contentRaw[ref.blockIndex];
+      }
+      if (block2 == null || typeof block2 !== "object") return { ok: false, reason: "block_not_found" };
+      return readToolBlock(block2, tmap);
+    }
+    function readToolBlock(block2, tmap) {
+      const typeVal = String(jsonPathGet(block2, tmap.block_type || "$.type") ?? "");
+      if (!typeVal) return { ok: false, reason: "not_a_tool_block" };
+      const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
+      const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
+      if (callTypes.includes(typeVal)) {
+        const toolName = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
+        const callArgs = stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input"));
+        return {
+          ok: true,
+          toolName,
+          callArgs,
+          // Measured on the same whitespace-flattened text the parser caps,
+          // so "truncated" here means exactly what it meant there.
+          truncated: flatLength(callArgs) > TOOL_CALL_SUMMARY_MAX
+        };
+      }
+      if (resultTypes.includes(typeVal)) {
+        const result = stringifyContent(jsonPathGet(block2, tmap.result_content || "$.content"));
+        return {
+          ok: true,
+          result,
+          truncated: flatLength(result) > TOOL_RESULT_SUMMARY_MAX
+        };
+      }
+      return { ok: false, reason: "not_a_tool_block" };
+    }
+    function flatLength(s2) {
+      return s2.replace(/\s+/g, " ").trim().length;
+    }
+    var init_tool_block_expand = __esm2({
+      "src/providers/spec/tool-block-expand.ts"() {
+        "use strict";
+        init_native_history_executor();
+        init_native_history_tool_blocks();
+        init_native_history_jsonl_cache();
       }
     });
     function isSafeFilename(name) {
@@ -108992,6 +109122,7 @@ ${text}` : text;
         init_fsm_driver();
         init_evaluator();
         init_native_history_executor();
+        init_tool_block_expand();
         init_native_history_jsonl_cache();
         init_background_task_detector();
         init_antigravity_screen_messages();
@@ -109927,6 +110058,25 @@ ${text}` : text;
             }
           }
           refreshProviderDefinition(_provider) {
+          }
+          /**
+           * (TOOL-EXPAND) Re-read one truncated tool bubble at full length.
+           *
+           * Tool summaries are capped by the parser and the full text is carried on
+           * no transcript payload, so this is the only way a reader can see the whole
+           * command or result. The session→transcript binding is resolved from the
+           * SAME inputs the routine read path uses, so an expand can never resolve to
+           * a different session's file than the bubble came from.
+           */
+          expandToolBlock(ref) {
+            return expandToolBlock(this.spec.native_history, {
+              agentType: this.cliType,
+              providerSessionId: this.providerSessionId,
+              sessionStartedAtMs: this.spawnedAtMs,
+              envOverrides: this.spawnedEnv,
+              workspace: this.workingDir,
+              instanceId: this.owningSessionId
+            }, ref);
           }
           /**
            * TX-FSM Stage 0 (shadow): forward the daemon's normalized signal
@@ -148263,6 +148413,36 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         text: buildDebugBundleText(bundle)
       };
     }
+    init_chat_commands_shared();
+    function canExpand(adapter) {
+      return !!adapter && typeof adapter.expandToolBlock === "function";
+    }
+    function handleExpandToolBlock(h, args) {
+      const ref = args?.toolBlockRef;
+      if (!ref || typeof ref !== "object") {
+        return { success: false, error: "toolBlockRef is required" };
+      }
+      const adapter = getTargetedCliAdapter(h, args);
+      if (!canExpand(adapter)) {
+        return { success: false, error: "expand_unsupported", reason: "unsupported_source" };
+      }
+      let result;
+      try {
+        result = adapter.expandToolBlock(ref);
+      } catch {
+        return { success: false, error: "expand_failed", reason: "source_unavailable" };
+      }
+      if (!result.ok) {
+        return { success: false, error: "expand_failed", reason: result.reason };
+      }
+      return {
+        success: true,
+        ...result.toolName ? { toolName: result.toolName } : {},
+        ...result.callArgs !== void 0 ? { callArgs: result.callArgs } : {},
+        ...result.result !== void 0 ? { result: result.result } : {},
+        truncated: result.truncated
+      };
+    }
     init_contracts2();
     init_provider_input_support();
     init_approval_utils();
@@ -150467,6 +150647,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const sessionScopedCommands = /* @__PURE__ */ new Set([
           "read_chat",
           "get_chat_debug_bundle",
+          // Addresses ONE session's transcript file. Failing closed when that
+          // session is gone is the point: resolving the ref against whatever
+          // session is current instead would expand the wrong transcript.
+          "expand_tool_block",
           "send_chat",
           // Cancelling a queued send addresses ONE session's driver FIFO, so it
           // must fail closed exactly like send_chat when the session is gone —
@@ -150530,6 +150714,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           // ─── Chat commands (chat-commands.ts) ───────────────
           case "read_chat":
             return handleReadChat(this, args);
+          case "expand_tool_block":
+            return handleExpandToolBlock(this, args);
           case "get_chat_debug_bundle":
             return handleGetChatDebugBundle(this, args);
           case "chat_history":

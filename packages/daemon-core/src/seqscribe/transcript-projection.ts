@@ -74,6 +74,39 @@ export interface ReplicatedTranscriptMessageV1 {
     readonly toolName: string | null;
     /** `meta.streaming` only — the rest of `ChatMessage.meta` never travels. */
     readonly streaming: boolean | null;
+    /**
+     * (TOOL-EXPAND) Content-free address of the tool block this bubble was
+     * summarised from — present ONLY on `kind:'tool'` bubbles the parser
+     * actually truncated, `null` otherwise.
+     *
+     * Why this is allowed on a wire that deliberately excludes
+     * `providerUnitKey`: the exclusion above is specifically because
+     * `providerUnitKey` is a HASH OF CONTENT, so it leaks a fingerprint of the
+     * message body. This ref is not derived from content in any way. It is
+     * three integers — a file mtime and two array positions — describing WHERE
+     * a block sits in a transcript the daemon already owns, and two different
+     * tool outputs at the same position produce the identical ref. It carries
+     * no text, no path, and no digest, so it cannot be inverted toward the
+     * body the way a content hash can.
+     *
+     * It exists because the untruncated tool text is intentionally NOT on this
+     * wire: a reader that wants the full body asks the daemon for it over P2P
+     * (`expand_tool_block`), and this ref is what makes that request address a
+     * specific block instead of a re-derived ordinal.
+     */
+    readonly toolBlockRef: ReplicatedTranscriptToolBlockRefV1 | null;
+}
+
+/**
+ * Integers only, by construction. `sourceMtimeMs` doubles as a freshness seal:
+ * the daemon refuses an expand whose mtime no longer matches, so a rotated
+ * transcript fails closed instead of resolving to a different tool's output.
+ */
+export interface ReplicatedTranscriptToolBlockRefV1 {
+    readonly sourceMtimeMs: number;
+    readonly recordIndex: number;
+    /** -1 when the record itself is the tool block (record-level shapes). */
+    readonly blockIndex: number;
 }
 
 export type TranscriptTerminalOutcome = 'completed' | 'failed' | 'cancelled' | 'stalled';
@@ -187,6 +220,7 @@ export interface TranscriptSnapshotCandidateMessage {
     readonly bubbleState?: unknown;
     readonly senderName?: unknown;
     readonly toolName?: unknown;
+    readonly toolBlockRef?: unknown;
     readonly meta?: unknown;
     readonly [extra: string]: unknown;
 }
@@ -310,6 +344,27 @@ function coverageModeField(value: unknown): TranscriptCoverageMode {
         : 'tail';
 }
 
+/**
+ * (TOOL-EXPAND) Coerce a tool-block ref, field by field and by NAME.
+ *
+ * Any missing/non-integer component, or any extra property a caller tacked on,
+ * yields a fresh object containing exactly the three integers — an upstream
+ * `{...ref, sourcePath}` can therefore never ride along. Returns null rather
+ * than a partial ref, since a half-resolved address is exactly the thing the
+ * daemon must refuse anyway.
+ */
+function toolBlockRefField(value: unknown): ReplicatedTranscriptToolBlockRefV1 | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const sourceMtimeMs = numberField(raw.sourceMtimeMs);
+    const recordIndex = numberField(raw.recordIndex);
+    const blockIndex = numberField(raw.blockIndex);
+    if (sourceMtimeMs == null || recordIndex == null || blockIndex == null) return null;
+    if (!Number.isInteger(recordIndex) || !Number.isInteger(blockIndex)) return null;
+    if (recordIndex < 0 || blockIndex < -1) return null;
+    return { sourceMtimeMs, recordIndex, blockIndex };
+}
+
 function stringArrayField(value: unknown): readonly string[] {
     if (!Array.isArray(value)) return [];
     return value.filter((item): item is string => typeof item === 'string');
@@ -337,6 +392,7 @@ export function encodeTranscriptMessage(candidate: TranscriptSnapshotCandidateMe
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
         streaming,
+        toolBlockRef: toolBlockRefField(candidate.toolBlockRef),
     };
 }
 
