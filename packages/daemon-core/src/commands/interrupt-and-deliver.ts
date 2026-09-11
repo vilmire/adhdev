@@ -54,6 +54,14 @@
  * thing that can write that text is this function, so ok:false genuinely means
  * nothing was sent and a retry is safe, and ok:true means this call sent it once.
  *
+ * ── SEND-NOW-SECOND-PRESS-KILL: why the second press needs evidence ───────
+ * Step 1's press is repeated once for live-proven providers. That repeat killed
+ * a session live (2026-09-11, claude-cli): for this CLI a Ctrl-C at an already
+ * idle prompt EXITS the program, and the repeat was gated only on elapsed time
+ * against a cached FSM status that lags the terminal. The press is now gated on
+ * a continuously-observed busy dwell as well — see
+ * INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS for the full timing derivation.
+ *
  * ── What this module deliberately does NOT do ─────────────────────────────
  * It does not bypass the modal park guard (cli-provider-instance.isModalParked)
  * or the driver's send gates, because it does not have its own write path at
@@ -89,6 +97,46 @@ export const INTERRUPT_IDLE_POLL_MS = 120;
  *  never been observed live, a second unexplained control byte at an unknown TUI
  *  state is a change we have no evidence is safe — those keep the single press. */
 export const INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
+/** SEND-NOW-SECOND-PRESS-KILL: how long the session must have been CONTINUOUSLY
+ *  observed busy, on samples taken after the first press, before the second stop
+ *  key is allowed to land.
+ *
+ *  ── The defect this closes (live, 2026-09-11 10:25, session 270c7cf7) ──────
+ *  Ctrl-C at an IDLE claude-cli prompt is not a no-op: a second one exits the
+ *  program. The daemon log shows both presses 215ms apart with NO busy→idle
+ *  state line between them, then the session dying 2.6s later:
+ *
+ *    10:25:45.231 turn interrupted via Ctrl-C   <- first press
+ *    10:25:45.446 turn interrupted via Ctrl-C   <- second press, 215ms later
+ *    10:25:48.060 status: generating → stopped  <- claude-cli exited
+ *
+ *  The pre-existing guards all passed while being wrong, because every one of
+ *  them reads the SAME cached observation:
+ *    • waitForIdleAfterInterrupt polls adapter.getStatus(), which returns the
+ *      cached FsmDriver `latestState` (cli-adapter.ts getStatus) — it never
+ *      re-parses the live screen.
+ *    • interruptTurn() re-checks `latestState?.status === 'generating'` before
+ *      writing, so it is the same stale value, not a second opinion.
+ *
+ *  And that cache is only refreshed when the CLI repaints:
+ *    pty chunk → 80ms screen-change debounce (spec/adapter.ts screenDebounceMs)
+ *              → on_screen_changed → reevaluate() → state_changed → latestState.
+ *  There is no periodic re-evaluation (tickIntervalMs defaults to 0), so with a
+ *  120ms poll and a 200ms press delay the window holds at most one or two
+ *  samples. If the idle repaint lands just after a poll, the next poll is at
+ *  ~240ms — AFTER the second press has already gone out. The observation is
+ *  simply younger than the event it is being used to rule out.
+ *
+ *  ── Why a dwell, rather than a fresher read ───────────────────────────────
+ *  Requiring the busy run to span at least one full debounce+poll cycle means a
+ *  repaint that already happened has necessarily been seen. Any sample taken
+ *  before the first press is discarded, so "still busy" is positive evidence
+ *  gathered after the press rather than a leftover from before it. This keeps
+ *  the fix inside this module: no new FsmDriver surface, no forced re-parse, and
+ *  no change to what the FSM considers authoritative.
+ *
+ *  Sized at 260ms = 80ms debounce + 120ms poll + margin for a slow eval frame. */
+export const INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS = 260;
 /** Head-room added to the idle timeout when reserving the driver's FIFO drain.
  *
  *  The reservation must outlive the idle wait AND the send that follows it, or
@@ -99,6 +147,21 @@ export const DRAIN_RESERVE_SLACK_MS = 5_000;
 
 /** Statuses that mean the session is not free to accept a new turn. */
 const BUSY_STATUSES = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
+/** Statuses that mean the session is GONE — not merely busy, and never going to
+ *  accept anything again.
+ *
+ *  ★ These are not busy, so a plain "not busy ⇒ idle" test reports a dead
+ *  session as a successful interrupt. That produced the self-contradictory live
+ *  pair in the 10:25 trace: `status: generating → stopped` at 10:25:48.060,
+ *  then `interrupt(Ctrl-C, proven) → idle → requeued` at 10:25:48.389 — the wait
+ *  read `stopped` as idle, step 3 sent into a dead adapter, and the body was
+ *  parked in a FIFO that the shutdown sweep discarded 5s later
+ *  (`DISCARDING 1 queued send(s)`). The message was silently lost while the
+ *  dashboard was told the steer had succeeded.
+ *
+ *  Distinguishing them makes the report honest: `session_exited` says plainly
+ *  that nothing was delivered and a retry needs a live session. */
+const TERMINAL_STATUSES = new Set(['stopped', 'error', 'exited', 'crashed']);
 
 export type InterruptAndDeliverOutcome =
     | {
@@ -161,11 +224,24 @@ function sleep(ms: number): Promise<void> {
  * Wait for the adapter to leave every busy status. Resolves true on the first
  * observed non-busy status, false on timeout.
  *
- * `secondPress`, when supplied, is invoked ONCE after `secondPressAfterMs` if
- * the session is still busy by then — the extra stop-key press described at
- * INTERRUPT_SECOND_PRESS_DELAY_MS. It is skipped entirely once idle is observed,
- * so a CLI that stopped on the first press never sees a stray control byte at
- * its idle prompt.
+ * `secondPress`, when supplied, is invoked ONCE — the extra stop-key press
+ * described at INTERRUPT_SECOND_PRESS_DELAY_MS — but only when BOTH hold:
+ *
+ *   • `secondPressAfterMs` has elapsed since the first press, and
+ *   • the session has been observed CONTINUOUSLY busy for at least
+ *     `minBusyDwellMs`, counting only samples taken after this wait began.
+ *
+ * The dwell is the fix for SEND-NOW-SECOND-PRESS-KILL (see the constant's
+ * header): elapsed time alone proves nothing, because the status being read is
+ * a cached FSM observation that lags the CLI by a screen-debounce plus a poll.
+ * A press gated only on the clock can therefore land on a prompt that went idle
+ * before it fired — and for claude-cli a Ctrl-C at an idle prompt exits the
+ * program. Requiring the busy run to span a full debounce+poll cycle means any
+ * repaint that already happened has necessarily been observed first.
+ *
+ * An `undefined` status (the adapter threw, or has no state yet) is NOT treated
+ * as busy: it breaks the dwell run. Unknown is not evidence of generating, and
+ * fail-closed here costs only a slower abort, while fail-open costs the session.
  *
  * Exported for the regression test, which asserts the ORDER of the three steps
  * against a real adapter rather than a stub.
@@ -174,24 +250,52 @@ export async function waitForIdleAfterInterrupt(
     adapter: InterruptibleAdapter,
     timeoutMs: number = INTERRUPT_IDLE_TIMEOUT_MS,
     pollMs: number = INTERRUPT_IDLE_POLL_MS,
-    options?: { secondPress?: () => void; secondPressAfterMs?: number },
+    options?: {
+        secondPress?: () => void;
+        secondPressAfterMs?: number;
+        minBusyDwellMs?: number;
+        /** Invoked when the wait ends because the session EXITED rather than
+         *  going idle, so the caller can report that distinctly. Returns false
+         *  either way — a dead session is not an idle one. */
+        onTerminalStatus?: (status: string) => void;
+    },
 ): Promise<boolean> {
     const startedAt = Date.now();
     const deadline = startedAt + timeoutMs;
     const secondPressAt = options?.secondPress
         ? startedAt + (options.secondPressAfterMs ?? INTERRUPT_SECOND_PRESS_DELAY_MS)
         : Number.POSITIVE_INFINITY;
+    const minBusyDwellMs = options?.minBusyDwellMs ?? INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS;
     let pressed = false;
+    /** Start of the current uninterrupted run of busy observations, or null when
+     *  the latest sample was not a confirmed busy status. Only ever set from a
+     *  sample taken inside this loop, i.e. strictly after the first press. */
+    let busySince: number | null = null;
     for (;;) {
         const status = readStatus(adapter);
+        // A session that EXITED is not idle. Reporting it as idle is what let a
+        // send go into a dead adapter — see TERMINAL_STATUSES.
+        // A session that EXITED is not idle. Reporting it as idle is what let a
+        // send go into a dead adapter — see TERMINAL_STATUSES.
+        if (status !== undefined && TERMINAL_STATUSES.has(status)) {
+            options?.onTerminalStatus?.(status);
+            return false;
+        }
         if (status !== undefined && !BUSY_STATUSES.has(status)) return true;
         const now = Date.now();
+        // Track the busy run. `undefined` (adapter threw / no state yet) is not
+        // a busy confirmation, so it resets the run rather than extending it.
+        if (status === undefined) busySince = null;
+        else if (busySince === null) busySince = now;
         if (now >= deadline) return false;
-        if (!pressed && now >= secondPressAt) {
+        const busyLongEnough = busySince !== null && now - busySince >= minBusyDwellMs;
+        if (!pressed && now >= secondPressAt && busyLongEnough) {
             pressed = true;
-            // Still busy after the first press. interruptTurn re-validates
-            // capability and 'generating' before writing, so this is a no-op if
-            // the session has meanwhile parked on a modal.
+            // Still busy after the first press, and confirmed so by observations
+            // that span a full repaint window — not by a stale cached state.
+            // interruptTurn re-validates capability and 'generating' before
+            // writing, so this is additionally a no-op if the session has
+            // meanwhile parked on a modal.
             options?.secondPress?.();
         }
         await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
@@ -208,7 +312,15 @@ export async function waitForIdleAfterInterrupt(
 export async function interruptAndDeliver(
     adapter: InterruptibleAdapter,
     text: string,
-    options?: { meshTaskId?: string; timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number },
+    options?: {
+        meshTaskId?: string;
+        timeoutMs?: number;
+        pollMs?: number;
+        secondPressAfterMs?: number;
+        /** SEND-NOW-SECOND-PRESS-KILL: minimum continuously-observed busy dwell
+         *  before the second stop key may be written. See the constant. */
+        minBusyDwellMs?: number;
+    },
 ): Promise<InterruptAndDeliverOutcome> {
     if (typeof adapter.interruptTurn !== 'function') {
         return {
@@ -260,12 +372,27 @@ export async function interruptAndDeliver(
         // Step 2 — wait for the FSM to observe busy→idle before writing anything.
         // A provider with a live-proven stop key gets one extra press partway
         // through: see INTERRUPT_SECOND_PRESS_DELAY_MS.
+        let terminalStatus: string | null = null;
         const wentIdle = await waitForIdleAfterInterrupt(adapter, options?.timeoutMs, options?.pollMs, {
+            onTerminalStatus: status => { terminalStatus = status; },
             secondPress: interrupted.confidence === 'proven'
                 ? () => { void adapter.interruptTurn?.(); }
                 : undefined,
             secondPressAfterMs: options?.secondPressAfterMs,
+            minBusyDwellMs: options?.minBusyDwellMs,
         });
+        if (!wentIdle && terminalStatus !== null) {
+            // The session is GONE, not merely slow. Sending here would hand the
+            // body to a dead adapter, which parks it in a FIFO the shutdown
+            // sweep then discards — a silent loss behind a success report.
+            LOG.warn('SendNow', `[${adapter.cliType}] session reported '${String(terminalStatus)}' after the stop key — body NOT delivered (claimed=${claimed})`);
+            return {
+                ok: false,
+                reason: 'session_exited',
+                message: `The ${adapter.cliType} session ended (${String(terminalStatus)}) before the message could be delivered, so nothing was sent. `
+                    + 'Start the session again and resend.',
+            };
+        }
         if (!wentIdle) {
             // The stop key WAS written, so the turn is very likely already aborted;
             // only the observation timed out. The body was deliberately NOT sent, and

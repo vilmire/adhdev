@@ -443,6 +443,162 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
         }
     }, 15_000);
 
+    // ── SEND-NOW-SECOND-PRESS-KILL ────────────────────────────────────────
+    // Live 2026-09-11 10:25, session 270c7cf7: both Ctrl-C presses landed 215ms
+    // apart with NO busy→idle line between them, and claude-cli exited 2.6s
+    // later. For claude-cli a Ctrl-C at an ALREADY IDLE prompt is not a no-op —
+    // it quits the program. The press had been gated only on elapsed time
+    // against adapter.getStatus(), which returns the cached FsmDriver
+    // `latestState`; that cache trails the terminal by an 80ms screen-change
+    // debounce plus a 120ms poll, so at a 200ms delay it can still read
+    // `generating` for a prompt that is already idle.
+    //
+    // These drive waitForIdleAfterInterrupt against a scripted status source
+    // rather than the real adapter, because the whole point is a status that is
+    // STALE relative to the terminal — a state a real FsmDriver reaches only by
+    // a timing race, which is exactly what must not be left to chance in a test.
+    describe('second-press safety when the observed status is stale', () => {
+        /** Adapter double whose reported status is read from a script, so the
+         *  lag between "terminal is idle" and "FSM says idle" is explicit. */
+        function scriptedAdapter(statusAt: (elapsedMs: number) => string | undefined) {
+            const startedAt = Date.now();
+            const presses: number[] = [];
+            return {
+                presses,
+                adapter: {
+                    cliType: 'claude-cli',
+                    getStatus: () => ({ status: statusAt(Date.now() - startedAt) }),
+                    sendMessage: async () => ({ status: 'delivered' as const }),
+                    interruptTurn: async () => {
+                        presses.push(Date.now() - startedAt);
+                        return { ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'proven' as const };
+                    },
+                },
+            };
+        }
+
+        it('does NOT fire the second press when the session went idle but the status is still stale', async () => {
+            // The terminal returned to an idle prompt at 40ms. The FSM does not
+            // report it until 400ms — the observation lag measured above. A
+            // clock-only gate fires at 200ms, straight into the idle prompt.
+            const { adapter, presses } = scriptedAdapter(
+                elapsed => (elapsed < 400 ? 'generating' : 'idle'),
+            );
+            let secondPresses = 0;
+
+            const wentIdle = await waitForIdleAfterInterrupt(adapter as never, 3_000, 30, {
+                secondPress: () => { secondPresses += 1; },
+                secondPressAfterMs: 200,
+                // Dwell longer than the stale window, so "still busy" can only be
+                // satisfied by observations that outlast the lag.
+                minBusyDwellMs: 600,
+            });
+
+            expect(wentIdle).toBe(true);
+            // ★ The assertion this fix exists for: no stray Ctrl-C at an idle
+            //   prompt. Reverting the dwell gate makes this 1.
+            expect(secondPresses).toBe(0);
+            expect(presses).toHaveLength(0);
+        }, 15_000);
+
+        it('STILL fires the second press when the session is genuinely, durably busy', async () => {
+            // Feature preservation: the whole reason the second press exists is
+            // a claude-cli turn that does not abort on one Ctrl-C (9.0s measured).
+            // A session that stays busy well past the dwell must still get it.
+            const { adapter, presses } = scriptedAdapter(() => 'generating');
+            let secondPresses = 0;
+
+            const wentIdle = await waitForIdleAfterInterrupt(adapter as never, 1_200, 30, {
+                secondPress: () => { secondPresses += 1; },
+                secondPressAfterMs: 200,
+                minBusyDwellMs: 260,
+            });
+
+            expect(wentIdle).toBe(false); // never left generating
+            expect(secondPresses).toBe(1);
+        }, 15_000);
+
+        it('fires the second press no earlier than the dwell allows', async () => {
+            const { adapter } = scriptedAdapter(() => 'generating');
+            const startedAt = Date.now();
+            let pressedAt = -1;
+
+            await waitForIdleAfterInterrupt(adapter as never, 1_500, 30, {
+                secondPress: () => { pressedAt = Date.now() - startedAt; },
+                // Clock gate is early; the dwell is what actually holds it back.
+                secondPressAfterMs: 50,
+                minBusyDwellMs: 500,
+            });
+
+            expect(pressedAt).toBeGreaterThanOrEqual(500);
+        }, 15_000);
+
+        it('treats an unreadable status as NOT busy, so it cannot license a press', async () => {
+            // An adapter that throws (or has no state yet) yields undefined.
+            // Unknown must never be evidence of generating: fail-closed costs a
+            // slower abort, fail-open costs the session.
+            const { adapter } = scriptedAdapter(() => undefined);
+            let secondPresses = 0;
+
+            await waitForIdleAfterInterrupt(adapter as never, 700, 30, {
+                secondPress: () => { secondPresses += 1; },
+                secondPressAfterMs: 100,
+                minBusyDwellMs: 200,
+            });
+
+            expect(secondPresses).toBe(0);
+        }, 15_000);
+
+        // The self-contradiction in the same live trace: `generating → stopped`
+        // at 10:25:48.060, then `interrupt(...) → idle → requeued` at
+        // 10:25:48.389. `stopped` is not a BUSY status, so the old "not busy ⇒
+        // idle" test reported a DEAD session as a successful interrupt, sent
+        // into a dead adapter, and the body was parked in a FIFO the shutdown
+        // sweep discarded 5s later — a silent loss behind a success report.
+        it('reports session_exited — not idle — when the session dies after the stop key', async () => {
+            const startedAt = Date.now();
+            let sent = 0;
+            const adapter = {
+                cliType: 'claude-cli',
+                // Dies 150ms in, exactly like the live trace.
+                getStatus: () => ({ status: Date.now() - startedAt < 150 ? 'generating' : 'stopped' }),
+                sendMessage: async () => { sent += 1; return { status: 'queued' as const }; },
+                interruptTurn: async () => ({
+                    ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'proven' as const,
+                }),
+            };
+
+            const outcome = await interruptAndDeliver(adapter as never, 'body', {
+                timeoutMs: 2_000,
+                pollMs: 30,
+            });
+
+            expect(outcome.ok).toBe(false);
+            if (!outcome.ok) expect(outcome.reason).toBe('session_exited');
+            // ★ Nothing may be handed to a dead adapter.
+            expect(sent).toBe(0);
+        }, 15_000);
+
+        it('does not fire when busy is only observed intermittently', async () => {
+            // A flapping observation never accumulates an uninterrupted busy run,
+            // so it cannot satisfy the dwell. Each undefined sample resets it.
+            let sample = 0;
+            const { adapter } = scriptedAdapter(() => {
+                sample += 1;
+                return sample % 2 === 0 ? 'generating' : undefined;
+            });
+            let secondPresses = 0;
+
+            await waitForIdleAfterInterrupt(adapter as never, 900, 30, {
+                secondPress: () => { secondPresses += 1; },
+                secondPressAfterMs: 100,
+                minBusyDwellMs: 300,
+            });
+
+            expect(secondPresses).toBe(0);
+        }, 15_000);
+    });
+
     it('waitForIdleAfterInterrupt resolves once the real adapter reports idle', async () => {
         const { adapter, pty } = await makeRunningAdapter();
         try {
