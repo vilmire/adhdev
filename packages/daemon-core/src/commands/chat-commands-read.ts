@@ -15,7 +15,7 @@ import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { hashSignatureParts } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
-import { filterUserFacingChatMessages, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
+import { filterUserFacingChatMessages, isActivityChatMessage, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -774,6 +774,7 @@ function readSafeSessionPtyHistoryPage(args: {
     excludeRecentCount: number;
     offset: number;
     limit: number;
+    excludeActivity?: boolean; // chat_history's prose-only default — same contract as the native page
 }): { messages: ChatMessage[]; hasMore: boolean } | null {
     const adapter = getTargetedCliAdapter(args.h, args.readArgs, args.provider?.type);
     if (!adapter || typeof adapter.getScriptParsedStatus !== 'function') return null;
@@ -796,9 +797,13 @@ function readSafeSessionPtyHistoryPage(args: {
     } catch {
         return null;
     }
-    const ptyMessages = collapseAdjacentDuplicateChatMessages(
+    const collapsedPtyMessages = collapseAdjacentDuplicateChatMessages(
         normalizeChatMessages(Array.isArray(parsed?.messages) ? parsed.messages as ChatMessage[] : []),
     );
+    // Filter BEFORE slicing — paging operates in the delivered message space.
+    const ptyMessages = args.excludeActivity === true
+        ? collapsedPtyMessages.filter((message) => !isActivityChatMessage(message))
+        : collapsedPtyMessages;
     if (ptyMessages.length === 0) return null;
     const end = Math.max(0, ptyMessages.length - args.excludeRecentCount - args.offset);
     const start = Math.max(0, end - args.limit);
@@ -994,6 +999,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
     // without it two concurrent antigravity sessions cross-bind each other's
     // conversation .db.
     instanceId?: string;
+    excludeActivity?: boolean; // chat_history's prose-only default — see readProviderChatHistory
 }): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
     const canBindFromLiveSession = !args.historySessionId
         && typeof args.sessionStartedAtMs === 'number'
@@ -1061,6 +1067,7 @@ function readCliProviderNativeHistory(agentStr: string, args: {
         sessionStartedAtMs: args.sessionStartedAtMs,
         envOverrides: args.envOverrides,
         instanceId: args.instanceId,
+        excludeActivity: args.excludeActivity,
     });
     const boundProviderSessionId = typeof (sessionHistory as any)?.providerSessionId === 'string'
         ? (sessionHistory as any).providerSessionId.trim()
@@ -1192,6 +1199,9 @@ function getCliVisibleTranscriptCount(adapter: any): number {
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
     const historySessionId = getHistorySessionId(h, args);
+    // Same opt-in contract as read_chat (read-chat-presentation.ts): prose-only
+    // default, `includeActivity` keeps activity rows — one toggle, both lanes.
+    const includeActivity = args?.includeActivity === true || args?.includeActivity === 'true';
     try {
         const provider = h.getProvider(agentType);
         const agentStr = provider?.type || agentType || getCurrentProviderType(h);
@@ -1250,6 +1260,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 instanceId: effectiveReadSessionId(h, args?.targetSessionId) || undefined,
                 pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
                 allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
+                excludeActivity: !includeActivity,
             })
             : readProviderChatHistory(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
@@ -1261,6 +1272,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                 excludeFromIdentity,
                 historyBehavior: provider?.historyBehavior,
                 scripts: provider?.scripts as any,
+                excludeActivity: !includeActivity,
             });
         if (supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory)) {
             const lookup = (result as any).lookup === 'workspace' ? 'workspace' : 'session';
@@ -1309,6 +1321,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
                     excludeRecentCount,
                     offset: offset || 0,
                     limit: limit || 30,
+                    excludeActivity: !includeActivity,
                 });
                 if (ptyPage) {
                     return {

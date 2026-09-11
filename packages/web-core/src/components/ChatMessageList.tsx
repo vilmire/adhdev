@@ -195,7 +195,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     // Visible chat transcript hides internal provider/coordinator activity rows.
     // The daemon/read_chat transcript still preserves these messages for debug/export paths.
-    const visibleMessages = useMemo(() => {
+    const { visibleMessages, activityMessageCount } = useMemo(() => {
         // Single classification pass. `filterChatMessagesForDefaultTranscript` and
         // `filterChatActivityMessages` each walked the full list calling
         // `classifyChatMessageForDisplay` per message; the two predicates are
@@ -213,9 +213,12 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         // native transcript replaying a finalized turn) before rendering — this is
         // adjacent-only, so the intentional non-adjacent history/live overlap is
         // preserved. (ANTIGRAVITY-REPLICA-DUP)
-        return collapseAdjacentDuplicateChatMessages(
-            mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages),
-        );
+        return {
+            visibleMessages: collapseAdjacentDuplicateChatMessages(
+                mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages),
+            ),
+            activityMessageCount: activityMessages.length,
+        };
     }, [messages, showActivityMessages]);
 
     const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;
@@ -619,6 +622,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     />
                 );
             })}
+
+            {/* Activity toggle ON but this transcript genuinely has zero
+              * tool/terminal/thought rows: without feedback the toggle looks
+              * broken (owner-reported). Rendered at the BOTTOM of the list —
+              * where the user who just clicked the header pill is looking —
+              * and only alongside a non-empty transcript (the global empty
+              * state above already covers the no-messages case). data-testid
+              * anchors the regression test. */}
+            {showActivityMessages && activityMessageCount === 0 && items.length > 0 && (
+                <div
+                    className="text-center py-2 text-2xs text-text-muted opacity-60"
+                    data-testid="chat-activity-empty-note"
+                >
+                    {t('chatList.noActivityToShow')}
+                </div>
+            )}
 
             {/* Typing indicator */}
             {isWorking && (

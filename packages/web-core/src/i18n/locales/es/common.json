@@ -2745,6 +2745,7 @@
     "chatList": {
         "loadingOlderMessages": "Cargando mensajes anteriores...",
         "waitingForMessages": "Esperando mensajes...",
+        "noActivityToShow": "Aún no hay actividad que mostrar en esta conversación",
         "agentGenerating": "El agente está generando...",
         "jumpToTop": "Ir al principio",
         "jumpToOldestMessages": "Ir a los mensajes más antiguos",

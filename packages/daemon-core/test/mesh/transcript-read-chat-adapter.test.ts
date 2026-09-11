@@ -84,6 +84,28 @@ const TURN = {
 } as const;
 
 describe('mapTranscriptSnapshotToReadChatPayload', () => {
+    it('re-applies read_chat\'s prose-only default: activity kinds are dropped from the display payload', () => {
+        // The observation is caller-independent and always carries activity
+        // rows (read-chat-presentation.ts). mesh_read_chat's legacy hop calls
+        // read_chat WITHOUT includeActivity, so the replica-served answer must
+        // drop the same rows or the two sources would render differently.
+        const payload = mapTranscriptSnapshotToReadChatPayload(
+            snapshot({
+                messages: [
+                    message({ role: 'user', content: 'do it' }),
+                    message({ role: 'assistant', kind: 'tool', content: 'Read(x)', turnKey: 'turn-2' }),
+                    message({ role: 'assistant', kind: 'thought', content: 'hm', turnKey: 'turn-2' }),
+                    message({ role: 'assistant', kind: 'terminal', content: '$ ls', turnKey: 'turn-2' }),
+                    message({ role: 'assistant', content: 'done', turnKey: 'turn-2' }),
+                ],
+                coverage: { mode: 'full', totalMessageCount: 5, returnedMessageCount: 5, omittedBefore: false },
+            }),
+            { omittedBefore: false, stale: false },
+        );
+
+        expect(payload.messages.map((m) => m.content)).toEqual(['do it', 'done']);
+    });
+
     it('maps identity/messages/status into the read_chat payload shape', () => {
         const payload = mapTranscriptSnapshotToReadChatPayload(
             snapshot({

@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from './config.js';
-import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
+import { buildRuntimeSystemChatMessage, isActivityChatMessage } from '../providers/chat-message-normalization.js';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 
 // Lazy per call: history lives under the instance config dir
@@ -1318,8 +1318,18 @@ function pageHistoryRecords(
     excludeRecentCount: number = 0,
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
+    excludeActivity: boolean = false,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
-    const allMessages = records
+    // chat_history's prose-only default (mirrors read_chat's `includeActivity`
+    // opt-in contract). Applied BEFORE dedup/collapse/paging so offset/limit/
+    // identity-cursor arithmetic operates in the same message space the caller
+    // will actually receive — filtering the paged slice afterwards would shrink
+    // pages inconsistently and break `hasMore`. Default false: summary/count
+    // callers keep their historical record space untouched.
+    const pageable = excludeActivity
+        ? records.filter((message) => !isActivityChatMessage(message as any))
+        : records;
+    const allMessages = pageable
         .map((message) => sanitizeHistoryMessage(agentType, message))
         .filter(Boolean) as HistoryMessage[];
     allMessages.sort(compareHistoryMessagesForPaging);
@@ -1670,6 +1680,7 @@ export function readChatHistory(
     excludeRecentCount: number = 0,
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
+    excludeActivity: boolean = false,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1683,7 +1694,7 @@ export function readChatHistory(
 
         if (bounded) {
             const fileSignatures = buildSavedHistoryFileSignatureMap(dir, files);
-            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${excludeFromIdentity || ''}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}`;
+            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${excludeFromIdentity || ''}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}\0${excludeActivity ? '1' : '0'}`;
             const signature = buildSavedHistoryCacheSignature(files, fileSignatures);
             const cached = readBoundedTailCache(cacheKey, signature);
             if (cached) return cached;
@@ -1696,7 +1707,7 @@ export function readChatHistory(
             const numericExclude = Math.max(0, Number(excludeRecentCount));
             const needed = numericLimit + numericOffset + numericExclude + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
             const { records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, needed);
-            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
+            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity, excludeActivity);
             // If we read every file, the conversation is fully represented in the
             // window and pageHistoryRecords' hasMore is authoritative. If we
             // stopped early there are older messages we never read, so hasMore
@@ -1727,7 +1738,7 @@ export function readChatHistory(
             }
         }
 
-        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity);
+        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity, excludeActivity);
     } catch {
         return { messages: [], hasMore: false };
     }
@@ -2102,6 +2113,13 @@ export function readProviderChatHistory(
         sessionStartedAtMs?: number;
         envOverrides?: Record<string, string>;
         forceRefresh?: boolean;
+        /**
+         * Drop tool/terminal/thought activity rows before paging — the
+         * chat_history command's prose-only default (its `includeActivity`
+         * opt-in flips this off). Absent/false preserves the historical
+         * unfiltered record space for every other caller.
+         */
+        excludeActivity?: boolean;
         // Daemon instance id of the reading session (== the session registry's
         // sessionId). Threaded to the native-history dispatcher so the
         // antigravity conversation-claim owner token is keyed on this stable
@@ -2143,7 +2161,7 @@ export function readProviderChatHistory(
             };
         }
         return {
-            ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
+            ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity, options.excludeActivity === true),
             source: 'provider-native',
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
@@ -2160,7 +2178,7 @@ export function readProviderChatHistory(
         };
     }
     return {
-        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity),
+        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity, options.excludeActivity === true),
         source: 'adhdev-mirror',
     };
 }

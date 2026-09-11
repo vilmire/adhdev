@@ -211,6 +211,43 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('activity toggle: subscribe params carry includeActivity when on, omit it when off, and a flip resubscribes', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    // Toggle off (default): byte-identical to the pre-toggle request shape.
+    const initialRequest = sendData.mock.calls[0]?.[1]
+    expect(initialRequest.params).not.toHaveProperty('includeActivity')
+
+    // Toggle on → resubscribe with the opt-in.
+    controller.updateOptions({ includeActivity: true })
+    const subscribeCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+    expect(subscribeCalls.length).toBeGreaterThan(1)
+    expect(subscribeCalls.at(-1)?.[1].params).toMatchObject({ includeActivity: true })
+
+    // Toggle back off → resubscribe without it.
+    controller.updateOptions({ includeActivity: false })
+    const finalCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+    expect(finalCalls.at(-1)?.[1].params).not.toHaveProperty('includeActivity')
+
+    // Callers that do not know about the toggle (warm descriptors pass no
+    // includeActivity field) must not churn the subscription.
+    const callCountBefore = sendData.mock.calls.length
+    controller.updateOptions({ fallbackRecentCount: 3 })
+    expect(sendData.mock.calls.length).toBe(callCountBefore)
+  })
+
   it('subscribes with only the requested tail window, not a client transcript cursor', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

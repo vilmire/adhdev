@@ -2740,6 +2740,7 @@
     "chatList": {
         "loadingOlderMessages": "以前のメッセージを読み込み中...",
         "waitingForMessages": "メッセージを待機中...",
+        "noActivityToShow": "この会話にはまだ表示できるアクティビティがありません",
         "agentGenerating": "エージェントが生成中...",
         "jumpToTop": "先頭へ移動",
         "jumpToOldestMessages": "最も古いメッセージへ移動",
