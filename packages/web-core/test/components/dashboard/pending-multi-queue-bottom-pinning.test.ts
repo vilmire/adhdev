@@ -6,6 +6,20 @@
  * This file covers the render half — that every waiting entry produces a bubble,
  * in FIFO order, after every delivered message, and that the echo contract still
  * retires them one-for-one rather than all-at-once.
+ *
+ * ★ 2026-09-11 — "appended last" turned out to be the WRONG reading of "always
+ * at the bottom", and the owner said so after using it: "유저가 보낸 메세지는 실제로
+ * 해당 부분에 들어간게 아니니까 최하단에 계속 떠있는게 맞을 것 같음." Appending pins a
+ * body only until the agent emits anything else, after which it scrolls away
+ * with the controls that withdraw it. PARKED bodies now render in
+ * `PendingQueueStrip`, pinned above the composer and outside the scroll
+ * container, and `withPendingLocalMessages` takes `{excludeQueued}` to keep them
+ * out of the transcript.
+ *
+ * These tests are kept, not deleted: multi-entry rendering, FIFO order and the
+ * one-for-one echo contract are all still live requirements, and the default
+ * (no `excludeQueued`) is still the real behaviour for the read-only share
+ * viewer and any surface without the strip. The exclusion is covered alongside.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -165,6 +179,67 @@ describe('single-entry wrapper stays behaviour-compatible', () => {
         expect(withPendingLocalMessage(live, null, NOW)).toBe(live)
         expect(withPendingLocalMessage(live, { content: '   ', sentAt: NOW - 100 }, NOW)).toBe(live)
         expect(withPendingLocalMessage(live, { content: 'echoed', sentAt: NOW - 100 }, NOW)).toBe(live)
+    })
+})
+
+/**
+ * (QUEUE-PINNED-COMPOSER) The transcript half of moving parked bodies out of the
+ * message stream. The strip that renders them is covered in
+ * pending-queue-strip.test.tsx.
+ */
+describe('QUEUE-PINNED-COMPOSER — parked bodies leave the transcript', () => {
+    it('★ omits PARKED entries, which the pinned strip renders instead', () => {
+        const live = [msg('assistant', 'still working', 10)]
+        const result = withPendingLocalMessages(live, [
+            pending('a', 'parked body', NOW - 100, true),
+        ], NOW, { excludeQueued: true })
+
+        expect(result.filter(m => metaOf(m).pendingLocal === true)).toHaveLength(0)
+        expect(result.map(m => m.content)).toEqual(['still working'])
+    })
+
+    it('★ KEEPS an unconfirmed entry in the transcript', () => {
+        // Its send is still in flight and may yet resolve as delivered rather
+        // than parked; the instant optimistic bubble is the whole point.
+        const result = withPendingLocalMessages([], [
+            pending('a', 'still sending', NOW - 100, false),
+        ], NOW, { excludeQueued: true })
+
+        expect(result.map(m => m.content)).toEqual(['still sending'])
+    })
+
+    it('★ an excluded entry still SPENDS its echo budget', () => {
+        // The subtle one. Two identical bodies, one already echoed: if the
+        // excluded entry skipped the budget, the echo would retire the OTHER
+        // copy and a body genuinely still parked would silently disappear from
+        // both the transcript and the strip.
+        const live = [msg('user', 'continue', NOW - 300)]
+        const result = withPendingLocalMessages(live, [
+            pending('a', 'continue', NOW - 200, true),
+            pending('b', 'continue', NOW - 100, false),
+        ], NOW, { excludeQueued: true })
+
+        // Entry 'a' is retired by the echo; 'b' is unconfirmed and still renders.
+        expect(result.filter(m => metaOf(m).pendingLocal === true).map(m => metaOf(m).pendingId))
+            .toEqual(['b'])
+    })
+
+    it('★ a parked entry WITHOUT an id stays in the transcript', () => {
+        // The strip skips rows it cannot address (both controls act on one FIFO
+        // entry by id), so excluding an idless entry here too would erase the
+        // owner's waiting message from every surface at once.
+        const result = withPendingLocalMessages([], [
+            { content: 'legacy single entry', sentAt: NOW - 100, queued: true },
+        ], NOW, { excludeQueued: true })
+
+        expect(result.map(m => m.content)).toEqual(['legacy single entry'])
+    })
+
+    it('default (no option) still appends parked bodies — share viewer, unmigrated surfaces', () => {
+        const result = withPendingLocalMessages([], [
+            pending('a', 'parked body', NOW - 100, true),
+        ], NOW)
+        expect(result.map(m => m.content)).toEqual(['parked body'])
     })
 })
 

@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
+import PendingQueueStrip from './PendingQueueStrip';
 import SessionInfoButton from './SessionInfoButton';
 import ConversationMuteButton from './ConversationMuteButton';
 import { getVisibleBarControls } from './ControlsBar';
@@ -226,15 +227,22 @@ export default function ChatPane({
     // signatures computed over it. This is a render-time overlay, so the
     // controller's contract is untouched.
     //
-    // ★ BOTTOM PINNING: the waiting bubbles are appended to the END of the live
-    // tail here, and `buildVisibleConversationMessages` sorts the live+history
-    // set BEFORE this overlay is applied — so a queued body always renders last,
-    // regardless of scroll position or how the tail was windowed.
+    // (QUEUE-PINNED-COMPOSER) PARKED bodies are excluded here and rendered by
+    // `PendingQueueStrip` above the composer instead. Appending them to the tail
+    // pinned them only until the agent said anything else, after which they
+    // scrolled out of view along with the controls that withdraw them — and a
+    // body the agent has not received does not belong in the transcript at all.
+    //
+    // Entries whose send is still in its round trip DO stay in the tail: the
+    // instant optimistic bubble is the point, and such a send may yet resolve as
+    // delivered rather than parked.
     const liveMessages = withPendingLocalMessages(
         getConversationLiveMessages(activeConv, chatTailState),
         // MULTI-QUEUE: prefer the full list; fall back to the single-entry prop
         // for callers that still pass only the newest bubble.
         pendingLocalMessages ?? (pendingLocalMessage ? [pendingLocalMessage] : null),
+        undefined,
+        { excludeQueued: true },
     );
     // Only the COUNT is consumed (activity-toggle affordance), but the filter
     // classifies every live message. Memoized on `liveMessages` so it runs when
@@ -608,6 +616,17 @@ export default function ChatPane({
                 onSendNow={handleSendNowQueued}
                 isSendingNow={isSendingChat}
                 onCancelQueued={handleCancelQueued}
+            />
+
+            {/* (QUEUE-PINNED-COMPOSER) Outside the scroll container by design: a
+                body still parked in the daemon FIFO has not entered the
+                conversation, so it sits with the composer it was typed into and
+                stays put however far the transcript scrolls. */}
+            <PendingQueueStrip
+                entries={pendingLocalMessages ?? (pendingLocalMessage ? [pendingLocalMessage] : [])}
+                onSendNow={handleSendNowQueued}
+                onCancelQueued={handleCancelQueued}
+                isSendingNow={isSendingChat}
             />
 
             <ChatControlsSection

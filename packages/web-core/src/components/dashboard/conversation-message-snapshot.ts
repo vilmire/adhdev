@@ -147,6 +147,18 @@ function buildPendingBubble(pending: PendingLocalMessage): DashboardMessage {
     } as unknown as DashboardMessage
 }
 
+export interface WithPendingLocalMessagesOptions {
+    /**
+     * (QUEUE-PINNED-COMPOSER) Omit bodies the daemon confirmed it PARKED, because
+     * a surface that pins them above the composer renders them itself.
+     *
+     * Off by default: the read-only share viewer and any surface without the
+     * pinned strip must keep showing waiting bodies somewhere, and the transcript
+     * tail is the only place they have.
+     */
+    excludeQueued?: boolean
+}
+
 /**
  * Append every still-waiting optimistic bubble to the END of the live tail.
  *
@@ -167,6 +179,7 @@ export function withPendingLocalMessages(
     liveMessages: DashboardMessage[],
     pending: readonly PendingLocalMessage[] | null | undefined,
     now: number = Date.now(),
+    options: WithPendingLocalMessagesOptions = {},
 ): DashboardMessage[] {
     if (!pending || pending.length === 0) return liveMessages
 
@@ -186,6 +199,20 @@ export function withPendingLocalMessages(
             echoBudget.set(target, remaining - 1)
             continue
         }
+        // (QUEUE-PINNED-COMPOSER) A PARKED body is rendered by the pinned strip
+        // above the composer instead of here. It must still consume its echo
+        // budget above, or a later identical body would match this one's echo
+        // and be retired twice over.
+        //
+        // Unconfirmed entries stay in the transcript: their send may still
+        // resolve as delivered, and an optimistic bubble that appears instantly
+        // is the whole point of the local append.
+        //
+        // `entry.id` is required to exclude: the strip skips a row it cannot
+        // address (both its controls act on one FIFO entry by id), so dropping
+        // an idless entry here too would remove the owner's waiting message from
+        // every surface at once. The two filters must agree.
+        if (options.excludeQueued && entry.queued === true && !!entry.id) continue
         bubbles.push(buildPendingBubble(entry))
     }
 
