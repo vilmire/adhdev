@@ -1411,8 +1411,11 @@
     }
 
     .chat-msg-tool .tool-icon {
-        color: var(--chat-tool-accent);
-        font-size: 10px;
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--chat-tool-accent);
+        flex-shrink: 0;
     }
 
     .chat-msg-tool .tool-text {

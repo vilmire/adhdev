@@ -474,7 +474,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         return (
             <div className="self-start chat-msg-tool" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
-                    <span className="tool-icon">⏺</span>
+                    <span className="tool-icon" aria-hidden="true" />
                     <span className="tool-label">Tool</span>
                 </div>
                 {hasStructuredRenderer && structuredParts ? (
