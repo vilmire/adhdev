@@ -1027,6 +1027,7 @@
             "schedTargetWorktreeTitle": "La tarea se ejecutaría en este worktree",
             "schedUnpinned": "sin fijar",
             "schedUnpinnedTitle": "Envío hipotético sin nodo fijado — las tareas fijadas a un nodo muestran su propia previsión en sus tarjetas",
+            "schedPointInTime": "Predicción puntual, no una asignación definitiva: la capacidad de los slots puede quedar obsoleta en cuanto se ocupa o libera uno",
             "schedulingShort": "Scheduling"
         },
         "page": {

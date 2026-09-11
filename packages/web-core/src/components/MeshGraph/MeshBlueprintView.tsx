@@ -34,12 +34,14 @@ import { MeshOverviewDetailModal } from './MeshOverviewCards'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,
     BLUEPRINT_GRAPH_LOAD_MORE_STEP,
+    ROUTE_PREVIEW_COMPACT_DIFFICULTY,
     ROUTE_PREVIEW_DIFFICULTIES,
     buildBlueprintGraphOverviewArgs,
     buildPinnedSlotLabels,
     buildRoutePreviewRequests,
     getBlueprintGraphPagination,
     nextBlueprintGraphLimit,
+    resolveCompactRoutePreviewLabel,
     routePreviewKey,
     routePreviewNextSlotLabel,
     routePreviewSlotLabel,
@@ -281,6 +283,10 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
         return out
     }, [schedMatrix, previewNodeSuffix])
 
+    // The single line the narrow-viewport chip shows — see
+    // resolveCompactRoutePreviewLabel for why medium is the one that reads.
+    const compactPredictedSlot = useMemo(() => resolveCompactRoutePreviewLabel(predictedSlots), [predictedSlots])
+
     // taskId → predicted slot on the task's PINNED node — the forecast that
     // actually applies to a pinned task, rendered distinctly on its card.
     const pinnedSlots = useMemo(() => {
@@ -409,13 +415,24 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     Clicking a difficulty opens the per-machine detail right below.
                     Offset below the live queue's in-flow stats row.
 
-                    HIDDEN on narrow viewports (2026-09-02): at 375px the overlay
-                    is as tall as the canvas itself and sits on top of every node,
-                    so the forecast — the least urgent thing here — was covering
-                    the graph it annotates. The same numbers stay reachable on the
-                    Status tab. ── */}
+                    NARROW VIEWPORTS (2026-09-02 → revised 2026-09-11): at 375px
+                    the four-row stack is as tall as the canvas itself and sat on
+                    top of every node, so it was hidden outright with
+                    `hidden sm:flex`. That hid the forecast from the MOBILE
+                    dashboard entirely, and the fallback the original comment
+                    claimed ("the same numbers stay reachable on the Status tab")
+                    was never true — the Status tab's scheduling card reports
+                    strategy and parallel caps, and no build has ever called
+                    mesh_route_preview from it. This file is still the only
+                    caller.
+                    So the overlay is visible at EVERY width again, but below
+                    `sm` it collapses to ONE line (the medium unpinned forecast,
+                    resolveCompactRoutePreviewLabel) instead of four. That keeps
+                    the original complaint answered — a single 20px chip does not
+                    cover the graph — while the other difficulties stay one tap
+                    away in the same detail popover both widths open. ── */}
                 {predictedSlots && (
-                    <div className="pointer-events-none absolute left-2 top-2 z-10 hidden max-h-[calc(100%-3rem)] flex-col items-start gap-1 sm:flex">
+                    <div className="pointer-events-none absolute left-2 top-2 z-10 flex max-h-[calc(100%-3rem)] flex-col items-start gap-1">
                         <div className={`pointer-events-auto flex flex-col rounded-md border text-3xs leading-4 ${meshTheme.isDark
                             ? 'border-white/10 bg-slate-950/85 text-slate-300'
                             : 'border-slate-200 bg-white/95 text-slate-600'}`}
@@ -423,9 +440,33 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             {/* Premise of the generic forecast: a hypothetical
                                 dispatch with NO pin. Pinned tasks carry their
                                 own 📌 forecast on their cards. */}
-                            <div className="px-2 pt-1 text-4xs uppercase tracking-wide opacity-60" title={t('mesh.blueprint.schedUnpinnedTitle')}>
+                            <div className="hidden px-2 pt-1 text-4xs uppercase tracking-wide opacity-60 sm:block" title={t('mesh.blueprint.schedUnpinnedTitle')}>
                                 {t('mesh.blueprint.schedUnpinned')}
                             </div>
+                            {/* ── Compact reading (< sm): one row, medium only.
+                                Tapping opens the same popover, which carries the
+                                difficulty switcher — so nothing here is a
+                                dead end. Sized as a real tap target (py-1.5)
+                                because this is the mobile affordance. ── */}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSchedDetailDifficulty(ROUTE_PREVIEW_COMPACT_DIFFICULTY)
+                                    setSchedDetailOpen(open => !open || schedDetailDifficulty !== ROUTE_PREVIEW_COMPACT_DIFFICULTY)
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 text-left transition-colors sm:hidden ${meshTheme.isDark ? 'hover:bg-slate-900' : 'hover:bg-slate-50'}`}
+                                title={t('mesh.blueprint.schedUnpinnedTitle')}
+                            >
+                                {/* opacity-75, not the stack's opacity-60: the wide
+                                    stack's labels are read as a COLUMN against the
+                                    difficulty names beside them, but this single chip
+                                    is the only label on screen, and at 60% over the
+                                    dark panel it rendered as barely-legible grey in
+                                    the 390px render. */}
+                                <span className="uppercase tracking-wide text-4xs opacity-75">{t('mesh.blueprint.schedulingShort')}</span>
+                                <span className="text-green-500">→ {compactPredictedSlot ?? t('mesh.blueprint.schedNoWinner')}</span>
+                            </button>
+                            {/* ── Full reading (≥ sm): all four difficulties. ── */}
                             {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
                                 <button
                                     key={difficulty}
@@ -434,7 +475,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                         setSchedDetailDifficulty(difficulty)
                                         setSchedDetailOpen(open => !open || schedDetailDifficulty !== difficulty)
                                     }}
-                                    className={`flex items-center gap-1.5 px-2 py-0.5 text-left transition-colors ${meshTheme.isDark ? 'hover:bg-slate-900' : 'hover:bg-slate-50'} ${schedDetailOpen && schedDetailDifficulty === difficulty ? (meshTheme.isDark ? 'bg-white/[0.06]' : 'bg-slate-100') : ''}`}
+                                    className={`hidden items-center gap-1.5 px-2 py-0.5 text-left transition-colors sm:flex ${meshTheme.isDark ? 'hover:bg-slate-900' : 'hover:bg-slate-50'} ${schedDetailOpen && schedDetailDifficulty === difficulty ? (meshTheme.isDark ? 'bg-white/[0.06]' : 'bg-slate-100') : ''}`}
                                     title={t('mesh.blueprint.scheduling')}
                                 >
                                     <span className="w-14 uppercase tracking-wide text-4xs opacity-60">{difficulty}</span>
@@ -475,6 +516,21 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                     </button>
                                 </div>
                                 {schedError && <div className="text-3xs text-red-400">{schedError}</div>}
+                                {/* ── Point-in-time premise, stated in FLOW rather than
+                                    as a hover title (2026-09-11). The wide overlay carried
+                                    both caveats — "no pin" and "this is a prediction" — in
+                                    `title` attributes and an uppercase header, neither of
+                                    which survives on a phone: the header is folded away by
+                                    the compact chip and a touch device has no hover. The
+                                    daemon marks this response `snapshot.pointInTime: true`
+                                    and warns that slot capacity can go stale the moment a
+                                    slot is claimed, so a reader must not take these rows
+                                    for a settled assignment. ── */}
+                                <div className="mb-1.5 text-4xs leading-4 text-text-muted">
+                                    {t('mesh.blueprint.schedUnpinnedTitle')}
+                                    {' · '}
+                                    {t('mesh.blueprint.schedPointInTime')}
+                                </div>
                                 {/* Per-machine plan quota at a glance — the same card the
                                     Status tab renders, so the two surfaces cannot drift. */}
                                 {schedQuotaOpen && (

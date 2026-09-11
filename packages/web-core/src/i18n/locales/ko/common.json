@@ -1022,6 +1022,7 @@
             "schedTargetWorktreeTitle": "이 워크트리 체크아웃에서 실행됩니다",
             "schedUnpinned": "핀 없음",
             "schedUnpinnedTitle": "핀 없이 보낼 때의 가상 예측 — 노드가 핀 지정된 태스크는 카드에 별도 예측이 표시됩니다",
+            "schedPointInTime": "확정된 배정이 아니라 현재 시점의 예측입니다 — 슬롯이 점유·해제되면 용량 정보는 즉시 낡을 수 있습니다",
             "schedulingShort": "스케줄링"
         },
         "page": {
