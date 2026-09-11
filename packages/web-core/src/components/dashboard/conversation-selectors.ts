@@ -1,6 +1,7 @@
 import type { DaemonData, SessionEntry } from '../../types'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
+import { classifyChatMessageForDisplay } from './chat-activity-visibility'
 import { getConversationLiveMessages } from './conversation-message-snapshot'
 import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
@@ -94,8 +95,17 @@ function getConversationLastMessage(
     // from the SAME authority ChatPane uses (getConversationLiveMessages), so the
     // inbox/card preview and the opened chat body agree on the latest bubble. Falls
     // back to conversation.messages when no live snapshot has arrived yet.
+    //
+    // The tail may now carry tool/terminal/thought ACTIVITY rows inline
+    // (activity-toggle wiring: replica snapshots always do; the legacy lane
+    // does when the toggle is on). Previews are prose surfaces — a turn that
+    // ends in a tool call must preview its last prose bubble, not the tool
+    // payload — so skip non-user-facing rows first and fall back to the old
+    // pick only when the tail has no prose at all.
     const messages = getConversationLiveMessages(conversation, snapshot)
-    return [...messages].reverse().find((message) => !message?._localId)
+    const reversed = [...messages].reverse()
+    return reversed.find((message) => !message?._localId && classifyChatMessageForDisplay(message).isUserFacing)
+        || reversed.find((message) => !message?._localId)
         || messages[messages.length - 1]
 }
 

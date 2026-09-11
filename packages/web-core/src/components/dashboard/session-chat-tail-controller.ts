@@ -161,6 +161,16 @@ export interface SessionChatTailControllerOptions {
   tailLimit?: number
   fallbackRecentCount?: number
   /**
+   * Dashboard activity-toggle state. When true, the legacy `session.chat_tail`
+   * subscription (and the daemon push it drives) asks read_chat for
+   * tool/terminal/thought rows inline (`includeActivity`). Off keeps the wire
+   * byte-identical to the pre-toggle behavior — no bandwidth change. The
+   * replica lane is unaffected either way (its snapshots are
+   * caller-independent and always carry activity; rendering filters by
+   * classification).
+   */
+  includeActivity?: boolean
+  /**
    * Injectable wall-clock for the generating→idle shrink-defense window. Defaults
    * to Date.now. Tests override it to drive the recent-activity window
    * deterministically.
@@ -359,6 +369,8 @@ export class SessionChatTailController {
   private historySessionId?: string
   private subscriptionKey: string
   private fallbackRecentCount: number
+  /** Dashboard activity-toggle state — see SessionChatTailControllerOptions. */
+  private includeActivity: boolean
   private snapshot: SessionChatTailSnapshot
   private transportSubscription: SubscriptionHandle | null = null
   private listeners = new Set<(snapshot: SessionChatTailSnapshot) => void>()
@@ -533,6 +545,7 @@ export class SessionChatTailController {
     this.historySessionId = options.historySessionId
     this.subscriptionKey = options.subscriptionKey
     this.fallbackRecentCount = Math.max(0, options.fallbackRecentCount ?? 0)
+    this.includeActivity = options.includeActivity === true
     this.now = options.now ?? (() => Date.now())
     this.snapshot = buildEmptySnapshot(Math.max(0, options.tailLimit ?? DEFAULT_TAIL_LIMIT))
   }
@@ -559,6 +572,17 @@ export class SessionChatTailController {
           this.disconnect()
           this.connect()
         }
+      }
+    }
+    // Activity-toggle flip: the subscription params must change with it (the
+    // daemon composes read_chat args from them), so resubscribe like a
+    // tailLimit change. `undefined` (a caller that does not know about the
+    // toggle — e.g. warm descriptors) leaves the current value untouched.
+    if (options.includeActivity !== undefined && options.includeActivity !== this.includeActivity) {
+      this.includeActivity = options.includeActivity
+      if (this.transportSubscription) {
+        this.disconnect()
+        this.connect()
       }
     }
     if (
@@ -1214,6 +1238,9 @@ export class SessionChatTailController {
         targetSessionId: this.sessionId,
         ...(this.historySessionId ? { historySessionId: this.historySessionId } : {}),
         ...(this.snapshot.cursor.tailLimit > 0 ? { tailLimit: this.snapshot.cursor.tailLimit } : {}),
+        // Omitted when off so the request an old browser sends and the request
+        // a toggle-off browser sends are byte-identical.
+        ...(this.includeActivity ? { includeActivity: true } : {}),
       },
     }
   }

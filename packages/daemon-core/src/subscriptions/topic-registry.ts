@@ -180,7 +180,7 @@ export interface TopicEngineSources {
      * router.execute('read_chat', …, 'p2p'); standalone through its
      * executeCommand (which also runs the invalidation gate — preserved).
      */
-    readChatTail?: (args: { targetSessionId: string; historySessionId?: string; tailLimit?: number }) =>
+    readChatTail?: (args: { targetSessionId: string; historySessionId?: string; tailLimit?: number; includeActivity?: boolean }) =>
         Promise<SessionChatTailCommandResult | null | undefined>;
 }
 
@@ -787,6 +787,9 @@ export class TopicSubscriptionRegistry {
             targetSessionId: params.targetSessionId,
             ...(params.historySessionId ? { historySessionId: params.historySessionId } : {}),
             ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
+            // Dashboard activity toggle opt-in — read_chat keeps its prose-only
+            // default when the subscriber did not ask for activity rows.
+            ...(params.includeActivity === true ? { includeActivity: true } : {}),
         });
 
         // The session vanished from the live registry (stopped agent, reclaimed

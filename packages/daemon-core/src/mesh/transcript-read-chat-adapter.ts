@@ -106,6 +106,25 @@ function mapProvenanceScalar(value: string | null): Record<string, unknown> | un
 }
 
 /**
+ * Re-apply `read_chat`'s prose-only default to the replica snapshot.
+ *
+ * The transcript OBSERVATION is caller-independent and always carries
+ * tool/terminal/thought activity rows (read-chat-presentation.ts — revision
+ * consistency + terminal-evidence soundness). Each consumer projects its own
+ * default; `mesh_read_chat`'s legacy hop calls `read_chat` WITHOUT
+ * `includeActivity`, so the replica-served answer must drop the same rows or
+ * the two sources this adapter exists to keep in parity would render
+ * differently. Kind-triple check on the wire shape (meta/source markers do
+ * not round-trip the allow-list) — no cross-boundary import, `mesh/**` must
+ * not value-import `providers/**`.
+ */
+const ACTIVITY_MESSAGE_KINDS = new Set(['tool', 'terminal', 'thought']);
+
+function isActivityWireMessage(message: ReplicatedTranscriptMessageV1): boolean {
+    return typeof message.kind === 'string' && ACTIVITY_MESSAGE_KINDS.has(message.kind.trim().toLowerCase());
+}
+
+/**
  * The replica-sourced twin of a `read_chat` command result.
  *
  * `transcriptReadSource` is the single-source-of-truth telemetry field
@@ -171,7 +190,7 @@ export function mapTranscriptSnapshotToReadChatPayload(
                 options: [...snapshot.activeInteractivePrompt.options],
             }
             : null,
-        messages: snapshot.messages.map(mapTranscriptMessage),
+        messages: snapshot.messages.filter((message) => !isActivityWireMessage(message)).map(mapTranscriptMessage),
         totalMessages: snapshot.coverage.totalMessageCount,
         // Absent turn projection stays absent — `read_chat` omits the key on the
         // provider-FSM fallback and `slimTurnPresentation` returns null for it,

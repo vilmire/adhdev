@@ -2740,6 +2740,7 @@
     "chatList": {
         "loadingOlderMessages": "이전 메시지 불러오는 중...",
         "waitingForMessages": "메시지를 기다리는 중...",
+        "noActivityToShow": "이 대화에는 아직 표시할 활동이 없습니다",
         "agentGenerating": "에이전트가 응답 중...",
         "jumpToTop": "맨 위로 이동",
         "jumpToOldestMessages": "가장 오래된 메시지로 이동",

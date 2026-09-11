@@ -28,6 +28,20 @@ function shouldPreserveReadChatPayloadField(key: string): boolean {
 }
 
 /**
+ * Activity kinds that survive the replica wire allow-list
+ * (`encodeTranscriptMessage` carries `kind` verbatim; meta/source/visibility
+ * markers do NOT round-trip). Only these may ride the caller-independent
+ * observation — see the observation block in `buildReadChatCommandResult`.
+ * Mirrors ACTIVITY kind classification in chat-message-normalization.ts and
+ * web-core chat-activity-visibility.ts.
+ */
+const WIRE_SAFE_ACTIVITY_KINDS = new Set(['tool', 'terminal', 'thought']);
+
+function isWireSafeActivityKind(kind: unknown): boolean {
+    return typeof kind === 'string' && WIRE_SAFE_ACTIVITY_KINDS.has(kind.trim().toLowerCase());
+}
+
+/**
  * Resolve the provider identity for this read, in the same order the upstream
  * pipeline already uses (`chat-commands-read.ts`: explicit args > session
  * registry > current session). The args-only form this used to have was a
@@ -284,6 +298,32 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
     const visibleMessages = includeActivity
         ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m))
         : filterUserFacingChatMessages(filteredMessages);
+    // The transcript OBSERVATION is caller-independent: it always carries the
+    // user-facing turns PLUS activity rows, regardless of this read's
+    // `includeActivity` arg. Two reasons, both load-bearing:
+    //   1. Revision consistency — the same session is read by callers with
+    //      different args (the internal collector passes none;
+    //      mesh-completion-synthesis passes includeActivity:true). If the
+    //      observation mirrored the caller's filter, the SAME transcript would
+    //      alternate between two contents on `session.<id>.transcript`,
+    //      minting a fresh revision (and chain-hash churn) on every
+    //      caller change with zero real transcript movement.
+    //   2. Terminal evidence — the 2026-08 false-completion incident
+    //      (mesh-terminal-admission.ts header) was a completion read WITHOUT
+    //      the trailing tool call. The replica-served `daemon_terminal_evidence`
+    //      consumer can only be sound if the replica actually contains that
+    //      trailing activity.
+    // Consumers re-apply their own default projection: the web pane classifies
+    // per row (toggle), and mesh_read_chat's replica display adapter drops
+    // activity kinds to mirror read_chat's prose default.
+    //
+    // ★ Restricted to activity rows whose `kind` survives the wire allow-list
+    // (`tool`/`terminal`/`thought`): rows classified activity only via
+    // meta/source markers lose those markers in `encodeTranscriptMessage`
+    // (kind stays 'standard') and would render as ordinary prose on every
+    // consumer — the exact noise 1b8f6d03 removed. Those rows stay excluded.
+    const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m)
+        || (isActivityChatMessage(m) && isWireSafeActivityKind(m.kind)));
 
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
@@ -297,12 +337,13 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
 
     // ── §8 unit 2 choke point (design §5.2) ─────────────────────────────────
     // "buildReadChatCommandResult의 validation/source selection 뒤, tail
-    // slicing 전에 typed TranscriptObservation을 만든다." The observation still
-    // carries `visibleMessages` (the FULL set this read observed, never
-    // `sync.messages`'s request-specific tailLimit slice) — `sync` only had to
-    // be computed first here because `preservedPayloadFields.messageSource`'s
-    // returnedCount is refreshed from it above, and this block reuses that
-    // same `preservedPayloadFields` object as the observation's provenance.
+    // slicing 전에 typed TranscriptObservation을 만든다." The observation
+    // carries `observationMessages` (the FULL caller-independent set this read
+    // observed, never `sync.messages`'s request-specific tailLimit slice) —
+    // `sync` only had to be computed first here because
+    // `preservedPayloadFields.messageSource`'s returnedCount is refreshed from
+    // it above, and this block reuses that same `preservedPayloadFields`
+    // object as the observation's provenance.
     // Fire-and-forget and exception-swallowed: `notifyTranscriptObservation` is
     // a safe no-op until a later unit (§8 unit 3+) calls
     // `configureTranscriptProjection`, and even once configured it must NEVER
@@ -320,11 +361,11 @@ export function buildReadChatCommandResult(payload: Record<string, any>, args: a
             activeInteractivePrompt: validatedPayload.activeInteractivePrompt ?? null,
             turn: turnPresentation.authority === 'turn_reducer' ? turnPresentation : null,
             provenance: preservedPayloadFields,
-            messages: visibleMessages,
+            messages: observationMessages,
             coverage: {
                 mode: 'full',
                 totalMessageCount: messages.length,
-                returnedMessageCount: visibleMessages.length,
+                returnedMessageCount: observationMessages.length,
                 omittedBefore: false,
             },
         });

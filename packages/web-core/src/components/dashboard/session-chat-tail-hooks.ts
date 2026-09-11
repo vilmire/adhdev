@@ -16,6 +16,10 @@ import { useTransport } from '../../context/TransportContext'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 import { getConversationHistorySessionIdForRead } from './conversation-identity'
 import {
+  readChatActivityVisiblePreference,
+  subscribeChatActivityVisiblePreference,
+} from './chat-activity-visibility'
+import {
   CHAT_TAIL_LIVENESS_TICK_MS,
   DEFAULT_TAIL_LIMIT,
   DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS,
@@ -72,6 +76,9 @@ export function useSessionChatTailController(
       sendData,
       tailLimit,
       fallbackRecentCount,
+      // Activity toggle at creation time; flips are pushed via updateOptions
+      // in the preference effect below (never a controller-recreate dep).
+      includeActivity: readChatActivityVisiblePreference(),
     })
     // `fallbackRecentCount` (activeConv.messages.length) is intentionally NOT a
     // dep: it changes on every meta append, and including it tore down and
@@ -123,6 +130,9 @@ export function useSessionChatTailController(
         // Omitted when empty so the payload an old browser sends and the payload
         // a new browser sends for an identity-less transcript are the same shape.
         ...(excludeFromIdentity ? { excludeFromIdentity } : {}),
+        // Same toggle that drives the live tail's includeActivity — read at
+        // call time so pages loaded after a toggle flip follow the new state.
+        ...(readChatActivityVisiblePreference() ? { includeActivity: true } : {}),
       })
       const result = raw && typeof raw === 'object' && 'result' in (raw as Record<string, unknown>)
         ? (raw as { result?: { messages?: DashboardMessage[]; hasMore?: boolean } }).result || {}
@@ -148,6 +158,10 @@ export function useSessionChatTailController(
         targetSessionId: sessionId,
         historySessionId,
         ...(tailLimit > 0 ? { tailLimit } : {}),
+        // Activity toggle opt-in, read at call time (a re-pull fired right
+        // after a toggle flip must reflect the NEW state, and a stale-closure
+        // boolean here would clobber activity rows the push lane delivered).
+        ...(readChatActivityVisiblePreference() ? { includeActivity: true } : {}),
       })
       // Response shape differs by transport (see TransportContext note): unwrap
       // the Cloud `result` wrapper, then read the daemon's raw read_chat body.
@@ -176,6 +190,22 @@ export function useSessionChatTailController(
       } as unknown as SessionChatTailUpdate
     }, { force })
   }, [activeConv.agentType, controller, daemonId, historySessionId, sendCommand, sessionId, subscriptionKey, tailLimit])
+
+  // Activity-toggle flip → push the new state into the controller (which
+  // resubscribes the legacy lane with the new params) and, when turning ON,
+  // force one authoritative re-pull so the already-open pane fills with
+  // activity rows immediately instead of waiting for the next daemon push.
+  // Turning OFF needs no re-pull: rendering filters activity out client-side.
+  useEffect(() => {
+    if (!controller) return
+    return subscribeChatActivityVisiblePreference((visible) => {
+      controller.updateOptions({ includeActivity: visible })
+      if (visible) void refreshAuthoritativeTail(true)
+    })
+    // refreshAuthoritativeTail is stable for a given session identity (same
+    // rationale as the mount effect below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller, daemonId, sessionId, historySessionId])
 
   // Mount + tab-focus + reconnect self-heal. Mount fire happens once per active
   // session (deps are the stable identity fields). Focus and reconnect re-pull

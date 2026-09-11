@@ -57,6 +57,8 @@ describe('handleChatHistory', () => {
       excludeRecentCount: 0,
       historyBehavior: undefined,
       scripts: undefined,
+      // chat_history's prose-only default: no includeActivity arg -> activity excluded
+      excludeActivity: true,
     })
     expect(result).toMatchObject({
       success: true,
@@ -107,6 +109,8 @@ describe('handleChatHistory', () => {
       excludeRecentCount: 1000,
       historyBehavior: undefined,
       scripts: undefined,
+      // chat_history's prose-only default: no includeActivity arg -> activity excluded
+      excludeActivity: true,
     })
     expect(result).toMatchObject({
       success: true,

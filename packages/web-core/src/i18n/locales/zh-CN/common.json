@@ -2740,6 +2740,7 @@
     "chatList": {
         "loadingOlderMessages": "正在加载较早的消息...",
         "waitingForMessages": "正在等待消息...",
+        "noActivityToShow": "此对话暂无可显示的活动",
         "agentGenerating": "智能体正在生成...",
         "jumpToTop": "跳到顶部",
         "jumpToOldestMessages": "跳到最早的消息",

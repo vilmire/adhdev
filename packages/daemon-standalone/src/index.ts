@@ -441,6 +441,7 @@ class StandaloneServer {
         targetSessionId: args.targetSessionId,
         ...(args.historySessionId ? { historySessionId: args.historySessionId } : {}),
         ...(args.tailLimit ? { tailLimit: args.tailLimit } : {}),
+        ...(args.includeActivity === true ? { includeActivity: true } : {}),
       }),
     },
     chatTail: {

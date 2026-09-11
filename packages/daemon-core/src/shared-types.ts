@@ -221,6 +221,13 @@ export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'm
 export interface SessionChatTailSubscriptionParams extends ReadChatCursor {
     targetSessionId: string;
     historySessionId?: string;
+    /**
+     * Opt-in: the daemon-side chat_tail read passes `includeActivity` to
+     * read_chat, so pushed tails carry tool/terminal/thought rows inline.
+     * Set by the dashboard when its activity toggle is on; absent → the
+     * push keeps read_chat's prose-only default.
+     */
+    includeActivity?: boolean;
 }
 
 export interface SessionRuntimeOutputSubscriptionParams {
