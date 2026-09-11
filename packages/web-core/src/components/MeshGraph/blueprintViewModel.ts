@@ -147,6 +147,31 @@ export function resolveTaskPredictedSlot(
     return generic ? { label: generic, pinned: false } : undefined
 }
 
+/**
+ * The one-line reading of the whole forecast: which slot a MEDIUM unpinned
+ * dispatch would take right now.
+ *
+ * WHY MEDIUM
+ * The full forecast is four rows (easy/medium/difficult/freeform), which is
+ * what made the overlay as tall as the canvas on a phone and got it hidden
+ * outright (`hidden sm:flex`, 2026-09-02). Narrow viewports need ONE line, and
+ * medium is the honest default: it is the difficulty the coordinator assigns
+ * when a task is not classified, so "where would my next task go" reads medium
+ * unless stated otherwise. The other three stay one tap away in the same
+ * detail popover the wide overlay opens — nothing is removed, only folded.
+ *
+ * Returns undefined when the sweep produced no eligible slot, so the caller
+ * renders the explicit "no eligible slot" copy rather than a bare dash that
+ * could be misread as "not loaded yet".
+ */
+export const ROUTE_PREVIEW_COMPACT_DIFFICULTY = 'medium'
+
+export function resolveCompactRoutePreviewLabel(
+    predictedSlots: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+    return predictedSlots?.[ROUTE_PREVIEW_COMPACT_DIFFICULTY]
+}
+
 /** One graph's placement on the blueprint's vertical time axis. */
 export interface BlueprintGraphTimelineEntry {
     graphId: string

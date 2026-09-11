@@ -12,6 +12,8 @@
 import { describe, expect, it } from 'vitest'
 import {
     BLUEPRINT_GRAPH_MAX_LIMIT,
+    ROUTE_PREVIEW_COMPACT_DIFFICULTY,
+    resolveCompactRoutePreviewLabel,
     buildBlueprintGraphOverviewArgs,
     buildBlueprintGraphTimeline,
     buildGateByNodeId,
@@ -275,6 +277,23 @@ describe('routePreviewNextSlotLabel / buildPinnedSlotLabels', () => {
             matrix,
         )
         expect(labels).toEqual({ 't-pinned': 'kimi·k3' })
+    })
+})
+
+describe('resolveCompactRoutePreviewLabel — the narrow-viewport one-liner', () => {
+    it('reads the MEDIUM row, which is the difficulty an unclassified task gets', () => {
+        expect(resolveCompactRoutePreviewLabel({
+            easy: 'kimi·k3',
+            medium: 'claude-cli·sonnet',
+            difficult: 'claude-cli·opus',
+        })).toBe('claude-cli·sonnet')
+        expect(ROUTE_PREVIEW_COMPACT_DIFFICULTY).toBe('medium')
+    })
+
+    it('reports absence rather than borrowing another difficulty — a phone showing the easy slot as if it were the answer is the misprediction the pinned-preview work already fixed once', () => {
+        expect(resolveCompactRoutePreviewLabel({ easy: 'kimi·k3', difficult: 'claude-cli·opus' })).toBeUndefined()
+        expect(resolveCompactRoutePreviewLabel({})).toBeUndefined()
+        expect(resolveCompactRoutePreviewLabel(undefined)).toBeUndefined()
     })
 })
 
