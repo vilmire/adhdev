@@ -1325,7 +1325,8 @@
         line-height: 0;
     }
 
-    .chat-bubble:hover .chat-copy-btn {
+    .chat-bubble:hover .chat-copy-btn,
+    .chat-msg-tool:hover .chat-copy-btn {
         opacity: 0.45;
     }
 
@@ -1397,7 +1398,8 @@
     }
 
     .chat-msg-tool .chat-msg-tool-meta {
-        display: inline-flex;
+        display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 5px;
         flex: 0 0 auto;
@@ -1408,6 +1410,12 @@
         letter-spacing: 0.04em;
         line-height: 1.6;
         text-transform: uppercase;
+    }
+
+    .chat-msg-tool .chat-msg-tool-meta .chat-bubble-header-end {
+        text-transform: none;
+        font-weight: 400;
+        margin-left: 2px;
     }
 
     .chat-msg-tool .tool-icon {
@@ -3894,7 +3902,8 @@
         }
 
         .chat-markdown,
-        .agent-chat-bubble {
+        .agent-chat-bubble,
+        .chat-msg-tool {
             -webkit-user-select: text;
             user-select: text;
         }

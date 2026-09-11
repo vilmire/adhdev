@@ -476,6 +476,12 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
                     <span className="tool-icon" aria-hidden="true" />
                     <span className="tool-label">Tool</span>
+                    <span className="chat-bubble-header-end">
+                        <CopyButton text={contentStr} />
+                        {receivedAt != null && (
+                            <span className="chat-time">{formatTime(receivedAt)}</span>
+                        )}
+                    </span>
                 </div>
                 {hasStructuredRenderer && structuredParts ? (
                     <div className="tool-text w-full">
