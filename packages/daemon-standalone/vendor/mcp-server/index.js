@@ -102738,6 +102738,601 @@ ${marker}`,
         SPAWN_LOG_ARG_MAX_CHARS = 200;
       }
     });
+    function chunkPreservingSurrogates(text, size) {
+      const chunks = [];
+      let offset = 0;
+      while (offset < text.length) {
+        let end = Math.min(text.length, offset + size);
+        if (end < text.length) {
+          const code = text.charCodeAt(end - 1);
+          if (code >= 55296 && code <= 56319) end -= 1;
+        }
+        if (end <= offset) end = Math.min(text.length, offset + size);
+        chunks.push(text.slice(offset, end));
+        offset = end;
+      }
+      return chunks;
+    }
+    var WIN32_PTY_WRITE_CHUNK_CHARS;
+    var WIN32_PTY_WRITE_CHUNK_GAP_MS;
+    var init_pty_write_chunking = __esm2({
+      "src/cli-adapters/pty-write-chunking.ts"() {
+        "use strict";
+        WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
+        WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
+      }
+    });
+    function countNewlines(s2) {
+      let n = 0;
+      for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
+      return n;
+    }
+    function shouldUseVerifiedSubmit(text, platform11 = process.platform) {
+      if (platform11 === "win32") return true;
+      return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
+    }
+    function resolveWin32SubmitMode(env2 = process.env) {
+      return env2.ADHDEV_WIN32_SUBMIT_MODE === "soft_newline" ? "soft_newline" : "paste";
+    }
+    function normalizeForEcho(s2) {
+      return s2.replace(/\s+/g, "");
+    }
+    function resolveSubmitDelayMs(specBeforeSubmit, text, manifestSendDelayMs) {
+      const lines = countNewlines(text);
+      const linesBonus = Math.min(800, lines * 80);
+      const lengthBonus = Math.min(800, Math.floor(text.length / 1e3) * 200);
+      const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
+      const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
+      return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
+    }
+    function guessExt(mime) {
+      if (/png/i.test(mime)) return ".png";
+      if (/jpe?g/i.test(mime)) return ".jpg";
+      if (/gif/i.test(mime)) return ".gif";
+      if (/webp/i.test(mime)) return ".webp";
+      return ".bin";
+    }
+    function hashSendText(text) {
+      let h = 5381;
+      for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h ^ text.charCodeAt(i)) >>> 0;
+      return `${h.toString(36)}:${text.length}`;
+    }
+    var SUBMIT_DELAY_FLOOR_MS;
+    var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS;
+    var VERIFIED_SUBMIT_MIN_CHARS;
+    var WIN32_BRACKETED_PASTE_OPEN;
+    var WIN32_BRACKETED_PASTE_CLOSE;
+    var BRACKETED_PASTE_OPEN;
+    var BRACKETED_PASTE_CLOSE;
+    var WIN32_SOFT_NEWLINE;
+    var chunkPreservingSurrogates2;
+    var MID_GENERATION_SUBMIT_MIN_GAP_MS;
+    var SEND_IN_FLIGHT_MAX_MS;
+    var DUPLICATE_RESEND_WINDOW_MS;
+    var WIN32_SUBMIT_RESEND_GAP_MS;
+    var WIN32_SUBMIT_MAX_RESENDS;
+    var WIN32_SUBMIT_SETTLE_MS;
+    var WIN32_SUBMIT_SETTLE_POLL_MS;
+    var WIN32_ECHO_PROBE_CHARS;
+    var WIN32_ECHO_MAX_WAIT_MS;
+    var init_submit_policy = __esm2({
+      "src/providers/spec/submit-policy.ts"() {
+        "use strict";
+        init_pty_write_chunking();
+        SUBMIT_DELAY_FLOOR_MS = 200;
+        SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
+        VERIFIED_SUBMIT_MIN_CHARS = 512;
+        WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
+        WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
+        BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
+        BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
+        WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
+        chunkPreservingSurrogates2 = chunkPreservingSurrogates;
+        MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
+        SEND_IN_FLIGHT_MAX_MS = 3e4;
+        DUPLICATE_RESEND_WINDOW_MS = 6e4;
+        WIN32_SUBMIT_RESEND_GAP_MS = 350;
+        WIN32_SUBMIT_MAX_RESENDS = 14;
+        WIN32_SUBMIT_SETTLE_MS = 500;
+        WIN32_SUBMIT_SETTLE_POLL_MS = 120;
+        WIN32_ECHO_PROBE_CHARS = 16;
+        WIN32_ECHO_MAX_WAIT_MS = 2e4;
+      }
+    });
+    var SendSubmitEngine;
+    var init_send_submit_engine = __esm2({
+      "src/providers/spec/send-submit-engine.ts"() {
+        "use strict";
+        init_logger();
+        init_pty_write_chunking();
+        init_submit_policy();
+        init_submit_policy();
+        SendSubmitEngine = class {
+          constructor(host) {
+            this.host = host;
+          }
+          /** Queued send bodies. `bracketedPaste` rides along so a queued image
+           *  prompt keeps its paste-wrapped delivery when drained later. */
+          pendingSends = [];
+          /** True while a send is written but the FSM has not yet left idle, i.e. the
+           *  composer is mid-submit. Blocks a second send from overwriting the first
+           *  before the CLI has consumed it (see handleSendMessage). */
+          sendInFlight = false;
+          /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
+           *  send the CLI never visibly consumed cannot wedge the queue forever. */
+          sendInFlightAt = 0;
+          /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
+           *  suspended, or 0 when it is free to run. See reserveDrain(). */
+          drainReservedUntil = 0;
+          /** Content hash → wall-clock of the last PTY write, for the pre-write
+           *  duplicate gate (see isDuplicateResend). */
+          recentSendHashes = /* @__PURE__ */ new Map();
+          /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
+           *  a torn-down driver never writes a queued body into a dead PTY. */
+          pendingSendDrainTimer = null;
+          /** SUBMIT-SILENT-FAILURE latch — see lastSubmitUnconfirmed(). */
+          submitUnconfirmed = false;
+          /** Most recent win32 body write, for the submit settle-gate. */
+          lastWin32WriteAt = 0;
+          win32SubmitTimer = null;
+          win32WriteTimer = null;
+          plainSubmitTimer = null;
+          /** Number of bodies still parked, for shutdown logging. */
+          get queueDepth() {
+            return this.pendingSends.length;
+          }
+          /** Byte lengths of the parked bodies, for the shutdown discard log. */
+          queuedLengths() {
+            return this.pendingSends.map((s2) => s2.text.length);
+          }
+          /** Drop every parked body. Called only from FsmDriver.shutdown(), which logs
+           *  the discard loudly first — these bodies were never written. */
+          discardQueued() {
+            this.pendingSends.length = 0;
+          }
+          /** Cancel every armed write/submit timer. Called from FsmDriver.shutdown()
+           *  so a torn-down driver never fires a CR into a dead PTY. */
+          cancelTimers() {
+            if (this.win32SubmitTimer) {
+              clearTimeout(this.win32SubmitTimer);
+              this.win32SubmitTimer = null;
+            }
+            if (this.win32WriteTimer) {
+              clearTimeout(this.win32WriteTimer);
+              this.win32WriteTimer = null;
+            }
+            if (this.plainSubmitTimer) {
+              clearTimeout(this.plainSubmitTimer);
+              this.plainSubmitTimer = null;
+            }
+            if (this.pendingSendDrainTimer) {
+              clearTimeout(this.pendingSendDrainTimer);
+              this.pendingSendDrainTimer = null;
+            }
+          }
+          /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
+          sendMessageDuringGeneration(text, bracketedPaste) {
+            if (process.platform === "win32") {
+              LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
+              return { accepted: false, reason: "platform_unsupported" };
+            }
+            if (!this.host.readySeenOnce) return { accepted: false, reason: "not_ready" };
+            if (this.host.currentStatus() !== "generating") return { accepted: false, reason: "not_generating" };
+            if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
+            if (this.isDuplicateResend(text)) {
+              LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send suppressed \u2014 duplicate resend (len=${text.length})`);
+              return { accepted: false, reason: "duplicate" };
+            }
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text.length})`
+            );
+            this.recentSendHashes.set(hashSendText(text), Date.now());
+            this.actuallySendMessage(text, bracketedPaste, { midGeneration: true });
+            return { accepted: true };
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
+          reserveDrain(ttlMs) {
+            this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`
+            );
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
+          releaseDrain() {
+            if (this.drainReservedUntil === 0) return;
+            this.drainReservedUntil = 0;
+            this.drainPendingSends();
+          }
+          /** True while an out-of-band caller still owns the next write. The TTL is a
+           *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
+          isDrainReserved() {
+            if (this.drainReservedUntil === 0) return false;
+            if (Date.now() >= this.drainReservedUntil) {
+              LOG.warn("FsmDriver", `[${this.host.specTag()}] drain reservation expired \u2014 releasing`);
+              this.drainReservedUntil = 0;
+              return false;
+            }
+            return true;
+          }
+          /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
+          claimQueuedSends(text) {
+            const before = this.pendingSends.length;
+            if (before === 0) return 0;
+            this.pendingSends = this.pendingSends.filter((s2) => s2.text !== text);
+            const claimed = before - this.pendingSends.length;
+            if (claimed > 0) {
+              this.recentSendHashes.delete(hashSendText(text));
+              LOG.info(
+                "FsmDriver",
+                `[${this.host.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery (len=${text.length}, remaining=${this.pendingSends.length})`
+              );
+            }
+            return claimed;
+          }
+          /**
+           * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
+           * is genuinely able to accept one: it has been ready at least once, it is
+           * sitting at an idle prompt right now, and no earlier send is still in flight.
+           * Anything else is queued and drained by drainPendingSends() when the machine
+           * next returns to idle.
+           *
+           * Before the fix this consulted ONLY `readySeenOnce` — a one-shot latch — so
+           * every send after the first ignored the live FSM state and could be written
+           * on top of a still-generating turn, braiding the two bodies in the composer
+           * (see the SEND-OVERLAP note above the constants).
+           */
+          handleSendMessage(text, bracketedPaste) {
+            if (this.isDuplicateResend(text)) {
+              LOG.info("FsmDriver", `[${this.host.specTag()}] send suppressed \u2014 duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
+              return { status: "duplicate" };
+            }
+            if (!this.canSendNow()) {
+              this.pendingSends.push({ text, bracketedPaste });
+              const reason = this.sendBlockedReason();
+              LOG.info(
+                "FsmDriver",
+                `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text.length}, queued=${this.pendingSends.length})`
+              );
+              return { status: "queued", queueDepth: this.pendingSends.length, reason };
+            }
+            this.beginSend(text, bracketedPaste);
+            return { status: "delivered" };
+          }
+          /** True when a send can be written to the PTY right now. */
+          canSendNow() {
+            if (!this.host.readySeenOnce) return false;
+            if (this.isSendInFlight()) return false;
+            return this.host.currentStatus() === "idle";
+          }
+          /** Human-readable reason a send was queued — logged, never used for control flow. */
+          sendBlockedReason() {
+            if (!this.host.readySeenOnce) return "machine not ready yet";
+            if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+            return `machine is ${this.host.currentStatus()}`;
+          }
+          /** In-flight latch with its self-expiry applied, so a send the CLI never
+           *  visibly consumed cannot wedge the queue permanently. */
+          isSendInFlight() {
+            if (!this.sendInFlight) return false;
+            if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
+              LOG.warn("FsmDriver", `[${this.host.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms \u2014 releasing`);
+              this.sendInFlight = false;
+              return false;
+            }
+            return true;
+          }
+          /**
+           * Pre-write duplicate gate. Suppresses a repeat of text that was written to
+           * the PTY within DUPLICATE_RESEND_WINDOW_MS *while that text is still being
+           * processed* — i.e. a send is in flight or the machine has not returned to
+           * idle. A genuine repeat typed at an idle prompt is NOT suppressed: sending
+           * "continue" twice in a row is ordinary use, and silently swallowing the
+           * second one would be a worse defect than the one being fixed.
+           */
+          isDuplicateResend(text) {
+            const now = Date.now();
+            const key2 = hashSendText(text);
+            for (const [candidate, at] of this.recentSendHashes) {
+              if (now - at > DUPLICATE_RESEND_WINDOW_MS) this.recentSendHashes.delete(candidate);
+            }
+            const previous = this.recentSendHashes.get(key2);
+            if (previous === void 0) return false;
+            if (now - previous > DUPLICATE_RESEND_WINDOW_MS) return false;
+            const stillProcessing = this.isSendInFlight() || this.host.currentStatus() !== "idle" || this.pendingSends.length > 0;
+            return stillProcessing;
+          }
+          /** Mark a send as in flight, record it for the duplicate gate, and write it. */
+          beginSend(text, bracketedPaste) {
+            this.sendInFlight = true;
+            this.sendInFlightAt = Date.now();
+            this.recentSendHashes.set(hashSendText(text), this.sendInFlightAt);
+            this.actuallySendMessage(text, bracketedPaste);
+          }
+          /**
+           * Release the in-flight latch and write the next queued send, if the machine
+           * can take one. Called from the FSM evaluation loop, so it runs on the same
+           * frame the machine reaches idle — the queue never waits for an extra PTY
+           * frame that a quiet CLI would never produce (the same hazard maybeMarkReady
+           * documents for the very first message).
+           */
+          drainPendingSends() {
+            if (!this.host.readySeenOnce) return;
+            const status = this.host.currentStatus();
+            if (this.sendInFlight && status !== "idle") {
+              this.sendInFlight = false;
+            }
+            if (status !== "idle") return;
+            if (this.isDrainReserved()) {
+              LOG.info(
+                "FsmDriver",
+                `[${this.host.specTag()}] drain held \u2014 an out-of-band send owns the next write (queued=${this.pendingSends.length})`
+              );
+              return;
+            }
+            if (this.isSendInFlight()) return;
+            if (this.pendingSends.length === 0) return;
+            const next = this.pendingSends.shift();
+            LOG.info("FsmDriver", `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
+            if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
+            this.pendingSendDrainTimer = setTimeout(() => {
+              this.pendingSendDrainTimer = null;
+              this.beginSend(next.text, next.bracketedPaste);
+            }, 50);
+            this.sendInFlight = true;
+            this.sendInFlightAt = Date.now();
+          }
+          /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
+           *  resend budget without the agent ever leaving the composer. A caller seeing
+           *  this should treat an apparent 'generating' status as untrustworthy. */
+          lastSubmitUnconfirmed() {
+            return this.submitUnconfirmed;
+          }
+          /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
+           *  tracked timer so the shutdown drain gate can see it and shutdown() can
+           *  cancel it instead of letting it fire into a killed PTY. */
+          schedulePlainSubmit(submitKey, delayMs) {
+            if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
+            this.plainSubmitTimer = setTimeout(() => {
+              this.plainSubmitTimer = null;
+              this.host.adapter.send_keys(submitKey);
+            }, delayMs);
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
+           *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
+           *  the body (or part of it) is in the composer and its submit key has not yet
+           *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
+           *  written yet — the composer holds nothing of theirs; they are discarded with
+           *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
+           *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
+           *  would hold shutdown for a whole turn boundary, not a submit). */
+          hasInFlightSubmit() {
+            return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
+           *  than callback-wiring: the four timers above re-arm each other across
+           *  several phases (write → echo-gate → resend net) and a poll is the only
+           *  join point that needs no knowledge of which phase is active. */
+          whenSubmitDrained(timeoutMs) {
+            if (!this.hasInFlightSubmit()) return Promise.resolve(true);
+            const deadline = Date.now() + Math.max(0, timeoutMs);
+            return new Promise((resolve34) => {
+              const poll = () => {
+                if (!this.hasInFlightSubmit()) {
+                  resolve34(true);
+                  return;
+                }
+                if (Date.now() >= deadline) {
+                  resolve34(false);
+                  return;
+                }
+                setTimeout(poll, 100);
+              };
+              setTimeout(poll, 100);
+            });
+          }
+          actuallySendMessage(text, bracketedPaste, opts) {
+            const sm = this.host.spec.send_message;
+            this.submitUnconfirmed = false;
+            const perChar = sm.delay_ms_per_char ?? 0;
+            const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.host.opts.manifestSendDelayMs);
+            if (opts?.midGeneration) {
+              this.host.adapter.send_keys(text);
+              this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS));
+              return;
+            }
+            const wrapInPaste = process.platform !== "win32" && bracketedPaste === true && sm.posix_bracketed_paste_for_images === true;
+            if (wrapInPaste) {
+              this.host.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
+              this.markBodyWrite();
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
+              return;
+            }
+            if (process.platform === "win32") {
+              this.writeWin32Body(text);
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
+              return;
+            }
+            if (perChar === 0 && shouldUseVerifiedSubmit(text)) {
+              this.host.adapter.send_keys(text);
+              this.markBodyWrite();
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
+              return;
+            }
+            if (perChar === 0) {
+              this.host.adapter.send_keys(text);
+              if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
+              else this.host.adapter.send_keys(sm.submit_key);
+              return;
+            }
+            let i = 0;
+            const iv = setInterval(() => {
+              if (i >= text.length) {
+                clearInterval(iv);
+                this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
+                return;
+              }
+              this.host.adapter.send_keys(text[i]);
+              i += 1;
+            }, perChar);
+          }
+          /** Record a win32 body write so the settle-gate counts it as input activity
+           *  even before the echo arrives. */
+          markBodyWrite() {
+            this.lastWin32WriteAt = Date.now();
+          }
+          /** Most recent win32 input activity — a write we issued OR a PTY output chunk
+           *  (echo). The submit settle-gate waits for this to go quiet. */
+          lastWin32InputActivityAt() {
+            return Math.max(this.host.lastPtyDataAt, this.lastWin32WriteAt);
+          }
+          /**
+           * Write the message body to the PTY for win32, paced into bounded chunks. A
+           * single unbounded ConPTY write can overflow the input pipe and drop leading
+           * bytes; splitting it with a short inter-chunk gap keeps the console input
+           * buffer from overflowing. Small bodies still go out in a single write. Each
+           * write advances lastWin32WriteAt so the submit settle-gate keeps waiting until
+           * the final segment is out and echoed.
+           *
+           * FIX-B-v2: a body that contains an embedded newline cannot be written raw —
+           * on the real win32 Ink/ConPTY composer each '\n' SUBMITS the preceding line as
+           * its own entry, truncating the prompt to only the tail fragment. So a
+           * newline-bearing body is rewritten so its embedded newlines never submit:
+           *   - 'paste' (default): wrap the body in a bracketed-paste (ESC[200~ … ESC[201~)
+           *     — the composer takes the whole thing, newlines and all, as pasted text.
+           *   - 'soft_newline': replace each embedded newline with a non-submitting
+           *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
+           * The trailing submit CR is NOT written here — it stays separate and is fired
+           * later by scheduleVerifiedSubmit (concern (A)). The bracketed-paste markers are
+           * written as their own atomic segments (never chunked), so chunking can never
+           * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
+           */
+          writeWin32Body(text) {
+            if (this.win32WriteTimer) {
+              clearTimeout(this.win32WriteTimer);
+              this.win32WriteTimer = null;
+            }
+            const hasNewline = /\r?\n/.test(text);
+            const mode = resolveWin32SubmitMode();
+            let segments;
+            if (!hasNewline) {
+              segments = chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+            } else if (mode === "soft_newline") {
+              const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+              segments = chunkPreservingSurrogates2(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
+            } else {
+              segments = [
+                WIN32_BRACKETED_PASTE_OPEN,
+                ...chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS),
+                WIN32_BRACKETED_PASTE_CLOSE
+              ];
+            }
+            if (segments.length <= 1) {
+              this.markBodyWrite();
+              this.host.adapter.send_keys(segments[0] ?? text);
+              return;
+            }
+            let idx = 0;
+            const writeNext = () => {
+              this.win32WriteTimer = null;
+              if (idx >= segments.length) return;
+              this.markBodyWrite();
+              this.host.adapter.send_keys(segments[idx]);
+              idx += 1;
+              if (idx < segments.length) {
+                this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
+              }
+            };
+            writeNext();
+          }
+          /**
+           * win32 submit. Two phases:
+           *
+           *  Phase 1 (echo-gate): hold the first CR until the body text is CONFIRMED in the
+           *  composer (its whitespace-collapsed tail appears in the rendered screen) AND the
+           *  PTY output is then quiet for WIN32_SUBMIT_SETTLE_MS (the full, possibly multi-KB
+           *  / multiline body has finished arriving). This replaces a bare output-quiet
+           *  settle: an early write that races claude's boot is buffered, not dropped, so the
+           *  screen can go quiet with the body NOT YET in the composer — a quiet-only gate
+           *  would then fire a CR into an empty composer (no submit). Waiting on the echo
+           *  closes that. Honors an initial minimum delay and a generous WIN32_ECHO_MAX_WAIT_MS
+           *  last-resort blind fire so a body that truly never confirms still submits (carried
+           *  by phase 2) rather than hanging. A settled session echoes immediately → no delay.
+           *
+           *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
+           *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
+           *  newline) resend, up to WIN32_SUBMIT_MAX_RESENDS. The first CR always fires
+           *  (a stale/edge status never suppresses it); resends are gated on still being
+           *  idle and stop the instant the agent leaves idle (submitted → generating /
+           *  approval). This preserves the win32 lone-CR-swallow handling.
+           */
+          scheduleVerifiedSubmit(submitKey, initialDelayMs, body, opts) {
+            if (this.win32SubmitTimer) {
+              clearTimeout(this.win32SubmitTimer);
+              this.win32SubmitTimer = null;
+            }
+            const startedAt = Date.now();
+            const normBody = normalizeForEcho(body);
+            const headProbe = normBody.slice(0, WIN32_ECHO_PROBE_CHARS);
+            const tailProbe = normBody.slice(-WIN32_ECHO_PROBE_CHARS);
+            const bodyEchoed = () => {
+              if (!normBody) return true;
+              const visible = normalizeForEcho(this.host.adapter.snapshot());
+              if (!visible.includes(tailProbe)) return false;
+              const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
+              return full.includes(headProbe);
+            };
+            const fire = (attempt) => {
+              this.win32SubmitTimer = null;
+              this.host.adapter.send_keys(submitKey);
+              if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) {
+                if (this.host.currentStatus() === "idle") {
+                  this.submitUnconfirmed = true;
+                  LOG.error(
+                    "FsmDriver",
+                    `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${WIN32_SUBMIT_MAX_RESENDS} submit-key attempts (len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). The message is likely still sitting unsent in the composer \u2014 the agent is NOT working on it.`
+                  );
+                }
+                return;
+              }
+              this.win32SubmitTimer = setTimeout(() => {
+                if (this.host.currentStatus() !== "idle") {
+                  this.win32SubmitTimer = null;
+                  if (attempt > 0) {
+                    LOG.warn("FsmDriver", `[${this.host.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
+                  }
+                  return;
+                }
+                fire(attempt + 1);
+              }, WIN32_SUBMIT_RESEND_GAP_MS);
+            };
+            const waitForEcho = () => {
+              this.win32SubmitTimer = null;
+              const now = Date.now();
+              const quietFor = now - this.lastWin32InputActivityAt();
+              const waited = now - startedAt;
+              const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
+              if (opts?.skipEchoGate ? true : bodyEchoed() && settled) {
+                fire(0);
+                return;
+              }
+              if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
+                LOG.warn(
+                  "FsmDriver",
+                  `[${this.host.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) \u2014 firing submit key blind; resend net will verify.`
+                );
+                fire(0);
+                return;
+              }
+              this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
+            };
+            if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForEcho, initialDelayMs);
+            else waitForEcho();
+          }
+        };
+      }
+    });
     function kimiHome2(env2 = process.env) {
       const override = env2.KIMI_CODE_HOME?.trim();
       return override ? override : path30.join(os20.homedir(), ".kimi-code");
@@ -102905,89 +103500,6 @@ ${marker}`,
         DEFAULT_WINDOW_MS = 2e4;
       }
     });
-    function chunkPreservingSurrogates(text, size) {
-      const chunks = [];
-      let offset = 0;
-      while (offset < text.length) {
-        let end = Math.min(text.length, offset + size);
-        if (end < text.length) {
-          const code = text.charCodeAt(end - 1);
-          if (code >= 55296 && code <= 56319) end -= 1;
-        }
-        if (end <= offset) end = Math.min(text.length, offset + size);
-        chunks.push(text.slice(offset, end));
-        offset = end;
-      }
-      return chunks;
-    }
-    var WIN32_PTY_WRITE_CHUNK_CHARS;
-    var WIN32_PTY_WRITE_CHUNK_GAP_MS;
-    var init_pty_write_chunking = __esm2({
-      "src/cli-adapters/pty-write-chunking.ts"() {
-        "use strict";
-        WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
-        WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
-      }
-    });
-    function countNewlines(s2) {
-      let n = 0;
-      for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
-      return n;
-    }
-    function shouldUseVerifiedSubmit(text, platform11 = process.platform) {
-      if (platform11 === "win32") return true;
-      return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
-    }
-    function resolveWin32SubmitMode(env2 = process.env) {
-      return env2.ADHDEV_WIN32_SUBMIT_MODE === "soft_newline" ? "soft_newline" : "paste";
-    }
-    function normalizeForEcho(s2) {
-      return s2.replace(/\s+/g, "");
-    }
-    function resolveSubmitDelayMs(specBeforeSubmit, text, manifestSendDelayMs) {
-      const lines = countNewlines(text);
-      const linesBonus = Math.min(800, lines * 80);
-      const lengthBonus = Math.min(800, Math.floor(text.length / 1e3) * 200);
-      const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
-      const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
-      return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
-    }
-    function guessExt(mime) {
-      if (/png/i.test(mime)) return ".png";
-      if (/jpe?g/i.test(mime)) return ".jpg";
-      if (/gif/i.test(mime)) return ".gif";
-      if (/webp/i.test(mime)) return ".webp";
-      return ".bin";
-    }
-    var SUBMIT_DELAY_FLOOR_MS;
-    var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS;
-    var VERIFIED_SUBMIT_MIN_CHARS;
-    var WIN32_BRACKETED_PASTE_OPEN;
-    var WIN32_BRACKETED_PASTE_CLOSE;
-    var BRACKETED_PASTE_OPEN;
-    var BRACKETED_PASTE_CLOSE;
-    var WIN32_SOFT_NEWLINE;
-    var chunkPreservingSurrogates2;
-    var init_submit_policy = __esm2({
-      "src/providers/spec/submit-policy.ts"() {
-        "use strict";
-        init_pty_write_chunking();
-        SUBMIT_DELAY_FLOOR_MS = 200;
-        SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
-        VERIFIED_SUBMIT_MIN_CHARS = 512;
-        WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
-        WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
-        BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
-        BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
-        WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
-        chunkPreservingSurrogates2 = chunkPreservingSurrogates;
-      }
-    });
-    function hashSendText(text) {
-      let h = 5381;
-      for (let i = 0; i < text.length; i += 1) h = ((h << 5) + h ^ text.charCodeAt(i)) >>> 0;
-      return `${h.toString(36)}:${text.length}`;
-    }
     function sameModal(a, b) {
       if (!a && !b) return true;
       if (!a || !b) return false;
@@ -103078,15 +103590,7 @@ ${marker}`,
     var import_session_host_core9;
     var DEFAULT_SPAWN_PRIME_MAX_WAIT_MS;
     var STALL_REFOCUS_INFO_LIMIT;
-    var SEND_IN_FLIGHT_MAX_MS;
-    var DUPLICATE_RESEND_WINDOW_MS;
     var fsmDriverSeq;
-    var WIN32_SUBMIT_RESEND_GAP_MS;
-    var WIN32_SUBMIT_MAX_RESENDS;
-    var WIN32_SUBMIT_SETTLE_MS;
-    var WIN32_SUBMIT_SETTLE_POLL_MS;
-    var WIN32_ECHO_PROBE_CHARS;
-    var WIN32_ECHO_MAX_WAIT_MS;
     var FsmDriver;
     var init_fsm_driver = __esm2({
       "src/providers/spec/fsm-driver.ts"() {
@@ -103101,29 +103605,23 @@ ${marker}`,
         init_fsm_evaluator();
         init_fsm_types();
         init_fsm_loader();
+        init_send_submit_engine();
         init_pre_launch_trust();
         init_kimi_workspace_trust();
         init_startup_dismiss();
         init_logger();
         init_debug_trace();
         init_debug_config();
-        init_pty_write_chunking();
+        init_submit_policy();
         init_submit_policy();
         init_submit_policy();
         DEFAULT_SPAWN_PRIME_MAX_WAIT_MS = 2e3;
         STALL_REFOCUS_INFO_LIMIT = 3;
-        SEND_IN_FLIGHT_MAX_MS = 3e4;
-        DUPLICATE_RESEND_WINDOW_MS = 6e4;
         fsmDriverSeq = 0;
-        WIN32_SUBMIT_RESEND_GAP_MS = 350;
-        WIN32_SUBMIT_MAX_RESENDS = 14;
-        WIN32_SUBMIT_SETTLE_MS = 500;
-        WIN32_SUBMIT_SETTLE_POLL_MS = 120;
-        WIN32_ECHO_PROBE_CHARS = 16;
-        WIN32_ECHO_MAX_WAIT_MS = 2e4;
         FsmDriver = class {
           constructor(opts) {
             this.opts = opts;
+            const self = this;
             const sessionId = typeof opts.sessionId === "string" ? opts.sessionId.trim() : "";
             this.sessionTag = sessionId ? sessionId.slice(0, 8) : `d${++fsmDriverSeq}`;
             this.loadSpecOrThrow();
@@ -103140,6 +103638,28 @@ ${marker}`,
                 on_exit: (info) => this.handleExit(info)
               }
             );
+            this.sends = new SendSubmitEngine({
+              adapter: this.adapter,
+              get spec() {
+                return self.spec;
+              },
+              get opts() {
+                return self.opts;
+              },
+              get readySeenOnce() {
+                return self.readySeenOnce;
+              },
+              get lastPtyDataAt() {
+                return self.lastPtyDataAt;
+              },
+              get currentStateId() {
+                return self.currentStateId;
+              },
+              specTag: () => this.specTag(),
+              // ★ The engine gates on this but never computes it — see the note on
+              // the `sends` field.
+              currentStatus: () => this.currentStatus()
+            });
             if (this.opts.hotReload !== false) this.armSpecWatcher();
           }
           spec;
@@ -103190,61 +103710,21 @@ ${marker}`,
           lastRefocusAt = 0;
           stallRefocusInfoCount = 0;
           stallRefocusSuppressedCount = 0;
-          /** Timer driving the win32 verification-based submit resend loop (see
-           *  WIN32_SUBMIT_* and scheduleVerifiedSubmit). Re-arms itself until the FSM
-           *  leaves idle (submitted) or the resend budget is spent. */
-          win32SubmitTimer = null;
           /** Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
            *  on_pty_data — including the echo of text written into the composer — so the
            *  win32 submit settle-gate can tell when input has finished landing. */
           lastPtyDataAt = 0;
-          /** Wall-clock (ms) of the most recent win32 message-body input write. Bridges
-           *  the gap between writing a chunk and its echo so the settle-gate does not
-           *  declare "quiet" mid-write. */
-          lastWin32WriteAt = 0;
-          /** Pending paced chunk-write timer for a large win32 body (see writeWin32Body). */
-          win32WriteTimer = null;
           /** Timer driving the win32 verification-based modal-confirm CR resend loop (see
            *  scheduleWin32ModalConfirm). A lone CR that confirms an approval/picker choice
            *  is absorbed by ConPTY the same way a send_message submit CR is, so the confirm
            *  must be resent until the modal actually resolves (status leaves 'approval'). */
           win32ModalConfirmTimer = null;
-          /** SUBMIT-SILENT-FAILURE: set when scheduleVerifiedSubmit spent its whole resend
-           *  budget without the FSM ever leaving 'idle' — i.e. the body is still sitting
-           *  unsent in the composer. Cleared on the next send. Exposed via
-           *  lastSubmitUnconfirmed() so a supervisor can distinguish "agent is thinking"
-           *  from "the prompt was never actually submitted". */
-          submitUnconfirmed = false;
-          /** ENTER-LOSS layer ①: the short-body / perChar paths' submit-key timer.
-           *  Previously a bare setTimeout — invisible to shutdown() (a CR could fire
-           *  into a killed PTY) and to the drain gate (a body written with its CR
-           *  still scheduled did not count as in flight). Tracked so both see it. */
-          plainSubmitTimer = null;
           currentEval = null;
           stateHistory = [];
           prevStateAt = 0;
           // ── send_message queueing until the machine first reaches a non-initial,
           //    non-busy ("ready") state — same contract as v3's idleSeenOnce.
           readySeenOnce = false;
-          /** Queued send bodies. `bracketedPaste` rides along so a queued image
-           *  prompt keeps its paste-wrapped delivery when drained later. */
-          pendingSends = [];
-          /** True while a send is written but the FSM has not yet left idle, i.e. the
-           *  composer is mid-submit. Blocks a second send from overwriting the first
-           *  before the CLI has consumed it (see handleSendMessage). */
-          sendInFlight = false;
-          /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
-           *  send the CLI never visibly consumed cannot wedge the queue forever. */
-          sendInFlightAt = 0;
-          /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
-           *  suspended, or 0 when it is free to run. See reserveDrain(). */
-          drainReservedUntil = 0;
-          /** Content hash → wall-clock of the last PTY write, for the pre-write
-           *  duplicate gate (see isDuplicateResend). */
-          recentSendHashes = /* @__PURE__ */ new Map();
-          /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
-           *  a torn-down driver never writes a queued body into a dead PTY. */
-          pendingSendDrainTimer = null;
           pickerInProgress = null;
           delegateTimers = /* @__PURE__ */ new Map();
           specWatcher = null;
@@ -103265,6 +103745,20 @@ ${marker}`,
           shadowDivergenceLast = /* @__PURE__ */ new Map();
           /** FSMLOG-SESSION-ATTRIBUTION (D3): session segment of every log line's prefix. */
           sessionTag;
+          /**
+           * The send/queue/submit machinery — see ./send-submit-engine.ts.
+           *
+           * Extracted for the file-size gate, along the one seam in this class that is
+           * genuinely self-contained: it owns the pendingSends FIFO, the in-flight
+           * latch, the duplicate-gate hashes, the drain reservation and every
+           * write/submit timer, and reads this driver only through the narrow
+           * `DriverHost` view implemented just below.
+           *
+           * ★ The driver deliberately keeps `currentStatus()`. The engine GATES on it
+           * but must never compute its own answer — two opinions about whether the
+           * terminal is idle is precisely the SEND-OVERLAP defect.
+           */
+          sends;
           subscribe(listener) {
             this.listeners.add(listener);
             return () => {
@@ -103381,7 +103875,7 @@ ${marker}`,
           dispatch(cmd) {
             switch (cmd.kind) {
               case "send_message":
-                this.handleSendMessage(cmd.text, cmd.bracketedPaste);
+                this.sends.handleSendMessage(cmd.text, cmd.bracketedPaste);
                 return;
               case "pty_write":
                 this.adapter.send_keys(cmd.data);
@@ -103408,47 +103902,23 @@ ${marker}`,
           }
           /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
           sendMessageWithDisposition(text, bracketedPaste) {
-            return this.handleSendMessage(text, bracketedPaste);
+            return this.sends.handleSendMessage(text, bracketedPaste);
+          }
+          /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
+          sendMessageDuringGeneration(text, bracketedPaste) {
+            return this.sends.sendMessageDuringGeneration(text, bracketedPaste);
           }
           /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
           reserveDrain(ttlMs) {
-            this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
-            LOG.info(
-              "FsmDriver",
-              `[${this.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`
-            );
+            this.sends.reserveDrain(ttlMs);
           }
           /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
           releaseDrain() {
-            if (this.drainReservedUntil === 0) return;
-            this.drainReservedUntil = 0;
-            this.drainPendingSends();
-          }
-          /** True while an out-of-band caller still owns the next write. The TTL is a
-           *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
-          isDrainReserved() {
-            if (this.drainReservedUntil === 0) return false;
-            if (Date.now() >= this.drainReservedUntil) {
-              LOG.warn("FsmDriver", `[${this.specTag()}] drain reservation expired \u2014 releasing`);
-              this.drainReservedUntil = 0;
-              return false;
-            }
-            return true;
+            this.sends.releaseDrain();
           }
           /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
           claimQueuedSends(text) {
-            const before = this.pendingSends.length;
-            if (before === 0) return 0;
-            this.pendingSends = this.pendingSends.filter((s2) => s2.text !== text);
-            const claimed = before - this.pendingSends.length;
-            if (claimed > 0) {
-              this.recentSendHashes.delete(hashSendText(text));
-              LOG.info(
-                "FsmDriver",
-                `[${this.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery (len=${text.length}, remaining=${this.pendingSends.length})`
-              );
-            }
-            return claimed;
+            return this.sends.claimQueuedSends(text);
           }
           /** Forward runtime metadata to the terminal transport so mesh binding
            *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
@@ -103516,34 +103986,19 @@ ${marker}`,
             this.spawnPrimeAwaitingOutput = false;
             this.spawnPrimePending = false;
             this.flushStallRefocusLogSummary();
-            if (this.win32SubmitTimer) {
-              clearTimeout(this.win32SubmitTimer);
-              this.win32SubmitTimer = null;
-            }
-            if (this.win32WriteTimer) {
-              clearTimeout(this.win32WriteTimer);
-              this.win32WriteTimer = null;
-            }
-            if (this.plainSubmitTimer) {
-              clearTimeout(this.plainSubmitTimer);
-              this.plainSubmitTimer = null;
-            }
+            this.sends.cancelTimers();
             if (this.win32ModalConfirmTimer) {
               clearTimeout(this.win32ModalConfirmTimer);
               this.win32ModalConfirmTimer = null;
             }
-            if (this.pendingSendDrainTimer) {
-              clearTimeout(this.pendingSendDrainTimer);
-              this.pendingSendDrainTimer = null;
-            }
-            if (this.pendingSends.length > 0) {
-              const lengths = this.pendingSends.map((s2) => s2.text.length);
+            if (this.sends.queueDepth > 0) {
+              const lengths = this.sends.queuedLengths();
               LOG.warn(
                 "FsmDriver",
-                `[${this.specTag()}] DISCARDING ${this.pendingSends.length} queued send(s) on shutdown \u2014 owner input accepted but never submitted (session=${this.opts.sessionId || "unknown"}, lengths=[${lengths.join(",")}])`
+                `[${this.specTag()}] DISCARDING ${this.sends.queueDepth} queued send(s) on shutdown \u2014 owner input accepted but never submitted (session=${this.opts.sessionId || "unknown"}, lengths=[${lengths.join(",")}])`
               );
             }
-            this.pendingSends.length = 0;
+            this.sends.discardQueued();
             this.specWatcher?.close();
             this.adapter.kill();
           }
@@ -103742,14 +104197,14 @@ ${marker}`,
               this.emitStateChanged(forceEmit);
               this.scheduleWakeForState();
               this.scheduleStallWatchdog();
-              this.drainPendingSends();
+              this.sends.drainPendingSends();
               return;
             }
             this.maybeMarkReady();
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
             this.scheduleStallWatchdog();
-            this.drainPendingSends();
+            this.sends.drainPendingSends();
           }
           commitTransition(fired, now, ev) {
             const from = this.currentStateId;
@@ -104070,368 +104525,32 @@ ${marker}`,
           // ────────────────────────────────────────────────────────────────────
           // Dashboard commands (identical semantics to v3)
           // ────────────────────────────────────────────────────────────────────
-          /**
-           * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
-           * is genuinely able to accept one: it has been ready at least once, it is
-           * sitting at an idle prompt right now, and no earlier send is still in flight.
-           * Anything else is queued and drained by drainPendingSends() when the machine
-           * next returns to idle.
-           *
-           * Before the fix this consulted ONLY `readySeenOnce` — a one-shot latch — so
-           * every send after the first ignored the live FSM state and could be written
-           * on top of a still-generating turn, braiding the two bodies in the composer
-           * (see the SEND-OVERLAP note above the constants).
-           */
-          handleSendMessage(text, bracketedPaste) {
-            if (this.isDuplicateResend(text)) {
-              LOG.info("FsmDriver", `[${this.specTag()}] send suppressed \u2014 duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
-              return { status: "duplicate" };
-            }
-            if (!this.canSendNow()) {
-              this.pendingSends.push({ text, bracketedPaste });
-              const reason = this.sendBlockedReason();
-              LOG.info(
-                "FsmDriver",
-                `[${this.specTag()}] send queued \u2014 ${reason} (len=${text.length}, queued=${this.pendingSends.length})`
-              );
-              return { status: "queued", queueDepth: this.pendingSends.length, reason };
-            }
-            this.beginSend(text, bracketedPaste);
-            return { status: "delivered" };
-          }
-          /** True when a send can be written to the PTY right now. */
-          canSendNow() {
-            if (!this.readySeenOnce) return false;
-            if (this.isSendInFlight()) return false;
-            return this.currentStatus() === "idle";
-          }
-          /** Human-readable reason a send was queued — logged, never used for control flow. */
-          sendBlockedReason() {
-            if (!this.readySeenOnce) return "machine not ready yet";
-            if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
-            return `machine is ${this.currentStatus()}`;
-          }
-          /** In-flight latch with its self-expiry applied, so a send the CLI never
-           *  visibly consumed cannot wedge the queue permanently. */
-          isSendInFlight() {
-            if (!this.sendInFlight) return false;
-            if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
-              LOG.warn("FsmDriver", `[${this.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms \u2014 releasing`);
-              this.sendInFlight = false;
-              return false;
-            }
-            return true;
-          }
-          /**
-           * Pre-write duplicate gate. Suppresses a repeat of text that was written to
-           * the PTY within DUPLICATE_RESEND_WINDOW_MS *while that text is still being
-           * processed* — i.e. a send is in flight or the machine has not returned to
-           * idle. A genuine repeat typed at an idle prompt is NOT suppressed: sending
-           * "continue" twice in a row is ordinary use, and silently swallowing the
-           * second one would be a worse defect than the one being fixed.
-           */
-          isDuplicateResend(text) {
-            const now = Date.now();
-            const key2 = hashSendText(text);
-            for (const [candidate, at] of this.recentSendHashes) {
-              if (now - at > DUPLICATE_RESEND_WINDOW_MS) this.recentSendHashes.delete(candidate);
-            }
-            const previous = this.recentSendHashes.get(key2);
-            if (previous === void 0) return false;
-            if (now - previous > DUPLICATE_RESEND_WINDOW_MS) return false;
-            const stillProcessing = this.isSendInFlight() || this.currentStatus() !== "idle" || this.pendingSends.length > 0;
-            return stillProcessing;
-          }
-          /** Mark a send as in flight, record it for the duplicate gate, and write it. */
-          beginSend(text, bracketedPaste) {
-            this.sendInFlight = true;
-            this.sendInFlightAt = Date.now();
-            this.recentSendHashes.set(hashSendText(text), this.sendInFlightAt);
-            this.actuallySendMessage(text, bracketedPaste);
-          }
-          /**
-           * Release the in-flight latch and write the next queued send, if the machine
-           * can take one. Called from the FSM evaluation loop, so it runs on the same
-           * frame the machine reaches idle — the queue never waits for an extra PTY
-           * frame that a quiet CLI would never produce (the same hazard maybeMarkReady
-           * documents for the very first message).
-           */
-          drainPendingSends() {
-            if (!this.readySeenOnce) return;
-            const status = this.currentStatus();
-            if (this.sendInFlight && status !== "idle") {
-              this.sendInFlight = false;
-            }
-            if (status !== "idle") return;
-            if (this.isDrainReserved()) {
-              LOG.info(
-                "FsmDriver",
-                `[${this.specTag()}] drain held \u2014 an out-of-band send owns the next write (queued=${this.pendingSends.length})`
-              );
-              return;
-            }
-            if (this.isSendInFlight()) return;
-            if (this.pendingSends.length === 0) return;
-            const next = this.pendingSends.shift();
-            LOG.info("FsmDriver", `[${this.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
-            if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
-            this.pendingSendDrainTimer = setTimeout(() => {
-              this.pendingSendDrainTimer = null;
-              this.beginSend(next.text, next.bracketedPaste);
-            }, 50);
-            this.sendInFlight = true;
-            this.sendInFlightAt = Date.now();
-          }
           /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
            *  resend budget without the agent ever leaving the composer. A caller seeing
            *  this should treat an apparent 'generating' status as untrustworthy. */
           lastSubmitUnconfirmed() {
-            return this.submitUnconfirmed;
+            return this.sends.lastSubmitUnconfirmed();
           }
-          /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
-           *  tracked timer so the shutdown drain gate can see it and shutdown() can
-           *  cancel it instead of letting it fire into a killed PTY. */
-          schedulePlainSubmit(submitKey, delayMs) {
-            if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
-            this.plainSubmitTimer = setTimeout(() => {
-              this.plainSubmitTimer = null;
-              this.adapter.send_keys(submitKey);
-            }, delayMs);
-          }
-          /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
-           *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
-           *  the body (or part of it) is in the composer and its submit key has not yet
-           *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
-           *  written yet — the composer holds nothing of theirs; they are discarded with
-           *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
-           *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
-           *  would hold shutdown for a whole turn boundary, not a submit). */
+          /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. Duck-typed by
+           *  cli-adapter / the shutdown drain gate (`typeof … === 'function'`), so
+           *  dropping this forwarder would silently turn the gate into a no-op rather
+           *  than fail to compile. */
           hasInFlightSubmit() {
-            return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
+            return this.sends.hasInFlightSubmit();
           }
-          /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
-           *  than callback-wiring: the four timers above re-arm each other across
-           *  several phases (write → echo-gate → resend net) and a poll is the only
-           *  join point that needs no knowledge of which phase is active. */
+          /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Duck-typed like
+           *  hasInFlightSubmit above. */
           whenSubmitDrained(timeoutMs) {
-            if (!this.hasInFlightSubmit()) return Promise.resolve(true);
-            const deadline = Date.now() + Math.max(0, timeoutMs);
-            return new Promise((resolve34) => {
-              const poll = () => {
-                if (!this.hasInFlightSubmit()) {
-                  resolve34(true);
-                  return;
-                }
-                if (Date.now() >= deadline) {
-                  resolve34(false);
-                  return;
-                }
-                setTimeout(poll, 100);
-              };
-              setTimeout(poll, 100);
-            });
+            return this.sends.whenSubmitDrained(timeoutMs);
           }
           /** ENTER-LOSS layer ③ — see ISpecDriver.snapshotWithScrollback. */
           snapshotWithScrollback() {
             return this.adapter.snapshotWithScrollback();
           }
-          actuallySendMessage(text, bracketedPaste) {
-            const sm = this.spec.send_message;
-            this.submitUnconfirmed = false;
-            const perChar = sm.delay_ms_per_char ?? 0;
-            const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.opts.manifestSendDelayMs);
-            const wrapInPaste = process.platform !== "win32" && bracketedPaste === true && sm.posix_bracketed_paste_for_images === true;
-            if (wrapInPaste) {
-              this.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
-              this.markBodyWrite();
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
-              return;
-            }
-            if (process.platform === "win32") {
-              this.writeWin32Body(text);
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
-              return;
-            }
-            if (perChar === 0 && shouldUseVerifiedSubmit(text)) {
-              this.adapter.send_keys(text);
-              this.markBodyWrite();
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
-              return;
-            }
-            if (perChar === 0) {
-              this.adapter.send_keys(text);
-              if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
-              else this.adapter.send_keys(sm.submit_key);
-              return;
-            }
-            let i = 0;
-            const iv = setInterval(() => {
-              if (i >= text.length) {
-                clearInterval(iv);
-                this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
-                return;
-              }
-              this.adapter.send_keys(text[i]);
-              i += 1;
-            }, perChar);
-          }
           /** The agent's current coarse status, derived from the FSM node we're in. */
           currentStatus() {
             const st = stateById(this.spec, this.currentStateId);
             return st ? statusForState(st) : "idle";
-          }
-          /** Record a win32 body write so the settle-gate counts it as input activity
-           *  even before the echo arrives. */
-          markBodyWrite() {
-            this.lastWin32WriteAt = Date.now();
-          }
-          /** Most recent win32 input activity — a write we issued OR a PTY output chunk
-           *  (echo). The submit settle-gate waits for this to go quiet. */
-          lastWin32InputActivityAt() {
-            return Math.max(this.lastPtyDataAt, this.lastWin32WriteAt);
-          }
-          /**
-           * Write the message body to the PTY for win32, paced into bounded chunks. A
-           * single unbounded ConPTY write can overflow the input pipe and drop leading
-           * bytes; splitting it with a short inter-chunk gap keeps the console input
-           * buffer from overflowing. Small bodies still go out in a single write. Each
-           * write advances lastWin32WriteAt so the submit settle-gate keeps waiting until
-           * the final segment is out and echoed.
-           *
-           * FIX-B-v2: a body that contains an embedded newline cannot be written raw —
-           * on the real win32 Ink/ConPTY composer each '\n' SUBMITS the preceding line as
-           * its own entry, truncating the prompt to only the tail fragment. So a
-           * newline-bearing body is rewritten so its embedded newlines never submit:
-           *   - 'paste' (default): wrap the body in a bracketed-paste (ESC[200~ … ESC[201~)
-           *     — the composer takes the whole thing, newlines and all, as pasted text.
-           *   - 'soft_newline': replace each embedded newline with a non-submitting
-           *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
-           * The trailing submit CR is NOT written here — it stays separate and is fired
-           * later by scheduleVerifiedSubmit (concern (A)). The bracketed-paste markers are
-           * written as their own atomic segments (never chunked), so chunking can never
-           * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
-           */
-          writeWin32Body(text) {
-            if (this.win32WriteTimer) {
-              clearTimeout(this.win32WriteTimer);
-              this.win32WriteTimer = null;
-            }
-            const hasNewline = /\r?\n/.test(text);
-            const mode = resolveWin32SubmitMode();
-            let segments;
-            if (!hasNewline) {
-              segments = chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS);
-            } else if (mode === "soft_newline") {
-              const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
-              segments = chunkPreservingSurrogates2(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
-            } else {
-              segments = [
-                WIN32_BRACKETED_PASTE_OPEN,
-                ...chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS),
-                WIN32_BRACKETED_PASTE_CLOSE
-              ];
-            }
-            if (segments.length <= 1) {
-              this.markBodyWrite();
-              this.adapter.send_keys(segments[0] ?? text);
-              return;
-            }
-            let idx = 0;
-            const writeNext = () => {
-              this.win32WriteTimer = null;
-              if (idx >= segments.length) return;
-              this.markBodyWrite();
-              this.adapter.send_keys(segments[idx]);
-              idx += 1;
-              if (idx < segments.length) {
-                this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
-              }
-            };
-            writeNext();
-          }
-          /**
-           * win32 submit. Two phases:
-           *
-           *  Phase 1 (echo-gate): hold the first CR until the body text is CONFIRMED in the
-           *  composer (its whitespace-collapsed tail appears in the rendered screen) AND the
-           *  PTY output is then quiet for WIN32_SUBMIT_SETTLE_MS (the full, possibly multi-KB
-           *  / multiline body has finished arriving). This replaces a bare output-quiet
-           *  settle: an early write that races claude's boot is buffered, not dropped, so the
-           *  screen can go quiet with the body NOT YET in the composer — a quiet-only gate
-           *  would then fire a CR into an empty composer (no submit). Waiting on the echo
-           *  closes that. Honors an initial minimum delay and a generous WIN32_ECHO_MAX_WAIT_MS
-           *  last-resort blind fire so a body that truly never confirms still submits (carried
-           *  by phase 2) rather than hanging. A settled session echoes immediately → no delay.
-           *
-           *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
-           *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
-           *  newline) resend, up to WIN32_SUBMIT_MAX_RESENDS. The first CR always fires
-           *  (a stale/edge status never suppresses it); resends are gated on still being
-           *  idle and stop the instant the agent leaves idle (submitted → generating /
-           *  approval). This preserves the win32 lone-CR-swallow handling.
-           */
-          scheduleVerifiedSubmit(submitKey, initialDelayMs, body, opts) {
-            if (this.win32SubmitTimer) {
-              clearTimeout(this.win32SubmitTimer);
-              this.win32SubmitTimer = null;
-            }
-            const startedAt = Date.now();
-            const normBody = normalizeForEcho(body);
-            const headProbe = normBody.slice(0, WIN32_ECHO_PROBE_CHARS);
-            const tailProbe = normBody.slice(-WIN32_ECHO_PROBE_CHARS);
-            const bodyEchoed = () => {
-              if (!normBody) return true;
-              const visible = normalizeForEcho(this.adapter.snapshot());
-              if (!visible.includes(tailProbe)) return false;
-              const full = normalizeForEcho(this.adapter.snapshotWithScrollback());
-              return full.includes(headProbe);
-            };
-            const fire = (attempt) => {
-              this.win32SubmitTimer = null;
-              this.adapter.send_keys(submitKey);
-              if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) {
-                if (this.currentStatus() === "idle") {
-                  this.submitUnconfirmed = true;
-                  LOG.error(
-                    "FsmDriver",
-                    `[${this.specTag()}] SUBMIT NOT CONFIRMED after ${WIN32_SUBMIT_MAX_RESENDS} submit-key attempts (len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). The message is likely still sitting unsent in the composer \u2014 the agent is NOT working on it.`
-                  );
-                }
-                return;
-              }
-              this.win32SubmitTimer = setTimeout(() => {
-                if (this.currentStatus() !== "idle") {
-                  this.win32SubmitTimer = null;
-                  if (attempt > 0) {
-                    LOG.warn("FsmDriver", `[${this.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
-                  }
-                  return;
-                }
-                fire(attempt + 1);
-              }, WIN32_SUBMIT_RESEND_GAP_MS);
-            };
-            const waitForEcho = () => {
-              this.win32SubmitTimer = null;
-              const now = Date.now();
-              const quietFor = now - this.lastWin32InputActivityAt();
-              const waited = now - startedAt;
-              const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
-              if (opts?.skipEchoGate ? true : bodyEchoed() && settled) {
-                fire(0);
-                return;
-              }
-              if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
-                LOG.warn(
-                  "FsmDriver",
-                  `[${this.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) \u2014 firing submit key blind; resend net will verify.`
-                );
-                fire(0);
-                return;
-              }
-              this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
-            };
-            if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForEcho, initialDelayMs);
-            else waitForEcho();
           }
           handleClickControl(controlId, payload) {
             const ctl = (this.spec.control_bar ?? []).find((c) => c.id === controlId);
@@ -109770,6 +109889,29 @@ ${text}` : text;
               return { status: "delivered" };
             }
             this.driver.dispatch({ kind: "send_message", text, bracketedPaste: _opts?.bracketedPaste });
+          }
+          /**
+           * SEND-NOW-AGENT-QUEUE: write a body into a GENERATING composer as a split
+           * write (text, gap, submit key) so the CLI's own input queue takes it,
+           * WITHOUT interrupting the turn in flight. POSIX only.
+           *
+           * See ISpecDriver.sendMessageDuringGeneration for the live A/B that
+           * distinguishes this from the retired force-inject, and for why win32 is
+           * refused. A driver that does not implement it (an out-of-tree ISpecDriver,
+           * a test double) reports `not_supported` — never a silent success, because
+           * the caller's whole contract here is that `accepted: false` means nothing
+           * was written and its previous fallback is safe to take.
+           */
+          sendMessageDuringGeneration(text, bracketedPaste) {
+            if (typeof this.driver.sendMessageDuringGeneration !== "function") {
+              return { accepted: false, reason: "not_supported" };
+            }
+            LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text.length})`);
+            const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste);
+            if (!outcome.accepted) {
+              LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text.length})`);
+            }
+            return outcome;
           }
           /**
            * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
@@ -148765,6 +148907,68 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_approval_utils();
     init_logger();
     init_interrupt_and_deliver();
+    init_logger();
+    function describe3(reason) {
+      switch (reason) {
+        case "platform_unsupported":
+          return "Send now without interrupting is not available on Windows yet.";
+        case "not_supported":
+          return "This session does not support sending while the agent is working.";
+        case "not_generating":
+          return "The agent is not generating right now.";
+        case "send_in_flight":
+          return "A previous message is still being submitted.";
+        case "not_ready":
+          return "The session is not ready to accept input yet.";
+        case "duplicate":
+          return "That message is already being delivered.";
+        default:
+          return "The message could not be handed to the agent queue.";
+      }
+    }
+    async function sendNowIntoAgentQueue(adapter, text) {
+      if (typeof adapter.sendMessageDuringGeneration !== "function") {
+        return {
+          ok: false,
+          reason: "not_supported",
+          message: describe3("not_supported"),
+          // Nothing was claimed, so nothing needed restoring: the driver still
+          // holds whatever it held before this call.
+          restored: true
+        };
+      }
+      const claimed = typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
+      const outcome = adapter.sendMessageDuringGeneration(text);
+      if (outcome.accepted) {
+        LOG.info(
+          "SendNowQueue",
+          `[${adapter.cliType}] handed to agent input queue (len=${text.length}, claimed=${claimed})`
+        );
+        return { ok: true, claimed };
+      }
+      let restored = claimed === 0;
+      if (claimed > 0 && typeof adapter.sendMessage === "function") {
+        try {
+          await adapter.sendMessage(text);
+          restored = true;
+        } catch (e) {
+          LOG.error(
+            "SendNowQueue",
+            `[${adapter.cliType}] FAILED to restore ${claimed} claimed send(s) after refusal (${outcome.reason}, len=${text.length}): ${e?.message}`
+          );
+        }
+      }
+      LOG.info(
+        "SendNowQueue",
+        `[${adapter.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text.length}, claimed=${claimed}, restored=${restored})`
+      );
+      return {
+        ok: false,
+        reason: outcome.reason,
+        message: describe3(outcome.reason),
+        restored
+      };
+    }
     init_chat_commands_shared();
     var RECENT_SEND_WINDOW_MS = 1200;
     var HERMES_CLI_STARTING_SEND_SETTLE_MS = 2e3;
@@ -148899,6 +149103,35 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             assertTextOnlyInput(provider, input);
             if (!text) return { success: false, error: "text required for PTY send" };
             await waitOnceForFreshHermesCliStart(adapter, _log);
+            if (args?.sendNow === true) {
+              const queued2 = await sendNowIntoAgentQueue(adapter, text);
+              if (!queued2.ok) {
+                return {
+                  success: false,
+                  sent: false,
+                  queuedWithAgent: false,
+                  reason: queued2.reason,
+                  error: queued2.message,
+                  // Tells the pane whether the body is still held by the
+                  // driver. `restored: false` means nothing holds it —
+                  // the bubble is the only remaining copy.
+                  restored: queued2.restored
+                };
+              }
+              const target2 = getTargetInstance(h, args);
+              if (target2?.category === "cli" && target2.type === adapter.cliType && typeof target2.recordAcknowledgedUserInput === "function") {
+                target2.recordAcknowledgedUserInput(input);
+              }
+              return {
+                ..._logSendSuccess(`${transport}-adapter-agent-queue`, adapter.cliType),
+                // `submitted` is deliberately false: the bytes are in the
+                // agent's queue, not answered. Reporting a submit here
+                // would repeat the exact lie 6cca365b was retired for.
+                submitted: false,
+                queuedWithAgent: true,
+                claimed: queued2.claimed
+              };
+            }
             const wantsInterrupt = args?.interrupt === true || args?.force === true || args?.forceSend === true;
             if (wantsInterrupt) {
               const outcome = await interruptAndDeliver(adapter, text);
