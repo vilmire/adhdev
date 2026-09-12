@@ -1544,8 +1544,8 @@
         "notDeliveredAria": "Not delivered",
         "sendNow": "Send now",
         "sending": "Sending…",
-        "sendNowAria": "Send now by interrupting the agent's current turn",
-        "sendNowTitle": "Interrupt the agent's current turn and send this message now. The turn in progress will be lost.",
+        "sendNowAria": "Send now to the agent's queue, without interrupting its current turn",
+        "sendNowTitle": "Send this message to the agent now. It goes into the agent's own queue and is answered next — the turn in progress keeps running.",
         "cancelQueued": "Cancel",
         "cancelQueuedAria": "Cancel this queued message",
         "cancelQueuedTitle": "Remove this message from the queue. It will not be sent to the agent."

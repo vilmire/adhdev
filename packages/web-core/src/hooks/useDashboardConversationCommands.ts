@@ -59,14 +59,16 @@ export interface DashboardConversationCommands {
     isFocusingAgent: boolean
     handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     /**
-     * SEND-NOW: interrupt the agent's turn in flight so the already-queued
-     * optimistic bubble is delivered as a genuine new turn. Takes no message —
+     * SEND-NOW-AGENT-QUEUE: hand the already-queued optimistic bubble to the
+     * AGENT'S OWN input queue while it is still generating, so it is answered as
+     * the next turn WITHOUT interrupting the turn in flight. Takes no message —
      * it re-sends the parked body the bubble is showing.
      *
      * Replaced `handleForceSendChat`, whose daemon-side implementation
      * (`forceSendMessage`) never existed: the type declared it, two call sites
      * invoked it, and every adapter fell through to a plain send. The button was
-     * wired to nothing.
+     * wired to nothing. POSIX only; a refusal is reported and never escalated to
+     * an interrupt. See the handler for the full derivation.
      */
     handleSendNowQueued: (pendingId?: string) => Promise<boolean>
     /**
@@ -308,11 +310,20 @@ function buildSendChatPayload(
     message: string,
     attachments: ImageAttachment[] | undefined,
     activeConv: ActiveConversation,
-    options: { interrupt?: boolean } = {},
+    options: { interrupt?: boolean; sendNow?: boolean } = {},
 ): Record<string, unknown> {
     const providerArgs = getProviderArgs(activeConv)
+    // ★ SEND-NOW-AGENT-QUEUE and `interrupt` are mutually exclusive flags, not
+    // two spellings of one intent: `sendNow` preserves the turn in flight and
+    // hands the body to the agent's own input queue, `interrupt` destroys that
+    // turn. Emitting both would let a daemon pick either one, and the two
+    // outcomes differ by whether the owner loses the answer they are waiting
+    // for — so `sendNow` wins and `interrupt` is dropped when both are set.
+    const modeArgs = options.sendNow
+        ? { sendNow: true }
+        : (options.interrupt ? { interrupt: true } : {})
     if (!attachments || attachments.length === 0) {
-        return { message, ...(options.interrupt ? { interrupt: true } : {}), ...providerArgs }
+        return { message, ...modeArgs, ...providerArgs }
     }
 
     // Structured input envelope — matches daemon's normalizeInputEnvelope contract
@@ -332,7 +343,7 @@ function buildSendChatPayload(
             parts,
             textFallback: message,
         },
-        ...(options.interrupt ? { interrupt: true } : {}),
+        ...modeArgs,
         ...providerArgs,
     }
 }
@@ -609,13 +620,26 @@ export function useDashboardConversationCommands({
      * actually pressed. Omitting it keeps the historical behaviour (act on the
      * oldest queued entry — the one the daemon will drain next).
      *
-     * ★ This does NOT write the body into the generating PTY. That path was
-     * retired after measured data loss (oss 6cca365b): the bytes are never
-     * consumed as a turn while the caller is told the send succeeded. The
-     * daemon's `interrupt` flag runs the only supported sequence — press the
-     * provider's own stop key, wait for busy→idle, then deliver as a genuine
-     * new turn. The turn in flight is DISCARDED, which is inherent to steering
-     * a running agent and is stated on the button itself.
+     * ★ SEND-NOW-AGENT-QUEUE: this hands the body to the AGENT'S OWN input queue
+     * and does NOT interrupt. The turn in flight keeps running and finishes
+     * normally; the CLI answers this body as the next turn (claude-cli shows
+     * "Press up to edit queued messages"). That is what the owner wants when
+     * they add a follow-up thought mid-turn — losing the answer they are waiting
+     * for is the outcome they avoided by not pressing stop.
+     *
+     * ★ This is NOT the retired force-inject. oss 6cca365b removed a path that
+     * wrote `text + '\r'` as ONE write and was told it had sent something the
+     * CLI never consumed. Live A/B (2026-09-12, claude-cli v2.1.220) showed the
+     * failure belonged to that combined write: the same body written as text,
+     * then a gap, then the submit key IS taken by the CLI's queue. The daemon's
+     * `sendNow` flag performs only that split shape, on POSIX only — win32's
+     * ConPTY absorbs a delayed lone CR and has not been re-measured, so it
+     * refuses rather than guessing.
+     *
+     * ★ A refusal does NOT fall back to interrupting. The daemon reports why and
+     * the bubble stays queued for the ordinary idle drain, because silently
+     * destroying a turn the owner did not ask to destroy is worse than the
+     * message waiting a little longer.
      *
      * Takes no message argument on purpose: it re-sends the body the bubble is
      * already showing, so the two can never disagree.
@@ -656,23 +680,37 @@ export function useDashboardConversationCommands({
             const raw = await sendDaemonCommand(
                 routeTarget,
                 'send_chat',
-                buildSendChatPayload(message, undefined, activeConv, { interrupt: true }),
+                buildSendChatPayload(message, undefined, activeConv, { sendNow: true }),
             )
             const res = unwrapCommandResult(raw)
 
-            // A failed interrupt means the body was NOT written — the daemon
-            // refuses rather than guessing (no stop key, session not
-            // generating, or idle never observed). Keep the bubble queued so
-            // the ordinary drain still delivers it, and say why.
+            // The daemon refused — nothing was written. Reasons range from
+            // "never possible here" (win32, or a driver without the split
+            // write) to "not right now" (the session stopped generating, a
+            // previous send is still submitting). Either way the bubble STAYS
+            // queued so the ordinary idle drain still delivers it, and the
+            // owner is told why rather than watching a button do nothing.
             if (res?.success === false) {
                 setSendFeedbackMessage(getInlineSendFailureMessage(new Error(res?.error || 'Send now failed')))
                 return false
             }
 
-            // An interrupt can still end re-parked (the session re-entered busy
-            // between the idle observation and the write). Report that honestly
-            // rather than clearing the queued badge on a delivery that did not
-            // happen.
+            // ★ Handed to the AGENT's own queue. The body left our FIFO and is
+            // in the CLI, so the queued badge is dropped — but it has NOT been
+            // answered yet, and the bubble stays until the daemon's echo retires
+            // it, exactly like an ordinary send awaiting its turn.
+            if (res?.queuedWithAgent === true) {
+                setLastSendQueued(false)
+                updatePendingMessages(prev => prev.map(entry => (
+                    entry.id === targetId ? { ...entry, queued: false } : entry
+                )))
+                setSendFeedbackMessage(null)
+                return true
+            }
+
+            // Parked in the daemon FIFO rather than delivered. Report that
+            // honestly rather than clearing the queued badge on a delivery that
+            // did not happen.
             if (isQueuedSendResult(res)) {
                 setLastSendQueued(true)
                 updatePendingMessages(prev => prev.map(entry => (

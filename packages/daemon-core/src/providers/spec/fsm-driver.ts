@@ -203,6 +203,19 @@ export interface ISpecDriver {
     /** SEND-NOW-WRONG-ITEM: end a reserveDrain() early and drain immediately if
      *  the machine is idle. Safe to call when no reservation is held. */
     releaseDrain?(): void;
+    /**
+     * SEND-NOW-AGENT-QUEUE: write a body into a GENERATING composer as a SPLIT
+     * write (text, gap, submit key) so the CLI's own input queue takes it,
+     * WITHOUT interrupting the turn in flight. POSIX only.
+     *
+     * ★ The full derivation — the live A/B that separates this from the retired
+     * atomic force-inject, why win32 is refused, and why the gate opened here is
+     * exactly one — lives with the types in ./submit-policy.ts
+     * (QueuedWriteOutcome). Read it before widening anything here.
+     *
+     * Optional so test doubles implementing ISpecDriver need not provide it.
+     */
+    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): QueuedWriteOutcome;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -432,6 +445,7 @@ const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
 const WIN32_ECHO_PROBE_CHARS = 16;
 const WIN32_ECHO_MAX_WAIT_MS = 20_000;
 
+
 // Submit policy (thresholds, delay resolution, win32 paste/newline encoding,
 // echo normalization, drain ceiling) was pure-moved to ./submit-policy.ts
 // (file-size gate). Re-exported below so existing imports from this module
@@ -449,7 +463,13 @@ import {
     resolveSubmitDelayMs,
     resolveWin32SubmitMode,
     shouldUseVerifiedSubmit,
+    MID_GENERATION_SUBMIT_MIN_GAP_MS,
 } from './submit-policy.js';
+import type { QueuedWriteOutcome } from './submit-policy.js';
+export {
+    MID_GENERATION_SUBMIT_MIN_GAP_MS,
+} from './submit-policy.js';
+export type { QueuedWriteOutcome, QueuedWriteRefusal } from './submit-policy.js';
 export {
     SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS,
     VERIFIED_SUBMIT_MIN_CHARS,
@@ -774,6 +794,51 @@ export class FsmDriver implements ISpecDriver {
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
     sendMessageWithDisposition(text: string, bracketedPaste?: boolean): SendDisposition {
         return this.handleSendMessage(text, bracketedPaste);
+    }
+
+    /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
+        // ★ win32 first, before any state is read, so the refused platform can
+        // never reach a write regardless of what the FSM believes. The delayed
+        // lone CR that makes this work on POSIX is the same shape ConPTY absorbs
+        // as a literal newline (see writeWin32Body / scheduleVerifiedSubmit), and
+        // no win32 machine was available to re-measure it.
+        if (process.platform === 'win32') {
+            LOG.info('FsmDriver', `[${this.specTag()}] mid-generation send refused — win32 split write unverified`);
+            return { accepted: false, reason: 'platform_unsupported' };
+        }
+        if (!this.readySeenOnce) return { accepted: false, reason: 'not_ready' };
+        // Only a GENERATING session belongs here. At idle the ordinary path is
+        // strictly better (a real turn, answered now), and an approval modal is
+        // not a composer at all — writing a prompt into it would answer the modal
+        // with garbage. `currentStatus()` returns 'approval' for a parked session,
+        // so both non-generating cases are refused by this one check.
+        if (this.currentStatus() !== 'generating') return { accepted: false, reason: 'not_generating' };
+        // SEND-OVERLAP still applies. The gate this method bypasses is the IDLE
+        // requirement, not the in-flight latch: a body written on top of another
+        // body's unconsumed composer line braids the two, which is the same
+        // defect whether or not the agent is generating.
+        if (this.isSendInFlight()) return { accepted: false, reason: 'send_in_flight' };
+        if (this.isDuplicateResend(text)) {
+            LOG.info('FsmDriver', `[${this.specTag()}] mid-generation send suppressed — duplicate resend (len=${text.length})`);
+            return { accepted: false, reason: 'duplicate' };
+        }
+
+        LOG.info(
+            'FsmDriver',
+            `[${this.specTag()}] mid-generation split write — agent input queue (len=${text.length})`,
+        );
+        // ★ The duplicate-gate record is written, but the in-flight latch is NOT
+        // taken. `sendInFlight` means "the composer holds a body whose submit the
+        // FSM has not yet confirmed by LEAVING idle" — and this session is not at
+        // idle and will not become idle on account of this write. Taking the latch
+        // would therefore hold it until its SEND_IN_FLIGHT_MAX_MS self-expiry and
+        // stall the ordinary FIFO drain for that whole window, blocking the very
+        // queue the owner is trying to get ahead of. drainPendingSends' own
+        // `status !== 'idle'` gate already prevents a concurrent write here.
+        this.recentSendHashes.set(hashSendText(text), Date.now());
+        this.actuallySendMessage(text, bracketedPaste, { midGeneration: true });
+        return { accepted: true };
     }
 
     /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
@@ -1788,11 +1853,43 @@ export class FsmDriver implements ISpecDriver {
         return this.adapter.snapshotWithScrollback();
     }
 
-    private actuallySendMessage(text: string, bracketedPaste?: boolean): void {
+    private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean }): void {
         const sm = this.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.opts.manifestSendDelayMs);
+
+        // SEND-NOW-AGENT-QUEUE: a mid-generation write takes the PLAIN split path
+        // — body write, timed gap, submit key — and never the echo-verified one,
+        // for two reasons that both come from the session being busy:
+        //
+        //  (a) The echo-gate releases its CR only once the screen has been QUIET
+        //      for WIN32_SUBMIT_SETTLE_MS. A generating agent streams output
+        //      continuously, so that condition is not merely slow to satisfy —
+        //      it is structurally false for the whole turn. The CR would be held
+        //      until the WIN32_ECHO_MAX_WAIT_MS (20s) blind-fire backstop, which
+        //      for a "Send now" press is indistinguishable from the button doing
+        //      nothing.
+        //  (b) The verified-resend net re-fires the submit key while the FSM
+        //      reads 'idle'. Here it never does, so the net cannot help anyway,
+        //      and its SUBMIT-NOT-CONFIRMED error branch would be evaluated
+        //      against a status that means something else entirely.
+        //
+        // The plain path is also exactly the shape that was measured to work:
+        // send_keys(text), a >=SUBMIT_DELAY_FLOOR_MS gap, send_keys(submit_key).
+        // perChar typing simulation is skipped — it would stretch the body write
+        // across the very turn boundary we are racing.
+        if (opts?.midGeneration) {
+            this.adapter.send_keys(text);
+            // ★ The CR MUST be a separate, later write. An atomic `text + '\r'`
+            // is the retired force-inject shape and is NOT consumed mid-turn
+            // (see ISpecDriver.sendMessageDuringGeneration for the A/B).
+            // schedulePlainSubmit is used unconditionally — never the
+            // `beforeSubmit === 0` immediate branch below — so the gap always
+            // exists even if a spec declares no delay.
+            this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS));
+            return;
+        }
 
         // POSIX-IMAGE-PASTE (multi-image attachment loss): a body carrying
         // materialized image paths is wrapped in a bracketed-paste region when the

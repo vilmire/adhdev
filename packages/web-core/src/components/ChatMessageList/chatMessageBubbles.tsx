@@ -693,9 +693,11 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                                     disabled={isSendingNow}
                                     className="chat-bubble-send-now"
                                     aria-label={t('chat.sendNowAria')}
-                                    // The interrupt DISCARDS the turn in flight — that is
-                                    // inherent to steering a running agent, not a defect,
-                                    // so it is stated up front rather than after the fact.
+                                    // SEND-NOW-AGENT-QUEUE: the body goes into the AGENT's
+                                    // own input queue and the turn in flight keeps running.
+                                    // The tooltip says so up front, because "send now"
+                                    // alone would leave the owner guessing whether they
+                                    // are about to lose the answer being written.
                                     title={t('chat.sendNowTitle')}
                                 >
                                     {isSendingNow ? t('chat.sending') : t('chat.sendNow')}

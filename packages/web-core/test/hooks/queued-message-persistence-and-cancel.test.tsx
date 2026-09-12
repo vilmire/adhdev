@@ -432,12 +432,14 @@ describe('SEND-NOW stays correct with several entries queued', () => {
         await queueBodies(h, ['first', 'second'])
 
         const second = h.get().pendingLocalMessages.find((e: any) => e.content === 'second')
-        send.mockResolvedValueOnce({ success: true, sent: true, submitted: true, interrupted: true })
+        send.mockResolvedValueOnce({ success: true, sent: true, queuedWithAgent: true })
         await act(async () => { await h.get().handleSendNowQueued(second.id) })
 
-        const interruptCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.interrupt === true)
-        expect(interruptCall).toBeTruthy()
-        expect(interruptCall![2].message).toBe('second')
+        // SEND-NOW-AGENT-QUEUE: the press routes through `sendNow`, not
+        // `interrupt`. What this test pins is which ENTRY was acted on.
+        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.sendNow === true)
+        expect(sendNowCall).toBeTruthy()
+        expect(sendNowCall![2].message).toBe('second')
     })
 
     it('falls back to the oldest queued entry when no id is given (legacy callers)', async () => {
@@ -445,10 +447,10 @@ describe('SEND-NOW stays correct with several entries queued', () => {
         const h = renderHarness(send)
         await queueBodies(h, ['oldest', 'newest'])
 
-        send.mockResolvedValueOnce({ success: true, sent: true, submitted: true, interrupted: true })
+        send.mockResolvedValueOnce({ success: true, sent: true, queuedWithAgent: true })
         await act(async () => { await h.get().handleSendNowQueued() })
 
-        const interruptCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.interrupt === true)
-        expect(interruptCall![2].message).toBe('oldest')
+        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.sendNow === true)
+        expect(sendNowCall![2].message).toBe('oldest')
     })
 })

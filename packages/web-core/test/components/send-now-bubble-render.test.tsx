@@ -51,8 +51,14 @@ describe('SEND-NOW bubble affordance', () => {
         expect(html).toContain('urgent: stop')
         expect(html).toContain('Waiting to send')
         expect(html).toContain('Send now')
-        // The lost turn is disclosed on the control itself, before the press.
-        expect(html).toContain('turn in progress will be lost')
+        // ★ SEND-NOW-AGENT-QUEUE: what the press actually does is disclosed on
+        // the control itself, before the press. The body goes to the AGENT's own
+        // queue and the turn in flight KEEPS RUNNING — the opposite of the
+        // interrupt semantics this button used to carry, so the tooltip must say
+        // so rather than leaving the owner to assume either one.
+        // (The apostrophe in "agent's" renders HTML-escaped, so the probe avoids it.)
+        expect(html).toContain('own queue and is answered next')
+        expect(html).toContain('turn in progress keeps running')
     })
 
     it('renders NEITHER on a pending bubble that was submitted, not queued', () => {
