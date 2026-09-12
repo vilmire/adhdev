@@ -16,6 +16,7 @@ import {
     buildMeshActiveWork,
     buildMeshAsyncRefineJobs,
     buildMeshMagiActivity,
+    compactMagiActivityGroup,
     summarizeMeshMagiActivity,
     buildMeshNodeProbeFreshness,
     buildMeshSchedulingRuntime,
@@ -959,7 +960,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         if (magiActivity.length > 0) {
             const fold = summarizeMeshMagiActivity(magiActivity);
             if (compact) {
-                if (fold.groups.length > 0) response.magiActivity = fold.groups;
+                if (fold.groups.length > 0) response.magiActivity = fold.groups.map(compactMagiActivityGroup);
                 response.magiActivitySummary = {
                     total: fold.total,
                     byStatus: fold.byStatus,

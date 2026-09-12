@@ -2382,10 +2382,15 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
   assert.equal(main.branchConvergence.needsConvergence, false);
   assert.equal(feature.branchConvergence.status, 'pushed_feature_branch_needs_merge');
   assert.equal(feature.branchConvergence.needsConvergence, true);
-  assert.match(feature.branchConvergence.nextStep, /do not report the task as fully complete/);
+  // Compact mode drops branchConvergence.nextStep once the identical sentence is
+  // already present in nextStepHints[] (mesh-compact.ts dedup) — assert on the
+  // hint instead of the now-elided duplicate copy.
+  assert.match(feature.nextStepHints.join(' '), /do not report the task as fully complete/);
+  assert.equal(feature.branchConvergence.nextStep, undefined);
   assert.equal(worktree.branchConvergence.status, 'cleanup_candidate');
   assert.equal(worktree.branchConvergence.needsConvergence, true);
-  assert.match(worktree.branchConvergence.nextStep, /mesh_refine_node/);
+  assert.match(worktree.nextStepHints.join(' '), /mesh_refine_node/);
+  assert.equal(worktree.branchConvergence.nextStep, undefined);
 
   assert.equal(status.branchConvergenceSummary.needsFollowUp, true);
   assert.equal(status.branchConvergenceSummary.unresolvedCount, 2);

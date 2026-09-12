@@ -15,15 +15,23 @@ import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mes
 // motivated this was mesh_status ~76KB and mesh_view_queue ~73KB exceeding the MCP
 // token cap. Compact must stay well under the cap; verbose stays unbounded/full.
 //
-// Raised 25_000 -> 60_000 alongside the node byte budgets. There is no hard byte
-// limit in the MCP SDK or the IPC transport — this is token-cost self-regulation,
-// and the old 25KB forced the fold to evict nodes on a 23-node mesh (20 worktrees +
-// 3 machines), which is the real operating shape. Folding costs more than the bytes
-// it saves: a folded node keeps only its id, losing the daemonId a deploy roster
-// needs. 60_000 leaves headroom over the measured 23-node worst case (~45KB).
-const COMPACT_BUDGET = 60_000;
+// History: 25_000 -> 60_000 (aiming to zero-fold a synthetic 23-node worst case) ->
+// 25_000 (2026-09-12, reverted). The 60_000 raise was measured only against the
+// node array in isolation; it did not account for the FIXED top-level sections
+// (daemonQuotas, magiActivity claim text, asyncRefineJobs, pendingCoordinatorEvents,
+// missions, …) that share the same output-token cap. Live proof it was too high:
+// the owner's real mesh_status (9 nodes, well under the "23-node worst case" this
+// was tuned for) measured ~59KB and was rejected by the MCP host's own output-token
+// cap. 25_000 restores real headroom under that cap; see COMPACT_DETAILED_NODES_BYTE_BUDGET
+// / COMPACT_NODES_TOTAL_BYTE_BUDGET (mesh-tools-internal.ts) for the paired node
+// budgets that were lowered alongside this.
+const COMPACT_BUDGET = 25_000;
 
-// The operating target: 20 worktrees + 3 machines must render with ZERO folding.
+// The historical "worst case" shape this suite stresses: 20 dirty worktrees + 3
+// machines, all maximally noteworthy. At the restored budget this no longer
+// zero-folds (see the discoverability assertion below) — some worktrees degrade to
+// minimal id-only stubs, addressable via verbose=true. That degradation is the
+// intended pressure valve for staying under the real MCP token cap, not a bug.
 const TARGET_WORKTREES = 20;
 const TARGET_MACHINES = 3;
 const TARGET_NODES = TARGET_WORKTREES + TARGET_MACHINES;
@@ -181,7 +189,7 @@ function buildMachinesAndWorktreesCtx(meshId: string) {
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-0', coordinatorHostname: 'coord-host' } };
 }
 
-test('mesh_status compact renders 20 worktrees + 3 machines with zero folding', async () => {
+test('mesh_status compact stays under budget with 20 dirty worktrees + 3 machines; every node id stays discoverable', async () => {
   const meshId = 'mesh-status-23-node-target';
   cleanupMesh(meshId);
   const { ctx } = buildMachinesAndWorktreesCtx(meshId);
@@ -189,16 +197,42 @@ test('mesh_status compact renders 20 worktrees + 3 machines with zero folding', 
     const compactStr = await meshStatus(ctx as any);
     const compact = JSON.parse(compactStr);
 
-    // The headline contract: the real operating shape folds NOTHING.
-    assert.equal(
-      compact.foldedNodes, undefined,
-      `23-node mesh must not fold any node; folded ${compact.foldedNodes?.count} (${JSON.stringify(compact.foldedNodes?.nodeIds)})`,
-    );
-    assert.equal(compact.nodes.length, TARGET_NODES, 'every node must be present in the array');
+    // The headline contract at the restored (real-cap-safe) budget: no node id is
+    // ever lost, even when the worst-case mesh forces some worktrees to fold to a
+    // minimal id-only stub. Every id must resolve either in nodes[] (detail or
+    // stub) or in foldedNodes.nodeIds — nothing becomes unaddressable.
+    const arrayIds = new Set((compact.nodes ?? []).map((n: any) => String(n.nodeId)));
+    const foldedIds = new Set((compact.foldedNodes?.nodeIds ?? []).map((id: any) => String(id)));
+    const allSeenIds = new Set([...arrayIds, ...foldedIds]);
+    assert.equal(allSeenIds.size, TARGET_NODES, 'every node id must remain discoverable in compact (array or foldedNodes)');
+    // Every machine node — pinned representative — must keep full detail, never
+    // degrade to a stub or fully fold, regardless of node-budget pressure.
+    for (let i = 0; i < TARGET_MACHINES; i++) {
+      const machineNode = (compact.nodes ?? []).find((n: any) => n.nodeId === `node-machine-${i}`);
+      assert.ok(machineNode, `machine node node-machine-${i} must stay in nodes[] (never folded)`);
+      assert.notEqual(machineNode.folded, true, `node-machine-${i} must keep full detail, not a stub`);
+    }
     assert.ok(
       compactStr.length < COMPACT_BUDGET,
       `compact 23-node mesh_status must stay under ${COMPACT_BUDGET} bytes; got ${compactStr.length}`,
     );
+
+    // Regression: branchConvergence.nextStep and nextStepHints carried the SAME
+    // sentence verbatim on every dirty/needs-convergence node in compact mode —
+    // pure duplication (~110 bytes × every dirty worktree). Compact must drop the
+    // redundant nextStep once the identical sentence is present in nextStepHints;
+    // the decision scalars (status/needsConvergence/reason) must still survive.
+    const detailedDirtyNode = (compact.nodes ?? []).find(
+      (n: any) => n && n.folded !== true && n.branchConvergence?.needsConvergence === true,
+    );
+    assert.ok(detailedDirtyNode, 'expected at least one detailed node with needsConvergence=true');
+    assert.ok(Array.isArray(detailedDirtyNode.nextStepHints) && detailedDirtyNode.nextStepHints.length > 0);
+    assert.equal(
+      detailedDirtyNode.branchConvergence.nextStep, undefined,
+      'compact must drop branchConvergence.nextStep once it is duplicated in nextStepHints',
+    );
+    assert.ok(typeof detailedDirtyNode.branchConvergence.status === 'string', 'decision scalars must survive the dedup');
+    assert.equal(detailedDirtyNode.branchConvergence.needsConvergence, true);
 
     // Budget accounting must measure the SAME format that is actually returned.
     // While mesh_status returned indented JSON, the node budget (which costs with

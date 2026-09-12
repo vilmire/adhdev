@@ -8,6 +8,7 @@ import {
     getMeshMagiActivityByGroup,
     RECENT_MAGI_CAP,
 } from '@adhdev/daemon-core';
+import { compactMagiActivityGroup } from '../src/tools/mesh-compact.js';
 
 // ─── deltaA: cross-replica git skew in synthesis ──
 
@@ -162,4 +163,48 @@ test('summarizeMeshMagiActivity caps recent synthesized groups to RECENT_MAGI_CA
     assert.equal(fold.groups.length, RECENT_MAGI_CAP);
     assert.equal(fold.byStatus.synthesized, RECENT_MAGI_CAP);
     assert.equal(fold.staleSynthesized, 4);
+});
+
+// ─── mesh_status compact fold: needsVerification/openQuestions claim text ──
+
+test('compactMagiActivityGroup truncates long needsVerification claims and openQuestions', () => {
+    const longClaim = 'x'.repeat(500);
+    const longQuestion = 'y'.repeat(500);
+    const group = {
+        consensusGroupId: 'magi_g1',
+        status: 'synthesized' as const,
+        needsVerification: [
+            { claim: longClaim, category: 'contested' },
+            { claim: 'short claim', category: 'agreed' },
+        ],
+        openQuestions: [longQuestion, 'short question'],
+        // Non-text fields must pass through untouched.
+        gitSkew: { skewed: true, distinctBranches: 2, branches: ['a', 'b'], divergentReplicas: 1 },
+        replicaCount: 3,
+    };
+    const compacted = compactMagiActivityGroup(group);
+
+    assert.ok(compacted.needsVerification[0].claim.length < longClaim.length, 'long claim must be truncated');
+    assert.ok(compacted.needsVerification[0].claim.endsWith('…'), 'truncated claim must be marked with an ellipsis');
+    assert.equal(compacted.needsVerification[0].category, 'contested', 'category must survive untouched');
+    assert.equal(compacted.needsVerification[1].claim, 'short claim', 'short claims must not be altered');
+
+    assert.ok(compacted.openQuestions[0].length < longQuestion.length, 'long openQuestion must be truncated');
+    assert.equal(compacted.openQuestions[1], 'short question');
+
+    assert.deepEqual(compacted.gitSkew, group.gitSkew, 'non-text fields must be untouched');
+    assert.equal(compacted.replicaCount, 3);
+
+    // Original object must not be mutated — compactMagiActivityGroup is a pure fold.
+    assert.equal(group.needsVerification[0].claim, longClaim, 'source group must not be mutated');
+});
+
+test('compactMagiActivityGroup is a no-op for a group with no long text', () => {
+    const group = {
+        consensusGroupId: 'magi_g2',
+        status: 'running' as const,
+        needsVerification: [{ claim: 'brief', category: 'agreed' }],
+    };
+    const compacted = compactMagiActivityGroup(group);
+    assert.deepEqual(compacted, group);
 });
