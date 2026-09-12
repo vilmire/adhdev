@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { fetchAntigravityQuota } from '../../src/quota/fetchers/antigravity';
+import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from '../../src/quota/fetchers/antigravity';
 import type {
     QuotaChildProcess,
     QuotaFetch,
@@ -935,5 +935,80 @@ describe('fetchAntigravityQuota', () => {
         expect(fetch.calls[0]).toBe(
             'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
         );
+    });
+});
+
+/**
+ * The renewal probe behind quota/refresh.ts's re-login recovery. It answers a
+ * question about a TIMESTAMP and runs on a schedule the user did not ask for,
+ * so the binding constraint is that it must not pull the live OAuth token into
+ * this process at all.
+ */
+describe('readAntigravityKeychainMtimeMs — metadata only', () => {
+    const MDAT_DUMP = [
+        'keychain: "/Users/someone/Library/Keychains/login.keychain-db"',
+        'class: "genp"',
+        'attributes:',
+        '    "acct"<blob>="antigravity"',
+        '    "cdat"<timedate>=0x32303236303532303033323431335A00  "20260520032413Z\\000"',
+        '    "mdat"<timedate>=0x32303236303931323036353434325A00  "20260912065442Z\\000"',
+        '    "svce"<blob>="gemini"',
+    ].join('\n');
+
+    it('★never passes -w, so `security` cannot print the password', async () => {
+        const spawn = stubSpawn(MDAT_DUMP);
+
+        await readAntigravityKeychainMtimeMs({
+            spawn: spawn.spawn,
+            env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin' } as NodeJS.ProcessEnv,
+        });
+
+        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls[0].command).toBe('/usr/bin/security');
+        // -w is the ONLY flag that makes find-generic-password emit the secret.
+        expect(spawn.calls[0].args).not.toContain('-w');
+        expect(spawn.calls[0].args).toEqual(
+            ['find-generic-password', '-s', 'gemini', '-a', 'antigravity'],
+        );
+    });
+
+    it('returns the mdat stamp, not cdat', async () => {
+        const spawn = stubSpawn(MDAT_DUMP);
+        const mtime = await readAntigravityKeychainMtimeMs({
+            spawn: spawn.spawn,
+            env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin' } as NodeJS.ProcessEnv,
+        });
+        expect(mtime).toBe(Date.parse('2026-09-12T06:54:42Z'));
+    });
+
+    it('resolves null — never throws — when the item is absent, and spends no other call', async () => {
+        const spawn = stubSpawn(null); // exit 44, the not-signed-in code
+        await expect(readAntigravityKeychainMtimeMs({
+            spawn: spawn.spawn,
+            env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin' } as NodeJS.ProcessEnv,
+        })).resolves.toBeNull();
+        expect(spawn.calls).toHaveLength(1);
+    });
+
+    it('resolves null when the spawn itself fails (no keychain, locked, missing binary)', async () => {
+        const throwingSpawn: QuotaSpawn = () => {
+            throw new Error('spawn /usr/bin/security ENOENT');
+        };
+        await expect(readAntigravityKeychainMtimeMs({
+            spawn: throwingSpawn,
+            env: { ADHDEV_ANTIGRAVITY_PLATFORM: 'darwin' } as NodeJS.ProcessEnv,
+        })).resolves.toBeNull();
+    });
+
+    it('touches NO credential store off darwin', async () => {
+        for (const platform of ['win32', 'linux', 'freebsd']) {
+            const spawn = stubSpawn(MDAT_DUMP);
+            const mtime = await readAntigravityKeychainMtimeMs({
+                spawn: spawn.spawn,
+                env: { ADHDEV_ANTIGRAVITY_PLATFORM: platform } as NodeJS.ProcessEnv,
+            });
+            expect(mtime, platform).toBeNull();
+            expect(spawn.calls, platform).toEqual([]);
+        }
     });
 });
