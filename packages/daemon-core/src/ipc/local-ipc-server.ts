@@ -19,7 +19,7 @@
 
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { LOG } from '../logging/logger.js';
+import { LOG, getLogLevel } from '../logging/logger.js';
 import { DAEMON_WS_PATH } from '../ipc-protocol.js';
 
 /** Parameters passed to `handleCommand` for each incoming ext:command frame. */
@@ -220,9 +220,10 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
             return;
         }
 
+        const handlerStartedAt = Date.now();
         try {
             const result = await opts.handleCommand({ command, args, requestId, ws });
-            ws.send(JSON.stringify({
+            const responseBody = JSON.stringify({
                 type: 'ext:command_result',
                 payload: {
                     requestId,
@@ -231,16 +232,60 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
                     error: result.error,
                     ...(result.extra || {}),
                 },
-            }));
+            });
+            writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
         } catch (error: any) {
-            ws.send(JSON.stringify({
+            const responseBody = JSON.stringify({
                 type: 'ext:command_result',
                 payload: {
                     requestId,
                     success: false,
                     error: error?.message || String(error),
                 },
-            }));
+            });
+            writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+        }
+    }
+
+    /**
+     * Diagnostic wrapper around the response `ws.send()` — surfaces requestId,
+     * handler duration, payload size and write outcome so a client-side timeout
+     * (mcp-server's IpcTransport) can be correlated against "did the daemon even
+     * finish/attempt to reply" instead of being a total black box. Debug-level
+     * (quiet by default); write failures/backpressure are warn-level regardless
+     * since those indicate the reply may never reach the client.
+     */
+    function writeResponse(
+        ws: WebSocket,
+        body: string,
+        command: string,
+        requestId: string,
+        handlerStartedAt: number,
+    ): void {
+        const handlerMs = Date.now() - handlerStartedAt;
+        if (ws.readyState !== WebSocket.OPEN) {
+            LOG.warn(logCategory, `response write skipped (socket not open): command='${command}' requestId=${requestId} handlerMs=${handlerMs} readyState=${ws.readyState}`);
+            return;
+        }
+        // bufferedAmount before the send tells us whether this write is stacking
+        // behind unflushed data already in the socket's outgoing buffer — the
+        // client-visible symptom of that is a reply that "arrives late" rather
+        // than "never arrives".
+        const bufferedBefore = ws.bufferedAmount;
+        try {
+            ws.send(body);
+        } catch (error: any) {
+            LOG.warn(logCategory, `response write failed: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} error=${error?.message || error}`);
+            return;
+        }
+        if (getLogLevel() === 'debug') {
+            const backpressured = bufferedBefore > 0 || ws.bufferedAmount > 0;
+            LOG.debug(logCategory, `response sent: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore} bufferedAfter=${ws.bufferedAmount}${backpressured ? ' backpressure=true' : ''}`);
+        } else if (bufferedBefore > 64 * 1024) {
+            // Meaningful backpressure even outside debug mode — the socket's
+            // write buffer was already >64KB before this send, so replies queued
+            // behind it are at real risk of missing the client's deadline.
+            LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
     }
 

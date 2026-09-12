@@ -159,6 +159,41 @@ interface PendingRequest {
   resolve: (value: any) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  command: string;
+  sentAt: number;
+}
+
+// ORPHAN-RESPONSE TRACKING (IPC timeout diagnostics): once a request's timeout
+// fires, its entry is removed from `pending` so a same-requestId response that
+// arrives afterward has nowhere to be correlated — it would previously be
+// silently dropped by the `if (!req) return;` guard in the message handler.
+// That silence is exactly the gap that makes "did the daemon's reply get lost
+// in transit, or did it just arrive late" unanswerable from logs alone. Record
+// timed-out requestIds (bounded, short-lived) so a late arrival can be logged
+// as an orphan with its actual lateness, instead of vanishing.
+const ORPHAN_TRACKING_TTL_MS = 60_000;
+const ORPHAN_TRACKING_MAX_ENTRIES = 500;
+interface TimedOutRequestInfo {
+  command: string;
+  timedOutAt: number;
+}
+const timedOutRequests = new Map<string, TimedOutRequestInfo>();
+
+function trackTimedOutRequest(requestId: string, command: string): void {
+  timedOutRequests.set(requestId, { command, timedOutAt: Date.now() });
+  if (timedOutRequests.size > ORPHAN_TRACKING_MAX_ENTRIES) {
+    // Evict the oldest entry (Map preserves insertion order) — a bounded ring
+    // rather than an unbounded leak if orphan responses never arrive.
+    const oldestKey = timedOutRequests.keys().next().value;
+    if (oldestKey !== undefined) timedOutRequests.delete(oldestKey);
+  }
+}
+
+/** Drop entries older than the TTL so the map can't accumulate forever. */
+function pruneTimedOutRequests(now: number): void {
+  for (const [requestId, info] of timedOutRequests) {
+    if (now - info.timedOutAt > ORPHAN_TRACKING_TTL_MS) timedOutRequests.delete(requestId);
+  }
 }
 
 const POOL_IDLE_EVICT_MS = 5 * 60_000;   // evict connections idle for >5 min
@@ -265,9 +300,23 @@ function getOrCreateConnection(
         return;
       }
       if (msg?.type !== 'ext:command_result') return;
-      const req = conn.pending.get(msg?.payload?.requestId);
-      if (!req) return;
-      conn.pending.delete(msg.payload.requestId);
+      const requestId = msg?.payload?.requestId;
+      const req = conn.pending.get(requestId);
+      if (!req) {
+        if (typeof requestId === 'string') {
+          const timedOut = timedOutRequests.get(requestId);
+          if (timedOut) {
+            timedOutRequests.delete(requestId);
+            const lateByMs = Date.now() - timedOut.timedOutAt;
+            // This is the decisive "lost vs late" signal: the daemon DID reply,
+            // just after the client had already given up and freed the slot —
+            // so it was a transport/scheduling delay, not a dropped frame.
+            console.error(`[ipc] orphan response: command='${timedOut.command}' requestId=${requestId} arrived ${lateByMs}ms after client timeout (ts=${new Date().toISOString()})`);
+          }
+        }
+        return;
+      }
+      conn.pending.delete(requestId);
       clearTimeout(req.timer);
       const payload = msg.payload;
       // A structured `result` means the responder actually processed the command
@@ -391,17 +440,28 @@ export class IpcTransport {
         return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
       }
 
+      const sentAt = Date.now();
       const timer = setTimeout(() => {
+        const pendingCountBeforeRemoval = conn.pending.size;
         conn.pending.delete(requestId);
+        const elapsedMs = Date.now() - sentAt;
         const error = new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`);
         // Tagged so the retry loop in sendIpcCommand can tell a TIMEOUT (the
         // freeze symptom, retryable for read-only probes) apart from a
         // semantic failure reply or a connection error (neither retried).
         (error as any).ipcTimeout = true;
+        // UTC ISO timestamp + requestId make this correlatable against the
+        // daemon's own local-ipc-server response-write log by requestId, even
+        // across separate log files/clocks. pendingCountBeforeRemoval helps
+        // distinguish "this one command stalled" from "the whole connection is
+        // backed up" (many requests timing out around the same moment).
+        console.error(`[ipc] timeout: command='${type}' requestId=${requestId} elapsedMs=${elapsedMs} pendingBeforeRemoval=${pendingCountBeforeRemoval} ts=${new Date().toISOString()}`);
+        pruneTimedOutRequests(Date.now());
+        trackTimedOutRequest(requestId, type);
         reject(error);
       }, timeoutMs);
 
-      conn.pending.set(requestId, { resolve, reject, timer });
+      conn.pending.set(requestId, { resolve, reject, timer, command: type, sentAt });
       conn.lastUsedAt = Date.now();
 
       if (conn.ready) {
