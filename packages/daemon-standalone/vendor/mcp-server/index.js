@@ -93969,21 +93969,21 @@ ${cleanBody}`;
         if (count > 0) parts.push(`${count} ${status}`);
       }
       const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
-      const ids = [];
-      for (const record2 of inputs.activeWork) {
-        const id = typeof record2?.taskId === "string" ? record2.taskId.trim() : "";
-        if (!id) continue;
-        ids.push(id.slice(0, TASK_ID_PREFIX_CHARS));
+      const entries = [];
+      const sorted = inputs.activeWork.filter((record2) => typeof record2?.taskId === "string" && record2.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+      for (const record2 of sorted) {
+        const id = record2.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries.push(`${id} ${record2.status}`);
       }
-      if (ids.length === 0) return clampToBound(head);
+      if (entries.length === 0) return clampToBound(head);
       let line = head;
       const shown = [];
-      for (let i = 0; i < ids.length; i++) {
-        const isLast = i === ids.length - 1;
-        const candidate = [...shown, ids[i]];
+      for (let i = 0; i < entries.length; i++) {
+        const isLast = i === entries.length - 1;
+        const candidate = [...shown, entries[i]];
         const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
         if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
-        shown.push(ids[i]);
+        shown.push(entries[i]);
         line = head + suffix;
       }
       if (shown.length === 0) return clampToBound(head);
@@ -94017,6 +94017,7 @@ ${cleanBody}`;
     var TASK_ID_PREFIX_CHARS;
     var ACTIVE_WORK_LEDGER_KINDS;
     var STATUS_RENDER_ORDER;
+    var STATUS_ACTIONABILITY_RANK;
     var init_mesh_notification_status_line = __esm2({
       "src/mesh/mesh-notification-status-line.ts"() {
         "use strict";
@@ -94035,15 +94036,16 @@ ${cleanBody}`;
           "task_question_pending"
         ];
         STATUS_RENDER_ORDER = [
-          "generating",
           "awaiting_approval",
           "awaiting_choice",
+          "failed",
+          "generating",
           "pending",
           "assigned",
           "finalizing",
-          "failed",
           "idle"
         ];
+        STATUS_ACTIONABILITY_RANK = Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i]));
       }
     });
     function findLiveCoordinators(components) {
