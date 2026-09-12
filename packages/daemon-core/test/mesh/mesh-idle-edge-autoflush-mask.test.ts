@@ -173,3 +173,108 @@ describe('coordinator idle-edge auto-flush — decides idle on RAW turn-state (A
     expect(getPendingMeshCoordinatorEvents(MESH_ID).length).toBe(0)
   })
 })
+
+// SESSION-ISOLATION. This idle auto-flush fast path drains for the whole
+// mesh/daemon (drainPendingMeshCoordinatorEvents(coordinatorMeshId, ...daemonIds)),
+// not for the one coordinator session whose idle edge just fired. Two coordinator
+// sessions for the SAME mesh can be live on the same daemon (e.g. two Claude Code
+// windows both running as mesh coordinators); before this fix, whichever session
+// went idle FIRST silently drained and injected an event that named a DIFFERENT
+// (targetCoordinatorSessionId) originating session — a completion dispatched by
+// coordinator A could be delivered into coordinator B's PTY instead.
+describe('coordinator idle-edge auto-flush — session isolation across siblings on the same daemon', () => {
+  const COORD_A = 'coord-session-A'
+  const COORD_B = 'coord-session-B'
+
+  beforeEach(() => {
+    try { __resetMeshRuntimeStoreForTests() } catch { /* best-effort */ }
+    try { __clearMeshPendingEventsForTests(MESH_ID) } catch { /* best-effort */ }
+  })
+
+  function sessionCoordinatorStub(sessionId: string) {
+    return {
+      category: 'cli' as const,
+      getState: () => ({
+        status: 'idle',
+        instanceId: sessionId,
+        settings: { meshCoordinatorFor: MESH_ID },
+      }),
+      getDrainStatus: () => 'idle' as const,
+      isModalParked: () => false,
+      onEvent: vi.fn(),
+    }
+  }
+
+  function wireTwoCoordinators(coordA: any, coordB: any): (event: Record<string, unknown>) => void {
+    let captured: ((event: any) => void) | undefined
+    const components = {
+      statusInstanceId: undefined,
+      instanceManager: {
+        onEvent: (cb: (event: any) => void) => { captured = cb },
+        getInstance: (id: string) => (id === COORD_A ? coordA : id === COORD_B ? coordB : undefined),
+        getByCategory: (cat: string) => (cat === 'cli' ? [coordA, coordB] : []),
+      },
+    } as any
+    setupMeshEventForwarding(components)
+    if (!captured) throw new Error('instanceManager.onEvent was never registered')
+    return captured
+  }
+
+  it('does not deliver a session-targeted completion into a sibling coordinator that happens to idle first', () => {
+    // Addressed to COORD_A specifically (as the fixed cli-manager.ts stamp now does).
+    queuePendingMeshCoordinatorEvent({
+      event: 'agent:generating_completed',
+      meshId: MESH_ID,
+      nodeLabel: 'worker-node',
+      nodeId: 'node-worker',
+      metadataEvent: { taskId: 'task-owned-by-a' },
+      coordinatorMessage: '[System] worker-node completed (owned by A)',
+      queuedAt: Date.now(),
+      targetCoordinatorSessionId: COORD_A,
+    })
+
+    const coordA = sessionCoordinatorStub(COORD_A)
+    const coordB = sessionCoordinatorStub(COORD_B)
+    const handler = wireTwoCoordinators(coordA, coordB)
+
+    // COORD_B goes idle FIRST — pre-fix, this fast path drained the whole mesh
+    // queue unconditionally and injected A's completion into B.
+    handler({ event: 'agent:generating_completed', instanceId: COORD_B })
+
+    expect(coordB.onEvent).not.toHaveBeenCalled()
+    // Re-queued (not lost) so COORD_A's own idle edge / the reconcile loop can
+    // still deliver it.
+    expect(getPendingMeshCoordinatorEvents(MESH_ID).length).toBe(1)
+
+    // COORD_A's own idle edge now delivers it correctly.
+    handler({ event: 'agent:generating_completed', instanceId: COORD_A })
+    expect(coordA.onEvent).toHaveBeenCalledTimes(1)
+    const [evt, data] = coordA.onEvent.mock.calls[0]
+    expect(evt).toBe('send_message')
+    expect(data.input.text).toContain('owned by A')
+    expect(getPendingMeshCoordinatorEvents(MESH_ID).length).toBe(0)
+  })
+
+  it('still broadcasts a session-less (legacy/broadcast) event to whichever coordinator idles first — single-coordinator behavior unaffected', () => {
+    queuePendingMeshCoordinatorEvent({
+      event: 'agent:generating_completed',
+      meshId: MESH_ID,
+      nodeLabel: 'worker-node',
+      nodeId: 'node-worker',
+      metadataEvent: { taskId: 'task-broadcast' },
+      coordinatorMessage: '[System] worker-node completed (broadcast)',
+      queuedAt: Date.now(),
+      // No targetCoordinatorSessionId — legacy/broadcast event.
+    })
+
+    const coordA = sessionCoordinatorStub(COORD_A)
+    const coordB = sessionCoordinatorStub(COORD_B)
+    const handler = wireTwoCoordinators(coordA, coordB)
+
+    handler({ event: 'agent:generating_completed', instanceId: COORD_B })
+
+    expect(coordB.onEvent).toHaveBeenCalledTimes(1)
+    expect(coordA.onEvent).not.toHaveBeenCalled()
+    expect(getPendingMeshCoordinatorEvents(MESH_ID).length).toBe(0)
+  })
+})

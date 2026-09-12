@@ -2085,6 +2085,11 @@ export class DaemonCliManager {
                                 // coordinator's reducer.
                                 ...(typeof meshContext.attemptId === 'string' && meshContext.attemptId ? { attemptId: meshContext.attemptId } : {}),
                                 ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
+                                // SESSION-ISOLATION: the originating coordinator SESSION, so this
+                                // worker's completion routes back to the exact dispatching session
+                                // rather than being consumed first-come by any coordinator idle on
+                                // this daemon (see attachMeshAssignment's coordinatorSessionId).
+                                ...(typeof meshContext.coordinatorSessionId === 'string' && meshContext.coordinatorSessionId ? { coordinatorSessionId: meshContext.coordinatorSessionId } : {}),
                             });
                         } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }
                         // DOUBLE-DISPATCH stamp guard: the instance manager refused this stamp because

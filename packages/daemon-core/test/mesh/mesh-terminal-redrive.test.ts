@@ -48,6 +48,7 @@ vi.mock('../../src/config/config.js', async (importOriginal) => {
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events-pending.js';
+import { buildMeshSystemMessage } from '../../src/mesh/mesh-events-utils.js';
 import {
     buildRedriveInjection,
     consumeRedriveEntry,
@@ -254,6 +255,31 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
 
         const genuineInjection = buildRedriveInjection(MESH, projectedTerminal(nextTaskId()));
         expect(genuineInjection!.metadataEvent).not.toHaveProperty('evidenceLevel');
+    });
+
+    it('always stamps a non-empty nodeLabel, with or without a nodeId — never renders "undefined has completed"', () => {
+        // Regression for the redrive injection omitting the (required)
+        // nodeLabel field: buildMeshSystemMessage interpolates it verbatim
+        // (`${args.nodeLabel} has completed its task…`), so an event built
+        // without a fallback here surfaces to the coordinator as the literal
+        // string "undefined has completed its task and is now idle".
+        const withNode = projectedTerminal(nextTaskId());
+        withNode.nodeId = 'node-redrive-123';
+        const withNodeInjection = buildRedriveInjection(MESH, withNode);
+        expect(withNodeInjection!.nodeLabel).toBe("Node 'node-redrive-123'");
+
+        const withoutNode = projectedTerminal(nextTaskId());
+        withoutNode.nodeId = undefined;
+        const withoutNodeInjection = buildRedriveInjection(MESH, withoutNode);
+        expect(withoutNodeInjection!.nodeLabel).toBeTruthy();
+        expect(withoutNodeInjection!.nodeLabel).not.toContain('undefined');
+
+        const rendered = buildMeshSystemMessage({
+            event: withoutNodeInjection!.event,
+            nodeLabel: withoutNodeInjection!.nodeLabel,
+            metadataEvent: withoutNodeInjection!.metadataEvent,
+        });
+        expect(rendered).not.toContain('undefined');
     });
 
     describe('quarantine (Stage 5a-4) — against the real pending queue', () => {

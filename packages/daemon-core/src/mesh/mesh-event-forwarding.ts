@@ -2141,14 +2141,32 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                                 const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
                                 const pendingEvents = drainPendingMeshCoordinatorEvents(coordinatorMeshId, drainDaemonIds.length > 0 ? drainDaemonIds : undefined);
                                 if (pendingEvents.length > 0) {
-                                    LOG.info('MeshEvents', `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
+                                    // SESSION-ISOLATION: this fast path drains for the WHOLE mesh/daemon,
+                                    // not this specific coordinator session, so an event addressed to a
+                                    // sibling coordinator session on this daemon must NOT be injected here
+                                    // — that is the first-come-first-served misroute. Mirror
+                                    // flushPendingForMeshIdleCoordinators' strict session filter: deliver
+                                    // only session-less (legacy/broadcast) events and events that name
+                                    // THIS session, and re-queue everything else for its owning session's
+                                    // own idle edge / the reconcile loop's strict hold/expire.
+                                    const flushSessionId = readNonEmptyString(flushState.instanceId);
+                                    let deliveredCount = 0;
                                     for (const pending of pendingEvents) {
+                                        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+                                        if (wantSession && !sessionIdsEquivalent(wantSession, flushSessionId)) {
+                                            try { requeueDrainedPendingMeshCoordinatorEvent(pending); } catch { /* best-effort re-queue */ }
+                                            continue;
+                                        }
                                         if (!pending.coordinatorMessage) continue;
                                         const forcePending = shouldForceInjectMeshEvent(pending.event);
                                         flushSource.onEvent('send_message', {
                                             input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
                                             ...(forcePending ? { force: true } : {}),
                                         });
+                                        deliveredCount++;
+                                    }
+                                    if (deliveredCount > 0) {
+                                        LOG.info('MeshEvents', `Auto-flushing ${deliveredCount} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
                                     }
                                 } else {
                                     // Nothing to flush → this idle edge left the coordinator with an
