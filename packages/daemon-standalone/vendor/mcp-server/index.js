@@ -167703,6 +167703,10 @@ function compactMeshStatusNode(entry) {
     if (summary) next.quota = summary;
     else delete next.quota;
   }
+  if (next.branchConvergence && typeof next.branchConvergence === "object" && typeof next.branchConvergence.nextStep === "string" && Array.isArray(next.nextStepHints) && next.nextStepHints.includes(next.branchConvergence.nextStep)) {
+    const { nextStep: _omitDuplicateNextStep, ...rest } = next.branchConvergence;
+    next.branchConvergence = rest;
+  }
   delete next.capabilityTagsByProvider;
   const elideSkip = /* @__PURE__ */ new Set(["git", "machine", "branchConvergence", "staleDaemonBuild", "sessions", ...MESH_COMPACT_PRESERVED_MARKER_FIELDS]);
   for (const k of Object.keys(next)) {
@@ -167807,6 +167811,21 @@ function summarizeNodeSessions(sessions) {
     summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
   }
   return summary;
+}
+var MAGI_COMPACT_CLAIM_MAX_CHARS = 160;
+function elideMagiText(value) {
+  return value.length > MAGI_COMPACT_CLAIM_MAX_CHARS ? `${value.slice(0, MAGI_COMPACT_CLAIM_MAX_CHARS)}\u2026` : value;
+}
+function compactMagiActivityGroup(group) {
+  if (!group || typeof group !== "object") return group;
+  const next = { ...group };
+  if (Array.isArray(next.needsVerification)) {
+    next.needsVerification = next.needsVerification.map((item) => item && typeof item.claim === "string" ? { ...item, claim: elideMagiText(item.claim) } : item);
+  }
+  if (Array.isArray(next.openQuestions)) {
+    next.openQuestions = next.openQuestions.map((q) => typeof q === "string" ? elideMagiText(q) : q);
+  }
+  return next;
 }
 
 // src/tools/mesh-queue-helpers.ts
@@ -169266,9 +169285,9 @@ function buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType) {
     noFallbackReason: "Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator."
   };
 }
-var COMPACT_DETAILED_NODES_BYTE_BUDGET = 32e3;
-var COMPACT_NODES_TOTAL_BYTE_BUDGET = 4e4;
-var COMPACT_MISSIONS_BYTE_BUDGET = 6e3;
+var COMPACT_DETAILED_NODES_BYTE_BUDGET = 11e3;
+var COMPACT_NODES_TOTAL_BYTE_BUDGET = 14500;
+var COMPACT_MISSIONS_BYTE_BUDGET = 4e3;
 function buildRecoverableLaunchFailure(ctx, node, providerType, error48) {
   const message = error48 instanceof Error ? error48.message : String(error48 || "launch failed");
   const classified = classifyMeshLaunchFailure(error48);
@@ -170339,7 +170358,7 @@ async function meshStatus(ctx, args = {}) {
     if (magiActivity.length > 0) {
       const fold = (0, import_daemon_core9.summarizeMeshMagiActivity)(magiActivity);
       if (compact) {
-        if (fold.groups.length > 0) response.magiActivity = fold.groups;
+        if (fold.groups.length > 0) response.magiActivity = fold.groups.map(compactMagiActivityGroup);
         response.magiActivitySummary = {
           total: fold.total,
           byStatus: fold.byStatus,
