@@ -1100,3 +1100,68 @@ export function hasTerminalAuthorityForTask(meshId: string, taskId: string): boo
     } catch { /* best-effort */ }
     return false;
 }
+
+/**
+ * STALE-APPROVAL-AFTER-TERMINAL (session fallback — false-awaiting-approval, live
+ * 2026-09-12): the SAME staleness question as hasTerminalAuthorityForTask, asked of a
+ * SESSION when the event carries no taskId.
+ *
+ * Why it is needed: a genuine completion calls detachMeshAssignment(), which clears
+ * meshActiveTaskId — so a waiting_approval emitted moments AFTER that completion has
+ * taskId=undefined and the task-keyed guard above skips itself. The completion destroys
+ * the very premise its own guard depends on. This also covers a coordinator SELF-session
+ * (isMeshWorkerSession()===false), which never carries a task binding at all.
+ *
+ * Why it is a BACKWARD WALK rather than "any terminal entry for this session": a session
+ * is long-lived and runs many tasks in sequence, so a bare "has ever terminated" read
+ * would suppress every genuine approval of every LATER task on that session. Instead we
+ * walk the session's lifecycle entries newest-first and let the MOST RECENT one decide:
+ *   • a non-weak terminal is the newest → the session is settled → the approval is stale;
+ *   • a task_dispatched is the newest → new work opened after the terminal → NOT stale;
+ *   • nothing for this session → no authority → NOT stale.
+ * So a new dispatch re-opens the session exactly the way a new busy phase (busyEpoch)
+ * re-opens the provider-side latch in status-transition.ts.
+ *
+ * Deliberately NOT authority, mirroring the task-keyed guard's exclusions so the two
+ * cannot disagree: a WEAK / false-idle completion (the worker may still be mid-turn) and
+ * task_stalled (a stalled task can resume and genuinely block on an approval).
+ */
+export function hasTerminalAuthorityForSession(meshId: string, sessionId: string): boolean {
+    // Source 1 — the QUEUE ROW, mirroring hasTerminalAuthorityForTask's second signal. This
+    // is not redundant with the ledger walk below: a completion's ledger entry can be
+    // recorded WEAK (evidenceLevel 'insufficient' — the remote-relay path routinely writes
+    // one) while the queue row it drove is unambiguously terminal. Keying staleness on the
+    // ledger alone would therefore miss exactly the case this guard exists for. Scoped to
+    // rows this session actually owns, and only when the session has no NON-terminal row —
+    // an open assignment means live work, so any approval for it is genuine.
+    try {
+        const sessionRows = getQueue(meshId).filter(row => sessionIdsEquivalent(row.assignedSessionId, sessionId));
+        if (sessionRows.length > 0) {
+            const anyOpen = sessionRows.some(row => row.status === 'pending' || row.status === 'assigned');
+            const anyTerminal = sessionRows.some(row => row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled');
+            if (!anyOpen && anyTerminal) return true;
+        }
+    } catch { /* best-effort — fall through to the ledger walk */ }
+    // Source 2 — the ledger walk.
+    try {
+        // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered (task_dispatched + the terminal kinds),
+        // no bare tail — a bare tail window can be crowded out by unrelated mesh traffic
+        // before reaching this session's most recent lifecycle entry.
+        const entries = readLedgerEntriesByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed', 'task_stalled']);
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const entry = entries[i];
+            if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
+            // Newest dispatch for this session wins → new work is open, approval is live.
+            if (entry.kind === 'task_dispatched') return false;
+            // task_stalled is not authority, and it must not shadow an OLDER terminal
+            // either (a stall after a completion means the session resumed) — treat it
+            // exactly like the dispatch case and stop the walk.
+            if (entry.kind === 'task_stalled') return false;
+            // A weak / false-idle completion is not authority; keep walking past it (an
+            // older genuine terminal with no dispatch since still settles the session).
+            if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload)) continue;
+            return true;
+        }
+    } catch { /* best-effort — absent authority means NOT stale (never over-suppress) */ }
+    return false;
+}

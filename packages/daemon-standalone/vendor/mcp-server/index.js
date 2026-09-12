@@ -88872,6 +88872,30 @@ ${cleanBody}`;
       }
       return false;
     }
+    function hasTerminalAuthorityForSession(meshId, sessionId) {
+      try {
+        const sessionRows = getQueue3(meshId).filter((row) => sessionIdsEquivalent(row.assignedSessionId, sessionId));
+        if (sessionRows.length > 0) {
+          const anyOpen = sessionRows.some((row) => row.status === "pending" || row.status === "assigned");
+          const anyTerminal = sessionRows.some((row) => row.status === "completed" || row.status === "failed" || row.status === "cancelled");
+          if (!anyOpen && anyTerminal) return true;
+        }
+      } catch {
+      }
+      try {
+        const entries = readLedgerEntriesByKind(meshId, ["task_dispatched", "task_completed", "task_failed", "task_stalled"]);
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const entry = entries[i];
+          if (!sessionIdsEquivalent(entry.sessionId, sessionId)) continue;
+          if (entry.kind === "task_dispatched") return false;
+          if (entry.kind === "task_stalled") return false;
+          if (entry.kind === "task_completed" && isWeakCompletionEvidence2(entry.payload)) continue;
+          return true;
+        }
+      } catch {
+      }
+      return false;
+    }
     var lastPendingEventsPruneAt;
     var PENDING_EVENTS_PRUNE_INTERVAL_MS;
     var INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS;
@@ -89010,8 +89034,9 @@ ${cleanBody}`;
       };
       if ((args.event === "agent:waiting_approval" || args.event === "agent:waiting_choice") && eventSessionId) {
         const approvalTaskId = readNonEmptyString(args.metadataEvent.taskId);
-        if (approvalTaskId && hasTerminalAuthorityForTask(args.meshId, approvalTaskId)) {
-          LOG.info("MeshEvents", `Suppressed ${args.event} for session ${eventSessionId} (mesh ${args.meshId}, task ${approvalTaskId}) \u2014 terminal authority already exists for the task; the approval/choice is stale (no current actionable modal)`);
+        const staleAfterTerminal = approvalTaskId ? hasTerminalAuthorityForTask(args.meshId, approvalTaskId) : hasTerminalAuthorityForSession(args.meshId, eventSessionId);
+        if (staleAfterTerminal) {
+          LOG.info("MeshEvents", `Suppressed ${args.event} for session ${eventSessionId} (mesh ${args.meshId}, ${approvalTaskId ? `task ${approvalTaskId}` : "no task binding \u2014 session-scoped"}) \u2014 terminal authority already exists; the approval/choice is stale (no current actionable modal)`);
           traceMeshEventDrop("stale_approval_after_terminal", traceCtx);
           return { success: true, forwarded: 0, suppressed: true, staleApprovalAfterTerminal: true };
         }
@@ -113649,7 +113674,7 @@ ${buttons.join("\n")}`;
             }
             host.generatingDebounceTimer = null;
           }, 3e3);
-        } else if (newStatus === "waiting_approval" && !(previousStatus === "waiting_choice" && !adapterStatus.activeModal)) {
+        } else if (newStatus === "waiting_approval" && !(previousStatus === "waiting_choice" && !adapterStatus.activeModal) && !host.hasEmittedGenuineCompletionForCurrentEpoch()) {
           host.suppressIdleHistoryReplay = false;
           if (host.generatingDebouncePending) {
             if (host.generatingDebounceTimer) {
@@ -134723,10 +134748,10 @@ ${ptyResult.output.slice(-2e3)}`);
                 const pendingCoordinatorEvents2 = getPendingMeshCoordinatorEvents(meshId, peekScope);
                 const asyncRefineJobs2 = pendingCoordinatorEvents2.length > 0 ? await (async () => {
                   try {
-                    const { readLedgerEntriesByKind: readLedgerEntriesByKind4 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                    const { readLedgerEntriesByKind: readLedgerEntriesByKind3 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
                     return buildMeshAsyncRefineJobs3({
                       meshId,
-                      ledgerEntries: readLedgerEntriesByKind4(meshId, ["task_dispatched", "task_completed", "task_failed"]),
+                      ledgerEntries: readLedgerEntriesByKind3(meshId, ["task_dispatched", "task_completed", "task_failed"]),
                       pendingEvents: [...pendingCoordinatorEvents2]
                     });
                   } catch {
@@ -134810,9 +134835,9 @@ ${ptyResult.output.slice(-2e3)}`);
               const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime22 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
               const schedulingRuntime = buildMeshSchedulingRuntime22(mesh, queue);
               const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
-              const { readLedgerEntries: readLedgerEntries22, readLedgerEntriesByKind: readLedgerEntriesByKind3, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { readLedgerEntries: readLedgerEntries22, readLedgerEntriesByKind: readLedgerEntriesByKind2, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const ledgerEntries = readLedgerEntries22(meshId, { tail: 20 });
-              const asyncRefineLedgerEntries = readLedgerEntriesByKind3(meshId, ["task_dispatched", "task_completed", "task_failed"]);
+              const asyncRefineLedgerEntries = readLedgerEntriesByKind2(meshId, ["task_dispatched", "task_completed", "task_failed"]);
               const ledgerSummary = getLedgerSummary22(meshId);
               const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
               const liveMeshSessions = (0, import_session_host_core3.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;

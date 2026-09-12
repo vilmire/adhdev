@@ -96,6 +96,14 @@ export interface StatusTransitionHost {
     meshTraceCtx(event?: string): Record<string, unknown>;
     completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence;
     completionHasFinalAssistantMessage(messages: unknown, turnStartedAt?: number): boolean;
+    /**
+     * TERMINAL-STALE-APPROVAL (emission side): true once a GENUINE (non-weak)
+     * completion has been emitted for the CURRENT busy epoch. Same instance method
+     * the sticky-approval overlay reads (see ApprovalGateHost) — exposed here so the
+     * approval arm can enforce the "no approval after a confirmed completion"
+     * invariant at the EMISSION point, not only in the sticky projection.
+     */
+    hasEmittedGenuineCompletionForCurrentEpoch(): boolean;
     emitGeneratingCompleted(opts: {
         chatTitle: string;
         duration: number | undefined;
@@ -270,7 +278,26 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
                 host.generatingDebounceTimer = null;
             }, 3000);
         } else if (newStatus === 'waiting_approval'
-            && !(previousStatus === 'waiting_choice' && !adapterStatus.activeModal)) {
+            && !(previousStatus === 'waiting_choice' && !adapterStatus.activeModal)
+            && !host.hasEmittedGenuineCompletionForCurrentEpoch()) {
+            // TERMINAL-STALE-APPROVAL (false-awaiting-approval, live 2026-09-12): the
+            // completion latch gate. Once a GENUINE (non-weak) completion has been emitted
+            // for the CURRENT busy epoch the turn is OVER, so a waiting_approval frame can
+            // only be the PTY parser misreading the settled screen (the completed prompt
+            // area repaints into something the modal extractor scores as a consent). Running
+            // the arm for it is actively harmful: it cancels the pending completion and bumps
+            // busyEpoch, letting the false approval WIN over the real completion, then emits
+            // an agent:waiting_approval that re-pins every coordinator projection with an
+            // approval no mesh_approve can resolve ("Not in approval state").
+            //
+            // Scoped exactly like the sticky overlay's identical latch read
+            // (approval-gate.ts stabilizeFlappingApprovalStatus): a WEAK / false-idle
+            // completion does NOT latch, so a genuine mid-turn approval following a
+            // false-idle is unaffected; and any new busy phase advances busyEpoch past the
+            // latch, which re-enables approval surfacing for the new turn. Skipping the arm
+            // leaves lastStatus to advance on the fall-through below, so the subsequent
+            // →generating / →idle frames read normally.
+            //
             // The !(waiting_choice → modal-less waiting_approval) guard: right after an
             // AskUserQuestion answer the FSM drains through approval_resolving (status
             // 'approval', NO modal extract) while the held prompt clears on its own

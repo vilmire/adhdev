@@ -335,3 +335,121 @@ describe('STALE-APPROVAL-AFTER-TERMINAL — LOCAL forwarding (setupMeshEventForw
     }
   })
 })
+
+// FALSE-AWAITING-APPROVAL (live 2026-09-12) — the TASKLESS half of the same defect.
+//
+// The task-keyed guard above depends on the event carrying a taskId, but a genuine
+// completion runs detachMeshAssignment(), which CLEARS meshActiveTaskId. So the false
+// approval the PTY paints milliseconds after that completion arrives with
+// taskId=undefined and the guard skipped itself — the completion destroyed the very
+// premise its own guard reads. A coordinator SELF-session (isMeshWorkerSession()===false)
+// never carries a task binding at all and was likewise never covered.
+//
+// FIX B: when no taskId is present, fall back to hasTerminalAuthorityForSession — a
+// backward walk over the session's lifecycle entries where the MOST RECENT one decides,
+// so a later dispatch re-opens the session rather than suppressing every future approval.
+describe('FALSE-AWAITING-APPROVAL — taskless session fallback (hasTerminalAuthorityForSession)', () => {
+  it('(the live defect) a waiting_approval with NO taskId after the session completed is suppressed', () => {
+    const meshId = `mesh_taskless_apr_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const task = seedAssignedTask(meshId)
+
+      // The genuine completion lands and commits terminal authority for the session.
+      remoteCompletion(meshId, task.id)
+      expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('completed')
+
+      // The false approval follows with its task binding already detached.
+      const late = remoteEvent(meshId, 'agent:waiting_approval', undefined as any)
+      expect((late as any).suppressed).toBe(true)
+      expect((late as any).staleApprovalAfterTerminal).toBe(true)
+      expect(readLedgerEntries(meshId).filter(e => e.kind === 'task_approval_needed')).toHaveLength(0)
+
+      // And it never reaches the approval inbox.
+      const activeWork = buildMeshActiveWork({
+        meshId,
+        queue: getQueue(meshId),
+        ledgerEntries: readLedgerEntries(meshId, { tail: 200 }),
+        directDispatches: getActiveDirectDispatches(meshId),
+        nodes: [{ id: NODE_ID, sessions: [{ id: SESSION_ID, providerType: 'codex-cli', status: 'waiting_approval' }] }],
+      })
+      expect(collectPendingApprovals(activeWork.activeWork)).toHaveLength(0)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('(over-suppression guard) a taskless approval on a session with NO terminal history is forwarded', () => {
+    const meshId = `mesh_taskless_live_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      seedAssignedTask(meshId)
+
+      // Nothing terminal for this session — the approval is live and must surface.
+      const approval = remoteEvent(meshId, 'agent:waiting_approval', undefined as any)
+      expect((approval as any).staleApprovalAfterTerminal).not.toBe(true)
+      expect((approval as any).suppressed).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('(over-suppression guard) a NEW dispatch after the terminal re-opens the session — a later taskless approval surfaces', () => {
+    const meshId = `mesh_taskless_reopen_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const first = seedAssignedTask(meshId)
+
+      // Turn 1 completes → session settles.
+      remoteCompletion(meshId, first.id)
+      const suppressed = remoteEvent(meshId, 'agent:waiting_approval', undefined as any)
+      expect((suppressed as any).staleApprovalAfterTerminal).toBe(true)
+
+      // Turn 2 is dispatched onto the SAME session: a real re-dispatch both opens a new
+      // ASSIGNED queue row and appends the dispatch entry, so the session is working again
+      // on both authority sources.
+      const second = seedAssignedTask(meshId, 'the next queued task')
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        sessionId: SESSION_ID,
+        nodeId: NODE_ID,
+        providerType: 'codex-cli',
+        payload: { taskId: second.id, source: 'direct' },
+      })
+
+      // A taskless approval for the NEW turn is genuine and must not be suppressed.
+      const live = remoteEvent(meshId, 'agent:waiting_approval', undefined as any)
+      expect((live as any).staleApprovalAfterTerminal).not.toBe(true)
+      expect((live as any).suppressed).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('(over-suppression guard) a WEAK completion is not session authority either — the taskless approval surfaces', () => {
+    const meshId = `mesh_taskless_weak_${Date.now()}`
+    try {
+      mockMesh(meshId)
+      const task = seedAssignedTask(meshId)
+
+      // Weak / false-idle terminal: the worker may still be mid-turn.
+      appendLedgerEntry(meshId, {
+        kind: 'task_completed',
+        sessionId: SESSION_ID,
+        nodeId: NODE_ID,
+        providerType: 'codex-cli',
+        payload: {
+          taskId: task.id,
+          evidenceLevel: 'insufficient',
+          completionDiagnostic: { blockReason: 'missing_final_assistant', finalAssistantPresent: false },
+        },
+      })
+
+      const approval = remoteEvent(meshId, 'agent:waiting_approval', undefined as any)
+      expect((approval as any).staleApprovalAfterTerminal).not.toBe(true)
+      expect((approval as any).suppressed).not.toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+})

@@ -68,6 +68,7 @@ import {
     stopStaleMeshWorker,
     supersedeRedriveReclaimForLateCompletion,
     hasTerminalAuthorityForTask,
+    hasTerminalAuthorityForSession,
 } from './mesh-event-suppression.js';
 // Re-exported for backward compatibility: these now live in mesh-event-suppression.ts
 // (pure move, file-size gate decomposition) but external importers still reach them via
@@ -333,8 +334,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // neither is ever mapped onto the other.
     if ((args.event === 'agent:waiting_approval' || args.event === 'agent:waiting_choice') && eventSessionId) {
         const approvalTaskId = readNonEmptyString(args.metadataEvent.taskId);
-        if (approvalTaskId && hasTerminalAuthorityForTask(args.meshId, approvalTaskId)) {
-            LOG.info('MeshEvents', `Suppressed ${args.event} for session ${eventSessionId} (mesh ${args.meshId}, task ${approvalTaskId}) — terminal authority already exists for the task; the approval/choice is stale (no current actionable modal)`);
+        // A taskId is the PRECISE key, but it is frequently absent exactly when this guard
+        // matters most: a genuine completion runs detachMeshAssignment(), clearing
+        // meshActiveTaskId, so the false approval that follows it milliseconds later carries
+        // taskId=undefined and the task-keyed read would skip itself (the completion breaks
+        // its own guard's premise). A coordinator SELF-session never carries one either. Fall
+        // back to the session-scoped walk, which answers the same staleness question and
+        // re-opens on the session's next dispatch.
+        const staleAfterTerminal = approvalTaskId
+            ? hasTerminalAuthorityForTask(args.meshId, approvalTaskId)
+            : hasTerminalAuthorityForSession(args.meshId, eventSessionId);
+        if (staleAfterTerminal) {
+            LOG.info('MeshEvents', `Suppressed ${args.event} for session ${eventSessionId} (mesh ${args.meshId}, ${approvalTaskId ? `task ${approvalTaskId}` : 'no task binding — session-scoped'}) — terminal authority already exists; the approval/choice is stale (no current actionable modal)`);
             traceMeshEventDrop('stale_approval_after_terminal', traceCtx);
             return { success: true, forwarded: 0, suppressed: true, staleApprovalAfterTerminal: true };
         }
