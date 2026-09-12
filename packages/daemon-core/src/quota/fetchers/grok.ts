@@ -51,7 +51,7 @@ import {
     type ProviderQuota,
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
-import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { assertInjectedNetworkFetchInTest, credentialFileMtimeMs, resolveDeps } from './deps.js';
 import { retryAfterMs, toNumber } from './coerce.js';
 
 const DEFAULT_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
@@ -164,6 +164,29 @@ function readCredentials(deps: Required<QuotaFetchDeps>): CredentialsResult {
         return { kind: 'invalid', reason: `Unable to read Grok auth file: ${message}` };
     }
     return parseCredentials(raw, deps.now());
+}
+
+/**
+ * When the grok CLI last rewrote `~/.grok/auth.json`, in unix ms — the
+ * re-login signal behind quota/refresh.ts's retry-budget reset.
+ *
+ * grok's refresh flow ROTATES the refresh token and rewrites this file (see the
+ * header), so its mtime moves on every successful refresh or re-login. An mtime
+ * later than the one observed at the last failure therefore means a NEW
+ * credential exists and a re-probe is worth spending. Resolves null when the
+ * file is absent or unreadable, which the caller treats as "no evidence of
+ * renewal" and acts on by leaving the existing backoff alone.
+ *
+ * Resolves the path through `authPath`, so `GROK_HOME` / `GROK_AUTH_PATH` are
+ * honoured exactly as the fetcher honours them.
+ *
+ * ★METADATA ONLY: the token value is never read (see credentialFileMtimeMs).
+ */
+export async function readGrokCredentialMtimeMs(
+    overrides: QuotaFetchDeps = {},
+): Promise<number | null> {
+    const deps = resolveDeps(overrides);
+    return credentialFileMtimeMs(authPath(deps.env));
 }
 
 function isExpired(credentials: GrokCredentials, nowMs: number): boolean {

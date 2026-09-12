@@ -12,7 +12,7 @@
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawn } from 'node:child_process';
-import { readFile as fsReadFile } from 'node:fs/promises';
+import { readFile as fsReadFile, stat as fsStat } from 'node:fs/promises';
 import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import { loadConfig } from '../../config/config.js';
 
@@ -89,6 +89,36 @@ export interface QuotaFetchDeps {
      * tick to stop collecting.
      */
     showAccountEmail?: () => boolean;
+}
+
+/**
+ * Modification time of a FILE-BACKED credential, in unix ms, or null when it
+ * cannot be determined.
+ *
+ * ★Shared by the re-login recovery detector in quota/refresh.ts, which resets a
+ * provider's spent retry budget when the credential behind a token-expiry
+ * failure has actually been renewed. The darwin/antigravity arm of that
+ * detector reads a keychain item's `mdat`; kimi and grok keep their token in a
+ * plain file, so a `stat` is the whole implementation — no child process, no
+ * parsing.
+ *
+ * ★METADATA ONLY. This never opens the file, so the token itself is never read
+ * into the process. That is the same constraint the keychain arm satisfies by
+ * omitting `security`'s `-w` flag, and it matters for the same reason: the
+ * renewal probe runs on a schedule the user did not ask for.
+ *
+ * Never throws. A missing file (the ordinary signed-out state), a permission
+ * error, or any other stat failure resolves to null, which the caller reads as
+ * "no evidence of renewal" and acts on by changing nothing.
+ */
+export async function credentialFileMtimeMs(filePath: string): Promise<number | null> {
+    try {
+        const stats = await fsStat(filePath);
+        const ms = stats.mtimeMs;
+        return Number.isFinite(ms) ? ms : null;
+    } catch {
+        return null;
+    }
 }
 
 /**

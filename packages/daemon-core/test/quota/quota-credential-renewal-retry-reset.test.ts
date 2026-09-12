@@ -1,5 +1,6 @@
 /**
- * ★RE-LOGIN RECOVERY for the antigravity quota retry budget.
+ * ★RE-LOGIN RECOVERY for the quota retry budget — antigravity (keychain mdat)
+ * plus kimi / grok (credential-file mtime).
  *
  * The defect: the daemon reads the `agy` token in the seconds before a
  * re-login completes, records `expired-token`, and burns the whole bounded
@@ -21,7 +22,7 @@
  *   (a) a CHANGED stamp resets the budget and makes the provider immediately
  *       re-probeable.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -202,22 +203,28 @@ describe('credential-renewal reset — (b) ★NO-OP when the token did not chang
     })
 })
 
-describe('credential-renewal reset — (c) the gate does not leak off darwin/expired/antigravity', () => {
-    it('does NOT fire on win32 or linux even with a moved stamp', async () => {
-        for (const platform of ['win32', 'linux'] as const) {
-            forcePlatform(platform)
-            let mtime = 1_000_000
-            __setQuotaCredentialMtimeReaderForTests(async () => mtime)
+describe('credential-renewal reset — (c) the gate does not leak to other kinds or providers', () => {
+    /**
+     * ★The PLATFORM gate lives in the antigravity SOURCE, not in the shared
+     * detector — the file-backed kimi/grok arms are platform-agnostic because a
+     * `stat` is. So this asserts the real production source resolves null off
+     * darwin (no keychain spawn), rather than injecting a reader, which would
+     * bypass the very gate under test.
+     */
+    it('the antigravity keychain source yields no stamp off darwin', async () => {
+        const { readAntigravityKeychainMtimeMs } = await vi.importActual<
+            typeof import('../../src/quota/fetchers/antigravity.js')
+        >('../../src/quota/fetchers/antigravity.js')
 
-            await exhaustBudget(agyFetch, fetchAntigravityQuota, expiredTokenFailure)
-            mtime = 2_000_000
-            expect(await resetFailureBudgetOnCredentialRenewal('antigravity-cli')).toBe(false)
-            expect(isFailureRetryDue('antigravity-cli', Date.now() + 60 * 60 * 1000)).toBe(false)
-
-            clearQuotaCache()
-            platformSpy?.mockRestore()
-            platformSpy = undefined
-            vi.clearAllMocks()
+        for (const platform of ['win32', 'linux', 'freebsd']) {
+            const spawn = vi.fn()
+            const mtime = await readAntigravityKeychainMtimeMs({
+                spawn: spawn as never,
+                env: { ADHDEV_ANTIGRAVITY_PLATFORM: platform } as NodeJS.ProcessEnv,
+            })
+            expect(mtime, platform).toBeNull()
+            // Never even reaches for the credential store.
+            expect(spawn, platform).not.toHaveBeenCalled()
         }
     })
 
@@ -238,18 +245,24 @@ describe('credential-renewal reset — (c) the gate does not leak off darwin/exp
         }
     })
 
-    it('does NOT fire for another provider, even one with an expired-token failure', async () => {
+    /**
+     * ★codex-cli is deliberately absent from CREDENTIAL_MTIME_SOURCES: it reads
+     * a rollout file and holds no OAuth token, so the budget-exhaustion stall
+     * this detector rescues cannot occur there. A provider with no source must
+     * stay a hard no-op even with a moved stamp and an expired-token failure.
+     */
+    it('does NOT fire for a provider with NO credential source (codex-cli)', async () => {
         forcePlatform('darwin')
         let mtime = 1_000_000
         __setQuotaCredentialMtimeReaderForTests(async () => mtime)
 
-        const kimiFetch = { provider: 'kimi' as const, fetch: fetchKimiQuota }
-        await exhaustBudget(kimiFetch, fetchKimiQuota, () =>
-            quotaFailure('kimi', 'error', 'token expired', { failureKind: 'expired-token' }))
+        const codexFetch = { provider: 'codex-cli' as const, fetch: fetchCodexQuota }
+        await exhaustBudget(codexFetch, fetchCodexQuota, () =>
+            quotaFailure('codex-cli', 'error', 'token expired', { failureKind: 'expired-token' }))
         mtime = 2_000_000
 
-        expect(await resetFailureBudgetOnCredentialRenewal('kimi')).toBe(false)
-        expect(isFailureRetryDue('kimi', Date.now() + 60 * 60 * 1000)).toBe(false)
+        expect(await resetFailureBudgetOnCredentialRenewal('codex-cli')).toBe(false)
+        expect(isFailureRetryDue('codex-cli', Date.now() + 60 * 60 * 1000)).toBe(false)
     })
 
     it('does NOT fire when the cached entry is a SUCCESS (nothing to rescue)', async () => {
@@ -268,6 +281,138 @@ describe('credential-renewal reset — (c) the gate does not leak off darwin/exp
         await refreshQuotaCacheOnce([agyFetch], allEnabled)
 
         expect(await resetFailureBudgetOnCredentialRenewal('antigravity-cli')).toBe(false)
+    })
+})
+
+/**
+ * ★kimi / grok — the same detector, a FILE-backed source instead of a keychain.
+ *
+ * ★PREVENTIVE, not a fix for a live symptom. The stale kimi/grok readings
+ * observed at the time of writing are NOT this stall: neither account had been
+ * re-logged-in since 09-08 (kimi) / 09-04 (grok), so the tokens were simply
+ * left expired. These cases exist so that WHEN the user does sign back in,
+ * kimi/grok recover the way agy now does instead of sitting on a spent budget.
+ *
+ * Parameterized over both providers because the contract is identical — only
+ * the credential path differs, and that lives in each fetcher.
+ */
+describe.each([
+    { provider: 'kimi' as const, mock: fetchKimiQuota, label: 'kimi' },
+    { provider: 'grok-cli' as const, mock: fetchGrokQuota, label: 'grok' },
+])('credential-renewal reset — $label (file mtime source)', ({ provider, mock }) => {
+    const fetcher = { provider, fetch: mock }
+    const expired = () =>
+        quotaFailure(provider, 'error', 'token expired', { failureKind: 'expired-token' })
+
+    it('(a) a newer file mtime resets the budget and makes the provider immediately retry-due', async () => {
+        let mtime = 1_000_000
+        __setQuotaCredentialMtimeReaderForTests(async () => mtime)
+
+        await exhaustBudget(fetcher, mock, expired)
+        expect(isFailureRetryDue(provider, Date.now() + 60 * 60 * 1000)).toBe(false)
+
+        // The CLI refreshes / the user re-logs in → the credentials file is
+        // rewritten, so its mtime moves forward.
+        mtime = 2_000_000
+
+        expect(await resetFailureBudgetOnCredentialRenewal(provider)).toBe(true)
+        expect(isFailureRetryDue(provider, Date.now() + 60 * 60 * 1000)).toBe(true)
+    })
+
+    it('(b) ★an UNCHANGED file mtime is a complete no-op — the dead token earns no extra probes', async () => {
+        __setQuotaCredentialMtimeReaderForTests(async () => 1_000_000)
+
+        await exhaustBudget(fetcher, mock, expired)
+        const callsAfterExhaustion = mock.mock.calls.length
+
+        for (let i = 0; i < 10; i += 1) {
+            expect(await resetFailureBudgetOnCredentialRenewal(provider)).toBe(false)
+        }
+
+        expect(isFailureRetryDue(provider, Date.now() + 60 * 60 * 1000)).toBe(false)
+        expect(mock).toHaveBeenCalledTimes(callsAfterExhaustion)
+    })
+
+    it('(b) an ABSENT or unreadable credentials file (null) keeps the existing backoff', async () => {
+        __setQuotaCredentialMtimeReaderForTests(async () => null)
+
+        await exhaustBudget(fetcher, mock, expired)
+        expect(await resetFailureBudgetOnCredentialRenewal(provider)).toBe(false)
+        expect(isFailureRetryDue(provider, Date.now() + 60 * 60 * 1000)).toBe(false)
+    })
+
+    it('(b) a stat that throws never breaks the caller and never resets', async () => {
+        __setQuotaCredentialMtimeReaderForTests(async () => {
+            throw new Error('EACCES: permission denied')
+        })
+
+        await exhaustBudget(fetcher, mock, expired)
+        await expect(resetFailureBudgetOnCredentialRenewal(provider)).resolves.toBe(false)
+        expect(isFailureRetryDue(provider, Date.now() + 60 * 60 * 1000)).toBe(false)
+    })
+
+    it('(c) does NOT fire for a NON-credential failure kind (network / rate-limited / parse)', async () => {
+        for (const failureKind of ['network', 'rate-limited', 'parse'] as const) {
+            let mtime = 1_000_000
+            __setQuotaCredentialMtimeReaderForTests(async () => mtime)
+
+            await exhaustBudget(fetcher, mock, () =>
+                quotaFailure(provider, 'error', 'x', { failureKind }))
+            mtime = 2_000_000
+
+            expect(await resetFailureBudgetOnCredentialRenewal(provider), failureKind).toBe(false)
+
+            clearQuotaCache()
+            vi.clearAllMocks()
+        }
+    })
+
+    it('(c) does NOT fire when the cached entry is a SUCCESS', async () => {
+        __setQuotaCredentialMtimeReaderForTests(async () => 2_000_000)
+
+        mock.mockResolvedValueOnce({
+            provider,
+            session: { usedPercent: 10, windowMinutes: 300, resetsAt: null },
+            weekly: null,
+            updatedAt: Date.now(),
+            error: null,
+            status: 'ok',
+            metadata: {},
+        })
+        await refreshQuotaCacheOnce([fetcher], allEnabled)
+
+        expect(await resetFailureBudgetOnCredentialRenewal(provider)).toBe(false)
+    })
+})
+
+/**
+ * The file-mtime source itself: metadata only, and fail-safe. Uses the REAL
+ * implementation (the module under test is mocked at the top of this file for
+ * the scheduling cases, so these import the actual one).
+ */
+describe('credentialFileMtimeMs — stat only, never opens the file', () => {
+    it('returns the mtime of an existing file and null for a missing one', async () => {
+        const { credentialFileMtimeMs } = await vi.importActual<
+            typeof import('../../src/quota/fetchers/deps.js')
+        >('../../src/quota/fetchers/deps.js')
+
+        const dir = mkdtempSync(join(tmpdir(), 'adhdev-cred-mtime-'))
+        const file = join(dir, 'auth.json')
+        // Content is irrelevant — it is never read — but a real token-shaped
+        // body makes the "we only stat it" claim concrete.
+        writeFileSync(file, JSON.stringify({ access_token: 'SECRET-MUST-NOT-BE-READ' }))
+
+        const mtime = await credentialFileMtimeMs(file)
+        expect(typeof mtime).toBe('number')
+        expect(mtime).toBeGreaterThan(0)
+        expect(mtime).toBe(statSync(file).mtimeMs)
+
+        // Absent file → null, the ordinary signed-out state. Never throws.
+        await expect(credentialFileMtimeMs(join(dir, 'nope.json'))).resolves.toBeNull()
+        // A directory path / unreadable target also degrades to null.
+        await expect(credentialFileMtimeMs(join(file, 'not-a-dir'))).resolves.toBeNull()
+
+        rmSync(dir, { recursive: true, force: true })
     })
 })
 
