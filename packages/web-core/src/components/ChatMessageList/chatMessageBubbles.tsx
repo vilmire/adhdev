@@ -538,15 +538,15 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         const expandableRef = message.toolBlockRef;
         return (
             <div className="self-start chat-msg-tool" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
+                <span className="chat-bubble-header-end chat-msg-tool-header-end">
+                    <CopyButton text={contentStr} />
+                    {receivedAt != null && (
+                        <span className="chat-time">{formatTime(receivedAt)}</span>
+                    )}
+                </span>
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
                     <span className="tool-icon" aria-hidden="true" />
                     <span className="tool-label">Tool</span>
-                    <span className="chat-bubble-header-end">
-                        <CopyButton text={contentStr} />
-                        {receivedAt != null && (
-                            <span className="chat-time">{formatTime(receivedAt)}</span>
-                        )}
-                    </span>
                 </div>
                 {hasStructuredRenderer && structuredParts ? (
                     <div className="tool-text w-full">

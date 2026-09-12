@@ -1454,6 +1454,12 @@
         font-size: 11px;
         color: var(--text-muted);
         padding: 8px 12px;
+        /* TOOL-META-CORNER: the header-end pill is pinned to the top-right corner
+           via position:absolute below, so it needs a positioning context here and
+           reserved right-hand padding so the meta row's "Tool" label + dot and
+           the tool text never run underneath it. */
+        position: relative;
+        padding-right: 56px;
         background: color-mix(in srgb, var(--chat-tool-bg) 92%, var(--chat-tool-accent) 8%);
         border: var(--chat-tool-border);
         border-left: 3px solid color-mix(in srgb, var(--chat-tool-accent) 64%, var(--border-subtle));
@@ -1482,10 +1488,19 @@
         text-transform: uppercase;
     }
 
-    .chat-msg-tool .chat-msg-tool-meta .chat-bubble-header-end {
+    /* TOOL-META-CORNER: pinned to the bubble's top-right corner instead of
+       sitting inline in the meta row, so it reads as a bubble-level affordance
+       (like the standard chat-bubble header) rather than competing with the
+       "Tool" label + status dot for room in a narrow meta row. The reserved
+       padding-right on .chat-msg-tool keeps this clear of the meta row, the
+       tool-text body, and the wrapping expand/collapse control below it. */
+    .chat-msg-tool .chat-bubble-header-end.chat-msg-tool-header-end {
+        position: absolute;
+        top: 6px;
+        right: 8px;
         text-transform: none;
         font-weight: 400;
-        margin-left: 2px;
+        margin-left: 0;
     }
 
     .chat-msg-tool .tool-icon {
