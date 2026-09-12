@@ -225,8 +225,19 @@ export function useSessionChatTailController(
         void refreshAuthoritativeTail()
       }
     }
+    // (MOBILE-BFCACHE) Mobile Safari/PWA backgrounding (home button, app
+    // switcher, BFCache suspension) does not reliably fire `visibilitychange`;
+    // it fires `pageshow` with `persisted: true` on resume instead. Treat that
+    // resume edge the same as the visible edge above so a mobile app-switch
+    // also re-pulls the authoritative tail.
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void refreshAuthoritativeTail()
+    }
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisible)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pageshow', onPageShow)
     }
 
     // Poll the transport connection state (edge-detect disconnect→connect) to
@@ -245,6 +256,9 @@ export function useSessionChatTailController(
     return () => {
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisible)
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pageshow', onPageShow)
       }
       clearInterval(reconnectTimer)
     }
@@ -305,14 +319,38 @@ export function useSessionChatTailController(
       if (typeof document === 'undefined') return
       controller.noteVisibilityChange(document.hidden)
     }
+    // (MOBILE-BFCACHE) `visibilitychange` alone misses mobile Safari/PWA
+    // backgrounding: minimizing via the home button or app switcher (and
+    // BFCache suspension generally) reliably fires `pagehide`/`pageshow`
+    // instead, not `visibilitychange`. Without this, `hiddenElapsedMs` stays
+    // 0 across a mobile minimize→resume, the lease sees the full wall-clock
+    // gap as elapsed time, and the very next tick trips the "replica
+    // degraded" fallback on resume. `noteVisibilityChange` is idempotent
+    // against duplicate same-value edges (see its doc comment), so it is
+    // safe for both listeners to fire on the same transition without
+    // double-counting or de-duplication here.
+    const onPageHide = () => {
+      controller.noteVisibilityChange(true)
+    }
+    const onPageShow = () => {
+      controller.noteVisibilityChange(false)
+    }
     onVisibilityChange()
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', onPageHide)
+      window.addEventListener('pageshow', onPageShow)
     }
     return () => {
       clearInterval(livenessTimer)
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pagehide', onPageHide)
+        window.removeEventListener('pageshow', onPageShow)
       }
     }
     // Same rationale as above: `refreshAuthoritativeTail` is stable for a given

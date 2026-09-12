@@ -359,6 +359,45 @@ describe('★ A③: hidden document time does not count toward the lease window'
     expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_screen_stalled')
   })
 
+  it('★ duplicate hidden/visible edges (as fired by TWO independent listeners — visibilitychange AND pagehide/pageshow — on the same transition) do not double-count or corrupt the grace window', () => {
+    // The hook wires BOTH a `visibilitychange` listener and a `pagehide`/
+    // `pageshow` listener into this same `noteVisibilityChange` call (see
+    // session-chat-tail-hooks.ts), because mobile Safari/PWA backgrounding
+    // does not reliably fire `visibilitychange` at all. A single OS-level
+    // minimize can therefore fire BOTH listeners with the same edge value.
+    // This pins that `noteVisibilityChange` tolerates the resulting duplicate
+    // calls without requiring the hook to de-duplicate them itself.
+    const { sendData, controller, advance } = setup()
+    controller.retain()
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
+      omittedBefore: false,
+    })
+
+    // Minimize: visibilitychange AND pagehide both fire `hidden = true`.
+    controller.noteVisibilityChange(true)
+    controller.noteVisibilityChange(true)
+    advance(LEASE_MS * 5)
+    // Resume: pageshow AND visibilitychange both fire `hidden = false`.
+    controller.noteVisibilityChange(false)
+    controller.noteVisibilityChange(false)
+
+    controller.shouldRefreshForLiveness()
+
+    expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_lease_expired')
+    expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_screen_stalled')
+
+    // And a genuine stall afterward, fully visible, must still be caught —
+    // proving the duplicate edges did not leak extra banked credit forward.
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'generating', 'q', 'a', 'more'), {
+      omittedBefore: false,
+    })
+    advance(LEASE_MS)
+    controller.shouldRefreshForLiveness()
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('replica_lease_expired')
+    expect(subscribeFrames(sendData).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('a REAL stall that happens entirely while visible is still caught (grace does not mask genuine stalls)', () => {
     const { sendData, controller, advance } = setup()
     controller.retain()
