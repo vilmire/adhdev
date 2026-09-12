@@ -66,15 +66,21 @@ function countsFrom(partial: Partial<Record<MeshActiveWorkStatus, number>>): Rec
 }
 
 function records(...ids: string[]): MeshActiveWorkRecord[] {
-  return ids.map(id => ({
+  return recordsWithStatus(ids.map(id => [id, 'generating' as MeshActiveWorkStatus]))
+}
+
+function recordsWithStatus(entries: Array<[string, MeshActiveWorkStatus]>): MeshActiveWorkRecord[] {
+  return entries.map(([id, status], i) => ({
     taskId: id,
     source: 'queue',
-    status: 'generating',
+    status,
     // Free text deliberately present on the record — the renderer must NOT surface it.
     taskTitle: 'refactor the billing module and delete the stale fixtures',
     taskSummary: 'refactor the billing module and delete the stale fixtures',
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
+    // Ascending so index order == createdAt order, matching how buildMeshActiveWork
+    // hands records to the renderer (createdAt-sorted).
+    createdAt: new Date(i).toISOString(),
+    updatedAt: new Date(i).toISOString(),
     elapsedMs: 0,
   })) as MeshActiveWorkRecord[]
 }
@@ -119,9 +125,81 @@ describe('renderMeshStatusLine', () => {
     })!
     expect(line.length).toBeLessThanOrEqual(MESH_STATUS_LINE_MAX_CHARS)
     expect(line).toContain('...')
-    // Every id that IS shown is a whole 7-char prefix — a half id is not a usable handle.
+    // Every shown entry is "<7-char id> <status>" — a half id is not a usable handle.
     const shown = line.slice(line.indexOf('(') + 1, line.lastIndexOf(')')).split(', ').filter(s => s !== '...')
-    for (const id of shown) expect(id).toHaveLength(7)
+    for (const entry of shown) {
+      const [id, status] = entry.split(' ')
+      expect(id).toHaveLength(7)
+      expect(status).toBe('generating')
+    }
+  })
+
+  it('orders both the count breakdown and the id list by actionability, not by count size or createdAt', () => {
+    // Oldest record is 'generating' (least actionable here); newest is 'awaiting_approval'.
+    const line = renderMeshStatusLine({
+      activeWork: recordsWithStatus([
+        ['aaaa111generating', 'generating'],
+        ['bbbb222approval', 'awaiting_approval'],
+      ]),
+      statusCounts: countsFrom({ generating: 1, awaiting_approval: 1 }),
+      totalActiveCount: 2,
+    })!
+    // Count breakdown: awaiting_approval must render before generating despite
+    // STATUS_RENDER_ORDER previously putting generating first.
+    expect(line.indexOf('awaiting_approval')).toBeLessThan(line.indexOf('generating'))
+    // Id list: the awaiting_approval id must appear before the generating id even
+    // though it has a LATER createdAt (index 1 vs index 0 in recordsWithStatus).
+    expect(line.indexOf('bbbb222')).toBeLessThan(line.indexOf('aaaa111'))
+  })
+
+  it('tags each id with its own status', () => {
+    const line = renderMeshStatusLine({
+      activeWork: recordsWithStatus([
+        ['a3f21c8deadbeef', 'awaiting_approval'],
+        ['9c1d0e2feedface', 'failed'],
+      ]),
+      statusCounts: countsFrom({ awaiting_approval: 1, failed: 1 }),
+      totalActiveCount: 2,
+    })!
+    expect(line).toContain('a3f21c8 awaiting_approval')
+    expect(line).toContain('9c1d0e2 failed')
+  })
+
+  it('under elision, keeps actionable ids and drops generating ids first', () => {
+    // One awaiting_approval id plus many generating ids, all with long free text,
+    // such that not all ids fit within the 200-char bound.
+    const generatingIds = Array.from({ length: 30 }, (_, i) => [`gen${i}`.padStart(7, '0'), 'generating' as MeshActiveWorkStatus] as [string, MeshActiveWorkStatus])
+    const line = renderMeshStatusLine({
+      activeWork: recordsWithStatus([
+        ...generatingIds, // older, createdAt index 0..29
+        ['zzzz999approval', 'awaiting_approval'], // newest, createdAt index 30
+      ]),
+      statusCounts: countsFrom({ generating: 30, awaiting_approval: 1 }),
+      totalActiveCount: 31,
+    })!
+    expect(line.length).toBeLessThanOrEqual(MESH_STATUS_LINE_MAX_CHARS)
+    expect(line).toContain('...')
+    // The single awaiting_approval id survives elision despite being createdAt-newest.
+    expect(line).toContain('zzzz999 awaiting_approval')
+  })
+
+  it('clampToBound never fires when elision already respects the char bound (head-only fallback stays whole)', () => {
+    // Regression guard for the fault: if actionability sorting were reverted, this
+    // input's elided line would still fit under the bound by construction (elision
+    // guarantees that), so this test alone would not catch the regression — it is
+    // the two tests above that pin the sort. This test instead pins that clampToBound's
+    // hard slice is never reached for a normal elided line: no trailing '…' marker.
+    const many = Array.from({ length: 80 }, (_, i) => `${i}`.padStart(7, '0') + 'tail')
+    const line = renderMeshStatusLine({
+      activeWork: records(...many),
+      statusCounts: countsFrom({ generating: 80 }),
+      totalActiveCount: 80,
+    })!
+    expect(line.length).toBeLessThanOrEqual(MESH_STATUS_LINE_MAX_CHARS)
+    expect(line.endsWith('…')).toBe(false)
+    // No entry is a bare truncated fragment ending mid-id.
+    const shown = line.slice(line.indexOf('(') + 1, line.lastIndexOf(')')).split(', ').filter(s => s !== '...')
+    for (const entry of shown) expect(entry).toMatch(/^\w{7} generating$/)
   })
 })
 

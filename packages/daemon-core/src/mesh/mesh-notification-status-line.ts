@@ -9,6 +9,13 @@
 // injects the notification. This module renders those numbers as a single
 // appended line so the common case needs no extra MCP call.
 //
+// ★THIS LINE IS A FILTER, NOT AN AUTHORITY ON APPROVALS. buildMeshActiveWork is
+// called here without `nodes`, so its live-overlay (turnProjectionActiveWorkStatus /
+// sessionStatusFromNodes) never runs — this line can under-report awaiting_approval
+// relative to true node state. Treat it as "at least this much is in flight",
+// never as proof that nothing needs approval. A coordinator that needs the real
+// answer must still call mesh_status / mesh_view_queue.
+//
 // ── Three constraints, each load-bearing ────────────────────────────────────
 //
 // 1. SNAPSHOT AT INJECT TIME, NEVER AT EMIT TIME. Emit (mesh-event-forwarding)
@@ -69,15 +76,24 @@ const ACTIVE_WORK_LEDGER_KINDS = [
  * should be able to diff them by eye). Ordered most- to least-actionable.
  */
 const STATUS_RENDER_ORDER: readonly MeshActiveWorkStatus[] = [
-    'generating',
     'awaiting_approval',
     'awaiting_choice',
+    'failed',
+    'generating',
     'pending',
     'assigned',
     'finalizing',
-    'failed',
     'idle',
 ];
+
+/**
+ * Rank used to sort BOTH the id list and, transitively, which ids survive elision.
+ * Lower rank = shown first. Mirrors STATUS_RENDER_ORDER's actionability ordering —
+ * kept as a separate map (rather than deriving from array index at call sites)
+ * because it is also used as a comparator key, not just an iteration order.
+ */
+const STATUS_ACTIONABILITY_RANK: Record<MeshActiveWorkStatus, number> =
+    Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i])) as Record<MeshActiveWorkStatus, number>;
 
 export interface MeshStatusLineInputs {
     activeWork: MeshActiveWorkRecord[];
@@ -91,7 +107,13 @@ export interface MeshStatusLineInputs {
  * record sets without touching SQLite.
  *
  * Shape:
- *   [Mesh] active 4: 2 generating, 1 awaiting_approval, 1 pending (a3f21c8, 7b0e441, ...)
+ *   [Mesh] active 4: 1 awaiting_approval, 1 failed, 2 generating (a3f21c8 awaiting_approval, 9c1d0e2 failed, ...)
+ *
+ * Both the count breakdown and the per-id list are ordered by actionability
+ * (STATUS_RENDER_ORDER), not by creation time — see STATUS_ACTIONABILITY_RANK.
+ * Each id carries its own status tag so a coordinator can map a specific id to
+ * "this is the one awaiting approval" without a follow-up call, and so that
+ * elision under the char bound drops the least-actionable ids first.
  *
  * Returns null when there is nothing worth appending (no active work), so the
  * caller appends nothing rather than a noise line.
@@ -110,27 +132,37 @@ export function renderMeshStatusLine(inputs: MeshStatusLineInputs): string | nul
         ? `[Mesh] active ${total}: ${parts.join(', ')}`
         : `[Mesh] active ${total}`;
 
-    // taskId prefixes are appended only while they fit whole. We never emit a
-    // truncated id — a half-id is not a usable handle and would read as a
+    // taskId+status entries are appended only while they fit whole. We never emit
+    // a truncated id — a half-id is not a usable handle and would read as a
     // different task. Once one does not fit, we stop and mark the elision.
-    const ids: string[] = [];
-    for (const record of inputs.activeWork) {
-        const id = typeof record?.taskId === 'string' ? record.taskId.trim() : '';
-        if (!id) continue;
-        ids.push(id.slice(0, TASK_ID_PREFIX_CHARS));
+    //
+    // Sorted by actionability (awaiting_approval/awaiting_choice/failed first),
+    // NOT by createdAt: inputs.activeWork arrives createdAt-sorted, and elision
+    // below keeps a PREFIX of this list, so without this sort the oldest ids
+    // survive truncation and a freshly-stuck approval on a busy mesh is the
+    // first thing dropped — exactly backwards from what's actionable.
+    // Array.prototype.sort is stable, so same-rank ids keep their createdAt order.
+    const entries: string[] = [];
+    const sorted = inputs.activeWork
+        .filter(record => typeof record?.taskId === 'string' && record.taskId.trim())
+        .slice()
+        .sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+    for (const record of sorted) {
+        const id = record.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries.push(`${id} ${record.status}`);
     }
-    if (ids.length === 0) return clampToBound(head);
+    if (entries.length === 0) return clampToBound(head);
 
     let line = head;
     const shown: string[] = [];
-    for (let i = 0; i < ids.length; i++) {
-        const isLast = i === ids.length - 1;
-        // Cost of committing to this id: the id itself plus, when ids remain
-        // after it, the ", ..." elision marker that will follow.
-        const candidate = [...shown, ids[i]];
+    for (let i = 0; i < entries.length; i++) {
+        const isLast = i === entries.length - 1;
+        // Cost of committing to this entry: the entry itself plus, when entries
+        // remain after it, the ", ..." elision marker that will follow.
+        const candidate = [...shown, entries[i]];
         const suffix = ` (${candidate.join(', ')}${isLast ? '' : ', ...'})`;
         if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
-        shown.push(ids[i]);
+        shown.push(entries[i]);
         line = head + suffix;
     }
     // Nothing fit — keep the counts, drop the id list entirely.
