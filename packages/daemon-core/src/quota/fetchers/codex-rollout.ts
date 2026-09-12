@@ -350,7 +350,22 @@ export function fetchCodexQuotaFromRollout(overrides: QuotaFetchDeps = {}): Prov
             updatedAt: reading.capturedAt,
             error: `Codex quota reading is stale (${hours}h old) — run codex to refresh`,
             status: 'error',
-            metadata: { ...metadata, failureKind: 'no-data' },
+            // lastGoodWindows, exactly as the Claude aged-out branch marks it:
+            // these windows were genuinely MEASURED — read off the rollout log
+            // at their original capture time — so they carry the same trust
+            // class as refresh.ts's carry-forward, and mesh quota routing may
+            // keep gating/bonusing on them until each window's own resetsAt
+            // (owner decision 2026-08-24).
+            //
+            // The mark has to be applied HERE, by the fetcher that authored the
+            // measurement: 'no-data' is deliberately NOT in
+            // TRANSIENT_QUOTA_FAILURE_KINDS (types.ts), so carry-forward never
+            // stamps provenance on this shape. Without it, routing's provenance
+            // gate (mesh-quota-routing.ts: `lastGoodWindows !== true → null`)
+            // discarded a real reading wholesale and fell OPEN — which is how an
+            // exhausted Codex (weekly 100% used, reset still ahead) kept winning
+            // difficult-task routing and returning empty completions.
+            metadata: { ...metadata, failureKind: 'no-data', lastGoodWindows: true },
         };
     }
 

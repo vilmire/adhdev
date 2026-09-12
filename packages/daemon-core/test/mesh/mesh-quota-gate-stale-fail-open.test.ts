@@ -202,3 +202,95 @@ describe('2026-08-25 Claude retained-window incident — validity is per reset b
         expect(quotaSpreadBonusByProvider(node, null, INCIDENT_NOW)['claude-cli']).toBe(0)
     })
 })
+
+/**
+ * The Codex counterpart of the incident above. The rollout fetcher's aged-out
+ * branch deliberately reports the windows it measured, but until it also marked
+ * `lastGoodWindows` those windows had no provenance — so routing's gate
+ * discarded them at the provenance check and fell OPEN. An exhausted Codex
+ * (weekly 100% used, reset still ahead) was therefore scored as "quota unknown"
+ * rather than "no quota left", won the clear-order tie for difficult tasks, and
+ * returned empty completions.
+ *
+ * These cases pin the SHAPE the fetcher emits (status 'error' + failureKind
+ * 'no-data' + retained windows + the mark), so they go red if the mark is
+ * dropped from codex-rollout.ts.
+ */
+describe('Codex stale rollout reading — provenance makes exhaustion gateable', () => {
+    const WEEKLY_RESET_AHEAD = NOW + 3 * 24 * 60 * MINUTE
+    const CAPTURED_9H_AGO = NOW - 9 * 60 * MINUTE
+
+    /** A node holding the aged-out rollout snapshot for a given weekly usage. */
+    function staleCodexNode(weeklyUsedPercent: number) {
+        return {
+            id: 'node_codex_stale',
+            nodeFacts: {
+                reportedAt: NOW,
+                quota: {
+                    'codex-cli': {
+                        provider: 'codex-cli',
+                        status: 'error',
+                        session: null,
+                        weekly: {
+                            usedPercent: weeklyUsedPercent,
+                            windowMinutes: 10080,
+                            resetsAt: WEEKLY_RESET_AHEAD,
+                        },
+                        updatedAt: CAPTURED_9H_AGO,
+                        error: 'Codex quota reading is stale (9h old) — run codex to refresh',
+                        metadata: { source: 'rollout', failureKind: 'no-data', lastGoodWindows: true },
+                    },
+                },
+            },
+        }
+    }
+
+    it('gates an exhausted Codex whose weekly reset is still ahead', () => {
+        const node = staleCodexNode(100)
+
+        // The measurement is 9h old but its window has not reset, and usage
+        // within a window only grows — so 0% left is a lower bound on now.
+        expect(evaluateProviderQuotaGate(node, 'codex-cli', POLICY, NOW)).toMatchObject({
+            reason: 'provider_quota_weekly_low',
+            window: 'weekly',
+            remainingPercent: 0,
+        })
+        expect(quotaSpreadBonusByProvider(node, POLICY, NOW)['codex-cli']).toBe(0)
+    })
+
+    it('does not gate a Codex that still has headroom — the threshold decides, not the mark', () => {
+        // The reverse regression: provenance makes the windows READABLE, it
+        // must not turn every stale snapshot into a block. 30% used ⇒ 70% left,
+        // judged against the DEFAULT weekly floor (the owner's 80% POLICY above
+        // is deliberately not applied here — under it 70% would legitimately
+        // gate, which would prove nothing about the mark).
+        const node = staleCodexNode(30)
+
+        expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull()
+        // …and it still earns a spread bonus proportional to that headroom,
+        // rather than being zeroed out as unreadable.
+        expect(quotaSpreadBonusByProvider(node, null, NOW)['codex-cli']).toBeGreaterThan(0)
+    })
+
+    it('still ranks a fresh-headroom Codex ahead of an exhausted one', () => {
+        const exhausted = staleCodexNode(100)
+        const roomy = staleCodexNode(30)
+
+        // `gated` carries the block reason alongside the provider; `clear` is
+        // the bare list routing actually picks from.
+        expect(rankProvidersByQuotaGate(exhausted, ['codex-cli'], POLICY, NOW).gated)
+            .toEqual([{
+                providerType: 'codex-cli',
+                block: {
+                    reason: 'provider_quota_weekly_low',
+                    window: 'weekly',
+                    remainingPercent: 0,
+                    thresholdPercent: 80,
+                },
+            }])
+        expect(rankProvidersByQuotaGate(exhausted, ['codex-cli'], POLICY, NOW).clear)
+            .toEqual([])
+        expect(rankProvidersByQuotaGate(roomy, ['codex-cli'], null, NOW).clear)
+            .toEqual(['codex-cli'])
+    })
+})
