@@ -1540,6 +1540,8 @@
         "toolExpandUnavailable": "无法获取完整输出 —— 读取后记录已发生变化。",
         "waitingToSend": "等待发送 —— 代理仍在处理中。",
         "waitingToSendAria": "等待发送",
+        "notDelivered": "未送达 —— 代理从未收到这条消息。",
+        "notDeliveredAria": "未送达",
         "sendNow": "立即发送",
         "sending": "发送中…",
         "sendNowAria": "中断代理当前的回合并立即发送",

@@ -277,6 +277,7 @@ export default function DashboardRemoteDialog({
                                 sendFeedbackMessage={cmds.sendFeedbackMessage}
                                 pendingLocalMessage={cmds.pendingLocalMessage}
                                 pendingLocalMessages={cmds.pendingLocalMessages}
+                                retireEchoedPendingMessages={cmds.retireEchoedPendingMessages}
                                 handleFocusAgent={cmds.handleFocusAgent}
                                 isFocusingAgent={cmds.isFocusingAgent}
                                 actionLogs={visibleActionLogs}

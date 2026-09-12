@@ -2,6 +2,7 @@ import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 import { getMessageTimestamp } from './message-utils'
+import { PENDING_QUEUED_MESSAGE_STALE_AFTER_MS } from '../../utils/pendingQueuedMessages'
 
 export function getConversationMessageAuthorityKey(conversation: ActiveConversation): string {
     const daemonId = getConversationDaemonRouteId(conversation)
@@ -47,6 +48,16 @@ export interface PendingLocalMessage {
     sentAt: number
     /** True when the daemon reported `queued` (parked, not yet written to the PTY). */
     queued?: boolean
+    /**
+     * (QUEUED-SEND-STUCK-FOREVER) True once the body has waited past
+     * `PENDING_QUEUED_MESSAGE_STALE_AFTER_MS` with no echo.
+     *
+     * The UI stops asserting it is still on its way and says it was not
+     * delivered. It is a DISPLAY claim, not a deletion — the text and its
+     * controls stay, because a body the daemon discarded on teardown is one the
+     * owner most likely wants to resend.
+     */
+    stale?: boolean
 }
 
 /**
@@ -122,6 +133,134 @@ function countEchoedMessages(liveMessages: DashboardMessage[], target: string): 
         if (normalizeForEchoMatch(message.content) === target) count += 1
     }
     return count
+}
+
+/**
+ * (QUEUED-SEND-STUCK-FOREVER) How long a PARKED body may wait before the UI
+ * stops claiming it is still on its way.
+ *
+ * ★ Why a cutoff is needed at all, when the echo is supposed to retire the entry.
+ *
+ * The echo only arrives if the daemon actually drains the body. It does not when
+ * the session is torn down mid-queue: `FsmDriver.shutdown()` logs
+ * `DISCARDING n queued send(s)` and empties `pendingSends` — and tells no
+ * surface. The dashboard's store is the ONLY record of that body at that point,
+ * so with nothing to retire it the row sat above the composer claiming "Waiting
+ * to send" indefinitely. The owner reported exactly that: messages sent long ago,
+ * still pinned as waiting, for an agent that was never going to receive them.
+ *
+ * ★ Why this is separate from, and much shorter than,
+ * `PENDING_QUEUED_MESSAGE_MAX_AGE_MS` (24h). That bound is STORE hygiene — it
+ * stops localStorage growing without limit — and is deliberately far above any
+ * plausible drain. This bound is a STATEMENT TO THE OWNER: past it, the UI no
+ * longer asserts the message is queued. Queue drains observed in practice are
+ * tens of seconds (the optimistic-bubble comment records 35.5s), so ten minutes
+ * is roughly an order of magnitude of headroom over the worst real wait while
+ * still resolving within one sitting rather than the next day.
+ *
+ * ★ It does NOT delete the body. A stale entry is marked, not dropped — see
+ * `retirePendingLocalMessages`. The owner keeps the text and keeps Cancel; what
+ * they lose is the false promise that it is still going to be delivered.
+ */
+export { PENDING_QUEUED_MESSAGE_STALE_AFTER_MS }
+
+/**
+ * The result of reconciling the local queue against the live transcript.
+ *
+ * `entries` is returned by identity when nothing changed, so the caller can skip
+ * a state write (and therefore a localStorage write and a re-render) on the
+ * overwhelmingly common tick where the tail moved but no pending body was
+ * affected.
+ */
+export interface PendingRetirementResult {
+    entries: PendingLocalMessage[]
+    /** True when `entries` differs from the input — i.e. a write is warranted. */
+    changed: boolean
+    /** How many entries the daemon's echo accounted for. */
+    retiredByEcho: number
+    /** How many entries crossed the stale threshold on this pass. */
+    markedStale: number
+}
+
+/**
+ * ★ THE FIX (QUEUED-SEND-STUCK-FOREVER): retire echoed bodies from STATE.
+ *
+ * `withPendingLocalMessages` has always matched echoes, but only while BUILDING
+ * THE RENDER — it skipped a bubble and returned. Nothing upstream learned that
+ * the body had arrived, so the entry stayed in React state and in localStorage
+ * forever. That was survivable for transcript bubbles (the skip hid them) and
+ * fatal for the pinned strip, which reads the STORE and so kept rendering rows
+ * the transcript had long since stopped showing. Worse, that render-time match
+ * deliberately EXCLUDES queued rows, which are precisely the ones the strip
+ * shows — so parked bodies had no echo path at all.
+ *
+ * Hoisting the same match to a state transition fixes both: an echoed entry is
+ * really removed, from state and from the persisted copy, for every surface at
+ * once.
+ *
+ * ★ The echo-budget counting is carried over deliberately and unchanged. With
+ * several entries queued the owner can legitimately send the same text twice
+ * ("continue", "continue"); one echo must retire exactly ONE entry, or the
+ * second body — still parked in the daemon FIFO — would vanish from screen while
+ * it was still waiting, which is the same disappearance in a new disguise.
+ *
+ * ★ Stale entries are MARKED, not dropped. Deleting the owner's text on a timer
+ * is the one outcome worse than showing it late: a body the daemon discarded on
+ * teardown is one the owner probably wants to resend, and they cannot resend
+ * what they cannot see. `stale` flips the row's claim from "waiting to send" to
+ * "not delivered", and leaves the text and the controls in place.
+ */
+export function retirePendingLocalMessages(
+    pending: readonly PendingLocalMessage[] | null | undefined,
+    liveMessages: DashboardMessage[],
+    now: number = Date.now(),
+    staleAfterMs: number = PENDING_QUEUED_MESSAGE_STALE_AFTER_MS,
+): PendingRetirementResult {
+    if (!pending || pending.length === 0) {
+        return { entries: [], changed: false, retiredByEcho: 0, markedStale: 0 }
+    }
+
+    const echoBudget = new Map<string, number>()
+    const kept: PendingLocalMessage[] = []
+    let retiredByEcho = 0
+    let markedStale = 0
+    let changed = false
+
+    for (const entry of pending) {
+        const target = entry.content.trim()
+        if (!target) {
+            // An empty body can never be echoed and can never be cancelled by
+            // content — it would pin forever. It is also nothing the owner can
+            // read, so dropping it loses them nothing.
+            changed = true
+            continue
+        }
+        if (!echoBudget.has(target)) {
+            echoBudget.set(target, countEchoedMessages(liveMessages, target))
+        }
+        const remaining = echoBudget.get(target) || 0
+        if (remaining > 0) {
+            // The daemon echoed this body back: it is a delivered turn in the
+            // transcript now, so the local stand-in has done its job.
+            echoBudget.set(target, remaining - 1)
+            retiredByEcho += 1
+            changed = true
+            continue
+        }
+        const isStale = now - entry.sentAt > staleAfterMs
+        if (isStale && entry.stale !== true) {
+            markedStale += 1
+            changed = true
+            kept.push({ ...entry, stale: true })
+            continue
+        }
+        kept.push(entry)
+    }
+
+    if (!changed) {
+        return { entries: pending as PendingLocalMessage[], changed: false, retiredByEcho: 0, markedStale: 0 }
+    }
+    return { entries: kept, changed: true, retiredByEcho, markedStale }
 }
 
 function buildPendingBubble(pending: PendingLocalMessage): DashboardMessage {

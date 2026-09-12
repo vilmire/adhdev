@@ -1540,6 +1540,8 @@
         "toolExpandUnavailable": "全体の出力を取得できません — 読み込み後にトランスクリプトが変更されました。",
         "waitingToSend": "送信待ち — エージェントはまだ作業中です。",
         "waitingToSendAria": "送信待ち",
+        "notDelivered": "未配信 — エージェントはこのメッセージを受け取っていません。",
+        "notDeliveredAria": "未配信",
         "sendNow": "今すぐ送信",
         "sending": "送信中…",
         "sendNowAria": "エージェントの現在のターンを中断して今すぐ送信",

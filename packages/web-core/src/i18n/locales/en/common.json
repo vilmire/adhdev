@@ -1540,6 +1540,8 @@
         "toolExpandUnavailable": "Full output is no longer available — the transcript has changed since this was read.",
         "waitingToSend": "Waiting to send — the agent is still working.",
         "waitingToSendAria": "Waiting to send",
+        "notDelivered": "Not delivered — the agent never received this.",
+        "notDeliveredAria": "Not delivered",
         "sendNow": "Send now",
         "sending": "Sending…",
         "sendNowAria": "Send now by interrupting the agent's current turn",

@@ -18,7 +18,7 @@ import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, bu
 import { eventManager } from '../../managers/EventManager';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
-import type { ActiveConversation } from './types';
+import type { ActiveConversation, DashboardMessage } from './types';
 import type { ChatMessage, DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
@@ -70,6 +70,13 @@ export interface ChatPaneProps {
      * for surfaces that have not been migrated.
      */
     pendingLocalMessages?: readonly PendingLocalMessage[] | null;
+    /**
+     * ★ (QUEUED-SEND-STUCK-FOREVER) Hand the daemon's transcript tail back to the
+     * queue's owner so echoed bodies are retired from state, not merely hidden by
+     * the render. Optional so the read-only share viewer — which renders a
+     * transcript it does not own and has no queue to reconcile — can omit it.
+     */
+    retireEchoedPendingMessages?: (liveMessages: DashboardMessage[]) => void;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
     actionLogs: { routeId: string; text: string; timestamp: number }[];
@@ -82,6 +89,17 @@ export interface ChatPaneProps {
 }
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
+
+/**
+ * (QUEUED-SEND-STUCK-FOREVER) How often the pane re-checks whether a waiting body
+ * has outlived the window in which calling it "waiting" is still true.
+ *
+ * Only runs while the queue is non-empty, and only writes when a row actually
+ * crosses the threshold. Coarse on purpose: it enforces a minutes-scale bound, so
+ * checking every 30s bounds the lag to a small fraction of it while staying far
+ * away from anything that could be mistaken for polling.
+ */
+const PENDING_QUEUE_STALE_SWEEP_INTERVAL_MS = 30_000;
 
 /**
  * (CHAT-TAB-SWITCH-STALE-FALLBACK ①) Build the chat-tail controller options for
@@ -136,6 +154,7 @@ export default function ChatPane({
     sendFeedbackMessage = null,
     pendingLocalMessage = null,
     pendingLocalMessages = null,
+    retireEchoedPendingMessages,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     scrollToBottomRequestNonce,
     isInputActive = true,
@@ -237,14 +256,46 @@ export default function ChatPane({
     // Entries whose send is still in its round trip DO stay in the tail: the
     // instant optimistic bubble is the point, and such a send may yet resolve as
     // delivered rather than parked.
+    //
+    // ★ (QUEUED-SEND-STUCK-FOREVER) The DAEMON's tail, before any local bubble is
+    // overlaid, is kept separate because it — and only it — is valid evidence that
+    // a body was delivered. Matching echoes against the overlaid list would let a
+    // pending entry match ITSELF and retire on the frame it was created.
+    const daemonLiveMessages = getConversationLiveMessages(activeConv, chatTailState);
     const liveMessages = withPendingLocalMessages(
-        getConversationLiveMessages(activeConv, chatTailState),
+        daemonLiveMessages,
         // MULTI-QUEUE: prefer the full list; fall back to the single-entry prop
         // for callers that still pass only the newest bubble.
         pendingLocalMessages ?? (pendingLocalMessage ? [pendingLocalMessage] : null),
         undefined,
         { excludeQueued: true },
     );
+
+    // ★ (QUEUED-SEND-STUCK-FOREVER) Hand the authoritative tail to the queue's
+    // owner so an echoed body is retired from STATE — and therefore from
+    // localStorage and from the pinned strip — instead of merely being skipped by
+    // the render above. Before this, the transcript hid a delivered body while the
+    // store kept it forever, which is what left "Waiting to send" rows pinned above
+    // the composer for messages the agent had already answered.
+    //
+    // ★ Two triggers, because there are two ways a body stops deserving its row.
+    // The TAIL moving is how a delivered body is detected. But the case that
+    // produced the bug report is a session torn down while bodies were parked —
+    // its transcript never moves again, so a tail-only trigger would never fire
+    // and the row would stay pinned exactly as before. Hence the timer as well:
+    // coarse (the threshold it enforces is minutes), only while the queue is
+    // non-empty, and a no-op write unless something actually changed.
+    const hasPendingEntries = (pendingLocalMessages?.length ?? 0) > 0;
+    useEffect(() => {
+        if (!retireEchoedPendingMessages) return;
+        retireEchoedPendingMessages(daemonLiveMessages);
+        if (!hasPendingEntries) return;
+        const timer = setInterval(
+            () => retireEchoedPendingMessages(daemonLiveMessages),
+            PENDING_QUEUE_STALE_SWEEP_INTERVAL_MS,
+        );
+        return () => clearInterval(timer);
+    }, [retireEchoedPendingMessages, daemonLiveMessages, hasPendingEntries]);
     // Only the COUNT is consumed (activity-toggle affordance), but the filter
     // classifies every live message. Memoized on `liveMessages` so it runs when
     // the tail actually changes rather than on every render of this pane.

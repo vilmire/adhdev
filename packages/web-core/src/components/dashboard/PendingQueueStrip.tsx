@@ -91,16 +91,32 @@ function PendingQueueStripImpl({
     const waiting = entries.filter(entry => entry.queued === true && !!entry.id);
     if (waiting.length === 0) return null;
 
+    // The region's own label must not out-live the claim its rows are making: a
+    // strip holding nothing but undelivered bodies announced as "Waiting to send"
+    // would tell a screen-reader user the exact thing this change exists to stop
+    // saying. Any still-waiting row keeps the waiting label, since that is then
+    // true of the region as a whole.
+    const hasLiveWait = waiting.some(entry => entry.stale !== true);
+    const regionLabel = hasLiveWait ? t('chat.waitingToSendAria') : t('chat.notDeliveredAria');
+
     return (
         <div
             className="chat-pending-queue-strip"
             data-testid="pending-queue-strip"
             data-pending-queue-count={waiting.length}
             role="region"
-            aria-label={t('chat.waitingToSendAria')}
+            aria-label={regionLabel}
         >
             {waiting.map(entry => (
-                <div key={entry.id} className="chat-pending-queue-row" data-chat-queued-row="true">
+                <div
+                    key={entry.id}
+                    className="chat-pending-queue-row"
+                    data-chat-queued-row="true"
+                    // ★ (QUEUED-SEND-STUCK-FOREVER) Marks a body that has waited past
+                    // the window in which "waiting to send" is still a true statement.
+                    // See the marker below for what changes when it is set.
+                    data-chat-queued-stale={entry.stale === true ? 'true' : undefined}
+                >
                     {/* `.chat-bubble` + `.chat-bubble-user` is the transcript's own
                         user skin, reused verbatim so a theme change moves both at
                         once and a waiting body is recognisably the same object as
@@ -110,18 +126,34 @@ function PendingQueueStripImpl({
                         title={entry.content}
                     >
                         <div className="chat-pending-queue-body">{entry.content}</div>
-                        {/* The undelivered marker. A glyph rather than the old
-                            sentence: it has to sit on EVERY waiting line, and a
-                            sentence repeated down the strip is what made the queue
-                            read as a form. `aria-label` carries the meaning the
-                            glyph cannot, so nothing is lost to a screen reader. */}
+                        {/* The undelivered marker. A glyph rather than a sentence:
+                            it has to sit on EVERY waiting line, and a sentence
+                            repeated down the strip is what made the queue read as a
+                            form. `aria-label` carries the meaning the glyph cannot,
+                            so nothing is lost to a screen reader.
+                          *
+                          * ★ (QUEUED-SEND-STUCK-FOREVER) The glyph is what states the
+                          * claim, so it is also where the claim has to STOP being made.
+                          * ⏱ is a PROMISE — it says the agent will get this. That
+                          * promise is false once the session was torn down mid-queue:
+                          * `FsmDriver.shutdown()` discards `pendingSends` and notifies
+                          * nobody, so no echo and no cancel confirmation will ever
+                          * arrive, and the row previously sat here repeating the
+                          * promise indefinitely. The owner reported exactly this. Past
+                          * the threshold it becomes ⚠ and the label says undelivered.
+                          *
+                          * The row is KEPT rather than removed: the text is the owner's,
+                          * a discarded body is one they most likely want to resend, and
+                          * Cancel still works to dismiss it. Only the claim changes. */}
                         <span
-                            className="chat-pending-queue-clock"
+                            className={entry.stale === true
+                                ? 'chat-pending-queue-clock chat-pending-queue-stale'
+                                : 'chat-pending-queue-clock'}
                             role="img"
-                            aria-label={t('chat.waitingToSendAria')}
-                            title={t('chat.waitingToSendAria')}
+                            aria-label={entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
+                            title={entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
                         >
-                            ⏱
+                            {entry.stale === true ? '⚠' : '⏱'}
                         </span>
                     </div>
                     {onCancelQueued && (
@@ -167,7 +199,11 @@ export const PendingQueueStrip = memo(PendingQueueStripImpl, (prev, next) => (
         return !!other
             && entry.id === other.id
             && entry.content === other.content
-            && entry.queued === other.queued;
+            && entry.queued === other.queued
+            // ★ `stale` selects the row's label, so omitting it here would let the
+            // strip keep rendering "Waiting to send" after the entry had already
+            // been marked undelivered — the memo would report no visible change.
+            && entry.stale === other.stale;
     })
 ));
 
