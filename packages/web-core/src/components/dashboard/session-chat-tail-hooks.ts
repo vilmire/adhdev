@@ -292,8 +292,28 @@ export function useSessionChatTailController(
       if (!controller.shouldRefreshForLiveness({ visible: watchdogPlan.visible })) return
       void refreshAuthoritativeTail()
     }, CHAT_TAIL_LIVENESS_TICK_MS)
+    // (VISIBILITY) Feed document hidden/visible edges to the replica lease so
+    // it can discount time spent hidden — see `noteVisibilityChange` on the
+    // controller. Without this, minimizing the app/tab past the lease window
+    // (20s while busy) and returning trips a false "replica degraded"
+    // fallback on the very next tick, because throttled timers/rendering
+    // freeze the lease clocks while hidden but wall-clock time does not stop.
+    // Fires once up front to seed the controller with the CURRENT state
+    // (mount can happen while already hidden, e.g. a pane opened in a
+    // background tab).
+    const onVisibilityChange = () => {
+      if (typeof document === 'undefined') return
+      controller.noteVisibilityChange(document.hidden)
+    }
+    onVisibilityChange()
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
     return () => {
       clearInterval(livenessTimer)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
     }
     // Same rationale as above: `refreshAuthoritativeTail` is stable for a given
     // session identity. `watchdogPlan.visible` (i.e. `refreshEnabled`) IS a dep
