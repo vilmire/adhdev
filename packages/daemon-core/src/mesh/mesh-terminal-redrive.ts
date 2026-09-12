@@ -338,10 +338,11 @@ export function buildRedriveInjection(
     return {
         event,
         meshId,
+        nodeLabel: nodeId ? `Node '${nodeId}'` : 'Remote agent',
         nodeId: nodeId || undefined,
         metadataEvent,
         queuedAt: Date.now(),
-    } as PendingMeshCoordinatorEvent;
+    };
 }
 
 /**

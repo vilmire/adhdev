@@ -943,7 +943,7 @@ export function holdOrExpireStrictUnmatchedEvent(
                 recoverable: true,
                 targetCoordinatorSessionId: wantSession,
                 targetCoordinatorDaemonId: pending.targetCoordinatorDaemonId ?? null,
-                nodeLabel: pending.nodeLabel,
+                nodeLabel: readNonEmptyString(pending.nodeLabel) || (pending.nodeId ? `Node '${pending.nodeId}'` : 'Remote agent'),
                 ...(pending.workspace ? { workspace: pending.workspace } : {}),
                 queuedAt,
                 ...(finalSummary ? { finalSummary } : {}),

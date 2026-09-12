@@ -90122,14 +90122,27 @@ ${cleanBody}`;
                     const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
                     const pendingEvents = drainPendingMeshCoordinatorEvents3(coordinatorMeshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
                     if (pendingEvents.length > 0) {
-                      LOG.info("MeshEvents", `Auto-flushing ${pendingEvents.length} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
+                      const flushSessionId = readNonEmptyString(flushState.instanceId);
+                      let deliveredCount = 0;
                       for (const pending of pendingEvents) {
+                        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+                        if (wantSession && !sessionIdsEquivalent(wantSession, flushSessionId)) {
+                          try {
+                            requeueDrainedPendingMeshCoordinatorEvent(pending);
+                          } catch {
+                          }
+                          continue;
+                        }
                         if (!pending.coordinatorMessage) continue;
                         const forcePending = shouldForceInjectMeshEvent(pending.event);
                         flushSource.onEvent("send_message", {
                           input: { text: pending.coordinatorMessage, textFallback: pending.coordinatorMessage },
                           ...forcePending ? { force: true } : {}
                         });
+                        deliveredCount++;
+                      }
+                      if (deliveredCount > 0) {
+                        LOG.info("MeshEvents", `Auto-flushing ${deliveredCount} pending coordinator event(s) for mesh ${coordinatorMeshId} on coordinator idle`);
                       }
                     } else {
                       maybeInjectIdleActiveMissionReminder(
@@ -94611,7 +94624,7 @@ ${statusLine}`;
             recoverable: true,
             targetCoordinatorSessionId: wantSession,
             targetCoordinatorDaemonId: pending.targetCoordinatorDaemonId ?? null,
-            nodeLabel: pending.nodeLabel,
+            nodeLabel: readNonEmptyString(pending.nodeLabel) || (pending.nodeId ? `Node '${pending.nodeId}'` : "Remote agent"),
             ...pending.workspace ? { workspace: pending.workspace } : {},
             queuedAt,
             ...finalSummary ? { finalSummary } : {},
@@ -100599,6 +100612,7 @@ ${marker}`,
       return {
         event,
         meshId,
+        nodeLabel: nodeId ? `Node '${nodeId}'` : "Remote agent",
         nodeId: nodeId || void 0,
         metadataEvent,
         queuedAt: Date.now()
@@ -120506,7 +120520,12 @@ Run 'adhdev doctor' for detailed diagnostics.`
                         // worker session so its lifecycle events echo it back for the
                         // coordinator's reducer.
                         ...typeof meshContext.attemptId === "string" && meshContext.attemptId ? { attemptId: meshContext.attemptId } : {},
-                        ...typeof meshContext.coordinatorDaemonId === "string" && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}
+                        ...typeof meshContext.coordinatorDaemonId === "string" && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {},
+                        // SESSION-ISOLATION: the originating coordinator SESSION, so this
+                        // worker's completion routes back to the exact dispatching session
+                        // rather than being consumed first-come by any coordinator idle on
+                        // this daemon (see attachMeshAssignment's coordinatorSessionId).
+                        ...typeof meshContext.coordinatorSessionId === "string" && meshContext.coordinatorSessionId ? { coordinatorSessionId: meshContext.coordinatorSessionId } : {}
                       });
                     } catch {
                     }
