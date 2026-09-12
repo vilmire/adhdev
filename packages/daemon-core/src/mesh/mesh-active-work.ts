@@ -376,6 +376,55 @@ function directDispatchTaskId(entry: MeshLedgerEntry): string {
     return readString(entry.payload?.taskId) || entry.id;
 }
 
+/**
+ * STALE-APPROVAL-NO-LIVE-SNIFF (live defect, 2026-09-12): session-scoped terminal
+ * evidence that a `task_approval_needed` level row is resolved, usable when there is
+ * NO live-session sniff to contradict it.
+ *
+ * The existing contradiction guard in buildLedgerDirectDispatchRecord can only fire
+ * when `live.status` is present, i.e. when the caller passed `nodes`. Two of the five
+ * buildMeshActiveWork call sites do not — `mesh-notification-status-line.ts` (the
+ * `[Mesh] active N: 1 awaiting_approval` line appended to coordinator notifications)
+ * and `mesh-idle-reminder.ts` both omit `nodes` entirely. On those surfaces
+ * `live.status` is ALWAYS undefined, so the guard is structurally dead and a resolved
+ * modal stays pinned forever — observed repeatedly in one day, with the coordinator
+ * about to fire mesh_approve at a modal that no longer exists.
+ *
+ * The task's OWN terminal already retires it (the snapshot matcher prefers a real
+ * terminal over an approval, and such records leave `activeWork` as terminal rows).
+ * The uncovered shape is an approval task with no own terminal whose SESSION has
+ * demonstrably moved on: a later task on the same session completed or failed, which
+ * means the worker is no longer sitting on that modal.
+ *
+ * Deliberately SESSION-scoped, not node-scoped. The equivalent real-time guard for
+ * approval NUDGES (`isApprovalNudgeResolved`, mesh-reconcile-coordinator-drain.ts)
+ * matches `nodeMatch || sessionMatch`, but it correlates a single queued nudge; here
+ * a node-wide match would let any unrelated task finishing anywhere on that node
+ * retire a genuinely-blocked session's approval. Session identity is the tight axis
+ * and the only one that actually implies the modal closed.
+ *
+ * Weak/false-idle completions are excluded (same rule as
+ * hasTerminalLedgerAuthorityForTask): a worker that may still be mid-turn is not
+ * evidence the modal closed. Terminals at or before the approval are excluded too —
+ * only a terminal that came AFTER can resolve it.
+ */
+function hasSessionTerminalAfterApproval(
+    ledgerEntries: MeshLedgerEntry[] | undefined,
+    sessionId: string | undefined,
+    approvalAtMs: number,
+): boolean {
+    if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
+    for (const entry of ledgerEntries || []) {
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        if (!sessionIdsEquivalent(readString(entry.sessionId), sessionId)) continue;
+        if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload || {})) continue;
+        const terminalAtMs = new Date(entry.timestamp).getTime();
+        if (!Number.isFinite(terminalAtMs) || terminalAtMs <= approvalAtMs) continue;
+        return true;
+    }
+    return false;
+}
+
 function statusFromTerminal(entry: MeshLedgerEntry): MeshActiveWorkStatus {
     if (entry.kind === 'task_approval_needed') return 'awaiting_approval';
     // A question (waiting_choice) is a distinct blocked state — kept OUT of
@@ -436,7 +485,7 @@ function classifyDirectDispatch(params: {
  */
 function buildLedgerDirectDispatchRecord(
     dispatch: MeshLedgerEntry,
-    ctx: { terminal: MeshLedgerEntry | undefined; nodes: any[] | undefined; now: number },
+    ctx: { terminal: MeshLedgerEntry | undefined; nodes: any[] | undefined; now: number; ledgerEntries?: MeshLedgerEntry[] },
 ): { record: MeshActiveWorkRecord; terminalRow: boolean } {
     const taskId = directDispatchTaskId(dispatch);
     // APPROVAL-Q1-REALTIME (stale level state): prefer a REAL terminal (task_completed /
@@ -484,8 +533,36 @@ function buildLedgerDirectDispatchRecord(
         && !!live.status
         && live.status !== 'awaiting_approval'
         && live.status !== 'awaiting_choice';
-    const status = (liveContradictsBlockedLevel ? live.status : terminalStatus || live.status) || 'assigned';
-    const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed');
+    // STALE-APPROVAL-NO-LIVE-SNIFF: the live sniff above is the PRIMARY contradiction,
+    // but it needs `nodes` — which the notification-status-line and idle-reminder call
+    // sites never pass, leaving the guard structurally dead exactly where the pinned
+    // `1 awaiting_approval` is rendered. Fall back to session-scoped ledger evidence:
+    // a later non-weak terminal on the SAME session means the worker moved past this
+    // modal. Only consulted when the live sniff produced nothing, so a live session
+    // still reporting `awaiting_approval` keeps the row (no over-retirement), and a
+    // genuinely-waiting task with no such terminal is untouched.
+    const sessionTerminalContradictsBlockedLevel = blockedLevelKind
+        && !live.status
+        && hasSessionTerminalAfterApproval(
+            ctx.ledgerEntries,
+            readString(dispatch.sessionId),
+            new Date(terminal!.timestamp).getTime(),
+        );
+    // When session evidence resolves the modal, the record is no longer blocked. It is
+    // reported `idle` — the session finished a turn; we have no evidence this task is
+    // still running, and `idle` is what the same-task terminal path already reports.
+    const status = (
+        liveContradictsBlockedLevel ? live.status
+            : sessionTerminalContradictsBlockedLevel ? 'idle'
+                : terminalStatus || live.status
+    ) || 'assigned';
+    // A session-terminal contradiction retires the row the same way a real terminal
+    // does: status alone is not enough, because `awaiting_approval` would merely be
+    // replaced by another ACTIVE status and the record would stay in activeWork (and
+    // in the rendered status line). Routing it as a terminal row is what actually
+    // removes it from the coordinator's surface.
+    const terminalRow = Boolean(terminal && terminal.kind !== 'task_approval_needed')
+        || sessionTerminalContradictsBlockedLevel;
     const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
         status,
         isTerminalRow: terminalRow,
@@ -792,7 +869,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         for (const dispatch of ledgerDispatches) {
             if (dbTaskIds.has(directDispatchTaskId(dispatch))) continue; // already covered by MeshRuntimeStore path above
             if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
-            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now, ledgerEntries });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
@@ -809,7 +886,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch of ledgerDispatches) {
             if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue; // already emitted as a queue row above
-            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
+            const { record, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now, ledgerEntries });
             if (terminalRow) {
                 terminalDirectWork.push(record);
                 if (opts.includeTerminalDirect !== true) continue;
