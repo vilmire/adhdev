@@ -582,6 +582,76 @@ async function readKeychainBlob(deps: Required<QuotaFetchDeps>): Promise<string 
 }
 
 /**
+ * Modification stamp of the darwin keychain item, WITHOUT reading the secret.
+ *
+ * ★WHY THIS EXISTS — the re-login recovery gap (owner report, agy quota stuck
+ * `expired-token` after signing back in). The `agy` CLI refreshes this token
+ * only when it RUNS, and the header's 2026-08-20 measurement established that
+ * the keychain item's mtime tracks each `agy` launch exactly. So "the item was
+ * rewritten since our last failure" is a reliable, cheap proxy for "the user
+ * re-logged in and the token is worth re-probing" — which is precisely the
+ * signal the bounded retry budget (quota/refresh.ts updateFailureRetry) has no
+ * other way to learn. Without it the budget stays spent until the next hourly
+ * backfill and the stale error is pinned on screen for up to an hour.
+ *
+ * ★NO SECRET IS READ. `find-generic-password` WITHOUT `-w` prints only the
+ * item's attributes (svce/acct/cdat/mdat) to stdout; the password is emitted
+ * solely under `-w`. That omission is the whole point of a separate function
+ * rather than a flag on readKeychainBlob: a renewal probe runs on a schedule
+ * the user did not ask for, and it must not pull a live OAuth token into this
+ * process's memory to answer a question about a timestamp.
+ *
+ * Returns null for every unhappy path — item absent, `security` missing or
+ * non-zero, no parseable `mdat`. The caller treats null as "no evidence of
+ * renewal" and changes nothing, so a keychain that cannot be read degrades to
+ * exactly the pre-existing backoff rather than to extra probing.
+ */
+export async function readAntigravityKeychainMtimeMs(
+    overrides: QuotaFetchDeps = {},
+): Promise<number | null> {
+    const deps = resolveDeps(overrides);
+    // Same `ADHDEV_ANTIGRAVITY_PLATFORM` test seam readCredentials uses, so the
+    // darwin gate is exercisable from a non-macOS runner. Never set in prod.
+    const platform = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
+    if (platform !== 'darwin') return null;
+    try {
+        const res = await runCredStoreCommand(
+            deps,
+            '/usr/bin/security',
+            // ★No `-w`: attributes only, never the password.
+            ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT],
+        );
+        if (res.code !== 0) return null;
+        // `security` prints attributes on stderr for some invocations and
+        // stdout for others; parse whichever carries the mdat line.
+        return parseKeychainMdatMs(`${res.stdout}\n${res.stderr}`);
+    } catch {
+        // Spawn failure or the 5s cred-store timeout. Never propagate: this is
+        // an advisory probe, and throwing here would break a refresh tick.
+        return null;
+    }
+}
+
+/**
+ * Pull the `mdat` timedate out of `security`'s attribute dump.
+ *
+ * The line looks like:
+ *     "mdat"<timedate>=0x3230...5A00  "20260912065442Z\000"
+ * i.e. a quoted `YYYYMMDDhhmmssZ` (always UTC) with a trailing NUL. Only the
+ * quoted form is parsed — the hex blob is the same value and decoding it would
+ * be a second code path to keep correct for no gain.
+ */
+export function parseKeychainMdatMs(output: string): number | null {
+    const match = /"mdat"<timedate>=(?:0x[0-9a-fA-F]*\s+)?"(\d{14})Z/.exec(output);
+    if (!match) return null;
+    const [, stamp] = match;
+    const iso = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}`
+        + `T${stamp.slice(8, 10)}:${stamp.slice(10, 12)}:${stamp.slice(12, 14)}Z`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : null;
+}
+
+/**
  * Read the same go-keyring item from the Windows Credential Manager via a
  * one-shot CredRead P/Invoke. Exit 44 (ERROR_NOT_FOUND) maps to null like
  * the macOS path; any OTHER failure rejects with the win32 error so the

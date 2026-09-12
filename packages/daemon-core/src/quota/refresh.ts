@@ -38,7 +38,7 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
-import { fetchAntigravityQuota } from './fetchers/antigravity.js';
+import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetchers/antigravity.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchCursorQuota } from './fetchers/cursor.js';
@@ -707,6 +707,12 @@ interface FailureRetryState {
     /** Consecutive transient failures since the last success. */
     failures: number;
     timer: NodeJS.Timeout | null;
+    /**
+     * Credential-store mtime observed when this failure episode was last
+     * recorded, for the renewal detector below. Undefined on every provider
+     * but antigravity-cli, and on any machine where the stamp is unreadable.
+     */
+    credentialMtimeMs?: number;
 }
 
 const failureRetries = new Map<string, FailureRetryState>();
@@ -715,6 +721,118 @@ function cancelFailureRetry(provider: QuotaProvider): void {
     const state = failureRetries.get(provider);
     if (state?.timer) clearTimeout(state.timer);
     failureRetries.delete(provider);
+}
+
+/**
+ * ★RE-LOGIN RECOVERY — reset the retry budget when the CREDENTIAL ITSELF was
+ * renewed (owner report: agy quota stayed `expired-token` long after signing
+ * back in).
+ *
+ * The failure this closes, in order: the daemon reads the token in the seconds
+ * BEFORE a re-login completes and records `expired-token`; `failures` only ever
+ * resets on a SUCCESS, so the bounded budget (QUOTA_FAILURE_MAX_RETRIES) is
+ * spent on probes that were all doomed to fail against the old token; once
+ * spent, `isFailureRetryDue` reports false and the short-fuse retry stops
+ * scheduling. The user then signs in — and nothing re-probes until the hourly
+ * backfill, so a reading that is already valid renders as a stale error for up
+ * to an hour. The budget is doing its job (it must not hammer a genuinely dead
+ * token); it simply has no way to hear that the token is no longer the same
+ * token.
+ *
+ * The keychain item's mtime is that missing signal, and a cheap one: `agy`
+ * rewrites the item on every launch (measured — see the antigravity fetcher
+ * header), so an mtime later than the one we saw at the last failure means a
+ * NEW credential exists. Reset the budget, and the very next wake finds the
+ * retry due again.
+ *
+ * ★THREE GUARDS, all narrow on purpose — this is a SHARED retry path and a
+ * leak into another provider, kind or platform is a regression:
+ *   1. provider — antigravity-cli only. Other providers have their own
+ *      credential lifecycles and are untouched by this file's change.
+ *   2. failureKind — TOKEN-EXPIRY kinds only (`expired-token` / `unauthorized`).
+ *      A `network`, `parse` or `rate-limited` failure is not a credential
+ *      problem, so a new credential is not evidence it would now succeed.
+ *   3. platform — darwin only. The probe reads a macOS keychain; win32 and
+ *      linux keep exactly their present behaviour.
+ *
+ * ★AND IT IS A NO-OP WHEN THE TOKEN DID NOT CHANGE. An unchanged (or
+ * unreadable) mtime returns false and the existing backoff stands untouched —
+ * so a provider whose token is genuinely dead is probed no more often than it
+ * is today. That asymmetry is the whole safety argument: the only thing that
+ * can spend a fresh budget is the user actually re-authenticating.
+ */
+const CREDENTIAL_RENEWAL_FAILURE_KINDS: ReadonlySet<string> = new Set([
+    'expired-token',
+    'unauthorized',
+]);
+
+/**
+ * Reads the credential stamp for a provider, or undefined when this provider /
+ * platform has no such stamp. Indirected through a mutable binding so tests can
+ * drive the detector without a real keychain; production never reassigns it.
+ */
+const defaultCredentialMtimeReader = async (provider: QuotaProvider): Promise<number | null> => {
+    if (provider !== 'antigravity-cli' || process.platform !== 'darwin') return null;
+    return readAntigravityKeychainMtimeMs();
+};
+
+let credentialMtimeReader: (provider: QuotaProvider) => Promise<number | null> =
+    defaultCredentialMtimeReader;
+
+/** Test seam for the credential-renewal detector; undefined restores production. */
+export function __setQuotaCredentialMtimeReaderForTests(
+    reader: ((provider: QuotaProvider) => Promise<number | null>) | undefined,
+): void {
+    credentialMtimeReader = reader ?? defaultCredentialMtimeReader;
+}
+
+/** Does this provider's cached failure qualify for the renewal detector at all? */
+function isCredentialRenewalCandidate(provider: QuotaProvider): boolean {
+    if (provider !== 'antigravity-cli') return false;
+    if (process.platform !== 'darwin') return false;
+    const entry = cache.get(provider);
+    if (!entry || entry.status === 'ok') return false;
+    const kind = entry.metadata?.failureKind;
+    return typeof kind === 'string' && CREDENTIAL_RENEWAL_FAILURE_KINDS.has(kind);
+}
+
+/**
+ * If the credential behind a token-expiry failure has been renewed since that
+ * failure was recorded, clear the consumed retry budget so the provider becomes
+ * immediately re-probeable. Resolves true only when it actually reset something.
+ *
+ * Never throws: a probe that fails for any reason resolves false and leaves the
+ * backoff exactly as it found it.
+ */
+export async function resetFailureBudgetOnCredentialRenewal(
+    provider: QuotaProvider,
+): Promise<boolean> {
+    if (!isCredentialRenewalCandidate(provider)) return false;
+    const state = failureRetries.get(provider);
+    // Nothing has failed yet, or the budget is untouched — the ordinary retry
+    // schedule is already going to re-probe, so there is nothing to rescue.
+    if (!state || state.failures === 0) return false;
+    let mtimeMs: number | null = null;
+    try {
+        mtimeMs = await credentialMtimeReader(provider);
+    } catch {
+        return false; // fail safe: keep the existing backoff
+    }
+    if (typeof mtimeMs !== 'number' || !Number.isFinite(mtimeMs)) return false;
+    const previous = state.credentialMtimeMs;
+    if (previous === undefined) {
+        // First stamp of this failure episode — record it as the baseline so a
+        // LATER renewal is detectable. Resetting here would be guessing.
+        state.credentialMtimeMs = mtimeMs;
+        return false;
+    }
+    if (mtimeMs <= previous) return false; // ★unchanged token → no-op
+    // A new credential exists. Drop the spent budget and let the ordinary
+    // scheduling paths (isFailureRetryDue → the loop's backfill gate) re-probe.
+    if (state.timer) clearTimeout(state.timer);
+    failureRetries.set(provider, { failures: 0, timer: null, credentialMtimeMs: mtimeMs });
+    LOG.info('Quota', `${provider}: credential renewed since the last failure — retry budget reset`);
+    return true;
 }
 
 /**
@@ -867,8 +985,17 @@ function updateFailureRetry(
     const previous = failureRetries.get(provider);
     if (previous?.timer) clearTimeout(previous.timer);
     const failures = (previous?.failures ?? 0) + 1;
+    // Carry the credential stamp across the episode: it is the baseline the
+    // renewal detector compares against, and losing it on each new failure
+    // would restart the "first stamp" handshake forever.
+    const credentialMtimeMs = previous?.credentialMtimeMs;
     if (failures > QUOTA_FAILURE_MAX_RETRIES) {
-        failureRetries.set(provider, { failures, timer: null });
+        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        // Budget just went from spendable to spent — this is exactly the state
+        // a later re-login has to be able to rescue, so make sure a baseline
+        // stamp exists to compare future reads against.
+        void resetFailureBudgetOnCredentialRenewal(provider)
+            .catch(() => { /* advisory only — never disturb the tick */ });
         LOG.info('Quota', `${provider}: transient failure persists after ${QUOTA_FAILURE_MAX_RETRIES} retries — back to the normal refresh cadence`);
         return;
     }
@@ -888,7 +1015,7 @@ function updateFailureRetry(
             .catch((e: any) => LOG.warn('Quota', `${provider}: scheduled retry failed: ${e?.message || e}`));
     }, delayMs);
     if (typeof timer.unref === 'function') timer.unref();
-    failureRetries.set(provider, { failures, timer });
+    failureRetries.set(provider, { failures, timer, credentialMtimeMs });
     LOG.info('Quota', `${provider}: transient failure — retry scheduled in ${Math.round(delayMs / 1000)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
 }
 
@@ -1215,6 +1342,24 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
             if (backfillDue(provider)) return true;
             return active && isDueByAxisTtl(provider);
         });
+        // ★RE-LOGIN RESCUE. A provider whose retry budget is spent is, by
+        // design, NOT in `due` — that is what stops us hammering a dead token.
+        // But the budget cannot hear a re-login, so probe the credential stamp
+        // for the narrow case that can be rescued (see
+        // resetFailureBudgetOnCredentialRenewal: darwin + antigravity +
+        // token-expiry kind). Deliberately fire-and-forget and OUTSIDE the
+        // `due` decision: this wake proceeds on the state it already computed,
+        // and a reset merely notifies the cache-changed listener, which
+        // reschedules the chain so the NEXT wake sees the retry as due. An
+        // unchanged stamp resets nothing and costs one `security` call per
+        // wake on one provider — no extra provider probe, ever.
+        for (const { provider } of fetchers) {
+            if (options.isEnabled && !options.isEnabled(provider)) continue;
+            if (due.some((f) => f.provider === provider)) continue;
+            void resetFailureBudgetOnCredentialRenewal(provider)
+                .then((reset) => { if (reset) notifyQuotaCacheChanged(); })
+                .catch(() => { /* advisory only — the tick must not depend on it */ });
+        }
         // A provider that was disabled since the last tick still has to be
         // PRUNED from the cache, and only refreshQuotaCacheOnce does that (it
         // drops the entry and rewrites the persisted file). Selecting nothing to
