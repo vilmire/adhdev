@@ -1346,10 +1346,11 @@
         color: var(--semantic-warning);
     }
 
-    /* Cancel. Always rendered and always hit-testable — hiding it behind hover
-       would strip it from touch entirely, and this is the only place a body can
-       be withdrawn before the agent sees it. 28px is the tap target; the glyph
-       inside is small. */
+    /* Send now + Cancel. Both always rendered and always hit-testable — hiding
+       either behind hover would strip it from touch entirely, and this is the
+       only place a queued body can be pushed through or withdrawn before the
+       agent sees it. 28px is the shared tap target; the glyph inside is small. */
+    .chat-pending-queue-send,
     .chat-pending-queue-cancel {
         flex: 0 0 auto;
         display: inline-flex;
@@ -1372,17 +1373,21 @@
     /* Pointer devices get the quieter resting state; touch keeps it at the
        opacity above, because there is no hover to bring it back. */
     @media (hover: hover) {
+        .chat-pending-queue-send,
         .chat-pending-queue-cancel {
             opacity: 0.28;
         }
     }
 
+    .chat-pending-queue-send:hover:not(:disabled),
+    .chat-pending-queue-send:focus-visible,
     .chat-pending-queue-cancel:hover:not(:disabled),
     .chat-pending-queue-cancel:focus-visible {
         opacity: 1;
         background: color-mix(in srgb, currentColor 14%, transparent);
     }
 
+    .chat-pending-queue-send:disabled,
     .chat-pending-queue-cancel:disabled {
         opacity: 0.2;
         cursor: default;
