@@ -1256,13 +1256,19 @@
        needs no sticky positioning to stay put — the flex column simply keeps it
        adjacent to the composer while the transcript scrolls behind it. A body
        parked in the daemon FIFO has not entered the conversation, and this is
-       what keeps it (and its Send now / Cancel controls) reachable no matter how
-       much the agent emits while it works. */
+       what keeps it (and the control that withdraws it) reachable no matter how
+       much the agent emits while it works.
+
+       (QUEUE-BUBBLE-LOOK) The strip itself is invisible: no border, no fill. The
+       card chrome that used to delimit it is what made a queue of one message
+       look like a panel. What the owner should see is their own message sitting
+       above the composer, so the only thing drawn here is the bubble. */
     .chat-pending-queue-strip {
         flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        /* Messenger spacing between consecutive outgoing bubbles. */
+        gap: 3px;
         /* Bounded so a deep queue cannot eat the transcript above it or push the
            composer off screen; past ~3 rows it scrolls internally instead. The
            store caps the queue at MAX_PENDING_QUEUED_MESSAGES, so this is a
@@ -1270,44 +1276,96 @@
         max-height: 30vh;
         overflow-y: auto;
         overscroll-behavior: contain;
-        padding: 6px 10px;
-        border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-        background: color-mix(in srgb, currentColor 4%, transparent);
+        padding: 4px 10px 6px;
     }
 
+    /* Right-aligned, like every outgoing message in a messenger. The row is the
+       alignment track; the bubble inside it is what carries the skin. */
     .chat-pending-queue-row {
         display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 5px 8px;
-        border-radius: 8px;
-        border: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
-        /* Dashed + translucent reads as "not delivered yet", visually distinct
-           from a real transcript bubble without inventing a new colour. */
-        background: color-mix(in srgb, currentColor 5%, transparent);
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+    }
+
+    .chat-pending-queue-bubble {
+        display: flex;
+        align-items: flex-end;
+        gap: 6px;
+        /* Never full width: a bubble that spans the pane stops reading as a
+           bubble. Matches the transcript's own outgoing-message proportion. */
+        max-width: 78%;
+        min-width: 0;
+        /* Undelivered, said with weight rather than words. Enough to be visible
+           next to a delivered bubble, not so much that the owner's own text is
+           hard to read. */
+        opacity: 0.72;
     }
 
     .chat-pending-queue-body {
         font-size: var(--chat-body-font-size, 0.8125rem);
         line-height: 1.35;
-        opacity: 0.85;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
-        /* A long body must not turn one waiting row into a wall of text; the
-           full text stays available via the row's title attribute. */
+        min-width: 0;
+        /* A long body must not turn one waiting bubble into a wall of text; the
+           full text stays available via the bubble's title attribute. */
         display: -webkit-box;
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
         overflow: hidden;
     }
 
-    /* Reuses .chat-bubble-queued for the label/button row so the pinned controls
-       and the in-bubble ones stay identical; only the bubble-internal divider is
-       dropped, the row already has its own border. */
-    .chat-pending-queue-actions {
-        margin-top: 2px;
-        padding-top: 0;
-        border-top: none;
+    /* The undelivered marker, sized to sit on the bubble's last line like a
+       messenger's read-receipt tick rather than announce itself. */
+    .chat-pending-queue-clock {
+        flex: 0 0 auto;
+        font-size: var(--chat-header-font-size);
+        line-height: 1.3;
+        opacity: 0.75;
+    }
+
+    /* Cancel. Always rendered and always hit-testable — hiding it behind hover
+       would strip it from touch entirely, and this is the only place a body can
+       be withdrawn before the agent sees it. 28px is the tap target; the glyph
+       inside is small. */
+    .chat-pending-queue-cancel {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: none;
+        background: none;
+        color: inherit;
+        font-size: var(--chat-header-font-size);
+        line-height: 1;
+        border-radius: 999px;
+        cursor: pointer;
+        opacity: 0.5;
+        transition: opacity 0.15s, background 0.15s;
+    }
+
+    /* Pointer devices get the quieter resting state; touch keeps it at the
+       opacity above, because there is no hover to bring it back. */
+    @media (hover: hover) {
+        .chat-pending-queue-cancel {
+            opacity: 0.28;
+        }
+    }
+
+    .chat-pending-queue-cancel:hover:not(:disabled),
+    .chat-pending-queue-cancel:focus-visible {
+        opacity: 1;
+        background: color-mix(in srgb, currentColor 14%, transparent);
+    }
+
+    .chat-pending-queue-cancel:disabled {
+        opacity: 0.2;
+        cursor: default;
     }
 
     .chat-copy-btn {
