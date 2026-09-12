@@ -20,6 +20,12 @@
  * at the bottom of this file are the ones that pin the position, and they are
  * deliberately untouched — if a future change moves the strip into the tail, they
  * still fail.
+ *
+ * ★ (QUEUE-SEND-NOW-RESTORED) That pass also dropped Send now entirely, on the
+ * reasoning that automatic delivery at turn-end made the interrupt redundant.
+ * The owner later noticed it missing live and asked for it back — not as the
+ * old text button, but as a small icon paired with cancel. The tests below
+ * assert the icon (`.chat-pending-queue-send`), not the old class.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -177,12 +183,35 @@ describe('PendingQueueStrip — a messenger bubble, not a panel (QUEUE-BUBBLE-LO
         expect(container.textContent).not.toMatch(/waiting to send/i)
     })
 
-    it('★ offers NO Send now — automatic delivery is the path', () => {
-        // Send now interrupted the running turn and discarded it. Wired or not,
-        // the strip must not surface it.
-        render({ entries: [parked('a', 'hello')], onSendNow: vi.fn(), onCancelQueued: vi.fn() })
+    it('★ offers Send now as a small icon, not the old text button', () => {
+        // (QUEUE-SEND-NOW-RESTORED) The owner asked for it back after noticing
+        // it missing live, but explicitly not as the old sentence/button pile —
+        // `.chat-bubble-send-now` is that old in-transcript text button and must
+        // stay absent here; the strip's own icon control is a distinct class.
+        const onSendNow = vi.fn()
+        render({ entries: [parked('a', 'hello')], onSendNow, onCancelQueued: vi.fn() })
         expect(container.querySelector('.chat-bubble-send-now')).toBeNull()
         expect(container.textContent).not.toMatch(/send now/i)
+
+        const send = container.querySelector<HTMLButtonElement>('.chat-pending-queue-send')
+        expect(send).not.toBeNull()
+        act(() => { send!.click() })
+        expect(onSendNow).toHaveBeenCalledWith('a')
+    })
+
+    it('omits send-now when the surface did not wire it (read-only viewer)', () => {
+        render({ entries: [parked('a', 'hello')], onCancelQueued: vi.fn() })
+        expect(container.querySelector('.chat-pending-queue-send')).toBeNull()
+    })
+
+    it('disables send-now while a round trip is open', () => {
+        render({
+            entries: [parked('a', 'hello')],
+            onSendNow: vi.fn(),
+            isSendingNow: true,
+        })
+        const send = container.querySelector<HTMLButtonElement>('.chat-pending-queue-send')
+        expect(send?.disabled).toBe(true)
     })
 
     it('★ drops the card chrome — no per-row border, no strip fill', () => {

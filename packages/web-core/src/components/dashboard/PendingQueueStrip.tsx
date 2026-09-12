@@ -42,12 +42,14 @@
  * yet — which is what a messenger shows and what the sentence was only
  * describing.
  *
- * Send now is gone with it. Automatic delivery when the turn ends is the normal
- * path, and the button's own tooltip had to admit it DISCARDS the running turn —
- * a destructive interrupt does not belong on permanent display next to every
- * queued line. Cancel survives as a small ✕ affordance, because withdrawing a
- * message you have not sent yet is the one thing the owner genuinely cannot do
- * anywhere else.
+ * Send now first left with the sentence, then came back (QUEUE-SEND-NOW-
+ * RESTORED): the owner noticed it missing from the live product and asked for
+ * it, specifically NOT as the old button-pile — as a small icon that pairs
+ * with cancel the same way a messenger's own affordances stay out of the way
+ * until touched. It is an ↑ glyph, same 28px hit target and hover treatment
+ * as `.chat-pending-queue-cancel`, sitting right next to it. The
+ * interrupt-and-discard behaviour is unchanged; only its permanent-sentence
+ * presentation was ever the objection.
  */
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -59,10 +61,9 @@ export interface PendingQueueStripProps {
     /**
      * Interrupt the running turn and deliver this body now.
      *
-     * ★ No longer rendered (QUEUE-BUBBLE-LOOK) — kept in the contract because
-     * `ChatPane` and the in-transcript bubble still wire the same handler, and
-     * because dropping it here would silently change the prop shape for every
-     * surface that mounts the strip. The strip simply does not surface it.
+     * ★ (QUEUE-SEND-NOW-RESTORED) Rendered as a small icon beside cancel —
+     * see the file header. Optional so a read-only viewer that never wires it
+     * renders the row without the affordance.
      */
     onSendNow?: (pendingId?: string) => void;
     /** Withdraw this body from the daemon FIFO. */
@@ -73,6 +74,7 @@ export interface PendingQueueStripProps {
 
 function PendingQueueStripImpl({
     entries,
+    onSendNow,
     onCancelQueued,
     isSendingNow,
 }: PendingQueueStripProps) {
@@ -156,6 +158,24 @@ function PendingQueueStripImpl({
                             {entry.stale === true ? '⚠' : '⏱'}
                         </span>
                     </div>
+                    {onSendNow && (
+                        // ★ (QUEUE-SEND-NOW-RESTORED) Same always-in-DOM,
+                        // hover-dimmed treatment as cancel below — a phone has no
+                        // hover, so touch must not lose the affordance either.
+                        // The interrupt still discards the running turn; that
+                        // trade-off lives in the tooltip, not in a permanent
+                        // sentence next to every row.
+                        <button
+                            type="button"
+                            onClick={() => onSendNow(entry.id)}
+                            disabled={isSendingNow}
+                            className="chat-pending-queue-send"
+                            aria-label={t('chat.sendNowAria')}
+                            title={t('chat.sendNowTitle')}
+                        >
+                            ↑
+                        </button>
+                    )}
                     {onCancelQueued && (
                         // ★ Always in the DOM, never hover-gated in markup.
                         //
@@ -189,9 +209,10 @@ function PendingQueueStripImpl({
  * (and re-run the filter) on every status update while nothing visible changed.
  */
 export const PendingQueueStrip = memo(PendingQueueStripImpl, (prev, next) => (
-    // `onSendNow` is intentionally absent: it is no longer rendered, so a fresh
-    // identity for it must not force a re-render.
-    prev.onCancelQueued === next.onCancelQueued
+    // ★ (QUEUE-SEND-NOW-RESTORED) `onSendNow` is rendered again, so a stale
+    // closure here would fire a previous render's handler on click.
+    prev.onSendNow === next.onSendNow
+    && prev.onCancelQueued === next.onCancelQueued
     && prev.isSendingNow === next.isSendingNow
     && prev.entries.length === next.entries.length
     && prev.entries.every((entry, index) => {
