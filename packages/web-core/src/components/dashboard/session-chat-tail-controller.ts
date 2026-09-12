@@ -536,6 +536,29 @@ export class SessionChatTailController {
    * shape of silence that is evidence of a stall rather than of calm.
    */
   private lastReplicaBusyAt = 0
+  /**
+   * (VISIBILITY) Wall-clock of the moment `document` last went hidden, or 0
+   * while visible. Backs `hiddenElapsedMs` below.
+   */
+  private hiddenSinceAt = 0
+  /**
+   * (VISIBILITY) Total time this controller has spent hidden since the lease
+   * clocks (`lastReplicaAdvanceAt`, `lastAppliedAt`) last advanced, in ms.
+   *
+   * ── Why the lease needs this ───────────────────────────────────────────────
+   * `expireStaleReplicaLease` compares wall-clock elapsed time against a fixed
+   * window (20s) to tell a stalled replica apart from a healthy one. While the
+   * tab/app is hidden, browsers throttle timers and rendering, so the lease
+   * clocks stop advancing — but wall-clock time keeps moving. On resume, the
+   * very first watchdog tick sees `now - lastReplicaAdvanceAt` spanning the
+   * ENTIRE hidden interval, which trips the 20s window on nearly every
+   * minimize/restore even though the replica lane was never actually stalled —
+   * it just wasn't being watched. Discounting accumulated hidden time from the
+   * elapsed-time check removes that false positive without touching the
+   * window itself, so a REAL stall while visible is still caught exactly as
+   * before.
+   */
+  private hiddenElapsedMs = 0
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -811,6 +834,11 @@ export class SessionChatTailController {
     if (advanced) {
       this.lastReplicaRevision = revision
       this.lastReplicaAdvanceAt = this.now()
+      // (VISIBILITY) The lane just proved itself alive, so any hidden-time
+      // credit banked before this point describes a stall window that is now
+      // over. Clearing it stops that credit from masking a LATER, unrelated
+      // stall — see `hiddenElapsedMs`.
+      this.hiddenElapsedMs = 0
     }
     // (LEASE) Arm expiry only while the replica itself says work is in progress.
     // See `lastReplicaBusyAt` — an idle session's silence is correct, and
@@ -1065,9 +1093,16 @@ export class SessionChatTailController {
     if (!this.replicaHealthy) return
     if (this.lastReplicaBusyAt === 0) return
     const nowMs = this.now()
+    // (VISIBILITY) Time spent with the document hidden does not count as
+    // elapsed for stall-detection: the lease clocks below stop advancing while
+    // hidden (throttled timers/rendering), not because the lane died. Includes
+    // any hidden span still in progress so a check that fires WHILE hidden is
+    // discounted too, not only one that fires after resume.
+    const hiddenMs = this.hiddenElapsedMs
+      + (this.hiddenSinceAt > 0 ? Math.max(0, nowMs - this.hiddenSinceAt) : 0)
     // Never armed for this window — the last busy report is itself older than
     // the lease, so treat the session as settled rather than stalled.
-    if ((nowMs - this.lastReplicaBusyAt) > CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
+    if ((nowMs - this.lastReplicaBusyAt - hiddenMs) > CHAT_TAIL_REPLICA_LEASE_BUSY_MS) return
     // (REPLICA-PROVENANCE-SCALAR-LOSS — observability) The lease measured LANE
     // advance only, which is why this defect ran silent: snapshots kept arriving
     // (~29.5/min) so the lane looked healthy, while every one was deferred and
@@ -1075,9 +1110,9 @@ export class SessionChatTailController {
     // rendered content is frozen past the same window is wedged whatever the
     // cause, and routes through the identical fallback path. A class detector,
     // deliberately not specific to the bug fixed above.
-    const laneStalled = (nowMs - this.lastReplicaAdvanceAt) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
+    const laneStalled = (nowMs - this.lastReplicaAdvanceAt - hiddenMs) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
     const screenStalled = this.lastAppliedAt > 0
-      && (nowMs - this.lastAppliedAt) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
+      && (nowMs - this.lastAppliedAt - hiddenMs) >= CHAT_TAIL_REPLICA_LEASE_BUSY_MS
     if (!laneStalled && !screenStalled) return
     // Route through the existing fallback path rather than clearing the flag
     // inline: it re-arms legacy, records the diagnostic and surfaces the
@@ -1099,6 +1134,25 @@ export class SessionChatTailController {
   noteTerminalStatusEvent(event: unknown): void {
     if (!isTerminalChatTailStatusEvent(event)) return
     this.terminalStatusRefreshPending = true
+  }
+
+  /**
+   * (VISIBILITY) Record a `document.visibilitychange` edge so the replica
+   * lease can discount time spent hidden — see `hiddenElapsedMs`.
+   *
+   * Idempotent against duplicate edges of the same kind (two `hidden` calls in
+   * a row extend nothing; two `visible` calls in a row bank nothing extra),
+   * so callers do not need to track the previous state themselves.
+   */
+  noteVisibilityChange(hidden: boolean): void {
+    const nowMs = this.now()
+    if (hidden) {
+      if (this.hiddenSinceAt === 0) this.hiddenSinceAt = nowMs
+      return
+    }
+    if (this.hiddenSinceAt === 0) return
+    this.hiddenElapsedMs += Math.max(0, nowMs - this.hiddenSinceAt)
+    this.hiddenSinceAt = 0
   }
 
   shouldRefreshForLiveness(options: { visible?: boolean } = {}): boolean {
@@ -1338,6 +1392,10 @@ export class SessionChatTailController {
     this.lastReplicaAdvanceAt = 0
     this.lastReplicaRevision = 0
     this.lastReplicaBusyAt = 0
+    // (VISIBILITY) Same reasoning — hidden-time credit describes a stall
+    // window on the lane this controller no longer has.
+    this.hiddenSinceAt = 0
+    this.hiddenElapsedMs = 0
     // (PERF) A recycled controller renders from a blank snapshot, so no prior
     // mapping describes its screen — see `clearLiveSnapshot` for the same rule.
     this.lastMappedRevisionSnapshot = null
@@ -1409,6 +1467,10 @@ export class SessionChatTailController {
       && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
     if (unchanged) return 'noop'
     this.lastAppliedAt = updateTime
+    // (VISIBILITY) The screen just demonstrably moved, so any hidden-time
+    // credit banked before this point belongs to a stall window that is now
+    // over — see `hiddenElapsedMs`.
+    this.hiddenElapsedMs = 0
     this.snapshot = {
       ...this.snapshot,
       liveMessages: nextMessages,
