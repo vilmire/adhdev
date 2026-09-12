@@ -164417,9 +164417,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           }));
           return;
         }
+        const handlerStartedAt = Date.now();
         try {
           const result = await opts.handleCommand({ command, args, requestId, ws });
-          ws.send(JSON.stringify({
+          const responseBody = JSON.stringify({
             type: "ext:command_result",
             payload: {
               requestId,
@@ -164428,16 +164429,38 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
               error: result.error,
               ...result.extra || {}
             }
-          }));
+          });
+          writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
         } catch (error48) {
-          ws.send(JSON.stringify({
+          const responseBody = JSON.stringify({
             type: "ext:command_result",
             payload: {
               requestId,
               success: false,
               error: error48?.message || String(error48)
             }
-          }));
+          });
+          writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+        }
+      }
+      function writeResponse(ws, body, command, requestId, handlerStartedAt) {
+        const handlerMs = Date.now() - handlerStartedAt;
+        if (ws.readyState !== import_ws3.WebSocket.OPEN) {
+          LOG.warn(logCategory, `response write skipped (socket not open): command='${command}' requestId=${requestId} handlerMs=${handlerMs} readyState=${ws.readyState}`);
+          return;
+        }
+        const bufferedBefore = ws.bufferedAmount;
+        try {
+          ws.send(body);
+        } catch (error48) {
+          LOG.warn(logCategory, `response write failed: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} error=${error48?.message || error48}`);
+          return;
+        }
+        if (getLogLevel() === "debug") {
+          const backpressured = bufferedBefore > 0 || ws.bufferedAmount > 0;
+          LOG.debug(logCategory, `response sent: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore} bufferedAfter=${ws.bufferedAmount}${backpressured ? " backpressure=true" : ""}`);
+        } else if (bufferedBefore > 64 * 1024) {
+          LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
       await new Promise((resolve34, reject) => {
@@ -165391,6 +165414,21 @@ function isRetryableProbeCommand(type2) {
 }
 var WS_CONNECTING = 0;
 var WS_OPEN = 1;
+var ORPHAN_TRACKING_TTL_MS = 6e4;
+var ORPHAN_TRACKING_MAX_ENTRIES = 500;
+var timedOutRequests = /* @__PURE__ */ new Map();
+function trackTimedOutRequest(requestId, command) {
+  timedOutRequests.set(requestId, { command, timedOutAt: Date.now() });
+  if (timedOutRequests.size > ORPHAN_TRACKING_MAX_ENTRIES) {
+    const oldestKey = timedOutRequests.keys().next().value;
+    if (oldestKey !== void 0) timedOutRequests.delete(oldestKey);
+  }
+}
+function pruneTimedOutRequests(now) {
+  for (const [requestId, info] of timedOutRequests) {
+    if (now - info.timedOutAt > ORPHAN_TRACKING_TTL_MS) timedOutRequests.delete(requestId);
+  }
+}
 var POOL_IDLE_EVICT_MS = 5 * 6e4;
 var POOL_MAX_AGE_MS = 10 * 6e4;
 var connectionPool = /* @__PURE__ */ new Map();
@@ -165476,9 +165514,20 @@ function getOrCreateConnection(WebSocketCtor, url2) {
         return;
       }
       if (msg?.type !== "ext:command_result") return;
-      const req = conn.pending.get(msg?.payload?.requestId);
-      if (!req) return;
-      conn.pending.delete(msg.payload.requestId);
+      const requestId = msg?.payload?.requestId;
+      const req = conn.pending.get(requestId);
+      if (!req) {
+        if (typeof requestId === "string") {
+          const timedOut = timedOutRequests.get(requestId);
+          if (timedOut) {
+            timedOutRequests.delete(requestId);
+            const lateByMs = Date.now() - timedOut.timedOutAt;
+            console.error(`[ipc] orphan response: command='${timedOut.command}' requestId=${requestId} arrived ${lateByMs}ms after client timeout (ts=${(/* @__PURE__ */ new Date()).toISOString()})`);
+          }
+        }
+        return;
+      }
+      conn.pending.delete(requestId);
       clearTimeout(req.timer);
       const payload = msg.payload;
       const hasStructuredResult = payload != null && payload.result != null;
@@ -165563,13 +165612,19 @@ var IpcTransport = class {
       } catch (e) {
         return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
       }
+      const sentAt = Date.now();
       const timer = setTimeout(() => {
+        const pendingCountBeforeRemoval = conn.pending.size;
         conn.pending.delete(requestId);
+        const elapsedMs = Date.now() - sentAt;
         const error48 = new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`);
         error48.ipcTimeout = true;
+        console.error(`[ipc] timeout: command='${type2}' requestId=${requestId} elapsedMs=${elapsedMs} pendingBeforeRemoval=${pendingCountBeforeRemoval} ts=${(/* @__PURE__ */ new Date()).toISOString()}`);
+        pruneTimedOutRequests(Date.now());
+        trackTimedOutRequest(requestId, type2);
         reject(error48);
       }, timeoutMs);
-      conn.pending.set(requestId, { resolve, reject, timer });
+      conn.pending.set(requestId, { resolve, reject, timer, command: type2, sentAt });
       conn.lastUsedAt = Date.now();
       if (conn.ready) {
         conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId } }));
