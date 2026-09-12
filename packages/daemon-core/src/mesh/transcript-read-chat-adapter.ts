@@ -89,6 +89,7 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Record<st
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState;
     if (message.senderName !== null) mapped.senderName = message.senderName;
     if (message.toolName !== null) mapped.toolName = message.toolName;
+    if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef;
     if (message.turnKey !== null) {
         // `_turnKey` ONLY — never `bubbleId`. See this file's header: `turnKey`
         // is turn-grained, so using it as per-bubble identity makes every bubble
