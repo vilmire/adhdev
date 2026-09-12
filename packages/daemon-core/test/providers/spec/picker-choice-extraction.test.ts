@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
+import { extractPickerChoices } from '../../../src/providers/spec/picker-controls.js';
 import { lastContiguousNumberedBlock } from '../../../src/providers/spec/evaluator.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
@@ -26,7 +26,7 @@ function claudeSetModelExtractPattern(): { pattern: string; flags?: string } {
     return ctl.action.extract_choices;
 }
 
-/** Mirror of SpecCliAdapter.extractPickerChoices line-parse logic: collect every
+/** Mirror of picker-controls.extractPickerChoices line-parse logic: collect every
  *  numbered line in screen order (no top-down de-dup) then reduce to the
  *  bottom-most contiguous block via the shared helper. */
 function parseChoices(text: string, ec: { pattern: string; flags?: string }) {
@@ -45,16 +45,12 @@ function parseChoices(text: string, ec: { pattern: string; flags?: string }) {
     return lastContiguousNumberedBlock(all);
 }
 
-/** Drive the REAL SpecCliAdapter.extractPickerChoices against a fixed screen —
- *  no stub of the parse logic. The adapter reads the screen through its driver,
- *  so we hand it a minimal driver returning `screen`. */
+/** Drive the REAL extractPickerChoices against a fixed screen — no stub of the
+ *  parse logic. It reads the screen through the driver it is handed, so we pass
+ *  a minimal driver returning `screen`. */
 function realExtract(screen: string, ec: { pattern: string; flags?: string }) {
-    const adapter: any = Object.create(SpecCliAdapter.prototype);
-    Object.assign(adapter, {
-        cliType: 'claude-cli',
-        driver: { getScreen: () => screen, getSections: () => undefined, snapshot: () => screen },
-    });
-    return adapter.extractPickerChoices({ extract_choices: ec });
+    const driver: any = { getScreen: () => screen, getSections: () => undefined, snapshot: () => screen };
+    return extractPickerChoices(driver, { extract_choices: ec } as any);
 }
 
 // Verbatim from a live claude-cli v2.1.170 /model picker (the cursor row uses ❯
