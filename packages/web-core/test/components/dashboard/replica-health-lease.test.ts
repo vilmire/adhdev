@@ -319,6 +319,110 @@ describe('★ A②: a genuinely idle session never revives legacy', () => {
 })
 
 // ───────────────────────────────────────────────────────────────────────────
+// ②b ★ VISIBILITY GRACE — a hidden app/tab is not a stalled replica either.
+//
+// ★★ Root-caused via owner-reproduced report: the degraded banner ("Live sync
+// is having trouble — showing messages the previous way") flashed on EVERY
+// minimize→restore of the app, then cleared itself moments later. Mechanism:
+// while `document.hidden`, browsers throttle timers/rendering, so the lease
+// clocks (`lastReplicaAdvanceAt`/`lastAppliedAt`) stop advancing — but
+// wall-clock time keeps moving. The very next watchdog tick after resume sees
+// the ENTIRE hidden interval as elapsed time, which trips the 20s lease
+// window on nearly every minimize even though the replica lane never actually
+// stalled — it just was not being watched. `noteVisibilityChange` discounts
+// that hidden span from the elapsed-time check.
+// ───────────────────────────────────────────────────────────────────────────
+describe('★ A③: hidden document time does not count toward the lease window', () => {
+  it('★ does NOT expire the lease when the elapsed time was spent hidden (minimize/restore)', () => {
+    const { sendData, controller, advance } = setup()
+    controller.retain()
+
+    // The replica takes over on a session that is actively generating.
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
+      omittedBefore: false,
+    })
+    expect(unsubscribeFrames(sendData)).toHaveLength(1)
+
+    // App minimized. Wall clock keeps moving well past the lease window while
+    // hidden — this is the exact shape of "minimize, go make coffee, restore".
+    controller.noteVisibilityChange(true)
+    advance(LEASE_MS * 5)
+    controller.noteVisibilityChange(false)
+
+    // The watchdog tick that fires right after resume must NOT see this as a
+    // stalled lane — the hidden span is discounted from elapsed time.
+    controller.shouldRefreshForLiveness()
+
+    expect(subscribeFrames(sendData)).toHaveLength(1)
+    expect(unsubscribeFrames(sendData)).toHaveLength(1)
+    expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_lease_expired')
+    expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_screen_stalled')
+  })
+
+  it('a REAL stall that happens entirely while visible is still caught (grace does not mask genuine stalls)', () => {
+    const { sendData, controller, advance } = setup()
+    controller.retain()
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
+      omittedBefore: false,
+    })
+
+    // No visibility edge at all — the pane stayed visible throughout and the
+    // lane genuinely stopped advancing.
+    advance(LEASE_MS)
+    controller.shouldRefreshForLiveness()
+
+    expect(subscribeFrames(sendData)).toHaveLength(2)
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('replica_lease_expired')
+  })
+
+  it('a stall that persists AFTER the hidden grace is still caught (grace is not unlimited)', () => {
+    const { sendData, controller, advance } = setup()
+    controller.retain()
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
+      omittedBefore: false,
+    })
+
+    // Brief minimize — well under the lease window — then resume, and the lane
+    // STILL never advances for a full lease window of genuinely visible time.
+    controller.noteVisibilityChange(true)
+    advance(1_000)
+    controller.noteVisibilityChange(false)
+    advance(LEASE_MS)
+    controller.shouldRefreshForLiveness()
+
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('replica_lease_expired')
+  })
+
+  it('a NEW stall after a healed lane is not masked by stale hidden-time credit from an earlier minimize', () => {
+    const { controller, advance } = setup()
+    controller.retain()
+
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(2, 'generating', 'q', 'a'), {
+      omittedBefore: false,
+    })
+
+    // First minimize/restore — banks hidden credit, then the lane proves
+    // itself alive by advancing (which must clear that credit).
+    controller.noteVisibilityChange(true)
+    advance(LEASE_MS * 3)
+    controller.noteVisibilityChange(false)
+    controller.applyTranscriptReplicaSnapshot(healthySnapshot(3, 'generating', 'q', 'a', 'more'), {
+      omittedBefore: false,
+    })
+    expect(controller.getSnapshot().transcriptFallbackReason).not.toBe('replica_lease_expired')
+
+    // A SECOND, unrelated stall while fully visible must not be discounted by
+    // credit left over from the first minimize.
+    advance(LEASE_MS)
+    controller.shouldRefreshForLiveness()
+
+    expect(controller.getSnapshot().transcriptFallbackReason).toBe('replica_lease_expired')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
 // ③ ★ B — legacy is retired only by a snapshot that was ACTUALLY APPLIED.
 // ───────────────────────────────────────────────────────────────────────────
 describe('★ B: a snapshot that never reached the screen cannot retire legacy', () => {
