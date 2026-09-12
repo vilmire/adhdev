@@ -77900,6 +77900,18 @@ ${rendered}`, "utf-8");
     function directDispatchTaskId(entry) {
       return readString6(entry.payload?.taskId) || entry.id;
     }
+    function hasSessionTerminalAfterApproval(ledgerEntries, sessionId, approvalAtMs) {
+      if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
+      for (const entry of ledgerEntries || []) {
+        if (entry.kind !== "task_completed" && entry.kind !== "task_failed") continue;
+        if (!sessionIdsEquivalent(readString6(entry.sessionId), sessionId)) continue;
+        if (entry.kind === "task_completed" && isWeakCompletionEvidence2(entry.payload || {})) continue;
+        const terminalAtMs = new Date(entry.timestamp).getTime();
+        if (!Number.isFinite(terminalAtMs) || terminalAtMs <= approvalAtMs) continue;
+        return true;
+      }
+      return false;
+    }
     function statusFromTerminal(entry) {
       if (entry.kind === "task_approval_needed") return "awaiting_approval";
       if (entry.kind === "task_question_pending") return "awaiting_choice";
@@ -77921,8 +77933,13 @@ ${rendered}`, "utf-8");
       const live = sessionStatusFromNodes(ctx.nodes, dispatch.nodeId, dispatch.sessionId);
       const blockedLevelKind = terminal?.kind === "task_approval_needed" || terminal?.kind === "task_question_pending";
       const liveContradictsBlockedLevel = blockedLevelKind && !!live.status && live.status !== "awaiting_approval" && live.status !== "awaiting_choice";
-      const status = (liveContradictsBlockedLevel ? live.status : terminalStatus || live.status) || "assigned";
-      const terminalRow = Boolean(terminal && terminal.kind !== "task_approval_needed");
+      const sessionTerminalContradictsBlockedLevel = blockedLevelKind && !live.status && hasSessionTerminalAfterApproval(
+        ctx.ledgerEntries,
+        readString6(dispatch.sessionId),
+        new Date(terminal.timestamp).getTime()
+      );
+      const status = (liveContradictsBlockedLevel ? live.status : sessionTerminalContradictsBlockedLevel ? "idle" : terminalStatus || live.status) || "assigned";
+      const terminalRow = Boolean(terminal && terminal.kind !== "task_approval_needed") || sessionTerminalContradictsBlockedLevel;
       const { ledgerOnlyStaleReason, isFreshUnacknowledged } = classifyDirectDispatch({
         status,
         isTerminalRow: terminalRow,
@@ -78115,7 +78132,7 @@ ${rendered}`, "utf-8");
         for (const dispatch of ledgerDispatches) {
           if (dbTaskIds.has(directDispatchTaskId(dispatch))) continue;
           if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue;
-          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
+          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
             terminalDirectWork.push(record2);
             if (opts.includeTerminalDirect !== true) continue;
@@ -78131,7 +78148,7 @@ ${rendered}`, "utf-8");
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch of ledgerDispatches) {
           if (queueTaskIds.has(directDispatchTaskId(dispatch))) continue;
-          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now });
+          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch, { terminal: terminalByDispatch.get(dispatch), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
             terminalDirectWork.push(record2);
             if (opts.includeTerminalDirect !== true) continue;
