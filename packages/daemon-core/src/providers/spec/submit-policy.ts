@@ -322,3 +322,115 @@ export type QueuedWriteOutcome =
  *  size-derived value still wins when larger (cursor-cli and kimi declare 1200),
  *  so no provider's existing settling time is shortened by this path. */
 export const MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
+
+// ── Send/submit shared state constants ───────────────────────────────────────
+// Pure-moved here from fsm-driver.ts when the send/submit machinery was
+// extracted to ./send-submit-engine.ts (file-size gate). Both fsm-driver and
+// the engine consume them, so they live with the rest of the submit policy
+// rather than being re-exported through a class module.
+
+/** Upper bound on how long a written-but-unobserved send holds the in-flight
+ *  latch. The latch normally clears the moment the FSM leaves idle (the CLI
+ *  visibly consumed the submit). A CLI that submits without any observable state
+ *  change would otherwise wedge the queue forever, so the latch self-expires.
+ *  Generous: it must outlast the win32 echo-gate + resend budget (~20s) so a slow
+ *  but legitimate submit is never treated as abandoned. */
+export const SEND_IN_FLIGHT_MAX_MS = 30_000;
+
+/** Duplicate-resend suppression window for the PRE-WRITE gate. Sized to match
+ *  USER_INPUT_ACK_DEDUP_WINDOW_MS (60s), the post-write bubble-collapse window in
+ *  cli-provider-instance — the two now cover the same span, closing the
+ *  1.2s..60s hole where a redelivery was collapsed in the UI but had already been
+ *  written to the PTY twice.
+ *
+ *  This is deliberately NOT applied to sends that go out while the machine is
+ *  idle and nothing is in flight — see isDuplicateResend. A user legitimately
+ *  typing the same text twice ("continue", "y", "run it again") is a normal turn
+ *  and must still reach the CLI; only a resend that collides with the SAME text
+ *  still being processed is dropped. */
+export const DUPLICATE_RESEND_WINDOW_MS = 60_000;
+
+/** djb2 — a short, stable content hash for the duplicate gate. Not security
+ *  relevant; only needs to make accidental collisions vanishingly unlikely
+ *  while keeping the map keys small. */
+export function hashSendText(text: string): string {
+    let h = 5381;
+    for (let i = 0; i < text.length; i += 1) h = (((h << 5) + h) ^ text.charCodeAt(i)) >>> 0;
+    return `${h.toString(36)}:${text.length}`;
+}
+
+// win32 ConPTY submit reliability — TWO independent concerns, do not conflate:
+//
+//   (A) WHEN the single real submit CR fires. The first CR must not fire until
+//       the WHOLE body has echoed into the composer; a MULTILINE body also opens
+//       an Ink paste/newline-accumulation window during which a lone CR can be
+//       absorbed as a literal newline rather than submitting, with a
+//       nondeterministic length (observed 0–~2s, driven by ConPTY byte timing).
+//       So we VERIFY instead of guessing: hold the CR behind the head+tail
+//       echo-gate (scheduleVerifiedSubmit phase 1), then resend the submit key on a
+//       fixed cadence until the FSM observes the agent has actually left the idle
+//       composer (status flips away from 'idle' — submitted / generating / modal),
+//       bounded by a retry budget (phase 2). Once submission is observed we stop
+//       so we don't spam Enter into the next turn. Single-line messages satisfy
+//       the check after the first CR, so their behaviour is unchanged.
+//
+//   (B) HOW the body's OWN embedded newlines are written (FIX-B-v2). On the real
+//       win32 Ink/ConPTY composer each embedded '\n' in the body SUBMITS the
+//       preceding line as a separate composer entry, so writing the raw body
+//       (writeWin32Body) submitted every line but the last BEFORE the trailing
+//       echo-gated CR (A) ever ran — the prompt was truncated to only the tail
+//       fragment after the last '\n' (failure_category=per_newline_submit). The
+//       body must therefore land atomically as composer TEXT with ZERO per-line
+//       submits. writeWin32Body now does that: it wraps a newline-bearing body in
+//       a bracketed-paste (ESC[200~ … ESC[201~) so the composer takes the whole
+//       thing — embedded newlines and all — as pasted text (PRIMARY mode), or in
+//       the soft_newline fallback rewrites each embedded newline as a
+//       non-submitting Shift+Enter sequence. EITHER way the trailing submit CR is
+//       NOT part of this write — it stays separate and is fired later by (A).
+//
+// NOTE on the old "bracketed-paste wrapping does NOT help" claim that used to live
+// here: that A/B fused the submit CR *inside* the paste (…body\r…201~), so the
+// paste-closing still carried a submit and was never a clean text-only paste. The
+// correct shape — paste wraps ONLY the body, CR stays separate — is what FIX-B-v2
+// implements; it was never actually tested by that earlier A/B.
+export const WIN32_SUBMIT_RESEND_GAP_MS = 350;
+export const WIN32_SUBMIT_MAX_RESENDS = 14;
+
+// Quiet window the win32 echo-gate (below) requires AFTER the body is seen in the
+// composer, so a CR fires only once the FULL (possibly multi-KB / multiline) body has
+// finished arriving and echoing — not mid-arrival. POLL_MS is the gate's recheck
+// cadence while it waits for the body to echo.
+export const WIN32_SUBMIT_SETTLE_MS = 500;
+export const WIN32_SUBMIT_SETTLE_POLL_MS = 120;
+
+// Defensive paced PTY write tuning (WIN32_PTY_WRITE_CHUNK_CHARS / _GAP_MS) and the
+// surrogate-safe splitter live in the shared cli-adapters/pty-write-chunking module —
+// see the import above. (It was originally shared with the legacy ProviderCliAdapter
+// engine, deleted in 48e5ed1a; this driver is now its only runtime consumer.)
+// Echo-gate for the win32 FIRST submit CR (supersedes the bare output-quiet settle).
+// The body write can race claude-cli's boot — its stdin reader is not wired until the
+// composer renders (~5–7s in, later under load), so a too-early write is buffered and
+// the output goes quiet with a still-EMPTY composer; a quiet-only gate then fires a CR
+// into nothing. Instead, hold the CR until the body text has actually ECHOED into the
+// composer (effect-confirmed, not readiness-signal-guessed) — the buffered write lands
+// once claude wires up, just late. WIN32_ECHO_MAX_WAIT_MS bounds the wait so a body
+// that truly never confirms still fires a blind CR (resend net) rather than hanging; it
+// is set generously so even a slow/contended boot lands its body before the blind fire.
+export const WIN32_ECHO_PROBE_CHARS = 16;
+export const WIN32_ECHO_MAX_WAIT_MS = 20_000;
+
+/**
+ * QUEUED-SEND-LOSS: what actually happened to a send_message, as opposed to
+ * whether the daemon accepted it.
+ *
+ * `delivered` means the body was written to the PTY. `queued` means it is
+ * sitting in the in-memory `pendingSends` FIFO because the machine could not
+ * take it yet — it has NOT been submitted, and it does not survive a driver
+ * shutdown or a daemon restart. Collapsing the two into one "success" is what
+ * let owner input go missing silently: the dashboard cleared the draft on an
+ * ack that only meant "accepted for later".
+ */
+export type SendDisposition =
+    | { status: 'delivered' }
+    | { status: 'queued'; queueDepth: number; reason: string }
+    | { status: 'duplicate' };
