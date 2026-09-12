@@ -8,9 +8,17 @@
  * never existed in src, so every adapter silently fell through to a plain send.
  * The button was wired to nothing.
  *
- * `handleSendNowQueued` replaces it with the only honest semantics: re-send the
- * ALREADY-PARKED body with `interrupt: true`, which makes the daemon press the
- * provider's own stop key, wait for busy→idle, and deliver it as a real turn.
+ * `handleSendNowQueued` replaces it with honest semantics. It now re-sends the
+ * ALREADY-PARKED body with `sendNow: true` (SEND-NOW-AGENT-QUEUE), which makes
+ * the daemon perform a SPLIT write — body, gap, submit key — into the generating
+ * composer, so the CLI's own input queue takes it and answers it as the next
+ * turn. The turn in flight is NOT interrupted and its answer is not lost.
+ *
+ * ★ That is still not the retired force-inject. 6cca365b measured an ATOMIC
+ * `text + '\r'` write being ignored mid-turn; the 2026-09-12 live A/B showed the
+ * split shape IS consumed. The distinction is the write shape, and it is pinned
+ * at the daemon level by
+ * daemon-core/test/commands/send-now-agent-queue-split-write.test.ts.
  *
  * ★ WHY THESE ARE HOOK-LEVEL TESTS (inherited from the file this replaces, and
  * still the point): the sibling helper tests for `isQueuedSendResult` and
@@ -31,10 +39,18 @@ import {
 
 /** What chat-commands-write.ts emits when the driver FIFO parks a send. */
 const DAEMON_QUEUED_RESULT = { success: true, sent: false, queued: true, submitted: false }
-/** What it emits when the interrupt landed and the body was written as a turn. */
-const DAEMON_INTERRUPT_DELIVERED = {
-    success: true, sent: true, submitted: true, interrupted: true,
-    interruptKey: 'Ctrl-C', interruptConfidence: 'proven',
+/**
+ * What it emits when the split write landed and the CLI's own input queue took
+ * the body (SEND-NOW-AGENT-QUEUE).
+ *
+ * ★ `submitted` is deliberately FALSE: the bytes are in the agent's queue, not
+ * answered. Reporting a submit here would repeat the exact lie 6cca365b was
+ * retired for. `queuedWithAgent` is the field that says where the body actually
+ * is, and it is distinct from `queued` (which means the DAEMON's FIFO parked it
+ * and nothing was written at all).
+ */
+const DAEMON_AGENT_QUEUED = {
+    success: true, sent: true, submitted: false, queuedWithAgent: true, claimed: 1,
 }
 
 function renderHarness(sendDaemonCommand: ReturnType<typeof vi.fn>) {
@@ -75,10 +91,10 @@ async function withParkedBubble(send: ReturnType<typeof vi.fn>) {
 }
 
 describe('SEND-NOW — handleSendNowQueued', () => {
-    it('★ asks the daemon to INTERRUPT, and re-sends the parked body verbatim', async () => {
+    it('★ asks the daemon for the AGENT QUEUE (not an interrupt), and re-sends the parked body verbatim', async () => {
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
-            .mockResolvedValueOnce(DAEMON_INTERRUPT_DELIVERED)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
         const h = await withParkedBubble(send)
 
         await act(async () => { await h.get().handleSendNowQueued() })
@@ -86,20 +102,24 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         expect(send).toHaveBeenCalledTimes(2)
         const [, type, payload] = send.mock.calls[1]
         expect(type).toBe('send_chat')
-        // ★ The flag is what routes the daemon to interrupt→idle→deliver. Without
-        // it the daemon would simply park the body a second time.
-        expect(payload).toMatchObject({ message: 'urgent: stop', interrupt: true })
-        // ★ And it must NOT carry the retired force-inject spelling as its own
-        // request — `force` now aliases to the same path, but the dashboard
-        // should be asking for what it actually means.
+        // ★ SEND-NOW-AGENT-QUEUE. The flag routes the daemon to the split write
+        // that the CLI's own input queue takes, leaving the turn in flight
+        // running. Without it the daemon would simply park the body again.
+        expect(payload).toMatchObject({ message: 'urgent: stop', sendNow: true })
+        // ★ And it must NOT ask to interrupt. The two flags mean materially
+        // different things — one preserves the running turn, the other destroys
+        // it — so sending both would let the daemon pick the outcome in which
+        // the owner loses the answer they are waiting for.
+        expect(payload.interrupt).toBeUndefined()
+        // ★ Nor the retired force-inject spelling, which aliases to interrupt.
         expect(payload.force).toBeUndefined()
         h.unmount()
     })
 
-    it('★ clears the queued badge once the interrupt delivered it as a real turn', async () => {
+    it('★ clears the queued badge once the agent queue took the body', async () => {
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
-            .mockResolvedValueOnce(DAEMON_INTERRUPT_DELIVERED)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
         const h = await withParkedBubble(send)
 
         await act(async () => { await h.get().handleSendNowQueued() })
@@ -131,14 +151,14 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         h.unmount()
     })
 
-    it('★ a refused interrupt keeps the bubble queued and surfaces why', async () => {
-        // No stop key / not generating / idle never observed. The body was NOT
-        // written, so the bubble must stay queued for the ordinary drain.
+    it('★ a refused write keeps the bubble queued and surfaces why', async () => {
+        // Not generating / a previous send still submitting / win32. The body was
+        // NOT written, so the bubble must stay queued for the ordinary drain.
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce({
-                success: false, sent: false, interrupted: false,
-                reason: 'stop_keys_empty', error: 'declares a stop control with an EMPTY key sequence',
+                success: false, sent: false, queuedWithAgent: false, restored: true,
+                reason: 'not_generating', error: 'The agent is not generating right now.',
             })
         const h = await withParkedBubble(send)
 
@@ -153,8 +173,40 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         h.unmount()
     })
 
+    it('★ a win32 refusal does NOT retry as an interrupt — the running turn is never killed', async () => {
+        // ★ The safety property of this whole feature. `sendNow` and `interrupt`
+        // request materially different outcomes: one preserves the turn in
+        // flight, the other destroys it. So a refusal must be REPORTED, never
+        // silently escalated — an owner who pressed Send now to add a follow-up
+        // thought would otherwise lose the answer they were waiting for, which
+        // is precisely the outcome they avoided by not pressing stop.
+        const send = vi.fn()
+            .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
+            .mockResolvedValueOnce({
+                success: false, sent: false, queuedWithAgent: false, restored: true,
+                reason: 'platform_unsupported',
+                error: 'Send now without interrupting is not available on Windows yet.',
+            })
+        const h = await withParkedBubble(send)
+
+        let accepted: boolean | undefined
+        await act(async () => { accepted = await h.get().handleSendNowQueued() })
+
+        expect(accepted).toBe(false)
+        // Exactly TWO calls: the original send and the refused sendNow. A third
+        // would be the silent interrupt escalation this test forbids.
+        expect(send).toHaveBeenCalledTimes(2)
+        expect(send.mock.calls.some(call => call[2]?.interrupt === true)).toBe(false)
+        expect(send.mock.calls.some(call => call[2]?.force === true)).toBe(false)
+        // The body is still parked with the daemon, so the ordinary idle drain
+        // will deliver it — the bubble is telling the truth by staying queued.
+        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'urgent: stop' })
+        expect(h.get().sendFeedbackMessage).toBeTruthy()
+        h.unmount()
+    })
+
     it('is a no-op when there is no parked message to send', async () => {
-        const send = vi.fn().mockResolvedValue(DAEMON_INTERRUPT_DELIVERED)
+        const send = vi.fn().mockResolvedValue(DAEMON_AGENT_QUEUED)
         const h = renderHarness(send)
 
         let accepted: boolean | undefined
@@ -185,7 +237,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         // which is exactly how a button appears "wired to nothing".
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
-            .mockResolvedValueOnce(DAEMON_INTERRUPT_DELIVERED)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
         const h = await withParkedBubble(send)
 
         await act(async () => { await h.get().handleSendNowQueued() })

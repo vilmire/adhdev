@@ -1544,8 +1544,8 @@
         "notDeliveredAria": "전달되지 않음",
         "sendNow": "지금 보내기",
         "sending": "보내는 중…",
-        "sendNowAria": "에이전트의 현재 턴을 중단하고 지금 보내기",
-        "sendNowTitle": "에이전트의 현재 턴을 중단하고 이 메시지를 지금 보냅니다. 진행 중인 턴은 사라집니다.",
+        "sendNowAria": "현재 턴을 중단하지 않고 에이전트 대기열로 지금 보내기",
+        "sendNowTitle": "이 메시지를 지금 에이전트에게 보냅니다. 에이전트 자체 대기열에 들어가 다음 턴에 처리되며, 진행 중인 턴은 그대로 계속됩니다.",
         "cancelQueued": "취소",
         "cancelQueuedAria": "대기 중인 이 메시지 취소",
         "cancelQueuedTitle": "이 메시지를 대기열에서 제거합니다. 에이전트에게 전송되지 않습니다."

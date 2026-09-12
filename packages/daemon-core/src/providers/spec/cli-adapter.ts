@@ -27,7 +27,7 @@ import {
     claudeAskUserQuestionPromptsMatch,
     readClaudeToolResultIds,
 } from './claude-tui-helpers.js';
-import { FsmDriver, type DashboardEvent, type ISpecDriver } from './fsm-driver.js';
+import { FsmDriver, type DashboardEvent, type ISpecDriver, type QueuedWriteOutcome } from './fsm-driver.js';
 import {
     openPickerAndListChoices,
     selectPickerChoice,
@@ -341,6 +341,30 @@ export class SpecCliAdapter implements CliAdapter {
             return { status: 'delivered' };
         }
         this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: _opts?.bracketedPaste });
+    }
+
+    /**
+     * SEND-NOW-AGENT-QUEUE: write a body into a GENERATING composer as a split
+     * write (text, gap, submit key) so the CLI's own input queue takes it,
+     * WITHOUT interrupting the turn in flight. POSIX only.
+     *
+     * See ISpecDriver.sendMessageDuringGeneration for the live A/B that
+     * distinguishes this from the retired force-inject, and for why win32 is
+     * refused. A driver that does not implement it (an out-of-tree ISpecDriver,
+     * a test double) reports `not_supported` — never a silent success, because
+     * the caller's whole contract here is that `accepted: false` means nothing
+     * was written and its previous fallback is safe to take.
+     */
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
+        if (typeof this.driver.sendMessageDuringGeneration !== 'function') {
+            return { accepted: false, reason: 'not_supported' };
+        }
+        LOG.info('SpecAdapter', `[${this.cliType}] sendMessageDuringGeneration(len=${text.length})`);
+        const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste);
+        if (!outcome.accepted) {
+            LOG.info('SpecAdapter', `[${this.cliType}] mid-generation send refused — ${outcome.reason} (len=${text.length})`);
+        }
+        return outcome;
     }
 
     /**

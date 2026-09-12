@@ -221,3 +221,104 @@ export function guessExt(mime: string): string {
     if (/webp/i.test(mime)) return '.webp';
     return '.bin';
 }
+
+// ── SEND-NOW-AGENT-QUEUE ─────────────────────────────────────────────────────
+// Pure-moved here from fsm-driver.ts (file-size gate), same precedent as the
+// submit-delay policy above. Re-exported from fsm-driver's barrel so existing
+// imports keep working. The stateful consumer
+// (FsmDriver.sendMessageDuringGeneration) stays in fsm-driver.ts.
+
+/** Why a mid-generation split write was refused. Each one means NOTHING was
+ *  written, so the caller can safely fall back to its previous behaviour. */
+export type QueuedWriteRefusal =
+    /** win32: the delayed lone CR is not recognised as a submit by ConPTY and
+     *  the regression has not been re-measured. See sendMessageDuringGeneration. */
+    | 'platform_unsupported'
+    /** The machine has not reached a ready state even once — there is no composer
+     *  to write into yet. */
+    | 'not_ready'
+    /** The session is not generating. The ordinary send path applies and is
+     *  strictly better: it delivers as a real turn instead of an agent-queued one. */
+    | 'not_generating'
+    /** An earlier send is still mid-submit. Writing now would braid two bodies
+     *  into one composer line — the SEND-OVERLAP defect. */
+    | 'send_in_flight'
+    /** The same body is already being delivered (pre-write duplicate gate). */
+    | 'duplicate'
+    /** The driver behind this adapter does not implement the split write (an
+     *  out-of-tree ISpecDriver, or a test double). Reported rather than assumed
+     *  successful, so the caller's fallback stays correct. */
+    | 'not_supported';
+
+/**
+ * SEND-NOW-AGENT-QUEUE: write a body into a GENERATING composer so the CLI's
+ * own input queue takes it, without interrupting the turn in flight.
+ *
+ * ── Why this is not the retired force-inject ──────────────────────────────
+ * oss 6cca365b removed `forceSendMessage` after measuring that a body written
+ * during generation was never consumed, while the caller was told it had been
+ * sent. That measurement was real, but its conclusion generalised one write
+ * SHAPE into a claim about all mid-generation writes. Re-measured live
+ * (2026-09-12, claude-cli v2.1.220, node-pty direct):
+ *
+ *   ATOMIC  — one write of `text + '\r'`      → NOT consumed. The body sits
+ *             in the composer; the CLI never queues it. This is exactly the
+ *             shape forceSendMessage used, and exactly what 6cca365b measured.
+ *   SPLIT   — write(text), gap, write('\r')   → CONSUMED. The TUI renders
+ *             "Press up to edit queued messages" and the body is answered as
+ *             the next turn when the current one ends.
+ *
+ * So the failing ingredient was the combined write, not the timing. This
+ * method exists to express the SPLIT shape explicitly, and the atomic shape
+ * remains forbidden — `actuallySendMessage` already writes the body and the
+ * submit key as separate `send_keys` calls with a `delay_ms_before_submit`
+ * gap between them, so the supported delivery is reused verbatim rather than
+ * reimplemented here.
+ *
+ * ── POSIX ONLY, deliberately ──────────────────────────────────────────────
+ * 6cca365b did not only delete a path; it also RETURNED win32 to the atomic
+ * write because a delayed lone CR is not recognised as a submit by ConPTY
+ * (the Ink composer absorbs it). That regression has not been re-measured —
+ * no win32 machine was available for the 2026-09-12 session — so win32 is
+ * refused here rather than being given an unverified new write path. Callers
+ * get `{ accepted: false, reason: 'platform_unsupported' }` and fall back to
+ * the behaviour they had before.
+ *
+ * ── Narrow by construction ────────────────────────────────────────────────
+ * This is NOT a general send. It bypasses exactly one gate — `canSendNow()`'s
+ * idle requirement — and keeps every other guard the ordinary path has
+ * (duplicate suppression, the in-flight latch, ready-once). It is reached
+ * only from the dashboard's explicit "Send now" press; nothing autonomous
+ * (the FIFO drain, mesh dispatch, `send_chat` without `sendNow`) can enter
+ * it. Optional so test doubles implementing ISpecDriver need not provide it.
+ */
+
+/**
+ * SEND-NOW-AGENT-QUEUE: the outcome of a mid-generation split write.
+ *
+ * `accepted: true` means the body WAS written to the PTY as text + a separately
+ * timed submit key, which the CLI's own input queue is expected to take. It is
+ * deliberately not called `delivered`: the agent has not answered it yet, and
+ * will not until the turn in flight ends. `accepted: false` always means no
+ * bytes were written.
+ */
+export type QueuedWriteOutcome =
+    | { accepted: true }
+    | { accepted: false; reason: QueuedWriteRefusal };
+
+/** SEND-NOW-AGENT-QUEUE: floor for the gap between the mid-generation body write
+ *  and its submit key.
+ *
+ *  The separation is the whole mechanism — an atomic `text + '\r'` is not taken
+ *  by the CLI's input queue, a split one is (see
+ *  ISpecDriver.sendMessageDuringGeneration). The live A/B that established this
+ *  used a ~400ms gap, so that is the floor rather than the ordinary
+ *  SUBMIT_DELAY_FLOOR_MS of 200: this write lands while the composer is also
+ *  being repainted by the turn in flight, which is strictly more contended than
+ *  the settled prompt the 200ms floor was derived against, and the only evidence
+ *  we have about what works here is at 400.
+ *
+ *  It is a FLOOR, not an override — resolveSubmitDelayMs' spec / manifest /
+ *  size-derived value still wins when larger (cursor-cli and kimi declare 1200),
+ *  so no provider's existing settling time is shortened by this path. */
+export const MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;

@@ -1544,8 +1544,8 @@
         "notDeliveredAria": "未送达",
         "sendNow": "立即发送",
         "sending": "发送中…",
-        "sendNowAria": "中断代理当前的回合并立即发送",
-        "sendNowTitle": "中断代理当前的回合并立即发送此消息。进行中的回合将丢失。",
+        "sendNowAria": "不中断当前回合，立即发送到代理队列",
+        "sendNowTitle": "立即将此消息发送给代理。它会进入代理自己的队列并在下一回合处理，进行中的回合会继续运行。",
         "cancelQueued": "取消",
         "cancelQueuedAria": "取消此排队中的消息",
         "cancelQueuedTitle": "将此消息从队列中移除。它不会被发送给代理。"

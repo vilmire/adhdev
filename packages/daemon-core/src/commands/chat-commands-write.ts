@@ -11,6 +11,7 @@ import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../pro
 import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
 import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
+import { sendNowIntoAgentQueue, type QueueWritableAdapter } from './send-now-queued-write.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -194,6 +195,54 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
                 await waitOnceForFreshHermesCliStart(adapter, _log);
+                // ── SEND-NOW-AGENT-QUEUE ────────────────────────────────────
+                // `sendNow` asks for the body to reach the agent WITHOUT killing
+                // the turn in flight, by letting the CLI's own input queue take
+                // it (claude-cli: "Press up to edit queued messages"). This is a
+                // SPLIT write — text, gap, submit key — which live A/B measured
+                // as consumed mid-turn where the retired atomic force-inject was
+                // not. See commands/send-now-queued-write.ts for the full
+                // derivation and providers/spec/fsm-driver.ts for the primitive.
+                //
+                // ★ It is its OWN flag, not an alias of `interrupt`. The two ask
+                // for materially different things — one preserves the running
+                // turn, the other destroys it — so a refusal here must NOT
+                // silently fall through to the interrupt path: the owner who
+                // pressed "Send now" to add a thought would lose the answer they
+                // were waiting for, which is precisely the outcome they avoided
+                // by not pressing stop. A refusal is reported, and the body stays
+                // queued for the ordinary drain.
+                if (args?.sendNow === true) {
+                    const queued = await sendNowIntoAgentQueue(adapter as unknown as QueueWritableAdapter, text);
+                    if (!queued.ok) {
+                        return {
+                            success: false,
+                            sent: false,
+                            queuedWithAgent: false,
+                            reason: queued.reason,
+                            error: queued.message,
+                            // Tells the pane whether the body is still held by the
+                            // driver. `restored: false` means nothing holds it —
+                            // the bubble is the only remaining copy.
+                            restored: queued.restored,
+                        };
+                    }
+                    const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+                    if (target?.category === 'cli'
+                        && target.type === adapter.cliType
+                        && typeof target.recordAcknowledgedUserInput === 'function') {
+                        target.recordAcknowledgedUserInput(input);
+                    }
+                    return {
+                        ..._logSendSuccess(`${transport}-adapter-agent-queue`, adapter.cliType),
+                        // `submitted` is deliberately false: the bytes are in the
+                        // agent's queue, not answered. Reporting a submit here
+                        // would repeat the exact lie 6cca365b was retired for.
+                        submitted: false,
+                        queuedWithAgent: true,
+                        claimed: queued.claimed,
+                    };
+                }
                 // SEND-NOW: `interrupt` asks to abort the turn in flight and
                 // deliver this body as a genuine new turn. `force`/`forceSend`
                 // are the retired force-inject spelling and are accepted as

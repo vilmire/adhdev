@@ -162,9 +162,10 @@ function PendingQueueStripImpl({
                         // ★ (QUEUE-SEND-NOW-RESTORED) Same always-in-DOM,
                         // hover-dimmed treatment as cancel below — a phone has no
                         // hover, so touch must not lose the affordance either.
-                        // The interrupt still discards the running turn; that
-                        // trade-off lives in the tooltip, not in a permanent
-                        // sentence next to every row.
+                        // SEND-NOW-AGENT-QUEUE: this hands the body to the
+                        // agent's own queue and does NOT discard the running
+                        // turn; what it does lives in the tooltip, not in a
+                        // permanent sentence next to every row.
                         <button
                             type="button"
                             onClick={() => onSendNow(entry.id)}
