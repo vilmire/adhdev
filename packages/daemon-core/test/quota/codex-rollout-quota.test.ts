@@ -20,6 +20,7 @@ import {
     codexSessionsDir,
     CODEX_ROLLOUT_STALE_AFTER_MS,
 } from '../../src/quota/fetchers/codex-rollout';
+import { evaluateProviderQuotaGate } from '../../src/mesh/mesh-quota-routing.js';
 
 let tempRoot: string;
 let env: NodeJS.ProcessEnv;
@@ -262,6 +263,13 @@ describe('fetchCodexQuotaFromRollout', () => {
         // it being dated to now or adjusted upward by guesswork.
         expect(quota?.weekly?.usedPercent).toBe(33);
         expect(quota?.updatedAt).toBe(captured);
+        // Provenance: the retained windows are a genuine measurement, so they
+        // carry the same mark as the Claude fetcher's aged-out branch. Routing
+        // requires it before it will gate on a non-'ok' snapshot — unmarked,
+        // an exhausted Codex fell through the provenance gate and kept being
+        // routed difficult work. 'no-data' is not a transient kind, so nothing
+        // downstream would apply this mark on the fetcher's behalf.
+        expect(quota?.metadata?.lastGoodWindows).toBe(true);
     });
 
     it('returns null — not a fabricated snapshot — when there is nothing to read', () => {
@@ -276,5 +284,62 @@ describe('fetchCodexQuotaFromRollout', () => {
         ]);
 
         expect(fetchCodexQuotaFromRollout({ env, now: () => NOW })).toBeNull();
+    });
+});
+
+/**
+ * The routing consequence of the stale branch's provenance mark, driven by the
+ * REAL fetcher rather than a hand-written snapshot.
+ *
+ * The mesh-side suite (mesh-quota-gate-stale-fail-open.test.ts) pins the gate's
+ * behaviour on a literal node-facts shape, which cannot notice if the fetcher
+ * stops emitting that shape. These cases close that gap: an exhausted Codex
+ * whose reading aged out must still be GATED, because an unmarked snapshot is
+ * discarded at routing's provenance check and fails open — the defect where a
+ * spent Codex kept winning difficult-task routing and returning empty
+ * completions.
+ */
+describe('stale rollout reading -> mesh routing gate (end to end)', () => {
+    /** Wrap a fetched snapshot as the node facts routing consumes. */
+    function nodeWith(quota: unknown) {
+        return {
+            id: 'node_codex',
+            nodeFacts: { reportedAt: NOW, quota: { 'codex-cli': quota } },
+        };
+    }
+
+    /** An aged-out reading at a given weekly usage, its reset still ahead. */
+    function staleReadingAt(usedPercent: number) {
+        const captured = NOW - CODEX_ROLLOUT_STALE_AFTER_MS - 60 * 60 * 1000;
+        writeRollout('2026/08/19', 'rollout-2026-08-19T20-00-00-aaa.jsonl', [
+            rateLimitLine({
+                timestamp: new Date(captured).toISOString(),
+                usedPercent,
+                windowMinutes: 10080,
+                // Seconds, as Codex writes it - three days out, so the window
+                // the reading describes is still the current one.
+                resetsAt: Math.floor((NOW + 3 * 24 * 60 * 60 * 1000) / 1000),
+            }),
+        ]);
+        return fetchCodexQuotaFromRollout({ env, now: () => NOW });
+    }
+
+    it('gates an exhausted Codex even though the reading is stale', () => {
+        const quota = staleReadingAt(100);
+        expect(quota?.metadata?.lastGoodWindows).toBe(true);
+
+        // Usage within a window only grows, so a 9h-old "100% used" is a lower
+        // bound on now - the safe direction for a gate to act on.
+        expect(evaluateProviderQuotaGate(nodeWith(quota), 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW))
+            .toMatchObject({ reason: 'provider_quota_weekly_low', window: 'weekly', remainingPercent: 0 });
+    });
+
+    it('leaves a Codex with real headroom selectable - the threshold decides', () => {
+        const quota = staleReadingAt(30);
+        expect(quota?.metadata?.lastGoodWindows).toBe(true);
+
+        // The reverse regression: provenance makes the windows readable, it
+        // must not turn every stale snapshot into a block.
+        expect(evaluateProviderQuotaGate(nodeWith(quota), 'codex-cli', null, NOW)).toBeNull();
     });
 });
