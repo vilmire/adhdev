@@ -1153,7 +1153,15 @@
         text-overflow: ellipsis;
     }
 
-    .chat-bubble-header .chat-time {
+    /* Also match .chat-bubble-header-end .chat-time directly: a header-end pill
+       positioned outside a .chat-bubble-header ancestor (e.g. the tool bubble's
+       top-right corner pill) still needs the same size/opacity — only the
+       ancestor rule (.chat-bubble-header .chat-time) requires an ancestor that
+       doesn't exist there. Color intentionally stays out of this rule so a
+       bubble's own muted palette (e.g. .chat-msg-tool's var(--text-muted)) is
+       preserved rather than overridden to currentColor. */
+    .chat-bubble-header .chat-time,
+    .chat-bubble-header-end .chat-time {
         font-size: var(--chat-header-font-size);
         opacity: 0.55;
         flex: 0 0 auto;
