@@ -33,6 +33,7 @@ function message(overrides: Partial<ReplicatedTranscriptMessageV1> = {}): Replic
         senderName: null,
         toolName: null,
         streaming: null,
+        toolBlockRef: null,
         ...overrides,
     };
 }
@@ -180,6 +181,29 @@ describe('mapTranscriptSnapshotToReadChatPayload', () => {
         expect('meta' in plain.messages[0]).toBe(false);
     });
 
+    it('carries toolBlockRef through the message mapper, and omits it when null', () => {
+        // NOTE on `kind`: real truncated tool bubbles are always `kind:'tool'`
+        // (native-history-tool-blocks.ts), but `mesh_read_chat` unconditionally
+        // filters `kind:'tool'` out of its OWN output (the activity-kind default
+        // above) — so a `kind:'tool'` fixture here would assert nothing about
+        // this mapping line; `messages[0]` would just be undefined. This uses
+        // `kind:'standard'` to isolate `mapTranscriptMessage`'s field-copy
+        // behavior from that unrelated filter, exactly as the other scalar
+        // fields in this suite (senderName, toolName, streaming) already do.
+        const ref = { sourceMtimeMs: 123456, recordIndex: 4, blockIndex: 1 };
+        const withRef = mapTranscriptSnapshotToReadChatPayload(
+            snapshot({ messages: [message({ toolBlockRef: ref })] }),
+            { omittedBefore: false, stale: false },
+        );
+        expect(withRef.messages[0].toolBlockRef).toEqual(ref);
+
+        const plain = mapTranscriptSnapshotToReadChatPayload(
+            snapshot({ messages: [message({ toolBlockRef: null })] }),
+            { omittedBefore: false, stale: false },
+        );
+        expect('toolBlockRef' in plain.messages[0]).toBe(false);
+    });
+
     it('narrows provenance scalars to {selected}, and omits them when null', () => {
         const withProvenance = mapTranscriptSnapshotToReadChatPayload(
             snapshot({ provenance: { messageSource: 'native_history', transcriptProvenance: 'jsonl' } }),
@@ -272,6 +296,32 @@ describe('mapTranscriptSnapshotToReadChatPayload — required-field injection', 
     it('revision: present → replicaRevision; removed → undefined', () => {
         expect(mapTranscriptSnapshotToReadChatPayload(base, opts).replicaRevision).toBe(7);
         expect(mapTranscriptSnapshotToReadChatPayload(inject('revision', base), opts).replicaRevision).toBeUndefined();
+    });
+
+    it('toolBlockRef: present on a message → mapped; removed → the expand affordance is silently lost', () => {
+        // `kind:'standard'` (default `message()` kind) deliberately, not
+        // `kind:'tool'`: `mesh_read_chat` unconditionally drops `kind:'tool'`
+        // rows via `isActivityWireMessage` (this consumer's prose-only
+        // default), so a `kind:'tool'` fixture would leave `messages` empty and
+        // assert nothing about THIS mapping line. Real truncated-tool bubbles
+        // are always `kind:'tool'` (native-history-tool-blocks.ts), so on the
+        // default (no-`includeActivity`) `mesh_read_chat` path `toolBlockRef`
+        // is filtered away before it would ever surface here regardless of this
+        // fix — this test only pins the mapper's own field-copy fidelity, the
+        // same isolation the senderName/toolName/streaming cases above use.
+        const ref = { sourceMtimeMs: 999, recordIndex: 2, blockIndex: 0 };
+        const withRef = snapshot({ messages: [message({ toolBlockRef: ref })] });
+        expect(mapTranscriptSnapshotToReadChatPayload(withRef, opts).messages[0].toolBlockRef).toEqual(ref);
+
+        const stripped = {
+            ...withRef,
+            messages: withRef.messages.map((m) => {
+                const mutated = { ...m } as Record<string, unknown>;
+                delete mutated.toolBlockRef;
+                return mutated as ReplicatedTranscriptMessageV1;
+            }),
+        };
+        expect(mapTranscriptSnapshotToReadChatPayload(stripped, opts).messages[0].toolBlockRef).toBeUndefined();
     });
 
     /**

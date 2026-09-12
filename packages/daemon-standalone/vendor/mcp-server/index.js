@@ -93485,6 +93485,7 @@ ${cleanBody}`;
       if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState;
       if (message.senderName !== null) mapped.senderName = message.senderName;
       if (message.toolName !== null) mapped.toolName = message.toolName;
+      if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef;
       if (message.turnKey !== null) {
         mapped._turnKey = message.turnKey;
       }

@@ -121,6 +121,7 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): Dashboard
     if (message.timestamp !== null) mapped.timestamp = message.timestamp
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState
     if (message.senderName !== null) mapped.senderName = message.senderName
+    if (message.toolBlockRef !== null) mapped.toolBlockRef = message.toolBlockRef
     if (message.turnKey !== null) {
         // `_turnKey` ONLY. `turnKey` is TURN-grained — the producer increments it
         // once per user message, so every bubble of a multi-bubble turn (prompt →

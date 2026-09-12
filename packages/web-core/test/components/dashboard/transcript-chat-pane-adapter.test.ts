@@ -79,6 +79,25 @@ describe('mapTranscriptSnapshotToChatTailUpdate', () => {
     expect(update.messageSource).toBeUndefined()
   })
 
+  it('carries toolBlockRef through so a truncated tool bubble stays expandable, and omits it when null', () => {
+    const ref = { sourceMtimeMs: 123456, recordIndex: 4, blockIndex: 1 }
+    const snapshot = buildSnapshot({
+      messages: [
+        { role: 'assistant', kind: 'tool', content: 'Read(x)…', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, toolBlockRef: ref },
+      ],
+    })
+    const update = mapTranscriptSnapshotToChatTailUpdate(snapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    expect(update.messages[0].toolBlockRef).toEqual(ref)
+
+    const plainSnapshot = buildSnapshot({
+      messages: [
+        { role: 'assistant', kind: 'tool', content: 'Read(x)', receivedAt: 1, timestamp: 1, turnKey: 't1', bubbleState: 'final', senderName: null, toolName: null, streaming: null, toolBlockRef: null },
+      ],
+    })
+    const plainUpdate = mapTranscriptSnapshotToChatTailUpdate(plainSnapshot, { subscriptionKey: 'key-1', omittedBefore: false, stale: false })
+    expect('toolBlockRef' in plainUpdate.messages[0]).toBe(false)
+  })
+
   it('maps activeModal 1:1 and leaves activeInteractivePrompt null (cannot round-trip from the allow-list)', () => {
     const snapshot = buildSnapshot({
       activeModal: { message: 'Run this command?', buttons: ['Approve', 'Deny'] },
