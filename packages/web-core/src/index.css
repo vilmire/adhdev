@@ -1326,6 +1326,18 @@
         opacity: 0.75;
     }
 
+    /* (QUEUED-SEND-STUCK-FOREVER) The marker stops promising delivery: the body
+       waited past the window in which "waiting to send" was true, which in
+       practice means the session was torn down with it still parked. Warning
+       colour rather than error — nothing failed loudly, and the owner's next step
+       is to resend, not to debug. Full opacity because this is the one state in
+       the strip that actually wants attention, against the 0.75 the ordinary
+       waiting marker sits at. */
+    .chat-pending-queue-clock.chat-pending-queue-stale {
+        opacity: 1;
+        color: var(--semantic-warning);
+    }
+
     /* Cancel. Always rendered and always hit-testable — hiding it behind hover
        would strip it from touch entirely, and this is the only place a body can
        be withdrawn before the agent sees it. 28px is the tap target; the glyph

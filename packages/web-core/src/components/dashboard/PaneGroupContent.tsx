@@ -61,6 +61,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
         sendFeedbackMessage,
         pendingLocalMessage,
         pendingLocalMessages,
+        retireEchoedPendingMessages,
         handleFocusAgent,
         isFocusingAgent,
     } = commands
@@ -101,6 +102,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
             sendFeedbackMessage={sendFeedbackMessage}
             pendingLocalMessage={pendingLocalMessage}
             pendingLocalMessages={pendingLocalMessages}
+            retireEchoedPendingMessages={retireEchoedPendingMessages}
             handleFocusAgent={handleFocusAgent}
             isFocusingAgent={isFocusingAgent}
             actionLogs={actionLogs}

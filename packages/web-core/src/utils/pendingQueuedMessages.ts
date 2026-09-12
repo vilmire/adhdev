@@ -46,6 +46,20 @@ export const MAX_PENDING_QUEUED_MESSAGES = 20
  */
 export const PENDING_QUEUED_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
+/**
+ * (QUEUED-SEND-STUCK-FOREVER) How long a body may wait before the UI stops
+ * claiming it is still going to be delivered.
+ *
+ * ★ Defined HERE, in the dependency-free leaf, and re-exported from
+ * `conversation-message-snapshot` — not the other way round. This module is
+ * imported by that one, so owning the constant in the component module would
+ * point the dependency backwards (util → components) just to share a number.
+ *
+ * See the re-export site for why the threshold exists and why it is an order of
+ * magnitude below the 24h store bound above.
+ */
+export const PENDING_QUEUED_MESSAGE_STALE_AFTER_MS = 10 * 60 * 1000
+
 export interface PendingQueuedMessage {
     /**
      * Stable per-entry identity, minted at submit.
@@ -63,6 +77,18 @@ export interface PendingQueuedMessage {
     sentAt: number
     /** True once the daemon answered `queued` (parked, not yet written to the PTY). */
     queued?: boolean
+    /**
+     * (QUEUED-SEND-STUCK-FOREVER) True once the body waited past
+     * `PENDING_QUEUED_MESSAGE_STALE_AFTER_MS` without the daemon echoing it back.
+     *
+     * ★ PERSISTED, unlike `settled`. The two look similar and must not be
+     * conflated: `settled` describes a live `send_chat` promise, which cannot
+     * survive a reload, so it is forced true on read. `stale` describes the
+     * BODY's history — how long it has gone undelivered — which is exactly what
+     * does survive a reload, and is the whole reason a restored row can be shown
+     * honestly instead of being re-announced as freshly waiting.
+     */
+    stale?: boolean
     /**
      * (CANCEL-INFLIGHT-LEAK) True once the `send_chat` round trip has RESOLVED —
      * whichever way it went. False/absent means the outcome is still unknown.
@@ -140,7 +166,15 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
         // is a property of a live `send_chat` promise, and no promise survives a
         // reload — a row read back from the store has no round trip pending by
         // construction, whatever the tab that wrote it was doing at the time.
-        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true, settled: true }, index })
+        // ★ (QUEUED-SEND-STUCK-FOREVER) Staleness is DERIVED on read, not merely
+        // carried. A row restored from a previous session has by definition been
+        // waiting since `sentAt`, and the tab that wrote it is gone — so nothing
+        // else will ever mark it. Deriving here is what makes an already-pinned
+        // body honest the instant the pane mounts, rather than announcing it as
+        // freshly "waiting to send" and then correcting itself once a transcript
+        // arrives (which, for a torn-down session, it may never do).
+        const stale = candidate.stale === true || (now - sentAt > PENDING_QUEUED_MESSAGE_STALE_AFTER_MS)
+        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true, settled: true, stale }, index })
         index += 1
     }
     // FIFO: oldest first, matching the daemon's own drain order so the rendered

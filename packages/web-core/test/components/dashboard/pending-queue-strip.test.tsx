@@ -261,3 +261,101 @@ describe('PendingQueueStrip — pinned, not part of the transcript', () => {
         expect(readChatPaneSource()).toMatch(/excludeQueued:\s*true/)
     })
 })
+
+/**
+ * (QUEUED-SEND-STUCK-FOREVER) The strip must stop making a promise it cannot keep.
+ *
+ * "Waiting to send" asserts the agent WILL get this body. That is false once the
+ * session has been torn down mid-queue — `FsmDriver.shutdown()` discards
+ * `pendingSends` and notifies no surface, so no echo and no cancel confirmation
+ * can ever arrive. The row previously sat here repeating that promise until a 24h
+ * age-out, which is the owner's report: a message sent long ago, still pinned as
+ * waiting, for an agent that was never going to receive it.
+ */
+describe('PendingQueueStrip — a body that waited too long stops claiming delivery', () => {
+    /**
+     * The marker's accessible name IS the claim (QUEUE-BUBBLE-LOOK replaced the
+     * sentence with a glyph, so `aria-label` is where the meaning now lives).
+     * Asserting on it rather than on the glyph character keeps this test about
+     * what the row CLAIMS, not which pictograph was chosen for it.
+     */
+    function markerLabel(index = 0): string {
+        return Array.from(container.querySelectorAll('.chat-pending-queue-clock'))[index]
+            ?.getAttribute('aria-label') || ''
+    }
+
+    it('★ a stale row says NOT DELIVERED instead of "waiting to send"', () => {
+        render({ entries: [{ ...parked('a', 'orphaned body'), stale: true }] })
+        expect(markerLabel()).toMatch(/not delivered/i)
+        expect(markerLabel()).not.toMatch(/waiting to send/i)
+        expect(container.querySelector('[data-chat-queued-stale="true"]')).not.toBeNull()
+    })
+
+    it('a row still inside the window keeps saying "waiting to send"', () => {
+        render({ entries: [parked('a', 'recent body')] })
+        expect(markerLabel()).toMatch(/waiting to send/i)
+        expect(container.querySelector('[data-chat-queued-stale="true"]')).toBeNull()
+    })
+
+    it('★ the stale marker is visually distinct, not only renamed', () => {
+        // A screen reader gets the aria-label above; a sighted owner gets this.
+        // Without the class the row would look identical to one still on its way.
+        render({ entries: [{ ...parked('a', 'orphaned body'), stale: true }] })
+        expect(container.querySelector('.chat-pending-queue-clock')?.className)
+            .toContain('chat-pending-queue-stale')
+
+        render({ entries: [parked('a', 'recent body')] })
+        expect(container.querySelector('.chat-pending-queue-clock')?.className)
+            .not.toContain('chat-pending-queue-stale')
+    })
+
+    it('★ a stale row KEEPS its text and its cancel — the owner will want to resend it', () => {
+        // Marking, not deleting, is the whole point: a discarded body is one the
+        // owner most likely wants back, and they cannot resend what they cannot see.
+        const onCancelQueued = vi.fn()
+        render({ entries: [{ ...parked('a', 'ghost body'), stale: true }], onCancelQueued })
+        expect(rowBodies()).toEqual(['ghost body'])
+
+        const cancel = container.querySelector<HTMLButtonElement>('.chat-pending-queue-cancel')
+        expect(cancel).not.toBeNull()
+        act(() => { cancel!.click() })
+        expect(onCancelQueued).toHaveBeenCalledWith('a')
+    })
+
+    it('★ a stale row keeps the messenger bubble skin — it is still the owner\'s message', () => {
+        // QUEUE-BUBBLE-LOOK must survive the stale state: going undelivered changes
+        // the claim, not what kind of object this is.
+        render({ entries: [{ ...parked('a', 'ghost body'), stale: true }] })
+        const bubble = container.querySelector('.chat-pending-queue-bubble')
+        expect(bubble?.className).toContain('chat-bubble-user')
+        expect(bubble?.className).toContain('chat-bubble')
+    })
+
+    it('★ the region label stops saying "waiting" once nothing is', () => {
+        // Otherwise a screen-reader user is told the exact thing the visible rows
+        // have just stopped saying.
+        render({ entries: [{ ...parked('a', 'orphaned'), stale: true }] })
+        expect(strip()?.getAttribute('aria-label')).toMatch(/not delivered/i)
+    })
+
+    it('keeps the waiting region label while ANY row is still genuinely waiting', () => {
+        render({
+            entries: [{ ...parked('a', 'orphaned'), stale: true }, parked('b', 'still waiting')],
+        })
+        expect(strip()?.getAttribute('aria-label')).toMatch(/waiting to send/i)
+    })
+
+    it('★ the memo lets the marker flip when an entry goes stale in place', () => {
+        // `stale` selects the marker, so a comparator that ignored it would leave
+        // the strip claiming "waiting to send" forever while state said otherwise
+        // — the defect surviving behind a green state-level test. This is the only
+        // test that exercises the memo, because the flip happens with the entry at
+        // the same index with the same id and the same content.
+        const entry = parked('a', 'aging body')
+        render({ entries: [entry] })
+        expect(markerLabel()).toMatch(/waiting to send/i)
+
+        render({ entries: [{ ...entry, stale: true }] })
+        expect(markerLabel()).toMatch(/not delivered/i)
+    })
+})

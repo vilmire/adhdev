@@ -5,6 +5,8 @@ import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getIn
 import { getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
 import { isConversationGenerating } from '../components/dashboard/DashboardMobileChatShared'
 import type { PendingLocalMessage } from '../components/dashboard/conversation-message-snapshot'
+import { retirePendingLocalMessages } from '../components/dashboard/conversation-message-snapshot'
+import type { DashboardMessage } from '../components/dashboard/types'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 import {
     createPendingQueuedMessageId,
@@ -76,6 +78,25 @@ export interface DashboardConversationCommands {
      * the handler for why a local-only removal would be a lie.
      */
     handleCancelQueued: (pendingId: string) => Promise<boolean>
+    /**
+     * ★ (QUEUED-SEND-STUCK-FOREVER) Reconcile the local queue against the live
+     * transcript: retire bodies the daemon has echoed back, and mark bodies that
+     * have waited too long to still be called "waiting".
+     *
+     * ★ Why the TAIL is pushed in rather than the hook reading it.
+     *
+     * The transcript authority is the per-pane chat-tail controller, which lives
+     * BELOW this hook (ChatPane owns it; this hook is called by the workspace
+     * above). The hook owns the queue state and its persisted copy. Rather than
+     * duplicate a tail subscription up here — a second subscription to the same
+     * session, with its own lifetime and its own chance to disagree — the pane
+     * hands its already-computed tail to the one writer that can act on it.
+     *
+     * Safe to call on every tail tick: it returns without touching state when
+     * nothing matched, so the common case costs one pass over the queue (which
+     * is capped at MAX_PENDING_QUEUED_MESSAGES) and no re-render.
+     */
+    retireEchoedPendingMessages: (liveMessages: DashboardMessage[]) => void
     handleRelaunch: () => void
     handleModalButton: (button: string) => void
     handleFocusAgent: () => Promise<void>
@@ -374,6 +395,38 @@ export function useDashboardConversationCommands({
             return next
         })
     }, [])
+
+    /**
+     * ★ (QUEUED-SEND-STUCK-FOREVER) The echo retirement, at STATE level.
+     *
+     * Before this, echo matching existed ONLY inside `withPendingLocalMessages`,
+     * which runs while building the render: it skipped the bubble and returned,
+     * so state and localStorage still held the entry. The transcript therefore
+     * looked right while the STORE — which is what the pinned strip and the next
+     * page load both read — kept a body the agent had already answered. A parked
+     * row was never even considered by that path (it excludes queued entries by
+     * design, since the strip renders them), so for exactly the rows the owner
+     * complained about, no echo path existed at all.
+     *
+     * Running the same match as a state transition is the fix: the entry is
+     * really gone, everywhere, and stays gone across a reload.
+     *
+     * ★ Writes only on a real change. `updatePendingMessages` is a no-op when the
+     * updater returns the same reference, so a tail tick that retires nothing
+     * costs no write and no render — which matters because this runs on every
+     * transcript update, not just on send.
+     *
+     * ★ Not gated on `queued`. An entry whose send is still in its round trip can
+     * be echoed too (the daemon delivered it outright and the echo beat the ack),
+     * and leaving that one behind would re-introduce the duplicate bubble the
+     * render-time match was written to prevent.
+     */
+    const retireEchoedPendingMessages = useCallback((liveMessages: DashboardMessage[]) => {
+        updatePendingMessages(prev => {
+            const result = retirePendingLocalMessages(prev, liveMessages)
+            return result.changed ? (result.entries as PendingQueuedMessage[]) : prev
+        })
+    }, [updatePendingMessages])
 
     useEffect(() => {
         setSendFeedbackMessage(null)
@@ -729,9 +782,36 @@ export function useDashboardConversationCommands({
             })
             const res = unwrapCommandResult(raw)
 
-            // `cancelled: 0` means the FIFO no longer held this body — it drained
-            // while the owner was deciding. Keep the bubble: the agent has it.
-            if (res?.success === false || (typeof res?.cancelled === 'number' && res.cancelled === 0)) {
+            // `cancelled: 0` means the FIFO did not hold this body. That has TWO
+            // causes and they need opposite handling — the old code assumed only
+            // the first and so produced the report that motivated this change.
+            //
+            //  (a) It drained while the owner was deciding. The agent HAS the
+            //      message and will answer it, so the bubble must stay and the
+            //      owner must be told the cancel lost the race.
+            //
+            //  (b) The FIFO never held it — the session was torn down mid-queue
+            //      (`FsmDriver.shutdown()` logs `DISCARDING n queued send(s)` and
+            //      empties `pendingSends` without telling any surface) or the
+            //      daemon restarted. Nothing will ever echo this body and nothing
+            //      will ever cancel it, so treating it as (a) pinned the row above
+            //      the composer permanently: the owner pressed Cancel on a message
+            //      that no longer existed anywhere and it refused to go away.
+            //
+            // `stale` separates them. A body still inside the delivery window is
+            // plausibly (a) — queues really do drain at the moment the owner
+            // reaches for Cancel. One that has outlived the window with no echo is
+            // (b): the ONLY reason it is still here is that no one is holding it.
+            // The owner asked for it gone, and in (b) there is no remote state left
+            // for a local drop to contradict — which is the exact condition the
+            // "must reach the daemon" rule above is protecting, and it is satisfied.
+            const daemonHoldsNothing = typeof res?.cancelled === 'number' && res.cancelled === 0
+            if (daemonHoldsNothing && pending.stale === true) {
+                updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+                setSendFeedbackMessage(prev => (prev === QUEUED_SEND_MESSAGE ? null : prev))
+                return true
+            }
+            if (res?.success === false || daemonHoldsNothing) {
                 setSendFeedbackMessage(CANCEL_QUEUED_TOO_LATE_MESSAGE)
                 return false
             }
@@ -846,6 +926,7 @@ export function useDashboardConversationCommands({
         handleSendChat,
         handleSendNowQueued,
         handleCancelQueued,
+        retireEchoedPendingMessages,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,
@@ -859,6 +940,7 @@ export function useDashboardConversationCommands({
         handleSendChat,
         handleSendNowQueued,
         handleCancelQueued,
+        retireEchoedPendingMessages,
         handleRelaunch,
         handleModalButton,
         handleFocusAgent,

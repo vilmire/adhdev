@@ -1545,6 +1545,8 @@
         "toolExpandUnavailable": "La salida completa ya no está disponible — la transcripción cambió desde que se leyó.",
         "waitingToSend": "Esperando para enviar — el agente todavía está trabajando.",
         "waitingToSendAria": "Esperando para enviar",
+        "notDelivered": "No entregado — el agente nunca recibió este mensaje.",
+        "notDeliveredAria": "No entregado",
         "sendNow": "Enviar ahora",
         "sending": "Enviando…",
         "sendNowAria": "Enviar ahora interrumpiendo el turno actual del agente",
