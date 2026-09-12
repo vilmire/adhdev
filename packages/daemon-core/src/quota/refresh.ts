@@ -42,8 +42,8 @@ import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetcher
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchCursorQuota } from './fetchers/cursor.js';
-import { fetchGrokQuota } from './fetchers/grok.js';
-import { fetchKimiQuota } from './fetchers/kimi.js';
+import { fetchGrokQuota, readGrokCredentialMtimeMs } from './fetchers/grok.js';
+import { fetchKimiQuota, readKimiCredentialMtimeMs } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
 import { loadQuotaCache, saveQuotaCache } from './persist.js';
 
@@ -739,24 +739,25 @@ function cancelFailureRetry(provider: QuotaProvider): void {
  * token); it simply has no way to hear that the token is no longer the same
  * token.
  *
- * The keychain item's mtime is that missing signal, and a cheap one: `agy`
- * rewrites the item on every launch (measured — see the antigravity fetcher
- * header), so an mtime later than the one we saw at the last failure means a
+ * The credential store's own modification time is that missing signal, and a
+ * cheap one: each CLI rewrites its credential when it refreshes or re-obtains
+ * the token, so a stamp later than the one we saw at the last failure means a
  * NEW credential exists. Reset the budget, and the very next wake finds the
  * retry due again.
  *
  * ★THREE GUARDS, all narrow on purpose — this is a SHARED retry path and a
- * leak into another provider, kind or platform is a regression:
- *   1. provider — antigravity-cli only. Other providers have their own
- *      credential lifecycles and are untouched by this file's change.
+ * leak into another provider or kind is a regression:
+ *   1. provider — only providers with a CREDENTIAL_MTIME_SOURCES entry below.
+ *      Everything else has no source and short-circuits to "no evidence".
  *   2. failureKind — TOKEN-EXPIRY kinds only (`expired-token` / `unauthorized`).
  *      A `network`, `parse` or `rate-limited` failure is not a credential
  *      problem, so a new credential is not evidence it would now succeed.
- *   3. platform — darwin only. The probe reads a macOS keychain; win32 and
- *      linux keep exactly their present behaviour.
+ *   3. platform — per source. The antigravity arm is darwin-only because it
+ *      reads a macOS keychain; the file arms are platform-agnostic because a
+ *      `stat` is.
  *
  * ★AND IT IS A NO-OP WHEN THE TOKEN DID NOT CHANGE. An unchanged (or
- * unreadable) mtime returns false and the existing backoff stands untouched —
+ * unreadable) stamp returns false and the existing backoff stands untouched —
  * so a provider whose token is genuinely dead is probed no more often than it
  * is today. That asymmetry is the whole safety argument: the only thing that
  * can spend a fresh budget is the user actually re-authenticating.
@@ -767,13 +768,42 @@ const CREDENTIAL_RENEWAL_FAILURE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Reads the credential stamp for a provider, or undefined when this provider /
- * platform has no such stamp. Indirected through a mutable binding so tests can
- * drive the detector without a real keychain; production never reassigns it.
+ * Per-provider "has the credential been renewed?" sources. A provider ABSENT
+ * from this table can never trigger the reset — that absence is the gate, so
+ * adding an entry is the whole cost of extending this, and forgetting to add
+ * one is a silent no-op rather than a misfire.
+ *
+ * ★Two source shapes, deliberately not unified further:
+ *   - antigravity-cli keeps its token in the macOS keychain, so its stamp is
+ *     the item's `mdat`, read via `security` WITHOUT `-w` (attributes only).
+ *     darwin-gated inside the fetcher; win32/linux resolve null.
+ *   - kimi / grok keep theirs in a plain file, so a `stat` on the path each
+ *     fetcher already resolves is the entire implementation.
+ * Both shapes return unix ms or null, and NEITHER reads the token value.
+ *
+ * ★codex is deliberately absent: it is a file-axis rollout reader with no OAuth
+ * token of its own, so the budget-exhaustion stall this detector exists to
+ * rescue cannot occur there.
+ */
+const CREDENTIAL_MTIME_SOURCES: Partial<
+    Record<QuotaProvider, (() => Promise<number | null>)>
+> = {
+    'antigravity-cli': () => (
+        // The keychain probe is macOS-only; skip the spawn entirely elsewhere.
+        process.platform === 'darwin' ? readAntigravityKeychainMtimeMs() : Promise.resolve(null)
+    ),
+    kimi: () => readKimiCredentialMtimeMs(),
+    'grok-cli': () => readGrokCredentialMtimeMs(),
+};
+
+/**
+ * Reads the credential stamp for a provider, or null when this provider has no
+ * source. Indirected through a mutable binding so tests can drive the detector
+ * without a real keychain or credential file; production never reassigns it.
  */
 const defaultCredentialMtimeReader = async (provider: QuotaProvider): Promise<number | null> => {
-    if (provider !== 'antigravity-cli' || process.platform !== 'darwin') return null;
-    return readAntigravityKeychainMtimeMs();
+    const source = CREDENTIAL_MTIME_SOURCES[provider];
+    return source ? source() : null;
 };
 
 let credentialMtimeReader: (provider: QuotaProvider) => Promise<number | null> =
@@ -786,10 +816,16 @@ export function __setQuotaCredentialMtimeReaderForTests(
     credentialMtimeReader = reader ?? defaultCredentialMtimeReader;
 }
 
-/** Does this provider's cached failure qualify for the renewal detector at all? */
+/**
+ * Does this provider's cached failure qualify for the renewal detector at all?
+ *
+ * Provider membership is the table above — no provider name is hardcoded here,
+ * so extending the detector is one entry and never an edit to this predicate.
+ * The platform gate lives inside each source (keychain: darwin-only; file
+ * stat: platform-agnostic).
+ */
 function isCredentialRenewalCandidate(provider: QuotaProvider): boolean {
-    if (provider !== 'antigravity-cli') return false;
-    if (process.platform !== 'darwin') return false;
+    if (!CREDENTIAL_MTIME_SOURCES[provider]) return false;
     const entry = cache.get(provider);
     if (!entry || entry.status === 'ok') return false;
     const kind = entry.metadata?.failureKind;
@@ -1345,14 +1381,16 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         // ★RE-LOGIN RESCUE. A provider whose retry budget is spent is, by
         // design, NOT in `due` — that is what stops us hammering a dead token.
         // But the budget cannot hear a re-login, so probe the credential stamp
-        // for the narrow case that can be rescued (see
-        // resetFailureBudgetOnCredentialRenewal: darwin + antigravity +
-        // token-expiry kind). Deliberately fire-and-forget and OUTSIDE the
+        // for the narrow cases that can be rescued (see
+        // resetFailureBudgetOnCredentialRenewal: a provider with a
+        // CREDENTIAL_MTIME_SOURCES entry, on a token-expiry failure kind).
+        // Deliberately fire-and-forget and OUTSIDE the
         // `due` decision: this wake proceeds on the state it already computed,
         // and a reset merely notifies the cache-changed listener, which
         // reschedules the chain so the NEXT wake sees the retry as due. An
-        // unchanged stamp resets nothing and costs one `security` call per
-        // wake on one provider — no extra provider probe, ever.
+        // unchanged stamp resets nothing and costs one `security` call (agy) or
+        // one `stat` (kimi/grok) per wake — and only for a provider already
+        // sitting on a token-expiry failure. No extra provider probe, ever.
         for (const { provider } of fetchers) {
             if (options.isEnabled && !options.isEnabled(provider)) continue;
             if (due.some((f) => f.provider === provider)) continue;

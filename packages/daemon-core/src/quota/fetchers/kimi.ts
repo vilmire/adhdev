@@ -29,7 +29,7 @@ import {
     type QuotaWindow,
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
-import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { assertInjectedNetworkFetchInTest, credentialFileMtimeMs, resolveDeps } from './deps.js';
 import { retryAfterMs, toNumber } from './coerce.js';
 
 const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
@@ -166,6 +166,32 @@ function readCredentials(deps: Required<QuotaFetchDeps>, oauthKey?: string): Cre
         return { kind: 'invalid', reason: `Unable to read Kimi credentials: ${message}` };
     }
     return parseCredentials(raw);
+}
+
+/**
+ * When the Kimi CLI last rewrote its credentials file, in unix ms — the
+ * re-login signal behind quota/refresh.ts's retry-budget reset.
+ *
+ * The CLI rewrites this file whenever it refreshes or re-obtains the token, so
+ * an mtime later than the one observed at the last failure means a NEW
+ * credential exists and a re-probe is worth spending. Resolves null when the
+ * file is absent or unreadable, which the caller treats as "no evidence of
+ * renewal" and acts on by leaving the existing backoff alone.
+ *
+ * ★Resolves the path exactly the way the fetcher does — via the configured
+ * managed-provider oauth ref, not a hardcoded `kimi-code.json`. A user with a
+ * configured ref keeps a leftover legacy token at the default name, and
+ * watching the wrong file would mean either missing every renewal or reacting
+ * to a file the fetcher never reads.
+ *
+ * ★METADATA ONLY: the token value is never read (see credentialFileMtimeMs).
+ */
+export async function readKimiCredentialMtimeMs(
+    overrides: QuotaFetchDeps = {},
+): Promise<number | null> {
+    const deps = resolveDeps(overrides);
+    const settings = readManagedKimiSettings(deps.env);
+    return credentialFileMtimeMs(credentialsPath(deps.env, settings.oauthKey));
 }
 
 function isExpired(credentials: KimiCredentials, nowMs: number): boolean {

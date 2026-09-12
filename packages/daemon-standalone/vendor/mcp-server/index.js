@@ -43145,6 +43145,15 @@ var require_dist3 = __commonJS({
         MACHINE_ID_PREFIX = "mach_";
       }
     });
+    async function credentialFileMtimeMs(filePath) {
+      try {
+        const stats = await (0, import_promises3.stat)(filePath);
+        const ms = stats.mtimeMs;
+        return Number.isFinite(ms) ? ms : null;
+      } catch {
+        return null;
+      }
+    }
     function assertInjectedNetworkFetchInTest(overrides, caller) {
       if (overrides.fetch) return;
       if (!isTestRuntimeEnv()) return;
@@ -43290,6 +43299,32 @@ var require_dist3 = __commonJS({
         ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"]
       );
       return res.code === 0 && res.stdout !== "" ? res.stdout : null;
+    }
+    async function readAntigravityKeychainMtimeMs(overrides = {}) {
+      const deps = resolveDeps(overrides);
+      const platform11 = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
+      if (platform11 !== "darwin") return null;
+      try {
+        const res = await runCredStoreCommand(
+          deps,
+          "/usr/bin/security",
+          // ★No `-w`: attributes only, never the password.
+          ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT]
+        );
+        if (res.code !== 0) return null;
+        return parseKeychainMdatMs(`${res.stdout}
+${res.stderr}`);
+      } catch {
+        return null;
+      }
+    }
+    function parseKeychainMdatMs(output) {
+      const match = /"mdat"<timedate>=(?:0x[0-9a-fA-F]*\s+)?"(\d{14})Z/.exec(output);
+      if (!match) return null;
+      const [, stamp2] = match;
+      const iso = `${stamp2.slice(0, 4)}-${stamp2.slice(4, 6)}-${stamp2.slice(6, 8)}T${stamp2.slice(8, 10)}:${stamp2.slice(10, 12)}:${stamp2.slice(12, 14)}Z`;
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : null;
     }
     async function readWinCredBlob(deps) {
       const res = await runCredStoreCommand(deps, "powershell.exe", powershellArgs(WINCRED_READ_PS1));
@@ -45445,6 +45480,10 @@ child.on('exit', () => process.exit(0));
       }
       return parseCredentials2(raw, deps.now());
     }
+    async function readGrokCredentialMtimeMs(overrides = {}) {
+      const deps = resolveDeps(overrides);
+      return credentialFileMtimeMs(authPath2(deps.env));
+    }
     function isExpired2(credentials, nowMs) {
       if (credentials.expiresAtMs === null) {
         return false;
@@ -45670,6 +45709,11 @@ child.on('exit', () => process.exit(0));
         return { kind: "invalid", reason: `Unable to read Kimi credentials: ${message}` };
       }
       return parseCredentials3(raw);
+    }
+    async function readKimiCredentialMtimeMs(overrides = {}) {
+      const deps = resolveDeps(overrides);
+      const settings = readManagedKimiSettings(deps.env);
+      return credentialFileMtimeMs(credentialsPath(deps.env, settings.oauthKey));
     }
     function isExpired3(credentials, nowMs) {
       if (credentials.expiresAt === null) {
@@ -46218,6 +46262,35 @@ child.on('exit', () => process.exit(0));
       if (state2?.timer) clearTimeout(state2.timer);
       failureRetries.delete(provider);
     }
+    function isCredentialRenewalCandidate(provider) {
+      if (!CREDENTIAL_MTIME_SOURCES[provider]) return false;
+      const entry = cache.get(provider);
+      if (!entry || entry.status === "ok") return false;
+      const kind = entry.metadata?.failureKind;
+      return typeof kind === "string" && CREDENTIAL_RENEWAL_FAILURE_KINDS.has(kind);
+    }
+    async function resetFailureBudgetOnCredentialRenewal(provider) {
+      if (!isCredentialRenewalCandidate(provider)) return false;
+      const state2 = failureRetries.get(provider);
+      if (!state2 || state2.failures === 0) return false;
+      let mtimeMs = null;
+      try {
+        mtimeMs = await credentialMtimeReader(provider);
+      } catch {
+        return false;
+      }
+      if (typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return false;
+      const previous = state2.credentialMtimeMs;
+      if (previous === void 0) {
+        state2.credentialMtimeMs = mtimeMs;
+        return false;
+      }
+      if (mtimeMs <= previous) return false;
+      if (state2.timer) clearTimeout(state2.timer);
+      failureRetries.set(provider, { failures: 0, timer: null, credentialMtimeMs: mtimeMs });
+      LOG.info("Quota", `${provider}: credential renewed since the last failure \u2014 retry budget reset`);
+      return true;
+    }
     function isFailureRetryDue(provider, now = Date.now()) {
       const entry = cache.get(provider);
       if (!entry || entry.status === "ok") return false;
@@ -46249,8 +46322,11 @@ child.on('exit', () => process.exit(0));
       const previous = failureRetries.get(provider);
       if (previous?.timer) clearTimeout(previous.timer);
       const failures = (previous?.failures ?? 0) + 1;
+      const credentialMtimeMs = previous?.credentialMtimeMs;
       if (failures > QUOTA_FAILURE_MAX_RETRIES) {
-        failureRetries.set(provider, { failures, timer: null });
+        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        void resetFailureBudgetOnCredentialRenewal(provider).catch(() => {
+        });
         LOG.info("Quota", `${provider}: transient failure persists after ${QUOTA_FAILURE_MAX_RETRIES} retries \u2014 back to the normal refresh cadence`);
         return;
       }
@@ -46266,7 +46342,7 @@ child.on('exit', () => process.exit(0));
         void refreshQuotaCacheOnce([{ provider, fetch: fetch2 }], isEnabled).catch((e) => LOG.warn("Quota", `${provider}: scheduled retry failed: ${e?.message || e}`));
       }, delayMs);
       if (typeof timer.unref === "function") timer.unref();
-      failureRetries.set(provider, { failures, timer });
+      failureRetries.set(provider, { failures, timer, credentialMtimeMs });
       LOG.info("Quota", `${provider}: transient failure \u2014 retry scheduled in ${Math.round(delayMs / 1e3)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
     }
     function hasRecentCliActivity(sessions, now = Date.now(), windowMs = QUOTA_ACTIVITY_WINDOW_MS) {
@@ -46364,6 +46440,14 @@ child.on('exit', () => process.exit(0));
           if (backfillDue(provider)) return true;
           return active && isDueByAxisTtl(provider);
         });
+        for (const { provider } of fetchers) {
+          if (options.isEnabled && !options.isEnabled(provider)) continue;
+          if (due.some((f) => f.provider === provider)) continue;
+          void resetFailureBudgetOnCredentialRenewal(provider).then((reset) => {
+            if (reset) notifyQuotaCacheChanged();
+          }).catch(() => {
+          });
+        }
         const needsPrune = !!options.isEnabled && fetchers.some(({ provider }) => !options.isEnabled(provider) && cache.has(provider));
         if (due.length === 0 && !needsPrune) {
           scheduleNext();
@@ -46519,6 +46603,10 @@ child.on('exit', () => process.exit(0));
     var hydrated;
     var QUOTA_FAILURE_MAX_RETRIES;
     var failureRetries;
+    var CREDENTIAL_RENEWAL_FAILURE_KINDS;
+    var CREDENTIAL_MTIME_SOURCES;
+    var defaultCredentialMtimeReader;
+    var credentialMtimeReader;
     var QUOTA_ROUTABLE_MAX_AGE_MS;
     var WORKING_STATUSES;
     var MIN_CHAIN_WAKE_DELAY_MS;
@@ -46582,6 +46670,23 @@ child.on('exit', () => process.exit(0));
         hydrated = false;
         QUOTA_FAILURE_MAX_RETRIES = 4;
         failureRetries = /* @__PURE__ */ new Map();
+        CREDENTIAL_RENEWAL_FAILURE_KINDS = /* @__PURE__ */ new Set([
+          "expired-token",
+          "unauthorized"
+        ]);
+        CREDENTIAL_MTIME_SOURCES = {
+          "antigravity-cli": () => (
+            // The keychain probe is macOS-only; skip the spawn entirely elsewhere.
+            process.platform === "darwin" ? readAntigravityKeychainMtimeMs() : Promise.resolve(null)
+          ),
+          kimi: () => readKimiCredentialMtimeMs(),
+          "grok-cli": () => readGrokCredentialMtimeMs()
+        };
+        defaultCredentialMtimeReader = async (provider) => {
+          const source = CREDENTIAL_MTIME_SOURCES[provider];
+          return source ? source() : null;
+        };
+        credentialMtimeReader = defaultCredentialMtimeReader;
         QUOTA_ROUTABLE_MAX_AGE_MS = 60 * 60 * 1e3;
         WORKING_STATUSES = /* @__PURE__ */ new Set([
           "generating",
