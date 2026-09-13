@@ -32,7 +32,7 @@ import {
     readProviderChatHistory,
 } from '../config/chat-history.js';
 import { claimAntigravityConversation } from './native-history/antigravity-claim-registry.js';
-import { type PersistableCliHistoryMessage, carryBubbleIdentity } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, carryMessageRefs } from './cli-provider-history-dedup.js';
 import { STATUS_HYDRATION_TAIL_LIMIT } from './cli-provider-instance-types.js';
 import { isIdleStatus, getMessageTime } from './cli-provider-status-helpers.js';
 
@@ -89,10 +89,9 @@ function toPersistableMessages(
         receivedAt: message.receivedAt,
         // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
         // which the canonical-history branch of `buildProviderState` projects
-        // into activeChat — so a resumed session needs the ref to survive here
-        // as well, by NAME and only when present.
-        ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
-        ...carryBubbleIdentity(message),
+        // into activeChat — so a resumed session needs BOTH the ref and the
+        // bubble identity to survive here, by NAME and only when present.
+        ...carryMessageRefs(message),
     })) as PersistableCliHistoryMessage[];
 }
 

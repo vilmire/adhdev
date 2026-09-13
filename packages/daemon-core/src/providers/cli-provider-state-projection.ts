@@ -35,7 +35,7 @@ import { workingDirBasename } from './working-dir.js';
 import { isCliGeneratingLikeStatus } from './cli-provider-status-helpers.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
-import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, carryBubbleIdentity } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, carryMessageRefs } from './cli-provider-history-dedup.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
 
 /** The narrow surface of CliProviderInstance the state projection reads/writes. */
@@ -76,6 +76,57 @@ export interface ProviderStateHost {
     shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean;
     applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void;
     flushEvents(): ProviderEvent[];
+}
+
+/**
+ * Persisted tail row → one `activeChat.messages` bubble.
+ *
+ * @message-projection l3 identity
+ *
+ * This is the hop the dashboard actually renders, so an omitted field here is
+ * user-visible: without the ref a truncated tool bubble loses its expand
+ * control, and without the identity web-core falls back to an index-derived
+ * React key that renumbers whenever the tail grows.
+ *
+ * ★ Fields are carried by NAME and only when present. Do not "simplify" this to
+ * a spread of `message`: an always-present `toolBlockRef: undefined` is not the
+ * same as an absent one to the consumers that test for the key, and the
+ * persisted row carries bookkeeping this projection deliberately drops.
+ */
+function toActiveChatMessage(message: PersistableCliHistoryMessage): Record<string, unknown> {
+    return {
+        role: message.role,
+        content: message.content,
+        kind: message.kind,
+        senderName: message.senderName,
+        receivedAt: message.receivedAt,
+        ...carryMessageRefs(message),
+    };
+}
+
+/**
+ * Parsed transcript row → one persisted-tail row.
+ *
+ * @message-projection l3 identity
+ *
+ * Differs from `toActiveChatMessage` in two ways that are real, not incidental:
+ * content is flattened from `MessagePart[]` to a string (the persisted shape is
+ * text-only), and `receivedAt` falls back to the parser's `timestamp`. The tail
+ * this produces is what the canonical-history branch replays back into
+ * activeChat, so anything dropped here is also missing from every restored
+ * session.
+ */
+function toPersistedTailMessage(
+    message: PersistableCliHistoryMessage & { timestamp?: number },
+): PersistableCliHistoryMessage {
+    return {
+        role: message.role,
+        content: flattenContent(message.content),
+        kind: typeof message.kind === 'string' ? message.kind : undefined,
+        senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
+        receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
+        ...carryMessageRefs(message),
+    };
 }
 
 export function buildProviderState(host: ProviderStateHost): ProviderState {
@@ -190,21 +241,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
         ? host.syncCanonicalSavedHistoryIfNeeded()
         : false;
     const statusMessages: any[] = canonicalBackedHistory && host.lastPersistedHistoryMessages.length > 0
-        ? host.lastPersistedHistoryMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-            kind: message.kind,
-            senderName: message.senderName,
-            receivedAt: message.receivedAt,
-            // (TOOL-EXPAND) By NAME, and only when present — this allow-list is
-            // the activeChat projection, so an omitted ref must stay omitted
-            // rather than becoming an `undefined` key on every prose bubble.
-            ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
-            // Bubble identity rides the same lane: web-core keys chat bubbles off
-            // it, so dropping it here forces an index-derived React key that
-            // renumbers whenever the tail grows.
-            ...carryBubbleIdentity(message),
-        }))
+        ? host.lastPersistedHistoryMessages.map(toActiveChatMessage)
         : mergedMessages;
 
     // purpose: 'display-tail' (zero-read) — Dashboard-tail repair (native-source
@@ -266,19 +303,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
                 messagesToSave = messagesToSave.slice(0, lastIdx);
             }
         }
-        const normalizedMessagesToSave = messagesToSave.map((message: PersistableCliHistoryMessage & { timestamp?: number }) => ({
-            role: message.role,
-            content: flattenContent(message.content),
-            kind: typeof message.kind === 'string' ? message.kind : undefined,
-            senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
-            receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
-            // (TOOL-EXPAND) The persisted tail is what the canonical-history
-            // branch above replays into activeChat, so the ref has to survive
-            // this hop too — otherwise a restored session loses expand controls
-            // even though the live parse had them.
-            ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
-            ...carryBubbleIdentity(message),
-        }));
+        const normalizedMessagesToSave = messagesToSave.map(toPersistedTailMessage);
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
             const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);
             if (incrementalMessages.length > 0) {

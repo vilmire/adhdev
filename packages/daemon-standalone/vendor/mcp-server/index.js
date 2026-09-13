@@ -79392,6 +79392,12 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         ...message?.bubbleId ? { bubbleId: message.bubbleId } : {}
       };
     }
+    function carryMessageRefs(message) {
+      return {
+        ...message?.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+        ...carryBubbleIdentity(message)
+      };
+    }
     function normalizePersistableCliHistoryContent(content) {
       return flattenContent(content).replace(/\s+/g, " ").trim();
     }
@@ -109003,6 +109009,21 @@ ${marker}`,
         init_transcript_claim_registry();
       }
     });
+    function toNativeHistoryMessage(m, workspace) {
+      return {
+        role: normalizeRole2(m.role),
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+        receivedAt: typeof m.receivedAt === "number" ? m.receivedAt : Date.parse(m.timestamp || "") || Date.now(),
+        kind: typeof m.kind === "string" ? m.kind : "standard",
+        workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0,
+        // (TOOL-EXPAND) Forward the reader's ref. This projection is an
+        // allow-list, so a ref the reader stamped is dropped here unless
+        // named explicitly — which is why it is validated rather than
+        // spread: a malformed ref reaching the dashboard would render an
+        // expand button that can only ever fail.
+        ...isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}
+      };
+    }
     function createNativeHistoryDispatcher(reader) {
       return (input) => {
         const workspace = input.workspace || "";
@@ -109033,19 +109054,7 @@ ${marker}`,
           }
         }
         return {
-          messages: session.messages.map((m) => ({
-            role: normalizeRole2(m.role),
-            content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-            receivedAt: typeof m.receivedAt === "number" ? m.receivedAt : Date.parse(m.timestamp || "") || Date.now(),
-            kind: typeof m.kind === "string" ? m.kind : "standard",
-            workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0,
-            // (TOOL-EXPAND) Forward the reader's ref. This projection is an
-            // allow-list, so a ref the reader stamped is dropped here unless
-            // named explicitly — which is why it is validated rather than
-            // spread: a malformed ref reaching the dashboard would render an
-            // expand button that can only ever fail.
-            ...isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}
-          })),
+          messages: session.messages.map((m) => toNativeHistoryMessage(m, workspace)),
           providerSessionId: resolvedProviderSessionId,
           sourcePath: session.sourcePath,
           sourceMtimeMs: session.sourceMtimeMs,
@@ -114967,10 +114976,9 @@ ${buttons.join("\n")}`;
         receivedAt: message.receivedAt,
         // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
         // which the canonical-history branch of `buildProviderState` projects
-        // into activeChat — so a resumed session needs the ref to survive here
-        // as well, by NAME and only when present.
-        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
-        ...carryBubbleIdentity(message)
+        // into activeChat — so a resumed session needs BOTH the ref and the
+        // bubble identity to survive here, by NAME and only when present.
+        ...carryMessageRefs(message)
       }));
     }
     function shouldHydrateExistingProviderHistory(host) {
@@ -115469,6 +115477,26 @@ ${buttons.join("\n")}`;
         init_cli_provider_transcript_merge();
       }
     });
+    function toActiveChatMessage(message) {
+      return {
+        role: message.role,
+        content: message.content,
+        kind: message.kind,
+        senderName: message.senderName,
+        receivedAt: message.receivedAt,
+        ...carryMessageRefs(message)
+      };
+    }
+    function toPersistedTailMessage(message) {
+      return {
+        role: message.role,
+        content: flattenContent(message.content),
+        kind: typeof message.kind === "string" ? message.kind : void 0,
+        senderName: typeof message.senderName === "string" ? message.senderName : void 0,
+        receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : message.timestamp,
+        ...carryMessageRefs(message)
+      };
+    }
     function buildProviderState(host) {
       const adapterStatus = host.stabilizeFlappingApprovalStatus(host.adapter.getStatus());
       if (Object.prototype.hasOwnProperty.call(adapterStatus, "activeInteractivePrompt")) {
@@ -115532,21 +115560,7 @@ ${buttons.join("\n")}`;
       }
       const mergedMessages = mergeConversationMessages(host.runtimeMessages, host.parsedIngestTimestamps.stamp(parsedMessages));
       const canonicalBackedHistory = host.shouldHydrateExistingProviderHistory() ? host.syncCanonicalSavedHistoryIfNeeded() : false;
-      const statusMessages = canonicalBackedHistory && host.lastPersistedHistoryMessages.length > 0 ? host.lastPersistedHistoryMessages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        kind: message.kind,
-        senderName: message.senderName,
-        receivedAt: message.receivedAt,
-        // (TOOL-EXPAND) By NAME, and only when present — this allow-list is
-        // the activeChat projection, so an omitted ref must stay omitted
-        // rather than becoming an `undefined` key on every prose bubble.
-        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
-        // Bubble identity rides the same lane: web-core keys chat bubbles off
-        // it, so dropping it here forces an index-derived React key that
-        // renumbers whenever the tail grows.
-        ...carryBubbleIdentity(message)
-      })) : mergedMessages;
+      const statusMessages = canonicalBackedHistory && host.lastPersistedHistoryMessages.length > 0 ? host.lastPersistedHistoryMessages.map(toActiveChatMessage) : mergedMessages;
       const adapterOwnsMessagesElsewhereForTail = host.adapter?.chatMessagesOwnedExternally === true;
       if (adapterOwnsMessagesElsewhereForTail && host.lastCompletionSummary) {
         const summary = host.lastCompletionSummary;
@@ -115580,19 +115594,7 @@ ${buttons.join("\n")}`;
             messagesToSave = messagesToSave.slice(0, lastIdx);
           }
         }
-        const normalizedMessagesToSave = messagesToSave.map((message) => ({
-          role: message.role,
-          content: flattenContent(message.content),
-          kind: typeof message.kind === "string" ? message.kind : void 0,
-          senderName: typeof message.senderName === "string" ? message.senderName : void 0,
-          receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : message.timestamp,
-          // (TOOL-EXPAND) The persisted tail is what the canonical-history
-          // branch above replays into activeChat, so the ref has to survive
-          // this hop too — otherwise a restored session loses expand controls
-          // even though the live parse had them.
-          ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
-          ...carryBubbleIdentity(message)
-        }));
+        const normalizedMessagesToSave = messagesToSave.map(toPersistedTailMessage);
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
           const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);
           if (incrementalMessages.length > 0) {

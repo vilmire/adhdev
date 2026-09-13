@@ -95,6 +95,36 @@ export interface NativeHistoryResult {
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
 }
 
+/**
+ * One reader record → one `NativeHistoryMessage`.
+ *
+ * @message-projection l3 ref
+ *
+ * `ref` sub-lane, not `identity`: this projection's declared output contract is
+ * `NativeHistoryMessage` (native-history-types.ts), which has no identity fields
+ * at ALL. Requiring them here would demand fields the type does not have — the
+ * bubble identity a message carries downstream is minted after this hop.
+ *
+ * This is the FIRST hop of every native-history read, so a field dropped here is
+ * unrecoverable: the activeChat and persisted-tail remaps downstream can only
+ * carry what they are handed.
+ */
+function toNativeHistoryMessage(m: any, workspace: string): NativeHistoryResult['messages'][number] {
+    return {
+        role: normalizeRole(m.role),
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        receivedAt: typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(m.timestamp || '') || Date.now(),
+        kind: typeof m.kind === 'string' ? m.kind : 'standard',
+        workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
+        // (TOOL-EXPAND) Forward the reader's ref. This projection is an
+        // allow-list, so a ref the reader stamped is dropped here unless
+        // named explicitly — which is why it is validated rather than
+        // spread: a malformed ref reaching the dashboard would render an
+        // expand button that can only ever fail.
+        ...(isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}),
+    };
+}
+
 export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeHistoryInput) => NativeHistoryResult | null {
     return (input: NativeHistoryInput) => {
         const workspace = input.workspace || '';
@@ -153,19 +183,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
         }
 
         return {
-            messages: session.messages.map((m: any) => ({
-                role: normalizeRole(m.role),
-                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-                receivedAt: typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(m.timestamp || '') || Date.now(),
-                kind: typeof m.kind === 'string' ? m.kind : 'standard',
-                workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
-                // (TOOL-EXPAND) Forward the reader's ref. This projection is an
-                // allow-list, so a ref the reader stamped is dropped here unless
-                // named explicitly — which is why it is validated rather than
-                // spread: a malformed ref reaching the dashboard would render an
-                // expand button that can only ever fail.
-                ...(isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}),
-            })),
+            messages: session.messages.map((m: any) => toNativeHistoryMessage(m, workspace)),
             providerSessionId: resolvedProviderSessionId,
             sourcePath: session.sourcePath,
             sourceMtimeMs: session.sourceMtimeMs,
