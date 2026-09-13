@@ -32,7 +32,7 @@ import {
     readProviderChatHistory,
 } from '../config/chat-history.js';
 import { claimAntigravityConversation } from './native-history/antigravity-claim-registry.js';
-import { type PersistableCliHistoryMessage, carryMessageRefs } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, projectCliChatMessage } from './cli-provider-history-dedup.js';
 import { STATUS_HYDRATION_TAIL_LIMIT } from './cli-provider-instance-types.js';
 import { isIdleStatus, getMessageTime } from './cli-provider-status-helpers.js';
 
@@ -64,7 +64,9 @@ export interface HistorySyncHost {
 /**
  * Normalizes a hydration read's messages into the persisted-tail shape.
  *
- * @message-projection l3
+ * No `@message-projection` marker: this no longer owns a field list, it just
+ * delegates to `projectCliChatMessage` (which IS a marked site). Marking a pure
+ * delegation would assert coverage the function does not itself provide.
  */
 function toPersistableMessages(
     messages: Array<{
@@ -81,18 +83,12 @@ function toPersistableMessages(
         bubbleId?: string;
     }>,
 ): PersistableCliHistoryMessage[] {
-    return messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        kind: message.kind,
-        senderName: message.senderName,
-        receivedAt: message.receivedAt,
-        // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
-        // which the canonical-history branch of `buildProviderState` projects
-        // into activeChat — so a resumed session needs BOTH the ref and the
-        // bubble identity to survive here, by NAME and only when present.
-        ...carryMessageRefs(message),
-    })) as PersistableCliHistoryMessage[];
+    // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`, which
+    // the canonical-history branch of `buildProviderState` projects into
+    // activeChat — so a resumed session needs BOTH the ref and the bubble
+    // identity to survive here. The field list is shared with that projection
+    // (`projectCliChatMessage`) precisely so the two cannot drift apart again.
+    return messages.map((message) => projectCliChatMessage(message));
 }
 
 export function shouldHydrateExistingProviderHistory(host: HistorySyncHost): boolean {

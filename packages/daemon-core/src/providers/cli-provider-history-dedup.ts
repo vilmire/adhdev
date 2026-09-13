@@ -97,6 +97,87 @@ export function carryMessageRefs(message: BubbleIdentityFields & {
     };
 }
 
+/**
+ * The canonical daemon-internal chat-message projection.
+ *
+ * @message-projection l3 identity
+ *
+ * ── What this replaced ─────────────────────────────────────────────────────
+ * Three hops between the native-history reader and `activeChat.messages` each
+ * wrote their own field-by-field remap of the SAME five fields plus the carry
+ * set: the hydration read (`toPersistableMessages`), the activeChat projection
+ * and the persisted-tail projection. They drifted independently — which is how
+ * `toolBlockRef` came to be fixed at one hop while still missing at the next,
+ * three times. One function now owns the field list.
+ *
+ * ── The one real difference, made explicit ─────────────────────────────────
+ * The persisted-tail hop needs two things the other two do not, and both are
+ * genuine, not incidental:
+ *   - `content` must be FLATTENED (`MessagePart[]` → string), because the
+ *     persisted shape is text-only.
+ *   - `receivedAt` falls back to the parser's `timestamp`, which only live
+ *     parser output carries.
+ * These are passed as explicit resolvers rather than a boolean flag, so the
+ * call site states what it wants instead of naming a mode whose meaning has to
+ * be looked up. Callers that want neither simply omit them.
+ *
+ * Fields are copied by NAME and only when present — never a spread of the
+ * source. The rows this produces are handed to the dashboard, where an
+ * always-present `toolBlockRef: undefined` is not the same as an absent one.
+ *
+ * ── What this deliberately does NOT absorb ─────────────────────────────────
+ * Other chat-message mappings exist and stay separate ON PURPOSE. They are not
+ * leftover duplication:
+ *
+ *   read-chat-contract.ts `validateMessage` — a VALIDATOR, not a projection.
+ *     It preserves any producer-supplied field verbatim (the contract is
+ *     deliberately open) and its job is to reject malformed input, not to
+ *     narrow a known shape.
+ *
+ *   seqscribe/transcript-projection.ts `encodeTranscriptMessage` — the L2
+ *     replica wire. A CONTENT BOUNDARY, not a convenience remap: it must
+ *     exclude `providerUnitKey` (a content hash) and carries a different,
+ *     narrower field set. Merging it here would put a boundary decision behind
+ *     a shared helper where a future field addition could widen it silently.
+ *
+ *   mesh/transcript-read-chat-adapter.ts + web-core's
+ *   transcript-chat-pane-adapter.ts — the two wire DECODERS. They run on the
+ *     far side of the boundary, reconstruct from nullable wire scalars rather
+ *     than optional daemon fields, and one of them lives in a different
+ *     package. Their shared discipline is enforced by
+ *     `check:message-projection-parity`, not by a shared function.
+ *
+ *   config/chat-history.ts `appendNewMessages` — carries identity but must NOT
+ *     persist `toolBlockRef` (mtime-sealed; dead once written). It delegates to
+ *     `carryBubbleIdentity` for exactly that reason.
+ */
+export function projectCliChatMessage(
+    message: PersistableCliHistoryMessage & { timestamp?: number },
+    options: {
+        /**
+         * Flatten `MessagePart[]` content to text (persisted shape only).
+         * Typed on the projection's OWN content type rather than `unknown`, so
+         * passing `flattenContent` directly type-checks without a cast.
+         */
+        flattenContent?: (content: PersistableCliHistoryMessage['content']) => string;
+        /** Accept the parser's `timestamp` when `receivedAt` is absent. */
+        fallBackToParserTimestamp?: boolean;
+    } = {},
+): PersistableCliHistoryMessage {
+    return {
+        role: message.role,
+        content: options.flattenContent
+            ? options.flattenContent(message.content)
+            : message.content,
+        kind: typeof message.kind === 'string' ? message.kind : undefined,
+        senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
+        receivedAt: typeof message.receivedAt === 'number'
+            ? message.receivedAt
+            : (options.fallBackToParserTimestamp ? message.timestamp : undefined),
+        ...carryMessageRefs(message),
+    };
+}
+
 function normalizePersistableCliHistoryContent(content: unknown): string {
     return flattenContent(content as any).replace(/\s+/g, ' ').trim();
 }
