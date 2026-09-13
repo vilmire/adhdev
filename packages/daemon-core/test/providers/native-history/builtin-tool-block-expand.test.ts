@@ -159,6 +159,33 @@ describe('claude-cli built-in reader', () => {
         expect(expanded.result!.length).toBeGreaterThan(result.content.length);
     });
 
+    /**
+     * The class invariant, asserted over the WHOLE session rather than one
+     * crafted block: if a bubble's text was cut, the ref that buys the rest back
+     * must be there.
+     *
+     * The individual cases above each pin one block they constructed, so a
+     * stamping path that silently stops covering some block SHAPE — a
+     * string-bodied `tool_result`, a block reached through a different branch of
+     * the reader — leaves them all green while the dashboard shows a truncated
+     * bubble with no way to expand it. That is precisely the live symptom
+     * (600-char bodies ending in `…`, no expand affordance) this guards.
+     */
+    it('stamps EVERY truncated tool bubble in the session, whatever its shape', () => {
+        const filePath = writeClaudeTranscript();
+        const session = readClaudeSession(filePath)!;
+
+        const truncated = session.messages.filter(
+            (m) => m.kind === 'tool' && m.content.endsWith('…'),
+        );
+        // Guard the guard: if the fixture stopped producing truncated bubbles
+        // this test would pass vacuously.
+        expect(truncated.length).toBeGreaterThan(0);
+
+        const unstamped = truncated.filter((m) => !m.toolBlockRef);
+        expect(unstamped.map((m) => m.content.slice(0, 60))).toEqual([]);
+    });
+
     it('refuses a ref whose mtime seal no longer matches', () => {
         const filePath = writeClaudeTranscript();
         const session = readClaudeSession(filePath)!;
