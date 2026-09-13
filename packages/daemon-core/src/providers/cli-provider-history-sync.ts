@@ -61,7 +61,11 @@ export interface HistorySyncHost {
     }) => void;
 }
 
-/** Normalizes a hydration read's messages into the persisted-tail shape. */
+/**
+ * Normalizes a hydration read's messages into the persisted-tail shape.
+ *
+ * @message-projection l3
+ */
 function toPersistableMessages(
     messages: Array<{
         role: string;
