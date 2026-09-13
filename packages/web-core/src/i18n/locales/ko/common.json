@@ -290,7 +290,9 @@
     "approval": {
         "processing": "처리 중...",
         "actionRequired": "조치 필요",
-        "alwaysAllowWarning": "이 권한을 영구적으로 허용합니다 — 이후 실행에서 다시 묻지 않습니다"
+        "alwaysAllowWarning": "이 권한을 영구적으로 허용합니다 — 이후 실행에서 다시 묻지 않습니다",
+        "questionPending": "질문 대기 중",
+        "answerQuestion": "질문에 답하기"
     },
     "newSession": {
         "title": "세션 시작",

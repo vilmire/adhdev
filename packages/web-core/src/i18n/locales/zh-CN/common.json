@@ -290,7 +290,9 @@
     "approval": {
         "processing": "处理中...",
         "actionRequired": "需要操作",
-        "alwaysAllowWarning": "永久授予此权限 — 后续运行将不再询问"
+        "alwaysAllowWarning": "永久授予此权限 — 后续运行将不再询问",
+        "questionPending": "等待回答问题",
+        "answerQuestion": "回答问题"
     },
     "newSession": {
         "title": "开始会话",
