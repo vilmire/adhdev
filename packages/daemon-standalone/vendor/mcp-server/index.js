@@ -87956,6 +87956,585 @@ ${cleanBody}`;
         assertTaskModeEvidenceStrategyIsExhaustive();
       }
     });
+    function renderMeshStatusLine(inputs) {
+      const total = inputs.totalActiveCount;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      const parts = [];
+      for (const status of STATUS_RENDER_ORDER) {
+        const count = inputs.statusCounts?.[status] ?? 0;
+        if (count > 0) parts.push(`${count} ${status}`);
+      }
+      const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
+      const entries = [];
+      const sorted = inputs.activeWork.filter((record2) => typeof record2?.taskId === "string" && record2.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+      for (const record2 of sorted) {
+        const id = record2.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries.push(`${id} ${record2.status}`);
+      }
+      if (entries.length === 0) return clampToBound(head);
+      let line = head;
+      const shown = [];
+      for (let i = 0; i < entries.length; i++) {
+        const isLast = i === entries.length - 1;
+        const candidate = [...shown, entries[i]];
+        const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
+        if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
+        shown.push(entries[i]);
+        line = head + suffix;
+      }
+      if (shown.length === 0) return clampToBound(head);
+      return clampToBound(line);
+    }
+    function clampToBound(line) {
+      if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
+      return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
+    }
+    function buildMeshStatusLineForNotification(meshId, now) {
+      if (!meshId) return null;
+      try {
+        const built = buildMeshActiveWork3({
+          meshId,
+          queue: getQueue3(meshId),
+          directDispatches: getActiveDirectDispatches3(meshId),
+          ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+          now: now ?? Date.now()
+        });
+        return renderMeshStatusLine({
+          activeWork: built.activeWork,
+          statusCounts: built.summary.statusCounts,
+          totalActiveCount: built.summary.totalActiveCount
+        });
+      } catch (e) {
+        LOG.debug("MeshReconcile", `Mesh status line build failed for mesh ${meshId}: ${e?.message || e}`);
+        return null;
+      }
+    }
+    var MESH_STATUS_LINE_MAX_CHARS;
+    var TASK_ID_PREFIX_CHARS;
+    var ACTIVE_WORK_LEDGER_KINDS;
+    var STATUS_RENDER_ORDER;
+    var STATUS_ACTIONABILITY_RANK;
+    var init_mesh_notification_status_line = __esm2({
+      "src/mesh/mesh-notification-status-line.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_active_work();
+        init_mesh_work_queue();
+        init_mesh_ledger();
+        MESH_STATUS_LINE_MAX_CHARS = 200;
+        TASK_ID_PREFIX_CHARS = 7;
+        ACTIVE_WORK_LEDGER_KINDS = [
+          "task_dispatched",
+          "task_completed",
+          "task_failed",
+          "task_stalled",
+          "task_approval_needed",
+          "task_question_pending"
+        ];
+        STATUS_RENDER_ORDER = [
+          "awaiting_approval",
+          "awaiting_choice",
+          "failed",
+          "generating",
+          "pending",
+          "assigned",
+          "finalizing",
+          "idle"
+        ];
+        STATUS_ACTIONABILITY_RANK = Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i]));
+      }
+    });
+    function findLiveCoordinators(components) {
+      const out = [];
+      for (const inst of components.instanceManager.getByCategory("cli")) {
+        const state2 = inst.getState();
+        const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
+        const meshId = readNonEmptyString(settings.meshCoordinatorFor);
+        if (!meshId) continue;
+        const status = readNonEmptyString(state2.status).toLowerCase();
+        const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
+        const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
+        const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
+        const sessionId = readNonEmptyString(state2.instanceId);
+        if (getLogLevel() === "debug") {
+          let adapterRaw = "?";
+          try {
+            const a = inst.adapter;
+            if (a && typeof a.getStatus === "function") {
+              adapterRaw = readNonEmptyString(a.getStatus({ allowParse: false })?.status) || "?";
+            }
+          } catch (e) {
+            adapterRaw = `err:${e?.message || e}`;
+          }
+          const lastStatus = readNonEmptyString(inst.lastStatus) || "?";
+          const autoApproveBusy = inst.autoApproveBusy;
+          const maskSince = inst.autoApproveMaskSince;
+          LOG.debug("MeshReconcile", `coordDiag sess=${sessionId || "?"} mesh=${meshId} getState=${status || "?"} drainStatus=${drainStatus || "n/a"} lastStatus=${lastStatus} adapterRaw=${adapterRaw} autoApproveBusy=${autoApproveBusy === true} maskSince=${maskSince || 0}`);
+        }
+        const stateKey2 = `${meshId}::${sessionId || "?"}`;
+        const prevParked = coordinatorModalParkState.get(stateKey2);
+        if (prevParked !== modalParked) {
+          coordinatorModalParkState.set(stateKey2, modalParked);
+          if (modalParked) {
+            LOG.info("MeshReconcile", `Coordinator ${sessionId || "?"} (mesh ${meshId}) entered modal-park (status=${status}) \u2014 terminal events for it will be held until the modal is answered`);
+          } else if (prevParked === true) {
+            LOG.info("MeshReconcile", `Coordinator ${sessionId || "?"} (mesh ${meshId}) left modal-park (status=${status}) \u2014 held events will drain on this/next tick`);
+          }
+        }
+        out.push({ meshId, instance: inst, sessionId, idle, modalParked });
+      }
+      return out;
+    }
+    function resolveCoordinatorDrainDeliverability(components, meshId) {
+      const coordinators = findLiveCoordinators(components).filter((c) => c.meshId === meshId);
+      if (coordinators.length === 0) {
+        return { hasLiveCliCoordinator: false, deliverableNow: false, holdForReconcile: false };
+      }
+      const hasIdle = coordinators.some((c) => c.idle);
+      return {
+        hasLiveCliCoordinator: true,
+        deliverableNow: hasIdle,
+        // A live CLI coordinator exists but none is idle → the reconcile loop is
+        // holding the events; the poll must not steal them.
+        holdForReconcile: !hasIdle
+      };
+    }
+    function shouldHoldPendingDrainForBusyLocalCoordinator(components, meshId, requestedCoordinatorDaemonId, callerIsSelfCoordinatorInboxRead) {
+      if (!meshId) return false;
+      const deliverability = resolveCoordinatorDrainDeliverability(components, meshId);
+      if (!deliverability.holdForReconcile) return false;
+      const requested = readNonEmptyString(requestedCoordinatorDaemonId);
+      if (!requested) return true;
+      const localIds = expandDaemonIdForms([
+        readNonEmptyString(components.statusInstanceId),
+        readNonEmptyString(getMachineId())
+      ]);
+      const targetsLocalCoordinator = localIds.some((id) => daemonIdsEquivalent4(id, requested));
+      if (!targetsLocalCoordinator) return false;
+      if (callerIsSelfCoordinatorInboxRead) return false;
+      return true;
+    }
+    function injectPendingIntoCoordinator(coordinator, pending, opts) {
+      const mode = opts?.mode ?? "idle-turn";
+      if (!coordinator) return { delivered: false, reason: "no_coordinator" };
+      let coordinatorMessage = pending.coordinatorMessage;
+      if (!coordinatorMessage) {
+        if (!shouldForceInjectMeshEvent(pending.event)) return { delivered: false, reason: "no_message" };
+        const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === "object" ? pending.metadataEvent : {};
+        coordinatorMessage = buildMeshSystemMessage({
+          event: pending.event,
+          nodeLabel: pending.nodeLabel,
+          metadataEvent
+        });
+        if (!coordinatorMessage) return { delivered: false, reason: "no_message" };
+        LOG.warn("MeshReconcile", `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time \u2014 a queued terminal event arrived message-less`);
+      }
+      if (shouldForceInjectMeshEvent(pending.event)) {
+        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
+        if (statusLine) coordinatorMessage = `${coordinatorMessage}
+
+${statusLine}`;
+      }
+      if (mode === "mid-generation-split") {
+        const splitCapable = coordinator;
+        if (typeof splitCapable.sendMessageDuringGeneration === "function") {
+          let outcome;
+          try {
+            outcome = splitCapable.sendMessageDuringGeneration(coordinatorMessage);
+          } catch (e) {
+            outcome = { accepted: false, reason: `threw:${e?.message || e}` };
+          }
+          if (outcome.accepted) {
+            traceMeshEventStage("surfaced", {
+              taskId: pending.metadataEvent?.taskId,
+              sessionId: pending.metadataEvent?.targetSessionId ?? pending.targetCoordinatorSessionId,
+              nodeId: pending.nodeId,
+              meshId: pending.meshId,
+              event: pending.event
+            }, "mid-generation-split");
+            LOG.info(
+              "MeshReconcile",
+              `Mid-generation split write delivered ${pending.event} (mesh ${pending.meshId}, len=${coordinatorMessage.length}) into the coordinator's agent input queue`
+            );
+            return { delivered: true, mode: "mid-generation-split" };
+          }
+          LOG.info(
+            "MeshReconcile",
+            `Mid-generation split write refused for ${pending.event} (mesh ${pending.meshId}): ${outcome.reason || "unknown"} \u2014 falling back to next-turn-queue`
+          );
+        }
+      }
+      const force = mode === "next-turn-queue" || mode === "mid-generation-split" ? false : opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event);
+      traceMeshEventStage("surfaced", {
+        taskId: pending.metadataEvent?.taskId,
+        sessionId: pending.metadataEvent?.targetSessionId ?? pending.targetCoordinatorSessionId,
+        nodeId: pending.nodeId,
+        meshId: pending.meshId,
+        event: pending.event
+      }, force ? "force-inject" : mode === "idle-turn" ? "inject" : "next-turn-queue");
+      coordinator.onEvent("send_message", {
+        input: { text: coordinatorMessage, textFallback: coordinatorMessage },
+        ...force ? { force: true } : {}
+      });
+      return { delivered: true, mode: mode === "mid-generation-split" ? "next-turn-queue" : mode };
+    }
+    function recordHeldTerminalEventsToLedger(meshId, drainDaemonIds, reason, heldForCoordinatorCount, strictRoutedFingerprints) {
+      let pending;
+      try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch {
+        return;
+      }
+      for (const event of pending) {
+        if (strictRoutedFingerprints?.has(buildPendingEventFingerprint(event))) continue;
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key2 = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ""}::${event.queuedAt}`}`;
+        if (heldEventLedgerRecorded.has(key2)) continue;
+        heldEventLedgerRecorded.add(key2);
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+          appendLedgerEntry3(meshId, {
+            kind: "event_held",
+            ...event.nodeId ? { nodeId: event.nodeId } : {},
+            payload: {
+              event: event.event,
+              reason,
+              recoverable: true,
+              heldForCoordinators: heldForCoordinatorCount,
+              nodeLabel: event.nodeLabel,
+              ...event.workspace ? { workspace: event.workspace } : {},
+              targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+              queuedAt: event.queuedAt,
+              ...fingerprint ? { fingerprint } : {},
+              ...finalSummary ? { finalSummary } : {},
+              // NOTIF-LOSS (A1): the machine recovery copy, matching every other
+              // event_held feeder (ledgerRecordQuarantinedEvent /
+              // ledgerRecordExpiredUndrainedEvent). Without it this entry claims
+              // `recoverable: true` but requeueHeldMeshCoordinatorEvents — which
+              // reconstructs solely from payload.heldEvent — reports it
+              // `unrecoverable`, so mesh_requeue_held_events could not recover the
+              // single reason code responsible for ~98% of holds. The C1 guarantee
+              // documented above only holds once the event itself is carried.
+              heldEvent: event
+            }
+          });
+          LOG.info("MeshReconcile", `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) \u2014 recoverable from ledger`);
+        } catch (e) {
+          heldEventLedgerRecorded.delete(key2);
+          LOG.warn("MeshReconcile", `Failed to ledger-record held ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+      }
+    }
+    function oldestHeldTerminalEventAgeMs(meshId, drainDaemonIds) {
+      let pending;
+      try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch {
+        return 0;
+      }
+      const now = Date.now();
+      let maxAge = 0;
+      for (const event of pending) {
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const queuedAt = typeof event.queuedAt === "number" ? event.queuedAt : now;
+        const age = now - queuedAt;
+        if (age > maxAge) maxAge = age;
+      }
+      return maxAge;
+    }
+    function surfaceCeilingExceededHeldEvents(meshId, drainDaemonIds, ceilingMs, heldForCoordinatorCount) {
+      let pending;
+      try {
+        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch {
+        return 0;
+      }
+      const now = Date.now();
+      let surfaced = 0;
+      for (const event of pending) {
+        if (!shouldForceInjectMeshEvent(event.event)) continue;
+        const queuedAt = typeof event.queuedAt === "number" ? event.queuedAt : now;
+        if (now - queuedAt < ceilingMs) continue;
+        const fingerprint = buildPendingEventFingerprint(event);
+        const key2 = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ""}::${event.queuedAt}`}`;
+        if (holdCeilingLedgerRecorded.has(key2)) continue;
+        holdCeilingLedgerRecorded.add(key2);
+        const heldMs = now - queuedAt;
+        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
+        try {
+          appendLedgerEntry3(meshId, {
+            kind: "event_held",
+            ...event.nodeId ? { nodeId: event.nodeId } : {},
+            payload: {
+              event: event.event,
+              reason: HOLD_CEILING_EXCEEDED_HOLD_REASON,
+              recoverable: true,
+              // How long the PTY hold lasted before we stopped waiting on it, and
+              // the bound it crossed — the two numbers an operator needs to tell a
+              // one-off settle from a structurally-parked coordinator.
+              heldMs,
+              ceilingMs,
+              heldForCoordinators: heldForCoordinatorCount,
+              // Names why this is surfaced rather than injected, so the entry is not
+              // misread as a delivery failure or as a force-inject having occurred.
+              surfacedOutOfBand: true,
+              nodeLabel: event.nodeLabel,
+              ...event.workspace ? { workspace: event.workspace } : {},
+              targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
+              queuedAt: event.queuedAt,
+              ...fingerprint ? { fingerprint } : {},
+              ...finalSummary ? { finalSummary } : {},
+              // Full event, matching every other event_held feeder, so
+              // mesh_requeue_held_events can restore it losslessly.
+              heldEvent: event
+            }
+          });
+          surfaced++;
+          LOG.warn(
+            "MeshReconcile",
+            `Hold ceiling exceeded: ${event.event} for mesh ${meshId} has been held ${Math.round(heldMs / 1e3)}s (\u2265 ${Math.round(ceilingMs / 1e3)}s) because no coordinator PTY ever re-confirmed idle \u2014 surfacing it OUT-OF-BAND via the ledger (pendingCoordinatorEvents / mesh_review_inbox). The event stays queued and will still deliver normally when the PTY idles; no force-inject was performed.`
+          );
+        } catch (e) {
+          holdCeilingLedgerRecorded.delete(key2);
+          LOG.warn("MeshReconcile", `Failed to ledger-record hold-ceiling ${event.event} for mesh ${meshId}: ${e?.message || e}`);
+        }
+      }
+      return surfaced;
+    }
+    function reconfirmGenuinelyIdleCoordinators(generating) {
+      const out = [];
+      for (const c of generating) {
+        const inst = c.instance;
+        const drainStatus = typeof inst?.getDrainStatus === "function" ? inst.getDrainStatus() : null;
+        const genuinelyIdle = drainStatus !== null ? drainStatus === "idle" : c.idle;
+        if (genuinelyIdle) out.push({ ...c, idle: true });
+      }
+      return out;
+    }
+    function drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, logLabel) {
+      let pendingEvents = [];
+      try {
+        pendingEvents = drainPendingMeshCoordinatorEvents3(
+          meshId,
+          drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+          {
+            // AMBIGUOUS-UNICAST guard (REFINE-EVENT-SESSION-SCOPED-UNICAST): observability
+            // only — it warns when a session-less unicast event is delivered while several
+            // coordinator sessions are live and racing for it. Never changes delivery, so
+            // an event can't be stranded by it. targetCoordinators is this daemon's live
+            // coordinator set for the mesh, which is exactly the racing population.
+            countLiveCoordinatorSessions: () => new Set(targetCoordinators.map((c) => c.sessionId).filter(Boolean)).size
+          }
+        );
+      } catch (e) {
+        LOG.warn("MeshReconcile", `Drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return 0;
+      }
+      if (pendingEvents.length === 0) return 0;
+      LOG.info("MeshReconcile", `Reconcile inject \u2192 ${logLabel}: ${pendingEvents.length} pending event(s) \u2192 ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
+      for (const pending of pendingEvents) {
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        if (wantSession) {
+          const matched = targetCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession));
+          if (matched.length === 0) {
+            holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
+            continue;
+          }
+          for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
+          continue;
+        }
+        for (const c of targetCoordinators) {
+          injectPendingIntoCoordinator(c.instance, pending);
+        }
+      }
+      return pendingEvents.length;
+    }
+    function isApprovalNudgeResolved(meshId, pending) {
+      const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === "object" ? pending.metadataEvent : {};
+      const nodeId = readNonEmptyString(pending.nodeId) || readNonEmptyString(metadataEvent.meshNodeId);
+      const sessionId = readNonEmptyString(metadataEvent.targetSessionId) || readNonEmptyString(metadataEvent.sessionId);
+      if (!nodeId && !sessionId) return false;
+      const queuedAt = typeof pending.queuedAt === "number" && Number.isFinite(pending.queuedAt) ? pending.queuedAt : 0;
+      let entries;
+      try {
+        entries = readApprovalResolutionEntries(meshId);
+      } catch {
+        return false;
+      }
+      return entries.some((e) => {
+        if (e.kind !== "task_completed" && e.kind !== "task_failed") return false;
+        if (queuedAt > 0) {
+          const t = new Date(e.timestamp).getTime();
+          if (Number.isFinite(t) && t < queuedAt) return false;
+        }
+        const nodeMatch = !!nodeId && !!e.nodeId && daemonIdsEquivalent4(e.nodeId, nodeId);
+        const sessionMatch = !!sessionId && !!e.sessionId && sessionIdsEquivalent(e.sessionId, sessionId);
+        return nodeMatch || sessionMatch;
+      });
+    }
+    function drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators) {
+      let peeked;
+      try {
+        peeked = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch {
+        return 0;
+      }
+      if (!peeked.some((e) => isMeshApprovalEvent(e.event))) return 0;
+      let drained;
+      try {
+        drained = drainPendingMeshCoordinatorEvents3(
+          meshId,
+          drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
+          { onlyEvents: MESH_APPROVAL_EVENTS }
+        );
+      } catch (e) {
+        LOG.warn("MeshReconcile", `Approval-nudge drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return 0;
+      }
+      let delivered = 0;
+      for (const pending of drained) {
+        if (isApprovalNudgeResolved(meshId, pending)) {
+          traceMeshEventDrop("approval_nudge_stale_resolved", {
+            taskId: readNonEmptyString(pending.metadataEvent?.taskId),
+            sessionId: readNonEmptyString(pending.metadataEvent?.targetSessionId) ?? pending.targetCoordinatorSessionId,
+            nodeId: pending.nodeId,
+            meshId,
+            event: pending.event
+          }, "approval already resolved (terminal ledger entry present)");
+          LOG.info("MeshReconcile", `Dropped stale approval nudge for mesh ${meshId} (${pending.nodeLabel}) \u2014 approval already resolved`);
+          continue;
+        }
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        const targets = wantSession ? meshCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : meshCoordinators;
+        if (targets.length === 0) continue;
+        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false });
+        delivered++;
+        LOG.info("MeshReconcile", `Delivered approval nudge (level) for mesh ${meshId} (${pending.nodeLabel}) \u2192 ${targets.length} coordinator(s) without waiting for an idle edge`);
+      }
+      return delivered;
+    }
+    function isCoordinatorSessionTombstoned(meshId, sessionId) {
+      if (!sessionId) return false;
+      try {
+        return readLedgerEntriesByKind(meshId, ["session_stopped"], TOMBSTONE_LOOKBACK_ENTRIES).some((entry) => sessionIdsEquivalent(readNonEmptyString(entry.sessionId), sessionId));
+      } catch {
+        return false;
+      }
+    }
+    function releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt) {
+      const { targetCoordinatorSessionId: _dead, ...released } = pending;
+      const reattributed = { ...released, queuedAt };
+      try {
+        const requeued = requeueDrainedPendingMeshCoordinatorEvent(reattributed);
+        const cleared = requeued && clearPendingEventCoordinatorSession(meshId, reattributed);
+        LOG.warn(
+          "MeshReconcile",
+          `Strict route reattribution: coordinator session ${wantSession} is TOMBSTONED (confirmed dead) on mesh ${meshId} \u2014 released ${pending.event} to daemon-level delivery so a live successor coordinator receives it instead of expiring undelivered (durable=${requeued} stampCleared=${cleared})`
+        );
+        traceMeshEventDrop("strict_route_reattributed", {
+          taskId: pending.metadataEvent?.taskId,
+          sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+          nodeId: pending.nodeId,
+          meshId,
+          event: pending.event
+        }, `coordinatorSession=${wantSession} tombstoned \u2192 released to daemon-level durable=${requeued}`);
+      } catch (e) {
+        LOG.warn("MeshReconcile", `Strict route reattribution failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
+      }
+    }
+    function holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId) {
+      const queuedAt = typeof pending.queuedAt === "number" ? pending.queuedAt : Date.now();
+      if (isCoordinatorSessionTombstoned(meshId, wantSession)) {
+        releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt);
+        return;
+      }
+      if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
+        try {
+          const requeued = requeueDrainedPendingMeshCoordinatorEvent(pending);
+          LOG.info("MeshReconcile", `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} \u2014 re-queued (${pending.event})${requeued ? "" : " [WARN: not durably re-queued]"}`);
+          traceMeshEventDrop("strict_route_hold", {
+            taskId: pending.metadataEvent?.taskId,
+            sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+            nodeId: pending.nodeId,
+            meshId,
+            event: pending.event
+          }, `coordinatorSession=${wantSession} not live durable=${requeued}`);
+        } catch (e) {
+          LOG.warn("MeshReconcile", `Strict route re-queue failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
+        }
+        return;
+      }
+      const finalSummary = readMeshCompletionSummary(pending.metadataEvent || {});
+      try {
+        appendLedgerEntry3(meshId, {
+          kind: "event_held",
+          ...pending.nodeId ? { nodeId: pending.nodeId } : {},
+          payload: {
+            event: pending.event,
+            reason: "strict_route_expired",
+            recoverable: true,
+            targetCoordinatorSessionId: wantSession,
+            targetCoordinatorDaemonId: pending.targetCoordinatorDaemonId ?? null,
+            nodeLabel: readNonEmptyString(pending.nodeLabel) || (pending.nodeId ? `Node '${pending.nodeId}'` : "Remote agent"),
+            ...pending.workspace ? { workspace: pending.workspace } : {},
+            queuedAt,
+            ...finalSummary ? { finalSummary } : {},
+            // NOTIF-LOSS (defect 2): the machine recovery copy. This writer was the
+            // ONE `event_held` feeder that omitted it while still claiming
+            // `recoverable: true`, so mesh_requeue_held_events — which reconstructs
+            // solely from payload.heldEvent — reported every strict_route_expired
+            // entry as `unrecoverable: no restorable original event`, breaking the
+            // tool's documented "Lossless: the full original event is restored"
+            // contract. Measured 2026-09-11: held entry ec6cace0 (a worker's
+            // agent:generating_completed) was permanently unrecoverable. The flat
+            // fields above remain the human-readable audit; this is the machine copy,
+            // matching ledgerRecordQuarantinedEvent / the C1 and hold-ceiling feeders.
+            heldEvent: pending
+          }
+        });
+        LOG.warn("MeshReconcile", `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} \u2014 recorded to ledger (recoverable), dropped (${pending.event})`);
+        traceMeshEventDrop("strict_route_expired", {
+          taskId: pending.metadataEvent?.taskId,
+          sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
+          nodeId: pending.nodeId,
+          meshId,
+          event: pending.event
+        }, `coordinatorSession=${wantSession} never returned`);
+      } catch (e) {
+        LOG.warn("MeshReconcile", `Failed to ledger-expire strict-unmatched ${pending.event} for mesh ${meshId}: ${e?.message || e}`);
+      }
+    }
+    var coordinatorModalParkState;
+    var DISK_RETENTION_INTERVAL_MS;
+    var heldEventLedgerRecorded;
+    var HOLD_CEILING_EXCEEDED_HOLD_REASON;
+    var holdCeilingLedgerRecorded;
+    var STRICT_SESSION_MATCH_TTL_MS;
+    var TOMBSTONE_LOOKBACK_ENTRIES;
+    var init_mesh_reconcile_coordinator_drain = __esm2({
+      "src/mesh/mesh-reconcile-coordinator-drain.ts"() {
+        "use strict";
+        init_config();
+        init_logger();
+        init_mesh_events_pending();
+        init_mesh_ledger();
+        init_mesh_read_model_consumers();
+        init_mesh_events_coordinator();
+        init_mesh_event_classify();
+        init_mesh_events_utils();
+        init_mesh_notification_status_line();
+        init_mesh_event_trace();
+        init_dist();
+        coordinatorModalParkState = /* @__PURE__ */ new Map();
+        DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
+        heldEventLedgerRecorded = /* @__PURE__ */ new Set();
+        HOLD_CEILING_EXCEEDED_HOLD_REASON = "hold_ceiling_exceeded";
+        holdCeilingLedgerRecorded = /* @__PURE__ */ new Set();
+        STRICT_SESSION_MATCH_TTL_MS = 6e4;
+        TOMBSTONE_LOOKBACK_ENTRIES = 200;
+      }
+    });
     function readLiveTurnPendingEvidence(instance) {
       const candidate = instance;
       try {
@@ -88950,6 +89529,11 @@ ${cleanBody}`;
         ]);
       }
     });
+    function isMidGenerationSplitEligible(input) {
+      if (!input.specOptIn) return false;
+      if (input.bodyLength > MID_GENERATION_MAX_BODY_CHARS) return false;
+      return (input.platform ?? process.platform) !== "win32";
+    }
     function bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs) {
       if (!meshNodeIdMatches5({ id: task.targetNodeId }, bootstrapNodeId)) return false;
       if (task.status === "assigned") return true;
@@ -90034,6 +90618,7 @@ ${cleanBody}`;
       } catch {
       }
       const idleCoordinators = [];
+      const busyCoordinators = [];
       try {
         for (const inst of components.instanceManager.getByCategory("cli")) {
           const state2 = inst.getState();
@@ -90045,12 +90630,14 @@ ${cleanBody}`;
           const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
           if (idle && !modalParked) {
             idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
+          } else if (!modalParked) {
+            busyCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
           }
         }
       } catch {
         return;
       }
-      if (idleCoordinators.length === 0) return;
+      if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
       const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
       let pendingEvents;
       try {
@@ -90061,9 +90648,35 @@ ${cleanBody}`;
       }
       if (pendingEvents.length === 0) return;
       let delivered = 0;
+      let deliveredBusy = 0;
       for (const pending of pendingEvents) {
         const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
         const targets = wantSession ? idleCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : idleCoordinators;
+        if (targets.length === 0 && pending.coordinatorMessage && shouldForceInjectMeshEvent(pending.event)) {
+          const originSessionId = readNonEmptyString(
+            pending.metadataEvent?.targetSessionId
+          ) || readNonEmptyString(pending.metadataEvent?.sessionId);
+          const notSelf = (c) => !originSessionId || !sessionIdsEquivalent(c.sessionId, originSessionId);
+          const busyTargets = (wantSession ? busyCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : busyCoordinators).filter(notSelf);
+          if (busyTargets.length > 0) {
+            let busyDelivered = 0;
+            for (const c of busyTargets) {
+              const splitEligible = isMidGenerationSplitEligible({
+                specOptIn: typeof c.instance.supportsMidGenerationQueue === "function" && c.instance.supportsMidGenerationQueue() === true,
+                bodyLength: pending.coordinatorMessage.length
+              });
+              const outcome = injectPendingIntoCoordinator(c.instance, pending, {
+                mode: splitEligible ? "mid-generation-split" : "next-turn-queue"
+              });
+              if (outcome.delivered) busyDelivered++;
+            }
+            if (busyDelivered > 0) {
+              delivered += busyDelivered;
+              deliveredBusy += busyDelivered;
+              continue;
+            }
+          }
+        }
         if (targets.length === 0 || !pending.coordinatorMessage) {
           try {
             requeueDrainedPendingMeshCoordinatorEvent(pending);
@@ -90082,7 +90695,10 @@ ${cleanBody}`;
         }
       }
       if (delivered > 0) {
-        LOG.info("MeshEvents", `Event-driven drain delivered ${delivered} pending event(s) to ${idleCoordinators.length} idle coordinator(s) for mesh ${meshId}`);
+        LOG.info(
+          "MeshEvents",
+          `Event-driven drain delivered ${delivered} pending event(s) for mesh ${meshId} (${idleCoordinators.length} idle coordinator(s)` + (deliveredBusy > 0 ? `; ${deliveredBusy} to ${busyCoordinators.length} busy coordinator(s) without waiting for an idle edge` : "") + ")"
+        );
       }
     }
     function setupMeshEventForwarding(components) {
@@ -90217,6 +90833,7 @@ ${cleanBody}`;
         flushPendingForMeshIdleCoordinators(components, routing.meshId);
       });
     }
+    var MID_GENERATION_MAX_BODY_CHARS;
     var REMOTE_IDLE_SESSION_TTL_MS;
     var meshByWorkspaceCache;
     var MESH_WORKSPACE_CACHE_TTL_MS;
@@ -90245,6 +90862,7 @@ ${cleanBody}`;
         init_dist();
         init_mesh_events_stale();
         init_mesh_task_inflight();
+        init_mesh_reconcile_coordinator_drain();
         init_mesh_graph_transition_runner();
         init_mesh_events_utils();
         init_mesh_event_classify();
@@ -90253,6 +90871,7 @@ ${cleanBody}`;
         init_mesh_autolaunch_integrity();
         init_mesh_event_suppression();
         init_mesh_event_suppression();
+        MID_GENERATION_MAX_BODY_CHARS = 512;
         REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1e3;
         meshByWorkspaceCache = /* @__PURE__ */ new Map();
         MESH_WORKSPACE_CACHE_TTL_MS = 5e3;
@@ -94151,554 +94770,6 @@ ${cleanBody}`;
         init_transcript_daemon_consumer_read();
         init_transcript_read_chat_adapter();
         nonIdleEscapeTracks = /* @__PURE__ */ new Map();
-      }
-    });
-    function renderMeshStatusLine(inputs) {
-      const total = inputs.totalActiveCount;
-      if (!Number.isFinite(total) || total <= 0) return null;
-      const parts = [];
-      for (const status of STATUS_RENDER_ORDER) {
-        const count = inputs.statusCounts?.[status] ?? 0;
-        if (count > 0) parts.push(`${count} ${status}`);
-      }
-      const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
-      const entries = [];
-      const sorted = inputs.activeWork.filter((record2) => typeof record2?.taskId === "string" && record2.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
-      for (const record2 of sorted) {
-        const id = record2.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
-        entries.push(`${id} ${record2.status}`);
-      }
-      if (entries.length === 0) return clampToBound(head);
-      let line = head;
-      const shown = [];
-      for (let i = 0; i < entries.length; i++) {
-        const isLast = i === entries.length - 1;
-        const candidate = [...shown, entries[i]];
-        const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
-        if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
-        shown.push(entries[i]);
-        line = head + suffix;
-      }
-      if (shown.length === 0) return clampToBound(head);
-      return clampToBound(line);
-    }
-    function clampToBound(line) {
-      if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
-      return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
-    }
-    function buildMeshStatusLineForNotification(meshId, now) {
-      if (!meshId) return null;
-      try {
-        const built = buildMeshActiveWork3({
-          meshId,
-          queue: getQueue3(meshId),
-          directDispatches: getActiveDirectDispatches3(meshId),
-          ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
-          now: now ?? Date.now()
-        });
-        return renderMeshStatusLine({
-          activeWork: built.activeWork,
-          statusCounts: built.summary.statusCounts,
-          totalActiveCount: built.summary.totalActiveCount
-        });
-      } catch (e) {
-        LOG.debug("MeshReconcile", `Mesh status line build failed for mesh ${meshId}: ${e?.message || e}`);
-        return null;
-      }
-    }
-    var MESH_STATUS_LINE_MAX_CHARS;
-    var TASK_ID_PREFIX_CHARS;
-    var ACTIVE_WORK_LEDGER_KINDS;
-    var STATUS_RENDER_ORDER;
-    var STATUS_ACTIONABILITY_RANK;
-    var init_mesh_notification_status_line = __esm2({
-      "src/mesh/mesh-notification-status-line.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_active_work();
-        init_mesh_work_queue();
-        init_mesh_ledger();
-        MESH_STATUS_LINE_MAX_CHARS = 200;
-        TASK_ID_PREFIX_CHARS = 7;
-        ACTIVE_WORK_LEDGER_KINDS = [
-          "task_dispatched",
-          "task_completed",
-          "task_failed",
-          "task_stalled",
-          "task_approval_needed",
-          "task_question_pending"
-        ];
-        STATUS_RENDER_ORDER = [
-          "awaiting_approval",
-          "awaiting_choice",
-          "failed",
-          "generating",
-          "pending",
-          "assigned",
-          "finalizing",
-          "idle"
-        ];
-        STATUS_ACTIONABILITY_RANK = Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i]));
-      }
-    });
-    function findLiveCoordinators(components) {
-      const out = [];
-      for (const inst of components.instanceManager.getByCategory("cli")) {
-        const state2 = inst.getState();
-        const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
-        const meshId = readNonEmptyString(settings.meshCoordinatorFor);
-        if (!meshId) continue;
-        const status = readNonEmptyString(state2.status).toLowerCase();
-        const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
-        const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
-        const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
-        const sessionId = readNonEmptyString(state2.instanceId);
-        if (getLogLevel() === "debug") {
-          let adapterRaw = "?";
-          try {
-            const a = inst.adapter;
-            if (a && typeof a.getStatus === "function") {
-              adapterRaw = readNonEmptyString(a.getStatus({ allowParse: false })?.status) || "?";
-            }
-          } catch (e) {
-            adapterRaw = `err:${e?.message || e}`;
-          }
-          const lastStatus = readNonEmptyString(inst.lastStatus) || "?";
-          const autoApproveBusy = inst.autoApproveBusy;
-          const maskSince = inst.autoApproveMaskSince;
-          LOG.debug("MeshReconcile", `coordDiag sess=${sessionId || "?"} mesh=${meshId} getState=${status || "?"} drainStatus=${drainStatus || "n/a"} lastStatus=${lastStatus} adapterRaw=${adapterRaw} autoApproveBusy=${autoApproveBusy === true} maskSince=${maskSince || 0}`);
-        }
-        const stateKey2 = `${meshId}::${sessionId || "?"}`;
-        const prevParked = coordinatorModalParkState.get(stateKey2);
-        if (prevParked !== modalParked) {
-          coordinatorModalParkState.set(stateKey2, modalParked);
-          if (modalParked) {
-            LOG.info("MeshReconcile", `Coordinator ${sessionId || "?"} (mesh ${meshId}) entered modal-park (status=${status}) \u2014 terminal events for it will be held until the modal is answered`);
-          } else if (prevParked === true) {
-            LOG.info("MeshReconcile", `Coordinator ${sessionId || "?"} (mesh ${meshId}) left modal-park (status=${status}) \u2014 held events will drain on this/next tick`);
-          }
-        }
-        out.push({ meshId, instance: inst, sessionId, idle, modalParked });
-      }
-      return out;
-    }
-    function resolveCoordinatorDrainDeliverability(components, meshId) {
-      const coordinators = findLiveCoordinators(components).filter((c) => c.meshId === meshId);
-      if (coordinators.length === 0) {
-        return { hasLiveCliCoordinator: false, deliverableNow: false, holdForReconcile: false };
-      }
-      const hasIdle = coordinators.some((c) => c.idle);
-      return {
-        hasLiveCliCoordinator: true,
-        deliverableNow: hasIdle,
-        // A live CLI coordinator exists but none is idle → the reconcile loop is
-        // holding the events; the poll must not steal them.
-        holdForReconcile: !hasIdle
-      };
-    }
-    function shouldHoldPendingDrainForBusyLocalCoordinator(components, meshId, requestedCoordinatorDaemonId, callerIsSelfCoordinatorInboxRead) {
-      if (!meshId) return false;
-      const deliverability = resolveCoordinatorDrainDeliverability(components, meshId);
-      if (!deliverability.holdForReconcile) return false;
-      const requested = readNonEmptyString(requestedCoordinatorDaemonId);
-      if (!requested) return true;
-      const localIds = expandDaemonIdForms([
-        readNonEmptyString(components.statusInstanceId),
-        readNonEmptyString(getMachineId())
-      ]);
-      const targetsLocalCoordinator = localIds.some((id) => daemonIdsEquivalent4(id, requested));
-      if (!targetsLocalCoordinator) return false;
-      if (callerIsSelfCoordinatorInboxRead) return false;
-      return true;
-    }
-    function injectPendingIntoCoordinator(coordinator, pending, opts) {
-      if (!coordinator) return;
-      let coordinatorMessage = pending.coordinatorMessage;
-      if (!coordinatorMessage) {
-        if (!shouldForceInjectMeshEvent(pending.event)) return;
-        const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === "object" ? pending.metadataEvent : {};
-        coordinatorMessage = buildMeshSystemMessage({
-          event: pending.event,
-          nodeLabel: pending.nodeLabel,
-          metadataEvent
-        });
-        if (!coordinatorMessage) return;
-        LOG.warn("MeshReconcile", `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time \u2014 a queued terminal event arrived message-less`);
-      }
-      if (shouldForceInjectMeshEvent(pending.event)) {
-        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
-        if (statusLine) coordinatorMessage = `${coordinatorMessage}
-
-${statusLine}`;
-      }
-      const force = opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event);
-      traceMeshEventStage("surfaced", {
-        taskId: pending.metadataEvent?.taskId,
-        sessionId: pending.metadataEvent?.targetSessionId ?? pending.targetCoordinatorSessionId,
-        nodeId: pending.nodeId,
-        meshId: pending.meshId,
-        event: pending.event
-      }, force ? "force-inject" : "inject");
-      coordinator.onEvent("send_message", {
-        input: { text: coordinatorMessage, textFallback: coordinatorMessage },
-        ...force ? { force: true } : {}
-      });
-    }
-    function recordHeldTerminalEventsToLedger(meshId, drainDaemonIds, reason, heldForCoordinatorCount, strictRoutedFingerprints) {
-      let pending;
-      try {
-        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
-      } catch {
-        return;
-      }
-      for (const event of pending) {
-        if (strictRoutedFingerprints?.has(buildPendingEventFingerprint(event))) continue;
-        if (!shouldForceInjectMeshEvent(event.event)) continue;
-        const fingerprint = buildPendingEventFingerprint(event);
-        const key2 = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ""}::${event.queuedAt}`}`;
-        if (heldEventLedgerRecorded.has(key2)) continue;
-        heldEventLedgerRecorded.add(key2);
-        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
-        try {
-          appendLedgerEntry3(meshId, {
-            kind: "event_held",
-            ...event.nodeId ? { nodeId: event.nodeId } : {},
-            payload: {
-              event: event.event,
-              reason,
-              recoverable: true,
-              heldForCoordinators: heldForCoordinatorCount,
-              nodeLabel: event.nodeLabel,
-              ...event.workspace ? { workspace: event.workspace } : {},
-              targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-              queuedAt: event.queuedAt,
-              ...fingerprint ? { fingerprint } : {},
-              ...finalSummary ? { finalSummary } : {},
-              // NOTIF-LOSS (A1): the machine recovery copy, matching every other
-              // event_held feeder (ledgerRecordQuarantinedEvent /
-              // ledgerRecordExpiredUndrainedEvent). Without it this entry claims
-              // `recoverable: true` but requeueHeldMeshCoordinatorEvents — which
-              // reconstructs solely from payload.heldEvent — reports it
-              // `unrecoverable`, so mesh_requeue_held_events could not recover the
-              // single reason code responsible for ~98% of holds. The C1 guarantee
-              // documented above only holds once the event itself is carried.
-              heldEvent: event
-            }
-          });
-          LOG.info("MeshReconcile", `Ledger-recorded held ${event.event} for mesh ${meshId} (reason ${reason}) \u2014 recoverable from ledger`);
-        } catch (e) {
-          heldEventLedgerRecorded.delete(key2);
-          LOG.warn("MeshReconcile", `Failed to ledger-record held ${event.event} for mesh ${meshId}: ${e?.message || e}`);
-        }
-      }
-    }
-    function oldestHeldTerminalEventAgeMs(meshId, drainDaemonIds) {
-      let pending;
-      try {
-        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
-      } catch {
-        return 0;
-      }
-      const now = Date.now();
-      let maxAge = 0;
-      for (const event of pending) {
-        if (!shouldForceInjectMeshEvent(event.event)) continue;
-        const queuedAt = typeof event.queuedAt === "number" ? event.queuedAt : now;
-        const age = now - queuedAt;
-        if (age > maxAge) maxAge = age;
-      }
-      return maxAge;
-    }
-    function surfaceCeilingExceededHeldEvents(meshId, drainDaemonIds, ceilingMs, heldForCoordinatorCount) {
-      let pending;
-      try {
-        pending = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
-      } catch {
-        return 0;
-      }
-      const now = Date.now();
-      let surfaced = 0;
-      for (const event of pending) {
-        if (!shouldForceInjectMeshEvent(event.event)) continue;
-        const queuedAt = typeof event.queuedAt === "number" ? event.queuedAt : now;
-        if (now - queuedAt < ceilingMs) continue;
-        const fingerprint = buildPendingEventFingerprint(event);
-        const key2 = `${meshId}::${fingerprint || `${event.event}::${event.nodeId || ""}::${event.queuedAt}`}`;
-        if (holdCeilingLedgerRecorded.has(key2)) continue;
-        holdCeilingLedgerRecorded.add(key2);
-        const heldMs = now - queuedAt;
-        const finalSummary = readMeshCompletionSummary(event.metadataEvent);
-        try {
-          appendLedgerEntry3(meshId, {
-            kind: "event_held",
-            ...event.nodeId ? { nodeId: event.nodeId } : {},
-            payload: {
-              event: event.event,
-              reason: HOLD_CEILING_EXCEEDED_HOLD_REASON,
-              recoverable: true,
-              // How long the PTY hold lasted before we stopped waiting on it, and
-              // the bound it crossed — the two numbers an operator needs to tell a
-              // one-off settle from a structurally-parked coordinator.
-              heldMs,
-              ceilingMs,
-              heldForCoordinators: heldForCoordinatorCount,
-              // Names why this is surfaced rather than injected, so the entry is not
-              // misread as a delivery failure or as a force-inject having occurred.
-              surfacedOutOfBand: true,
-              nodeLabel: event.nodeLabel,
-              ...event.workspace ? { workspace: event.workspace } : {},
-              targetCoordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
-              queuedAt: event.queuedAt,
-              ...fingerprint ? { fingerprint } : {},
-              ...finalSummary ? { finalSummary } : {},
-              // Full event, matching every other event_held feeder, so
-              // mesh_requeue_held_events can restore it losslessly.
-              heldEvent: event
-            }
-          });
-          surfaced++;
-          LOG.warn(
-            "MeshReconcile",
-            `Hold ceiling exceeded: ${event.event} for mesh ${meshId} has been held ${Math.round(heldMs / 1e3)}s (\u2265 ${Math.round(ceilingMs / 1e3)}s) because no coordinator PTY ever re-confirmed idle \u2014 surfacing it OUT-OF-BAND via the ledger (pendingCoordinatorEvents / mesh_review_inbox). The event stays queued and will still deliver normally when the PTY idles; no force-inject was performed.`
-          );
-        } catch (e) {
-          holdCeilingLedgerRecorded.delete(key2);
-          LOG.warn("MeshReconcile", `Failed to ledger-record hold-ceiling ${event.event} for mesh ${meshId}: ${e?.message || e}`);
-        }
-      }
-      return surfaced;
-    }
-    function reconfirmGenuinelyIdleCoordinators(generating) {
-      const out = [];
-      for (const c of generating) {
-        const inst = c.instance;
-        const drainStatus = typeof inst?.getDrainStatus === "function" ? inst.getDrainStatus() : null;
-        const genuinelyIdle = drainStatus !== null ? drainStatus === "idle" : c.idle;
-        if (genuinelyIdle) out.push({ ...c, idle: true });
-      }
-      return out;
-    }
-    function drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, logLabel) {
-      let pendingEvents = [];
-      try {
-        pendingEvents = drainPendingMeshCoordinatorEvents3(
-          meshId,
-          drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
-          {
-            // AMBIGUOUS-UNICAST guard (REFINE-EVENT-SESSION-SCOPED-UNICAST): observability
-            // only — it warns when a session-less unicast event is delivered while several
-            // coordinator sessions are live and racing for it. Never changes delivery, so
-            // an event can't be stranded by it. targetCoordinators is this daemon's live
-            // coordinator set for the mesh, which is exactly the racing population.
-            countLiveCoordinatorSessions: () => new Set(targetCoordinators.map((c) => c.sessionId).filter(Boolean)).size
-          }
-        );
-      } catch (e) {
-        LOG.warn("MeshReconcile", `Drain failed for mesh ${meshId}: ${e?.message || e}`);
-        return 0;
-      }
-      if (pendingEvents.length === 0) return 0;
-      LOG.info("MeshReconcile", `Reconcile inject \u2192 ${logLabel}: ${pendingEvents.length} pending event(s) \u2192 ${targetCoordinators.length} coordinator(s) for mesh ${meshId}`);
-      for (const pending of pendingEvents) {
-        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
-        if (wantSession) {
-          const matched = targetCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession));
-          if (matched.length === 0) {
-            holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
-            continue;
-          }
-          for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
-          continue;
-        }
-        for (const c of targetCoordinators) {
-          injectPendingIntoCoordinator(c.instance, pending);
-        }
-      }
-      return pendingEvents.length;
-    }
-    function isApprovalNudgeResolved(meshId, pending) {
-      const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === "object" ? pending.metadataEvent : {};
-      const nodeId = readNonEmptyString(pending.nodeId) || readNonEmptyString(metadataEvent.meshNodeId);
-      const sessionId = readNonEmptyString(metadataEvent.targetSessionId) || readNonEmptyString(metadataEvent.sessionId);
-      if (!nodeId && !sessionId) return false;
-      const queuedAt = typeof pending.queuedAt === "number" && Number.isFinite(pending.queuedAt) ? pending.queuedAt : 0;
-      let entries;
-      try {
-        entries = readApprovalResolutionEntries(meshId);
-      } catch {
-        return false;
-      }
-      return entries.some((e) => {
-        if (e.kind !== "task_completed" && e.kind !== "task_failed") return false;
-        if (queuedAt > 0) {
-          const t = new Date(e.timestamp).getTime();
-          if (Number.isFinite(t) && t < queuedAt) return false;
-        }
-        const nodeMatch = !!nodeId && !!e.nodeId && daemonIdsEquivalent4(e.nodeId, nodeId);
-        const sessionMatch = !!sessionId && !!e.sessionId && sessionIdsEquivalent(e.sessionId, sessionId);
-        return nodeMatch || sessionMatch;
-      });
-    }
-    function drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators) {
-      let peeked;
-      try {
-        peeked = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
-      } catch {
-        return 0;
-      }
-      if (!peeked.some((e) => isMeshApprovalEvent(e.event))) return 0;
-      let drained;
-      try {
-        drained = drainPendingMeshCoordinatorEvents3(
-          meshId,
-          drainDaemonIds.length > 0 ? drainDaemonIds : localDaemonId,
-          { onlyEvents: MESH_APPROVAL_EVENTS }
-        );
-      } catch (e) {
-        LOG.warn("MeshReconcile", `Approval-nudge drain failed for mesh ${meshId}: ${e?.message || e}`);
-        return 0;
-      }
-      let delivered = 0;
-      for (const pending of drained) {
-        if (isApprovalNudgeResolved(meshId, pending)) {
-          traceMeshEventDrop("approval_nudge_stale_resolved", {
-            taskId: readNonEmptyString(pending.metadataEvent?.taskId),
-            sessionId: readNonEmptyString(pending.metadataEvent?.targetSessionId) ?? pending.targetCoordinatorSessionId,
-            nodeId: pending.nodeId,
-            meshId,
-            event: pending.event
-          }, "approval already resolved (terminal ledger entry present)");
-          LOG.info("MeshReconcile", `Dropped stale approval nudge for mesh ${meshId} (${pending.nodeLabel}) \u2014 approval already resolved`);
-          continue;
-        }
-        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
-        const targets = wantSession ? meshCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : meshCoordinators;
-        if (targets.length === 0) continue;
-        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false });
-        delivered++;
-        LOG.info("MeshReconcile", `Delivered approval nudge (level) for mesh ${meshId} (${pending.nodeLabel}) \u2192 ${targets.length} coordinator(s) without waiting for an idle edge`);
-      }
-      return delivered;
-    }
-    function isCoordinatorSessionTombstoned(meshId, sessionId) {
-      if (!sessionId) return false;
-      try {
-        return readLedgerEntriesByKind(meshId, ["session_stopped"], TOMBSTONE_LOOKBACK_ENTRIES).some((entry) => sessionIdsEquivalent(readNonEmptyString(entry.sessionId), sessionId));
-      } catch {
-        return false;
-      }
-    }
-    function releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt) {
-      const { targetCoordinatorSessionId: _dead, ...released } = pending;
-      const reattributed = { ...released, queuedAt };
-      try {
-        const requeued = requeueDrainedPendingMeshCoordinatorEvent(reattributed);
-        const cleared = requeued && clearPendingEventCoordinatorSession(meshId, reattributed);
-        LOG.warn(
-          "MeshReconcile",
-          `Strict route reattribution: coordinator session ${wantSession} is TOMBSTONED (confirmed dead) on mesh ${meshId} \u2014 released ${pending.event} to daemon-level delivery so a live successor coordinator receives it instead of expiring undelivered (durable=${requeued} stampCleared=${cleared})`
-        );
-        traceMeshEventDrop("strict_route_reattributed", {
-          taskId: pending.metadataEvent?.taskId,
-          sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
-          nodeId: pending.nodeId,
-          meshId,
-          event: pending.event
-        }, `coordinatorSession=${wantSession} tombstoned \u2192 released to daemon-level durable=${requeued}`);
-      } catch (e) {
-        LOG.warn("MeshReconcile", `Strict route reattribution failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
-      }
-    }
-    function holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId) {
-      const queuedAt = typeof pending.queuedAt === "number" ? pending.queuedAt : Date.now();
-      if (isCoordinatorSessionTombstoned(meshId, wantSession)) {
-        releaseStrictRouteToDaemonLevel(pending, wantSession, meshId, queuedAt);
-        return;
-      }
-      if (Date.now() - queuedAt <= STRICT_SESSION_MATCH_TTL_MS) {
-        try {
-          const requeued = requeueDrainedPendingMeshCoordinatorEvent(pending);
-          LOG.info("MeshReconcile", `Strict route hold: coordinator session ${wantSession} not live on mesh ${meshId} \u2014 re-queued (${pending.event})${requeued ? "" : " [WARN: not durably re-queued]"}`);
-          traceMeshEventDrop("strict_route_hold", {
-            taskId: pending.metadataEvent?.taskId,
-            sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
-            nodeId: pending.nodeId,
-            meshId,
-            event: pending.event
-          }, `coordinatorSession=${wantSession} not live durable=${requeued}`);
-        } catch (e) {
-          LOG.warn("MeshReconcile", `Strict route re-queue failed for ${pending.event} on mesh ${meshId}: ${e?.message || e}`);
-        }
-        return;
-      }
-      const finalSummary = readMeshCompletionSummary(pending.metadataEvent || {});
-      try {
-        appendLedgerEntry3(meshId, {
-          kind: "event_held",
-          ...pending.nodeId ? { nodeId: pending.nodeId } : {},
-          payload: {
-            event: pending.event,
-            reason: "strict_route_expired",
-            recoverable: true,
-            targetCoordinatorSessionId: wantSession,
-            targetCoordinatorDaemonId: pending.targetCoordinatorDaemonId ?? null,
-            nodeLabel: readNonEmptyString(pending.nodeLabel) || (pending.nodeId ? `Node '${pending.nodeId}'` : "Remote agent"),
-            ...pending.workspace ? { workspace: pending.workspace } : {},
-            queuedAt,
-            ...finalSummary ? { finalSummary } : {},
-            // NOTIF-LOSS (defect 2): the machine recovery copy. This writer was the
-            // ONE `event_held` feeder that omitted it while still claiming
-            // `recoverable: true`, so mesh_requeue_held_events — which reconstructs
-            // solely from payload.heldEvent — reported every strict_route_expired
-            // entry as `unrecoverable: no restorable original event`, breaking the
-            // tool's documented "Lossless: the full original event is restored"
-            // contract. Measured 2026-09-11: held entry ec6cace0 (a worker's
-            // agent:generating_completed) was permanently unrecoverable. The flat
-            // fields above remain the human-readable audit; this is the machine copy,
-            // matching ledgerRecordQuarantinedEvent / the C1 and hold-ceiling feeders.
-            heldEvent: pending
-          }
-        });
-        LOG.warn("MeshReconcile", `Strict route expire: coordinator session ${wantSession} never returned for mesh ${meshId} \u2014 recorded to ledger (recoverable), dropped (${pending.event})`);
-        traceMeshEventDrop("strict_route_expired", {
-          taskId: pending.metadataEvent?.taskId,
-          sessionId: pending.metadataEvent?.targetSessionId ?? wantSession,
-          nodeId: pending.nodeId,
-          meshId,
-          event: pending.event
-        }, `coordinatorSession=${wantSession} never returned`);
-      } catch (e) {
-        LOG.warn("MeshReconcile", `Failed to ledger-expire strict-unmatched ${pending.event} for mesh ${meshId}: ${e?.message || e}`);
-      }
-    }
-    var coordinatorModalParkState;
-    var DISK_RETENTION_INTERVAL_MS;
-    var heldEventLedgerRecorded;
-    var HOLD_CEILING_EXCEEDED_HOLD_REASON;
-    var holdCeilingLedgerRecorded;
-    var STRICT_SESSION_MATCH_TTL_MS;
-    var TOMBSTONE_LOOKBACK_ENTRIES;
-    var init_mesh_reconcile_coordinator_drain = __esm2({
-      "src/mesh/mesh-reconcile-coordinator-drain.ts"() {
-        "use strict";
-        init_config();
-        init_logger();
-        init_mesh_events_pending();
-        init_mesh_ledger();
-        init_mesh_read_model_consumers();
-        init_mesh_events_coordinator();
-        init_mesh_event_classify();
-        init_mesh_events_utils();
-        init_mesh_notification_status_line();
-        init_mesh_event_trace();
-        init_dist();
-        coordinatorModalParkState = /* @__PURE__ */ new Map();
-        DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
-        heldEventLedgerRecorded = /* @__PURE__ */ new Set();
-        HOLD_CEILING_EXCEEDED_HOLD_REASON = "hold_ceiling_exceeded";
-        holdCeilingLedgerRecorded = /* @__PURE__ */ new Set();
-        STRICT_SESSION_MATCH_TTL_MS = 6e4;
-        TOMBSTONE_LOOKBACK_ENTRIES = 200;
       }
     });
     function resolveConsumeGraceMs(profile) {
@@ -103163,7 +103234,17 @@ ${marker}`,
            *  written yet — the composer holds nothing of theirs; they are discarded with
            *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
            *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
-           *  would hold shutdown for a whole turn boundary, not a submit). */
+           *  would hold shutdown for a whole turn boundary, not a submit).
+           *
+           *  NOTIF-IMMEDIACY (Tier 2) coverage note: a MID-GENERATION split write is
+           *  covered by this predicate WITHOUT a new timer field, because
+           *  actuallySendMessage's midGeneration branch schedules its separated CR
+           *  through `schedulePlainSubmit` — i.e. it arms `plainSubmitTimer`, which is
+           *  already listed below. This matters: mesh completion notifications now take
+           *  that path, and the composer-residue defect this gate exists for (oss
+           *  7cd5b777) is exactly "daemon exits between the body write and its CR". The
+           *  coupling is load-bearing, so if the mid-generation branch ever stops using
+           *  schedulePlainSubmit it MUST add its timer here in the same change. */
           hasInFlightSubmit() {
             return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
           }
@@ -103969,6 +104050,10 @@ ${marker}`,
           /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
           sendMessageDuringGeneration(text, bracketedPaste) {
             return this.sends.sendMessageDuringGeneration(text, bracketedPaste);
+          }
+          /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
+          supportsMidGenerationQueue() {
+            return this.spec?.send_message?.mid_generation_queue === true;
           }
           /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
           reserveDrain(ttlMs) {
@@ -110305,7 +110390,41 @@ ${text}` : text;
             } catch {
             }
           }
+          /**
+           * FORCE-NO-OP (2026-09-13): `opts.force` is ACCEPTED AND DELIBERATELY IGNORED
+           * on this path, and that is the correct behaviour — not an oversight.
+           *
+           * `force` is a legacy flag from the retired `ProviderCliAdapter` engine, where
+           * it meant "raw-write into the PTY even while the session is generating". That
+           * force-inject was removed as a data-loss path (a body written into a
+           * generating claude-cli PTY is not consumed as a turn), and the removal is
+           * load-bearing — see `injectPendingIntoCoordinator` in
+           * mesh/mesh-reconcile-coordinator-drain.ts ("force-inject-into-generating stays
+           * intentionally removed") and the F3 note in mesh/mesh-event-forwarding.ts.
+           *
+           * Since the legacy engine was deleted (oss 48e5ed1a) SpecCliAdapter is the only
+           * live CLI engine, so every remaining `force: true` caller has been a silent
+           * no-op: the body takes the ordinary disposition path below and is parked in the
+           * driver FIFO whenever the machine is not idle. It was named `_opts` here, which
+           * read as "intentionally unused" and hid that the mesh force callers were not
+           * getting what their call sites claimed.
+           *
+           * The flag is kept in the signature (rather than deleted) because it is part of
+           * the shared `CliInstanceAdapter` contract that non-spec adapters also implement.
+           * Callers that need a body to reach a BUSY session must use one of the two
+           * supported routes instead:
+           *   - `sendMessage` (this method) → adapter FIFO, surfaced at the next turn
+           *     boundary. This is the "next-turn-queue" delivery mode.
+           *   - `sendMessageDuringGeneration` → the POSIX-only split write that the CLI's
+           *     own input queue takes. This is the "mid-generation-split" delivery mode.
+           */
           async sendMessage(text, _opts) {
+            if (_opts?.force === true) {
+              LOG.debug(
+                "SpecAdapter",
+                `[${this.cliType}] sendMessage received force:true \u2014 ignored by design (force-inject-into-generating is retired); body takes the ordinary FIFO path`
+              );
+            }
             LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length})`);
             LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? "\u2026" : ""}`);
             if (typeof this.driver.sendMessageWithDisposition === "function") {
@@ -110343,6 +110462,23 @@ ${text}` : text;
               LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text.length})`);
             }
             return outcome;
+          }
+          /**
+           * NOTIF-IMMEDIACY: does this session's SPEC opt into mid-turn queued input?
+           *
+           * Reports the spec's `send_message.mid_generation_queue` declaration only. It
+           * deliberately does NOT consider platform or body size — those are the mesh
+           * caller's policy and are enforced there — and it does NOT consider the live
+           * FSM state, because `sendMessageDuringGeneration` is the single authority on
+           * whether a write is admissible right now (a second opinion about session
+           * readiness is the class of bug the SEND-OVERLAP work removed).
+           *
+           * False for any spec that has not been measured against the split write, which
+           * is every spec except the ones that explicitly opt in.
+           */
+          supportsMidGenerationQueue() {
+            if (typeof this.driver.supportsMidGenerationQueue !== "function") return false;
+            return this.driver.supportsMidGenerationQueue() === true;
           }
           /**
            * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
@@ -111851,6 +111987,31 @@ ${text}` : text;
     }
     var init_cli_provider_bracketed_paste = __esm2({
       "src/providers/cli-provider-bracketed-paste.ts"() {
+        "use strict";
+      }
+    });
+    function adapterSupportsMidGenerationQueue(adapter) {
+      const a = adapter;
+      if (!a || typeof a.supportsMidGenerationQueue !== "function") return false;
+      try {
+        return a.supportsMidGenerationQueue() === true;
+      } catch {
+        return false;
+      }
+    }
+    function adapterSendMessageDuringGeneration(adapter, text) {
+      const a = adapter;
+      if (!a || typeof a.sendMessageDuringGeneration !== "function") {
+        return { accepted: false, reason: "not_supported" };
+      }
+      try {
+        return a.sendMessageDuringGeneration(text);
+      } catch (e) {
+        return { accepted: false, reason: `threw:${e?.message || e}` };
+      }
+    }
+    var init_cli_provider_mid_generation = __esm2({
+      "src/providers/cli-provider-mid-generation.ts"() {
         "use strict";
       }
     });
@@ -115653,6 +115814,7 @@ ${buttons.join("\n")}`;
         "use strict";
         crypto6 = __toESM2(require("crypto"));
         init_cli_provider_bracketed_paste();
+        init_cli_provider_mid_generation();
         init_contracts2();
         init_provider_input_support();
         init_interactive_prompt();
@@ -116329,6 +116491,13 @@ ${buttons.join("\n")}`;
           /** True when this session is parked on a modal awaiting a human answer. */
           isModalParked() {
             return this.resolveModalParkStatus() !== null;
+          }
+          // NOTIF-IMMEDIACY: both delegate to providers/cli-provider-mid-generation.ts.
+          supportsMidGenerationQueue() {
+            return adapterSupportsMidGenerationQueue(this.adapter);
+          }
+          sendMessageDuringGeneration(text) {
+            return adapterSendMessageDuringGeneration(this.adapter, text);
           }
           /**
            * Provider-agnostic live-state observation for the mesh completion gate —

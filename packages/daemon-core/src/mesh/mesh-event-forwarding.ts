@@ -26,6 +26,58 @@ import {
     hasUnterminalDirectDispatchLedgerEntry,
 } from './mesh-events-stale.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
+import { injectPendingIntoCoordinator } from './mesh-reconcile-coordinator-drain.js';
+
+/**
+ * NOTIF-IMMEDIACY: size ceiling for the Tier 2 mid-generation split write.
+ *
+ * ★ Deliberately DUPLICATED here rather than imported from
+ * providers/spec/submit-policy.ts (`MID_GENERATION_MAX_BODY_CHARS`): `mesh/**`
+ * must not value-import `providers/**` (enforced by check:boundaries, and this
+ * file is not in the frozen baseline). The value is a policy threshold, not a
+ * behavioural coupling — the provider side enforces its own submit rules
+ * regardless of what the mesh caller decides, so a drift here costs immediacy
+ * for over-sized bodies, never correctness: anything above the ceiling simply
+ * takes the ordinary held path.
+ *
+ * Keep in sync with submit-policy.ts's MID_GENERATION_MAX_BODY_CHARS
+ * (= VERIFIED_SUBMIT_MIN_CHARS, 512), which carries the full derivation.
+ */
+const MID_GENERATION_MAX_BODY_CHARS = 512;
+
+/**
+ * NOTIF-IMMEDIACY: may THIS body reach THIS busy coordinator through the Tier 2
+ * mid-generation split write, or must it take the platform-neutral Tier 1 route?
+ *
+ * Pure and exported so the policy is testable without a live mesh/store — the
+ * three conditions below are the entire authorisation surface for writing into a
+ * generating session, and each one is load-bearing:
+ *
+ *  1. `specOptIn` — the spec declares `send_message.mid_generation_queue`. The
+ *     split write was measured against claude-cli v2.1.220 ONLY; a CLI without a
+ *     mid-turn input queue would swallow the body silently, and since the row is
+ *     already `drained = 1` a silent swallow is permanent loss of the
+ *     completion's finalSummary. Never assumed, never inferred.
+ *  2. `bodyLength <= MID_GENERATION_MAX_BODY_CHARS` — the mid-generation path
+ *     skips the echo-verified submit (a generating screen never goes quiet), so
+ *     a large body's CR is unconfirmed. That is exactly the composer-residue
+ *     defect (oss 7cd5b777, 10,937 chars). Over the ceiling → Tier 1.
+ *  3. POSIX — the driver refuses win32 before reading any state, so this is
+ *     belt-and-braces; win32 simply takes Tier 1, which is platform-neutral. The
+ *     ConPTY question is deliberately NOT re-litigated here.
+ *
+ * Returning false is always SAFE: Tier 1 still delivers the body at the
+ * coordinator's next turn boundary. Only immediacy is traded away.
+ */
+export function isMidGenerationSplitEligible(input: {
+    specOptIn: boolean;
+    bodyLength: number;
+    platform?: NodeJS.Platform;
+}): boolean {
+    if (!input.specOptIn) return false;
+    if (input.bodyLength > MID_GENERATION_MAX_BODY_CHARS) return false;
+    return (input.platform ?? process.platform) !== 'win32';
+}
 import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler } from './mesh-graph-transition-runner.js';
 import {
     buildMeshSystemMessage,
@@ -1956,6 +2008,15 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
     } catch { /* store unavailable — fall through and let the drain decide */ }
 
     const idleCoordinators: { instance: ProviderInstance; sessionId: string }[] = [];
+    // NOTIF-IMMEDIACY (Tier 1): coordinators that are BUSY but NOT modal-parked. These
+    // used to be invisible here — the function returned the moment no idle target was
+    // found, so a completion landing while the coordinator was mid-turn waited for the
+    // reconcile poll to find an idle edge. Measured cost: median ~1min, worst 873s.
+    //
+    // They are collected separately and never mixed into `idleCoordinators`, because the
+    // two groups get DIFFERENT delivery modes and a busy target must never be handed the
+    // idle-turn write.
+    const busyCoordinators: { instance: ProviderInstance; sessionId: string }[] = [];
     try {
         for (const inst of components.instanceManager.getByCategory('cli')) {
             const state = inst.getState();
@@ -1978,10 +2039,18 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
             const idle = drainStatus !== null ? drainStatus === 'idle' : (status === 'idle');
             if (idle && !modalParked) {
                 idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state.instanceId) });
+            } else if (!modalParked) {
+                // ★ Modal-parked is EXCLUDED from both groups, unchanged. A body delivered
+                // into a harness modal has its keystrokes eaten by the modal's key handler
+                // (silently answering a question the user never saw), so those coordinators
+                // keep waiting for the modal-resolved tick. This is the fail-closed guard the
+                // reconcile loop also enforces and it is not relaxed by Tier 1.
+                busyCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state.instanceId) });
             }
         }
     } catch { return; }
-    if (idleCoordinators.length === 0) return; // no idle target now → leave for the reconcile poll
+    // No live coordinator of EITHER kind → nothing to attempt; leave for the reconcile poll.
+    if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
 
     const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
     let pendingEvents: PendingMeshCoordinatorEvent[];
@@ -1994,11 +2063,67 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
     if (pendingEvents.length === 0) return;
 
     let delivered = 0;
+    let deliveredBusy = 0;
     for (const pending of pendingEvents) {
         const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
         const targets = wantSession
             ? idleCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession))
             : idleCoordinators;
+
+        // ── NOTIF-IMMEDIACY (Tier 1): no idle target, but a busy one is live ──────
+        // Only TERMINAL events (shouldForceInjectMeshEvent: completion / approval /
+        // stop / refine · bootstrap) take this route. A silent lifecycle event
+        // (agent:ready / generating_started) carries no coordinatorMessage and is
+        // queued purely to re-drive the claim state machine — injecting it would spam
+        // the coordinator, so it falls through to the requeue branch below unchanged.
+        //
+        // Strict session routing is applied to the busy group exactly as to the idle
+        // group: an event naming an originating coordinator session reaches only that
+        // session. Anything not deliverable here is requeued, never dropped.
+        if (targets.length === 0 && pending.coordinatorMessage && shouldForceInjectMeshEvent(pending.event)) {
+            // ★ SELF-COMPLETION EXCLUSION. A coordinator session can itself be a
+            // direct-dispatch target, and when it completes that task its own completion
+            // flows through here. It must NOT be told about its own completion — the event
+            // exists so the DISPATCHING coordinator (usually on another daemon) can drain it
+            // from the shared pending queue.
+            //
+            // The idle path never had to state this: a session emitting its own completion
+            // is mid-transition and was not an idle drain target, so the case could not
+            // arise. The busy group is exactly where it does arise, and a broadcast event
+            // (no targetCoordinatorSessionId) would otherwise reach it.
+            const originSessionId = readNonEmptyString(
+                (pending.metadataEvent as Record<string, unknown> | undefined)?.targetSessionId,
+            ) || readNonEmptyString((pending.metadataEvent as Record<string, unknown> | undefined)?.sessionId);
+            const notSelf = (c: { sessionId: string }) =>
+                !originSessionId || !sessionIdsEquivalent(c.sessionId, originSessionId);
+            const busyTargets = (wantSession
+                ? busyCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession))
+                : busyCoordinators
+            ).filter(notSelf);
+            if (busyTargets.length > 0) {
+                let busyDelivered = 0;
+                for (const c of busyTargets) {
+                    // Tier 2 eligibility is decided PER TARGET — see
+                    // isMidGenerationSplitEligible for why each condition is load-bearing.
+                    const splitEligible = isMidGenerationSplitEligible({
+                        specOptIn: typeof (c.instance as any).supportsMidGenerationQueue === 'function'
+                            && (c.instance as any).supportsMidGenerationQueue() === true,
+                        bodyLength: pending.coordinatorMessage.length,
+                    });
+                    const outcome = injectPendingIntoCoordinator(c.instance as any, pending, {
+                        mode: splitEligible ? 'mid-generation-split' : 'next-turn-queue',
+                    });
+                    if (outcome.delivered) busyDelivered++;
+                }
+                if (busyDelivered > 0) {
+                    delivered += busyDelivered;
+                    deliveredBusy += busyDelivered;
+                    continue;
+                }
+                // Every busy target refused → fall through to the requeue below. The row
+                // is already drained, so requeue is what keeps the completion alive.
+            }
+        }
         // Not deliverable into an idle target here (wrong/absent session), or a message-less
         // lifecycle event (agent:ready / generating_started carry no coordinatorMessage and
         // must not be injected): re-queue so the reconcile loop owns it (lazy-synth / strict
@@ -2032,7 +2157,15 @@ export function flushPendingForMeshIdleCoordinators(components: DaemonComponents
         }
     }
     if (delivered > 0) {
-        LOG.info('MeshEvents', `Event-driven drain delivered ${delivered} pending event(s) to ${idleCoordinators.length} idle coordinator(s) for mesh ${meshId}`);
+        LOG.info(
+            'MeshEvents',
+            `Event-driven drain delivered ${delivered} pending event(s) for mesh ${meshId} `
+            + `(${idleCoordinators.length} idle coordinator(s)`
+            + (deliveredBusy > 0
+                ? `; ${deliveredBusy} to ${busyCoordinators.length} busy coordinator(s) without waiting for an idle edge`
+                : '')
+            + ')',
+        );
     }
 }
 

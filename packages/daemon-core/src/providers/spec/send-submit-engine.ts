@@ -434,7 +434,17 @@ export class SendSubmitEngine {
      *  written yet — the composer holds nothing of theirs; they are discarded with
      *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
      *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
-     *  would hold shutdown for a whole turn boundary, not a submit). */
+     *  would hold shutdown for a whole turn boundary, not a submit).
+     *
+     *  NOTIF-IMMEDIACY (Tier 2) coverage note: a MID-GENERATION split write is
+     *  covered by this predicate WITHOUT a new timer field, because
+     *  actuallySendMessage's midGeneration branch schedules its separated CR
+     *  through `schedulePlainSubmit` — i.e. it arms `plainSubmitTimer`, which is
+     *  already listed below. This matters: mesh completion notifications now take
+     *  that path, and the composer-residue defect this gate exists for (oss
+     *  7cd5b777) is exactly "daemon exits between the body write and its CR". The
+     *  coupling is load-bearing, so if the mid-generation branch ever stops using
+     *  schedulePlainSubmit it MUST add its timer here in the same change. */
     hasInFlightSubmit(): boolean {
         return this.win32SubmitTimer !== null
             || this.win32WriteTimer !== null

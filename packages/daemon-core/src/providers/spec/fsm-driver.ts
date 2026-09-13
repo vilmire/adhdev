@@ -206,6 +206,18 @@ export interface ISpecDriver {
      * Optional so test doubles implementing ISpecDriver need not provide it.
      */
     sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): QueuedWriteOutcome;
+    /**
+     * NOTIF-IMMEDIACY: does the loaded spec declare
+     * `send_message.mid_generation_queue`?
+     *
+     * A narrow read-only projection of the spec rather than an accessor for the
+     * whole `CliSpecV4`: the spec is driver-private on purpose, and exposing it
+     * wholesale would let callers form their own opinions about send readiness —
+     * the class of second-opinion bug the SEND-OVERLAP work removed. Optional so
+     * test doubles and out-of-tree drivers need not provide it (absent → treated
+     * as not opted in).
+     */
+    supportsMidGenerationQueue?(): boolean;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
@@ -692,6 +704,11 @@ export class FsmDriver implements ISpecDriver {
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
     sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
         return this.sends.sendMessageDuringGeneration(text, bracketedPaste);
+    }
+
+    /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
+    supportsMidGenerationQueue(): boolean {
+        return this.spec?.send_message?.mid_generation_queue === true;
     }
 
     /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */

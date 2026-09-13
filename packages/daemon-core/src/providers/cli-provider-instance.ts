@@ -8,6 +8,7 @@
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
+import { adapterSupportsMidGenerationQueue, adapterSendMessageDuringGeneration } from './cli-provider-mid-generation.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
@@ -906,6 +907,12 @@ export class CliProviderInstance implements ProviderInstance {
         return this.resolveModalParkStatus() !== null;
     }
 
+    // NOTIF-IMMEDIACY: both delegate to providers/cli-provider-mid-generation.ts.
+    supportsMidGenerationQueue(): boolean { return adapterSupportsMidGenerationQueue(this.adapter); }
+    sendMessageDuringGeneration(text: string): { accepted: boolean; reason?: string } {
+        return adapterSendMessageDuringGeneration(this.adapter, text);
+    }
+
     /**
      * Provider-agnostic live-state observation for the mesh completion gate —
      * see completion/evidence.ts (verbatim move; the private discriminators it
@@ -1017,34 +1024,21 @@ export class CliProviderInstance implements ProviderInstance {
             assertProviderSupportsDeclaredInput(this.provider, input);
             const promptText = buildCliStructuredInputPrompt(input);
             if (promptText) {
-                // FORCE-NO-OP (2026-09-13) — this comment used to claim that force:true
-                // "bypasses the busy/generating send guard". That STOPPED being true when
-                // the legacy ProviderCliAdapter engine was deleted (oss 48e5ed1a):
-                // SpecCliAdapter, now the only live CLI engine, accepts `force` and ignores
-                // it by design (see SpecCliAdapter.sendMessage). Raw-writing into a
-                // generating PTY is the retired data-loss path and is NOT coming back.
-                //
-                // What `force` still does here is real but narrower than it looked: it
-                // selects the MODAL fail-closed hold immediately below. That guard is the
-                // reason the flag is still read, and it must stay — a body delivered while
-                // the coordinator is parked on a harness modal would have its keystrokes
-                // eaten by the modal's key handler.
-                //
-                // Immediacy for a BUSY (non-modal) coordinator is now supplied upstream by
-                // the mesh delivery modes (see injectPendingIntoCoordinator's
-                // MeshDeliveryMode), not by this flag.
+                // FORCE-NO-OP (2026-09-13): force:true does NOT bypass the busy/generating
+                // send guard — SpecCliAdapter (the only live CLI engine since 48e5ed1a)
+                // accepts and ignores it by design. The flag survives only because it selects
+                // the MODAL fail-closed hold below; busy-coordinator immediacy now comes from
+                // the mesh delivery modes (MeshDeliveryMode).
                 const force = data?.force === true;
                 const bracketedPaste = shouldUseBracketedPasteForEnvelope(input);
-                // Modal guard: a force-inject still writes raw keystrokes into the PTY,
-                // bypassing the busy send-guard. If the coordinator is parked on a
-                // harness modal (claude-cli AskUserQuestion → waiting_choice, or a
-                // tool-consent waiting_approval), those keystrokes are consumed by the
-                // modal's key handler and silently select a choice the user never made
-                // (data corruption). Hold the force-inject in that narrow window —
-                // the event stays queued and the reconcile loop redelivers it on the
-                // next tick once the modal is resolved. We ONLY hold for the two modal
-                // states; generating is still force-injected (that is the deadlock the
-                // force path exists to break — see mesh-events-coordinator).
+                // Modal guard (fail-closed, load-bearing). If the coordinator is parked on
+                // a harness modal (claude-cli AskUserQuestion → waiting_choice, or a
+                // tool-consent waiting_approval), a delivered body's keystrokes are eaten
+                // by the modal's key handler and silently select a choice the user never
+                // made (data corruption). Hold in that narrow window — the event stays
+                // queued and the reconcile loop redelivers once the modal is resolved.
+                // ONLY the two modal states hold; a merely-generating coordinator does not
+                // (its body is parked in the adapter FIFO by the send guard, not injected).
                 if (force && this.isModalParked()) {
                     LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
                     return;

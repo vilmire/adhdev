@@ -323,6 +323,39 @@ export type QueuedWriteOutcome =
  *  so no provider's existing settling time is shortened by this path. */
 export const MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
 
+/**
+ * NOTIF-IMMEDIACY: hard upper bound on a body delivered through the
+ * mid-generation split write.
+ *
+ * ── Why a ceiling exists at all ───────────────────────────────────────────
+ * The mid-generation path deliberately SKIPS the echo-verified submit (see
+ * actuallySendMessage): a generating agent streams output continuously, so the
+ * "screen has been quiet" precondition the echo-gate waits on is structurally
+ * false for the whole turn. That is the right trade for an interactive
+ * one-liner — but it means a mid-generation write has NO confirmation that its
+ * CR landed.
+ *
+ * That is survivable at interactive sizes and not at notification sizes. The
+ * measured failure (oss 7cd5b777) was a 10,937-char worker-completion
+ * notification whose submit CR — scheduled >=1800ms out by resolveSubmitDelayMs'
+ * length bonus — never fired because the daemon restarted inside the window; the
+ * body sat in the composer for 1h42m and was then merge-submitted with the
+ * owner's next input.
+ *
+ * ── Why this exact number ─────────────────────────────────────────────────
+ * Deliberately the SAME constant as VERIFIED_SUBMIT_MIN_CHARS rather than an
+ * independent value: that threshold is already defined as "the size above which
+ * a blind timed CR is unsafe and the submit must be echo-verified". A
+ * mid-generation write cannot echo-verify, so the honest ceiling is precisely
+ * the point where verification becomes required. Above it the body keeps the
+ * existing idle-edge hold, which delivers it as a real turn with the full
+ * verified-submit machinery.
+ *
+ * Bodies over this size are NOT dropped — the caller falls back to the ordinary
+ * held path, so the only thing lost is immediacy.
+ */
+export const MID_GENERATION_MAX_BODY_CHARS = VERIFIED_SUBMIT_MIN_CHARS;
+
 // ── Send/submit shared state constants ───────────────────────────────────────
 // Pure-moved here from fsm-driver.ts when the send/submit machinery was
 // extracted to ./send-submit-engine.ts (file-size gate). Both fsm-driver and

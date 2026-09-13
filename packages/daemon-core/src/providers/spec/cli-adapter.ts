@@ -404,6 +404,24 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     /**
+     * NOTIF-IMMEDIACY: does this session's SPEC opt into mid-turn queued input?
+     *
+     * Reports the spec's `send_message.mid_generation_queue` declaration only. It
+     * deliberately does NOT consider platform or body size — those are the mesh
+     * caller's policy and are enforced there — and it does NOT consider the live
+     * FSM state, because `sendMessageDuringGeneration` is the single authority on
+     * whether a write is admissible right now (a second opinion about session
+     * readiness is the class of bug the SEND-OVERLAP work removed).
+     *
+     * False for any spec that has not been measured against the split write, which
+     * is every spec except the ones that explicitly opt in.
+     */
+    supportsMidGenerationQueue(): boolean {
+        if (typeof this.driver.supportsMidGenerationQueue !== 'function') return false;
+        return this.driver.supportsMidGenerationQueue() === true;
+    }
+
+    /**
      * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
      * FIFO so this caller becomes its only delivery route. See
      * ISpecDriver.claimQueuedSends for why the interrupt path needs it.
