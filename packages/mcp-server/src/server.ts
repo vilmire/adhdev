@@ -55,6 +55,7 @@ import {
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
+import { annotateAll } from './tools/tool-annotations.js';
 import {
   ALL_WORKER_TOOLS, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
 } from './tools/worker-tools.js';
@@ -147,7 +148,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       process.exit(1);
     }
 
-    const workerTools = [...ALL_WORKER_TOOLS, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL];
+    // ALL_WORKER_TOOLS is already annotated at its definition; the three git
+    // tools are shared consts published by more than one mode, so they get
+    // annotated here at the point of publication.
+    const workerTools = [...ALL_WORKER_TOOLS, ...annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL])];
     const workerToolByName = new Map<string, { inputSchema?: { properties?: Record<string, unknown> } }>(
       workerTools.map(tool => [tool.name, tool]),
     );
@@ -343,7 +347,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // its doc comment in daemon-core's index.ts for why mcp-server is allowed to
     // import it directly rather than going through a transport command.
     const { isWorkerMcpEnabled } = await import('@adhdev/daemon-core');
-    const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL] : ALL_MESH_TOOLS;
+    const meshTools = isWorkerMcpEnabled()
+      ? [...ALL_MESH_TOOLS, ...annotateAll([MESH_NOTIFY_WORKER_TOOL])]
+      : ALL_MESH_TOOLS;
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: meshTools }));
 
@@ -458,7 +464,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   // Tool availability by mode:
   //   both:  list_sessions, launch_session, read_chat, send_chat, approve, git_status
   //   local: + screenshot (requires P2P / local daemon access)
-  const allTools = [
+  const allTools = annotateAll([
     LIST_DAEMONS_TOOL,
     LIST_SESSIONS_TOOL,
     LAUNCH_SESSION_TOOL,
@@ -481,7 +487,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
-  ];
+  ]);
 
   const server = new Server(
     { name: 'adhdev-mcp-server', version: MCP_SERVER_VERSION },

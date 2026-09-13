@@ -27,6 +27,7 @@
  */
 
 import type { CommandTransport } from '../transports/mode.js';
+import { annotateAll } from './tool-annotations.js';
 
 /**
  * Credentials read once at startup from the environment the MCP config supplied.
@@ -172,7 +173,12 @@ export const PEER_CONTEXT_PULL_TOOL = {
   },
 };
 
-export const ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL];
+/**
+ * The published worker toolset, each definition carrying its MCP behavior hints
+ * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
+ * fourth worker tool cannot be added here without stating what it does.
+ */
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
 
 /**
  * Map the tool's snake_case wire shape onto the daemon's camelCase report.

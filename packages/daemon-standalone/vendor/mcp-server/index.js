@@ -25879,9 +25879,9 @@ var require_streamx = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/b4a/index.js
+// ../../node_modules/tar-stream/node_modules/b4a/index.js
 var require_b4a2 = __commonJS({
-  "../daemon-core/node_modules/b4a/index.js"(exports2, module2) {
+  "../../node_modules/tar-stream/node_modules/b4a/index.js"(exports2, module2) {
     "use strict";
     function isBuffer(value) {
       return Buffer.isBuffer(value) || value instanceof Uint8Array;
@@ -26037,9 +26037,9 @@ var require_b4a2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/headers.js
+// ../../node_modules/tar-stream/headers.js
 var require_headers = __commonJS({
-  "../daemon-core/node_modules/tar-stream/headers.js"(exports2) {
+  "../../node_modules/tar-stream/headers.js"(exports2) {
     "use strict";
     var b4a = require_b4a2();
     var ZEROS = "0000000000000000000";
@@ -26300,9 +26300,9 @@ var require_headers = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/extract.js
+// ../../node_modules/tar-stream/extract.js
 var require_extract = __commonJS({
-  "../daemon-core/node_modules/tar-stream/extract.js"(exports2, module2) {
+  "../../node_modules/tar-stream/extract.js"(exports2, module2) {
     "use strict";
     var { Writable, Readable, getStreamError } = require_streamx();
     var FIFO = require_fast_fifo();
@@ -26645,9 +26645,9 @@ var require_extract = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/constants.js
+// ../../node_modules/tar-stream/constants.js
 var require_constants2 = __commonJS({
-  "../daemon-core/node_modules/tar-stream/constants.js"(exports2, module2) {
+  "../../node_modules/tar-stream/constants.js"(exports2, module2) {
     "use strict";
     var constants = {
       // just for envs without fs
@@ -26666,9 +26666,9 @@ var require_constants2 = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/pack.js
+// ../../node_modules/tar-stream/pack.js
 var require_pack = __commonJS({
-  "../daemon-core/node_modules/tar-stream/pack.js"(exports2, module2) {
+  "../../node_modules/tar-stream/pack.js"(exports2, module2) {
     "use strict";
     var { Readable, Writable, getStreamError } = require_streamx();
     var b4a = require_b4a2();
@@ -26901,9 +26901,9 @@ var require_pack = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-stream/index.js
+// ../../node_modules/tar-stream/index.js
 var require_tar_stream = __commonJS({
-  "../daemon-core/node_modules/tar-stream/index.js"(exports2) {
+  "../../node_modules/tar-stream/index.js"(exports2) {
     "use strict";
     exports2.extract = require_extract();
     exports2.pack = require_pack();
@@ -27146,9 +27146,9 @@ var require_pump = __commonJS({
   }
 });
 
-// ../daemon-core/node_modules/tar-fs/index.js
+// ../../node_modules/tar-fs/index.js
 var require_tar_fs = __commonJS({
-  "../daemon-core/node_modules/tar-fs/index.js"(exports2) {
+  "../../node_modules/tar-fs/index.js"(exports2) {
     "use strict";
     var tar = require_tar_stream();
     var pump = require_pump();
@@ -166788,6 +166788,222 @@ function isLocalControlPlaneNode(ctx, node) {
   return !!getLocalControlPlaneMatchReason(ctx, node);
 }
 
+// src/tools/tool-annotations.ts
+var READ_LOCAL = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
+var READ_REMOTE = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true
+};
+var WRITE_LOCAL_SAFE = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
+var WRITE_LOCAL_ACCUMULATING = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false
+};
+var DESTRUCTIVE_LOCAL = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false
+};
+var DESTRUCTIVE_REMOTE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true
+};
+var DISPATCH = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true
+};
+var CONTROL_REMOTE_IDEMPOTENT = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true
+};
+var TOOL_ANNOTATIONS = {
+  // ── Standard mode: inspection ────────────────────────────────────────
+  list_daemons: READ_LOCAL,
+  list_sessions: READ_LOCAL,
+  check_pending: READ_LOCAL,
+  // Reads a live agent session's transcript/screen through the daemon.
+  read_chat: READ_REMOTE,
+  read_chat_debug: READ_REMOTE,
+  spec_debug: READ_REMOTE,
+  screenshot: READ_REMOTE,
+  // ── Standard mode: session control ───────────────────────────────────
+  // Spawns a CLI/ACP agent process — the canonical open-world action.
+  launch_session: DISPATCH,
+  // Terminates a running agent process: destructive (in-flight work is lost),
+  // idempotent (stopping an already-stopped session converges).
+  stop_session: DESTRUCTIVE_REMOTE,
+  // Delivers a message into a live agent's context. Not destructive, but each
+  // call is an additional message, so not idempotent.
+  send_chat: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // Resolves a pending approval prompt to a single decided state.
+  approve: CONTROL_REMOTE_IDEMPOTENT,
+  // ── Git (read) ───────────────────────────────────────────────────────
+  git_status: READ_LOCAL,
+  git_log: READ_LOCAL,
+  git_diff: READ_LOCAL,
+  // ── Git (write) ──────────────────────────────────────────────────────
+  // Creates a commit. Additive — it does not rewrite or drop history — but a
+  // second call creates a second commit.
+  git_checkpoint: WRITE_LOCAL_ACCUMULATING,
+  // Publishes to a git REMOTE: open-world, and irreversible once other people
+  // fetch it. Idempotent in that re-pushing the same commits is a no-op.
+  git_push: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  // ── Mesh: read-only inspection ───────────────────────────────────────
+  // These reach across the mesh (remote nodes over P2P) but only to read.
+  mesh_status: READ_REMOTE,
+  mesh_list_nodes: READ_LOCAL,
+  // Explicitly documented as read-only and fetch-free — a pure scoring preview.
+  mesh_route_preview: READ_LOCAL,
+  mesh_view_queue: READ_LOCAL,
+  mesh_graph_view: READ_LOCAL,
+  mesh_task_history: READ_LOCAL,
+  mesh_ledger_query: READ_LOCAL,
+  mesh_mission_list: READ_LOCAL,
+  mesh_review_inbox: READ_LOCAL,
+  mesh_node_slots_list: READ_LOCAL,
+  mesh_magi_kind_panel_list: READ_LOCAL,
+  mesh_coordinator_prompt_append_get: READ_LOCAL,
+  // Read-only config helpers (all three modes — schema/validate/suggest —
+  // return a draft; neither writes the config file).
+  mesh_refine_config: READ_LOCAL,
+  mesh_change_impact_config: READ_LOCAL,
+  // Documented read-only discovery/planning.
+  mesh_plan_onboarding: READ_LOCAL,
+  mesh_refine_plan: READ_LOCAL,
+  // Read-only, but probes the node's installed CLIs to draft a profile.
+  mesh_node_slots_propose: READ_REMOTE,
+  // Reads that cross to a (possibly remote) node.
+  mesh_read_chat: READ_REMOTE,
+  mesh_read_debug: READ_REMOTE,
+  mesh_read_terminal: READ_REMOTE,
+  mesh_read_node_logs: READ_REMOTE,
+  mesh_git_status: READ_REMOTE,
+  mesh_list_pending_approvals: READ_REMOTE,
+  // ── Mesh: dispatch (spawns delegated agents) ─────────────────────────
+  mesh_enqueue_task: DISPATCH,
+  mesh_enqueue_batch: DISPATCH,
+  mesh_send_task: DISPATCH,
+  mesh_launch_session: DISPATCH,
+  // Fans a read-only investigation out to a PANEL of agents on other machines.
+  // The investigation is read-only; dispatching it is not.
+  mesh_magi_review: DISPATCH,
+  // Collects an already-dispatched fan-out. Re-collecting re-synthesizes the
+  // same replicas rather than dispatching more.
+  mesh_magi_collect: CONTROL_REMOTE_IDEMPOTENT,
+  // Delivers a memo to a worker's next tool call — one more memo per call.
+  mesh_notify_worker: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // ── Mesh: live session control ───────────────────────────────────────
+  mesh_approve: CONTROL_REMOTE_IDEMPOTENT,
+  mesh_answer_question: CONTROL_REMOTE_IDEMPOTENT,
+  // Injects raw keystrokes into a live PTY. Not idempotent (keys repeat), and
+  // destructive-capable: the keys can be anything, including an interrupt.
+  mesh_send_keys: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  // ── Mesh: queue mutation ─────────────────────────────────────────────
+  // Cancels queued/assigned work — the pending task is discarded.
+  mesh_queue_cancel: DESTRUCTIVE_LOCAL,
+  // Returns a task to pending, optionally REWRITING its instruction (the
+  // previous instruction is overwritten).
+  mesh_queue_requeue: DESTRUCTIVE_LOCAL,
+  // Restores held events back to pending. Explicitly documented as lossless.
+  mesh_requeue_held_events: WRITE_LOCAL_SAFE,
+  // ── Mesh: graph gates ────────────────────────────────────────────────
+  // Takes/releases a lease. Lease-guarded and convergent, not destructive.
+  mesh_graph_gate_claim: WRITE_LOCAL_SAFE,
+  mesh_graph_gate_release: WRITE_LOCAL_SAFE,
+  // Gives up on a gate so the graph reaches a TERMINAL state — the work behind
+  // it is abandoned, which is not recoverable by releasing it later.
+  mesh_graph_gate_abandon: DESTRUCTIVE_LOCAL,
+  // ── Mesh: lifecycle / bootstrap ──────────────────────────────────────
+  // Creates new mesh/node records. Additive; a repeat creates another.
+  mesh_create: WRITE_LOCAL_ACCUMULATING,
+  mesh_add_node: WRITE_LOCAL_ACCUMULATING,
+  // Creates a git WORKTREE on disk for a (possibly remote) node.
+  mesh_clone_node: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // Deregisters a node.
+  mesh_remove_node: DESTRUCTIVE_LOCAL,
+  // Removes worktree nodes — deletes on-disk worktrees on the target machine.
+  mesh_cleanup_worktree_nodes: DESTRUCTIVE_REMOTE,
+  // Deletes delegated session records (reviewable history is discarded).
+  mesh_cleanup_sessions: DESTRUCTIVE_LOCAL,
+  // Deletes orphaned dispatch records when execute=true (see rule 1 above).
+  mesh_prune_stale_direct: DESTRUCTIVE_LOCAL,
+  // Restarts a daemon process: in-flight sessions on that daemon go away.
+  mesh_restart_daemon: DESTRUCTIVE_REMOTE,
+  // ── Mesh: git convergence ────────────────────────────────────────────
+  // The Refinery: validate → MERGE → PUSH → clean up the worktree when
+  // executed. Reaches a git remote and removes the worktree afterwards.
+  mesh_refine_node: DESTRUCTIVE_REMOTE,
+  mesh_refine_batch: DESTRUCTIVE_REMOTE,
+  // Merges/pushes when executed — strictly fast-forward (never force-pushes,
+  // rebases, resets or cleans), but it does publish to a remote.
+  mesh_fast_forward_node: DESTRUCTIVE_REMOTE,
+  // Creates a commit on a node workspace.
+  mesh_checkpoint: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // ── Mesh: config writes ──────────────────────────────────────────────
+  // Writes the repo `.adhdev/*` config families. `mesh_init` is the
+  // first-time path; `mesh_reinit` is documented as OVERWRITE semantics on an
+  // already-initialized repo, so it can replace a config the user edited.
+  mesh_init: WRITE_LOCAL_SAFE,
+  mesh_reinit: DESTRUCTIVE_LOCAL,
+  // Writes `.adhdev/mesh.json` from the machine-local entry — overwrites the
+  // committed file.
+  mesh_write_mesh_json_config: DESTRUCTIVE_LOCAL,
+  // Sets one named value, replacing only that value.
+  mesh_node_slots_set: WRITE_LOCAL_SAFE,
+  mesh_magi_kind_panel_set: WRITE_LOCAL_SAFE,
+  mesh_coordinator_prompt_append_set: WRITE_LOCAL_SAFE,
+  // ── Mesh: notes / missions / ledger ──────────────────────────────────
+  // Appends a durable note; each call records another.
+  mesh_record_note: WRITE_LOCAL_ACCUMULATING,
+  // Retracts a note — the note stops being inherited by future coordinators.
+  mesh_forget_note: DESTRUCTIVE_LOCAL,
+  // Upsert: creates or updates one mission by id, converging on the given value.
+  mesh_mission_upsert: WRITE_LOCAL_SAFE,
+  // Imports MISSING ledger entries from peers — additive by construction.
+  mesh_reconcile_ledger: WRITE_LOCAL_SAFE,
+  // ── Worker mode ──────────────────────────────────────────────────────
+  // Files this worker's terminal completion report. Idempotent by design: the
+  // daemon reports a duplicate as accepted rather than as a failure.
+  report_completion: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  // Each progress note is an additional note.
+  progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // Pulls context from peer workers — a read that crosses to other sessions.
+  peer_context_pull: READ_REMOTE
+};
+function withAnnotations(tool) {
+  const annotations = TOOL_ANNOTATIONS[tool.name];
+  if (!annotations) {
+    throw new Error(
+      `[adhdev-mcp] Tool '${tool.name}' has no entry in TOOL_ANNOTATIONS. Add one to src/tools/tool-annotations.ts classifying its read-only/destructive/idempotent/open-world behavior.`
+    );
+  }
+  return { ...tool, annotations };
+}
+function annotateAll(tools) {
+  return tools.map(withAnnotations);
+}
+
 // src/tools/mesh-tool-schemas.ts
 var MESH_TASK_INPUT_SCHEMA = {
   type: "object",
@@ -167998,7 +168214,7 @@ var MESH_NOTIFY_WORKER_TOOL = {
     required: ["node_id", "task_id", "message"]
   }
 };
-var ALL_MESH_TOOLS = [
+var ALL_MESH_TOOLS = annotateAll([
   MESH_STATUS_TOOL,
   MESH_ROUTE_PREVIEW_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -168064,7 +168280,7 @@ var ALL_MESH_TOOLS = [
   MESH_NODE_SLOTS_PROPOSE_TOOL,
   MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
   MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL
-];
+]);
 
 // src/tools/mesh-compact.ts
 var import_daemon_core4 = __toESM(require_dist3());
@@ -176487,7 +176703,7 @@ var PEER_CONTEXT_PULL_TOOL = {
     }
   }
 };
-var ALL_WORKER_TOOLS = [REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL];
+var ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
 function toDaemonReport(a) {
   const notes = a.handoff_notes;
   return {
@@ -177827,7 +178043,7 @@ async function startMcpServer(opts) {
       );
       process.exit(1);
     }
-    const workerTools = [...ALL_WORKER_TOOLS, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL];
+    const workerTools = [...ALL_WORKER_TOOLS, ...annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL])];
     const workerToolByName = new Map(
       workerTools.map((tool) => [tool.name, tool])
     );
@@ -177979,7 +178195,7 @@ async function startMcpServer(opts) {
       throw new Error(`Unknown resource: ${req.params.uri}`);
     });
     const { isWorkerMcpEnabled } = await Promise.resolve().then(() => __toESM(require_dist3()));
-    const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL] : ALL_MESH_TOOLS;
+    const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, ...annotateAll([MESH_NOTIFY_WORKER_TOOL])] : ALL_MESH_TOOLS;
     server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: meshTools }));
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
@@ -178216,7 +178432,7 @@ async function startMcpServer(opts) {
 `);
     return;
   }
-  const allTools = [
+  const allTools = annotateAll([
     LIST_DAEMONS_TOOL,
     LIST_SESSIONS_TOOL,
     LAUNCH_SESSION_TOOL,
@@ -178239,7 +178455,7 @@ async function startMcpServer(opts) {
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
     ...isLocal ? [SCREENSHOT_TOOL] : []
-  ];
+  ]);
   const server = new import_server.Server(
     { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } }
