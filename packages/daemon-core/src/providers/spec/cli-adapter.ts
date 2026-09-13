@@ -316,8 +316,44 @@ export class SpecCliAdapter implements CliAdapter {
         }
     }
 
+    /**
+     * FORCE-NO-OP (2026-09-13): `opts.force` is ACCEPTED AND DELIBERATELY IGNORED
+     * on this path, and that is the correct behaviour — not an oversight.
+     *
+     * `force` is a legacy flag from the retired `ProviderCliAdapter` engine, where
+     * it meant "raw-write into the PTY even while the session is generating". That
+     * force-inject was removed as a data-loss path (a body written into a
+     * generating claude-cli PTY is not consumed as a turn), and the removal is
+     * load-bearing — see `injectPendingIntoCoordinator` in
+     * mesh/mesh-reconcile-coordinator-drain.ts ("force-inject-into-generating stays
+     * intentionally removed") and the F3 note in mesh/mesh-event-forwarding.ts.
+     *
+     * Since the legacy engine was deleted (oss 48e5ed1a) SpecCliAdapter is the only
+     * live CLI engine, so every remaining `force: true` caller has been a silent
+     * no-op: the body takes the ordinary disposition path below and is parked in the
+     * driver FIFO whenever the machine is not idle. It was named `_opts` here, which
+     * read as "intentionally unused" and hid that the mesh force callers were not
+     * getting what their call sites claimed.
+     *
+     * The flag is kept in the signature (rather than deleted) because it is part of
+     * the shared `CliInstanceAdapter` contract that non-spec adapters also implement.
+     * Callers that need a body to reach a BUSY session must use one of the two
+     * supported routes instead:
+     *   - `sendMessage` (this method) → adapter FIFO, surfaced at the next turn
+     *     boundary. This is the "next-turn-queue" delivery mode.
+     *   - `sendMessageDuringGeneration` → the POSIX-only split write that the CLI's
+     *     own input queue takes. This is the "mid-generation-split" delivery mode.
+     */
     async sendMessage(text: string, _opts?: { force?: boolean; bracketedPaste?: boolean }): Promise<{ status: 'queued' | 'delivered' } | void> {
-        // Content-free at info — the prompt body is user data.
+        // Content-free at info — the prompt body is user data. `force` is logged so a
+        // caller still passing it can see, in the log, that it changed nothing here.
+        if (_opts?.force === true) {
+            LOG.debug(
+                'SpecAdapter',
+                `[${this.cliType}] sendMessage received force:true — ignored by design `
+                + '(force-inject-into-generating is retired); body takes the ordinary FIFO path',
+            );
+        }
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
         // QUEUED-SEND-LOSS: honour the `{status}` contract this signature has
