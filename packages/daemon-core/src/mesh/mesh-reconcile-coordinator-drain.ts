@@ -272,16 +272,58 @@ export function shouldHoldPendingDrainForBusyLocalCoordinator(
     return true;
 }
 
-// Inject a drained pending event into a live coordinator session. Force-inject
-// events carry force:true so they bypass the busy send-guard and land in the PTY
-// even while the coordinator is generating (see shouldForceInjectMeshEvent).
+/**
+ * How a drained pending event should reach the coordinator's session.
+ *
+ * NOTIF-IMMEDIACY (2026-09-13). Until now this function had exactly one caller
+ * shape — "the coordinator is idle, write it as a real turn" — plus the approval
+ * nudge's `forceOverride: false`. Naming the modes makes the second and third
+ * routes first-class, because completions now use them too:
+ *
+ *  - `idle-turn`: the historical path. The coordinator is at a real turn end, so
+ *    the ordinary send lands as a turn answered immediately.
+ *  - `next-turn-queue`: the coordinator is BUSY. The body goes to the adapter's
+ *    own outbound FIFO and surfaces at its next turn boundary. No raw PTY write
+ *    is involved, so this is platform-neutral and cannot corrupt a modal. This is
+ *    the same mechanism the APPROVAL-Q1-REALTIME nudge already used via
+ *    `forceOverride: false`; Tier 1 generalises it to terminal events.
+ *  - `mid-generation-split`: the coordinator is GENERATING and its spec opts into
+ *    the SEND-NOW-AGENT-QUEUE split write, so the CLI's own input queue takes the
+ *    body as its next turn. POSIX-only and size-capped by the caller.
+ *
+ * Force-inject (a raw write into a generating PTY) is NOT one of the modes and
+ * stays retired — see the `force` note in SpecCliAdapter.sendMessage.
+ */
+export type MeshDeliveryMode = 'idle-turn' | 'next-turn-queue' | 'mid-generation-split';
 
+/**
+ * Why an injection attempt did not put the body in front of the coordinator.
+ *
+ * ★ This type exists so callers can REQUEUE. The function used to return void,
+ * which made every refusal indistinguishable from a success — and because the
+ * caller has already marked the row `drained = 1` before calling (the pre-write
+ * ordering is a pillar invariant, see drainPendingMeshCoordinatorEvents), a
+ * silent refusal is permanent data loss for a completion whose `finalSummary`
+ * exists ONLY in that pending event.
+ */
+export type MeshInjectOutcome =
+    | { delivered: true; mode: MeshDeliveryMode }
+    | { delivered: false; reason: 'no_coordinator' | 'no_message' | 'mode_refused'; detail?: string };
+
+/**
+ * Inject a drained pending event into a live coordinator session.
+ *
+ * Returns a typed outcome: `delivered: false` means NOTHING reached the session
+ * and the caller MUST requeue the (already-drained) row via
+ * `requeueDrainedPendingMeshCoordinatorEvent`.
+ */
 export function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
-    opts?: { forceOverride?: boolean },
-): void {
-    if (!coordinator) return;
+    opts?: { forceOverride?: boolean; mode?: MeshDeliveryMode },
+): MeshInjectOutcome {
+    const mode: MeshDeliveryMode = opts?.mode ?? 'idle-turn';
+    if (!coordinator) return { delivered: false, reason: 'no_coordinator' };
     // NOTIF-DROP-SYNTH-NO-MESSAGE (defence-in-depth): a queued event with no coordinatorMessage
     // used to be dropped here (drain-without-inject) — the row had already been consumed
     // (drained=1) by the caller's drain, so silently returning lost it forever. The primary fix
@@ -293,7 +335,7 @@ export function injectPendingIntoCoordinator(
     // machine on pull) — for it we still return without injecting.
     let coordinatorMessage = pending.coordinatorMessage;
     if (!coordinatorMessage) {
-        if (!shouldForceInjectMeshEvent(pending.event)) return;
+        if (!shouldForceInjectMeshEvent(pending.event)) return { delivered: false, reason: 'no_message' };
         const metadataEvent = pending.metadataEvent && typeof pending.metadataEvent === 'object'
             ? pending.metadataEvent
             : {};
@@ -302,7 +344,8 @@ export function injectPendingIntoCoordinator(
             nodeLabel: pending.nodeLabel,
             metadataEvent,
         });
-        if (!coordinatorMessage) return; // builder produced nothing — nothing to surface
+        // builder produced nothing — nothing to surface
+        if (!coordinatorMessage) return { delivered: false, reason: 'no_message' };
         LOG.warn('MeshReconcile', `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time — a queued terminal event arrived message-less`);
     }
     // NOTIF-STATUS-LINE: append a one-line mesh snapshot to TERMINAL notifications
@@ -328,11 +371,71 @@ export function injectPendingIntoCoordinator(
         const statusLine = buildMeshStatusLineForNotification(pending.meshId);
         if (statusLine) coordinatorMessage = `${coordinatorMessage}\n\n${statusLine}`;
     }
+    // NOTIF-IMMEDIACY: `mid-generation-split` hands the body to the CLI's OWN input
+    // queue via the SEND-NOW-AGENT-QUEUE split write, so a BUSY coordinator takes the
+    // completion as its next turn instead of waiting for an idle edge. Attempted FIRST
+    // because it is the only mode that reaches a generating session as a real queued
+    // turn; every refusal falls through to `next-turn-queue` below, which is always
+    // available. The caller owns the eligibility policy (POSIX, spec opt-in, size cap)
+    // — this function only performs the write the caller asked for.
+    //
+    // ★ A refusal here is NOT a failure: nothing was written (the engine's contract is
+    // that `accepted: false` means zero bytes), so falling through cannot double-send.
+    if (mode === 'mid-generation-split') {
+        const splitCapable = coordinator as unknown as {
+            sendMessageDuringGeneration?: (text: string) => { accepted: boolean; reason?: string };
+        };
+        if (typeof splitCapable.sendMessageDuringGeneration === 'function') {
+            let outcome: { accepted: boolean; reason?: string };
+            try {
+                outcome = splitCapable.sendMessageDuringGeneration(coordinatorMessage);
+            } catch (e: any) {
+                outcome = { accepted: false, reason: `threw:${e?.message || e}` };
+            }
+            if (outcome.accepted) {
+                traceMeshEventStage('surfaced', {
+                    taskId: pending.metadataEvent?.taskId,
+                    sessionId: pending.metadataEvent?.targetSessionId ?? pending.targetCoordinatorSessionId,
+                    nodeId: pending.nodeId,
+                    meshId: pending.meshId,
+                    event: pending.event,
+                }, 'mid-generation-split');
+                LOG.info(
+                    'MeshReconcile',
+                    `Mid-generation split write delivered ${pending.event} (mesh ${pending.meshId}, len=${coordinatorMessage.length}) `
+                    + 'into the coordinator\'s agent input queue',
+                );
+                return { delivered: true, mode: 'mid-generation-split' };
+            }
+            LOG.info(
+                'MeshReconcile',
+                `Mid-generation split write refused for ${pending.event} (mesh ${pending.meshId}): ${outcome.reason || 'unknown'} `
+                + '— falling back to next-turn-queue',
+            );
+        }
+        // Fall through: deliver via the adapter FIFO rather than reporting a refusal.
+        // The row is already drained, so returning `delivered: false` here would make the
+        // caller requeue a body we can still deliver losslessly one line down.
+    }
+
     // forceOverride lets the APPROVAL-Q1-REALTIME nudge path deliver into a busy
     // coordinator WITHOUT a raw PTY force-write (force-inject-into-generating stays
     // intentionally removed): a non-force send_message enters the adapter's
     // pendingOutboundQueue and is surfaced at the coordinator's next turn boundary.
-    const force = opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event);
+    //
+    // NOTIF-IMMEDIACY: `next-turn-queue` asks for exactly that behaviour by name. It
+    // pins force to false — on the spec engine `force` is already ignored (see
+    // SpecCliAdapter.sendMessage), but stating it here keeps the mode honest for any
+    // adapter that still reads the flag, and stops a busy-coordinator delivery from
+    // ever being mistaken for a force-inject.
+    // ★ `mid-generation-split` that reached here REFUSED its split write and is falling
+    // back, so it is now a busy-coordinator delivery and must be treated exactly like
+    // `next-turn-queue` — including force:false. Computing force from the ORIGINAL mode
+    // would let a fallback deliver into a busy session with force set, which is the one
+    // thing Tier 1 must never do (and which the retired force-inject path is).
+    const force = (mode === 'next-turn-queue' || mode === 'mid-generation-split')
+        ? false
+        : (opts?.forceOverride ?? shouldForceInjectMeshEvent(pending.event));
     // EVTTRACE: event surfaced to the coordinator (injected into its live CLI session).
     // This is the terminal happy-path stage. Observation only.
     traceMeshEventStage('surfaced', {
@@ -341,11 +444,12 @@ export function injectPendingIntoCoordinator(
         nodeId: pending.nodeId,
         meshId: pending.meshId,
         event: pending.event,
-    }, force ? 'force-inject' : 'inject');
+    }, force ? 'force-inject' : (mode === 'idle-turn' ? 'inject' : 'next-turn-queue'));
     coordinator.onEvent('send_message', {
         input: { text: coordinatorMessage, textFallback: coordinatorMessage },
         ...(force ? { force: true } : {}),
     });
+    return { delivered: true, mode: mode === 'mid-generation-split' ? 'next-turn-queue' : mode };
 }
 
 // Held-event ledger dedup: fingerprints of held terminal events already written as an

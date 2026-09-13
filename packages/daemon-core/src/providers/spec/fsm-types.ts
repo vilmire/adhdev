@@ -349,6 +349,29 @@ export interface CliSpecV4 {
          * test/providers/spec/driver-posix-image-paste.test.ts.
          */
         posix_bracketed_paste_for_images?: boolean;
+        /**
+         * NOTIF-IMMEDIACY opt-in: this CLI holds input typed DURING a turn in its
+         * own queue and answers it as the next turn (claude-cli shows "Press up to
+         * edit queued messages").
+         *
+         * When true, an autonomous mesh terminal notification may be delivered to a
+         * BUSY coordinator through the SEND-NOW-AGENT-QUEUE split write instead of
+         * waiting for an idle edge. Omitted/false → the body takes the adapter FIFO
+         * (surfaced at the next turn boundary) or the ordinary idle-edge hold.
+         *
+         * ★ Default false, and deliberately per-spec rather than global. The live
+         * A/B that established the split write works (2026-09-12: SPLIT consumed,
+         * ATOMIC not) was measured against claude-cli v2.1.220 ONLY. A CLI without
+         * a mid-turn input queue would swallow the write silently — and because the
+         * pending row is marked drained BEFORE the write, a silent swallow is
+         * permanent loss of a completion's finalSummary. So a spec opts in only
+         * after its OWN measurement; nothing is extrapolated from claude-cli.
+         *
+         * This flag does not by itself authorise the write: the mesh caller also
+         * enforces POSIX-only (the driver refuses win32 before reading state) and
+         * the MID_GENERATION_MAX_BODY_CHARS size ceiling.
+         */
+        mid_generation_queue?: boolean;
     };
     sections: Record<string, SectionDef>;
     states: FsmState[];
