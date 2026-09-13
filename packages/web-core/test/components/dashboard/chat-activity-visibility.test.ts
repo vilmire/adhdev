@@ -27,16 +27,20 @@ describe('chat activity visibility presenter', () => {
     expect(filterChatActivityMessages(messages)).toHaveLength(0)
   })
 
-  it('classifies kind:tool as chat-visible so tool bubbles render in the default transcript', () => {
-    // Live claude-cli native-turn tool rows carry kind:'tool' with no
-    // visibility/userFacing stamp. They must not be parked behind the Activity
-    // toggle — that was the filter that produced 47 tool messages and 0 DOM nodes.
+  it('classifies kind:tool as ACTIVITY, alongside terminal and thought', () => {
+    // Tool rows sit behind the Activity toggle with the other two activity
+    // kinds, so turning it OFF gives a pure conversation view. That is only
+    // safe because the toggle now DEFAULTS ON — a tool row is still visible
+    // out of the box (see the preference test below). The earlier fix made
+    // tool unconditionally chat-class, which rendered the toggle meaningless
+    // for the kind that dominates a CLI session.
     const tool = message({ role: 'assistant', kind: 'tool', content: 'arbitrary payload alpha' })
 
-    expect(classifyChatMessageForDisplay(tool).surface).toBe('chat')
-    expect(classifyChatMessageForDisplay(tool).isUserFacing).toBe(true)
-    expect(filterChatMessagesForDefaultTranscript([tool])).toEqual([tool])
-    expect(filterChatActivityMessages([tool])).toEqual([])
+    expect(classifyChatMessageForDisplay(tool).surface).toBe('activity')
+    expect(classifyChatMessageForDisplay(tool).isActivityFacing).toBe(true)
+    expect(classifyChatMessageForDisplay(tool).isUserFacing).toBe(false)
+    expect(filterChatActivityMessages([tool])).toEqual([tool])
+    expect(filterChatMessagesForDefaultTranscript([tool])).toEqual([])
   })
 
   it('classifies terminal and runtime rows as activity using structure, not content strings', () => {
@@ -70,13 +74,25 @@ describe('chat activity visibility presenter', () => {
       setItem: (key: string, value: string) => { values.set(key, value) },
     }
 
-    expect(readChatActivityVisiblePreference(storage)).toBe(false)
+    // UNSET defaults ON: tool rows are activity-classified, so defaulting OFF
+    // would hide the bulk of a CLI transcript from every new user.
+    expect(readChatActivityVisiblePreference(storage)).toBe(true)
     writeChatActivityVisiblePreference(true, storage)
     expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('1')
     expect(readChatActivityVisiblePreference(storage)).toBe(true)
+    // An EXPLICIT opt-out is honoured — only the unset case flips.
     writeChatActivityVisiblePreference(false, storage)
     expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('0')
     expect(readChatActivityVisiblePreference(storage)).toBe(false)
+  })
+
+  it('treats an unreadable storage as UNSET (default ON), not as an opt-out', () => {
+    // Private mode / disabled storage throws on getItem. Falling back to false
+    // there would hide every tool row for those users with no way to notice.
+    const throwingStorage = {
+      getItem: () => { throw new Error('storage unavailable') },
+    }
+    expect(readChatActivityVisiblePreference(throwingStorage)).toBe(true)
   })
 
   it('merges activity rows by timestamp and index only when the opt-in is enabled', () => {

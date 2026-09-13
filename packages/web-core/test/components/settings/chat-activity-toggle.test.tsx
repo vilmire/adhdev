@@ -63,32 +63,35 @@ describe('chat activity toggle (O5)', () => {
     ;(globalThis as { localStorage?: unknown }).localStorage = savedStorage as Storage
   })
 
-  it('defaults to hidden — absent preference reads false', () => {
-    expect(readChatActivityVisiblePreference()).toBe(false)
+  it('defaults to SHOWN — absent preference reads true', () => {
+    // Tool rows are activity-classified, so a default of false would hide the
+    // bulk of a CLI transcript from every user who never opens Settings.
+    expect(readChatActivityVisiblePreference()).toBe(true)
   })
 
   it('Settings toggle records the preference and the recorded value changes activity-row display', () => {
     act(() => root.render(<ChatActivitySection />))
     const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')
     expect(toggle).not.toBeNull()
-    expect(toggle!.getAttribute('aria-checked')).toBe('false')
+    // Starts ON (the default), so the first click is an opt-OUT.
+    expect(toggle!.getAttribute('aria-checked')).toBe('true')
 
     act(() => toggle!.click())
 
-    // The preference is actually recorded…
-    expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('1')
-    expect(toggle!.getAttribute('aria-checked')).toBe('true')
+    // The opt-out is actually recorded as an explicit '0'…
+    expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('0')
+    expect(toggle!.getAttribute('aria-checked')).toBe('false')
 
     // …and the recorded value flips what the transcript merge renders.
     const chat = [{ role: 'assistant', content: 'answer', receivedAt: 20 } as ChatMessage]
     const activity = [{ role: 'assistant', kind: 'thought', content: 'thought row', receivedAt: 10 } as ChatMessage]
+    expect(mergeChatAndActivityMessages(chat, activity, readChatActivityVisiblePreference())).toEqual(chat)
+
+    act(() => toggle!.click())
+    expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('1')
     expect(
       mergeChatAndActivityMessages(chat, activity, readChatActivityVisiblePreference()).map((m) => m.content),
     ).toEqual(['thought row', 'answer'])
-
-    act(() => toggle!.click())
-    expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('0')
-    expect(mergeChatAndActivityMessages(chat, activity, readChatActivityVisiblePreference())).toEqual(chat)
   })
 
   it('setter notifies same-document subscribers — storage events alone never fire in the writing tab', () => {
@@ -116,6 +119,11 @@ describe('chat activity toggle (O5)', () => {
   it('Settings section listens for external preference flips (in-pane pill stays in sync)', () => {
     act(() => root.render(<ChatActivitySection />))
     const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!
+    // Starts at the default (ON); drive it the other way so the assertion
+    // proves the section FOLLOWED an external flip rather than just matching
+    // its own initial state.
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    act(() => setChatActivityVisiblePreference(false))
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     act(() => setChatActivityVisiblePreference(true))
     expect(toggle.getAttribute('aria-checked')).toBe('true')

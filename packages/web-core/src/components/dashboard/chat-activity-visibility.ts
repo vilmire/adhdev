@@ -102,15 +102,6 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
     if (INTERNAL_SOURCES.has(source) || role === 'system' || kind === 'system') {
         return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role, kind, label: 'Internal' }
     }
-    // kind:'tool' is a chat bubble (the existing ChatMessageRow tool branch),
-    // not the Activity-toggle opt-in. Claude-cli native-turn emits plaintext
-    // tool rows with no visibility/userFacing stamp; classifying them as
-    // activity dropped every tool bubble from the default transcript (47
-    // tool messages, 0 DOM nodes). Thought/terminal stay behind the toggle.
-    // Explicitly-hidden tools still take the explicitHidden branch above.
-    if (kind === 'tool') {
-        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
-    }
     if (activityLike) {
         return { surface: 'activity', isUserFacing: false, isActivityFacing: true, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
     }
@@ -189,11 +180,27 @@ export function mergeChatAndActivityMessages<T extends ChatMessage>(messages: T[
     })
 }
 
+/**
+ * Activity visibility, defaulting to ON when the user has never chosen.
+ *
+ * `kind:'tool'` is activity-classified, and tool rows are the bulk of what a
+ * CLI session produces — defaulting OFF would hide them from every new user,
+ * which is the transcript regression this default exists to prevent. Thought
+ * and terminal rows ride along on the same switch.
+ *
+ * Only the UNSET case flips. `writeChatActivityVisiblePreference` stores an
+ * explicit '0', so a user who deliberately turned activity off is honoured:
+ * that reads back as false and stays false. Absent key → true; '0' → false;
+ * anything else (including '1') → true.
+ */
 export function readChatActivityVisiblePreference(storage: Pick<Storage, 'getItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined): boolean {
     try {
-        return storage?.getItem(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) === '1'
+        return storage?.getItem(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) !== '0'
     } catch {
-        return false
+        // Storage unavailable (private mode, disabled cookies) is an UNSET
+        // read, not an opt-out — match the no-key default rather than
+        // silently hiding every tool row.
+        return true
     }
 }
 
