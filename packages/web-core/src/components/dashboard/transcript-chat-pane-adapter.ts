@@ -110,7 +110,17 @@ export function buildTranscriptReadSourceAttributes(state: {
  * turn) and must never be assigned to the per-BUBBLE `bubbleId`, or all bubbles
  * of a turn collapse onto one React key. `sequence` (allow-listed, a monotonic
  * per-session integer) IS per-message and carries through. `providerUnitKey`
- * stays off the wire on purpose: it embeds a content hash. */
+ * stays off the wire on purpose: it embeds a content hash.
+ *
+ * ★ `toolName` is deliberately NOT mapped, and its absence here is not the
+ * asymmetry with the mesh-side adapter it looks like. Two independent reasons:
+ * `ChatMessage` (daemon-core types.ts) has no `toolName` field at all, so there
+ * is nothing to assign it to; and the producer hardcodes `toolName: undefined`
+ * (`commands/transcript-observation-builder.ts`), so the wire value is
+ * structurally always null. Mapping it would add a field that is dead on both
+ * ends. The tool NAME a reader sees is already inside the bubble's own
+ * rendered content (`↗ {name}: …`), and the expand response carries it
+ * separately. Do not "restore" this for symmetry. */
 function mapTranscriptMessage(message: ReplicatedTranscriptMessageV1): DashboardMessage {
     const mapped: ChatMessage = {
         role: message.role,
