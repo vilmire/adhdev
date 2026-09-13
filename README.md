@@ -212,6 +212,7 @@ ADHDev talks to coding agents through four provider categories — `ide` (CDP), 
 | Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
+| Grok CLI | `cli/grok-cli` |
 
 **IDEs** (via Chrome DevTools Protocol): Cursor, Google Antigravity, VS Code, VSCodium, Kiro, Windsurf, Trae, PearAI.
 
