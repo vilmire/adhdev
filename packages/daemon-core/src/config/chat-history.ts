@@ -828,6 +828,14 @@ export class ChatHistoryWriter {
  /**
  * Append new messages to history
  * 
+ * @message-projection l3 identity
+ * @message-projection-excludes toolBlockRef: sealed by sourceMtimeMs, so a ref
+ * persisted to disk is dead on the next read (expandToolBlock fails closed with
+ * `source_changed`). Re-stamped by the native parser on each read instead.
+ *
+ * The incremental-append lane. Read-back is a passthrough, so a field omitted
+ * here is unrecoverable — see the note on the pushed record below.
+ *
  * @param agentType agent type (e.g. 'antigravity', 'cursor')
  * @param messages Message array received from readChat
  * @param sessionTitle Current session title
@@ -1950,6 +1958,13 @@ function getProviderNativeHistoryScript(
     return typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * @message-projection l3
+ *
+ * The FIRST hop every native-history read passes through. A field dropped here
+ * can never be recovered downstream — the activeChat / persisted-tail remaps
+ * only carry what they are handed.
+ */
 function normalizeProviderNativeHistoryRecords(agentType: string, historySessionId: string, records: unknown): HistoryMessage[] {
     if (!Array.isArray(records)) return [];
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);

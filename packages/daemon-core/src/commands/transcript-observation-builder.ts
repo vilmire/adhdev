@@ -46,6 +46,18 @@ export interface BuildTranscriptObservationInput {
     readonly coverage: TranscriptSnapshotCandidateCoverage;
 }
 
+/**
+ * @message-projection l3 identity
+ * @message-projection-excludes providerUnitKey: this narrowing feeds the L2
+ * replica wire, which excludes it by design — it embeds a content hash.
+ * @message-projection-excludes bubbleId: same reason; the wire has no consumer
+ * for per-bubble daemon identity, and `sequence` + `turnKey` carry what readers
+ * actually need.
+ *
+ * The single observation publisher's narrowing. Widening the downstream wire
+ * encoder's allow-list alone is NOT enough — a field has to survive here first
+ * or the encoder only ever sees undefined.
+ */
 function flattenMessage(message: ChatMessage): TranscriptObservation['messages'][number] {
     const meta = message.meta && typeof message.meta === 'object' ? message.meta : undefined;
     return {

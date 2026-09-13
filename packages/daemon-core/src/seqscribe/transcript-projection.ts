@@ -372,6 +372,14 @@ function stringArrayField(value: unknown): readonly string[] {
 
 // ─── Encoders (allow-list copy by name — never a deny-list) ────────────────
 
+/**
+ * @message-projection l2
+ *
+ * The replica transcript wire. `check:message-projection-parity` enforces that
+ * this stays a by-NAME allow-list: it fails on any object spread here, and on
+ * any property key outside `ReplicatedTranscriptMessageV1` — in particular
+ * `providerUnitKey`, which is a content hash and must never reach this topic.
+ */
 export function encodeTranscriptMessage(candidate: TranscriptSnapshotCandidateMessage): ReplicatedTranscriptMessageV1 {
     const meta = candidate.meta;
     const streaming =
