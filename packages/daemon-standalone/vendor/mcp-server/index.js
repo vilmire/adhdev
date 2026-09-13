@@ -46062,6 +46062,35 @@ child.on('exit', () => process.exit(0));
     function quotaCachePath(env2 = process.env) {
       return path12.join(quotaCacheDir(env2), "cache.json");
     }
+    function holdsReading(entry) {
+      if (!entry) return false;
+      if (entry.session !== null && entry.session !== void 0) return true;
+      if (entry.weekly !== null && entry.weekly !== void 0) return true;
+      return Array.isArray(entry.buckets) && entry.buckets.length > 0;
+    }
+    function mergeLastGoodForPersist(fresh, stored) {
+      if (!stored) return fresh;
+      const merged = {};
+      for (const [provider, entry] of Object.entries(fresh)) {
+        const prior = stored[provider];
+        if (holdsReading(entry) || !holdsReading(prior)) {
+          merged[provider] = entry;
+          continue;
+        }
+        merged[provider] = {
+          ...entry,
+          session: prior.session,
+          weekly: prior.weekly,
+          ...prior.monthly !== void 0 ? { monthly: prior.monthly } : {},
+          ...prior.buckets !== void 0 ? { buckets: prior.buckets } : {},
+          // The numbers keep the age of the observation that produced them,
+          // never the age of the failure that could not replace them.
+          updatedAt: prior.updatedAt,
+          metadata: { ...entry.metadata, lastGoodWindows: true }
+        };
+      }
+      return merged;
+    }
     function saveQuotaCache(providers, env2 = process.env, nowMs = Date.now()) {
       const file2 = quotaCachePath(env2);
       const temp = `${file2}.${process.pid}.tmp`;
@@ -46137,7 +46166,8 @@ child.on('exit', () => process.exit(0));
       if (!transient) return fresh;
       const prevIsFreshOk = !!prev && prev.status === "ok";
       const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
-      const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && (prev.session !== null || prev.weekly !== null);
+      const prevHasBuckets = !!prev && Array.isArray(prev.buckets) && prev.buckets.length > 0;
+      const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && (prev.session !== null || prev.weekly !== null || prevHasBuckets);
       if (!prevHasWindows) return fresh;
       return {
         ...fresh,
@@ -46269,7 +46299,7 @@ child.on('exit', () => process.exit(0));
         updateFailureRetry(provider, fetch2, isEnabled);
       }
       const snapshot = readQuotaCache();
-      if (snapshot) saveQuotaCache(snapshot);
+      if (snapshot) saveQuotaCache(mergeLastGoodForPersist(snapshot, loadQuotaCache()));
       notifyQuotaCacheChanged();
     }
     function cancelFailureRetry(provider) {
@@ -165443,7 +165473,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     var CLAUDE_NO_API_LINE = "Claude has no quota API \u2014 adhdev borrows your statusLine to read it.";
     var CLAUDE_WRAP_NOT_REPLACE_LINE = "Install wraps (not replaces) your statusline, so nothing is lost.";
     function windowCue(quota) {
-      if (quota.metadata?.failureKind === "no-data" && (quota.session || quota.weekly)) return "stale";
+      const kind = quota.metadata?.failureKind;
+      const userMustAct = kind === "no-data" || kind === "expired-token" && quota.provider === "antigravity-cli";
+      const hasReading = !!quota.session || !!quota.weekly || Array.isArray(quota.buckets) && quota.buckets.length > 0;
+      if (userMustAct && hasReading) return "stale";
       if (quota.metadata?.lastGoodWindows === true) return "refreshing";
       return void 0;
     }
@@ -168790,14 +168823,20 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     const pct = (w) => w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : void 0;
     const weekly = pct(snapshot.weekly);
     const session = pct(snapshot.session);
-    if (weekly === void 0 && session === void 0) {
+    const buckets = Array.isArray(snapshot.buckets) ? snapshot.buckets.filter((b) => b && Number.isFinite(b.usedPercent)) : [];
+    const worstBucket = buckets.length > 0 ? `${Math.round(Math.max(...buckets.map((b) => b.usedPercent)))}%` : void 0;
+    if (weekly === void 0 && session === void 0 && worstBucket === void 0) {
       out[provider] = failureKind ? `${status}:${failureKind}` : status;
       continue;
     }
     const age = formatQuotaSnapshotAge(snapshot, now);
     const stale = isQuotaSnapshotStale(snapshot, now);
     let line = `7d ${weekly ?? "\u2014"} \xB7 5h ${session ?? "\u2014"} \xB7 ${age}${stale ? " stale" : ""}`;
-    if (failureKind === "no-data") {
+    if (weekly === void 0 && session === void 0 && worstBucket !== void 0) {
+      line = `pool ${worstBucket} (${buckets.length}) \xB7 ${age}${stale ? " stale" : ""}`;
+    }
+    const userMustAct = failureKind === "no-data" || failureKind === "expired-token" && provider === "antigravity-cli";
+    if (userMustAct) {
       if (!stale) line += " \xB7 stale";
     } else if (lastGood) line += " \xB7 refreshing";
     else if (status !== "ok") line += ` \xB7 ${status}`;

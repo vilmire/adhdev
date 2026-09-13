@@ -95,22 +95,54 @@ function hasUsableQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefine
 }
 
 /**
+ * Failure kinds whose retained numbers must read `stale`, never `refreshing`.
+ *
+ * The distinction is not "is the failure transient?" but "will the daemon fix
+ * this on its own?". Both of these answer no, and each needs a user action:
+ *  - `no-data` — the capture channel produced nothing new (Claude's statusline
+ *    aged out). The daemon may poll again, but this snapshot is a historical
+ *    capture, not an in-flight refresh.
+ *  - `expired-token` on antigravity — the daemon deliberately does NOT redeem
+ *    the stored refresh token (fetchers/antigravity.ts), so no amount of
+ *    retrying renews it; only the user running `agy` does. Labelling it
+ *    "refreshing" promised a self-heal that cannot happen, which is the
+ *    opposite of the one thing the user needed to be told (owner report
+ *    2026-09-13). Kimi's expired-token is NOT here on purpose: its CLI
+ *    refreshes the token on its own cadence, so "refreshing" is literally true.
+ */
+function isSelfHealingFailure(quota: MeshNodeFactsProviderQuota): boolean {
+    const kind = quota.metadata?.failureKind
+    if (kind === 'no-data') return false
+    if (kind === 'expired-token' && quota.provider === 'antigravity-cli') return false
+    return true
+}
+
+/** Does the snapshot carry any renderable number — windows OR per-pool buckets? */
+function hasAnyUsableQuotaReading(quota: MeshNodeFactsProviderQuota): boolean {
+    if (hasUsableQuotaWindow(quota.session) || hasUsableQuotaWindow(quota.weekly)) return true
+    // Antigravity's reading can live entirely on the bucket axis (session/weekly
+    // are only a worst-bucket collapse and may both be null), and those chips
+    // are exactly what the user sees — so a cue is owed even with no window.
+    return Array.isArray(quota.buckets)
+        && quota.buckets.some((b) => !!b && typeof b.usedPercent === 'number' && Number.isFinite(b.usedPercent))
+}
+
+/**
  * Which freshness cue a snapshot's windows should carry.
  *
- * `refreshing` — last-good carry-forward after a TRANSIENT failure; another
- * fetch is expected to replace the numbers.
- * `stale` — windows are present but the capture channel has no current
- * reading (`failureKind: 'no-data'`). Claude's statusline is the canonical
- * case: the numbers are a historical capture, and there is no refresh
- * in-flight. Distinct from `refreshing` on purpose — mixing them would
- * tell a coordinator a 20-hour-old reading is about to update itself.
+ * `refreshing` — last-good carry-forward after a failure the daemon is
+ * expected to resolve by itself; another fetch will replace the numbers.
+ * `stale` — numbers are present but nothing is going to refresh them without
+ * the user (see isSelfHealingFailure). Distinct from `refreshing` on purpose:
+ * mixing them tells a reader a reading is about to update itself when it is
+ * not, and suppresses the action that would actually fix it.
  */
 export function quotaWindowCue(quota: MeshNodeFactsProviderQuota): QuotaWindowCue | undefined {
-    // Order matters: the Claude aged-out shape now ALSO marks lastGoodWindows
-    // (mesh routing trusts the retained windows until their reset), but its
-    // cue must stay 'stale' — nothing is retrying. 'no-data' is not a
-    // transient kind, so carry-forward can never wear it.
-    if (quota.metadata?.failureKind === 'no-data' && (hasUsableQuotaWindow(quota.session) || hasUsableQuotaWindow(quota.weekly))) {
+    // Order matters: the aged-out Claude shape and the retained antigravity
+    // shape both ALSO mark lastGoodWindows (mesh routing trusts retained
+    // numbers until their reset), so the non-self-healing test must come
+    // first or they would all read 'refreshing'.
+    if (!isSelfHealingFailure(quota) && hasAnyUsableQuotaReading(quota)) {
         return 'stale'
     }
     if (quota.metadata?.lastGoodWindows === true) return 'refreshing'

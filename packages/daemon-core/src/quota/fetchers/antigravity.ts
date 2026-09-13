@@ -1093,9 +1093,24 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
         // and it only refreshes on LAUNCH, so the message names that action
         // explicitly rather than describing the mechanism: the earlier wording
         // ("the agy CLI refreshes it on next use") stated a fact about the CLI
-        // and left the reader with nothing to do. `expired-token` is transient,
-        // so the last good numbers stay on screen marked "refreshing" while
-        // this shows.
+        // and left the reader with nothing to do.
+        //
+        // ★THIS BRANCH STAYS NUMBERLESS ON PURPOSE — and still shows numbers.
+        // `expired-token` is transient, so the retention path keeps the last
+        // good reading and labels it; this fetcher does not (and must not)
+        // reach for a cache of its own, per the LAST-GOOD note in the header.
+        // Two upstream fixes make that retention actually hold for antigravity
+        // (owner report 2026-09-13, when it did not):
+        //   - carryForwardLastGoodWindows counts a buckets-only reading as
+        //     real, so the per-pool chips — which for this provider ARE the
+        //     measurement — are no longer judged absent and dropped.
+        //   - mergeLastGoodForPersist stops this numberless snapshot from
+        //     overwriting the stored one, which is what previously made the
+        //     error survive restarts as permanent (this provider's credential
+        //     store holds OAuth tokens, not buckets, so nothing could rebuild
+        //     a reading the file had already lost).
+        // The retained numbers render "· stale", not "· refreshing": nothing
+        // the daemon can do renews this token — only the user running `agy`.
         return quotaFailure(
             'antigravity-cli',
             'error',

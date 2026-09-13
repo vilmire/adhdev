@@ -45,7 +45,7 @@ import { fetchCursorQuota } from './fetchers/cursor.js';
 import { fetchGrokQuota, readGrokCredentialMtimeMs } from './fetchers/grok.js';
 import { fetchKimiQuota, readKimiCredentialMtimeMs } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
-import { loadQuotaCache, saveQuotaCache } from './persist.js';
+import { loadQuotaCache, mergeLastGoodForPersist, saveQuotaCache } from './persist.js';
 
 /**
  * How often a node re-reads its own quota. Deliberately coarse: quota moves on
@@ -289,8 +289,18 @@ export function carryForwardLastGoodWindows(
     if (!transient) return fresh;
     const prevIsFreshOk = !!prev && prev.status === 'ok';
     const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
+    // ★A REAL READING IS NOT ONLY session/weekly (owner report 2026-09-13:
+    // antigravity showed a bald "token expired" with no numbers at all).
+    // Antigravity's measurement lives on the per-pool `buckets` axis; its
+    // session/weekly are a worst-bucket COLLAPSE of it, and a plan whose pools
+    // do not map onto the 5h/weekly axes leaves both null while `buckets`
+    // still holds a perfectly good reading. Judging "do we hold anything
+    // worth keeping?" on session/weekly alone therefore declared that
+    // reading absent and let the numberless error through — the chips the
+    // user actually reads went blank. Buckets count as a real reading here.
+    const prevHasBuckets = !!prev && Array.isArray(prev.buckets) && prev.buckets.length > 0;
     const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward)
-        && (prev!.session !== null || prev!.weekly !== null);
+        && (prev!.session !== null || prev!.weekly !== null || prevHasBuckets);
     if (!prevHasWindows) return fresh;
     // Keep the last good numbers + their ORIGINAL age; carry the fresh
     // failure signal. prev.updatedAt is already the original observation
@@ -670,8 +680,13 @@ export async function refreshQuotaCacheOnce(
     // "looked and could not read" is a state worth surviving a restart, exactly
     // like a successful reading. saveQuotaCache never throws, so a cache that
     // cannot be written leaves the in-memory result untouched.
+    // ★Merged against what is already on disk, never written blind. An entry
+    // that carries no numbers must not erase a stored one that does — that is
+    // what made a transient failure survive a restart as a permanent numberless
+    // error (see mergeLastGoodForPersist). The in-memory carry-forward above
+    // covers the running process; this covers the file the next process reads.
     const snapshot = readQuotaCache();
-    if (snapshot) saveQuotaCache(snapshot);
+    if (snapshot) saveQuotaCache(mergeLastGoodForPersist(snapshot, loadQuotaCache()));
     // Tell the refresh loop's timer chain the expiry landscape just changed so
     // it can recompute its next wake (see quotaCacheChangedListener).
     notifyQuotaCacheChanged();

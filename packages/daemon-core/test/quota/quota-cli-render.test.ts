@@ -183,6 +183,32 @@ describe('printQuota — no-data stale marker', () => {
     });
 });
 
+// ★ANTIGRAVITY EXPIRED TOKEN IS STALE, NOT REFRESHING (owner report
+// 2026-09-13) — and the CLI must agree with the dashboard, since windowCue
+// here is a deliberate hand-copy of web-core's quotaWindowCue (daemon-core
+// cannot import web-core). The daemon never redeems this provider's refresh
+// token, so nothing is in flight; only the user running `agy` renews it.
+// Kimi's expired-token stays "(refreshing)" above — its CLI really does
+// refresh on its own cadence — so this is provider-scoped on purpose.
+describe('printQuota — antigravity expired token', () => {
+    const agyRetained: ProviderQuota = {
+        provider: 'antigravity-cli',
+        session: { usedPercent: 44.5, windowMinutes: 300, resetsAt: null },
+        weekly: { usedPercent: 9, windowMinutes: 10080, resetsAt: null },
+        updatedAt: 1,
+        error: 'Antigravity access token expired — run `agy` once to refresh it, then quota will report again.',
+        status: 'error',
+        metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true } as any,
+    };
+
+    it('marks retained windows "(stale)", never "(refreshing)"', () => {
+        const joined = captureLogs(() => printQuota('Antigravity', agyRetained)).join('\n');
+        expect(joined).toMatch(/44\.5%.*\(stale\)/);
+        expect(joined).toMatch(/9\.0%.*\(stale\)/);
+        expect(joined).not.toContain('(refreshing)');
+    });
+});
+
 describe('printClaudeStatuslineStatus — diagnostic output', () => {
     let tempDir: string;
 
