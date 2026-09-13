@@ -196,6 +196,10 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             kind: message.kind,
             senderName: message.senderName,
             receivedAt: message.receivedAt,
+            // (TOOL-EXPAND) By NAME, and only when present — this allow-list is
+            // the activeChat projection, so an omitted ref must stay omitted
+            // rather than becoming an `undefined` key on every prose bubble.
+            ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
         }))
         : mergedMessages;
 
@@ -264,6 +268,11 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             kind: typeof message.kind === 'string' ? message.kind : undefined,
             senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
             receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
+            // (TOOL-EXPAND) The persisted tail is what the canonical-history
+            // branch above replays into activeChat, so the ref has to survive
+            // this hop too — otherwise a restored session loses expand controls
+            // even though the live parse had them.
+            ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
         }));
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
             const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);

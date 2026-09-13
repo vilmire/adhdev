@@ -16,6 +16,16 @@ export type PersistableCliHistoryMessage = {
     kind?: string;
     senderName?: string;
     receivedAt?: number;
+    /**
+     * (TOOL-EXPAND) Content-free address of the tool block this bubble was
+     * truncated from — three integers, never text. Carried on the persisted
+     * shape because the canonical-history branch of `buildProviderState`
+     * projects these rows straight into `activeChat.messages`; dropping it here
+     * stripped the ref from every restored tool bubble, so the dashboard's
+     * ToolExpandControl never rendered and `expand_tool_block` had no address
+     * to ask for.
+     */
+    toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
 };
 
 function normalizePersistableCliHistoryContent(content: unknown): string {
