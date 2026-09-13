@@ -27,6 +27,12 @@ import {
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { statMtimeMs } from './fs-utils.js';
+import {
+  oneLine,
+  TOOL_CALL_SUMMARY_MAX,
+  TOOL_RESULT_SUMMARY_MAX,
+} from '../spec/native-history-tool-blocks.js';
+import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -40,6 +46,12 @@ export interface NativeHistoryMessage {
   workspace?: string;
   /** Stable per-message identity (v2 contract). */
   providerUnitKey?: string;
+  /**
+   * (TOOL-EXPAND) Address of the source block this bubble was summarised from.
+   * Present only on `kind:'tool'` bubbles the caps below actually truncated —
+   * see `stampClaudeToolRef`.
+   */
+  toolBlockRef?: NativeHistoryToolBlockRef;
 }
 
 export interface NativeHistorySession {
@@ -88,35 +100,76 @@ function isSafeSessionId(sessionId: string): boolean {
 }
 
 /**
+ * A parsed content block, carrying the index it occupied in the raw `content`
+ * array so a truncated tool bubble can be addressed back to its source block.
+ * `blockIndex` is -1 for parts that did not come from an indexable array (a
+ * plain string `content`), which are never tool bubbles and so never stamped.
+ */
+interface ContentPart {
+  content: string;
+  kind: NativeHistoryKind;
+  senderName?: string;
+  /** Index in the record's raw `content` array; -1 when not array-addressed. */
+  blockIndex: number;
+  /** True when a summary cap dropped text — the gate for stamping a ref. */
+  truncated: boolean;
+}
+
+/**
+ * Render a `tool_use` block's arguments for the bubble.
+ *
+ * The pre-existing behaviour showed ONLY `input.command`, so every non-shell
+ * tool (Read, Edit, Task, …) rendered as a bare name with its arguments
+ * nowhere — and, worse, a bash call with a 10KB heredoc rendered in full,
+ * uncapped, on every read_chat. Both are fixed by summarising the same way the
+ * spec parser does: prefer `command` when present (it is the most legible
+ * single field), else the whole input object, then cap.
+ */
+function summarizeToolUseInput(block: Record<string, unknown>): { text: string; truncated: boolean } {
+  const input = block.input;
+  if (input == null) return { text: '', truncated: false };
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    const command = (input as Record<string, unknown>).command;
+    if (typeof command === 'string' && command.trim()) {
+      return oneLine(command, TOOL_CALL_SUMMARY_MAX);
+    }
+  }
+  const raw = typeof input === 'string' ? input : safeStringify(input);
+  return oneLine(raw, TOOL_CALL_SUMMARY_MAX);
+}
+
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value) ?? ''; } catch { return ''; }
+}
+
+/**
  * Expand assistant content array into flat text + kind.
  * For array content, text blocks → 'standard', tool_use blocks → 'tool'.
  */
-function extractAssistantContentParts(
-  content: unknown,
-): Array<{ content: string; kind: NativeHistoryKind; senderName?: string }> {
+function extractAssistantContentParts(content: unknown): ContentPart[] {
   if (typeof content === 'string') {
     const trimmed = content.trim();
-    return trimmed ? [{ content: trimmed, kind: 'standard' }] : [];
+    return trimmed ? [{ content: trimmed, kind: 'standard', blockIndex: -1, truncated: false }] : [];
   }
   if (!Array.isArray(content)) return [];
-  const parts: Array<{ content: string; kind: NativeHistoryKind; senderName?: string }> = [];
-  for (const block of content) {
+  const parts: ContentPart[] = [];
+  for (let blockIndex = 0; blockIndex < content.length; blockIndex++) {
+    const block = content[blockIndex];
     if (!block || typeof block !== 'object') continue;
     const type = String((block as Record<string, unknown>).type || '').trim();
     if (type === 'text') {
       const text = String((block as Record<string, unknown>).text || '').trim();
-      if (text) parts.push({ content: text, kind: 'standard' });
+      if (text) parts.push({ content: text, kind: 'standard', blockIndex, truncated: false });
     } else if (type === 'tool_use') {
       const name = String((block as Record<string, unknown>).name || '').trim() || 'Tool';
-      const input = (block as Record<string, unknown>).input;
-      const command =
-        input && typeof input === 'object'
-          ? String((input as Record<string, unknown>).command || '').trim()
-          : '';
+      const { text: args, truncated } = summarizeToolUseInput(block as Record<string, unknown>);
       parts.push({
-        content: command ? `${name}: ${command}` : name,
+        content: args ? `${name}: ${args}` : name,
         kind: 'tool',
         senderName: 'Tool',
+        blockIndex,
+        truncated,
       });
     }
   }
@@ -129,41 +182,67 @@ function extractAssistantContentParts(
  */
 function extractUserContentParts(
   content: unknown,
-): Array<{ role: NativeHistoryRole; content: string; kind: NativeHistoryKind; senderName?: string }> {
+): Array<ContentPart & { role: NativeHistoryRole }> {
   if (typeof content === 'string') {
     const trimmed = content.trim();
-    return trimmed ? [{ role: 'user', content: trimmed, kind: 'standard' }] : [];
+    return trimmed
+      ? [{ role: 'user', content: trimmed, kind: 'standard', blockIndex: -1, truncated: false }]
+      : [];
   }
   if (!Array.isArray(content)) return [];
-  const parts: Array<{ role: NativeHistoryRole; content: string; kind: NativeHistoryKind; senderName?: string }> = [];
-  for (const block of content) {
+  const parts: Array<ContentPart & { role: NativeHistoryRole }> = [];
+  for (let blockIndex = 0; blockIndex < content.length; blockIndex++) {
+    const block = content[blockIndex];
     if (!block || typeof block !== 'object') continue;
     const type = String((block as Record<string, unknown>).type || '').trim();
     if (type === 'text') {
       const text = String((block as Record<string, unknown>).text || '').trim();
-      if (text) parts.push({ role: 'user', content: text, kind: 'standard' });
-    } else if (type === 'tool_result') {
-      const raw = (block as Record<string, unknown>).content;
-      let text = '';
-      if (typeof raw === 'string') {
-        text = raw.trim();
-      } else if (Array.isArray(raw)) {
-        text = (raw as unknown[])
-          .map((entry) => {
-            if (typeof entry === 'string') return entry.trim();
-            if (!entry || typeof entry !== 'object') return '';
-            const e = entry as Record<string, unknown>;
-            if (typeof e.text === 'string') return e.text.trim();
-            if (typeof e.content === 'string') return e.content.trim();
-            return '';
-          })
-          .filter(Boolean)
-          .join('\n');
+      if (text) {
+        parts.push({ role: 'user', content: text, kind: 'standard', blockIndex, truncated: false });
       }
-      if (text) parts.push({ role: 'assistant', content: text, kind: 'tool', senderName: 'Tool' });
+    } else if (type === 'tool_result') {
+      const raw = flattenToolResultContent((block as Record<string, unknown>).content);
+      if (!raw) continue;
+      // Tool results are the big ones — measured up to 125KB in a live
+      // ~/.claude transcript. Before this cap they were carried in FULL on
+      // every read_chat payload; now the bubble shows a summary and the body
+      // stays on disk behind the ref.
+      const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+      if (!text) continue;
+      parts.push({
+        role: 'assistant',
+        content: text,
+        kind: 'tool',
+        senderName: 'Tool',
+        blockIndex,
+        truncated,
+      });
     }
   }
   return parts;
+}
+
+/**
+ * Flatten a `tool_result` block's `content` to plain text.
+ *
+ * Shared by the parse path and the expand path so both agree on what "the
+ * result body" is — an expand that flattened differently would return text the
+ * reader could not match against the bubble it clicked.
+ */
+function flattenToolResultContent(raw: unknown): string {
+  if (typeof raw === 'string') return raw.trim();
+  if (!Array.isArray(raw)) return '';
+  return (raw as unknown[])
+    .map((entry) => {
+      if (typeof entry === 'string') return entry.trim();
+      if (!entry || typeof entry !== 'object') return '';
+      const e = entry as Record<string, unknown>;
+      if (typeof e.text === 'string') return e.text.trim();
+      if (typeof e.content === 'string') return e.content.trim();
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
@@ -236,6 +315,99 @@ function resolveTranscriptPath(sessionId: string, workspace?: string): string | 
 }
 
 /**
+ * Attach an expand ref to a bubble, but ONLY when expanding would actually show
+ * something new.
+ *
+ * Three conditions, all necessary:
+ *   - `kind === 'tool'`: nothing else has a truncated body behind it.
+ *   - `part.truncated`: the cap actually bit. Stamping a complete bubble gives
+ *     the reader a button that returns the string they are already looking at.
+ *   - `sourceMtimeMs > 0` and `blockIndex >= 0`: without a seal the ref cannot
+ *     be validated on resolve, and without an array position it cannot be
+ *     addressed at all.
+ */
+function stampToolBlockRef(
+  msg: NativeHistoryMessage,
+  part: { kind: NativeHistoryKind; blockIndex: number; truncated: boolean },
+  recordIndex: number,
+  sourceMtimeMs: number,
+): void {
+  if (part.kind !== 'tool') return;
+  if (!part.truncated) return;
+  if (!(sourceMtimeMs > 0) || part.blockIndex < 0 || recordIndex < 0) return;
+  msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: part.blockIndex };
+}
+
+/**
+ * Re-parse the transcript into the SAME record array `parseTranscriptFile`
+ * indexes against, for the expand path to address by `recordIndex`.
+ *
+ * Deliberately re-implemented here rather than reusing the spec path's
+ * `readJsonlLines`: that cache indexes the records IT chose to keep, and its
+ * skip rule (trim-then-parse, malformed dropped) is maintained independently of
+ * this reader's. Two parsers agreeing today is not the same as two parsers that
+ * cannot disagree, and a one-record drift between them would silently return a
+ * neighbouring tool's output — the exact mis-addressing the mtime seal exists
+ * to prevent, but invisible to it because the seal would still match.
+ */
+export function readClaudeRecords(filePath: string): Record<string, unknown>[] {
+  let raw: string;
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  const out: Record<string, unknown>[] = [];
+  for (const line of raw.split('\n').filter(Boolean)) {
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    out.push(parsed as Record<string, unknown>);
+  }
+  return out;
+}
+
+/**
+ * Read one addressed claude tool block at full length.
+ *
+ * Returns null when the address does not name a tool block, so the caller can
+ * report a typed refusal rather than an empty body.
+ */
+export function readClaudeToolBlockAt(
+  record: Record<string, unknown>,
+  blockIndex: number,
+): { toolName?: string; callArgs?: string; result?: string } | null {
+  const message = record.message && typeof record.message === 'object'
+    ? (record.message as Record<string, unknown>)
+    : null;
+  if (!message) return null;
+  const content = message.content;
+  if (!Array.isArray(content)) return null;
+  if (blockIndex < 0 || blockIndex >= content.length) return null;
+  const block = content[blockIndex];
+  if (!block || typeof block !== 'object') return null;
+
+  const b = block as Record<string, unknown>;
+  const type = String(b.type || '').trim();
+  if (type === 'tool_use') {
+    const toolName = String(b.name || '').trim() || 'Tool';
+    const input = b.input;
+    // Return the WHOLE input, not just `command`. The summary prefers
+    // `command` for legibility, but the point of expanding is to see
+    // everything the summary dropped — including the other arguments.
+    const callArgs = input == null
+      ? ''
+      : typeof input === 'string' ? input : safeStringifyPretty(input);
+    return { toolName, callArgs };
+  }
+  if (type === 'tool_result') {
+    const result = flattenToolResultContent(b.content);
+    return { result };
+  }
+  return null;
+}
+
+function safeStringifyPretty(value: unknown): string {
+  try { return JSON.stringify(value, null, 2) ?? ''; } catch { return ''; }
+}
+
+/**
  * Parse a single JSONL transcript file into NativeHistoryMessages plus the
  * session's token usage.
  *
@@ -247,6 +419,14 @@ function parseTranscriptFile(
   filePath: string,
   sessionId: string,
   workspaceFallback?: string,
+  /**
+   * (TOOL-EXPAND) mtime seal for refs minted here. Passed in rather than
+   * re-stat'ed so the seal is the SAME value the session reports as
+   * `sourceMtimeMs` — a second stat could observe a newer mtime and mint refs
+   * that the expand path then rejects as `source_changed` on first click.
+   * Omitted (0) by callers that only want message text, which skips stamping.
+   */
+  sourceMtimeMs = 0,
 ): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[] } {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [] }; }
@@ -262,10 +442,17 @@ function parseTranscriptFile(
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
+  // recordIndex counts SURVIVING records — every line this loop successfully
+  // parses, including ones it later skips for other reasons. It must not count
+  // raw lines, because `readClaudeRecords` (the expand path) rebuilds the same
+  // array from the same rule; addressing by raw line number would drift by one
+  // for every malformed or blank line in the file.
+  let recordIndex = -1;
   for (const line of lines) {
     let parsed: unknown = null;
     try { parsed = JSON.parse(line); } catch { continue; }
     if (!parsed || typeof parsed !== 'object') continue;
+    recordIndex++;
 
     const record = parsed as Record<string, unknown>;
 
@@ -326,6 +513,7 @@ function parseTranscriptFile(
         };
         if (part.senderName) msg.senderName = part.senderName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
+        stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
         records.push(msg);
       }
     } else if (type === 'assistant') {
@@ -341,6 +529,7 @@ function parseTranscriptFile(
         };
         if (part.senderName) msg.senderName = part.senderName;
         if (detectedWorkspace) msg.workspace = detectedWorkspace;
+        stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
         records.push(msg);
       }
     }
@@ -365,7 +554,9 @@ export function readSession(sessionPath: string): NativeHistorySession | null {
   if (!fs.existsSync(sessionPath)) return null;
 
   const sourceMtimeMs = statMtimeMs(sessionPath);
-  const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename);
+  // Seal the refs with the mtime this session will report, so an expand
+  // request minted from this read validates against the same number.
+  const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename, undefined, sourceMtimeMs);
   if (messages.length === 0) return null;
 
   const firstSystem = messages.find((m) => m.kind === 'session_start');

@@ -50,6 +50,12 @@ import * as os from 'os';
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { statMtimeMs } from './fs-utils.js';
+import {
+  oneLine,
+  TOOL_CALL_SUMMARY_MAX,
+  TOOL_RESULT_SUMMARY_MAX,
+} from '../spec/native-history-tool-blocks.js';
+import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 
 export interface GrokNativeHistoryMessage {
   ts: string;
@@ -61,6 +67,11 @@ export interface GrokNativeHistoryMessage {
   historySessionId: string;
   workspace?: string;
   providerUnitKey?: string;
+  /**
+   * (TOOL-EXPAND) Address of the source record this bubble was summarised
+   * from, present only when a cap actually dropped text.
+   */
+  toolBlockRef?: NativeHistoryToolBlockRef;
 }
 
 export interface GrokNativeHistorySession {
@@ -181,6 +192,81 @@ interface ParsedRecord {
   role: NativeHistoryRole;
   content: string;
   kind: NativeHistoryKind;
+  /**
+   * (TOOL-EXPAND) True when a summary cap dropped text from this record, so
+   * `readSession` knows to stamp an expand ref. Absent on records that were
+   * never capped.
+   */
+  truncated?: boolean;
+}
+
+/**
+ * Concatenated arguments of an assistant turn's tool calls, untruncated.
+ *
+ * grok stores `arguments` as a JSON *string* per call. It is re-parsed and
+ * re-serialised for display so the bubble shows readable values rather than a
+ * wall of escaped quotes; a call whose arguments are not valid JSON falls back
+ * to the raw string rather than being dropped.
+ */
+function grokToolCallArguments(toolCalls: unknown[]): string {
+  const parts: string[] = [];
+  for (const call of toolCalls) {
+    if (!call || typeof call !== 'object') continue;
+    const args = (call as Record<string, unknown>).arguments;
+    if (typeof args === 'string') {
+      const trimmed = args.trim();
+      if (!trimmed) continue;
+      try { parts.push(JSON.stringify(JSON.parse(trimmed), null, 2)); } catch { parts.push(trimmed); }
+    } else if (args != null) {
+      try { parts.push(JSON.stringify(args, null, 2) ?? ''); } catch { /* skip unserialisable */ }
+    }
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
+/**
+ * Re-parse a grok chat_history into the record array `readSession` indexes
+ * against. See `readClaudeRecords` for why the expand path re-parses rather
+ * than sharing the spec path's jsonl cache.
+ */
+export function readGrokRecords(filePath: string): Record<string, unknown>[] {
+  let text: string;
+  try { text = fs.readFileSync(filePath, 'utf8'); } catch { return []; }
+  const out: Record<string, unknown>[] = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let record: unknown;
+    try { record = JSON.parse(trimmed); } catch { continue; }
+    if (!record || typeof record !== 'object') continue;
+    out.push(record as Record<string, unknown>);
+  }
+  return out;
+}
+
+/**
+ * Read one addressed grok tool record at full length. Returns null when the
+ * record is not a tool call turn or tool result.
+ */
+export function readGrokToolBlockAt(
+  record: Record<string, unknown>,
+): { toolName?: string; callArgs?: string; result?: string } | null {
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type === 'assistant') {
+    const toolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : [];
+    if (toolCalls.length === 0) return null;
+    const names = toolCalls
+      .map((call) => (call && typeof call === 'object' ? (call as Record<string, unknown>).name : null))
+      .filter((name): name is string => typeof name === 'string' && name.length > 0);
+    return {
+      toolName: names.length > 0 ? names.join(', ') : 'tool',
+      callArgs: grokToolCallArguments(toolCalls),
+    };
+  }
+  if (type === 'tool_result') {
+    return { result: blocksToText(record.content).trim() };
+  }
+  return null;
 }
 
 /**
@@ -210,20 +296,28 @@ export function parseGrokRecord(raw: unknown): ParsedRecord | null {
     const toolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : [];
     if (!text) {
       if (toolCalls.length === 0) return null;
-      // Tool-only turn: name the calls rather than emit an empty bubble.
+      // Tool-only turn: name the calls rather than emit an empty bubble, and
+      // append the arguments so the bubble says WHAT was called, not just that
+      // something was. The args are the part worth expanding — measured up to
+      // ~15KB in a live grok store.
       const names = toolCalls
         .map((call) => (call && typeof call === 'object' ? (call as Record<string, unknown>).name : null))
         .filter((name): name is string => typeof name === 'string' && name.length > 0);
       const label = names.length > 0 ? names.join(', ') : 'tool';
-      return { role: 'assistant', content: `[tool: ${label}]`, kind: 'tool' };
+      const args = grokToolCallArguments(toolCalls);
+      if (!args) return { role: 'assistant', content: `[tool: ${label}]`, kind: 'tool' };
+      const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
+      return { role: 'assistant', content: `[tool: ${label}] ${summary}`, kind: 'tool', truncated };
     }
     return { role: 'assistant', content: text, kind: 'standard' };
   }
 
   if (type === 'tool_result') {
-    const text = blocksToText(record.content).trim();
+    const raw = blocksToText(record.content).trim();
+    if (!raw) return null;
+    const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
     if (!text) return null;
-    return { role: 'assistant', content: text, kind: 'tool' };
+    return { role: 'assistant', content: text, kind: 'tool', truncated };
   }
 
   return null;
@@ -260,14 +354,22 @@ export function readSession(
   const providerSessionId = path.basename(sessionDir);
   const sourceMtimeMs = statMtimeMs(sourcePath);
 
-  const parsed: ParsedRecord[] = [];
+  // recordIndex tracks the position in the PARSED-RECORD array (what
+  // `readGrokRecords` rebuilds), which is not the same as `parsed.length`:
+  // this loop drops system prompts, synthetic reminders and reasoning records,
+  // so the surviving-message index runs ahead of nothing and behind the record
+  // index. Stamping the latter is what makes the ref addressable.
+  const parsed: Array<ParsedRecord & { recordIndex: number }> = [];
+  let recordIndex = -1;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     let record: unknown;
     try { record = JSON.parse(trimmed); } catch { continue; }
+    if (!record || typeof record !== 'object') continue;
+    recordIndex++;
     const message = parseGrokRecord(record);
-    if (message) parsed.push(message);
+    if (message) parsed.push({ ...message, recordIndex });
   }
 
   // No per-message timestamps exist in this format (see file header). Spread
@@ -290,6 +392,11 @@ export function readSession(
       historySessionId: sessionId || providerSessionId,
       ...(workspace ? { workspace } : {}),
       providerUnitKey: `${providerSessionId}:${index}`,
+      // grok records ARE the tool block (no content array to index into), so
+      // blockIndex is -1 — the same record-level convention codex uses.
+      ...(message.kind === 'tool' && message.truncated && sourceMtimeMs > 0
+        ? { toolBlockRef: { sourceMtimeMs, recordIndex: message.recordIndex, blockIndex: -1 } }
+        : {}),
     };
   });
 
