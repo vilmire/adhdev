@@ -24,17 +24,28 @@ const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusli
 
 /**
  * Mirrors web-core's `quotaWindowCue` / `formatQuotaWindow`. daemon-core cannot
- * import web-core, so the cue decision is duplicated here on purpose:
- *  - `refreshing` — last-good carry-forward after a TRANSIENT failure
- *  - `stale` — `failureKind: 'no-data'` with retained windows (Claude
- *    statusline aged out). Distinct from refreshing: nothing is retrying.
+ * import web-core, so the cue decision is duplicated here on purpose — ★keep
+ * the two in step, or `adhdev quota` and the dashboard disagree about the same
+ * snapshot:
+ *  - `refreshing` — retained numbers the daemon is expected to replace by itself
+ *  - `stale` — retained numbers nothing will refresh without the USER:
+ *      · `no-data` (Claude statusline aged out — a session must run)
+ *      · antigravity `expired-token` — the daemon deliberately does not redeem
+ *        the refresh token, so only the user running `agy` renews it. Kimi's
+ *        expired-token is excluded: its CLI does refresh on its own cadence,
+ *        which is what "refreshing" is meant to describe.
  */
 function windowCue(quota: ProviderQuota): 'refreshing' | 'stale' | undefined {
-    // Order matters: the Claude aged-out shape now ALSO marks lastGoodWindows
-    // (so mesh routing keeps trusting the retained windows until reset), but
-    // its cue must stay 'stale' — nothing is retrying, a session must run.
-    // 'no-data' is not a transient kind, so carry-forward can never wear it.
-    if (quota.metadata?.failureKind === 'no-data' && (quota.session || quota.weekly)) return 'stale';
+    // Order matters: the aged-out Claude shape and the retained antigravity
+    // shape both ALSO mark lastGoodWindows (so mesh routing keeps trusting the
+    // retained numbers until reset), so this test must come first or they
+    // would read 'refreshing'.
+    const kind = quota.metadata?.failureKind;
+    const userMustAct = kind === 'no-data'
+        || (kind === 'expired-token' && quota.provider === 'antigravity-cli');
+    const hasReading = !!quota.session || !!quota.weekly
+        || (Array.isArray(quota.buckets) && quota.buckets.length > 0);
+    if (userMustAct && hasReading) return 'stale';
     if (quota.metadata?.lastGoodWindows === true) return 'refreshing';
     return undefined;
 }

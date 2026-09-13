@@ -51,6 +51,80 @@ export interface QuotaCacheFile {
 }
 
 /**
+ * Does this snapshot carry a reading worth surviving a restart?
+ *
+ * "A reading" is any measured axis: the rolling session/weekly windows, or the
+ * per-pool `buckets` a provider like antigravity reports (whose session/weekly
+ * are only a worst-bucket collapse and can both be null while buckets hold the
+ * real numbers). Deliberately shape-based rather than `status === 'ok'`: a
+ * carried-forward entry (metadata.lastGoodWindows) is a non-ok snapshot that
+ * still holds genuine numbers, and it is precisely the one we must keep.
+ */
+function holdsReading(entry: MeshNodeFactsProviderQuota | undefined): boolean {
+    if (!entry) return false;
+    if (entry.session !== null && entry.session !== undefined) return true;
+    if (entry.weekly !== null && entry.weekly !== undefined) return true;
+    return Array.isArray(entry.buckets) && entry.buckets.length > 0;
+}
+
+/**
+ * ★THE CLOBBER BARRIER (owner report 2026-09-13: antigravity quota showed a
+ * bald "Antigravity access token expired — run `agy`…" instead of the last
+ * numbers, and STAYED there across restarts).
+ *
+ * Carry-forward (refresh.ts) keeps the last good numbers in memory, but the
+ * file is what a restart reads back, and it was overwritten with whatever the
+ * tick produced — including a transient failure carrying NO numbers. That made
+ * the failure sticky in a way the in-memory path never was:
+ *
+ *   tick fails transiently → numberless error persisted (last-good erased)
+ *   → restart hydrates the ERROR → carry-forward now has no `prev` reading to
+ *   carry → persists the error again → permanently numberless until a live
+ *   token appears.
+ *
+ * Antigravity is the case that cannot self-heal out of that loop: its
+ * credential store holds OAuth tokens, not buckets, so there is no second
+ * source to rebuild a reading from (unlike codex, which re-derives one from its
+ * rollout logs). Once the file lost the numbers they were gone until the user
+ * ran `agy` by hand.
+ *
+ * So: a provider entry that holds NO reading never overwrites a stored entry
+ * that does. The fresh failure's status/error/failureKind still win — we keep
+ * the numbers and their original `updatedAt`, not the stale verdict — which is
+ * the same "retained numbers, fresh failure signal" contract carry-forward
+ * applies in memory, and the retained axes are marked `lastGoodWindows` so no
+ * reader mistakes them for a live measurement.
+ */
+export function mergeLastGoodForPersist(
+    fresh: Record<string, MeshNodeFactsProviderQuota>,
+    stored: Record<string, MeshNodeFactsProviderQuota> | undefined,
+): Record<string, MeshNodeFactsProviderQuota> {
+    if (!stored) return fresh;
+    const merged: Record<string, MeshNodeFactsProviderQuota> = {};
+    for (const [provider, entry] of Object.entries(fresh)) {
+        const prior = stored[provider];
+        if (holdsReading(entry) || !holdsReading(prior)) {
+            merged[provider] = entry;
+            continue;
+        }
+        merged[provider] = {
+            ...entry,
+            session: prior.session,
+            weekly: prior.weekly,
+            ...(prior.monthly !== undefined ? { monthly: prior.monthly } : {}),
+            ...(prior.buckets !== undefined ? { buckets: prior.buckets } : {}),
+            // The numbers keep the age of the observation that produced them,
+            // never the age of the failure that could not replace them.
+            updatedAt: prior.updatedAt,
+            metadata: { ...entry.metadata, lastGoodWindows: true },
+        };
+    }
+    // A provider absent from `fresh` was pruned on purpose (the enable gate
+    // drops a disabled provider's entry), so it is NOT resurrected from disk.
+    return merged;
+}
+
+/**
  * Persist the current snapshots.
  *
  * Written temp-then-rename (the pattern the statusline wrapper already uses, see

@@ -179,3 +179,55 @@ test('extractReporterNodeFactsQuota returns undefined for a reporter without quo
   assert.equal(extractReporterNodeFactsQuota({ result: {} }), undefined);
   assert.equal(extractReporterNodeFactsQuota(undefined), undefined);
 });
+
+// ★BUCKETS-ONLY PROVIDERS KEEP THEIR NUMBERS IN THE FOLD (owner report
+// 2026-09-13). Antigravity measures on a per-pool `buckets` axis; its
+// session/weekly are only a worst-bucket collapse of it and can BOTH be null
+// while the buckets hold a perfectly good reading. Folding that shape to a bare
+// "error:expired-token" threw away the very reading daemon-core's carry-forward
+// had just preserved, and told a coordinator the node could not report when it
+// could — the same class of misread the AGE ALWAYS / lastGoodWindows rules
+// above exist to prevent.
+const agyBucketsOnly = {
+  'antigravity-cli': {
+    provider: 'antigravity-cli',
+    status: 'error',
+    session: null,
+    weekly: null,
+    buckets: [
+      { name: 'Gemini Models · 5h Limit Remaining', usedPercent: 62, windowMinutes: 300, resetsAt: null },
+      { name: 'Claude/GPT Bundled Models · 5h Limit Remaining', usedPercent: 12, windowMinutes: 300, resetsAt: null },
+    ],
+    updatedAt: Date.now(),
+    error: 'Antigravity access token expired — run `agy` once to refresh it, then quota will report again.',
+    metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true },
+  },
+};
+
+test('summarizeNodeQuota keeps a buckets-only reading instead of collapsing to error:expired-token', () => {
+  const summary = summarizeNodeQuota(agyBucketsOnly);
+  const line = summary?.['antigravity-cli'] ?? '';
+
+  assert.ok(!line.startsWith('error:'), `expected retained numbers, got "${line}"`);
+  // Worst pool's used% and how many pools reported — the headline routing gates on.
+  assert.match(line, /^pool 62% \(2\)/);
+});
+
+test('an expired antigravity token is cued stale, never refreshing', () => {
+  // The daemon never redeems this token, so nothing is in flight — only the
+  // user running `agy` produces a new reading. Same class as no-data.
+  const line = summarizeNodeQuota(agyBucketsOnly)?.['antigravity-cli'] ?? '';
+  assert.match(line, /stale/);
+  assert.ok(!line.includes('refreshing'), `expected stale, got "${line}"`);
+});
+
+test('a snapshot with no numbers on ANY axis still degrades to status:failureKind', () => {
+  const none = {
+    'antigravity-cli': {
+      ...agyBucketsOnly['antigravity-cli'],
+      buckets: [],
+      metadata: { source: 'oauth', failureKind: 'expired-token' },
+    },
+  };
+  assert.equal(summarizeNodeQuota(none)?.['antigravity-cli'], 'error:expired-token');
+});

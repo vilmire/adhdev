@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { collectQuotaBucketChips, formatQuotaWindow, quotaWindowCue } from '../../src/utils/quota-format'
+import { buildQuotaDisplayModel, collectQuotaBucketChips, formatQuotaWindow, quotaWindowCue } from '../../src/utils/quota-format'
 
 // Companion to daemon-core's carryForwardLastGoodWindows (oss/packages/daemon-core/src/quota/refresh.ts):
 // once a snapshot carries metadata.lastGoodWindows, the reader must be able to
@@ -133,5 +133,56 @@ describe('collectQuotaBucketChips — antigravity per-pool buckets', () => {
   it('returns [] for single-bucket or bucket-less providers — the axes already say it', () => {
     expect(collectQuotaBucketChips({ ...antigravity, buckets: antigravity.buckets.slice(0, 1) } as never)).toEqual([])
     expect(collectQuotaBucketChips({ ...antigravity, buckets: undefined } as never)).toEqual([])
+  })
+})
+
+// ★ANTIGRAVITY EXPIRED TOKEN — retained numbers, and the cue that tells the
+// truth about them (owner report 2026-09-13).
+//
+// The daemon deliberately never redeems antigravity's stored refresh token
+// (daemon-core fetchers/antigravity.ts), so nothing it does will renew it —
+// only the user running `agy`. Cueing those retained numbers "refreshing"
+// promised a self-heal that cannot happen and buried the one action that
+// fixes it. They are stale in exactly the sense Claude's aged-out reading is.
+describe('quotaWindowCue — antigravity expired token reads stale, not refreshing', () => {
+  const agyRetained = {
+    provider: 'antigravity-cli',
+    status: 'error',
+    session: null,
+    weekly: null,
+    buckets: [
+      { name: 'Gemini Models · 5h Limit Remaining', usedPercent: 44.5, windowMinutes: 300, resetsAt: null },
+      { name: 'Claude/GPT Bundled Models · 5h Limit Remaining', usedPercent: 12, windowMinutes: 300, resetsAt: null },
+    ],
+    updatedAt: 1,
+    error: 'Antigravity access token expired — run `agy` once to refresh it, then quota will report again.',
+    metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true },
+  }
+
+  it('cues stale even though the snapshot is marked lastGoodWindows', () => {
+    expect(quotaWindowCue(agyRetained as never)).toBe('stale')
+  })
+
+  it('counts a buckets-only reading as present (both axes are null here)', () => {
+    // Antigravity's session/weekly are a worst-bucket collapse and can both be
+    // null while the buckets hold the real reading — judging "are there
+    // numbers?" on the axes alone missed it and fell through to 'refreshing'.
+    expect(quotaWindowCue({ ...agyRetained, buckets: undefined } as never)).toBe('refreshing')
+  })
+
+  it("does NOT restage kimi's expired token — its CLI really does refresh", () => {
+    const kimi = { ...agyRetained, provider: 'kimi', buckets: undefined, session: { usedPercent: 28, windowMinutes: 300, resetsAt: null } }
+    expect(quotaWindowCue(kimi as never)).toBe('refreshing')
+  })
+
+  it('renders CHIPS with a stale cue — never the bald "run agy" error wall', () => {
+    const model = buildQuotaDisplayModel(agyRetained as never)
+    expect(model.kind).toBe('chips')
+    expect(model.cue).toBe('stale')
+    expect(model.message).toBeNull()
+    expect(model.chips.map(c => c.label).sort()).toEqual([
+      'Claude/GPT 5h 12.0% used · stale',
+      'Gemini 5h 44.5% used · stale',
+    ])
   })
 })

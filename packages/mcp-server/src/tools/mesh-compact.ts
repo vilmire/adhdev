@@ -137,6 +137,9 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
  *                                           visible instead of dropped
  *   "7d 99% · 5h 30% · 319m stale"         — failureKind no-data: retained numbers
  *                                           exist, but no new measurement arrived
+ *   "pool 62% (4) · 12m · stale"           — provider measured only on the per-pool
+ *                                           bucket axis (antigravity): worst pool's
+ *                                           used% and how many pools reported
  *   "unavailable:cli-unavailable"          — no numbers at all: status[:failureKind]
  *
  * Rules encoded here (each one is a past misread):
@@ -150,7 +153,12 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
  *     dropping the numbers here (the old "error:expired-token" fold) threw
  *     away exactly the signal that carry-forward preserved.
  *   - no-data is labelled stale, never refreshing — the daemon may poll the
- *     statusline file again, but this snapshot is not an in-flight marker.
+ *     statusline file again, but this snapshot is not an in-flight marker. An
+ *     expired antigravity token is the same class: the daemon never redeems it,
+ *     so only the user running `agy` can produce a new reading.
+ *   - BUCKETS COUNT AS NUMBERS — a provider whose plan reports per-pool buckets
+ *     can have both axes null while holding a real reading; folding that to a
+ *     bare status word discarded it.
  * A provider that FAILED still appears, carrying its failureKind: "this node
  * looked and could not tell" is a different diagnosis from "this node never
  * reported", and collapsing the two into an absent key would destroy exactly
@@ -167,20 +175,41 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         const pct = (w: any): string | undefined => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : undefined);
         const weekly = pct(snapshot.weekly);
         const session = pct(snapshot.session);
+        // Per-pool buckets are a real reading on their own. Antigravity's
+        // session/weekly are only a worst-bucket COLLAPSE of them and can both
+        // be null while the buckets hold good numbers — folding that to a bare
+        // "error:expired-token" threw away the very reading the daemon's
+        // carry-forward had just preserved, and told a coordinator the node
+        // could not report when it could.
+        const buckets = Array.isArray(snapshot.buckets)
+            ? snapshot.buckets.filter((b: any) => b && Number.isFinite(b.usedPercent))
+            : [];
+        const worstBucket = buckets.length > 0
+            ? `${Math.round(Math.max(...buckets.map((b: any) => b.usedPercent)))}%`
+            : undefined;
         // Only a snapshot with NO usable numbers at all degrades to the bare
         // status[:failureKind] word — any retained reading stays visible.
-        if (weekly === undefined && session === undefined) {
+        if (weekly === undefined && session === undefined && worstBucket === undefined) {
             out[provider] = failureKind ? `${status}:${failureKind}` : status;
             continue;
         }
         const age = formatQuotaSnapshotAge(snapshot, now);
         const stale = isQuotaSnapshotStale(snapshot, now);
         let line = `7d ${weekly ?? '—'} · 5h ${session ?? '—'} · ${age}${stale ? ' stale' : ''}`;
-        // `no-data` means the source did not produce a new measurement. The
-        // quota loop may poll it again, but "refreshing" would falsely claim
-        // this snapshot denotes an active refresh. Avoid duplicating "stale"
-        // when age already did it.
-        if (failureKind === 'no-data') {
+        // A buckets-only provider would otherwise render "7d — · 5h —", which
+        // reads as "measured nothing". Name the axis the numbers came from:
+        // `pool` is the worst pool's used%, the same headline routing gates on.
+        if (weekly === undefined && session === undefined && worstBucket !== undefined) {
+            line = `pool ${worstBucket} (${buckets.length}) · ${age}${stale ? ' stale' : ''}`;
+        }
+        // `no-data` means the source did not produce a new measurement; an
+        // expired antigravity token is the same class — the daemon will not
+        // renew it (only the user running `agy` does), so "refreshing" would
+        // falsely claim an active refresh. Avoid duplicating "stale" when age
+        // already did it.
+        const userMustAct = failureKind === 'no-data'
+            || (failureKind === 'expired-token' && provider === 'antigravity-cli');
+        if (userMustAct) {
             if (!stale) line += ' · stale';
         } else if (lastGood) line += ' · refreshing';
         else if (status !== 'ok') line += ` · ${status}`;
