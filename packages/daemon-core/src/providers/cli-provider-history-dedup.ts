@@ -51,13 +51,15 @@ export type PersistableCliHistoryMessage = {
  * next. Identifiers and ordinals only — never content, so this rides the same
  * lane as `toolBlockRef`.
  */
-export function carryBubbleIdentity(message: {
+export type BubbleIdentityFields = {
     sequence?: number;
     _turnKey?: string;
     bubbleState?: string;
     providerUnitKey?: string;
     bubbleId?: string;
-}): Partial<PersistableCliHistoryMessage> {
+};
+
+export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdentityFields {
     return {
         ...(typeof message?.sequence === 'number' && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {}),
         ...(message?._turnKey ? { _turnKey: message._turnKey } : {}),

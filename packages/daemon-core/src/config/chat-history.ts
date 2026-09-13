@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from './config.js';
 import { buildRuntimeSystemChatMessage, isActivityChatMessage } from '../providers/chat-message-normalization.js';
+import { carryBubbleIdentity } from '../providers/cli-provider-history-dedup.js';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 
 // Lazy per call: history lives under the instance config dir
@@ -109,6 +110,21 @@ interface HistoryMessage {
     historySessionId?: string; // Persistent provider-side conversation/session key
     sessionTitle?: string;
     workspace?: string;   // Working directory at session start (kind: 'session_start' only)
+    /**
+     * (BUBBLE-IDENTITY) Producer-minted, content-free bubble identity. Declared
+     * here because it is genuinely persisted to the JSONL record — it used to be
+     * stamped through `as any` on the normalizer path only, which hid the fact
+     * that the incremental-append writer dropped it on the floor.
+     *
+     * Identifiers and ordinals only, never content. `toolBlockRef` is
+     * deliberately NOT part of this set: it is sealed by `sourceMtimeMs`, so a
+     * persisted ref is dead on the next read (see `appendNewMessages`).
+     */
+    sequence?: number;
+    _turnKey?: string;
+    bubbleState?: string;
+    providerUnitKey?: string;
+    bubbleId?: string;
 }
 
 function normalizeHistoryComparable(text: string): string {
@@ -819,7 +835,19 @@ export class ChatHistoryWriter {
  */
     appendNewMessages(
         agentType: string,
-        messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; senderName?: string; historyDedupKey?: string }>,
+        messages: Array<{
+            role: string;
+            content: string;
+            receivedAt?: number;
+            kind?: string;
+            senderName?: string;
+            historyDedupKey?: string;
+            sequence?: number;
+            _turnKey?: string;
+            bubbleState?: string;
+            providerUnitKey?: string;
+            bubbleId?: string;
+        }>,
         sessionTitle?: string,
         instanceId?: string,
         historySessionId?: string,
@@ -875,6 +903,22 @@ export class ChatHistoryWriter {
                     instanceId,
                     historySessionId: effectiveHistoryKey,
                     sessionTitle,
+                    // (BUBBLE-IDENTITY) This writer is the incremental-append lane
+                    // (PTY-parsed tail via cli-provider-state-projection, plus the
+                    // runtime/system markers). Read-back is a passthrough
+                    // (JSON.parse -> sanitizeHistoryMessage spreads `...message`),
+                    // so whatever lands here survives a restart — and whatever does
+                    // NOT land here is unrecoverable, because the downstream
+                    // activeChat/persisted-tail remaps only carry what they are
+                    // handed. Identity was previously dropped at this hop, which
+                    // forced every restored bubble onto an index-derived React key.
+                    //
+                    // `toolBlockRef` is deliberately excluded: it is sealed by
+                    // `sourceMtimeMs` and `expandToolBlock` fails closed with
+                    // `source_changed` when the seal no longer matches, so a
+                    // persisted ref would render a permanently dead expand control.
+                    // Refs are re-stamped by the native parser on each read instead.
+                    ...carryBubbleIdentity(msg),
                 });
             }
 
