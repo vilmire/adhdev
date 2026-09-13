@@ -79398,6 +79398,16 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         ...carryBubbleIdentity(message)
       };
     }
+    function projectCliChatMessage(message, options = {}) {
+      return {
+        role: message.role,
+        content: options.flattenContent ? options.flattenContent(message.content) : message.content,
+        kind: typeof message.kind === "string" ? message.kind : void 0,
+        senderName: typeof message.senderName === "string" ? message.senderName : void 0,
+        receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : options.fallBackToParserTimestamp ? message.timestamp : void 0,
+        ...carryMessageRefs(message)
+      };
+    }
     function normalizePersistableCliHistoryContent(content) {
       return flattenContent(content).replace(/\s+/g, " ").trim();
     }
@@ -114968,18 +114978,7 @@ ${buttons.join("\n")}`;
       }
     });
     function toPersistableMessages(messages) {
-      return messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        kind: message.kind,
-        senderName: message.senderName,
-        receivedAt: message.receivedAt,
-        // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
-        // which the canonical-history branch of `buildProviderState` projects
-        // into activeChat — so a resumed session needs BOTH the ref and the
-        // bubble identity to survive here, by NAME and only when present.
-        ...carryMessageRefs(message)
-      }));
+      return messages.map((message) => projectCliChatMessage(message));
     }
     function shouldHydrateExistingProviderHistory(host) {
       return host.launchMode === "resume" || host.launchMode === "manual";
@@ -115478,24 +115477,13 @@ ${buttons.join("\n")}`;
       }
     });
     function toActiveChatMessage(message) {
-      return {
-        role: message.role,
-        content: message.content,
-        kind: message.kind,
-        senderName: message.senderName,
-        receivedAt: message.receivedAt,
-        ...carryMessageRefs(message)
-      };
+      return projectCliChatMessage(message);
     }
     function toPersistedTailMessage(message) {
-      return {
-        role: message.role,
-        content: flattenContent(message.content),
-        kind: typeof message.kind === "string" ? message.kind : void 0,
-        senderName: typeof message.senderName === "string" ? message.senderName : void 0,
-        receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : message.timestamp,
-        ...carryMessageRefs(message)
-      };
+      return projectCliChatMessage(message, {
+        flattenContent,
+        fallBackToParserTimestamp: true
+      });
     }
     function buildProviderState(host) {
       const adapterStatus = host.stabilizeFlappingApprovalStatus(host.adapter.getStatus());

@@ -129,30 +129,27 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
         const historySync = srcFile('cli-provider-history-sync.ts');
         const dedup = srcFile('cli-provider-history-dedup.ts');
 
-        // Each remap is anchored on `receivedAt`, the last field both of them
-        // copied before the fix, so a rename of the ref alone cannot make this
-        // pass vacuously. Both spellings of the surrounding remap (plain and
-        // typeof-guarded) end on that field.
+        // The three remaps this guard was written against (hydration read,
+        // activeChat projection, persisted tail) no longer keep three copies of
+        // the field list — that duplication is exactly what let the ref be fixed
+        // at one hop and stay missing at the next, three times over. They now
+        // delegate to one canonical projection.
         //
-        // The three remaps now delegate to `carryMessageRefs`, which carries the
-        // ref AND the identity by name. The assertion is unchanged in substance
-        // — "every remap carries the ref" — only the spelling it looks for moved
-        // from an inlined conditional to the shared helper that replaced it.
-        const remaps = projection.split(/receivedAt: (?:message\.receivedAt|typeof message\.receivedAt)/);
-        expect(remaps.length).toBe(3); // 2 remaps + head
+        // So the guard checks the same property against the new shape: all three
+        // call sites route through `projectCliChatMessage`, and that function
+        // carries the ref by name. Splitting on `receivedAt:` (the old anchor)
+        // would now silently match nothing, so the delegation count is asserted
+        // explicitly instead.
+        const delegations = projection.match(/projectCliChatMessage\(/g) ?? [];
+        expect(delegations.length, 'both projections in cli-provider-state-projection.ts must delegate').toBe(2);
+        expect(historySync).toContain('projectCliChatMessage(message)');
 
-        for (const [index, remap] of remaps.slice(1).entries()) {
-            expect(
-                remap.slice(0, 600),
-                `cli-provider-state-projection.ts remap #${index + 1} dropped toolBlockRef`,
-            ).toContain('carryMessageRefs(message)');
-        }
-
-        expect(historySync).toContain('carryMessageRefs(message)');
-        expect(dedup).toContain('toolBlockRef?:');
-        // The helper the remaps now delegate to must itself carry the ref by
-        // name, or the delegation above would be satisfied by an empty function.
+        // The canonical projection must itself carry the ref, or every
+        // delegation above would be satisfied by an empty function.
+        expect(dedup).toContain('export function projectCliChatMessage');
         expect(dedup).toContain('toolBlockRef: message.toolBlockRef');
+        expect(dedup).toContain('toolBlockRef?:');
+        expect(dedup).toMatch(/projectCliChatMessage[\s\S]*carryMessageRefs\(message\)/);
     });
 
     /**
@@ -167,20 +164,18 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
         const historySync = srcFile('cli-provider-history-sync.ts');
         const dedup = srcFile('cli-provider-history-dedup.ts');
 
-        const remaps = projection.split(/receivedAt: (?:message\.receivedAt|typeof message\.receivedAt)/);
-        for (const [index, remap] of remaps.slice(1).entries()) {
-            expect(
-                remap.slice(0, 900),
-                `cli-provider-state-projection.ts remap #${index + 1} dropped the bubble identity`,
-            ).toContain('carryMessageRefs(message)');
-        }
+        // Same delegation chain as the ref guard above; here the assertion is on
+        // the identity end of it.
+        expect(projection).toContain('projectCliChatMessage(message');
+        expect(historySync).toContain('projectCliChatMessage(message)');
 
-        expect(historySync).toContain('carryMessageRefs(message)');
-        // `carryMessageRefs` is the ref+identity pair; it must be built ON the
-        // identity helper rather than re-listing the fields, so there is still
-        // exactly one place the identity set is defined.
+        // The chain must bottom out in ONE definition of the identity set:
+        //   projectCliChatMessage -> carryMessageRefs -> carryBubbleIdentity
+        // Each link is asserted, so an intermediate that stops delegating (and
+        // silently re-lists a stale subset of fields) fails here.
         expect(dedup).toContain('export function carryBubbleIdentity');
         expect(dedup).toContain('export function carryMessageRefs');
+        expect(dedup).toMatch(/projectCliChatMessage[\s\S]*carryMessageRefs\(message\)/);
         expect(dedup).toMatch(/carryMessageRefs[\s\S]*carryBubbleIdentity\(message\)/);
     });
 

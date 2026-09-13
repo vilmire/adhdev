@@ -35,7 +35,7 @@ import { workingDirBasename } from './working-dir.js';
 import { isCliGeneratingLikeStatus } from './cli-provider-status-helpers.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
-import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, carryMessageRefs } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, projectCliChatMessage } from './cli-provider-history-dedup.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
 
 /** The narrow surface of CliProviderInstance the state projection reads/writes. */
@@ -81,52 +81,34 @@ export interface ProviderStateHost {
 /**
  * Persisted tail row → one `activeChat.messages` bubble.
  *
- * @message-projection l3 identity
- *
  * This is the hop the dashboard actually renders, so an omitted field here is
  * user-visible: without the ref a truncated tool bubble loses its expand
  * control, and without the identity web-core falls back to an index-derived
- * React key that renumbers whenever the tail grows.
- *
- * ★ Fields are carried by NAME and only when present. Do not "simplify" this to
- * a spread of `message`: an always-present `toolBlockRef: undefined` is not the
- * same as an absent one to the consumers that test for the key, and the
- * persisted row carries bookkeeping this projection deliberately drops.
+ * React key that renumbers whenever the tail grows. The field list lives in
+ * `projectCliChatMessage` — shared with the hydration read and the
+ * persisted-tail hop, which used to keep three copies of it and drifted apart.
  */
 function toActiveChatMessage(message: PersistableCliHistoryMessage): Record<string, unknown> {
-    return {
-        role: message.role,
-        content: message.content,
-        kind: message.kind,
-        senderName: message.senderName,
-        receivedAt: message.receivedAt,
-        ...carryMessageRefs(message),
-    };
+    return projectCliChatMessage(message);
 }
 
 /**
  * Parsed transcript row → one persisted-tail row.
  *
- * @message-projection l3 identity
- *
- * Differs from `toActiveChatMessage` in two ways that are real, not incidental:
- * content is flattened from `MessagePart[]` to a string (the persisted shape is
- * text-only), and `receivedAt` falls back to the parser's `timestamp`. The tail
- * this produces is what the canonical-history branch replays back into
- * activeChat, so anything dropped here is also missing from every restored
- * session.
+ * Same projection as `toActiveChatMessage` plus the two differences the
+ * persisted shape genuinely requires: content is flattened (`MessagePart[]` →
+ * string, since the persisted shape is text-only) and `receivedAt` accepts the
+ * parser's `timestamp`, which only live parser output carries. The tail this
+ * produces is what the canonical-history branch replays back into activeChat,
+ * so anything dropped here is also missing from every restored session.
  */
 function toPersistedTailMessage(
     message: PersistableCliHistoryMessage & { timestamp?: number },
 ): PersistableCliHistoryMessage {
-    return {
-        role: message.role,
-        content: flattenContent(message.content),
-        kind: typeof message.kind === 'string' ? message.kind : undefined,
-        senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
-        receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
-        ...carryMessageRefs(message),
-    };
+    return projectCliChatMessage(message, {
+        flattenContent,
+        fallBackToParserTimestamp: true,
+    });
 }
 
 export function buildProviderState(host: ProviderStateHost): ProviderState {
