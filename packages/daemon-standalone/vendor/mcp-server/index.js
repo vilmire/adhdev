@@ -80365,6 +80365,14 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         if (typeof record2?.bubbleState === "string" && record2.bubbleState) {
           base.bubbleState = record2.bubbleState;
         }
+        const ref = record2?.toolBlockRef;
+        if (ref && typeof ref === "object" && typeof ref.sourceMtimeMs === "number" && typeof ref.recordIndex === "number" && typeof ref.blockIndex === "number") {
+          base.toolBlockRef = {
+            sourceMtimeMs: ref.sourceMtimeMs,
+            recordIndex: ref.recordIndex,
+            blockIndex: ref.blockIndex
+          };
+        }
         return sanitizeHistoryMessage(agentType, base);
       }).filter(Boolean);
     }
@@ -114879,6 +114887,52 @@ ${buttons.join("\n")}`;
         };
       }
     });
+    function carryBubbleIdentity(message) {
+      return {
+        ...typeof message?.sequence === "number" && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {},
+        ...message?._turnKey ? { _turnKey: message._turnKey } : {},
+        ...message?.bubbleState ? { bubbleState: message.bubbleState } : {},
+        ...message?.providerUnitKey ? { providerUnitKey: message.providerUnitKey } : {},
+        ...message?.bubbleId ? { bubbleId: message.bubbleId } : {}
+      };
+    }
+    function normalizePersistableCliHistoryContent(content) {
+      return flattenContent(content).replace(/\s+/g, " ").trim();
+    }
+    function buildPersistableCliHistorySignature(message) {
+      return [
+        String(message.role || ""),
+        String(message.kind || ""),
+        String(message.senderName || ""),
+        normalizePersistableCliHistoryContent(message.content)
+      ].join("|");
+    }
+    function hasSamePersistableCliHistoryIdentity(a, b) {
+      return String(a?.role || "") === String(b?.role || "") && String(a?.kind || "") === String(b?.kind || "") && String(a?.senderName || "") === String(b?.senderName || "") && String(a?.content || "") === String(b?.content || "");
+    }
+    function buildIncrementalHistoryAppendMessages(previousMessages, currentMessages) {
+      if (!Array.isArray(currentMessages) || currentMessages.length === 0) return [];
+      if (!Array.isArray(previousMessages) || previousMessages.length === 0) return currentMessages;
+      const comparableLength = Math.min(previousMessages.length, currentMessages.length);
+      let sharedPrefixLength = 0;
+      while (sharedPrefixLength < comparableLength && hasSamePersistableCliHistoryIdentity(previousMessages[sharedPrefixLength], currentMessages[sharedPrefixLength])) {
+        sharedPrefixLength += 1;
+      }
+      if (sharedPrefixLength === currentMessages.length) return [];
+      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
+      while (sharedPrefixLength < comparableLength && buildPersistableCliHistorySignature(previousMessages[sharedPrefixLength]) === buildPersistableCliHistorySignature(currentMessages[sharedPrefixLength])) {
+        sharedPrefixLength += 1;
+      }
+      if (sharedPrefixLength === currentMessages.length) return [];
+      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
+      return currentMessages;
+    }
+    var init_cli_provider_history_dedup = __esm2({
+      "src/providers/cli-provider-history-dedup.ts"() {
+        "use strict";
+        init_contracts2();
+      }
+    });
     function toPersistableMessages(messages) {
       return messages.map((message) => ({
         role: message.role,
@@ -114890,7 +114944,8 @@ ${buttons.join("\n")}`;
         // which the canonical-history branch of `buildProviderState` projects
         // into activeChat — so a resumed session needs the ref to survive here
         // as well, by NAME and only when present.
-        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
+        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+        ...carryBubbleIdentity(message)
       }));
     }
     function shouldHydrateExistingProviderHistory(host) {
@@ -115011,6 +115066,7 @@ ${buttons.join("\n")}`;
         init_logger();
         init_chat_history();
         init_antigravity_claim_registry();
+        init_cli_provider_history_dedup();
         init_cli_provider_instance_types();
         init_cli_provider_status_helpers();
       }
@@ -115388,43 +115444,6 @@ ${buttons.join("\n")}`;
         init_cli_provider_transcript_merge();
       }
     });
-    function normalizePersistableCliHistoryContent(content) {
-      return flattenContent(content).replace(/\s+/g, " ").trim();
-    }
-    function buildPersistableCliHistorySignature(message) {
-      return [
-        String(message.role || ""),
-        String(message.kind || ""),
-        String(message.senderName || ""),
-        normalizePersistableCliHistoryContent(message.content)
-      ].join("|");
-    }
-    function hasSamePersistableCliHistoryIdentity(a, b) {
-      return String(a?.role || "") === String(b?.role || "") && String(a?.kind || "") === String(b?.kind || "") && String(a?.senderName || "") === String(b?.senderName || "") && String(a?.content || "") === String(b?.content || "");
-    }
-    function buildIncrementalHistoryAppendMessages(previousMessages, currentMessages) {
-      if (!Array.isArray(currentMessages) || currentMessages.length === 0) return [];
-      if (!Array.isArray(previousMessages) || previousMessages.length === 0) return currentMessages;
-      const comparableLength = Math.min(previousMessages.length, currentMessages.length);
-      let sharedPrefixLength = 0;
-      while (sharedPrefixLength < comparableLength && hasSamePersistableCliHistoryIdentity(previousMessages[sharedPrefixLength], currentMessages[sharedPrefixLength])) {
-        sharedPrefixLength += 1;
-      }
-      if (sharedPrefixLength === currentMessages.length) return [];
-      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
-      while (sharedPrefixLength < comparableLength && buildPersistableCliHistorySignature(previousMessages[sharedPrefixLength]) === buildPersistableCliHistorySignature(currentMessages[sharedPrefixLength])) {
-        sharedPrefixLength += 1;
-      }
-      if (sharedPrefixLength === currentMessages.length) return [];
-      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
-      return currentMessages;
-    }
-    var init_cli_provider_history_dedup = __esm2({
-      "src/providers/cli-provider-history-dedup.ts"() {
-        "use strict";
-        init_contracts2();
-      }
-    });
     function buildProviderState(host) {
       const adapterStatus = host.stabilizeFlappingApprovalStatus(host.adapter.getStatus());
       if (Object.prototype.hasOwnProperty.call(adapterStatus, "activeInteractivePrompt")) {
@@ -115497,7 +115516,11 @@ ${buttons.join("\n")}`;
         // (TOOL-EXPAND) By NAME, and only when present — this allow-list is
         // the activeChat projection, so an omitted ref must stay omitted
         // rather than becoming an `undefined` key on every prose bubble.
-        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
+        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+        // Bubble identity rides the same lane: web-core keys chat bubbles off
+        // it, so dropping it here forces an index-derived React key that
+        // renumbers whenever the tail grows.
+        ...carryBubbleIdentity(message)
       })) : mergedMessages;
       const adapterOwnsMessagesElsewhereForTail = host.adapter?.chatMessagesOwnedExternally === true;
       if (adapterOwnsMessagesElsewhereForTail && host.lastCompletionSummary) {
@@ -115542,7 +115565,8 @@ ${buttons.join("\n")}`;
           // branch above replays into activeChat, so the ref has to survive
           // this hop too — otherwise a restored session loses expand controls
           // even though the live parse had them.
-          ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
+          ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+          ...carryBubbleIdentity(message)
         }));
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
           const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);

@@ -35,7 +35,7 @@ import { workingDirBasename } from './working-dir.js';
 import { isCliGeneratingLikeStatus } from './cli-provider-status-helpers.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
-import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, carryBubbleIdentity } from './cli-provider-history-dedup.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
 
 /** The narrow surface of CliProviderInstance the state projection reads/writes. */
@@ -200,6 +200,10 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             // the activeChat projection, so an omitted ref must stay omitted
             // rather than becoming an `undefined` key on every prose bubble.
             ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+            // Bubble identity rides the same lane: web-core keys chat bubbles off
+            // it, so dropping it here forces an index-derived React key that
+            // renumbers whenever the tail grows.
+            ...carryBubbleIdentity(message),
         }))
         : mergedMessages;
 
@@ -273,6 +277,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             // this hop too — otherwise a restored session loses expand controls
             // even though the live parse had them.
             ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+            ...carryBubbleIdentity(message),
         }));
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
             const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);
