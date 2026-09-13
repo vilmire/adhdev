@@ -79383,6 +79383,52 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         INTERNAL_SOURCE_SET = new Set(CHAT_MESSAGE_INTERNAL_SOURCES);
       }
     });
+    function carryBubbleIdentity(message) {
+      return {
+        ...typeof message?.sequence === "number" && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {},
+        ...message?._turnKey ? { _turnKey: message._turnKey } : {},
+        ...message?.bubbleState ? { bubbleState: message.bubbleState } : {},
+        ...message?.providerUnitKey ? { providerUnitKey: message.providerUnitKey } : {},
+        ...message?.bubbleId ? { bubbleId: message.bubbleId } : {}
+      };
+    }
+    function normalizePersistableCliHistoryContent(content) {
+      return flattenContent(content).replace(/\s+/g, " ").trim();
+    }
+    function buildPersistableCliHistorySignature(message) {
+      return [
+        String(message.role || ""),
+        String(message.kind || ""),
+        String(message.senderName || ""),
+        normalizePersistableCliHistoryContent(message.content)
+      ].join("|");
+    }
+    function hasSamePersistableCliHistoryIdentity(a, b) {
+      return String(a?.role || "") === String(b?.role || "") && String(a?.kind || "") === String(b?.kind || "") && String(a?.senderName || "") === String(b?.senderName || "") && String(a?.content || "") === String(b?.content || "");
+    }
+    function buildIncrementalHistoryAppendMessages(previousMessages, currentMessages) {
+      if (!Array.isArray(currentMessages) || currentMessages.length === 0) return [];
+      if (!Array.isArray(previousMessages) || previousMessages.length === 0) return currentMessages;
+      const comparableLength = Math.min(previousMessages.length, currentMessages.length);
+      let sharedPrefixLength = 0;
+      while (sharedPrefixLength < comparableLength && hasSamePersistableCliHistoryIdentity(previousMessages[sharedPrefixLength], currentMessages[sharedPrefixLength])) {
+        sharedPrefixLength += 1;
+      }
+      if (sharedPrefixLength === currentMessages.length) return [];
+      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
+      while (sharedPrefixLength < comparableLength && buildPersistableCliHistorySignature(previousMessages[sharedPrefixLength]) === buildPersistableCliHistorySignature(currentMessages[sharedPrefixLength])) {
+        sharedPrefixLength += 1;
+      }
+      if (sharedPrefixLength === currentMessages.length) return [];
+      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
+      return currentMessages;
+    }
+    var init_cli_provider_history_dedup = __esm2({
+      "src/providers/cli-provider-history-dedup.ts"() {
+        "use strict";
+        init_contracts2();
+      }
+    });
     function getHistoryDir() {
       return path25.join(getConfigDir(), "history");
     }
@@ -80633,6 +80679,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         path25 = __toESM2(require("path"));
         init_config();
         init_chat_message_normalization();
+        init_cli_provider_history_dedup();
         RETAIN_DAYS = 30;
         SAVED_HISTORY_INDEX_VERSION = 1;
         SAVED_HISTORY_INDEX_FILE = ".saved-history-index.json";
@@ -80659,6 +80706,14 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           rotated = false;
           /**
           * Append new messages to history
+          *
+          * @message-projection l3 identity
+          * @message-projection-excludes toolBlockRef: sealed by sourceMtimeMs, so a ref
+          * persisted to disk is dead on the next read (expandToolBlock fails closed with
+          * `source_changed`). Re-stamped by the native parser on each read instead.
+          *
+          * The incremental-append lane. Read-back is a passthrough, so a field omitted
+          * here is unrecoverable — see the note on the pushed record below.
           *
           * @param agentType agent type (e.g. 'antigravity', 'cursor')
           * @param messages Message array received from readChat
@@ -80712,7 +80767,23 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
                   agent: agentType,
                   instanceId,
                   historySessionId: effectiveHistoryKey,
-                  sessionTitle
+                  sessionTitle,
+                  // (BUBBLE-IDENTITY) This writer is the incremental-append lane
+                  // (PTY-parsed tail via cli-provider-state-projection, plus the
+                  // runtime/system markers). Read-back is a passthrough
+                  // (JSON.parse -> sanitizeHistoryMessage spreads `...message`),
+                  // so whatever lands here survives a restart — and whatever does
+                  // NOT land here is unrecoverable, because the downstream
+                  // activeChat/persisted-tail remaps only carry what they are
+                  // handed. Identity was previously dropped at this hop, which
+                  // forced every restored bubble onto an index-derived React key.
+                  //
+                  // `toolBlockRef` is deliberately excluded: it is sealed by
+                  // `sourceMtimeMs` and `expandToolBlock` fails closed with
+                  // `source_changed` when the seal no longer matches, so a
+                  // persisted ref would render a permanently dead expand control.
+                  // Refs are re-stamped by the native parser on each read instead.
+                  ...carryBubbleIdentity(msg)
                 });
               }
               if (newMessages.length === 0) return;
@@ -114885,52 +114956,6 @@ ${buttons.join("\n")}`;
             }
           }
         };
-      }
-    });
-    function carryBubbleIdentity(message) {
-      return {
-        ...typeof message?.sequence === "number" && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {},
-        ...message?._turnKey ? { _turnKey: message._turnKey } : {},
-        ...message?.bubbleState ? { bubbleState: message.bubbleState } : {},
-        ...message?.providerUnitKey ? { providerUnitKey: message.providerUnitKey } : {},
-        ...message?.bubbleId ? { bubbleId: message.bubbleId } : {}
-      };
-    }
-    function normalizePersistableCliHistoryContent(content) {
-      return flattenContent(content).replace(/\s+/g, " ").trim();
-    }
-    function buildPersistableCliHistorySignature(message) {
-      return [
-        String(message.role || ""),
-        String(message.kind || ""),
-        String(message.senderName || ""),
-        normalizePersistableCliHistoryContent(message.content)
-      ].join("|");
-    }
-    function hasSamePersistableCliHistoryIdentity(a, b) {
-      return String(a?.role || "") === String(b?.role || "") && String(a?.kind || "") === String(b?.kind || "") && String(a?.senderName || "") === String(b?.senderName || "") && String(a?.content || "") === String(b?.content || "");
-    }
-    function buildIncrementalHistoryAppendMessages(previousMessages, currentMessages) {
-      if (!Array.isArray(currentMessages) || currentMessages.length === 0) return [];
-      if (!Array.isArray(previousMessages) || previousMessages.length === 0) return currentMessages;
-      const comparableLength = Math.min(previousMessages.length, currentMessages.length);
-      let sharedPrefixLength = 0;
-      while (sharedPrefixLength < comparableLength && hasSamePersistableCliHistoryIdentity(previousMessages[sharedPrefixLength], currentMessages[sharedPrefixLength])) {
-        sharedPrefixLength += 1;
-      }
-      if (sharedPrefixLength === currentMessages.length) return [];
-      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
-      while (sharedPrefixLength < comparableLength && buildPersistableCliHistorySignature(previousMessages[sharedPrefixLength]) === buildPersistableCliHistorySignature(currentMessages[sharedPrefixLength])) {
-        sharedPrefixLength += 1;
-      }
-      if (sharedPrefixLength === currentMessages.length) return [];
-      if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
-      return currentMessages;
-    }
-    var init_cli_provider_history_dedup = __esm2({
-      "src/providers/cli-provider-history-dedup.ts"() {
-        "use strict";
-        init_contracts2();
       }
     });
     function toPersistableMessages(messages) {
