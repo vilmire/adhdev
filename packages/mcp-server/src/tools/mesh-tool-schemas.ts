@@ -1496,19 +1496,17 @@ export const MESH_NOTIFY_WORKER_TOOL = {
 /**
  * The published mesh tool registry.
  *
- * Wrapped in `annotateAll` so every published definition carries its MCP
- * behavior hints (readOnly/destructive/idempotent/openWorld). The classification
- * itself lives in tool-annotations.ts — see that file for why it is one central
- * map rather than a literal on each of the 61 definitions below. `annotateAll`
- * THROWS for a tool with no classification, so adding a tool here without
- * classifying it fails loudly at module load instead of publishing a hint-less
- * tool.
+ * Source-shape contract for docs:verify (`scripts/verify-docs.mjs`
+ * countAllMeshTools): keep this as a bare array-literal assignment. Wrapping
+ * the initializer in annotateAll() broke that parser (source-shape guard).
  *
- * Note this returns new objects: the `*_TOOL` consts above stay un-annotated and
- * are still exported individually (tests and other registries import them), so
- * anything reading a const directly sees the same shape it always did.
+ * Annotations are applied immediately after as copies: the `*_TOOL` consts
+ * above stay un-annotated and are still exported individually. `annotateAll`
+ * THROWS for a tool with no classification, so adding a tool here without
+ * classifying it still fails at module load instead of publishing a hint-less
+ * tool. The classification itself lives in tool-annotations.ts.
  */
-export const ALL_MESH_TOOLS = annotateAll([
+export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_ROUTE_PREVIEW_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -1574,4 +1572,9 @@ export const ALL_MESH_TOOLS = annotateAll([
     MESH_NODE_SLOTS_PROPOSE_TOOL,
     MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
     MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL,
-]);
+];
+
+// Replace each slot with an annotated copy. Does not mutate the `*_TOOL`
+// consts (annotateAll copies). Keep this AFTER the array literal so the
+// docs:verify parser still matches the assignment as an array literal.
+Object.assign(ALL_MESH_TOOLS, annotateAll(ALL_MESH_TOOLS));

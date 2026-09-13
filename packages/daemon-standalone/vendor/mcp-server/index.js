@@ -25879,9 +25879,9 @@ var require_streamx = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/node_modules/b4a/index.js
+// ../daemon-core/node_modules/b4a/index.js
 var require_b4a2 = __commonJS({
-  "../../node_modules/tar-stream/node_modules/b4a/index.js"(exports2, module2) {
+  "../daemon-core/node_modules/b4a/index.js"(exports2, module2) {
     "use strict";
     function isBuffer(value) {
       return Buffer.isBuffer(value) || value instanceof Uint8Array;
@@ -26037,9 +26037,9 @@ var require_b4a2 = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/headers.js
+// ../daemon-core/node_modules/tar-stream/headers.js
 var require_headers = __commonJS({
-  "../../node_modules/tar-stream/headers.js"(exports2) {
+  "../daemon-core/node_modules/tar-stream/headers.js"(exports2) {
     "use strict";
     var b4a = require_b4a2();
     var ZEROS = "0000000000000000000";
@@ -26300,9 +26300,9 @@ var require_headers = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/extract.js
+// ../daemon-core/node_modules/tar-stream/extract.js
 var require_extract = __commonJS({
-  "../../node_modules/tar-stream/extract.js"(exports2, module2) {
+  "../daemon-core/node_modules/tar-stream/extract.js"(exports2, module2) {
     "use strict";
     var { Writable, Readable, getStreamError } = require_streamx();
     var FIFO = require_fast_fifo();
@@ -26645,9 +26645,9 @@ var require_extract = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/constants.js
+// ../daemon-core/node_modules/tar-stream/constants.js
 var require_constants2 = __commonJS({
-  "../../node_modules/tar-stream/constants.js"(exports2, module2) {
+  "../daemon-core/node_modules/tar-stream/constants.js"(exports2, module2) {
     "use strict";
     var constants = {
       // just for envs without fs
@@ -26666,9 +26666,9 @@ var require_constants2 = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/pack.js
+// ../daemon-core/node_modules/tar-stream/pack.js
 var require_pack = __commonJS({
-  "../../node_modules/tar-stream/pack.js"(exports2, module2) {
+  "../daemon-core/node_modules/tar-stream/pack.js"(exports2, module2) {
     "use strict";
     var { Readable, Writable, getStreamError } = require_streamx();
     var b4a = require_b4a2();
@@ -26901,9 +26901,9 @@ var require_pack = __commonJS({
   }
 });
 
-// ../../node_modules/tar-stream/index.js
+// ../daemon-core/node_modules/tar-stream/index.js
 var require_tar_stream = __commonJS({
-  "../../node_modules/tar-stream/index.js"(exports2) {
+  "../daemon-core/node_modules/tar-stream/index.js"(exports2) {
     "use strict";
     exports2.extract = require_extract();
     exports2.pack = require_pack();
@@ -27146,9 +27146,9 @@ var require_pump = __commonJS({
   }
 });
 
-// ../../node_modules/tar-fs/index.js
+// ../daemon-core/node_modules/tar-fs/index.js
 var require_tar_fs = __commonJS({
-  "../../node_modules/tar-fs/index.js"(exports2) {
+  "../daemon-core/node_modules/tar-fs/index.js"(exports2) {
     "use strict";
     var tar = require_tar_stream();
     var pump = require_pump();
@@ -168214,7 +168214,7 @@ var MESH_NOTIFY_WORKER_TOOL = {
     required: ["node_id", "task_id", "message"]
   }
 };
-var ALL_MESH_TOOLS = annotateAll([
+var ALL_MESH_TOOLS = [
   MESH_STATUS_TOOL,
   MESH_ROUTE_PREVIEW_TOOL,
   MESH_LIST_NODES_TOOL,
@@ -168280,7 +168280,8 @@ var ALL_MESH_TOOLS = annotateAll([
   MESH_NODE_SLOTS_PROPOSE_TOOL,
   MESH_COORDINATOR_PROMPT_APPEND_GET_TOOL,
   MESH_COORDINATOR_PROMPT_APPEND_SET_TOOL
-]);
+];
+Object.assign(ALL_MESH_TOOLS, annotateAll(ALL_MESH_TOOLS));
 
 // src/tools/mesh-compact.ts
 var import_daemon_core4 = __toESM(require_dist3());
