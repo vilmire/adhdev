@@ -133,6 +133,11 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
         // copied before the fix, so a rename of the ref alone cannot make this
         // pass vacuously. Both spellings of the surrounding remap (plain and
         // typeof-guarded) end on that field.
+        //
+        // The three remaps now delegate to `carryMessageRefs`, which carries the
+        // ref AND the identity by name. The assertion is unchanged in substance
+        // — "every remap carries the ref" — only the spelling it looks for moved
+        // from an inlined conditional to the shared helper that replaced it.
         const remaps = projection.split(/receivedAt: (?:message\.receivedAt|typeof message\.receivedAt)/);
         expect(remaps.length).toBe(3); // 2 remaps + head
 
@@ -140,11 +145,14 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
             expect(
                 remap.slice(0, 600),
                 `cli-provider-state-projection.ts remap #${index + 1} dropped toolBlockRef`,
-            ).toContain('toolBlockRef: message.toolBlockRef');
+            ).toContain('carryMessageRefs(message)');
         }
 
-        expect(historySync).toContain('toolBlockRef: message.toolBlockRef');
+        expect(historySync).toContain('carryMessageRefs(message)');
         expect(dedup).toContain('toolBlockRef?:');
+        // The helper the remaps now delegate to must itself carry the ref by
+        // name, or the delegation above would be satisfied by an empty function.
+        expect(dedup).toContain('toolBlockRef: message.toolBlockRef');
     });
 
     /**
@@ -164,11 +172,16 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
             expect(
                 remap.slice(0, 900),
                 `cli-provider-state-projection.ts remap #${index + 1} dropped the bubble identity`,
-            ).toContain('carryBubbleIdentity(message)');
+            ).toContain('carryMessageRefs(message)');
         }
 
-        expect(historySync).toContain('carryBubbleIdentity(message)');
+        expect(historySync).toContain('carryMessageRefs(message)');
+        // `carryMessageRefs` is the ref+identity pair; it must be built ON the
+        // identity helper rather than re-listing the fields, so there is still
+        // exactly one place the identity set is defined.
         expect(dedup).toContain('export function carryBubbleIdentity');
+        expect(dedup).toContain('export function carryMessageRefs');
+        expect(dedup).toMatch(/carryMessageRefs[\s\S]*carryBubbleIdentity\(message\)/);
     });
 
     /**
@@ -195,6 +208,24 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
         expect(Object.keys(carryBubbleIdentity({}))).toEqual([]);
         // A non-finite ordinal is not an identity — it must not ride the wire.
         expect(Object.keys(carryBubbleIdentity({ sequence: Number.NaN }))).toEqual([]);
+    });
+
+    it('carryMessageRefs carries the ref AND the identity, each only when present', async () => {
+        const { carryMessageRefs } = await import('../../src/providers/cli-provider-history-dedup.js');
+
+        expect(carryMessageRefs({ toolBlockRef: REF, bubbleId: 'b9', sequence: 9 })).toEqual({
+            toolBlockRef: REF,
+            bubbleId: 'b9',
+            sequence: 9,
+        });
+
+        // A bubble with identity but no ref must not gain a `toolBlockRef` key —
+        // the activeChat projection feeds these straight to the dashboard, where
+        // an always-present undefined key is not the same as an absent one.
+        expect(Object.keys(carryMessageRefs({ bubbleId: 'b9' }))).toEqual(['bubbleId']);
+        // ...and a truncated tool bubble with no identity yet keeps just the ref.
+        expect(Object.keys(carryMessageRefs({ toolBlockRef: REF }))).toEqual(['toolBlockRef']);
+        expect(Object.keys(carryMessageRefs({}))).toEqual([]);
     });
 
     it('holds the content boundary — the ref is exactly three integers', () => {

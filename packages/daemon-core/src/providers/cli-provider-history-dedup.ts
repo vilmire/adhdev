@@ -69,6 +69,34 @@ export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdenti
     };
 }
 
+/**
+ * The daemon-internal carry set: bubble identity PLUS the tool-block ref.
+ *
+ * `carryBubbleIdentity` covers identity alone because one hop — the on-disk
+ * incremental-append writer — must carry identity but must NOT persist the ref
+ * (it is sealed by `sourceMtimeMs`, so a stored ref is dead on the next read).
+ * Every OTHER daemon-internal hop wants both, and hand-rolling the pair at each
+ * one is what let `toolBlockRef` go missing at three separate hops.
+ *
+ * Both fields are copied by NAME and only when present, so a bubble that never
+ * carried them does not gain `undefined` keys — the activeChat projection feeds
+ * `ChatMessage` objects straight to the dashboard, where an always-present
+ * `toolBlockRef: undefined` would be indistinguishable from a real ref to a
+ * `in` check.
+ *
+ * Identifiers, ordinals and three integers — never content. This is L3 only:
+ * `providerUnitKey` embeds a content hash and must not reach the replica wire
+ * (see `seqscribe/transcript-projection.ts`).
+ */
+export function carryMessageRefs(message: BubbleIdentityFields & {
+    toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
+}): Partial<Pick<PersistableCliHistoryMessage, 'toolBlockRef'>> & BubbleIdentityFields {
+    return {
+        ...(message?.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+        ...carryBubbleIdentity(message),
+    };
+}
+
 function normalizePersistableCliHistoryContent(content: unknown): string {
     return flattenContent(content as any).replace(/\s+/g, ' ').trim();
 }
