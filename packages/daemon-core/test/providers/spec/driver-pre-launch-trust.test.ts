@@ -210,6 +210,133 @@ describe('FsmDriver -- pre_launch_trust', () => {
         }
     });
 
+    /**
+     * ★AGY-WORKER-TRUST-STALL diagnosability (2026-09-13).
+     *
+     * Fail-closed is CORRECT here and stays — resolving `~` against the daemon's
+     * real HOME is the worker trust leak. What was wrong is that the skip was
+     * anonymous: "skipping array trust without a resolved launch plan" with no
+     * provider, no workspace and no delegated marker. When every antigravity
+     * worker began hanging on the folder-trust prompt, this single line was the
+     * only evidence and it could not be tied to a session.
+     *
+     * Anything reaching this branch is by construction a session that will now
+     * sit on an unanswerable prompt, so the line must identify itself.
+     */
+    it('★fail-closed skip names provider, workspace and delegated-vs-user launch', async () => {
+        const { LOG } = await import('../../../src/logging/logger.js');
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-noplan-ws-'));
+        const workerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-noplan-home-'));
+        const warnings: string[] = [];
+        const spy = vi.spyOn(LOG, 'warn').mockImplementation((subsystem: string, message: string) => {
+            if (subsystem === 'pre-launch-trust') warnings.push(message);
+            return undefined as any;
+        });
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                id: 'antigravity-cli',
+                // A home-rooted array store with NO resolvedTrustPlan — the exact
+                // shape the defect produced on every gate-off worker launch.
+                pre_launch_trust: {
+                    settings_path: '~/.gemini/antigravity-cli/settings.json',
+                    key: 'trustedWorkspaces',
+                },
+            })),
+            workingDir: workspace,
+            // A redirected HOME is what marks this launch as a delegated worker.
+            extraEnv: { HOME: workerHome },
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            expect(warnings).toHaveLength(1);
+            const line = warnings[0];
+            expect(line).toContain('skipping array trust without a resolved launch plan');
+            expect(line).toContain('provider=antigravity-cli');
+            expect(line).toContain(`workspace=${workspace}`);
+            expect(line).toContain('launch=delegated-worker');
+            // Says what the operator will actually observe, not just the internal cause.
+            expect(line).toMatch(/folder-trust prompt|stall/);
+        } finally {
+            spy.mockRestore();
+            driver.shutdown();
+            fs.rmSync(workspace, { recursive: true, force: true });
+            fs.rmSync(workerHome, { recursive: true, force: true });
+        }
+    });
+
+    it('fail-closed skip distinguishes a user launch from a delegated worker', async () => {
+        const { LOG } = await import('../../../src/logging/logger.js');
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-noplan-user-'));
+        const warnings: string[] = [];
+        const spy = vi.spyOn(LOG, 'warn').mockImplementation((subsystem: string, message: string) => {
+            if (subsystem === 'pre-launch-trust') warnings.push(message);
+            return undefined as any;
+        });
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                id: 'antigravity-cli',
+                pre_launch_trust: {
+                    settings_path: '~/.gemini/antigravity-cli/settings.json',
+                    key: 'trustedWorkspaces',
+                },
+            })),
+            workingDir: workspace,
+            // No HOME redirect ⇒ not a delegated worker.
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]).toContain('launch=user');
+            expect(warnings[0]).not.toContain('launch=delegated-worker');
+        } finally {
+            spy.mockRestore();
+            driver.shutdown();
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    /**
+     * The fail-closed GUARD itself must survive the decoupling fix. A plan-less
+     * home-rooted store must write nothing — anywhere — rather than fall back to
+     * the daemon's real HOME.
+     */
+    it('★writes nothing to the real home when no plan was resolved (leak guard intact)', async () => {
+        const actualHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-guard-home-'));
+        homedirOverride.value = actualHome;
+        const settings = path.join(actualHome, '.gemini', 'antigravity-cli', 'settings.json');
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-guard-ws-'));
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({
+                id: 'antigravity-cli',
+                pre_launch_trust: {
+                    settings_path: '~/.gemini/antigravity-cli/settings.json',
+                    key: 'trustedWorkspaces',
+                },
+            })),
+            workingDir: workspace,
+            resolvedTrustPlan: null,
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            expect(fs.existsSync(settings)).toBe(false);
+            expect(fs.existsSync(path.join(actualHome, '.gemini'))).toBe(false);
+        } finally {
+            driver.shutdown();
+            fs.rmSync(workspace, { recursive: true, force: true });
+            fs.rmSync(actualHome, { recursive: true, force: true });
+            homedirOverride.value = '';
+        }
+    });
+
     it('validator accepts the scheme form and rejects unknown/mixed declarations', async () => {
         const { validateFsmSpec } = await import('../../../src/providers/spec/fsm-loader.js');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } }))).toEqual([]);

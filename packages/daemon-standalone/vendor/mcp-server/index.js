@@ -52699,6 +52699,7 @@ ${blocks.join("\n\n")}`;
       prepareWorkerPrivateHome: () => prepareWorkerPrivateHome,
       resolveWorkerMcpConfigPath: () => resolveWorkerMcpConfigPath,
       resolveWorkerMcpIsolation: () => resolveWorkerMcpIsolation,
+      resolveWorkerTrustHome: () => resolveWorkerTrustHome,
       revokeWorkerSessionBind: () => revokeWorkerSessionBind,
       revokeWorkerTaskToken: () => revokeWorkerTaskToken,
       verifyWorkerSessionBind: () => verifyWorkerSessionBind,
@@ -52902,6 +52903,22 @@ ${blocks.join("\n\n")}`;
         imported.push(entry.relativePath);
       }
       return { home, imported, skipped };
+    }
+    function resolveWorkerTrustHome(input) {
+      const spec = findWorkerPrivateHomeSpec(input.providerType);
+      if (!spec) return null;
+      try {
+        const prepared = prepareWorkerPrivateHome(spec, {
+          workspace: input.workspace,
+          sessionKey: input.sessionKey,
+          realHome: input.realHome,
+          baseDir: input.baseDir
+        });
+        return { home: prepared.home, imported: prepared.imported, skipped: prepared.skipped };
+      } catch (err) {
+        LOG.warn("WorkerTrust", `worker trust HOME preparation failed for ${input.providerType}: ${err?.message || err}`);
+        return null;
+      }
     }
     function resolveWorkerMcpConfigPath(declaredPath, workspace, workerHome) {
       const trimmed = String(declaredPath || "").trim();
@@ -103819,7 +103836,11 @@ ${marker}`,
               } else if ("scheme" in this.spec.pre_launch_trust && this.spec.pre_launch_trust.scheme === "kimi_workspace_file") {
                 applyKimiWorkspaceTrust(this.opts.workingDir);
               } else {
-                LOG.warn("pre-launch-trust", "skipping array trust without a resolved launch plan");
+                const delegated = typeof this.opts.extraEnv?.HOME === "string" && this.opts.extraEnv.HOME.trim() !== "";
+                LOG.warn(
+                  "pre-launch-trust",
+                  `[${this.specTag()}] skipping array trust without a resolved launch plan (provider=${this.spec.id || "unknown"}, workspace=${this.opts.workingDir}, launch=${delegated ? "delegated-worker" : "user"}) \u2014 the CLI will show its folder-trust prompt and the session may stall.`
+                );
               }
             }
             this.startupDismissConfig = normalizeStartupDismissConfig(this.spec.startup_dismiss);
@@ -119380,9 +119401,29 @@ ${rawInput}` : rawInput;
       }, input.runtimeEnv || process.env);
       const preLaunchTrust = input.preLaunchTrust || loadPreLaunchTrustFromSpecPath(input.resolvedSpecPath) || void 0;
       let resolvedTrustPlan;
+      let trustHomeNotes;
       if (preLaunchTrust) {
         resolvedTrustPlan = null;
-        if (workerIsolation?.workerHome) {
+        const notes = workerIsolation?.notes || [];
+        if (!workerIsolation) trustHomeNotes = notes;
+        let storeHome = workerIsolation?.workerHome;
+        if (!storeHome) {
+          const trustHome = resolveWorkerTrustHome({
+            providerType: input.cliType,
+            workspace: input.workspace,
+            sessionKey: input.sessionKey || input.workspace,
+            realHome: input.realHome,
+            baseDir: input.workerHomeBaseDir
+          });
+          if (trustHome) {
+            storeHome = trustHome.home;
+            notes.push(`worker trust HOME ${trustHome.home} (imported: ${trustHome.imported.join(", ") || "none"})`);
+            if (trustHome.skipped.length) notes.push(`skipped missing trust imports: ${trustHome.skipped.join(", ")}`);
+          } else {
+            notes.push(`no worker trust HOME available for ${input.cliType} \u2014 pre-launch trust will be skipped`);
+          }
+        }
+        if (storeHome) {
           const lifecycle = input.trustLifecycle || {
             kind: "worktree",
             worktreePath: path45.resolve(input.workspace),
@@ -119395,7 +119436,7 @@ ${rawInput}` : rawInput;
             provider: input.cliType,
             workspace: input.workspace,
             trust: preLaunchTrust,
-            storeHome: workerIsolation.workerHome,
+            storeHome,
             scope: "worker",
             origin: "worker_auto",
             sessionKey: input.sessionKey || input.workspace,
@@ -119408,14 +119449,18 @@ ${rawInput}` : rawInput;
                 nowMs: input.nowMs
               });
               resolvedTrustPlan = candidate;
-              workerIsolation.notes.push(
+              notes.push(
                 `${recorded.reused ? "reused" : "recorded"} worker-auto trust grant ${recorded.grant.grantId}`
               );
             } catch (err) {
-              workerIsolation.notes.push(`worker trust ledger unavailable (${err?.message || err})`);
+              notes.push(`worker trust ledger unavailable (${err?.message || err})`);
               LOG.warn("WorkerTrust", `worker-auto trust grant failed for ${input.cliType}: ${err?.message || err}`);
             }
           }
+        }
+        if (resolvedTrustPlan && storeHome && !envUnsets.has("HOME") && !env2.HOME) {
+          env2.HOME = storeHome;
+          if (process.platform === "win32" && !env2.USERPROFILE) env2.USERPROFILE = storeHome;
         }
       }
       const envSet = input.isolation?.env?.set;
@@ -119462,7 +119507,8 @@ ${rawInput}` : rawInput;
         cliArgs,
         env: env2,
         ...workerIsolation ? { workerIsolation } : {},
-        ...resolvedTrustPlan !== void 0 ? { resolvedTrustPlan } : {}
+        ...resolvedTrustPlan !== void 0 ? { resolvedTrustPlan } : {},
+        ...trustHomeNotes?.length ? { trustNotes: trustHomeNotes } : {}
       };
     }
     var os29;
@@ -120672,6 +120718,9 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 }) : null;
                 if (delegatedLaunch?.workerIsolation?.notes.length) {
                   LOG.info("WorkerMcp", `[${cliType}] ${delegatedLaunch.workerIsolation.notes.join("; ")}`);
+                }
+                if (delegatedLaunch?.trustNotes?.length) {
+                  LOG.info("WorkerTrust", `[${cliType}] ${delegatedLaunch.trustNotes.join("; ")}`);
                 }
                 const provMeta = provLookup;
                 const provTrust = provMeta?._sourceTrust;
