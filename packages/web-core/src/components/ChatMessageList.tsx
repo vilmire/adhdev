@@ -84,7 +84,16 @@ export interface ChatMessageListProps {
     receivedAtMap?: Record<string, number>;
     /** Daemon-provided hash for the current last message; avoids re-hashing large idle transcripts. */
     lastMessageHash?: string;
-    /** Opt-in: show tool/terminal/runtime activity rows in a distinct activity surface. */
+    /**
+     * Show tool/terminal/thought activity rows inline.
+     *
+     * The dashboard drives this from the user preference, which now defaults ON
+     * (`readChatActivityVisiblePreference`) so tool bubbles are visible without
+     * opting in. The PROP default stays `false` on purpose: hosts that omit it
+     * are read-only surfaces with no toggle to undo it — SessionShare being the
+     * one in tree — and a shared session should not start emitting the host's
+     * tool activity to its viewers.
+     */
     showActivityMessages?: boolean;
     /** custom empty state */
     emptyState?: React.ReactNode;
