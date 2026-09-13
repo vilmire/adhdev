@@ -34,6 +34,17 @@ import {
     type BatchNodeConvergence,
 } from './router-refine.js';
 
+/**
+ * IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): budget for the PLAN-phase `git fetch origin
+ * <base>` that seeds change-area ordering. Deliberately shorter than the shared
+ * GIT_NETWORK_TIMEOUT_MS (30s): this fetch is a best-effort ordering input, not a
+ * correctness requirement — on timeout resolveBaseRef falls through to local refs and the
+ * batch still converges, because every node's own refine re-fetches origin/<base> under
+ * the full network budget before its patch-equivalence check. The old 30s exactly equalled
+ * the caller's outer IPC deadline, so a single slow remote consumed the entire budget.
+ */
+const BATCH_PLAN_FETCH_TIMEOUT_MS = 10_000;
+
     /**
      * Batch refinery: converge multiple sibling worktree nodes onto the base branch
      * in one sequential pipeline, absorbing the rebase + patch-equivalence churn that
@@ -99,57 +110,58 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
 
         // Analyze change areas for ordering. The repoRoot is shared across siblings of
         // the same source; resolve a base ref (origin/<base> preferred) once per repoRoot.
-        const repoRootBaseRef = new Map<string, string>();
-        const submodulePathsByRepoRoot = new Map<string, Set<string>>();
-        const resolveBaseRef = async (repoRoot: string): Promise<string> => {
+        //
+        // IPC-ACCEPT-ASYNC-BOUNDARY: the per-node loop below runs in PARALLEL, so these
+        // caches memoize the in-flight PROMISE, not the settled value. Caching the value
+        // only (the previous shape, safe under a sequential loop) would let N concurrent
+        // siblings of one repoRoot all miss the cache and each run their own `git fetch`,
+        // turning the dedup into an N-way stampede on the same remote.
+        const repoRootBaseRef = new Map<string, Promise<string>>();
+        const submodulePathsByRepoRoot = new Map<string, Promise<Set<string>>>();
+        const resolveBaseRef = (repoRoot: string): Promise<string> => {
             const cached = repoRootBaseRef.get(repoRoot);
             if (cached) return cached;
-            let baseBranch = 'main';
-            try {
-                const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
-                if (stdout.trim()) baseBranch = stdout.trim();
-            } catch { /* fall back to main */ }
-            let baseRef = 'HEAD';
-            try {
-                // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
-                // without it an unreachable remote hangs this await forever, so the refine
-                // job never completes and holds its node slot indefinitely.
-                await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: 30_000 });
-            } catch { /* offline / no remote — fall through to local refs */ }
-            try {
-                const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
-                baseRef = stdout.trim();
-            } catch {
+            const pending = (async (): Promise<string> => {
+                let baseBranch = 'main';
                 try {
-                    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                    if (stdout.trim()) baseBranch = stdout.trim();
+                } catch { /* fall back to main */ }
+                let baseRef = 'HEAD';
+                try {
+                    // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
+                    // without it an unreachable remote hangs this await forever, so the refine
+                    // job never completes and holds its node slot indefinitely.
+                    //
+                    // IPC-ACCEPT-ASYNC-BOUNDARY: bounded by the PLAN-scoped 10s budget, not the
+                    // 30s network default. This fetch is an ordering-input optimization — on
+                    // timeout the catch below falls through to local refs and the batch still
+                    // converges (each node's own refine re-fetches origin/<base> anyway). The
+                    // old 30s exactly equalled the caller's outer IPC deadline, leaving zero
+                    // headroom for everything else in the plan.
+                    await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
+                } catch { /* offline / no remote / timed out — fall through to local refs */ }
+                try {
+                    const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
                     baseRef = stdout.trim();
-                } catch { /* leave HEAD */ }
-            }
-            repoRootBaseRef.set(repoRoot, baseRef);
-            return baseRef;
+                } catch {
+                    try {
+                        const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
+                        baseRef = stdout.trim();
+                    } catch { /* leave HEAD */ }
+                }
+                return baseRef;
+            })();
+            repoRootBaseRef.set(repoRoot, pending);
+            return pending;
         };
 
-        const changeAreas: Array<Awaited<ReturnType<typeof analyzeMeshRefineNodeChangeArea>>> = [];
-        for (const node of targetNodes) {
-            const repoRoot = resolveRepoRootFor(node);
-            let branch = typeof node.worktreeBranch === 'string' ? node.worktreeBranch : '';
-            try {
-                const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
-                if (stdout.trim()) branch = stdout.trim();
-            } catch { /* use stored worktreeBranch */ }
-
-            if (!repoRoot || !branch) {
-                changeAreas.push({
-                    nodeId: node.id, workspace: node.workspace, branch: branch || '(unknown)',
-                    changedTopLevelPaths: [], changedFiles: [], touchedSubmodulePaths: [],
-                    touchesSubmodule: false, aheadCount: 0,
-                    error: !repoRoot ? 'source repoRoot not found' : 'branch not resolved',
-                });
-                continue;
-            }
-            if (!submodulePathsByRepoRoot.has(repoRoot)) {
+        const resolveSubmodulePaths = (repoRoot: string): Promise<Set<string>> => {
+            const cached = submodulePathsByRepoRoot.get(repoRoot);
+            if (cached) return cached;
+            const pending = (async (): Promise<Set<string>> => {
                 // Resolve declared submodule paths once per repo root.
-                let subPaths = new Set<string>();
+                const subPaths = new Set<string>();
                 try {
                     const { stdout } = await execFileAsync('git', ['config', '--file', '.gitmodules', '--get-regexp', 'path'], { cwd: repoRoot, encoding: 'utf8', env: gitChildEnv() });
                     for (const line of stdout.split('\n')) {
@@ -159,26 +171,59 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
                         const value = trimmed.slice(spaceIdx + 1).trim();
                         if (value) subPaths.add(value);
                     }
-                } catch { subPaths = new Set(); }
-                submodulePathsByRepoRoot.set(repoRoot, subPaths);
-            }
-            const baseRef = await resolveBaseRef(repoRoot);
-            let branchRef = branch;
-            try {
-                const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
-                branchRef = stdout.trim() || branch;
-            } catch { /* use branch name */ }
-            changeAreas.push(await analyzeMeshRefineNodeChangeArea({
-                nodeId: node.id,
-                workspace: node.workspace,
-                branch,
-                baseRef,
-                branchRef,
-                diffCwd: node.workspace,
-                repoRoot,
-                submodulePaths: submodulePathsByRepoRoot.get(repoRoot)!,
-            }));
-        }
+                } catch { return new Set<string>(); }
+                return subPaths;
+            })();
+            submodulePathsByRepoRoot.set(repoRoot, pending);
+            return pending;
+        };
+
+        // IPC-ACCEPT-ASYNC-BOUNDARY: probe every node CONCURRENTLY. Each node's probes read
+        // only its own workspace (plus the per-repoRoot caches above, which dedup themselves
+        // by memoized promise), so there is no cross-node dependency to serialize on — the
+        // old sequential loop simply paid N x (branch + rev-parse + diff) in wall-clock, and
+        // the first node of each repoRoot additionally blocked its siblings behind the fetch.
+        // Promise.all preserves INPUT order in its result, which orderMeshRefineBatchNodes
+        // relies on for its stable tie-break — do not switch to push-on-completion.
+        const changeAreas: Array<Awaited<ReturnType<typeof analyzeMeshRefineNodeChangeArea>>> = await Promise.all(
+            targetNodes.map(async (node) => {
+                const repoRoot = resolveRepoRootFor(node);
+                let branch = typeof node.worktreeBranch === 'string' ? node.worktreeBranch : '';
+                try {
+                    const { stdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+                    if (stdout.trim()) branch = stdout.trim();
+                } catch { /* use stored worktreeBranch */ }
+
+                if (!repoRoot || !branch) {
+                    return {
+                        nodeId: node.id, workspace: node.workspace, branch: branch || '(unknown)',
+                        changedTopLevelPaths: [], changedFiles: [], touchedSubmodulePaths: [],
+                        touchesSubmodule: false, aheadCount: 0,
+                        error: !repoRoot ? 'source repoRoot not found' : 'branch not resolved',
+                    };
+                }
+
+                const [submodulePaths, baseRef] = await Promise.all([
+                    resolveSubmodulePaths(repoRoot),
+                    resolveBaseRef(repoRoot),
+                ]);
+                let branchRef = branch;
+                try {
+                    const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', env: gitChildEnv() });
+                    branchRef = stdout.trim() || branch;
+                } catch { /* use branch name */ }
+                return analyzeMeshRefineNodeChangeArea({
+                    nodeId: node.id,
+                    workspace: node.workspace,
+                    branch,
+                    baseRef,
+                    branchRef,
+                    diffCwd: node.workspace,
+                    repoRoot,
+                    submodulePaths,
+                });
+            }),
+        );
 
         const ordering = orderMeshRefineBatchNodes(changeAreas);
         const orderedNodes = ordering.order
@@ -512,50 +557,182 @@ export async function finishMeshRefineBatchJob(self: DaemonCommandRouter,
     }
 
     /**
-     * Async entry for the batch Refinery execute path. Mirrors startMeshRefineJob:
-     * resolves the plan synchronously (so target/ordering errors and the dry-run shape
-     * stay synchronous), then for execute=true registers an in-flight batch job, returns
-     * {async:true, status:'accepted', batch:true, ...plan} immediately, and runs the
-     * convergence loop in the background — emitting the same terminal refine event.
-     * Idempotent: a batch already in flight for this mesh returns the running handle
-     * with duplicate:true rather than spawning a second background job.
+     * Resolve the batch plan and run the convergence loop. Everything here happens AFTER
+     * the caller has already been told `accepted` (IPC-ACCEPT-ASYNC-BOUNDARY), so this
+     * function must never throw into its caller and must always drive the job to a
+     * terminal event — a plan failure is a terminal FAILURE event, not a thrown rejection.
+     *
+     * The plan's `order` / `orderingRationale` / `plan` are unknown at accept time, so they
+     * are published here on the refine:accepted event instead of in the accept response.
      */
-export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
-        // Resolve the plan up-front. For dry-run this returns the synchronous plan; for
-        // execute it returns the same plan shape but we hand convergence to the bg job.
-        const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
-        const planRecord = plan as Record<string, unknown>;
-        if (planRecord.success !== true) return plan;
+async function planThenRunMeshRefineBatchJob(self: DaemonCommandRouter,
+        handle: MeshRefineBatchJobHandle,
+        meshId: string,
+        requestedNodeIds: string[] | undefined,
+        args: any,
+    ): Promise<void> {
+        const key = buildRefineBatchJobKey(self, meshId);
+        const failTerminally = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
+            const completedAt = new Date().toISOString();
+            const terminalHandle = buildRefineBatchJobHandle(self, {
+                meshId,
+                nodeIds: handle.nodeIds,
+                order: handle.order,
+                status: 'failed',
+                startedAt: handle.startedAt,
+                completedAt,
+                jobId: handle.jobId,
+                interactionId: handle.interactionId,
+                coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+                coordinatorSessionId: handle.targetCoordinatorSessionId,
+            });
+            const result = { success: false, batch: true, error, ...(extra ?? {}) };
+            self.terminalRefineBatchJobs.set(key, { ...terminalHandle, result });
+            self.runningRefineBatchJobs.delete(key);
+            self.invalidateAggregateMeshStatus(meshId);
+            await appendRefineBatchJobLedger(self, 'task_failed', terminalHandle, result);
+            queueRefineBatchJobEvent(self, 'refine:failed', terminalHandle, result);
+        };
 
-        // If the caller actually asked for a dry-run, return the plan as-is (sync).
-        if (args?.dryRun === true && args?.execute !== true) return plan;
+        let planRecord: Record<string, unknown>;
+        try {
+            planRecord = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false }) as Record<string, unknown>;
+        } catch (e: any) {
+            await failTerminally(e?.message || String(e), { stage: 'plan' });
+            return;
+        }
+        if (planRecord.success !== true) {
+            // Target/ordering errors used to surface synchronously in the accept reply.
+            // They are now terminal failure events carrying the same plan fields.
+            await failTerminally(
+                typeof planRecord.error === 'string' ? planRecord.error : 'Batch plan failed',
+                { stage: 'plan', plan: planRecord },
+            );
+            return;
+        }
 
         const order = Array.isArray(planRecord.order) ? (planRecord.order as unknown[]).filter((v): v is string => typeof v === 'string') : [];
         const nodeIds = order.slice();
-        if (nodeIds.length === 0) {
-            // No convergeable nodes — nothing to dispatch; return the empty plan synchronously.
-            return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
-        }
 
-        const key = buildRefineBatchJobKey(self, meshId);
-        const running = self.runningRefineBatchJobs.get(key);
-        if (running) return { ...running, duplicate: true };
-
-        // Re-resolve the ordered node objects against current membership so the bg job
-        // refines real nodes (the plan only carries ids). preferInline matches refine_mesh_node.
+        // Re-resolve the ordered node objects against current membership so the job refines
+        // real nodes (the plan only carries ids). preferInline matches refine_mesh_node.
         const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
         const mesh = meshRecord?.mesh;
         const allNodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
         const orderedNodes = nodeIds
             .map(id => allNodes.find(n => meshNodeIdMatches(n, id)))
             .filter((n): n is any => !!n);
-        if (orderedNodes.length === 0) {
-            return { success: false, error: 'Batch nodes no longer resolvable in mesh', batch: true };
+
+        if (nodeIds.length === 0 || orderedNodes.length === 0) {
+            // No convergeable nodes. Previously returned synchronously as a non-async success;
+            // now a terminal event so the already-accepted job still reaches a terminal state.
+            const completedAt = new Date().toISOString();
+            const terminalHandle = buildRefineBatchJobHandle(self, {
+                meshId,
+                nodeIds,
+                order,
+                status: 'completed',
+                startedAt: handle.startedAt,
+                completedAt,
+                jobId: handle.jobId,
+                interactionId: handle.interactionId,
+                coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+                coordinatorSessionId: handle.targetCoordinatorSessionId,
+            });
+            const result = {
+                ...planRecord,
+                success: true,
+                batch: true,
+                dryRun: false,
+                nodeCount: 0,
+                results: [],
+                note: nodeIds.length === 0
+                    ? 'No convergeable local worktree nodes found.'
+                    : 'Batch nodes no longer resolvable in mesh.',
+            };
+            self.terminalRefineBatchJobs.set(key, { ...terminalHandle, result });
+            self.runningRefineBatchJobs.delete(key);
+            self.invalidateAggregateMeshStatus(meshId);
+            await appendRefineBatchJobLedger(self, 'task_completed', terminalHandle, result);
+            queueRefineBatchJobEvent(self, 'refine:completed', terminalHandle, result);
+            return;
         }
-        const ordering = {
+
+        const ordering = { order, rationale: planRecord.orderingRationale };
+
+        // Publish the resolved plan on the accepted event — this is where order /
+        // orderingRationale / plan now reach the coordinator (they left the accept reply
+        // because resolving them is exactly the pre-accept cost this fix removed). The
+        // handle is re-built so nodeIds/order/nodeCount/batchLabel are the REAL values
+        // rather than the empty placeholders the accept reply carried.
+        const plannedHandle = buildRefineBatchJobHandle(self, {
+            meshId,
+            nodeIds,
             order,
-            rationale: planRecord.orderingRationale,
-        };
+            status: 'accepted',
+            startedAt: handle.startedAt,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+            coordinatorSessionId: handle.targetCoordinatorSessionId,
+        });
+        self.runningRefineBatchJobs.set(key, plannedHandle);
+        await appendRefineBatchJobLedger(self, 'task_dispatched', plannedHandle);
+        queueRefineBatchJobEvent(self, 'refine:accepted', plannedHandle, {
+            success: true,
+            batch: true,
+            phase: 'planned',
+            order,
+            orderingRationale: planRecord.orderingRationale,
+            plan: planRecord.plan,
+            nodeIds,
+            nodeCount: nodeIds.length,
+        });
+
+        // REFINE-CONCURRENCY-CAP: the batch pipeline runs through the shared execution
+        // slot — a second accepted job waits instead of overlapping its 19-gate npm/vitest
+        // load with the running one.
+        await runWithRefineExecutionSlot(`batch ${plannedHandle.jobId} (mesh ${meshId})`,
+            () => finishMeshRefineBatchJob(self, plannedHandle, orderedNodes, ordering, args));
+    }
+
+    /**
+     * Async entry for the batch Refinery execute path.
+     *
+     * IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): this used to be only HALF async. It awaited
+     * the FULL plan (per-node git branch/rev-parse/diff probes plus a 30s-bounded
+     * `git fetch origin <base>`, scaling with node count) and only then replied `accepted`,
+     * so a local batch_refine over several nodes routinely blew the caller's IPC deadline.
+     * The job still ran to completion in the background, so the coordinator read a
+     * TIMEOUT on work that was actually succeeding — and a retry would have double-dispatched.
+     *
+     * Now the accept reply is sub-ms and node-count independent: handle → register →
+     * refine:accepted → setImmediate(plan → convergence).
+     *
+     * ★Contract change: the accept response no longer carries `order`, `orderingRationale`
+     * or `plan` — those cannot exist before the plan runs. They are delivered on the
+     * refine:accepted event (`result.phase === 'planned'`) and again on the terminal event,
+     * which is the channel the coordinator already consumes for this job. Target/ordering
+     * errors likewise became terminal refine:failed events rather than a synchronous error.
+     *
+     * dryRun is UNCHANGED and still fully synchronous — the plan IS the dry-run's product,
+     * so there is nothing to defer (and plan_mesh_refine_node carries its own 45s budget).
+     *
+     * Idempotent: a batch already in flight for this mesh returns the running handle with
+     * duplicate:true rather than spawning a second background job.
+     */
+export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
+        // Dry-run: the plan IS the deliverable, so resolve it synchronously as before.
+        // The med-family handler already routes dry-run to batchRefineMeshNodes directly,
+        // so this is defence-in-depth for any other caller — the condition is kept
+        // character-identical to that handler's so the two can never disagree.
+        if (args?.dryRun !== false && args?.execute !== true) {
+            return batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+        }
+
+        const key = buildRefineBatchJobKey(self, meshId);
+        const running = self.runningRefineBatchJobs.get(key);
+        if (running) return { ...running, duplicate: true };
 
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()
@@ -565,25 +742,28 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
         const coordinatorSessionId = typeof args?.coordinatorSessionId === 'string' && args.coordinatorSessionId.trim()
             ? args.coordinatorSessionId.trim()
             : undefined;
-        const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
+
+        // The target set is not known yet (that is the plan's job, now deferred), so the
+        // accept handle carries empty nodeIds/order. planThenRunMeshRefineBatchJob replaces
+        // this registration with the planned handle as soon as the plan resolves, and the
+        // jobId/interactionId are stable across both so the coordinator can correlate.
+        const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds: [], order: [], coordinatorDaemonId, coordinatorSessionId });
         self.runningRefineBatchJobs.set(key, handle);
-        await appendRefineBatchJobLedger(self, 'task_dispatched', handle);
-        queueRefineBatchJobEvent(self, 'refine:accepted', handle);
 
         setImmediate(() => {
-            // REFINE-CONCURRENCY-CAP: the batch pipeline runs through the shared
-            // execution slot — a second accepted job waits instead of overlapping
-            // its 19-gate npm/vitest load with the running one.
-            void runWithRefineExecutionSlot(`batch ${handle.jobId} (mesh ${meshId})`,
-                () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args));
+            void planThenRunMeshRefineBatchJob(self, handle, meshId, requestedNodeIds, args)
+                .catch(async (e: any) => {
+                    // Last-resort guard: the accept reply is already out, so a leaked
+                    // rejection would strand the job in runningRefineBatchJobs forever and
+                    // block every subsequent batch for this mesh on the duplicate check.
+                    LOG.warn('Mesh', `[Refinery] Async refine batch job ${handle.jobId} failed outside its terminal path: ${e?.message || e}`);
+                    self.runningRefineBatchJobs.delete(key);
+                    self.invalidateAggregateMeshStatus(meshId);
+                });
         });
 
-        // Return the accepted handle plus the plan so the coordinator sees the target set.
         return {
             ...handle,
-            order,
-            orderingRationale: planRecord.orderingRationale,
-            plan: planRecord.plan,
-            note: 'Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly.',
+            note: 'Batch convergence accepted. The target set and ordering are resolved in the background and arrive on the refine:accepted event; completion/failure (with per-node results) arrives as a terminal refine event. Do not poll repeatedly.',
         };
     }

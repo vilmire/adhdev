@@ -1545,6 +1545,38 @@ function getQueueStatusById(meshId: string): Map<string, string> {
     return new Map(getQueue(meshId).map(task => [task.id, task.status]));
 }
 
+// IPC-ACCEPT-ASYNC-BOUNDARY: in-flight backgrounded auto-launch scans, per mesh. The
+// launch is deliberately NOT awaited by triggerMeshQueue (see the call site), so this is
+// the only handle on work that outlives the call. Production uses it to drain in-flight
+// launches on shutdown; tests use awaitInFlightAutoLaunches() to observe post-spawn state
+// deterministically instead of sleeping.
+const inFlightAutoLaunches = new Map<string, Set<Promise<boolean>>>();
+
+function trackInFlightAutoLaunch(meshId: string, promise: Promise<boolean>): void {
+    let set = inFlightAutoLaunches.get(meshId);
+    if (!set) { set = new Set(); inFlightAutoLaunches.set(meshId, set); }
+    set.add(promise);
+    void promise.finally(() => {
+        set!.delete(promise);
+        if (set!.size === 0) inFlightAutoLaunches.delete(meshId);
+    });
+}
+
+/**
+ * Await every auto-launch scan currently in flight for `meshId` (all meshes when omitted).
+ * Resolves immediately when none are pending. Settles repeatedly until quiet, because one
+ * scan can enqueue follow-on work that starts another.
+ */
+export async function awaitInFlightAutoLaunches(meshId?: string): Promise<void> {
+    for (let i = 0; i < 10; i++) {
+        const pending = meshId
+            ? [...(inFlightAutoLaunches.get(meshId) ?? [])]
+            : [...inFlightAutoLaunches.values()].flatMap(set => [...set]);
+        if (pending.length === 0) return;
+        await Promise.allSettled(pending);
+    }
+}
+
 export async function triggerMeshQueue(components: DaemonComponents, meshId: string): Promise<MeshQueueTriggerResult> {
     const mesh = getMeshWithCache(components, meshId);
     const pendingBefore = countQueueStatus(meshId, 'pending');
@@ -1688,7 +1720,33 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         }
     }
 
-    autoLaunchStarted = await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
+    // IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): the auto-launch is NOT awaited. Spawning a
+    // worker session is the single heaviest thing this function can do — detectCLI's
+    // per-provider sequential --version chain, a remote `launch_cli` dispatch, and then
+    // waitForRemote/LocalSessionReady — which pushed trigger_mesh_queue past its caller's
+    // IPC deadline even though the assignment work below was already finished. The caller
+    // needs the ASSIGNMENT result; the spawn's outcome reaches it through queue state on a
+    // later tick, which is how a launch started on a prior tick was always reported anyway.
+    //
+    // `autoLaunchStarted` therefore reports only that a launch was INITIATED this tick, not
+    // that it completed. The duplicate-launch protection does not depend on the await:
+    // maybeAutoLaunchOneQueueSession takes its per-task lock (autoLaunchTaskInProgress) and
+    // writes markAutoLaunch SYNCHRONOUSLY-ish before any spawn await, and `autoLaunchPending`
+    // below independently re-reads task.autoLaunch from the queue, so a launch still
+    // converging is seen by the next tick exactly as before.
+    const autoLaunchPromise = maybeAutoLaunchOneQueueSession(components, meshId, mesh)
+        .catch(e => {
+            LOG.warn('MeshQueue', `Auto-launch scan failed for mesh ${meshId}: ${e?.message || e}`);
+            return false;
+        });
+    trackInFlightAutoLaunch(meshId, autoLaunchPromise);
+    // Give the launch scan its synchronous prologue (gates + per-task lock + markAutoLaunch)
+    // a chance to land before we snapshot the queue, without waiting on any spawn I/O. If it
+    // settles within this turn we report it exactly as the old await did.
+    autoLaunchStarted = await Promise.race([
+        autoLaunchPromise,
+        new Promise<boolean>(resolve => setImmediate(() => resolve(false))),
+    ]);
     // AUTOLAUNCH-ORPHAN-SWEEP: run AFTER the drain + auto-launch so it reads post-claim
     // assignment state (a session that just won its claim must not be reported as an orphan).
     sweepAutoLaunchOrphanSessions(components, meshId);

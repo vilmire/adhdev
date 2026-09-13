@@ -18,6 +18,7 @@ export {
     __scoreSlotForTaskForTests,
     activeReadonlyAssignedCount,
     activeWriteAssignedCount,
+    awaitInFlightAutoLaunches,
     isSessionActivelyGenerating,
     triggerMeshQueue,
     tryAssignQueueTask,

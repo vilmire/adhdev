@@ -50,13 +50,31 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // probes (status/merge-tree/submodule) inline before replying, which can approach the
   // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.
   plan_mesh_refine_node: 45_000,
-  // A2: refine_mesh_node / batch_refine_mesh_nodes are async-job-ack (the responder
-  // returns { async:true, status:'accepted' } immediately and works in the background),
-  // so 15s already suffices. 30s is a defensive floor guarding a future sync-dry-run
-  // regression; it is intentionally BELOW the relay 90s budget because the synchronous
-  // ack reply is sub-second and never bounded by the relay deadline.
+  // refine_mesh_node / batch_refine_mesh_nodes are async-job-ack: the responder returns
+  // { async:true, status:'accepted' } and runs the convergence pipeline in the background.
+  //
+  // IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): the ack is now genuinely sub-ms. It used to
+  // be only HALF async — startMeshRefineBatchJob awaited the full plan (per-node git
+  // probes: branch resolution, a 30s-bounded `git fetch origin <base>`, rev-parse,
+  // change-area diff — scaling with node count) BEFORE replying, so the "immediate ack"
+  // this comment once described was contradicted by the implementation and a 6-node
+  // batch could exceed the deadline below. The plan now runs AFTER the accept reply
+  // (setImmediate), and its order/orderingRationale/plan are delivered on the
+  // refine:accepted / terminal refine events instead of in the accept response.
+  //
+  // 30s is therefore a defensive regression floor, not a cost budget: it guards a future
+  // change that re-introduces synchronous pre-accept work. It is intentionally BELOW the
+  // relay 90s budget because the ack reply is never bounded by the relay deadline.
   refine_mesh_node: 30_000,
   batch_refine_mesh_nodes: 30_000,
+  // trigger_mesh_queue: previously UNREGISTERED, so a local bare dispatch fell through to
+  // the bare 15s default while the responder could far exceed it — triggerMeshQueue's
+  // auto-launch awaited a real session spawn (detectCLI's sequential --version chain, a
+  // remote launch_cli dispatch, plus waitForRemote/LocalSessionReady). That spawn is now
+  // backgrounded (the assignment result returns without awaiting it), so what remains
+  // synchronous is the idle-session drain scan. 45s is the defensive floor for that
+  // residual scan and for the spawn path should it ever become blocking again.
+  trigger_mesh_queue: 45_000,
   // P0 (2026-08-28 RCA, false 15s timeouts on 4 unregistered commands): these commands
   // fell through to the bare 15s default and violated IPC >= relay >= responder for a
   // LOCAL node (no relay layer wraps a local dispatch — see the module comment above).
