@@ -9,7 +9,7 @@
 // SEPARATE, live namespace (the Repo Mesh MAGI cross-verification feature,
 // docs/CONCEPTS.md §5) and must never be touched by this cleanup.
 import { describe, expect, it } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { SUPPORTED_LANGUAGES } from '../../src/i18n/languages'
 
@@ -64,9 +64,16 @@ describe('MAGI landing section stays removed (O9)', () => {
     })
 
     it('landing.css no longer defines .magi-media rules', () => {
+        // packages/web-cloud is the proprietary root package and does not
+        // exist in the oss-only (vilmire/adhdev) checkout that runs this
+        // suite in CI. Whether the file exists at all is out of scope here
+        // (that's the root/cloud test suite's job) — this check only
+        // asserts the *content* invariant, and only when the file happens
+        // to be present (e.g. a root monorepo checkout).
         const css = fileURLToPath(
             new URL('../../../../../packages/web-cloud/src/landing.css', import.meta.url),
         )
-        expect(existsSync(css)).toBe(true)
+        if (!existsSync(css)) return
+        expect(readFileSync(css, 'utf-8')).not.toMatch(/\.magi-media\b/)
     })
 })
