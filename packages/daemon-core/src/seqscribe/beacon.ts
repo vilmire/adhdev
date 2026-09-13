@@ -455,7 +455,11 @@ export interface BeaconHandle {
      * library's debounce only fires after an append, which an idle daemon may
      * not make for hours.
      *
-     * Rejections are swallowed and counted, exactly like the library's own push.
+     * Since SPEC v3.7 (P30) this delegates report construction to the
+     * library's own `BeaconHandle.pushNow()` — the same vectors() snapshot and
+     * §5.7a hint derivation as the debounced push, still routed through this
+     * host's projection/split-retry transport. Rejections are swallowed and
+     * counted, exactly like the library's own push.
      */
     pushNow(): Promise<void>;
     /**
@@ -588,10 +592,6 @@ export function armBeacon(
     // projected. Hash-hint topics come from this node's live definition table,
     // so a stale reader can ask for a register key it does not hold yet.
     let lastScope: string[] = [];
-    // `pushNow()` bypasses the library's private buildHints(). Preserve the last
-    // library-produced, already-projected hint set so reconnect re-seeding does
-    // not erase it from the server board; the next applied write refreshes it.
-    let lastLocalHints: ProjectedBeaconReport['hints'];
     // The last board this beacon observed, retained purely so `diagnostics()`
     // can be a free read (see the note on BeaconHandle.diagnostics). Null until
     // the first successful GET — which `computeBeaconDiagnostics` reports as
@@ -609,7 +609,6 @@ export function armBeacon(
             LOG.warn('Seqscribe', 'beacon report failed the content projection; not sent');
             return;
         }
-        lastLocalHints = projected.hints;
         lastScope = scopeOf(projected.vectors);
         try {
             await transport.put(projected);
@@ -807,7 +806,10 @@ export function armBeacon(
             ]))];
 
             try {
-                handle.node.setKnownVectors(clean as never[]);
+                // SPEC v3.7 P34: hand the library the completeness signal its
+                // own transport cannot carry, so staleness().soleCopyRisk is
+                // gated on the real board shape rather than "unknown".
+                handle.node.setKnownVectors(clean as never[], { truncated });
                 lastBoard = {
                     reports: clean,
                     truncated,
@@ -833,18 +835,25 @@ export function armBeacon(
         async pushNow(): Promise<void> {
             if (stopped) return;
             try {
-                // `node.vectors()` is the same source `BeaconHub.push()` reads.
-                // P27 hint derivation is private to the library, so preserve
-                // its last projected hint set rather than clearing it on the
-                // server during reconnect re-seeding.
-                await doPut({
-                    node: handle.writerId,
-                    at: new Date().toISOString(),
-                    vectors: handle.node.vectors(),
-                    ...(lastLocalHints ? { hints: lastLocalHints } : {}),
-                });
-                const board = await doGet();
-                if (!stopped) handle.node.setKnownVectors(board as never[]);
+                // SPEC v3.7 P30: the library publishes through the SAME path as
+                // its debounced push — identical `vectors()` snapshot and
+                // identical §5.7a hint derivation honoring each topic's
+                // `hintKeys` — routed through this host's transport callbacks,
+                // so the projection, split-retry, GET bounding, and counters
+                // above all still apply. The pre-v3.7 host-built report (and
+                // the `lastLocalHints` replay cache it needed because it could
+                // not reach the library's private buildHints()) is retired.
+                await libHandle.pushNow();
+                // The library adopts the GET's reports with completeness
+                // UNKNOWN (BeaconTransport.get() carries no truncation signal —
+                // P34), which would defer every soleCopyRisk to "unknown".
+                // Re-seed with the count our split-retry already computed so
+                // the library's gate sees the real board shape (§7.1.2.1).
+                if (!stopped && lastBoard) {
+                    handle.node.setKnownVectors(lastBoard.reports as never[], {
+                        truncated: lastBoard.truncated,
+                    });
+                }
             } catch {
                 // Advisory: mirrors the library's own `push().catch()`. Both
                 // legs already counted the failure before it got here.

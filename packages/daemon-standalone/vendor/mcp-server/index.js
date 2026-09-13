@@ -57213,6 +57213,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         BeaconHub = class {
           deps;
           known = [];
+          // P34 board-completeness state. `boardSeen` distinguishes "no board yet" from
+          // "an empty board", which are different answers: the first cannot judge
+          // anything, the second legitimately has no peers to compare against.
+          boardSeen = false;
+          boardTruncated = void 0;
           transport = null;
           debounceTimer = null;
           // Node-level teardown (proposals-v3.5 P28). Terminal and distinct from an
@@ -57237,7 +57242,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const gen = ++this.armGen;
             this.transport = t;
             this.hostHints = o?.hints ?? null;
-            this.push();
+            void this.push();
             return {
               stop: () => {
                 if (this.armGen !== gen)
@@ -57249,7 +57254,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 }
                 this.transport = null;
                 this.hostHints = null;
-              }
+              },
+              // P30: publish immediately, bypassing the debounce. A stale handle (one
+              // whose arming was retired by stop() or a re-arm) resolves without
+              // publishing rather than pushing on a later arming's behalf — the same
+              // generation discipline stop() uses. Advisory on failure like the
+              // debounced push: push() already swallows and the round is best-effort,
+              // so this never rejects.
+              pushNow: () => this.armGen !== gen ? Promise.resolve() : this.push()
             };
           }
           // §14 close quiescence: a started beacon's debounce timer reads
@@ -57271,11 +57283,19 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               return;
             this.debounceTimer = this.deps.timers.setTimeout(() => {
               this.debounceTimer = null;
-              this.push();
+              void this.push();
             }, this.deps.constants.BEACON_DEBOUNCE_MS);
           }
-          setKnownVectors(v) {
+          // proposals-v3.8 P34: `o.truncated` is the host's count of peer reports the
+          // board did NOT return. The library cannot derive it — BeaconTransport.get()
+          // yields BeaconReport[] with no completeness signal — so sole-copy judgement
+          // depends on the host passing it. Omitting it is treated as "unknown
+          // completeness", which is the fail-safe reading: a board that might be a
+          // subset can never prove a sole copy.
+          setKnownVectors(v, o) {
             this.known = v;
+            this.boardSeen = true;
+            this.boardTruncated = o?.truncated;
           }
           // wake-up lag & pre-write warning source (§5.7): how far each known peer's
           // vector is ahead of the local replica
@@ -57300,7 +57320,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                   latestKnown = [topic, hint[0], hint[1]];
               }
             }
-            const out = { behind, asOf: new Date(this.deps.clock()).toISOString() };
+            const aheadPeers = Object.entries(behind).filter(([, lag]) => lag > 0).map(([w]) => w).sort();
+            const soleCopyRisk = !this.boardSeen ? "unknown" : this.boardTruncated === void 0 || this.boardTruncated > 0 ? "unknown" : this.localOnlyAgainstBoard(topic);
+            const out = {
+              behind,
+              aheadPeers,
+              soleCopyRisk,
+              asOf: new Date(this.deps.clock()).toISOString()
+            };
             if (key2 !== void 0 && latestKnown) {
               const [t, w, s2] = latestKnown;
               out.keyStale = {
@@ -57309,6 +57336,34 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               };
             }
             return out;
+          }
+          // P34: true when this node holds entries on `topic` that NO peer on a
+          // known-whole board reports holding. Per-writer and conservative: a peer whose
+          // contig reaches our own is enough to clear the stream, and a retired writer's
+          // finalSeq counts as coverage. Only ever called once completeness is known.
+          localOnlyAgainstBoard(topic) {
+            const mine = this.deps.core.vectors()[topic];
+            if (!mine)
+              return false;
+            for (const [writer, w] of Object.entries(mine.writers)) {
+              const myContig = "retired" in w ? w.finalSeq : w.contig;
+              if (myContig <= 0)
+                continue;
+              let covered = false;
+              for (const report of this.known) {
+                const theirs = report.vectors[topic]?.writers?.[writer];
+                if (!theirs)
+                  continue;
+                const theirSeq = "retired" in theirs ? theirs.finalSeq : theirs.contig;
+                if (theirSeq >= myContig) {
+                  covered = true;
+                  break;
+                }
+              }
+              if (!covered)
+                return true;
+            }
+            return false;
           }
           // §5.7 hints (P27). `hintKeys` is the per-topic opt-in gate: a topic that has
           // not set it contributes nothing and, if the host names it anyway, is dropped
@@ -57362,10 +57417,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 delete out[topic];
             return Object.keys(out).length > 0 ? out : void 0;
           }
+          // One report-building path, shared by the debounced push and the host's
+          // pushNow() (proposals-v3.8 P30). Returning the promise is what lets pushNow
+          // await the round; the debounced caller discards it. A host-initiated publish
+          // is therefore byte-indistinguishable from a library-initiated one — same
+          // vectors() snapshot, same buildHints() derivation, same hintKeys policy —
+          // which is the whole point: before this, a host that wanted an immediate
+          // publish had to build the report itself and could not reach buildHints(),
+          // so its reports silently carried no §5.7a hints at all.
           push() {
             const t = this.transport;
             if (!t || this.closed)
-              return;
+              return Promise.resolve();
             const gen = this.armGen;
             const report = {
               node: this.deps.writerId,
@@ -57375,9 +57438,12 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const hints = this.buildHints();
             if (hints)
               report.hints = hints;
-            void t.put(report).then(() => t.get()).then((reports) => {
-              if (!this.closed && this.armGen === gen)
+            return t.put(report).then(() => t.get()).then((reports) => {
+              if (!this.closed && this.armGen === gen) {
                 this.known = reports;
+                this.boardSeen = true;
+                this.boardTruncated = void 0;
+              }
             }).catch(() => {
             });
           }
@@ -57927,7 +57993,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             try {
               this.validateShape(d);
               if (!await this.verify(d)) {
-                this.deps.emitAnomaly({ kind: "bad_directive" });
+                this.deps.emitAnomaly({ kind: "bad_directive", topic: d.topic, writer: d.writer });
                 return;
               }
               const result = await this.deps.core.applyDirective(d);
@@ -58106,14 +58172,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               return "bad";
             const policy = this.deps.topics.get(cert.topic).policy;
             if (policy.finalityAuthority === void 0 || cert.authority !== policy.finalityAuthority) {
-              this.deps.emitAnomaly({ kind: "bad_cert" });
+              this.deps.emitAnomaly({ kind: "bad_cert", topic: cert.topic });
               return "bad";
             }
             const verify = this.deps.authority?.verifyFinality;
             if (!verify)
               return "bad";
             if (!await verify(cert)) {
-              this.deps.emitAnomaly({ kind: "bad_cert" });
+              this.deps.emitAnomaly({ kind: "bad_cert", topic: cert.topic });
               return "bad";
             }
             const existing = this.deps.core.getCert(cert.topic);
@@ -58123,11 +58189,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               if (cert.generation === existing.generation) {
                 if (jcs(cert) === jcs(existing))
                   return "duplicate";
-                this.deps.emitAnomaly({ kind: "bad_cert" });
+                this.deps.emitAnomaly({ kind: "bad_cert", topic: cert.topic });
                 return "bad";
               }
               if (orderCompare(cert.order, existing.order) < 0) {
-                this.deps.emitAnomaly({ kind: "bad_cert" });
+                this.deps.emitAnomaly({ kind: "bad_cert", topic: cert.topic });
                 return "bad";
               }
             }
@@ -58271,7 +58337,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const t = this.recoveries.get(`${topic} ${writer}`);
             if (t && !t.unavailableReported) {
               t.unavailableReported = true;
-              this.emitAnomaly({ kind: "canonical_unavailable" });
+              this.emitAnomaly({ kind: "canonical_unavailable", topic, writer });
             }
           }
           getCert(topic) {
@@ -58466,7 +58532,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (head.sealReason === null) {
               head.sealReason = "fork";
               this.saveHead(head);
-              anomalies.push({ kind: "writer_forked" });
+              anomalies.push({ kind: "writer_forked", topic: item.topic, writer: item.writer });
             }
             settle.push(() => item.resolve());
           }
@@ -58498,7 +58564,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 head.contigChain = cutChain;
                 if (head.sealReason === null) {
                   head.sealReason = "fork";
-                  anomalies.push({ kind: "writer_forked" });
+                  anomalies.push({ kind: "writer_forked", topic: cert.topic, writer: w.writer });
                 }
                 this.saveHead(head);
                 continue;
@@ -58510,7 +58576,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                   if (head.sealReason === null) {
                     head.sealReason = "fork";
                     this.saveHead(head);
-                    anomalies.push({ kind: "writer_forked" });
+                    anomalies.push({ kind: "writer_forked", topic: cert.topic, writer: w.writer });
                   }
                 }
               }
@@ -58858,7 +58924,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const updatedAt = Date.parse(c.updatedAt);
               if (Number.isFinite(updatedAt) && updatedAt < staleBefore) {
                 this.deps.store.cursorDelete(c.consumer, topic);
-                this.deps.emitAnomaly({ kind: "consumer_abandoned" });
+                this.deps.emitAnomaly({ kind: "consumer_abandoned", topic, consumer: c.consumer });
                 continue;
               }
               minCursor = Math.min(minCursor, c.lastRowid);
@@ -59333,7 +59399,12 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               case "chown-takeover": {
                 if (!await this.verifyTakeover(e)) {
                   if (mode === "live")
-                    this.deps.emitAnomaly({ kind: "takeover_invalid", entry: e });
+                    this.deps.emitAnomaly({
+                      kind: "takeover_invalid",
+                      entry: e,
+                      topic: e.topic,
+                      writer: e.writer
+                    });
                   return;
                 }
                 ks.owner = String(payload.newOwner ?? "");
@@ -59465,7 +59536,12 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           }
           violation(e) {
             this.deps.store.annotate(e.topic, e.writer, e.seq, "owned_violation", new Date(this.deps.clock()).toISOString());
-            this.deps.emitAnomaly({ kind: "owned_violation", entry: e });
+            this.deps.emitAnomaly({
+              kind: "owned_violation",
+              entry: e,
+              topic: e.topic,
+              writer: e.writer
+            });
           }
           markApproved(ks, ref, approver) {
             const req = ks.requests.find((r) => this.sameId(r.entry, ref));
@@ -59987,7 +60063,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               sub.chunkBytes = 0;
               session.sendControl({
                 t: "ERR",
-                code: "ERR_ENTRY_ENCODING",
+                code: session.violationCode(),
+                // P38
                 detail: `SNAP reassembly exceeds MAX_REASSEMBLY_BYTES (subId ${m.subId})`
               });
               session.close("protocol");
@@ -60185,7 +60262,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               this.requested.delete(m.snapshotId);
               session.sendControl({
                 t: "ERR",
-                code: "ERR_ENTRY_ENCODING",
+                code: session.violationCode(),
+                // P38
                 detail: `SNAPSHOT reassembly exceeds MAX_REASSEMBLY_BYTES (${m.topic})`
               });
               session.close("protocol");
@@ -61028,9 +61106,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_errors3();
         init_messages();
         PROTO_MIN = 1;
-        PROTO_MAX = 1;
+        PROTO_MAX = 2;
         Session = class {
           peerId;
+          // negotiated protocol version; 1 until HELLO completes (P38)
+          protoNow = 1;
           peerClass;
           grants;
           o;
@@ -61232,6 +61312,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             this.stallTimer = this.o.timers.setTimeout(() => this.stallCheck(), Math.ceil(this.c.CHANNEL_STALL_MS / 2));
           }
           // ---- lifecycle ----
+          // P38: the ERR code for a protocol violation, chosen by negotiated version.
+          // proto ≥ 2 peers get the distinct `ERR_PROTOCOL`; proto-1 peers keep
+          // `ERR_ENTRY_ENCODING`, whose union they actually have. Every protocol-violation
+          // close site routes through here so the four of them cannot drift apart.
+          violationCode() {
+            return this.protoNow >= 2 ? "ERR_PROTOCOL" : "ERR_ENTRY_ENCODING";
+          }
           close(reason = "detach") {
             if (this.stateNow === "closed")
               return;
@@ -61345,6 +61432,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               this.close("protocol");
               return;
             }
+            this.protoNow = proto2;
             this.peerGrants = m.grants;
             this.peerGrantsGen = m.grantsGen ?? 0;
             this.recomputeRefusals();
@@ -61394,7 +61482,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (m.mid > this.recvContigMid + this.c.INFLIGHT_CREDITS) {
               this.sendControl({
                 t: "ERR",
-                code: "ERR_ENTRY_ENCODING",
+                code: this.violationCode(),
+                // P38
                 detail: `data mid ${m.mid} beyond credit window`
               });
               this.close("protocol");
@@ -61590,17 +61679,34 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           rejectStats(topic) {
             return { ...this.rejects.get(topic) ?? {} };
           }
-          // P24 — drain-and-reset: each stats() read returns the counters accumulated
-          // since the previous read, plus the bounded (topic, peer) byte leaderboard.
-          drainIntervalStats() {
-            const topics = new Map(this.interval);
-            this.interval.clear();
+          // P24 interval counters, read WITHOUT resetting (proposals-v3.8 P31).
+          //
+          // P24 made its only reader drain-and-reset, which silently made the NUMBER OF
+          // CALLERS part of the semantics: with N independent readers each one saw only
+          // the slice accumulated since whichever reader happened to run last, so values
+          // shrank as unrelated call frequency rose and nothing anywhere reported it.
+          // Reading and resetting are now separate: stats() uses this one and is a pure
+          // read safe for any number of callers at any cadence, while a host that wants
+          // strictly disjoint windows calls drainIntervalStats() from a single owner.
+          readIntervalStats() {
+            const topics = /* @__PURE__ */ new Map();
+            for (const [t, c] of this.interval)
+              topics.set(t, { ...c });
             const hotspots = [...this.intervalPairBytes].map(([k, bytes]) => {
               const i = k.indexOf("\0");
               return { topic: k.slice(0, i), peerId: k.slice(i + 1), bytes };
             }).sort((a, b) => b.bytes - a.bytes || (a.topic < b.topic ? -1 : a.topic > b.topic ? 1 : a.peerId < b.peerId ? -1 : 1)).slice(0, SYNC_HOTSPOT_TOP_N);
-            this.intervalPairBytes.clear();
             return { topics, hotspots };
+          }
+          // Explicit reset of the P24 interval window (proposals-v3.8 P31): same shape as
+          // readIntervalStats(), then clear. A single owning reader still gets exactly
+          // disjoint windows — the P24 behavior, now opt-in rather than riding on every
+          // stats() call.
+          drainIntervalStats() {
+            const out = this.readIntervalStats();
+            this.interval.clear();
+            this.intervalPairBytes.clear();
+            return out;
           }
           counters(topic) {
             let c = this.interval.get(topic);
@@ -61637,7 +61743,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             this.hotWindowBytes += bytes;
             if (!this.hotEmitted && this.hotWindowBytes >= this.o.constants.SYNC_HOT_BYTES) {
               this.hotEmitted = true;
-              this.o.emitAnomaly({ kind: "sync_hot" });
+              this.o.emitAnomaly({ kind: "sync_hot", topic, peerId });
             }
           }
           // ---- lifecycle ----
@@ -61683,7 +61789,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               ps.expectedHaveReq = null;
               ps.session.sendControl({
                 t: "ERR",
-                code: "ERR_ENTRY_ENCODING",
+                code: ps.session.violationCode(),
+                // P38
                 detail: `HAVE reassembly exceeds MAX_REASSEMBLY_BYTES (req ${m.req})`
               });
               ps.session.close("protocol");
@@ -62133,7 +62240,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                       if (before !== void 0 && before >= head.contigSeq) {
                         if (!ps.stalled.has(skey)) {
                           ps.stalled.add(skey);
-                          this.o.emitAnomaly({ kind: "sync_stalled" });
+                          this.o.emitAnomaly({
+                            kind: "sync_stalled",
+                            topic: m.topic,
+                            peerId: ps.session.peerId,
+                            writer: m.writer
+                          });
                         }
                       } else {
                         ps.stalled.delete(skey);
@@ -62319,6 +62431,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return {
               name,
               version: def.version,
+              table: inst.table,
               rebuild: () => this.rebuild(name),
               query: (sql, params) => {
                 if (inst.faulted)
@@ -62577,7 +62690,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const expected = sha256HexUtf8(jcs(this.sortedRows(inst)));
             const actual = sha256HexUtf8(jcs(this.tableRows(inst)));
             if (expected !== actual) {
-              this.deps.emitAnomaly({ kind: "delta_mismatch" });
+              this.deps.emitAnomaly({ kind: "delta_mismatch", topic: inst.topic, view: inst.name });
               this.rewriteTable(inst);
               inst.epoch = this.mintEpoch();
               this.emitChange(inst, { upserts: [], deletes: [], reset: true });
@@ -62668,7 +62781,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           }
           fault(inst, err) {
             inst.faulted = true;
-            this.deps.emitAnomaly({ kind: "view_faulted" });
+            this.deps.emitAnomaly({ kind: "view_faulted", topic: inst.topic, view: inst.name });
             void err;
           }
           emitChange(inst, c) {
@@ -62821,7 +62934,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return sync.attach(ch, o);
         },
         vectors: () => core2.vectors(),
-        setKnownVectors: (v) => beaconHub.setKnownVectors(v),
+        setKnownVectors: (v, o) => beaconHub.setKnownVectors(v, o),
         staleness: (topic, key2) => beaconHub.staleness(topic, key2),
         beacon: (t, o) => beaconHub.start(t, o),
         finality: (topic) => finalityHub.finality(topic),
@@ -62908,7 +63021,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return r;
       };
       const stats = () => {
-        const interval = sync.drainIntervalStats();
+        const interval = sync.readIntervalStats();
         const out = { topics: {}, peers: sync.peerStats(), syncHotspots: interval.hotspots };
         const now = clock();
         for (const topic of topics.list()) {
@@ -62945,6 +63058,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
       return Object.assign(node, {
         stats,
+        // P31: the explicit drain. Returns the window it cleared in the same shape
+        // stats() reports, so a single-owner collector can publish it unchanged.
+        drainSyncInterval: () => {
+          const i = sync.drainIntervalStats();
+          const topics2 = {};
+          for (const [t, c] of i.topics)
+            topics2[t] = c;
+          return { topics: topics2, syncHotspots: i.hotspots };
+        },
         resetConsumer: (topic, consumer, o) => consumers.resetConsumer(topic, consumer, o),
         deleteConsumer: (topic, consumer) => consumers.deleteConsumer(topic, consumer),
         listConsumers: (topic) => consumers.listConsumers(topic),
@@ -163062,18 +163184,19 @@ data: ${JSON.stringify(msg.data)}
       try {
         unsubAnomaly = node.onAnomaly((anomaly) => {
           try {
+            const subject = (anomaly.topic ? ` topic=${anomaly.topic}` : "") + (anomaly.peerId ? ` peer=${anomaly.peerId}` : "") + (anomaly.writer ? ` writer=${anomaly.writer}` : "") + (anomaly.view ? ` view=${anomaly.view}` : "") + (anomaly.consumer ? ` consumer=${anomaly.consumer}` : "");
             if (anomaly.kind === "sync_stalled") {
               LOG.warn(
                 "Seqscribe",
-                `sync stalled writer=${writerId} \u2014 WANT rounds toward a peer stopped progressing; check get_status_metadata seqscribe.stalledStreams / applyRejects`
+                `sync stalled node=${writerId}${subject} \u2014 WANT rounds toward a peer stopped progressing`
               );
             } else if (anomaly.kind === "sync_hot") {
               LOG.warn(
                 "Seqscribe",
-                `sync hot writer=${writerId} \u2014 bulk sync traffic crossed the rate window (informational, not throttled); see seqscribe.syncHotspots in get_status_metadata`
+                `sync hot node=${writerId}${subject} \u2014 bulk sync traffic crossed the rate window (informational, not throttled)`
               );
             } else {
-              LOG.warn("Seqscribe", `anomaly kind=${anomaly.kind} writer=${writerId}`);
+              LOG.warn("Seqscribe", `anomaly kind=${anomaly.kind} node=${writerId}${subject}`);
             }
           } catch {
           }
@@ -163409,10 +163532,9 @@ data: ${JSON.stringify(msg.data)}
       wantRoundsRequested: 0,
       wantRoundsServed: 0
     };
-    function sumTotals(stats) {
+    function sumTotals(drain) {
       const totals = { ...ZERO_TOTALS };
-      for (const topic of Object.values(stats.topics ?? {})) {
-        const sync = topic?.sync;
+      for (const sync of Object.values(drain.topics ?? {})) {
         if (!sync) continue;
         totals.servedEntries += num(sync.servedEntries);
         totals.servedBytes += num(sync.servedBytes);
@@ -163463,8 +163585,10 @@ data: ${JSON.stringify(msg.data)}
       const collect = () => {
         if (stopped) return current;
         let stats;
+        let interval;
         try {
           stats = opts.readStats();
+          interval = opts.drainInterval();
         } catch (error48) {
           log(
             "warn",
@@ -163473,12 +163597,12 @@ data: ${JSON.stringify(msg.data)}
           return current;
         }
         const at = clock();
-        const totals = sumTotals(stats);
+        const totals = sumTotals(interval);
         const snapshot = {
           at,
           intervalMs: lastAt === null ? intervalMs : Math.max(0, at - lastAt),
           totals,
-          hotspots: (stats.syncHotspots ?? []).slice(0, SNAPSHOT_HOTSPOT_LIMIT).map((h) => ({ topic: h.topic, peerId: h.peerId, bytes: num(h.bytes) })),
+          hotspots: (interval.syncHotspots ?? []).slice(0, SNAPSHOT_HOTSPOT_LIMIT).map((h) => ({ topic: h.topic, peerId: h.peerId, bytes: num(h.bytes) })),
           applyRejects: sumApplyRejects(stats),
           stalledStreams: sumStalledStreams(stats),
           stats
@@ -164704,7 +164828,8 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         try {
           const node = components.seqscribeNode;
           seqscribeCollector = startSeqscribeThroughputCollector({
-            readStats: () => node.node.stats()
+            readStats: () => node.node.stats(),
+            drainInterval: () => node.node.drainSyncInterval()
           });
           seqscribeCollector.collect();
           components.seqscribeCollector = seqscribeCollector;
@@ -165687,7 +165812,6 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       ]);
       let stopped = false;
       let lastScope = [];
-      let lastLocalHints;
       let lastBoard = null;
       const doPut = async (rawReport) => {
         const projected = projectBeaconReport(rawReport);
@@ -165696,7 +165820,6 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           LOG.warn("Seqscribe", "beacon report failed the content projection; not sent");
           return;
         }
-        lastLocalHints = projected.hints;
         lastScope = scopeOf(projected.vectors);
         try {
           await transport.put(projected);
@@ -165821,7 +165944,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
             ...Object.keys(report.hints ?? {})
           ]))];
           try {
-            handle.node.setKnownVectors(clean2);
+            handle.node.setKnownVectors(clean2, { truncated });
             lastBoard = {
               reports: clean2,
               truncated,
@@ -165843,14 +165966,12 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         async pushNow() {
           if (stopped) return;
           try {
-            await doPut({
-              node: handle.writerId,
-              at: (/* @__PURE__ */ new Date()).toISOString(),
-              vectors: handle.node.vectors(),
-              ...lastLocalHints ? { hints: lastLocalHints } : {}
-            });
-            const board = await doGet();
-            if (!stopped) handle.node.setKnownVectors(board);
+            await libHandle.pushNow();
+            if (!stopped && lastBoard) {
+              handle.node.setKnownVectors(lastBoard.reports, {
+                truncated: lastBoard.truncated
+              });
+            }
           } catch {
           }
         },

@@ -28,6 +28,18 @@
  *     at it and get a falsy read. `summarizeSoleCopy` is the single decision
  *     point; every caller goes through it.
  *
+ *     Since SPEC v3.7 (P34) the library derives the same two answers —
+ *     `staleness()` returns `aheadPeers` and a three-valued `soleCopyRisk`,
+ *     gated on the host-supplied completeness signal
+ *     (`setKnownVectors(v, { truncated })`, which beacon.ts now passes). The
+ *     HOST derivation below stays, deliberately: the library's value is a
+ *     per-topic gate, while this module's contract is the per-(topic, writer)
+ *     candidate list the UI renders (`localSeq`/`bestPeerSeq`/`unreplicated`,
+ *     ring-cap capping, the subscribe-only exclusion — see
+ *     `BeaconTopicReplication`), plus the `SoleCopyUnknownReason` distinction
+ *     (`'truncated'` vs `'no-board'`) the wire shape carries. The library's
+ *     gate and this list now enforce the same truncation rule independently.
+ *
  *  2. **`keyStale` is ADVISORY-ONLY and must never gate correctness** (§5.7a).
  *     It is named `keyStaleAdvisory` for exactly that reason. P27 now supplies
  *     hash-only REGISTER-key hints, but the reader picks the raw maximum `seq`
