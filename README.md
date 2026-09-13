@@ -22,7 +22,7 @@ Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://doc
 
 **The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → ff-merge to `main`, worktree gone. Your phone only buzzed if something needed approving.
 
-ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — 23 of the last 60 commits on `main` are `Auto-merge via Refinery` commits: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
+ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — a large share of `main` commits are `Auto-merge via Refinery` commits: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
 
 ---
 
@@ -173,6 +173,8 @@ adhdev standalone --host          # allow other devices on the same LAN
 adhdev standalone --port 8080     # custom port
 adhdev standalone --token mysecret # token auth for scripts / operator access
 adhdev standalone --no-open       # don't auto-open the browser
+adhdev standalone --dev           # enable DevConsole to debug and test providers
+adhdev standalone --public <dir>  # serve a custom web dashboard build
 ```
 
 Standalone stays localhost-only by default. If you bind to `0.0.0.0` for LAN access, the dashboard warns when neither token auth nor a dashboard password is configured.
@@ -209,6 +211,7 @@ ADHDev talks to coding agents through four provider categories — `ide` (CDP), 
 | Codex CLI | `cli/codex-cli` |
 | Cursor Agent | `cli/cursor-cli` |
 | Google Antigravity CLI | `cli/antigravity-cli` |
+| Grok CLI | `cli/grok-cli` |
 | Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
@@ -286,7 +289,7 @@ This is the open-source, self-hosted edition (AGPL-3.0). Hosted cloud operations
 - `POST /api/v1/mux/:workspace/control`
 - `ws://localhost:3847/ws`
 
-Reference: [docs/openapi.yml](docs/openapi.yml) · [Self-hosted API docs](docs/self-hosted/local-api.md)
+Reference: [Self-hosted API docs](docs/self-hosted/local-api.md)
 
 ---
 

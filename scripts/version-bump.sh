@@ -398,26 +398,6 @@ echo "  ✅ packages/daemon-standalone/vendor/mcp-server staged"
 echo "[version-bump] syncing oss/package-lock.json..."
 npm install --package-lock-only 2>/dev/null || npm install --package-lock-only
 
-# ── CHANGELOG stub ──
-
-TODAY=$(date +%Y-%m-%d)
-CHANGELOG="CHANGELOG.md"
-if [ -f "$CHANGELOG" ]; then
-    # Insert new version section after the header
-    node -e "
-        const fs = require('fs');
-        const content = fs.readFileSync('$CHANGELOG', 'utf-8');
-        const stub = '## [$NEW_VERSION] - $TODAY\n\n### Added\n- \n\n### Fixed\n- \n\n### Changed\n- \n';
-        // Insert after 'All notable changes...' line
-        const marker = content.indexOf('\n\n## [');
-        if (marker !== -1) {
-            const updated = content.slice(0, marker) + '\n\n' + stub + content.slice(marker + 2);
-            fs.writeFileSync('$CHANGELOG', updated);
-        }
-    "
-    echo "  📋 CHANGELOG.md — v$NEW_VERSION stub added (edit before push if needed)"
-fi
-
 # ── Git commit, tag, push ──
 
 echo ""
@@ -428,7 +408,6 @@ echo "📝 Committing and tagging..."
 OSS_RELEASE_PATHS=(
     "${PACKAGES[@]}"
     "package-lock.json"
-    "$CHANGELOG"
     "packages/daemon-standalone/vendor/mcp-server"
 )
 if [ "$GHOSTTY_CHANGED" -eq 1 ]; then

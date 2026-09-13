@@ -86,13 +86,40 @@ If you need to build selectively, keep the dependency chain in mind:
 
 ### 🧪 Testing
 
+Build first (tests run against built packages), then run the full suite — the same 11 package suites CI runs:
+
 ```bash
-# Type-check (no emit)
+npm run build
+npm test        # runs `npm test` in every workspace that has tests
+```
+
+Or run a single package's suite:
+
+```bash
+npm run test -w packages/mesh-shared
+npm run test -w packages/daemon-core
+npm run test -w packages/mcp-server
+npm run test -w packages/web-core
+npm run test -w packages/session-host-daemon
+npm run test -w packages/session-host-core
+npm run test -w packages/terminal-mux-core
+npm run test -w packages/terminal-mux-cli
+npm run test -w packages/terminal-render-web
+npm run test -w packages/web-standalone
+npm run test -w packages/daemon-standalone
+```
+
+Type-check (no emit):
+
+```bash
 npx tsc --noEmit -p packages/daemon-core/tsconfig.json
 npx tsc --noEmit -p packages/session-host-daemon/tsconfig.json
 npx tsc --noEmit -p packages/daemon-standalone/tsconfig.json
+```
 
-# Run standalone daemon
+Run the standalone daemon:
+
+```bash
 node packages/daemon-standalone/dist/index.js
 # Dashboard at http://localhost:3847
 
