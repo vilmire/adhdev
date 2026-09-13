@@ -26,7 +26,46 @@ export type PersistableCliHistoryMessage = {
      * to ask for.
      */
     toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
+    /**
+     * (TOOL-EXPAND) Producer-minted bubble identity, carried for the same reason
+     * as `toolBlockRef`: these rows are projected straight into
+     * `activeChat.messages`, and web-core keys bubbles off this identity. Dropping
+     * it made every restored bubble fall back to an index-derived React key, which
+     * renumbers as the tail grows (remount flash) and cannot address a single
+     * bubble for expand/collapse state. Identifiers only — no content.
+     */
+    sequence?: number;
+    _turnKey?: string;
+    bubbleState?: string;
+    providerUnitKey?: string;
+    bubbleId?: string;
 };
+
+/**
+ * (TOOL-EXPAND) Copy the producer-minted bubble identity by NAME and only when
+ * present, so a bubble that never carried it does not gain `undefined` keys on
+ * every row. Shared by the three field-by-field remaps that stand between the
+ * native-history reader and `activeChat.messages`
+ * (`toPersistableMessages` and the two remaps in cli-provider-state-projection),
+ * so the identity cannot be preserved at one hop and silently dropped at the
+ * next. Identifiers and ordinals only — never content, so this rides the same
+ * lane as `toolBlockRef`.
+ */
+export function carryBubbleIdentity(message: {
+    sequence?: number;
+    _turnKey?: string;
+    bubbleState?: string;
+    providerUnitKey?: string;
+    bubbleId?: string;
+}): Partial<PersistableCliHistoryMessage> {
+    return {
+        ...(typeof message?.sequence === 'number' && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {}),
+        ...(message?._turnKey ? { _turnKey: message._turnKey } : {}),
+        ...(message?.bubbleState ? { bubbleState: message.bubbleState } : {}),
+        ...(message?.providerUnitKey ? { providerUnitKey: message.providerUnitKey } : {}),
+        ...(message?.bubbleId ? { bubbleId: message.bubbleId } : {}),
+    };
+}
 
 function normalizePersistableCliHistoryContent(content: unknown): string {
     return flattenContent(content as any).replace(/\s+/g, ' ').trim();

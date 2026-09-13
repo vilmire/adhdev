@@ -17,6 +17,12 @@
  * These tests drive the REAL projection/persistence functions rather than
  * asserting on parser output — the earlier regression tests checked the parser
  * (which was already correct) and therefore could not catch this.
+ *
+ * NOTE these remaps are the DOWNSTREAM half of the fix. They can only carry what
+ * they are handed, and the upstream native-history normalizer was dropping the
+ * ref before it ever reached them — see
+ * test/config/native-history-toolblockref-passthrough.test.ts, which drives the
+ * real read path and is what made the live projection go from 0 refs to N.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -139,6 +145,56 @@ describe('(TOOL-EXPAND) activeChat projection carries toolBlockRef', () => {
 
         expect(historySync).toContain('toolBlockRef: message.toolBlockRef');
         expect(dedup).toContain('toolBlockRef?:');
+    });
+
+    /**
+     * The same three remaps must also carry the producer-minted bubble identity.
+     * web-core keys chat bubbles off it, so dropping it forces an index-derived
+     * React key that renumbers whenever the tail grows (remount flash) and cannot
+     * address a single bubble for expand/collapse state. All three delegate to one
+     * shared helper so the identity cannot survive one hop and die at the next.
+     */
+    it('every activeChat/persistence remap also carries the bubble identity', () => {
+        const projection = srcFile('cli-provider-state-projection.ts');
+        const historySync = srcFile('cli-provider-history-sync.ts');
+        const dedup = srcFile('cli-provider-history-dedup.ts');
+
+        const remaps = projection.split(/receivedAt: (?:message\.receivedAt|typeof message\.receivedAt)/);
+        for (const [index, remap] of remaps.slice(1).entries()) {
+            expect(
+                remap.slice(0, 900),
+                `cli-provider-state-projection.ts remap #${index + 1} dropped the bubble identity`,
+            ).toContain('carryBubbleIdentity(message)');
+        }
+
+        expect(historySync).toContain('carryBubbleIdentity(message)');
+        expect(dedup).toContain('export function carryBubbleIdentity');
+    });
+
+    /**
+     * The shared helper itself: by NAME and only when present (no `undefined`
+     * keys on bubbles that never carried identity), identifiers/ordinals only.
+     */
+    it('carryBubbleIdentity copies identity by name and omits what is absent', async () => {
+        const { carryBubbleIdentity } = await import('../../src/providers/cli-provider-history-dedup.js');
+
+        expect(carryBubbleIdentity({
+            sequence: 4,
+            _turnKey: 'turn:2',
+            bubbleState: 'final',
+            providerUnitKey: 'u4',
+            bubbleId: 'b4',
+        })).toEqual({
+            sequence: 4,
+            _turnKey: 'turn:2',
+            bubbleState: 'final',
+            providerUnitKey: 'u4',
+            bubbleId: 'b4',
+        });
+
+        expect(Object.keys(carryBubbleIdentity({}))).toEqual([]);
+        // A non-finite ordinal is not an identity — it must not ride the wire.
+        expect(Object.keys(carryBubbleIdentity({ sequence: Number.NaN }))).toEqual([]);
     });
 
     it('holds the content boundary — the ref is exactly three integers', () => {

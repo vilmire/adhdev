@@ -1944,6 +1944,27 @@ function normalizeProviderNativeHistoryRecords(agentType: string, historySession
             if (typeof record?.bubbleState === 'string' && record.bubbleState) {
                 (base as any).bubbleState = record.bubbleState;
             }
+            // (TOOL-EXPAND) The content-free tool-block ref the native parser
+            // stamps on truncated tool bubbles. This normalizer is the FIRST hop
+            // every native-history read passes through (callProviderNativeHistoryRead
+            // -> here -> pageHistoryRecords -> readProviderChatHistory), so a ref
+            // dropped here can never be recovered by the downstream activeChat /
+            // persisted-tail remaps — they only carry what they are handed. Copied
+            // by NAME and only when present so prose bubbles keep their exact key
+            // set, and re-read field by field as three numbers so nothing but the
+            // three indices can ride this lane (the boundary that makes the ref
+            // safe to project into activeChat at all).
+            const ref = record?.toolBlockRef;
+            if (ref && typeof ref === 'object'
+                && typeof ref.sourceMtimeMs === 'number'
+                && typeof ref.recordIndex === 'number'
+                && typeof ref.blockIndex === 'number') {
+                (base as any).toolBlockRef = {
+                    sourceMtimeMs: ref.sourceMtimeMs,
+                    recordIndex: ref.recordIndex,
+                    blockIndex: ref.blockIndex,
+                };
+            }
             return sanitizeHistoryMessage(agentType, base);
         })
         .filter(Boolean) as HistoryMessage[];

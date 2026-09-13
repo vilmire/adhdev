@@ -32,7 +32,7 @@ import {
     readProviderChatHistory,
 } from '../config/chat-history.js';
 import { claimAntigravityConversation } from './native-history/antigravity-claim-registry.js';
-import type { PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
+import { type PersistableCliHistoryMessage, carryBubbleIdentity } from './cli-provider-history-dedup.js';
 import { STATUS_HYDRATION_TAIL_LIMIT } from './cli-provider-instance-types.js';
 import { isIdleStatus, getMessageTime } from './cli-provider-status-helpers.js';
 
@@ -70,6 +70,11 @@ function toPersistableMessages(
         senderName?: string;
         receivedAt?: number;
         toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
+        sequence?: number;
+        _turnKey?: string;
+        bubbleState?: string;
+        providerUnitKey?: string;
+        bubbleId?: string;
     }>,
 ): PersistableCliHistoryMessage[] {
     return messages.map((message) => ({
@@ -83,6 +88,7 @@ function toPersistableMessages(
         // into activeChat — so a resumed session needs the ref to survive here
         // as well, by NAME and only when present.
         ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+        ...carryBubbleIdentity(message),
     })) as PersistableCliHistoryMessage[];
 }
 
