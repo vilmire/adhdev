@@ -1001,15 +1001,17 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         }
     }
 
-    // Start the throughput collector — the process's single `node.stats()`
-    // reader (library P24 drains the interval counters on every read, so any
-    // second reader corrupts everyone's numbers; see throughput-collector.ts).
-    // Every other consumer reads `snapshot()`.
+    // Start the throughput collector — the process's single owner of the P24
+    // interval drain (since SPEC v3.7 P31, `stats()` is a pure read and the
+    // drain lives behind `drainSyncInterval()`; one drain owner keeps the
+    // interval windows disjoint — see throughput-collector.ts). Every other
+    // consumer reads `snapshot()`.
     if (components.seqscribeNode) {
         try {
             const node = components.seqscribeNode;
             seqscribeCollector = startSeqscribeThroughputCollector({
                 readStats: () => node.node.stats(),
+                drainInterval: () => node.node.drainSyncInterval(),
             });
             // Prime it once so `get_status_metadata` and the first status
             // report have a snapshot to read instead of null for a full tick.

@@ -1,30 +1,32 @@
 /**
- * seqscribe interval-throughput collector (library proposals-v3.5 P24).
+ * seqscribe interval-throughput collector (library proposals-v3.5 P24,
+ * drain ownership revised by SPEC v3.7 P31).
  *
- * ── Why this file exists: stats() is DESTRUCTIVE ───────────────────────────
- * As of P24, `node.stats()` is not a pure read. Every call drains
- * `SyncEngine.drainIntervalStats()`, which returns the counters accumulated
- * since the PREVIOUS call and then CLEARS them. The interval is literally
- * "[previous stats() call, this one]".
+ * ── Why this file exists: one owner for the interval drain ─────────────────
+ * The library's P24 interval counters accumulate until someone drains them.
+ * Before v3.7 the drain was a side effect of `node.stats()`, which made the
+ * NUMBER OF CALLERS part of the semantics — every extra reader stole a
+ * fragment of someone else's interval, silently. Since v3.7 (P31) `stats()`
+ * is a pure read and the drain lives behind `node.drainSyncInterval()`, so
+ * the safety hazard is gone from the library.
  *
- * That makes the number of stats() callers part of the semantics. With three
- * independent callers — the status reporter, `get_status_metadata`, and the
- * mesh read-readiness probe — each one steals whatever accumulated since
- * whichever caller happened to run last. Nobody sees a whole interval, the
- * values shrink as unrelated traffic increases, and the throughput readout
- * silently becomes noise. The failure is invisible: no error, no zero, just
- * numbers that are wrong by an unknowable factor.
+ * This collector remains the process's SINGLE drain owner — as hygiene, not
+ * as a correctness requirement. One owner ticking on its own cadence keeps
+ * the interval windows disjoint and meaningful ("traffic in the last tick");
+ * several independent drainers would each see arbitrary sub-windows. Every
+ * other consumer reads the snapshot it publishes. `snapshot()` is a pure
+ * getter — reading it does not consume an interval, so any number of readers
+ * at any cadence is safe.
  *
- * So this module makes stats() single-reader by construction. The collector
- * ticks on its own cadence, is the ONLY thing in the daemon that calls
- * `node.stats()`, and every other consumer reads the snapshot it publishes.
- * `snapshot()` is a pure getter — reading it does not consume an interval, so
- * any number of readers at any cadence is safe.
+ * Point-in-time gauges (`logRows`, `pending`, `quarantined`, `archived`,
+ * `consumers[].lagRows`, `peers`, `finalityGeneration`) come from `stats()`
+ * and may now be read by anyone directly; only the interval counters
+ * (`topics`, `syncHotspots`) come from `drainSyncInterval()`.
  *
  * ★ If you add a new consumer of seqscribe stats, wire it to `snapshot()`.
- *   Calling `node.stats()` directly re-introduces the bug this file exists to
- *   prevent, and the regression test in
- *   `test/seqscribe/throughput-collector.test.ts` asserts the single-reader
+ *   Calling `drainSyncInterval()` directly fragments the interval windows
+ *   this file owns, and the regression test in
+ *   `test/seqscribe/throughput-collector.test.ts` asserts the single-drain
  *   property.
  *
  * ── Content boundary ───────────────────────────────────────────────────────
@@ -38,7 +40,7 @@
  * `test/status/cloud-status-content-boundary.test.ts`.
  */
 
-import type { NodeStats } from 'seqscribe';
+import type { NodeStats, TopicSyncCounters } from 'seqscribe';
 import { LOG } from '../logging/logger.js';
 
 /** Default collector cadence. Also the effective resolution of every counter. */
@@ -104,9 +106,26 @@ const ZERO_TOTALS: SeqscribeThroughputTotals = {
     wantRoundsServed: 0,
 };
 
+/**
+ * The drained P24 interval counters, as returned by `node.drainSyncInterval()`
+ * (SPEC v3.7 P31) — same shape `stats()` reports them in.
+ */
+export interface SyncIntervalDrain {
+    topics: Record<string, TopicSyncCounters>;
+    syncHotspots: NodeStats['syncHotspots'];
+}
+
 export interface ThroughputCollectorOptions {
-    /** Reads `node.stats()`. This must be the process's ONLY caller. */
+    /**
+     * Reads `node.stats()` for the point-in-time gauges. A pure read since
+     * SPEC v3.7, so any number of callers is safe.
+     */
     readStats: () => NodeStats;
+    /**
+     * Drains the P24 interval counters via `node.drainSyncInterval()`. This
+     * must be the process's ONLY caller — see the file header.
+     */
+    drainInterval: () => SyncIntervalDrain;
     /** Tick cadence. Tests pass a short value. */
     intervalMs?: number;
     /** Injectable clock — tests drive this deterministically. */
@@ -128,10 +147,9 @@ export interface SeqscribeThroughputCollector {
     stop(): void;
 }
 
-function sumTotals(stats: NodeStats): SeqscribeThroughputTotals {
+function sumTotals(drain: SyncIntervalDrain): SeqscribeThroughputTotals {
     const totals: SeqscribeThroughputTotals = { ...ZERO_TOTALS };
-    for (const topic of Object.values(stats.topics ?? {})) {
-        const sync = topic?.sync;
+    for (const sync of Object.values(drain.topics ?? {})) {
         if (!sync) continue;
         totals.servedEntries += num(sync.servedEntries);
         totals.servedBytes += num(sync.servedBytes);
@@ -208,9 +226,12 @@ export function startSeqscribeThroughputCollector(
     const collect = (): SeqscribeThroughputSnapshot | null => {
         if (stopped) return current;
         let stats: NodeStats;
+        let interval: SyncIntervalDrain;
         try {
-            // ★ The single stats() call in the daemon. See the file header.
+            // Gauges first (a pure read since v3.7), then the drain — the
+            // process's single drainSyncInterval() call. See the file header.
             stats = opts.readStats();
+            interval = opts.drainInterval();
         } catch (error) {
             // A failed read is not fatal and must not kill the timer: the node
             // may be mid-close, or the DB briefly unavailable. Keep the last
@@ -223,12 +244,12 @@ export function startSeqscribeThroughputCollector(
         }
 
         const at = clock();
-        const totals = sumTotals(stats);
+        const totals = sumTotals(interval);
         const snapshot: SeqscribeThroughputSnapshot = {
             at,
             intervalMs: lastAt === null ? intervalMs : Math.max(0, at - lastAt),
             totals,
-            hotspots: (stats.syncHotspots ?? [])
+            hotspots: (interval.syncHotspots ?? [])
                 .slice(0, SNAPSHOT_HOTSPOT_LIMIT)
                 .map((h) => ({ topic: h.topic, peerId: h.peerId, bytes: num(h.bytes) })),
             applyRejects: sumApplyRejects(stats),

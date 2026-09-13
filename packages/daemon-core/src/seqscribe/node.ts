@@ -231,13 +231,17 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
               })
             : null;
 
-    // Anomaly logging (library P22/P24). Without this the replication signals
-    // exist only inside the library and a host mid-incident cannot see them.
+    // Anomaly logging (library P22/P24, subject identifiers since SPEC v3.7
+    // P32). Without this the replication signals exist only inside the library
+    // and a host mid-incident cannot see them.
     //
-    // The `Anomaly` payload is `{ kind, entry? }` — the library carries no peer
-    // or topic detail on the sync signals, so the log line is the kind plus the
-    // node-level context we already hold. `entry` is deliberately NOT logged:
-    // it is a LogEntry and its payload is user/agent content.
+    // The `Anomaly` payload is `{ kind, topic?, peerId?, writer?, view?,
+    // consumer?, entry? }`. Since P32 the anomaly names its subject directly,
+    // so the log line carries those identifiers and no longer sends the reader
+    // off to correlate `get_status_metadata`. The identifiers are LOCAL-ONLY
+    // (topic names embed session/mesh ids) — the daemon log is an allowed
+    // surface. `entry` is deliberately NOT logged: it is a LogEntry and its
+    // payload is user/agent content.
     //
     // Severity split: `sync_hot` is informational by the library's own
     // definition (bulk catch-up is normal and it never throttles), but it is
@@ -248,20 +252,25 @@ export function openSeqscribeNode(opts: SeqscribeNodeOptions = {}): SeqscribeNod
     try {
         unsubAnomaly = node.onAnomaly((anomaly) => {
             try {
+                const subject =
+                    (anomaly.topic ? ` topic=${anomaly.topic}` : '') +
+                    (anomaly.peerId ? ` peer=${anomaly.peerId}` : '') +
+                    (anomaly.writer ? ` writer=${anomaly.writer}` : '') +
+                    (anomaly.view ? ` view=${anomaly.view}` : '') +
+                    (anomaly.consumer ? ` consumer=${anomaly.consumer}` : '');
                 if (anomaly.kind === 'sync_stalled') {
                     LOG.warn(
                         'Seqscribe',
-                        `sync stalled writer=${writerId} — WANT rounds toward a peer stopped progressing; ` +
-                            'check get_status_metadata seqscribe.stalledStreams / applyRejects',
+                        `sync stalled node=${writerId}${subject} — WANT rounds toward a peer stopped progressing`,
                     );
                 } else if (anomaly.kind === 'sync_hot') {
                     LOG.warn(
                         'Seqscribe',
-                        `sync hot writer=${writerId} — bulk sync traffic crossed the rate window ` +
-                            '(informational, not throttled); see seqscribe.syncHotspots in get_status_metadata',
+                        `sync hot node=${writerId}${subject} — bulk sync traffic crossed the rate window ` +
+                            '(informational, not throttled)',
                     );
                 } else {
-                    LOG.warn('Seqscribe', `anomaly kind=${anomaly.kind} writer=${writerId}`);
+                    LOG.warn('Seqscribe', `anomaly kind=${anomaly.kind} node=${writerId}${subject}`);
                 }
             } catch {
                 /* a logging failure must never propagate into the library */

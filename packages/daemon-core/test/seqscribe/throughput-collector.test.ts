@@ -7,22 +7,22 @@ import {
 import { summarizeSeqscribeStats } from '../../src/seqscribe/stats.js';
 
 /**
- * The collector exists for ONE reason: since library proposals-v3.5 P24,
- * `node.stats()` is destructive. Every call drains the interval throughput
- * counters and resets them, so the interval is "[previous stats() call, this
- * one]".
+ * The collector exists to keep the P24 interval counters meaningful: they
+ * accumulate until someone drains them, and the drain must have ONE owner or
+ * every consumer sees an arbitrary sub-window.
  *
- * That makes the NUMBER OF CALLERS part of the semantics. With the three
- * pre-existing callers (status reporter, `get_status_metadata`, mesh
- * read-readiness) each one steals whatever accumulated since whoever ran last.
- * The failure mode is silent — no throw, no zero, just numbers wrong by a
- * factor nobody can reconstruct.
+ * Before SPEC v3.7 the drain was a side effect of `node.stats()`, which made
+ * the NUMBER OF CALLERS part of the semantics — each extra reader silently
+ * stole a fragment of someone else's interval. Since v3.7 (P31) `stats()` is
+ * a pure read and the drain lives behind `node.drainSyncInterval()`.
  *
- * These tests pin the property that prevents it: the collector is the only
- * caller, and `snapshot()` is a pure read that consumes nothing.
+ * These tests pin the property that survives both regimes: the collector is
+ * the only drain caller, its totals are INTERVAL values (not
+ * cumulative-since-start), and `snapshot()` is a pure read that consumes
+ * nothing.
  */
 
-/** A fake node whose `stats()` drains an interval exactly as the library's does. */
+/** A fake node with SPEC v3.7 semantics: stats() is a pure read; only drainSyncInterval() resets. */
 function fakeNode() {
     let pending = {
         servedEntries: 0,
@@ -36,10 +36,14 @@ function fakeNode() {
     let applyRejects: Record<string, number> = {};
     let stalledStreams = 0;
     let statsCalls = 0;
+    let drainCalls = 0;
 
     return {
         get statsCalls() {
             return statsCalls;
+        },
+        get drainCalls() {
+            return drainCalls;
         },
         /** Simulate sync traffic accumulating between drains. */
         accrue(over: Partial<typeof pending> & { hotspot?: { topic: string; peerId: string; bytes: number } }) {
@@ -59,20 +63,9 @@ function fakeNode() {
         setStalled(n: number) {
             stalledStreams = n;
         },
-        /** The destructive read. Drains `pending`, exactly like the library. */
+        /** SPEC v3.7: a PURE read. Counters accumulate until drained. */
         stats(): NodeStats {
             statsCalls++;
-            const drained = pending;
-            pending = {
-                servedEntries: 0,
-                servedBytes: 0,
-                appliedEntries: 0,
-                appliedBytes: 0,
-                wantRoundsRequested: 0,
-                wantRoundsServed: 0,
-            };
-            const drainedHotspots = hotspots;
-            hotspots = [];
             return {
                 topics: {
                     'mesh.mesh_abc.events': {
@@ -85,7 +78,9 @@ function fakeNode() {
                         certOrderAgeMs: null,
                         consumers: {},
                         applyRejects,
-                        sync: drained,
+                        // Cumulative since the last drain — reading this for
+                        // interval throughput is exactly the P31 trap.
+                        sync: { ...pending },
                     },
                 },
                 peers: [
@@ -97,23 +92,43 @@ function fakeNode() {
                         stalledStreams,
                     },
                 ],
-                syncHotspots: drainedHotspots,
+                syncHotspots: [...hotspots],
             } as unknown as NodeStats;
+        },
+        /** The interval drain. Resets the counters, exactly like the library. */
+        drainSyncInterval() {
+            drainCalls++;
+            const drained = pending;
+            pending = {
+                servedEntries: 0,
+                servedBytes: 0,
+                appliedEntries: 0,
+                appliedBytes: 0,
+                wantRoundsRequested: 0,
+                wantRoundsServed: 0,
+            };
+            const drainedHotspots = hotspots;
+            hotspots = [];
+            return {
+                topics: { 'mesh.mesh_abc.events': drained },
+                syncHotspots: drainedHotspots,
+            };
         },
     };
 }
 
-describe('seqscribe throughput collector — single-reader property', () => {
+describe('seqscribe throughput collector — single-drain property', () => {
     let collector: SeqscribeThroughputCollector | null = null;
     afterEach(() => {
         collector?.stop();
         collector = null;
     });
 
-    it('is the only caller of stats(): repeated snapshot() reads consume no interval', () => {
+    it('is the only drain caller: repeated snapshot() reads consume no interval', () => {
         const node = fakeNode();
         collector = startSeqscribeThroughputCollector({
             readStats: () => node.stats(),
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log: () => {},
         });
@@ -121,48 +136,57 @@ describe('seqscribe throughput collector — single-reader property', () => {
         // ── Interval 1 ──
         node.accrue({ servedEntries: 10, servedBytes: 1000 });
         collector.collect();
-        expect(node.statsCalls).toBe(1);
+        expect(node.drainCalls).toBe(1);
 
         // ★ THE ASSERTION. Other consumers read the snapshot between ticks.
-        // Under the bug this test guards, each of these would have been a
-        // `node.stats()` call that drained the next interval out from under the
-        // collector. Here they must not touch stats() at all...
+        // None of them may drain — the interval stays whole for the next tick...
         const readerA = collector.snapshot();
         const readerB = collector.snapshot();
         const readerC = collector.snapshot();
-        expect(node.statsCalls).toBe(1);
+        expect(node.drainCalls).toBe(1);
 
         // ...and every reader must see the SAME whole interval, not a fragment.
         expect(readerA?.totals.servedEntries).toBe(10);
         expect(readerB?.totals.servedEntries).toBe(10);
         expect(readerC?.totals.servedEntries).toBe(10);
 
-        // ── Interval 2 ── traffic accrued while those readers were reading is
-        // still intact, because none of them consumed it.
+        // ── Interval 2 ── ★ interval, NOT cumulative: since v3.7 stats()
+        // reports counters cumulative-since-last-drain, so a collector reading
+        // totals off stats() would report 17 here. The drain reports 7.
         node.accrue({ servedEntries: 7, servedBytes: 700 });
         collector.collect();
-        expect(node.statsCalls).toBe(2);
+        expect(node.drainCalls).toBe(2);
         expect(collector.snapshot()?.totals.servedEntries).toBe(7);
     });
 
-    it('demonstrates the bug it prevents: a second direct reader halves the interval', () => {
-        // Not a test of our code — a test of the PREMISE. If this ever stops
-        // failing to preserve the full interval, the library's reset semantics
-        // changed and the single-reader constraint can be revisited.
+    it('totals come from the drain, not the cumulative stats() view (the P31 trap)', () => {
+        // Under SPEC v3.7, stats().topics[*].sync accumulates until drained.
+        // A collector that kept reading totals from stats() — the pre-bump
+        // wiring — would silently turn interval throughput into
+        // cumulative-since-start. This pins that it does not.
         const node = fakeNode();
         node.accrue({ servedEntries: 10 });
 
-        const rogue = node.stats(); // a second consumer calling stats() directly
+        // A rogue direct stats() reader is now HARMLESS (v3.7: pure read)...
+        const rogue = node.stats();
         expect(rogue.topics['mesh.mesh_abc.events']!.sync.servedEntries).toBe(10);
 
-        // The collector now sees nothing: the rogue reader took the interval.
+        // ...and the collector still sees the whole interval, because only its
+        // drain consumes anything.
         collector = startSeqscribeThroughputCollector({
             readStats: () => node.stats(),
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log: () => {},
         });
         collector.collect();
-        expect(collector.snapshot()?.totals.servedEntries).toBe(0);
+        expect(collector.snapshot()?.totals.servedEntries).toBe(10);
+
+        // The next tick reports only what accrued since — never the cumulative
+        // 15 that stats().topics[*].sync would show.
+        node.accrue({ servedEntries: 5 });
+        collector.collect();
+        expect(collector.snapshot()?.totals.servedEntries).toBe(5);
     });
 
     it('sums interval throughput across topics and surfaces P22 counters', () => {
@@ -180,6 +204,7 @@ describe('seqscribe throughput collector — single-reader property', () => {
 
         collector = startSeqscribeThroughputCollector({
             readStats: () => node.stats(),
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log: () => {},
         });
@@ -203,6 +228,7 @@ describe('seqscribe throughput collector — single-reader property', () => {
         const log = vi.fn();
         collector = startSeqscribeThroughputCollector({
             readStats: () => node.stats(),
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log,
         });
@@ -238,6 +264,7 @@ describe('seqscribe throughput collector — single-reader property', () => {
                 if (fail) throw new Error('db closed');
                 return node.stats();
             },
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log,
         });
@@ -258,14 +285,15 @@ describe('seqscribe throughput collector — single-reader property', () => {
         const node = fakeNode();
         collector = startSeqscribeThroughputCollector({
             readStats: () => node.stats(),
+            drainInterval: () => node.drainSyncInterval(),
             intervalMs: 60_000,
             log: () => {},
         });
         collector.collect();
-        const calls = node.statsCalls;
+        const calls = node.drainCalls;
         collector.stop();
         collector.collect();
-        expect(node.statsCalls).toBe(calls);
+        expect(node.drainCalls).toBe(calls);
     });
 });
 
@@ -280,6 +308,7 @@ describe('summarizeSeqscribeStats — local diagnostics are opt-in', () => {
     });
     const collector = startSeqscribeThroughputCollector({
         readStats: () => node.stats(),
+        drainInterval: () => node.drainSyncInterval(),
         intervalMs: 60_000,
         log: () => {},
     });

@@ -463,9 +463,10 @@ export interface SummarizeOptions {
      * The throughput collector's published snapshot. Only read when
      * `includeLocalDiagnostics` is set.
      *
-     * ★ Pass the collector's `snapshot()`, never a fresh `node.stats()`:
-     * stats() drains the interval counters, so a second reader silently halves
-     * everyone's numbers (seqscribe/throughput-collector.ts).
+     * ★ Pass the collector's `snapshot()`, never a fresh interval read: the
+     * collector is the process's single drain owner, and the snapshot is the
+     * only assembled home of the interval counters
+     * (seqscribe/throughput-collector.ts).
      */
     throughput?: SeqscribeThroughputSnapshot | null;
     /**
