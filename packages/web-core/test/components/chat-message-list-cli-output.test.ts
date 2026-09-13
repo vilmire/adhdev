@@ -17,7 +17,7 @@ function renderMessages(messages: ChatMessage[]): string {
 }
 
 describe('ChatMessageList CLI assistant rendering', () => {
-  it('hides internal coordinator tool and terminal activity from the visible chat transcript', () => {
+  it('renders kind:tool bubbles in the default transcript and still hides terminal activity', () => {
     const html = renderMessages([
       {
         role: 'assistant',
@@ -36,8 +36,10 @@ describe('ChatMessageList CLI assistant rendering', () => {
       } as ChatMessage,
     ])
 
-    expect(html).not.toContain('mcp_adhdev_mesh_mesh_git_status')
+    expect(html).toContain('chat-msg-tool')
+    expect(html).toContain('⚡ mcp_adhdev_mesh_mesh_git_status (0.0s)')
     expect(html).not.toContain('Ran command')
+    expect(html).not.toContain('mcp_adhdev_mesh_mesh_git_status output')
     expect(html).toContain('최종 cleanup 요약입니다.')
   })
 

@@ -222,6 +222,10 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         const activityMessages: ChatMessage[] = [];
         for (const message of (Array.isArray(messages) ? messages : [])) {
             const classification = classifyChatMessageForDisplay(message);
+            // kind:'tool' is classified user-facing (chat-activity-visibility)
+            // so it takes this branch and ChatMessageRow's existing tool-bubble
+            // renderer. Do not add a kind==='standard' allow-list here — that
+            // is the filter that previously dropped every tool row from DOM.
             if (classification.isUserFacing) chatMessages.push(message);
             else if (classification.isActivityFacing) activityMessages.push(message);
         }

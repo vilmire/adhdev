@@ -81,10 +81,10 @@ describe('chat activity toggle (O5)', () => {
 
     // …and the recorded value flips what the transcript merge renders.
     const chat = [{ role: 'assistant', content: 'answer', receivedAt: 20 } as ChatMessage]
-    const activity = [{ role: 'assistant', kind: 'tool', content: 'tool row', receivedAt: 10 } as ChatMessage]
+    const activity = [{ role: 'assistant', kind: 'thought', content: 'thought row', receivedAt: 10 } as ChatMessage]
     expect(
       mergeChatAndActivityMessages(chat, activity, readChatActivityVisiblePreference()).map((m) => m.content),
-    ).toEqual(['tool row', 'answer'])
+    ).toEqual(['thought row', 'answer'])
 
     act(() => toggle!.click())
     expect(values.get(CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY)).toBe('0')

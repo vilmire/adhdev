@@ -37,6 +37,13 @@ import {
 // without the system-message row dominating the chat column (G8).
 const SYSTEM_BUBBLE_TRUNCATE_LENGTH = 100;
 
+// Native-turn tool rows arrive as a plaintext string with no toolBlockRef
+// (claude-cli does not emit structured tool_use blocks on that path). Fold
+// at the same cap the spec-history parser uses for tool *results*
+// (`TOOL_RESULT_SUMMARY_MAX` in daemon-core native-history-tool-blocks.ts)
+// and expand locally — the full string is already on the message.
+const TOOL_BUBBLE_LOCAL_COLLAPSE_MAX = 600;
+
 function CopyButton({ text }: { text: string }) {
     const { t } = useTranslation('common');
     const [copied, setCopied] = useState(false);
@@ -536,6 +543,14 @@ export const ChatMessageRow = memo(function ChatMessageRow({
         // exactly where there is more text to fetch — and never on a bubble
         // whose expanded form would be identical.
         const expandableRef = message.toolBlockRef;
+        const fullText = toolExpand?.text ?? contentStr;
+        const canLocalExpand = !expandableRef
+            && !hasStructuredRenderer
+            && fullText.length > TOOL_BUBBLE_LOCAL_COLLAPSE_MAX;
+        const showCollapsedLocal = canLocalExpand && !isTextExpanded && toolExpand?.status !== 'expanded';
+        const displayedText = showCollapsedLocal
+            ? `${fullText.slice(0, TOOL_BUBBLE_LOCAL_COLLAPSE_MAX - 1)}…`
+            : fullText;
         return (
             <div className="self-start chat-msg-tool" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <span className="chat-bubble-header-end chat-msg-tool-header-end">
@@ -554,7 +569,7 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                     </div>
                 ) : (
                     <div className="tool-text w-full" style={{ whiteSpace: 'pre-wrap' }}>
-                        {toolExpand?.text ?? contentStr}
+                        {displayedText}
                     </div>
                 )}
                 {expandableRef && onExpandToolBlock ? (
@@ -562,6 +577,12 @@ export const ChatMessageRow = memo(function ChatMessageRow({
                         state={toolExpand}
                         onExpand={() => onExpandToolBlock(expandableRef)}
                         onCollapse={onCollapseToolBlock}
+                    />
+                ) : canLocalExpand ? (
+                    <ToolExpandControl
+                        state={isTextExpanded || toolExpand?.status === 'expanded' ? { status: 'expanded' } : undefined}
+                        onExpand={onToggleTextExpanded}
+                        onCollapse={onToggleTextExpanded}
                     />
                 ) : null}
             </div>

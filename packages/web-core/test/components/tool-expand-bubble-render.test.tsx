@@ -59,6 +59,21 @@ describe('TOOL-EXPAND bubble affordance', () => {
         expect(html).not.toContain('Show full output')
     })
 
+    it('folds a long plaintext native-turn body (no ref) and offers local expand', () => {
+        const long = `↘ ${'workspace file path segment '.repeat(40)}TAIL_MARKER`
+        const html = render(toolBubble({ content: long }))
+        expect(html).toContain('chat-msg-tool')
+        expect(html).toContain('Show full output')
+        expect(html).not.toContain('TAIL_MARKER')
+    })
+
+    it('reveals the full plaintext body once locally expanded', () => {
+        const long = `↘ ${'workspace file path segment '.repeat(40)}TAIL_MARKER`
+        const html = render(toolBubble({ content: long }), { isTextExpanded: true })
+        expect(html).toContain('TAIL_MARKER')
+        expect(html).toContain('Show less')
+    })
+
     it('offers nothing to a read-only host that passes no handler', () => {
         // SessionShare renders rows with no command surface; it must still render.
         const html = render(toolBubble({ toolBlockRef: REF }))

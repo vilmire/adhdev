@@ -1,8 +1,9 @@
 /**
- * ChatActivitySection — Settings toggle for chat activity rows (tool calls,
- * terminal output, thinking). Writes the same global preference the in-pane
- * Activity pill flips (chat-activity-visibility.ts); mounted ChatPanes react
- * immediately via the preference's custom change event.
+ * ChatActivitySection — Settings toggle for chat activity rows (terminal
+ * output, thinking). Tool-call bubbles always render in the default transcript.
+ * Writes the same global preference the in-pane Activity pill flips
+ * (chat-activity-visibility.ts); mounted ChatPanes react immediately via the
+ * preference's custom change event.
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'

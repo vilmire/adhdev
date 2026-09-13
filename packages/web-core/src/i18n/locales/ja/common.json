@@ -1569,7 +1569,7 @@
         "busyGenerating": "エージェントが応答を生成中です。",
         "busyWaitingApproval": "エージェントが承認を待っています。承認コントロールは準備でき次第表示されます。",
         "activityToggleLabel": "アクティビティ",
-        "activityToggleTitle": "ツール・ターミナル・思考のアクティビティ行を表示"
+        "activityToggleTitle": "ターミナル・思考のアクティビティ行を表示"
     },
     "chatInput": {
         "attachImage": "画像を添付",
@@ -3380,8 +3380,8 @@
         },
         "chatActivity": {
             "rowLabel": "チャットにエージェントの活動を表示",
-            "descriptionOn": "ツール呼び出し・ターミナル出力・思考過程がチャットメッセージの間に表示されます。",
-            "descriptionOff": "チャットメッセージのみ表示されます。ツール呼び出し・ターミナル出力・思考過程は非表示のままです。"
+            "descriptionOn": "ターミナル出力と思考過程がチャットメッセージの間に表示されます。ツール呼び出しは常にチャットバブルとして表示されます。",
+            "descriptionOff": "ターミナル出力と思考過程は非表示のままです。ツール呼び出しはチャットバブルとして表示され続けます。"
         }
     },
     "historyModal": {

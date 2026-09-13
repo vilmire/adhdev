@@ -31,7 +31,7 @@ const PROSE_ONLY: ChatMessage[] = [
 
 const WITH_ACTIVITY: ChatMessage[] = [
   ...PROSE_ONLY,
-  { role: 'assistant', kind: 'tool', content: 'Read(file.ts)' } as ChatMessage,
+  { role: 'assistant', kind: 'thought', content: 'pondering the next step' } as ChatMessage,
 ]
 
 describe('ChatMessageList — activity empty-state note', () => {
@@ -43,13 +43,13 @@ describe('ChatMessageList — activity empty-state note', () => {
   it('does not show the note when activity rows exist (they render instead)', () => {
     const html = render(WITH_ACTIVITY, true)
     expect(html).not.toContain('data-testid="chat-activity-empty-note"')
-    expect(html).toContain('Read(file.ts)')
+    expect(html).toContain('pondering the next step')
   })
 
   it('does not show the note when the toggle is OFF (activity rows are filtered, no note either)', () => {
     const offHtml = render(WITH_ACTIVITY, false)
     expect(offHtml).not.toContain('data-testid="chat-activity-empty-note"')
-    expect(offHtml).not.toContain('Read(file.ts)')
+    expect(offHtml).not.toContain('pondering the next step')
   })
 
   it('does not show the note over the global empty state (no messages at all)', () => {

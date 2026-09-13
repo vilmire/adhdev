@@ -102,6 +102,15 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
     if (INTERNAL_SOURCES.has(source) || role === 'system' || kind === 'system') {
         return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role, kind, label: 'Internal' }
     }
+    // kind:'tool' is a chat bubble (the existing ChatMessageRow tool branch),
+    // not the Activity-toggle opt-in. Claude-cli native-turn emits plaintext
+    // tool rows with no visibility/userFacing stamp; classifying them as
+    // activity dropped every tool bubble from the default transcript (47
+    // tool messages, 0 DOM nodes). Thought/terminal stay behind the toggle.
+    // Explicitly-hidden tools still take the explicitHidden branch above.
+    if (kind === 'tool') {
+        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
+    }
     if (activityLike) {
         return { surface: 'activity', isUserFacing: false, isActivityFacing: true, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
     }

@@ -1569,7 +1569,7 @@
         "busyGenerating": "代理正在生成回复。",
         "busyWaitingApproval": "代理正在等待批准。批准控件将在可用时显示。",
         "activityToggleLabel": "活动",
-        "activityToggleTitle": "显示工具、终端和思考活动行"
+        "activityToggleTitle": "显示终端和思考活动行"
     },
     "chatInput": {
         "attachImage": "附加图片",
@@ -3380,8 +3380,8 @@
         },
         "chatActivity": {
             "rowLabel": "在聊天中显示智能体活动",
-            "descriptionOn": "工具调用、终端输出和思考过程将显示在聊天消息之间。",
-            "descriptionOff": "仅显示聊天消息。工具调用、终端输出和思考过程保持隐藏。"
+            "descriptionOn": "终端输出和思考过程将显示在聊天消息之间。工具调用始终以聊天气泡显示。",
+            "descriptionOff": "终端输出和思考过程保持隐藏。工具调用仍会以聊天气泡显示。"
         }
     },
     "historyModal": {

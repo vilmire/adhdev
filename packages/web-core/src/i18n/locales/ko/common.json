@@ -1569,7 +1569,7 @@
         "busyGenerating": "에이전트가 응답을 생성 중입니다.",
         "busyWaitingApproval": "에이전트가 승인을 기다리고 있습니다. 승인 컨트롤이 준비되면 표시됩니다.",
         "activityToggleLabel": "활동",
-        "activityToggleTitle": "도구 호출·터미널·생각 활동 행 표시"
+        "activityToggleTitle": "터미널·생각 활동 행 표시"
     },
     "chatInput": {
         "attachImage": "이미지 첨부",
@@ -3380,8 +3380,8 @@
         },
         "chatActivity": {
             "rowLabel": "채팅에 에이전트 활동 표시",
-            "descriptionOn": "도구 호출·터미널 출력·생각 과정이 채팅 메시지 사이에 표시됩니다.",
-            "descriptionOff": "채팅 메시지만 표시됩니다. 도구 호출·터미널 출력·생각 과정은 숨겨집니다."
+            "descriptionOn": "터미널 출력과 생각이 채팅 메시지 사이에 표시됩니다. 도구 호출은 항상 채팅 버블로 표시됩니다.",
+            "descriptionOff": "터미널 출력과 생각은 숨겨집니다. 도구 호출은 채팅 버블로 계속 표시됩니다."
         }
     },
     "historyModal": {
