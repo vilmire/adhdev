@@ -1574,7 +1574,7 @@
         "busyGenerating": "El agente está generando una respuesta.",
         "busyWaitingApproval": "El agente está esperando aprobación. Los controles de aprobación aparecerán cuando estén disponibles.",
         "activityToggleLabel": "Actividad",
-        "activityToggleTitle": "Mostrar filas de actividad de terminal y razonamiento"
+        "activityToggleTitle": "Mostrar filas de actividad de herramientas, terminal y razonamiento"
     },
     "chatInput": {
         "attachImage": "Adjuntar imagen",
@@ -3384,8 +3384,8 @@
         },
         "chatActivity": {
             "rowLabel": "Mostrar actividad del agente en el chat",
-            "descriptionOn": "La salida del terminal y el razonamiento se muestran entre los mensajes. Las llamadas a herramientas siempre aparecen como burbujas de chat.",
-            "descriptionOff": "La salida del terminal y el razonamiento permanecen ocultos. Las llamadas a herramientas siguen apareciendo como burbujas de chat."
+            "descriptionOn": "Las llamadas a herramientas, la salida del terminal y el razonamiento se muestran entre los mensajes.",
+            "descriptionOff": "Solo se muestra la conversación. Las llamadas a herramientas, la salida del terminal y el razonamiento permanecen ocultos."
         }
     },
     "historyModal": {

@@ -45,10 +45,11 @@ describe('ChatMessageList message polish structure', () => {
     expect(html).toContain('Fetched workspace status.')
   })
 
-  it('renders kind:tool bubbles in the default transcript without a visibility stamp', () => {
+  it('renders kind:tool bubbles when activity is shown, without a visibility stamp', () => {
     // Live claude-cli native-turn tool rows have no visibility/userFacing meta.
-    // Injection: classifying them as activity (or filtering kind!=='standard')
-    // drops this bubble and the assertion goes red.
+    // Tool is activity-classified and the toggle defaults ON, so this is what
+    // the user sees by default. Injection: filtering kind!=='standard' out of
+    // ChatMessageRow drops this bubble and the assertion goes red.
     const html = renderMessages([
       {
         role: 'assistant',
@@ -56,7 +57,7 @@ describe('ChatMessageList message polish structure', () => {
         content: '↘ Navigated to http://localhost:8975/gh.html Tab Context',
         bubbleState: 'final',
       } as ChatMessage,
-    ])
+    ], { showActivityMessages: true })
 
     expect(html).toContain('chat-msg-tool')
     expect(html).toContain('Navigated to http://localhost:8975/gh.html')

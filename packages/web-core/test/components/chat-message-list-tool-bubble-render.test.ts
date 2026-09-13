@@ -3,17 +3,23 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@adhdev/daemon-core'
 import ChatMessageList, { buildChatMessageStableKeys } from '../../src/components/ChatMessageList'
+import { readChatActivityVisiblePreference } from '../../src/components/dashboard/chat-activity-visibility'
 
 /**
- * kind:'tool' rows must produce a tool bubble in the DEFAULT transcript
- * (Activity toggle off). Live claude-cli native-turn messages reach
- * ChatMessageList.props.messages with kind:'tool', plaintext content, a shared
- * `_turnKey`, and a per-message `sequence` — and no visibility stamp.
+ * kind:'tool' rows must produce a tool bubble whenever activity is shown.
  *
- * Injection: classifying those rows as activity (or allowing only
- * kind==='standard' into ChatMessageRow) drops every tool bubble from DOM.
+ * Live claude-cli native-turn messages reach ChatMessageList.props.messages
+ * with kind:'tool', plaintext content, a shared `_turnKey`, and a per-message
+ * `sequence` — and no visibility stamp. Tool rows are ACTIVITY-classified and
+ * ride the Activity toggle, which DEFAULTS ON
+ * (`readChatActivityVisiblePreference`), so the user still sees them without
+ * opting in. These tests pass the flag explicitly because the prop default
+ * stays `false` for read-only hosts that have no toggle (SessionShare).
+ *
+ * Injection: allowing only kind==='standard' into ChatMessageRow, or dropping
+ * tool from the activity merge, empties every assertion below.
  */
-function renderMessages(messages: ChatMessage[]): string {
+function renderMessages(messages: ChatMessage[], showActivityMessages = true): string {
   return renderToStaticMarkup(
     React.createElement(ChatMessageList, {
       messages,
@@ -21,7 +27,7 @@ function renderMessages(messages: ChatMessage[]): string {
       agentName: 'Claude',
       userName: 'You',
       contextKey: 'test',
-      // Default: activity opt-in OFF. Tools must still render.
+      showActivityMessages,
     }),
   )
 }
@@ -116,5 +122,34 @@ describe('ChatMessageList — kind:tool default-transcript render', () => {
     expect(html).toContain('chat-msg-tool')
     expect(html).toContain('Show full output')
     expect(html).not.toContain('TAIL_MARKER')
+  })
+
+  /**
+   * The pair of invariants the toggle realignment has to hold, asserted
+   * together because either one alone can be satisfied by the wrong design:
+   * "tool always visible" passes #1 but breaks #2 (the toggle does nothing),
+   * and "tool behind a default-OFF toggle" passes #2 but breaks #1 (the live
+   * regression — tool rows hidden from everyone by default).
+   */
+  it('renders tool bubbles at the DEFAULT preference, and hides them only on explicit opt-out', () => {
+    const messages = [
+      { role: 'user', kind: 'standard', content: 'do the thing', receivedAt: 1, sequence: 0 } as ChatMessage,
+      { role: 'assistant', kind: 'tool', content: '↘ ran the thing', receivedAt: 2, sequence: 1 } as ChatMessage,
+    ]
+
+    // #1 — the unset preference is what a new user gets. Read it through the
+    // real accessor rather than hardcoding `true`, so a flipped default fails
+    // here instead of silently passing a literal.
+    const defaultPreference = readChatActivityVisiblePreference({ getItem: () => null })
+    expect(defaultPreference).toBe(true)
+    const shownByDefault = renderMessages(messages, defaultPreference)
+    expect(shownByDefault).toContain('chat-msg-tool')
+    expect(shownByDefault).toContain('ran the thing')
+
+    // #2 — turning it off yields a pure conversation view.
+    const optedOut = renderMessages(messages, readChatActivityVisiblePreference({ getItem: () => '0' }))
+    expect(optedOut).not.toContain('chat-msg-tool')
+    expect(optedOut).not.toContain('ran the thing')
+    expect(optedOut).toContain('do the thing')
   })
 })
