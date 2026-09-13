@@ -41,6 +41,7 @@ export {
     tryAssignQueueTask,
     isSessionActivelyGenerating,
     triggerMeshQueue,
+    awaitInFlightAutoLaunches,
     handleMeshForwardEvent,
     setupMeshEventForwarding,
     shouldRequeueHollowCompletion,

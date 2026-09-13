@@ -53,7 +53,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMocks.detectCLI }))
 
-import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { triggerMeshQueue, awaitInFlightAutoLaunches } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import {
   __resetAutoLaunchAwaitClaimBackoffForTests,
@@ -152,6 +152,11 @@ describe('AUTOLAUNCH-TASK-RACE — per-task lock serializes concurrent triggerMe
         triggerMeshQueue(components, meshId),
         triggerMeshQueue(components, meshId),
       ])
+      // IPC-ACCEPT-ASYNC-BOUNDARY: triggerMeshQueue no longer awaits the auto-launch (it
+      // is the slowest thing in the call and blew the caller's IPC deadline). The race
+      // being pinned here is unchanged — both passes still contend for the same per-task
+      // lock — but the launch now settles after the trigger returns, so join it first.
+      await awaitInFlightAutoLaunches(meshId)
 
       expect(launchCliCalls(components)).toBe(1)
       expect(components.__spawned).toHaveLength(1)
@@ -180,6 +185,8 @@ describe('AUTOLAUNCH-TASK-RACE — per-task lock serializes concurrent triggerMe
         triggerMeshQueue(components, meshId),
         triggerMeshQueue(components, meshId),
       ])
+      // See (a): the launch is backgrounded, so join it before reading post-spawn state.
+      await awaitInFlightAutoLaunches(meshId)
 
       expect(launchCliCalls(components)).toBe(1)
       const row = taskRow(meshId, task.id)
@@ -207,6 +214,8 @@ describe('AUTOLAUNCH-TASK-RACE — per-task lock serializes concurrent triggerMe
         triggerMeshQueue(components, meshId),
         triggerMeshQueue(components, meshId),
       ])
+      // See (a): the launch is backgrounded, so join it before reading post-spawn state.
+      await awaitInFlightAutoLaunches(meshId)
 
       const row = taskRow(meshId, task.id)
       const launchedSessionId = components.__spawned[0]

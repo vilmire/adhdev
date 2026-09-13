@@ -85489,6 +85489,25 @@ ${block2.text}`,
     function getQueueStatusById(meshId) {
       return new Map(getQueue3(meshId).map((task) => [task.id, task.status]));
     }
+    function trackInFlightAutoLaunch(meshId, promise2) {
+      let set3 = inFlightAutoLaunches.get(meshId);
+      if (!set3) {
+        set3 = /* @__PURE__ */ new Set();
+        inFlightAutoLaunches.set(meshId, set3);
+      }
+      set3.add(promise2);
+      void promise2.finally(() => {
+        set3.delete(promise2);
+        if (set3.size === 0) inFlightAutoLaunches.delete(meshId);
+      });
+    }
+    async function awaitInFlightAutoLaunches(meshId) {
+      for (let i = 0; i < 10; i++) {
+        const pending = meshId ? [...inFlightAutoLaunches.get(meshId) ?? []] : [...inFlightAutoLaunches.values()].flatMap((set3) => [...set3]);
+        if (pending.length === 0) return;
+        await Promise.allSettled(pending);
+      }
+    }
     async function triggerMeshQueue(components, meshId) {
       const mesh = getMeshWithCache(components, meshId);
       const pendingBefore = countQueueStatus(meshId, "pending");
@@ -85597,7 +85616,15 @@ ${block2.text}`,
           assignIdleCandidate(remaining.shift());
         }
       }
-      autoLaunchStarted = await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
+      const autoLaunchPromise = maybeAutoLaunchOneQueueSession(components, meshId, mesh).catch((e) => {
+        LOG.warn("MeshQueue", `Auto-launch scan failed for mesh ${meshId}: ${e?.message || e}`);
+        return false;
+      });
+      trackInFlightAutoLaunch(meshId, autoLaunchPromise);
+      autoLaunchStarted = await Promise.race([
+        autoLaunchPromise,
+        new Promise((resolve34) => setImmediate(() => resolve34(false)))
+      ]);
       sweepAutoLaunchOrphanSessions(components, meshId);
       const afterQueue = getQueue3(meshId);
       const pendingAfter = afterQueue.filter((task) => task.status === "pending").length;
@@ -85656,6 +85683,7 @@ ${block2.text}`,
     var dispatchWarmupGetterMissingWarned;
     var LOCAL_LAUNCH_READY_TIMEOUT_MS;
     var LOCAL_LAUNCH_READY_POLL_MS;
+    var inFlightAutoLaunches;
     var init_mesh_queue_assignment = __esm2({
       "src/mesh/mesh-queue-assignment.ts"() {
         "use strict";
@@ -85711,6 +85739,7 @@ ${block2.text}`,
         dispatchWarmupGetterMissingWarned = /* @__PURE__ */ new Set();
         LOCAL_LAUNCH_READY_TIMEOUT_MS = 15e3;
         LOCAL_LAUNCH_READY_POLL_MS = 100;
+        inFlightAutoLaunches = /* @__PURE__ */ new Map();
       }
     });
     function readSettings(state2) {
@@ -97400,6 +97429,7 @@ ${statusLine}`;
       PENDING_RETENTION_EXPIRED_HOLD_REASON: () => PENDING_RETENTION_EXPIRED_HOLD_REASON,
       __resetIdleAutoFastForwardForTests: () => __resetIdleAutoFastForwardForTests,
       __resetMeshWorkspaceCacheForTests: () => __resetMeshWorkspaceCacheForTests,
+      awaitInFlightAutoLaunches: () => awaitInFlightAutoLaunches,
       clearPendingMeshCoordinatorEvents: () => clearPendingMeshCoordinatorEvents,
       drainPendingMeshCoordinatorEvents: () => drainPendingMeshCoordinatorEvents3,
       getMeshV2BackstopCounters: () => getMeshV2BackstopCounters,
@@ -137199,58 +137229,41 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       };
       const repoRootBaseRef = /* @__PURE__ */ new Map();
       const submodulePathsByRepoRoot = /* @__PURE__ */ new Map();
-      const resolveBaseRef = async (repoRoot) => {
+      const resolveBaseRef = (repoRoot) => {
         const cached5 = repoRootBaseRef.get(repoRoot);
         if (cached5) return cached5;
-        let baseBranch = "main";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) baseBranch = stdout.trim();
-        } catch {
-        }
-        let baseRef = "HEAD";
-        try {
-          await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: 3e4 });
-        } catch {
-        }
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-          baseRef = stdout.trim();
-        } catch {
+        const pending = (async () => {
+          let baseBranch = "main";
           try {
-            const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
-            baseRef = stdout.trim();
+            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            if (stdout.trim()) baseBranch = stdout.trim();
           } catch {
           }
-        }
-        repoRootBaseRef.set(repoRoot, baseRef);
-        return baseRef;
+          let baseRef = "HEAD";
+          try {
+            await execFileAsync8("git", ["fetch", "origin", baseBranch], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv(), timeout: BATCH_PLAN_FETCH_TIMEOUT_MS });
+          } catch {
+          }
+          try {
+            const { stdout } = await execFileAsync8("git", ["rev-parse", `origin/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+            baseRef = stdout.trim();
+          } catch {
+            try {
+              const { stdout } = await execFileAsync8("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
+              baseRef = stdout.trim();
+            } catch {
+            }
+          }
+          return baseRef;
+        })();
+        repoRootBaseRef.set(repoRoot, pending);
+        return pending;
       };
-      const changeAreas = [];
-      for (const node of targetNodes) {
-        const repoRoot = resolveRepoRootFor(node);
-        let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
-        try {
-          const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          if (stdout.trim()) branch = stdout.trim();
-        } catch {
-        }
-        if (!repoRoot || !branch) {
-          changeAreas.push({
-            nodeId: node.id,
-            workspace: node.workspace,
-            branch: branch || "(unknown)",
-            changedTopLevelPaths: [],
-            changedFiles: [],
-            touchedSubmodulePaths: [],
-            touchesSubmodule: false,
-            aheadCount: 0,
-            error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
-          });
-          continue;
-        }
-        if (!submodulePathsByRepoRoot.has(repoRoot)) {
-          let subPaths = /* @__PURE__ */ new Set();
+      const resolveSubmodulePaths2 = (repoRoot) => {
+        const cached5 = submodulePathsByRepoRoot.get(repoRoot);
+        if (cached5) return cached5;
+        const pending = (async () => {
+          const subPaths = /* @__PURE__ */ new Set();
           try {
             const { stdout } = await execFileAsync8("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", env: gitChildEnv() });
             for (const line of stdout.split("\n")) {
@@ -137261,28 +137274,57 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
               if (value) subPaths.add(value);
             }
           } catch {
-            subPaths = /* @__PURE__ */ new Set();
+            return /* @__PURE__ */ new Set();
           }
-          submodulePathsByRepoRoot.set(repoRoot, subPaths);
-        }
-        const baseRef = await resolveBaseRef(repoRoot);
-        let branchRef = branch;
-        try {
-          const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
-          branchRef = stdout.trim() || branch;
-        } catch {
-        }
-        changeAreas.push(await analyzeMeshRefineNodeChangeArea({
-          nodeId: node.id,
-          workspace: node.workspace,
-          branch,
-          baseRef,
-          branchRef,
-          diffCwd: node.workspace,
-          repoRoot,
-          submodulePaths: submodulePathsByRepoRoot.get(repoRoot)
-        }));
-      }
+          return subPaths;
+        })();
+        submodulePathsByRepoRoot.set(repoRoot, pending);
+        return pending;
+      };
+      const changeAreas = await Promise.all(
+        targetNodes.map(async (node) => {
+          const repoRoot = resolveRepoRootFor(node);
+          let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
+          try {
+            const { stdout } = await execFileAsync8("git", ["branch", "--show-current"], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+            if (stdout.trim()) branch = stdout.trim();
+          } catch {
+          }
+          if (!repoRoot || !branch) {
+            return {
+              nodeId: node.id,
+              workspace: node.workspace,
+              branch: branch || "(unknown)",
+              changedTopLevelPaths: [],
+              changedFiles: [],
+              touchedSubmodulePaths: [],
+              touchesSubmodule: false,
+              aheadCount: 0,
+              error: !repoRoot ? "source repoRoot not found" : "branch not resolved"
+            };
+          }
+          const [submodulePaths, baseRef] = await Promise.all([
+            resolveSubmodulePaths2(repoRoot),
+            resolveBaseRef(repoRoot)
+          ]);
+          let branchRef = branch;
+          try {
+            const { stdout } = await execFileAsync8("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", env: gitChildEnv() });
+            branchRef = stdout.trim() || branch;
+          } catch {
+          }
+          return analyzeMeshRefineNodeChangeArea({
+            nodeId: node.id,
+            workspace: node.workspace,
+            branch,
+            baseRef,
+            branchRef,
+            diffCwd: node.workspace,
+            repoRoot,
+            submodulePaths
+          });
+        })
+      );
       const ordering = orderMeshRefineBatchNodes(changeAreas);
       const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches5(n, nodeId))).filter((n) => !!n);
       const dryRun = args?.dryRun !== false && args?.execute !== true;
@@ -137518,50 +137560,132 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       await appendRefineBatchJobLedger(self, isTerminalSuccess ? "task_completed" : "task_failed", terminalHandle, normalizedResult);
       queueRefineBatchJobEvent(self, isTerminalSuccess ? "refine:completed" : "refine:failed", terminalHandle, normalizedResult);
     }
-    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
-      const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
-      const planRecord = plan;
-      if (planRecord.success !== true) return plan;
-      if (args?.dryRun === true && args?.execute !== true) return plan;
+    async function planThenRunMeshRefineBatchJob(self, handle, meshId, requestedNodeIds, args) {
+      const key2 = buildRefineBatchJobKey(self, meshId);
+      const failTerminally = async (error48, extra) => {
+        const completedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const terminalHandle = buildRefineBatchJobHandle(self, {
+          meshId,
+          nodeIds: handle.nodeIds,
+          order: handle.order,
+          status: "failed",
+          startedAt: handle.startedAt,
+          completedAt,
+          jobId: handle.jobId,
+          interactionId: handle.interactionId,
+          coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+          coordinatorSessionId: handle.targetCoordinatorSessionId
+        });
+        const result = { success: false, batch: true, error: error48, ...extra ?? {} };
+        self.terminalRefineBatchJobs.set(key2, { ...terminalHandle, result });
+        self.runningRefineBatchJobs.delete(key2);
+        self.invalidateAggregateMeshStatus(meshId);
+        await appendRefineBatchJobLedger(self, "task_failed", terminalHandle, result);
+        queueRefineBatchJobEvent(self, "refine:failed", terminalHandle, result);
+      };
+      let planRecord;
+      try {
+        planRecord = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+      } catch (e) {
+        await failTerminally(e?.message || String(e), { stage: "plan" });
+        return;
+      }
+      if (planRecord.success !== true) {
+        await failTerminally(
+          typeof planRecord.error === "string" ? planRecord.error : "Batch plan failed",
+          { stage: "plan", plan: planRecord }
+        );
+        return;
+      }
       const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
       const nodeIds = order.slice();
-      if (nodeIds.length === 0) {
-        return { ...planRecord, success: true, batch: true, dryRun: false, async: false };
-      }
-      const key2 = buildRefineBatchJobKey(self, meshId);
-      const running = self.runningRefineBatchJobs.get(key2);
-      if (running) return { ...running, duplicate: true };
       const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord?.mesh;
       const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
       const orderedNodes = nodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches5(n, id))).filter((n) => !!n);
-      if (orderedNodes.length === 0) {
-        return { success: false, error: "Batch nodes no longer resolvable in mesh", batch: true };
+      if (nodeIds.length === 0 || orderedNodes.length === 0) {
+        const completedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const terminalHandle = buildRefineBatchJobHandle(self, {
+          meshId,
+          nodeIds,
+          order,
+          status: "completed",
+          startedAt: handle.startedAt,
+          completedAt,
+          jobId: handle.jobId,
+          interactionId: handle.interactionId,
+          coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+          coordinatorSessionId: handle.targetCoordinatorSessionId
+        });
+        const result = {
+          ...planRecord,
+          success: true,
+          batch: true,
+          dryRun: false,
+          nodeCount: 0,
+          results: [],
+          note: nodeIds.length === 0 ? "No convergeable local worktree nodes found." : "Batch nodes no longer resolvable in mesh."
+        };
+        self.terminalRefineBatchJobs.set(key2, { ...terminalHandle, result });
+        self.runningRefineBatchJobs.delete(key2);
+        self.invalidateAggregateMeshStatus(meshId);
+        await appendRefineBatchJobLedger(self, "task_completed", terminalHandle, result);
+        queueRefineBatchJobEvent(self, "refine:completed", terminalHandle, result);
+        return;
       }
-      const ordering = {
+      const ordering = { order, rationale: planRecord.orderingRationale };
+      const plannedHandle = buildRefineBatchJobHandle(self, {
+        meshId,
+        nodeIds,
         order,
-        rationale: planRecord.orderingRationale
-      };
-      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
-      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
-      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds, order, coordinatorDaemonId, coordinatorSessionId });
-      self.runningRefineBatchJobs.set(key2, handle);
-      await appendRefineBatchJobLedger(self, "task_dispatched", handle);
-      queueRefineBatchJobEvent(self, "refine:accepted", handle);
-      setImmediate(() => {
-        void runWithRefineExecutionSlot(
-          `batch ${handle.jobId} (mesh ${meshId})`,
-          () => finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args)
-        );
+        status: "accepted",
+        startedAt: handle.startedAt,
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        coordinatorSessionId: handle.targetCoordinatorSessionId
       });
-      return {
-        ...handle,
+      self.runningRefineBatchJobs.set(key2, plannedHandle);
+      await appendRefineBatchJobLedger(self, "task_dispatched", plannedHandle);
+      queueRefineBatchJobEvent(self, "refine:accepted", plannedHandle, {
+        success: true,
+        batch: true,
+        phase: "planned",
         order,
         orderingRationale: planRecord.orderingRationale,
         plan: planRecord.plan,
-        note: "Batch convergence accepted and running in the background. Completion/failure (with per-node results) will be delivered as a terminal refine event; do not poll repeatedly."
+        nodeIds,
+        nodeCount: nodeIds.length
+      });
+      await runWithRefineExecutionSlot(
+        `batch ${plannedHandle.jobId} (mesh ${meshId})`,
+        () => finishMeshRefineBatchJob(self, plannedHandle, orderedNodes, ordering, args)
+      );
+    }
+    async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
+      if (args?.dryRun !== false && args?.execute !== true) {
+        return batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+      }
+      const key2 = buildRefineBatchJobKey(self, meshId);
+      const running = self.runningRefineBatchJobs.get(key2);
+      if (running) return { ...running, duplicate: true };
+      const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : self.deps.statusInstanceId || void 0;
+      const coordinatorSessionId = typeof args?.coordinatorSessionId === "string" && args.coordinatorSessionId.trim() ? args.coordinatorSessionId.trim() : void 0;
+      const handle = buildRefineBatchJobHandle(self, { meshId, nodeIds: [], order: [], coordinatorDaemonId, coordinatorSessionId });
+      self.runningRefineBatchJobs.set(key2, handle);
+      setImmediate(() => {
+        void planThenRunMeshRefineBatchJob(self, handle, meshId, requestedNodeIds, args).catch(async (e) => {
+          LOG.warn("Mesh", `[Refinery] Async refine batch job ${handle.jobId} failed outside its terminal path: ${e?.message || e}`);
+          self.runningRefineBatchJobs.delete(key2);
+          self.invalidateAggregateMeshStatus(meshId);
+        });
+      });
+      return {
+        ...handle,
+        note: "Batch convergence accepted. The target set and ordering are resolved in the background and arrive on the refine:accepted event; completion/failure (with per-node results) arrives as a terminal refine event. Do not poll repeatedly."
       };
     }
+    var BATCH_PLAN_FETCH_TIMEOUT_MS;
     var init_router_refine_batch_jobs = __esm2({
       "src/commands/router-refine-batch-jobs.ts"() {
         "use strict";
@@ -137574,6 +137698,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_git_locale();
         init_mesh_refine_concurrency();
         init_router_refine();
+        BATCH_PLAN_FETCH_TIMEOUT_MS = 1e4;
       }
     });
     var router_refine_exports = {};
@@ -165921,13 +166046,31 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   // probes (status/merge-tree/submodule) inline before replying, which can approach the
   // 15s default on a slow (Windows) host. 45s defensively, matching git_status/diff.
   plan_mesh_refine_node: 45e3,
-  // A2: refine_mesh_node / batch_refine_mesh_nodes are async-job-ack (the responder
-  // returns { async:true, status:'accepted' } immediately and works in the background),
-  // so 15s already suffices. 30s is a defensive floor guarding a future sync-dry-run
-  // regression; it is intentionally BELOW the relay 90s budget because the synchronous
-  // ack reply is sub-second and never bounded by the relay deadline.
+  // refine_mesh_node / batch_refine_mesh_nodes are async-job-ack: the responder returns
+  // { async:true, status:'accepted' } and runs the convergence pipeline in the background.
+  //
+  // IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): the ack is now genuinely sub-ms. It used to
+  // be only HALF async — startMeshRefineBatchJob awaited the full plan (per-node git
+  // probes: branch resolution, a 30s-bounded `git fetch origin <base>`, rev-parse,
+  // change-area diff — scaling with node count) BEFORE replying, so the "immediate ack"
+  // this comment once described was contradicted by the implementation and a 6-node
+  // batch could exceed the deadline below. The plan now runs AFTER the accept reply
+  // (setImmediate), and its order/orderingRationale/plan are delivered on the
+  // refine:accepted / terminal refine events instead of in the accept response.
+  //
+  // 30s is therefore a defensive regression floor, not a cost budget: it guards a future
+  // change that re-introduces synchronous pre-accept work. It is intentionally BELOW the
+  // relay 90s budget because the ack reply is never bounded by the relay deadline.
   refine_mesh_node: 3e4,
   batch_refine_mesh_nodes: 3e4,
+  // trigger_mesh_queue: previously UNREGISTERED, so a local bare dispatch fell through to
+  // the bare 15s default while the responder could far exceed it — triggerMeshQueue's
+  // auto-launch awaited a real session spawn (detectCLI's sequential --version chain, a
+  // remote launch_cli dispatch, plus waitForRemote/LocalSessionReady). That spawn is now
+  // backgrounded (the assignment result returns without awaiting it), so what remains
+  // synchronous is the idle-session drain scan. 45s is the defensive floor for that
+  // residual scan and for the spawn path should it ever become blocking again.
+  trigger_mesh_queue: 45e3,
   // P0 (2026-08-28 RCA, false 15s timeouts on 4 unregistered commands): these commands
   // fell through to the bare 15s default and violated IPC >= relay >= responder for a
   // LOCAL node (no relay layer wraps a local dispatch — see the module comment above).

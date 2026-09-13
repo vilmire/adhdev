@@ -226,12 +226,58 @@ function withConfigDir(root: string) {
 
 // Execute is async: the immediate response is an accepted batch job handle; the
 // aggregate per-node results arrive in the terminal ledger entry + refine event.
-function expectAcceptedBatch(result: any, expectedNodeIds: string[]) {
+/**
+ * IPC-ACCEPT-ASYNC-BOUNDARY (2026-09-13): the accept reply is emitted BEFORE the plan
+ * runs, so it can no longer carry the target set — `nodeIds` / `order` / `plan` are
+ * resolved in the background and published on the refine:accepted event instead.
+ * The accept envelope itself (identity + status) is unchanged.
+ */
+function expectAcceptedBatch(result: any) {
   expect(result).toMatchObject({ success: true, async: true, batch: true, status: 'accepted' })
   expect(result.jobId).toMatch(/^refine_batch_/)
   expect(result.interactionId).toMatch(/^ix_/)
   expect(result.startedAt).toMatch(/T/)
-  expect([...result.nodeIds].sort()).toEqual([...expectedNodeIds].sort())
+  // The plan has not run yet at accept time — the target set is empty by contract.
+  expect(result.nodeIds).toEqual([])
+  expect(result.order).toEqual([])
+  expect(result.plan).toBeUndefined()
+  expect(result.orderingRationale).toBeUndefined()
+}
+
+/**
+ * Accumulating drain: drainPendingMeshCoordinatorEvents CONSUMES, so several waiters in
+ * one test would steal each other's events. Everything drained for a mesh is kept here and
+ * every waiter matches against the accumulated set.
+ */
+const drainedCoordinatorEvents = new Map<string, any[]>()
+function drainAccumulated(meshId: string): any[] {
+  const seen = drainedCoordinatorEvents.get(meshId) ?? []
+  seen.push(...drainPendingMeshCoordinatorEvents(meshId))
+  drainedCoordinatorEvents.set(meshId, seen)
+  return seen
+}
+
+/** Poll the accumulated coordinator events for the first one matching `predicate`. */
+async function waitForCoordinatorEvent(meshId: string, predicate: (e: any) => boolean, timeoutMs = 90000): Promise<any> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const match = drainAccumulated(meshId).find(predicate)
+    if (match) return match
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error(`Timed out waiting for a matching mesh coordinator event on ${meshId}`)
+}
+
+/**
+ * Poll for the planned refine:accepted event — the channel that now carries the target
+ * set. Returns the matching event so callers can assert order/plan on it.
+ */
+function waitForPlannedAcceptedEvent(meshId: string, jobId: string, timeoutMs = 90000): Promise<any> {
+  return waitForCoordinatorEvent(meshId, e =>
+    e.event === 'refine:accepted'
+    && (e.metadataEvent as any)?.jobId === jobId
+    && (e.metadataEvent as any)?.result?.phase === 'planned',
+  timeoutMs)
 }
 
 async function waitForBatchLedger(meshId: string, jobId: string, timeoutMs = 90000): Promise<any> {
@@ -253,9 +299,12 @@ async function waitForBatchLedger(meshId: string, jobId: string, timeoutMs = 900
 // ledger → return the aggregate result payload the background job produced.
 async function executeBatchAndAwait(router: any, meshId: string, args: any, expectedNodeIds: string[]): Promise<any> {
   const accepted: any = await router.execute('batch_refine_mesh_nodes', { meshId, execute: true, ...args })
-  expectAcceptedBatch(accepted, expectedNodeIds)
+  expectAcceptedBatch(accepted)
+  // The target set now arrives on the planned refine:accepted event, not the accept reply.
+  const planned = await waitForPlannedAcceptedEvent(meshId, accepted.jobId)
+  expect([...(planned.metadataEvent.result.nodeIds as string[])].sort()).toEqual([...expectedNodeIds].sort())
   const terminal = await waitForBatchLedger(meshId, accepted.jobId)
-  return { accepted, terminal, result: terminal.payload.result }
+  return { accepted, planned, terminal, result: terminal.payload.result }
 }
 
 describe('batch_refine_mesh_nodes', () => {
@@ -504,15 +553,17 @@ describe('batch_refine_mesh_nodes', () => {
       const router = createRouter()
 
       const accepted: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
-      // Immediate accepted handle — no per-node results inline yet.
-      expectAcceptedBatch(accepted, ['node-a', 'node-b'])
+      // Immediate accepted handle — no per-node results inline yet, and (new contract)
+      // no target set either: the plan runs AFTER this reply.
+      expectAcceptedBatch(accepted)
       expect(accepted.results).toBeUndefined()
-      expect(accepted.order.sort()).toEqual(['node-a', 'node-b'])
-      // A provisional refine:accepted event is queued for the coordinator. The batch
-      // identity rides in the refine_batch_ jobId prefix (intrinsic to the handle and
-      // preserved through the forward path).
-      const acceptedEvents = drainPendingMeshCoordinatorEvents(mesh.id)
-      expect(acceptedEvents.some(e => e.event === 'refine:accepted' && /^refine_batch_/.test((e.metadataEvent as any)?.jobId ?? ''))).toBe(true)
+      // The planned refine:accepted event is where order / orderingRationale / plan now
+      // reach the coordinator. The batch identity rides in the refine_batch_ jobId prefix
+      // (intrinsic to the handle and preserved through the forward path).
+      const planned = await waitForPlannedAcceptedEvent(mesh.id, accepted.jobId)
+      expect(/^refine_batch_/.test(planned.metadataEvent.jobId)).toBe(true)
+      expect([...(planned.metadataEvent.result.order as string[])].sort()).toEqual(['node-a', 'node-b'])
+      expect(planned.metadataEvent.result.plan).toHaveLength(2)
 
       // Background convergence finishes and writes a terminal ledger entry + event.
       const terminal = await waitForBatchLedger(mesh.id, accepted.jobId)
@@ -520,8 +571,11 @@ describe('batch_refine_mesh_nodes', () => {
       const result = terminal.payload.result
       expect(result).toMatchObject({ batch: true, allConverged: true })
       expect(result.summary).toMatchObject({ merged: 2, blocked: 0, notMergeable: 0 })
-      const completedEvents = drainPendingMeshCoordinatorEvents(mesh.id)
-      expect(completedEvents.some(e => e.event === 'refine:completed' && /^refine_batch_/.test((e.metadataEvent as any)?.jobId ?? ''))).toBe(true)
+      // Poll rather than a single drain: waitForPlannedAcceptedEvent above already
+      // consumes from this same queue, so a one-shot drain here could race the emit.
+      const completed = await waitForCoordinatorEvent(mesh.id, e =>
+        e.event === 'refine:completed' && /^refine_batch_/.test((e.metadataEvent as any)?.jobId ?? ''))
+      expect(completed).toBeTruthy()
       // Both changes are present on base.
       expect(readFileSync(join(repo, 'a.txt'), 'utf-8')).toBe('a-change\n')
       expect(readFileSync(join(repo, 'b.txt'), 'utf-8')).toBe('b-change\n')
@@ -549,7 +603,7 @@ describe('batch_refine_mesh_nodes', () => {
       const router = createRouter()
 
       const first: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
-      expectAcceptedBatch(first, ['node-a'])
+      expectAcceptedBatch(first)
       const second: any = await router.execute('batch_refine_mesh_nodes', { meshId: mesh.id, execute: true, inlineMesh: mesh })
       // Same job, flagged duplicate — no second background convergence.
       expect(second).toMatchObject({ success: true, async: true, batch: true, duplicate: true, jobId: first.jobId })
