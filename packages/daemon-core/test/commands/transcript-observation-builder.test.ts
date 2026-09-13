@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTranscriptObservationFromReadChat } from '../../src/commands/transcript-observation-builder.js';
+import { encodeTranscriptMessage } from '../../src/seqscribe/transcript-projection.js';
 import type { ChatMessage } from '../../src/types.js';
 
 const BASE_COVERAGE = { mode: 'full' as const, totalMessageCount: 1, returnedMessageCount: 1, omittedBefore: false };
@@ -86,6 +87,56 @@ describe('buildTranscriptObservationFromReadChat (design §5.2 choke point)', ()
         });
         expect(result?.messages).toHaveLength(20);
         expect(result?.coverage.mode).toBe('full');
+    });
+
+    /**
+     * (TOOL-EXPAND) Regression: the expand ref must survive BOTH narrowings.
+     *
+     * `flattenMessage` here and `encodeTranscriptMessage` downstream are two
+     * independent field-by-field allow-lists, and a field has to be named in
+     * each one. When the ref was added, only the encoder and the web adapter
+     * were widened — this builder kept dropping it, so every truncated tool
+     * bubble reached the dashboard with `toolBlockRef: null` and no way to
+     * fetch the rest. The parser-level tests stayed green throughout, because
+     * the ref was minted correctly and only died in transit.
+     *
+     * Asserting across the pair is therefore the point: either hop alone can be
+     * green while the chain is broken.
+     */
+    it('carries toolBlockRef through the builder AND the wire encoder', () => {
+        const ref = { sourceMtimeMs: 1_700_000_000_123, recordIndex: 13, blockIndex: 0 };
+        const messages: ChatMessage[] = [
+            { role: 'assistant', kind: 'tool', content: 'a long tool result…', toolBlockRef: ref },
+        ];
+        const result = buildTranscriptObservationFromReadChat({
+            sessionId: 'sess-1',
+            providerType: 'claude-code',
+            status: 'idle',
+            providerObservedStatus: 'idle',
+            turn: null,
+            messages,
+            coverage: BASE_COVERAGE,
+        });
+        // Hop 1 — the narrowing this file owns.
+        expect(result?.messages[0]?.toolBlockRef).toEqual(ref);
+        // Hop 2 — the wire allow-list the dashboard actually receives. `null`
+        // here is the live symptom, so assert the resolved object, not truthiness.
+        expect(encodeTranscriptMessage(result!.messages[0]!).toolBlockRef).toEqual(ref);
+    });
+
+    it('leaves toolBlockRef null for a bubble that was never truncated', () => {
+        const messages: ChatMessage[] = [{ role: 'assistant', kind: 'tool', content: 'short' }];
+        const result = buildTranscriptObservationFromReadChat({
+            sessionId: 'sess-1',
+            providerType: 'claude-code',
+            status: 'idle',
+            providerObservedStatus: 'idle',
+            turn: null,
+            messages,
+            coverage: BASE_COVERAGE,
+        });
+        // An expand affordance on a complete bubble returns the same text back.
+        expect(encodeTranscriptMessage(result!.messages[0]!).toolBlockRef).toBeNull();
     });
 
     it('never throws on malformed message content', () => {
