@@ -27,16 +27,27 @@ describe('chat activity visibility presenter', () => {
     expect(filterChatActivityMessages(messages)).toHaveLength(0)
   })
 
-  it('classifies tool, terminal, and runtime rows as activity using structure, not content strings', () => {
+  it('classifies kind:tool as chat-visible so tool bubbles render in the default transcript', () => {
+    // Live claude-cli native-turn tool rows carry kind:'tool' with no
+    // visibility/userFacing stamp. They must not be parked behind the Activity
+    // toggle — that was the filter that produced 47 tool messages and 0 DOM nodes.
+    const tool = message({ role: 'assistant', kind: 'tool', content: 'arbitrary payload alpha' })
+
+    expect(classifyChatMessageForDisplay(tool).surface).toBe('chat')
+    expect(classifyChatMessageForDisplay(tool).isUserFacing).toBe(true)
+    expect(filterChatMessagesForDefaultTranscript([tool])).toEqual([tool])
+    expect(filterChatActivityMessages([tool])).toEqual([])
+  })
+
+  it('classifies terminal and runtime rows as activity using structure, not content strings', () => {
     const messages = [
-      message({ role: 'assistant', kind: 'tool', content: 'arbitrary payload alpha' }),
       message({ role: 'assistant', kind: 'terminal', content: 'arbitrary payload beta' }),
       message({ role: 'assistant', content: 'arbitrary payload gamma', meta: { source: 'runtime_activity', transcriptVisibility: 'internal', audience: 'debug', isInternal: true } }),
     ]
 
     expect(filterChatMessagesForDefaultTranscript(messages)).toEqual([])
-    expect(filterChatActivityMessages(messages)).toHaveLength(3)
-    expect(classifyChatMessageForDisplay(messages[2]).label).toBe('Runtime')
+    expect(filterChatActivityMessages(messages)).toHaveLength(2)
+    expect(classifyChatMessageForDisplay(messages[1]).label).toBe('Runtime')
   })
 
   it('keeps explicitly user-facing tool output in the default chat surface', () => {
@@ -70,10 +81,10 @@ describe('chat activity visibility presenter', () => {
 
   it('merges activity rows by timestamp and index only when the opt-in is enabled', () => {
     const chat = [message({ role: 'assistant', content: 'answer', receivedAt: 20, index: 2 })]
-    const activity = [message({ role: 'assistant', kind: 'tool', content: 'tool', receivedAt: 10, index: 1 })]
+    const activity = [message({ role: 'assistant', kind: 'thought', content: 'thinking', receivedAt: 10, index: 1 })]
 
     expect(mergeChatAndActivityMessages(chat, activity, false)).toEqual(chat)
-    expect(mergeChatAndActivityMessages(chat, activity, true).map((item) => item.content)).toEqual(['tool', 'answer'])
+    expect(mergeChatAndActivityMessages(chat, activity, true).map((item) => item.content)).toEqual(['thinking', 'answer'])
   })
 
   it('collapses back-to-back identical bubbles at the history↔live seam (ANTIGRAVITY-REPLICA-DUP)', () => {

@@ -244,6 +244,22 @@ describe('buildChatMessageStableKeys — same-content sibling collision', () => 
         expect(buildChatMessageStableKeys(withSequence)).toEqual([`turn:${TURN_KEY}|seq:3`])
     })
 
+    it('does not collapse tool+standard siblings that share a native-turn _turnKey', () => {
+        const nativeTurn = 'claude-cli:native-turn:019e71fb-3cd1-76f1-9500-a7977eb2b374:0'
+        const messages = [
+            { role: 'user', kind: 'standard', content: 'go', _turnKey: nativeTurn, sequence: 0 },
+            { role: 'assistant', kind: 'tool', content: '↘ Navigated', _turnKey: nativeTurn, sequence: 1 },
+            { role: 'assistant', kind: 'standard', content: 'done', _turnKey: nativeTurn, sequence: 2 },
+        ] as unknown as ChatMessage[]
+        const keys = buildChatMessageStableKeys(messages)
+        expect(new Set(keys).size).toBe(3)
+        expect(keys).toEqual([
+            `turn:${nativeTurn}|seq:0`,
+            `turn:${nativeTurn}|seq:1`,
+            `turn:${nativeTurn}|seq:2`,
+        ])
+    })
+
     /**
      * Seam stability: the same bubble must key identically whether it arrives
      * from the live store or the history store. Both feed ONE merged array here,

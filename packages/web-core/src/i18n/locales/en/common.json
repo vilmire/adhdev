@@ -1569,7 +1569,7 @@
         "busyGenerating": "Agent is generating.",
         "busyWaitingApproval": "Agent is waiting for approval. Approval controls will appear when available.",
         "activityToggleLabel": "Activity",
-        "activityToggleTitle": "Show tool, terminal, and thinking activity rows"
+        "activityToggleTitle": "Show terminal and thinking activity rows"
     },
     "chatInput": {
         "attachImage": "Attach image",
@@ -3380,8 +3380,8 @@
         },
         "chatActivity": {
             "rowLabel": "Show agent activity in chat",
-            "descriptionOn": "Tool calls, terminal output, and thinking are shown between chat messages.",
-            "descriptionOff": "Only chat messages are shown. Tool calls, terminal output, and thinking stay hidden."
+            "descriptionOn": "Terminal output and thinking are shown between chat messages. Tool calls always appear as chat bubbles.",
+            "descriptionOff": "Terminal output and thinking stay hidden. Tool calls still appear as chat bubbles."
         }
     },
     "historyModal": {
