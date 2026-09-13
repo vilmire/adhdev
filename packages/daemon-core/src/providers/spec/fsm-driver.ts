@@ -556,7 +556,26 @@ export class FsmDriver implements ISpecDriver {
             } else {
                 // Fail closed for array stores: resolving `~` here would use the
                 // daemon's real HOME and recreate the worker trust leak.
-                LOG.warn('pre-launch-trust', 'skipping array trust without a resolved launch plan');
+                //
+                // ★The context below is load-bearing, not decoration. This line
+                // used to read only "skipping array trust without a resolved
+                // launch plan", and when every delegated antigravity worker
+                // started hanging on the folder-trust prompt (AGY-WORKER-TRUST-
+                // STALL) it was the ONLY signal in the log — with no provider,
+                // no workspace and no delegated/user marker, it could not be
+                // tied to a session without reading the source. Anything that
+                // makes this branch fire is by construction a worker that will
+                // now sit on an unanswerable prompt, so it must name itself.
+                const delegated = typeof this.opts.extraEnv?.HOME === 'string'
+                    && this.opts.extraEnv.HOME.trim() !== '';
+                LOG.warn(
+                    'pre-launch-trust',
+                    `[${this.specTag()}] skipping array trust without a resolved launch plan`
+                    + ` (provider=${this.spec.id || 'unknown'},`
+                    + ` workspace=${this.opts.workingDir},`
+                    + ` launch=${delegated ? 'delegated-worker' : 'user'})`
+                    + ' — the CLI will show its folder-trust prompt and the session may stall.',
+                );
             }
         }
         this.startupDismissConfig = normalizeStartupDismissConfig(this.spec.startup_dismiss);

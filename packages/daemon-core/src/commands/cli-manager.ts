@@ -1824,6 +1824,12 @@ export class DaemonCliManager {
                 if (delegatedLaunch?.workerIsolation?.notes.length) {
                     LOG.info('WorkerMcp', `[${cliType}] ${delegatedLaunch.workerIsolation.notes.join('; ')}`);
                 }
+                // Trust-axis notes only appear separately when the worker-MCP
+                // gate is off; with it on they are already inside the notes
+                // logged just above, so this never double-reports.
+                if (delegatedLaunch?.trustNotes?.length) {
+                    LOG.info('WorkerTrust', `[${cliType}] ${delegatedLaunch.trustNotes.join('; ')}`);
+                }
                 // Untrusted-provider gate: an external source that ships JS
                 // hooks needs explicit user confirmation before its first
                 // launch. Dashboards add `confirmExternalUntrusted: true` to

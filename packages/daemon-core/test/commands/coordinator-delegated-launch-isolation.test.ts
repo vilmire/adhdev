@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-manager'
+import { applyPreLaunchTrust } from '../../src/providers/spec/pre-launch-trust'
 
 // Every it() below creates its own mkdtempSync workspace inline (no shared
 // beforeEach), so there is no single variable to hook an afterEach onto.
@@ -339,5 +340,242 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(result.env.ADHDEV_WORKER_SESSION_BIND).toMatch(/^wsb_/)
     expect(result.cliArgs.join(' ')).not.toContain(result.env.ADHDEV_WORKER_SESSION_BIND)
     expect(result.workerIsolation?.configPath).toBeUndefined()
+  })
+})
+
+/**
+ * ★AGY-WORKER-TRUST-STALL regression (2026-09-13).
+ *
+ * The defect: a delegated antigravity worker's pre-launch trust plan was built
+ * ONLY when `workerIsolation.workerHome` existed — i.e. only behind
+ * ADHDEV_WORKER_MCP, which is OFF by default. So on an ordinary daemon the plan
+ * was null, fsm-driver fail-closed, and every worker hung forever on
+ * "Do you trust the files in this folder?".
+ *
+ * These cases pin the two halves that together make the fix real:
+ *   1. the plan is non-null with the gate OFF, and
+ *   2. its store path is worker-scoped — never the daemon's own HOME.
+ * Either one alone is insufficient: (1) without (2) is the trust leak the
+ * fail-closed branch exists to prevent, and (2) without the HOME export is
+ * inert (the CLI would read `~` and prompt anyway).
+ */
+describe('★delegated worker pre-launch trust is decoupled from the worker-MCP gate', () => {
+  const AGY_TRUST = {
+    settings_path: '~/.gemini/antigravity-cli/settings.json',
+    key: 'trustedWorkspaces',
+  } as const
+
+  const priorEnv = process.env.ADHDEV_WORKER_MCP
+  beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+  afterEach(() => {
+    if (priorEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
+    else process.env.ADHDEV_WORKER_MCP = priorEnv
+  })
+
+  /** A realistic `~` for antigravity, so the private-HOME imports have sources. */
+  function fakeRealHome(): string {
+    const home = mkdtempSync(join(tmpdir(), 'agy-trust-realhome-'))
+    __tmpDirsToClean.push(home)
+    const agy = join(home, '.gemini', 'antigravity-cli')
+    mkdirSync(join(agy, 'brain'), { recursive: true })
+    mkdirSync(join(agy, 'conversations'), { recursive: true })
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true })
+    writeFileSync(join(agy, 'antigravity-oauth-token'), '{"token":{}}', { mode: 0o600 })
+    writeFileSync(join(agy, 'settings.json'), '{"theme":"owner-sentinel"}\n', { mode: 0o600 })
+    writeFileSync(join(agy, 'history.jsonl'), '', { mode: 0o600 })
+    return home
+  }
+
+  function launchWorker(opts: { realHome: string; workspace: string; ledgerPath: string }) {
+    const workerBase = mkdtempSync(join(tmpdir(), 'agy-trust-workerbase-'))
+    __tmpDirsToClean.push(workerBase)
+    return buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'antigravity-cli',
+      workspace: opts.workspace,
+      sessionKey: 'sess_worker_trust',
+      preLaunchTrust: AGY_TRUST,
+      mcpConfig: {
+        mode: 'auto_import',
+        format: 'claude_mcp_json',
+        path: '~/.gemini/config/mcp_config.json',
+      },
+      realHome: opts.realHome,
+      workerHomeBaseDir: workerBase,
+      trustLedgerPath: opts.ledgerPath,
+      // ★No runtimeEnv override ⇒ ADHDEV_WORKER_MCP is genuinely off (deleted
+      // in beforeEach). This is the production default, and the shape the
+      // defect lived in.
+    })
+  }
+
+  it('★builds a NON-NULL trust plan with ADHDEV_WORKER_MCP off (the stall fix)', () => {
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+
+    // The gate really is off — no MCP isolation surface was produced at all.
+    expect(result.workerIsolation).toBeUndefined()
+    // …and yet the trust plan exists. Before the fix this was null.
+    expect(result.resolvedTrustPlan).not.toBeNull()
+    expect(result.resolvedTrustPlan).toMatchObject({
+      provider: 'antigravity-cli',
+      scope: 'worker',
+      origin: 'worker_auto',
+      sessionKey: 'sess_worker_trust',
+    })
+    expect(result.resolvedTrustPlan!.workspaceRealpath).toBe(realpathSync(workspace))
+  })
+
+  it('★resolves the trust store to a worker-scoped path, never the daemon HOME (leak safety)', () => {
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-leak-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-leak-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+    const storePath = result.resolvedTrustPlan!.storePath
+
+    expect(storePath).not.toBe(join(realHome, '.gemini', 'antigravity-cli', 'settings.json'))
+    // Not merely "a different file" — it must not be anywhere under the real
+    // home, which is what a `~`-resolution regression would produce.
+    expect(storePath.startsWith(realHome)).toBe(false)
+    // And it must not be under the daemon process's own HOME either.
+    const daemonHome = process.env.HOME || process.env.USERPROFILE || ''
+    if (daemonHome) expect(storePath.startsWith(daemonHome)).toBe(false)
+
+    // HOME is exported to the same worker-scoped root — without this the store
+    // exists but the CLI never reads it and still prompts (inert fix).
+    expect(result.env.HOME).toBeTruthy()
+    expect(storePath.startsWith(result.env.HOME!)).toBe(true)
+  })
+
+  it('★materializing the plan leaves the owner\'s real settings.json byte-identical', () => {
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-apply-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-apply-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+    const ownerSettings = join(realHome, '.gemini', 'antigravity-cli', 'settings.json')
+    const ownerBytes = readFileSync(ownerSettings, 'utf8')
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+    applyPreLaunchTrust(AGY_TRUST, result.resolvedTrustPlan!)
+
+    // The whole point: the worker's automatic grant never lands in the owner's
+    // personal trusted-workspace list.
+    expect(readFileSync(ownerSettings, 'utf8')).toBe(ownerBytes)
+    expect(JSON.parse(ownerBytes).trustedWorkspaces).toBeUndefined()
+
+    // The worker's own copy DOES carry it — inherited settings preserved.
+    const projected = JSON.parse(readFileSync(result.resolvedTrustPlan!.storePath, 'utf8'))
+    expect(projected.theme).toBe('owner-sentinel')
+    expect(projected.trustedWorkspaces).toEqual([realpathSync(workspace)])
+  })
+
+  it('records the worker-auto grant in the daemon ledger even with the gate off', () => {
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-ledger-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-ledger-only-'))
+    __tmpDirsToClean.push(ledgerRoot)
+    const ledgerPath = join(ledgerRoot, 'grants.json')
+
+    const result = launchWorker({ realHome, workspace, ledgerPath })
+
+    expect(result.resolvedTrustPlan).not.toBeNull()
+    expect(existsSync(ledgerPath)).toBe(true)
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
+    expect(ledger.grants).toHaveLength(1)
+    expect(ledger.grants[0]).toMatchObject({
+      provider: 'antigravity-cli', scope: 'worker', origin: 'worker_auto',
+    })
+    // Provenance is attributable, not anonymous.
+    expect(ledger.grants[0].usages[0].sessionKey).toBe('sess_worker_trust')
+  })
+
+  it('emits trust-axis launch notes so a skipped grant is diagnosable from the log', () => {
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-notes-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-notes-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+
+    const notes = (result.trustNotes || []).join('; ')
+    expect(notes).toMatch(/worker trust HOME/)
+    expect(notes).toMatch(/worker-auto trust grant/)
+    // The secret-free contract: notes name paths and grant ids, never tokens.
+    expect(notes).not.toMatch(/wtk_|wsb_/)
+  })
+
+  it('★fails closed (plan stays null) for a provider with no worker-scoped HOME spec', () => {
+    // kimi declares pre_launch_trust via a named scheme and has no private-HOME
+    // spec. Decoupling must NOT become "resolve `~` against the daemon home for
+    // anyone" — a provider we cannot scope still gets a null plan.
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-noscope-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const workerBase = mkdtempSync(join(tmpdir(), 'agy-trust-noscope-base-'))
+    __tmpDirsToClean.push(workerBase)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'grok-cli',
+      workspace,
+      sessionKey: 'sess_noscope',
+      preLaunchTrust: { settings_path: '~/.grok/settings.json', key: 'trustedFolders' },
+      workerHomeBaseDir: workerBase,
+    })
+
+    expect(result.resolvedTrustPlan).toBeNull()
+    // No HOME redirect either — an unscoped provider keeps its prior behavior
+    // exactly, rather than being pointed at a directory with no imports.
+    expect(result.env.HOME).toBeUndefined()
+    expect((result.trustNotes || []).join('; ')).toMatch(/no worker trust HOME available/)
+  })
+
+  it('reuses the MCP-gate private HOME when the gate is ON (one HOME per launch)', () => {
+    process.env.ADHDEV_WORKER_MCP = '1'
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-gateon-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-gateon-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+
+    expect(result.workerIsolation?.workerHome).toBeTruthy()
+    expect(result.resolvedTrustPlan).not.toBeNull()
+    // The trust store lives inside the SAME home the MCP config was written to
+    // — not a second, parallel private home.
+    expect(result.resolvedTrustPlan!.storePath.startsWith(result.workerIsolation!.workerHome!)).toBe(true)
+    expect(result.env.HOME).toBe(result.workerIsolation!.workerHome)
+    // With the gate on the notes stay in workerIsolation.notes (no double-report).
+    expect(result.trustNotes).toBeUndefined()
+    expect(result.workerIsolation!.notes.join('; ')).toMatch(/worker-auto trust grant/)
+  })
+
+  it('the projected store is the path the CLI will actually read under the exported HOME', () => {
+    // Ties the two halves together: HOME redirect + store path must agree, so
+    // `~/.gemini/antigravity-cli/settings.json` as the CLI resolves it IS the
+    // file the plan wrote. A mismatch here is the silently-inert failure mode.
+    const realHome = fakeRealHome()
+    const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-agree-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const ledgerRoot = mkdtempSync(join(tmpdir(), 'agy-trust-agree-ledger-'))
+    __tmpDirsToClean.push(ledgerRoot)
+
+    const result = launchWorker({ realHome, workspace, ledgerPath: join(ledgerRoot, 'grants.json') })
+    applyPreLaunchTrust(AGY_TRUST, result.resolvedTrustPlan!)
+
+    const asCliResolvesIt = join(result.env.HOME!, '.gemini', 'antigravity-cli', 'settings.json')
+    expect(asCliResolvesIt).toBe(result.resolvedTrustPlan!.storePath)
+    expect(existsSync(dirname(asCliResolvesIt))).toBe(true)
+    expect(JSON.parse(readFileSync(asCliResolvesIt, 'utf8')).trustedWorkspaces)
+      .toEqual([realpathSync(workspace)])
   })
 })

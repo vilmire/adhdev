@@ -649,6 +649,78 @@ export function prepareWorkerPrivateHome(
     return { home, imported, skipped };
 }
 
+export interface WorkerTrustHome {
+    /** Absolute worker-scoped HOME the trust store is resolved against. */
+    home: string;
+    imported: string[];
+    skipped: string[];
+}
+
+/**
+ * ★Resolve the worker-scoped HOME used by the TRUST axis, independent of
+ * `ADHDEV_WORKER_MCP`.
+ *
+ * ─── Why this exists separately from resolveWorkerMcpIsolation() ─────────
+ *
+ * `pre_launch_trust` and worker-MCP isolation share one mechanism (a
+ * worker-private HOME) but answer to different requirements, and coupling them
+ * produced a live hang:
+ *
+ *   ADHDEV_WORKER_MCP is OFF by default ⇒ resolveWorkerMcpIsolation() returns
+ *   null ⇒ the delegated launch had no `workerHome` ⇒ no trust plan was built
+ *   ⇒ fsm-driver's fail-closed branch skipped the pre-trust write ⇒ every
+ *   antigravity worker sat forever on "Do you trust the files in this folder?".
+ *
+ * The MCP axis is a HARDENING feature and is correctly opt-in: with it off the
+ * worker keeps the (weaker) isolation it always had, which is a degradation,
+ * not a stall. The trust axis is not like that — with it off the worker does
+ * not run at all. So it must not inherit the MCP flag's default-off.
+ *
+ * ─── Why this cannot just resolve `~` to the daemon's HOME ───────────────
+ *
+ * That is the worker trust leak the fail-closed guard was written for: the
+ * worktree path would be appended to the OWNER's personal `trustedWorkspaces`
+ * array, silently granting every future interactive `agy` run in that
+ * directory a trust the owner never approved. This function therefore always
+ * returns a worker-scoped directory under the worker-home base dir, never the
+ * real home — and the caller exports it as HOME so the CLI actually reads the
+ * projected store rather than the owner's.
+ *
+ * Reuses WORKER_PRIVATE_HOME_SPECS wholesale, which is what keeps the
+ * redirection safe: auth material and transcript directories are symlinked
+ * THROUGH to the real home (so the worker stays logged in and the daemon's
+ * os.homedir()-rooted transcript reader still finds what the worker writes),
+ * while `settings.json` — the trust store itself — is COPIED, so the trust
+ * projection has no write-through path back to the user's file.
+ *
+ * Returns null for a provider with no private-HOME spec (there is nothing to
+ * isolate), and null on preparation failure — the caller must then fail closed
+ * exactly as before rather than fall back to the real home.
+ */
+export function resolveWorkerTrustHome(input: {
+    providerType: string;
+    workspace: string;
+    sessionKey: string;
+    realHome?: string;
+    baseDir?: string;
+}): WorkerTrustHome | null {
+    const spec = findWorkerPrivateHomeSpec(input.providerType);
+    if (!spec) return null;
+    try {
+        const prepared = prepareWorkerPrivateHome(spec, {
+            workspace: input.workspace,
+            sessionKey: input.sessionKey,
+            realHome: input.realHome,
+            baseDir: input.baseDir,
+        });
+        return { home: prepared.home, imported: prepared.imported, skipped: prepared.skipped };
+    } catch (err: any) {
+        // Never downgrade to the real home — see the leak note above.
+        LOG.warn('WorkerTrust', `worker trust HOME preparation failed for ${input.providerType}: ${err?.message || err}`);
+        return null;
+    }
+}
+
 // ─── Worker MCP config ──────────────────────────────────────────────────
 
 export interface WorkerMcpServerCommand {

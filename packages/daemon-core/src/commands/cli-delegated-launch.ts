@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { shortHash } from '../system/hash.js';
-import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, type WorkerMcpConfigOverrideDelivery, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
+import { expandWorkerIsolationPlaceholders, resolveWorkerMcpIsolation, resolveWorkerTrustHome, type WorkerMcpConfigOverrideDelivery, type WorkerMcpIsolation } from '../mesh/worker-mcp-isolation.js';
 import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
 import type { MeshCoordinatorDelegatedWorkerIsolation } from '../providers/contracts.js';
 import type { PreLaunchTrust } from '../providers/spec/fsm-types.js';
@@ -79,6 +79,12 @@ export interface CoordinatorDelegatedCliLaunchOptions {
     workerIsolation?: WorkerMcpIsolation;
     /** Present (or explicitly null) when this provider declares pre-launch trust. */
     resolvedTrustPlan?: ResolvedTrustPlan | null;
+    /**
+     * Launch-log notes produced by the TRUST axis when the worker-MCP gate is
+     * off (with it on they are merged into `workerIsolation.notes` instead, so
+     * a caller logging both never double-reports).
+     */
+    trustNotes?: string[];
 }
 
 function hasCliArg(args: string[], flag: string): boolean {
@@ -210,16 +216,55 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
             : {}),
     }, input.runtimeEnv || process.env);
 
-    // TRUST-PROVENANCE C: private HOME/imports above must exist before the
-    // grant is ledgered. The driver receives this already-absolute plan and
-    // materializes it into the per-worker copy immediately before PTY spawn.
+    // TRUST-PROVENANCE C: private HOME/imports must exist before the grant is
+    // ledgered. The driver receives this already-absolute plan and materializes
+    // it into the per-worker copy immediately before PTY spawn.
+    //
+    // ★AGY-WORKER-TRUST-STALL (2026-09-13): this block used to be gated on
+    // `workerIsolation?.workerHome`, i.e. on ADHDEV_WORKER_MCP — which is OFF by
+    // default. So on every ordinary daemon a delegated antigravity worker got
+    // plan=null, fsm-driver fail-closed, and the worker hung forever on "Do you
+    // trust the files in this folder?". The trust axis must not inherit the MCP
+    // axis's opt-in default: MCP-off is a degradation, trust-off is a stall.
+    //
+    // The store HOME is therefore resolved on its OWN axis below. It is always a
+    // worker-scoped directory — never the daemon's real HOME, which is what the
+    // driver's fail-closed branch exists to prevent (a worker's automatic grant
+    // must not be written into the owner's personal trustedWorkspaces array).
     const preLaunchTrust = input.preLaunchTrust
         || loadPreLaunchTrustFromSpecPath(input.resolvedSpecPath)
         || undefined;
     let resolvedTrustPlan: ResolvedTrustPlan | null | undefined;
+    let trustHomeNotes: string[] | undefined;
     if (preLaunchTrust) {
         resolvedTrustPlan = null;
-        if (workerIsolation?.workerHome) {
+        // Prefer the MCP-gate HOME when it exists so one launch never prepares
+        // two different private homes (they are keyed identically, but reusing
+        // the resolved one keeps the config write and the trust projection
+        // provably in the same directory).
+        const notes: string[] = workerIsolation?.notes || [];
+        if (!workerIsolation) trustHomeNotes = notes;
+        let storeHome = workerIsolation?.workerHome;
+        if (!storeHome) {
+            const trustHome = resolveWorkerTrustHome({
+                providerType: input.cliType,
+                workspace: input.workspace,
+                sessionKey: input.sessionKey || input.workspace,
+                realHome: input.realHome,
+                baseDir: input.workerHomeBaseDir,
+            });
+            if (trustHome) {
+                storeHome = trustHome.home;
+                notes.push(`worker trust HOME ${trustHome.home} (imported: ${trustHome.imported.join(', ') || 'none'})`);
+                if (trustHome.skipped.length) notes.push(`skipped missing trust imports: ${trustHome.skipped.join(', ')}`);
+            } else {
+                // No private-HOME spec, or preparation failed. Leaving the plan
+                // null is correct: the driver then fails closed instead of
+                // resolving `~` against the daemon's own HOME.
+                notes.push(`no worker trust HOME available for ${input.cliType} — pre-launch trust will be skipped`);
+            }
+        }
+        if (storeHome) {
             const lifecycle: TrustLifecycle = input.trustLifecycle || {
                 kind: 'worktree',
                 worktreePath: path.resolve(input.workspace),
@@ -232,7 +277,7 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
                 provider: input.cliType,
                 workspace: input.workspace,
                 trust: preLaunchTrust,
-                storeHome: workerIsolation.workerHome,
+                storeHome,
                 scope: 'worker',
                 origin: 'worker_auto',
                 sessionKey: input.sessionKey || input.workspace,
@@ -245,16 +290,25 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
                         nowMs: input.nowMs,
                     });
                     resolvedTrustPlan = candidate;
-                    workerIsolation.notes.push(
+                    notes.push(
                         `${recorded.reused ? 'reused' : 'recorded'} worker-auto trust grant ${recorded.grant.grantId}`,
                     );
                 } catch (err: any) {
                     // Ledger is the source of truth. Never create an unledgered
                     // projection, and never fall back to the user's real store.
-                    workerIsolation.notes.push(`worker trust ledger unavailable (${err?.message || err})`);
+                    notes.push(`worker trust ledger unavailable (${err?.message || err})`);
                     LOG.warn('WorkerTrust', `worker-auto trust grant failed for ${input.cliType}: ${err?.message || err}`);
                 }
             }
+        }
+        // ★The trust HOME is only real if the CLI reads it. Without this export
+        // the projection lands in a directory the worker never consults, `~`
+        // still resolves to the daemon's home, and the prompt reappears — the
+        // fix would be silently inert. Same pairing the MCP axis asserts below;
+        // applied here because with the gate off that branch never runs.
+        if (resolvedTrustPlan && storeHome && !envUnsets.has('HOME') && !env.HOME) {
+            env.HOME = storeHome;
+            if (process.platform === 'win32' && !env.USERPROFILE) env.USERPROFILE = storeHome;
         }
     }
 
@@ -332,5 +386,6 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         env,
         ...(workerIsolation ? { workerIsolation } : {}),
         ...(resolvedTrustPlan !== undefined ? { resolvedTrustPlan } : {}),
+        ...(trustHomeNotes?.length ? { trustNotes: trustHomeNotes } : {}),
     };
 }
