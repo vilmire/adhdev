@@ -63,7 +63,14 @@ export interface HistorySyncHost {
 
 /** Normalizes a hydration read's messages into the persisted-tail shape. */
 function toPersistableMessages(
-    messages: Array<{ role: string; content: string; kind?: string; senderName?: string; receivedAt?: number }>,
+    messages: Array<{
+        role: string;
+        content: string;
+        kind?: string;
+        senderName?: string;
+        receivedAt?: number;
+        toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
+    }>,
 ): PersistableCliHistoryMessage[] {
     return messages.map((message) => ({
         role: message.role,
@@ -71,6 +78,11 @@ function toPersistableMessages(
         kind: message.kind,
         senderName: message.senderName,
         receivedAt: message.receivedAt,
+        // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
+        // which the canonical-history branch of `buildProviderState` projects
+        // into activeChat — so a resumed session needs the ref to survive here
+        // as well, by NAME and only when present.
+        ...(message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
     })) as PersistableCliHistoryMessage[];
 }
 

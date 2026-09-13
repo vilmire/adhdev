@@ -114879,7 +114879,12 @@ ${buttons.join("\n")}`;
         content: message.content,
         kind: message.kind,
         senderName: message.senderName,
-        receivedAt: message.receivedAt
+        receivedAt: message.receivedAt,
+        // (TOOL-EXPAND) Hydration reads feed `lastPersistedHistoryMessages`,
+        // which the canonical-history branch of `buildProviderState` projects
+        // into activeChat — so a resumed session needs the ref to survive here
+        // as well, by NAME and only when present.
+        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
       }));
     }
     function shouldHydrateExistingProviderHistory(host) {
@@ -115482,7 +115487,11 @@ ${buttons.join("\n")}`;
         content: message.content,
         kind: message.kind,
         senderName: message.senderName,
-        receivedAt: message.receivedAt
+        receivedAt: message.receivedAt,
+        // (TOOL-EXPAND) By NAME, and only when present — this allow-list is
+        // the activeChat projection, so an omitted ref must stay omitted
+        // rather than becoming an `undefined` key on every prose bubble.
+        ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
       })) : mergedMessages;
       const adapterOwnsMessagesElsewhereForTail = host.adapter?.chatMessagesOwnedExternally === true;
       if (adapterOwnsMessagesElsewhereForTail && host.lastCompletionSummary) {
@@ -115522,7 +115531,12 @@ ${buttons.join("\n")}`;
           content: flattenContent(message.content),
           kind: typeof message.kind === "string" ? message.kind : void 0,
           senderName: typeof message.senderName === "string" ? message.senderName : void 0,
-          receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : message.timestamp
+          receivedAt: typeof message.receivedAt === "number" ? message.receivedAt : message.timestamp,
+          // (TOOL-EXPAND) The persisted tail is what the canonical-history
+          // branch above replays into activeChat, so the ref has to survive
+          // this hop too — otherwise a restored session loses expand controls
+          // even though the live parse had them.
+          ...message.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}
         }));
         if (!canonicalBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
           const incrementalMessages = buildIncrementalHistoryAppendMessages(host.lastPersistedHistoryMessages, normalizedMessagesToSave);
