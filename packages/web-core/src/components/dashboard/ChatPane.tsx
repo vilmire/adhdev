@@ -37,6 +37,7 @@ import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../..
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
+import { getInstallBaseForHost, PREVIEW_INSTALL_BASE } from '../../utils/install-base';
 import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessages, type PendingLocalMessage } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
@@ -143,6 +144,34 @@ export function buildBusyChatInputStatusMessage(
         return t('chatPane.busyWaitingApproval')
     }
     return null
+}
+
+/**
+ * (dev/preview diagnostics) True only on surfaces where internal diagnostic
+ * detail may be shown: a dev build, or any preview host. Uses web-core's
+ * canonical preview-surface classifier (every host that is not a production
+ * web host), so the degraded-replica banner's reason suffix can never leak
+ * into the production wording.
+ */
+function isDevOrPreviewSurface(): boolean {
+    if ((import.meta as any).env?.DEV) return true
+    if (typeof window === 'undefined') return false
+    return getInstallBaseForHost(window.location.hostname) === PREVIEW_INSTALL_BASE
+}
+
+/**
+ * (dev/preview diagnostics) The reason suffix appended to the degraded-replica
+ * banner — `' (no_node)'` — or `''` whenever the surface is production or the
+ * controller has no reason. Pure so the production-suppression rule is
+ * directly testable; the reason is a closed-union label from the controller
+ * snapshot, never content.
+ */
+export function buildReplicaDegradedReasonSuffix(
+    reason: string | undefined,
+    devOrPreviewSurface: boolean,
+): string {
+    if (!devOrPreviewSurface || !reason) return ''
+    return ` (${reason})`
 }
 
 export default function ChatPane({
@@ -704,6 +733,13 @@ export default function ChatPane({
                     data-testid="transcript-replica-degraded-notice"
                 >
                     {t('chatPane.replicaDegraded')}
+                    {/* (dev/preview diagnostics) Append the controller's
+                        `transcriptFallbackReason` (a closed-union label like
+                        `no_node`, already on the snapshot — never content) so a
+                        regression can be attributed without reproducing it. The
+                        production wording above is unchanged: this suffix never
+                        renders on production hosts. */}
+                    {buildReplicaDegradedReasonSuffix(chatTailState.transcriptFallbackReason, isDevOrPreviewSurface())}
                 </div>
             )}
             <ChatMessageList
