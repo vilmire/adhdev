@@ -1017,11 +1017,22 @@ export class CliProviderInstance implements ProviderInstance {
             assertProviderSupportsDeclaredInput(this.provider, input);
             const promptText = buildCliStructuredInputPrompt(input);
             if (promptText) {
-                // force:true bypasses the busy/generating send guard so terminal mesh
-                // events (completion/failure/bootstrap) land in a coordinator session that
-                // is itself parked in `generating` while awaiting that very event.
-                // Without it the message is queued and only flushed on the coordinator's
-                // own idle transition — which never happens until it receives the message.
+                // FORCE-NO-OP (2026-09-13) — this comment used to claim that force:true
+                // "bypasses the busy/generating send guard". That STOPPED being true when
+                // the legacy ProviderCliAdapter engine was deleted (oss 48e5ed1a):
+                // SpecCliAdapter, now the only live CLI engine, accepts `force` and ignores
+                // it by design (see SpecCliAdapter.sendMessage). Raw-writing into a
+                // generating PTY is the retired data-loss path and is NOT coming back.
+                //
+                // What `force` still does here is real but narrower than it looked: it
+                // selects the MODAL fail-closed hold immediately below. That guard is the
+                // reason the flag is still read, and it must stay — a body delivered while
+                // the coordinator is parked on a harness modal would have its keystrokes
+                // eaten by the modal's key handler.
+                //
+                // Immediacy for a BUSY (non-modal) coordinator is now supplied upstream by
+                // the mesh delivery modes (see injectPendingIntoCoordinator's
+                // MeshDeliveryMode), not by this flag.
                 const force = data?.force === true;
                 const bracketedPaste = shouldUseBracketedPasteForEnvelope(input);
                 // Modal guard: a force-inject still writes raw keystrokes into the PTY,
