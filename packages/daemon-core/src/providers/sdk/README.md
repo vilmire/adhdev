@@ -1,6 +1,6 @@
 # Provider SDK
 
-> Status: Phase 1 in progress · License of this directory: AGPL-3.0 (part of `oss/`) · See [marketplace plan](../../../../../../docs/design/v1.0.0-marketplace-plan.md).
+> Status: Phase 1 in progress · License of this directory: AGPL-3.0 (part of `oss/`) · The marketplace plan lives in the private upstream monorepo (`docs/design/v1.0.0-marketplace-plan.md`) and is not part of this mirror.
 
 This directory is the **Provider SDK** — the framework that lets external developers author CLI providers (and later IDE, Extension, ACP) against a versioned, typed contract.
 
@@ -36,7 +36,7 @@ sdk/
 
 ## Primitive identifiers
 
-Primitives are referenced by `$schema: adhdev:<category>/<id>@<version>` in provider manifests. See the audit-derived v1 catalog of 50 primitives at [`audit-cli-v1.md §5`](../../../../../../../adhdev-providers/docs/provider-contract/cli/audit-cli-v1.md#5-proposed-v1-primitive-set).
+Primitives are referenced by `$schema: adhdev:<category>/<id>@<version>` in provider manifests. The audit-derived v1 catalog of 50 primitives lives in the `adhdev-providers` repository at `docs/provider-contract/cli/audit-cli-v1.md` (§5), which is not part of this mirror.
 
 ## Stability
 

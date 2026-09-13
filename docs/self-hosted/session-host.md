@@ -154,7 +154,7 @@ The standalone API reference covers the raw route surface. This page is the prac
 
 ## Related Pages
 
-- [CLI Commands](/reference/cli-commands)
+- [CLI Commands](https://docs.adhf.dev/reference/cli-commands)
 - [Terminal Mux](terminal-mux.md)
 - [Local API](local-api.md)
-- [Troubleshooting](/guide/troubleshooting)
+- [Troubleshooting](https://docs.adhf.dev/guide/troubleshooting)

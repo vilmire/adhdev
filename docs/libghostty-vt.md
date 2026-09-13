@@ -1,6 +1,6 @@
 # libghostty-vt Integration Notes
 
-We use `TerminalScreen` in [provider-cli-adapter.ts](../packages/daemon-core/src/cli-adapters/provider-cli-adapter.ts)
+We use `TerminalScreen` in [terminal-screen.ts](../packages/daemon-core/src/cli-adapters/terminal-screen.ts)
 purely as a VT parser + screen snapshot model. This is the same layer that
 `libghostty-vt` is designed to replace.
 

@@ -22,7 +22,7 @@ AI 코딩 에이전트는 이제 장시간 실행되는 백그라운드 워커�
 
 **루프는 이렇습니다:** 채팅으로 태스크를 설명 → 코디네이터가 접수·태깅·큐잉 → 놀고 있는 머신이 새 워크트리로 가져감 → 레포 자체의 게이트가 판정 → `main`에 ff-머지, 워크트리 정리. 승인이 필요할 때만 폰이 울립니다.
 
-ADHDev는 그렇게 만들어집니다. ADHDev를 개발하는 비공개 모노레포 — 이 엔진은 그 레포에서 서브모듈로 공개됩니다 — 에서는 최근 `main` 커밋 60개 중 23개가 `Auto-merge via Refinery` 커밋입니다. 에이전트가 끝낸 작업을 레포 자체의 게이트가 승인했고, 사람이 `git merge`를 치지 않은 채 Refinery가 착지시킨 것들입니다. 이 이력은 업스트림 모노레포에 있으므로, 공개 미러인 이 저장소의 로그에는 해당 머지 커밋이 나타나지 않습니다.
+ADHDev는 그렇게 만들어집니다. ADHDev를 개발하는 비공개 모노레포 — 이 엔진은 그 레포에서 서브모듈로 공개됩니다 — 에서는 `main` 커밋의 상당수가 `Auto-merge via Refinery` 커밋입니다. 에이전트가 끝낸 작업을 레포 자체의 게이트가 승인했고, 사람이 `git merge`를 치지 않은 채 Refinery가 착지시킨 것들입니다. 이 이력은 업스트림 모노레포에 있으므로, 공개 미러인 이 저장소의 로그에는 해당 머지 커밋이 나타나지 않습니다.
 
 ---
 
@@ -173,6 +173,8 @@ adhdev standalone --host          # 동일 LAN의 다른 기기 접근 허용
 adhdev standalone --port 8080     # 커스텀 포트
 adhdev standalone --token mysecret # 스크립트/운영자 접근을 위한 토큰 인증
 adhdev standalone --no-open       # 브라우저 자동 열기 비활성화
+adhdev standalone --dev           # 프로바이더 디버그·테스트용 DevConsole 활성화
+adhdev standalone --public <dir>  # 커스텀 웹 대시보드 빌드 서빙
 ```
 
 Standalone은 기본적으로 localhost 전용입니다. LAN 접근을 위해 `0.0.0.0`에 바인딩하는 경우, 토큰 인증이나 대시보드 비밀번호가 설정되지 않으면 대시보드가 경고를 표시합니다.
@@ -209,6 +211,7 @@ ADHDev는 네 가지 프로바이더 카테고리를 통해 코딩 에이전트�
 | Codex CLI | `cli/codex-cli` |
 | Cursor Agent | `cli/cursor-cli` |
 | Google Antigravity CLI | `cli/antigravity-cli` |
+| Grok CLI | `cli/grok-cli` |
 | Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
@@ -285,7 +288,7 @@ provider는 포크해야 하는 코드가 아니라 데이터입니다. provider
 - `POST /api/v1/mux/:workspace/control`
 - `ws://localhost:3847/ws`
 
-레퍼런스: [docs/openapi.yml](docs/openapi.yml) · [셀프호스트 API 문서](docs/self-hosted/local-api.md)
+레퍼런스: [셀프호스트 API 문서](docs/self-hosted/local-api.md)
 
 ---
 

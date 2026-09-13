@@ -13,4 +13,4 @@
 
 ## CLA
 
-- [ ] I have read the [CLA](./CLA.md) and I hereby sign the CLA
+- [ ] I have read the [CLA](../CLA.md) and I hereby sign the CLA
