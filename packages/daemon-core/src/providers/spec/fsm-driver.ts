@@ -37,6 +37,11 @@ import {
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
 import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
+// MULTISELECT-REMOTE-DEADLOCK: the checkbox-marker detector the interactive-prompt
+// CAPTURE path uses to set `multiSelect`. Reused (not reimplemented) so the raw
+// modal-press refusal below can never disagree with the structured answer path
+// about whether a picker is multi-select.
+import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
 import { SendSubmitEngine } from './send-submit-engine.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
@@ -1529,11 +1534,77 @@ export class FsmDriver implements ISpecDriver {
         return this.handleClickModalButton(index);
     }
 
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: is the modal we're parked on a multi-select
+     * (checkbox) picker — the one class a raw modal-button press must never
+     * touch? See handleClickModalButton for why.
+     *
+     * Two independent conditions, BOTH required, so the refusal stays narrow:
+     *   1. the FSM classifies this state as a `picker` (an approval/confirm
+     *      consent modal is single-select by construction and keeps working);
+     *   2. the live frame actually renders checkbox markers on its numbered
+     *      option rows — detectClaudeTuiMultiSelect, the SAME detector the
+     *      capture path uses to set `InteractiveQuestion.multiSelect`, so the
+     *      refusal and the structured answer path can never disagree about
+     *      whether a given picker is multi-select.
+     *
+     * Reads the scrollback-inclusive frame for the same reason deriveModal does:
+     * a tall prompt body scrolls the option rows' glyph column out of the
+     * viewport, and a viewport-only read would then miss the checkboxes and let
+     * the corrupting press through.
+     */
+    private isMultiSelectCheckboxPicker(): boolean {
+        const state = stateById(this.spec, this.currentStateId);
+        if (!state || modalKindForState(state) !== 'picker') return false;
+        try {
+            return detectClaudeTuiMultiSelect(this.scrollbackLines().join('\n'));
+        } catch {
+            // A snapshot failure must not turn into a silent corrupting press
+            // either — but it is also not evidence of a checkbox picker, so keep
+            // the existing single-select behaviour rather than refusing blind.
+            return false;
+        }
+    }
+
     private handleClickModalButton(index: number): boolean {
         const m = this.currentEval?.modal;
         if (!m) return false;
         const btn = m.buttons.find(b => b.index === index);
         if (!btn) return false;
+
+        // MULTISELECT-REMOTE-DEADLOCK: a raw modal-button press CANNOT answer a
+        // multi-select (checkbox) picker, and pressing one silently CORRUPTS it.
+        //
+        // The raw press paths below assume single-select semantics — one key (or
+        // arrow-nav + one CR) both chooses and submits. A claude-cli checkbox
+        // picker breaks BOTH halves of that assumption (protocol measured live,
+        // see buildClaudeInteractiveTuiAnswerSteps):
+        //   * a digit TOGGLES a box without moving the cursor or advancing;
+        //   * CR/Enter toggles the CURSOR's row — it does NOT submit. Only Tab
+        //     commits the question, and a final CR on the review page submits.
+        // So each remote tap flipped a checkbox the user never chose and never
+        // submitted anything, leaving the session parked and flapping
+        // approval↔busy forever (the mobile "can't answer the question" wedge).
+        //
+        // There is no correct keystroke to emit from HERE: answering needs the
+        // whole bound InteractivePrompt (every question's selected label set) to
+        // build the digit+Tab+CR sequence, plus the live focus assertions that
+        // keep a stale response from operating another picker. That state lives
+        // one layer up on SpecCliAdapter (activeInteractivePrompt →
+        // setInteractivePromptResponse → buildClaudeInteractiveTuiAnswerSteps),
+        // not on this keystroke-only driver. So fail LOUDLY and write NOTHING:
+        // the `false` return already flows out through
+        // SpecCliAdapter.resolveModalMatched to mesh_approve and the dashboard,
+        // which is exactly the "this surface cannot submit" signal the caller
+        // needs in order to route the user to the structured picker instead.
+        //
+        // Scoped to picker-kind modals that actually render checkbox markers, so
+        // single-select pickers and approval/confirm modals keep their existing
+        // behaviour byte-for-byte.
+        if (this.isMultiSelectCheckboxPicker()) {
+            LOG.warn('FsmDriver', `[${this.spec.id}] click_modal_button(${index}) refused — multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
+            return false;
+        }
 
         const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
         if (rule?.select_mode === 'arrow_keys') {

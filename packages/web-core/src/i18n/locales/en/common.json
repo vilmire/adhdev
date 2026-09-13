@@ -290,7 +290,9 @@
     "approval": {
         "processing": "PROCESSING...",
         "actionRequired": "ACTION REQUIRED",
-        "alwaysAllowWarning": "Grants this permission permanently — future runs will not ask again"
+        "alwaysAllowWarning": "Grants this permission permanently — future runs will not ask again",
+        "questionPending": "QUESTION WAITING",
+        "answerQuestion": "Answer the question"
     },
     "newSession": {
         "title": "Start session",

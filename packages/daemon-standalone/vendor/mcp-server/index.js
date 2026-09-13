@@ -103645,6 +103645,7 @@ ${marker}`,
         init_fsm_evaluator();
         init_fsm_types();
         init_fsm_loader();
+        init_interactive_prompt();
         init_send_submit_engine();
         init_pre_launch_trust();
         init_kimi_workspace_trust();
@@ -104633,11 +104634,43 @@ ${marker}`,
           clickModalButton(index) {
             return this.handleClickModalButton(index);
           }
+          /**
+           * MULTISELECT-REMOTE-DEADLOCK: is the modal we're parked on a multi-select
+           * (checkbox) picker — the one class a raw modal-button press must never
+           * touch? See handleClickModalButton for why.
+           *
+           * Two independent conditions, BOTH required, so the refusal stays narrow:
+           *   1. the FSM classifies this state as a `picker` (an approval/confirm
+           *      consent modal is single-select by construction and keeps working);
+           *   2. the live frame actually renders checkbox markers on its numbered
+           *      option rows — detectClaudeTuiMultiSelect, the SAME detector the
+           *      capture path uses to set `InteractiveQuestion.multiSelect`, so the
+           *      refusal and the structured answer path can never disagree about
+           *      whether a given picker is multi-select.
+           *
+           * Reads the scrollback-inclusive frame for the same reason deriveModal does:
+           * a tall prompt body scrolls the option rows' glyph column out of the
+           * viewport, and a viewport-only read would then miss the checkboxes and let
+           * the corrupting press through.
+           */
+          isMultiSelectCheckboxPicker() {
+            const state2 = stateById(this.spec, this.currentStateId);
+            if (!state2 || modalKindForState(state2) !== "picker") return false;
+            try {
+              return detectClaudeTuiMultiSelect(this.scrollbackLines().join("\n"));
+            } catch {
+              return false;
+            }
+          }
           handleClickModalButton(index) {
             const m = this.currentEval?.modal;
             if (!m) return false;
             const btn = m.buttons.find((b) => b.index === index);
             if (!btn) return false;
+            if (this.isMultiSelectCheckboxPicker()) {
+              LOG.warn("FsmDriver", `[${this.spec.id}] click_modal_button(${index}) refused \u2014 multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
+              return false;
+            }
             const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
             if (rule?.select_mode === "arrow_keys") {
               const from = m.buttons.find((b) => b.current)?.index ?? 1;
