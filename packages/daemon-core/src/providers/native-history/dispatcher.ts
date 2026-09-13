@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
+import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 import { readSession as readClaudeCliSession } from './claude-cli-transcript.js';
 import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
@@ -53,7 +54,22 @@ export interface NativeHistoryInput {
 }
 
 export interface NativeHistoryResult {
-    messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; workspace?: string }>;
+    messages: Array<{
+        role: string;
+        content: string;
+        receivedAt?: number;
+        kind?: string;
+        workspace?: string;
+        /**
+         * (TOOL-EXPAND) Content-free address of the tool block this bubble was
+         * summarised from, present only when the reader actually truncated it.
+         * Stamped by the JSONL readers (claude/codex/grok); absent for readers
+         * whose store has no positional record index (hermes/antigravity
+         * sqlite), which is what lets the dashboard tell "nothing more to
+         * fetch" from "not addressable".
+         */
+        toolBlockRef?: NativeHistoryToolBlockRef;
+    }>;
     providerSessionId?: string;
     sourcePath: string;
     sourceMtimeMs: number;
@@ -143,6 +159,12 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
                 receivedAt: typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(m.timestamp || '') || Date.now(),
                 kind: typeof m.kind === 'string' ? m.kind : 'standard',
                 workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
+                // (TOOL-EXPAND) Forward the reader's ref. This projection is an
+                // allow-list, so a ref the reader stamped is dropped here unless
+                // named explicitly — which is why it is validated rather than
+                // spread: a malformed ref reaching the dashboard would render an
+                // expand button that can only ever fail.
+                ...(isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}),
             })),
             providerSessionId: resolvedProviderSessionId,
             sourcePath: session.sourcePath,
@@ -734,6 +756,23 @@ export function createNativeHistoryListDispatcher(
         // Caller reads `result.sessions`; a bare array is silently dropped.
         return { sessions };
     };
+}
+
+/**
+ * Shape-check a reader-stamped tool block ref before it leaves the dispatcher.
+ *
+ * Mirrors `isValidRef` in `spec/tool-block-expand.ts` — the module that will
+ * later have to resolve it. Rejecting here rather than at resolve time means an
+ * unusable ref never becomes a visible expand affordance in the first place.
+ */
+function isToolBlockRef(v: unknown): v is NativeHistoryToolBlockRef {
+    if (!v || typeof v !== 'object') return false;
+    const r = v as Record<string, unknown>;
+    return Number.isFinite(r.sourceMtimeMs)
+        && Number.isInteger(r.recordIndex)
+        && Number.isInteger(r.blockIndex)
+        && (r.recordIndex as number) >= 0
+        && (r.blockIndex as number) >= -1;
 }
 
 function normalizeRole(r: any): 'user' | 'assistant' | 'system' {

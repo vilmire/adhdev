@@ -56,6 +56,12 @@ const CODEX_DEFAULT_COMPLETION_SIGNAL: NativeCompletionSignalSpec = {
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { isSafeFilename, statMtimeMs } from './fs-utils.js';
+import {
+  oneLine,
+  TOOL_CALL_SUMMARY_MAX,
+  TOOL_RESULT_SUMMARY_MAX,
+} from '../spec/native-history-tool-blocks.js';
+import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 
 export interface NativeHistoryMessage {
   ts: string;
@@ -69,6 +75,14 @@ export interface NativeHistoryMessage {
   workspace?: string;
   /** Stable per-message identity (v2 contract). */
   providerUnitKey?: string;
+  /**
+   * (TOOL-EXPAND) Address of the source record this bubble was summarised
+   * from. codex persists each tool call/result as its OWN top-level record
+   * rather than a block inside a content array, so `blockIndex` is always -1
+   * here — the record itself is the block (the same convention the spec parser
+   * uses for this shape).
+   */
+  toolBlockRef?: NativeHistoryToolBlockRef;
 }
 
 export interface NativeHistorySession {
@@ -171,34 +185,107 @@ function summarizeToolArguments(value: unknown): string {
 /**
  * Build a human-readable summary of a Codex tool call payload.
  */
-function summarizeToolCall(payload: Record<string, unknown>): string {
+function summarizeToolCall(payload: Record<string, unknown>): { content: string; truncated: boolean } {
   const name = String(payload.name ?? payload.type ?? 'tool').trim() || 'tool';
+  const argumentValue = codexToolCallArguments(payload);
+  if (!argumentValue) return { content: name, truncated: false };
+  // Cap here rather than at the call site so the truncation verdict is decided
+  // on the same string that gets rendered — `summarizeToolArguments` can
+  // already pick a short `command` field out of a large object, and that is NOT
+  // a truncation the reader can recover anything from by expanding.
+  const { text, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
+  return { content: text ? `${name}: ${text}` : name, truncated };
+}
+
+/**
+ * The argument text a codex tool-call bubble summarises, before capping.
+ * Shared with the expand path so both agree on which field is "the arguments".
+ */
+function codexToolCallArguments(payload: Record<string, unknown>): string {
   const rawArguments = payload.arguments ?? payload.input;
-  let argumentValue = '';
   if (typeof rawArguments === 'string') {
     const trimmed = rawArguments.trim();
     try {
-      argumentValue = summarizeToolArguments(JSON.parse(trimmed));
+      return summarizeToolArguments(JSON.parse(trimmed));
     } catch {
-      argumentValue = trimmed;
+      return trimmed;
     }
-  } else {
-    argumentValue = summarizeToolArguments(rawArguments);
   }
-  return argumentValue ? `${name}: ${argumentValue}` : name;
+  return summarizeToolArguments(rawArguments);
 }
 
 /**
  * Extract text content from a tool output payload.
  */
-function extractToolOutputContent(payload: Record<string, unknown>): string {
+function extractToolOutputContent(payload: Record<string, unknown>): { content: string; truncated: boolean } {
+  const raw = codexToolOutputText(payload);
+  if (!raw) return { content: '', truncated: false };
+  const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+  return { content: text, truncated };
+}
+
+/** Untruncated text of a codex tool output payload. */
+function codexToolOutputText(payload: Record<string, unknown>): string {
   const output = payload.output ?? payload.result ?? payload.content;
   const text = flattenCodexContent(output);
   if (text) return text;
   if (output && typeof output === 'object') {
-    try { return JSON.stringify(output).trim(); } catch { return ''; }
+    try { return JSON.stringify(output, null, 2).trim(); } catch { return ''; }
   }
   return '';
+}
+
+/**
+ * Re-parse a codex rollout into the record array `parseSessionFile` indexes
+ * against. See `readClaudeRecords` for why this is not routed through the spec
+ * path's jsonl cache.
+ */
+export function readCodexRecords(filePath: string): Record<string, unknown>[] {
+  let raw: string;
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  const out: Record<string, unknown>[] = [];
+  for (const line of raw.split('\n').filter(Boolean)) {
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    out.push(parsed as Record<string, unknown>);
+  }
+  return out;
+}
+
+/**
+ * Read one addressed codex tool record at full length. Returns null when the
+ * record is not a tool call/output.
+ */
+export function readCodexToolBlockAt(
+  record: Record<string, unknown>,
+): { toolName?: string; callArgs?: string; result?: string } | null {
+  if (String(record.type || '').trim() !== 'response_item') return null;
+  const payload = record.payload && typeof record.payload === 'object'
+    ? (record.payload as Record<string, unknown>)
+    : null;
+  if (!payload) return null;
+  const payloadType = String(payload.type || '').trim();
+
+  if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
+    const toolName = String(payload.name ?? payload.type ?? 'tool').trim() || 'tool';
+    // Prefer the RAW arguments over the summarised pick: expanding exists to
+    // show what the summary dropped, and `summarizeToolArguments` deliberately
+    // narrows a large object down to one legible field.
+    const rawArguments = payload.arguments ?? payload.input;
+    let callArgs = '';
+    if (typeof rawArguments === 'string') {
+      const trimmed = rawArguments.trim();
+      try { callArgs = JSON.stringify(JSON.parse(trimmed), null, 2); } catch { callArgs = trimmed; }
+    } else if (rawArguments != null) {
+      try { callArgs = JSON.stringify(rawArguments, null, 2) ?? ''; } catch { callArgs = ''; }
+    }
+    return { toolName, callArgs };
+  }
+  if (payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') {
+    return { result: codexToolOutputText(payload) };
+  }
+  return null;
 }
 
 function hasAssistantStandardMessageSinceLastUser(records: NativeHistoryMessage[], content: string): boolean {
@@ -358,6 +445,8 @@ function parseSessionFile(
   sessionId: string,
   workspaceFallback?: string,
   completionSignal: NativeCompletionSignalSpec | null = CODEX_DEFAULT_COMPLETION_SIGNAL,
+  /** (TOOL-EXPAND) mtime seal for refs minted here; 0 disables stamping. */
+  sourceMtimeMs = 0,
 ): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[]; turnTerminalMarkers: NativeTurnTerminalMarker[] } {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [], turnTerminalMarkers: [] }; }
@@ -369,10 +458,14 @@ function parseSessionFile(
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
+  // Counts records that PARSE, matching `readCodexRecords` exactly — see the
+  // note there on why the expand path re-parses instead of sharing a cache.
+  let recordIndex = -1;
   for (const line of lines) {
     let parsed: unknown = null;
     try { parsed = JSON.parse(line); } catch { continue; }
     if (!parsed || typeof parsed !== 'object') continue;
+    recordIndex++;
 
     const record = parsed as Record<string, unknown>;
     const receivedAt = extractTimestampValue(record.timestamp) || fallbackTs;
@@ -479,7 +572,7 @@ function parseSessionFile(
       if (detectedWorkspace) msg.workspace = detectedWorkspace;
       records.push(msg);
     } else if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
-      const content = summarizeToolCall(payload);
+      const { content, truncated } = summarizeToolCall(payload);
       if (!content) continue;
 
       const msg: NativeHistoryMessage = {
@@ -493,9 +586,12 @@ function parseSessionFile(
         historySessionId: sessionId,
       };
       if (detectedWorkspace) msg.workspace = detectedWorkspace;
+      if (truncated && sourceMtimeMs > 0) {
+        msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
+      }
       records.push(msg);
     } else if (payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') {
-      const content = extractToolOutputContent(payload);
+      const { content, truncated } = extractToolOutputContent(payload);
       if (!content) continue;
 
       const msg: NativeHistoryMessage = {
@@ -509,6 +605,9 @@ function parseSessionFile(
         historySessionId: sessionId,
       };
       if (detectedWorkspace) msg.workspace = detectedWorkspace;
+      if (truncated && sourceMtimeMs > 0) {
+        msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
+      }
       records.push(msg);
     }
   }
@@ -564,6 +663,9 @@ export function readSession(
     sessionId,
     workspaceFallback,
     declaredSignal ?? CODEX_DEFAULT_COMPLETION_SIGNAL,
+    // Seal refs with the mtime this session reports, so an expand minted from
+    // this read validates against the same number.
+    sourceMtimeMs,
   );
   if (messages.length === 0) return null;
 

@@ -106542,87 +106542,6 @@ ${marker}`,
         globCacheMisses = 0;
       }
     });
-    function isValidRef(ref) {
-      if (!ref || typeof ref !== "object") return false;
-      const r = ref;
-      return Number.isFinite(r.sourceMtimeMs) && Number.isInteger(r.recordIndex) && Number.isInteger(r.blockIndex) && r.recordIndex >= 0 && r.blockIndex >= -1;
-    }
-    function expandToolBlock(cfg, input, ref) {
-      if (!isValidRef(ref)) return { ok: false, reason: "block_not_found" };
-      if (cfg?.source?.kind !== "jsonl") return { ok: false, reason: "unsupported_source" };
-      const src = cfg.source;
-      let resolved;
-      try {
-        resolved = executeNativeHistory(cfg, input);
-      } catch {
-        return { ok: false, reason: "source_unavailable" };
-      }
-      if (!resolved?.sourcePath) return { ok: false, reason: "source_unavailable" };
-      if (resolved.sourceMtimeMs !== ref.sourceMtimeMs) {
-        return { ok: false, reason: "source_changed" };
-      }
-      let lines;
-      try {
-        lines = readJsonlLines(resolved.sourcePath);
-      } catch {
-        return { ok: false, reason: "source_unavailable" };
-      }
-      if (ref.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
-      const record2 = lines[ref.recordIndex];
-      if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
-      const shape = compileRecordShapes(src).pick(record2);
-      const tmap = shape?.map.tools;
-      if (!tmap) return { ok: false, reason: "unsupported_source" };
-      let block2;
-      if (ref.blockIndex === -1) {
-        block2 = record2;
-      } else {
-        const contentRaw = jsonPathGet(record2, shape.map.content);
-        if (!Array.isArray(contentRaw)) return { ok: false, reason: "block_not_found" };
-        if (ref.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
-        block2 = contentRaw[ref.blockIndex];
-      }
-      if (block2 == null || typeof block2 !== "object") return { ok: false, reason: "block_not_found" };
-      return readToolBlock(block2, tmap);
-    }
-    function readToolBlock(block2, tmap) {
-      const typeVal = String(jsonPathGet(block2, tmap.block_type || "$.type") ?? "");
-      if (!typeVal) return { ok: false, reason: "not_a_tool_block" };
-      const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
-      const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
-      if (callTypes.includes(typeVal)) {
-        const toolName = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
-        const callArgs = stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input"));
-        return {
-          ok: true,
-          toolName,
-          callArgs,
-          // Measured on the same whitespace-flattened text the parser caps,
-          // so "truncated" here means exactly what it meant there.
-          truncated: flatLength(callArgs) > TOOL_CALL_SUMMARY_MAX
-        };
-      }
-      if (resultTypes.includes(typeVal)) {
-        const result = stringifyContent(jsonPathGet(block2, tmap.result_content || "$.content"));
-        return {
-          ok: true,
-          result,
-          truncated: flatLength(result) > TOOL_RESULT_SUMMARY_MAX
-        };
-      }
-      return { ok: false, reason: "not_a_tool_block" };
-    }
-    function flatLength(s2) {
-      return s2.replace(/\s+/g, " ").trim().length;
-    }
-    var init_tool_block_expand = __esm2({
-      "src/providers/spec/tool-block-expand.ts"() {
-        "use strict";
-        init_native_history_executor();
-        init_native_history_tool_blocks();
-        init_native_history_jsonl_cache();
-      }
-    });
     function isSafeFilename(name) {
       return /^[A-Za-z0-9._:-]+$/.test(name) && !name.includes("..");
     }
@@ -106653,27 +106572,49 @@ ${marker}`,
     function isSafeSessionId(sessionId) {
       return /^[A-Za-z0-9._:-]+$/.test(sessionId) && !sessionId.includes("..");
     }
+    function summarizeToolUseInput(block2) {
+      const input = block2.input;
+      if (input == null) return { text: "", truncated: false };
+      if (typeof input === "object" && !Array.isArray(input)) {
+        const command = input.command;
+        if (typeof command === "string" && command.trim()) {
+          return oneLine(command, TOOL_CALL_SUMMARY_MAX);
+        }
+      }
+      const raw = typeof input === "string" ? input : safeStringify(input);
+      return oneLine(raw, TOOL_CALL_SUMMARY_MAX);
+    }
+    function safeStringify(value) {
+      if (typeof value === "string") return value;
+      try {
+        return JSON.stringify(value) ?? "";
+      } catch {
+        return "";
+      }
+    }
     function extractAssistantContentParts(content) {
       if (typeof content === "string") {
         const trimmed = content.trim();
-        return trimmed ? [{ content: trimmed, kind: "standard" }] : [];
+        return trimmed ? [{ content: trimmed, kind: "standard", blockIndex: -1, truncated: false }] : [];
       }
       if (!Array.isArray(content)) return [];
       const parts = [];
-      for (const block2 of content) {
+      for (let blockIndex = 0; blockIndex < content.length; blockIndex++) {
+        const block2 = content[blockIndex];
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
           const text = String(block2.text || "").trim();
-          if (text) parts.push({ content: text, kind: "standard" });
+          if (text) parts.push({ content: text, kind: "standard", blockIndex, truncated: false });
         } else if (type2 === "tool_use") {
           const name = String(block2.name || "").trim() || "Tool";
-          const input = block2.input;
-          const command = input && typeof input === "object" ? String(input.command || "").trim() : "";
+          const { text: args, truncated } = summarizeToolUseInput(block2);
           parts.push({
-            content: command ? `${name}: ${command}` : name,
+            content: args ? `${name}: ${args}` : name,
             kind: "tool",
-            senderName: "Tool"
+            senderName: "Tool",
+            blockIndex,
+            truncated
           });
         }
       }
@@ -106682,35 +106623,47 @@ ${marker}`,
     function extractUserContentParts(content) {
       if (typeof content === "string") {
         const trimmed = content.trim();
-        return trimmed ? [{ role: "user", content: trimmed, kind: "standard" }] : [];
+        return trimmed ? [{ role: "user", content: trimmed, kind: "standard", blockIndex: -1, truncated: false }] : [];
       }
       if (!Array.isArray(content)) return [];
       const parts = [];
-      for (const block2 of content) {
+      for (let blockIndex = 0; blockIndex < content.length; blockIndex++) {
+        const block2 = content[blockIndex];
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
           const text = String(block2.text || "").trim();
-          if (text) parts.push({ role: "user", content: text, kind: "standard" });
-        } else if (type2 === "tool_result") {
-          const raw = block2.content;
-          let text = "";
-          if (typeof raw === "string") {
-            text = raw.trim();
-          } else if (Array.isArray(raw)) {
-            text = raw.map((entry) => {
-              if (typeof entry === "string") return entry.trim();
-              if (!entry || typeof entry !== "object") return "";
-              const e = entry;
-              if (typeof e.text === "string") return e.text.trim();
-              if (typeof e.content === "string") return e.content.trim();
-              return "";
-            }).filter(Boolean).join("\n");
+          if (text) {
+            parts.push({ role: "user", content: text, kind: "standard", blockIndex, truncated: false });
           }
-          if (text) parts.push({ role: "assistant", content: text, kind: "tool", senderName: "Tool" });
+        } else if (type2 === "tool_result") {
+          const raw = flattenToolResultContent(block2.content);
+          if (!raw) continue;
+          const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+          if (!text) continue;
+          parts.push({
+            role: "assistant",
+            content: text,
+            kind: "tool",
+            senderName: "Tool",
+            blockIndex,
+            truncated
+          });
         }
       }
       return parts;
+    }
+    function flattenToolResultContent(raw) {
+      if (typeof raw === "string") return raw.trim();
+      if (!Array.isArray(raw)) return "";
+      return raw.map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (!entry || typeof entry !== "object") return "";
+        const e = entry;
+        if (typeof e.text === "string") return e.text.trim();
+        if (typeof e.content === "string") return e.content.trim();
+        return "";
+      }).filter(Boolean).join("\n");
     }
     function extractClaudeUsage(message, receivedAt) {
       const raw = message.usage;
@@ -106725,7 +106678,62 @@ ${marker}`,
       });
       return { ...normalized, mode: "delta", receivedAt };
     }
-    function parseTranscriptFile(filePath, sessionId, workspaceFallback) {
+    function stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs) {
+      if (part.kind !== "tool") return;
+      if (!part.truncated) return;
+      if (!(sourceMtimeMs > 0) || part.blockIndex < 0 || recordIndex < 0) return;
+      msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: part.blockIndex };
+    }
+    function readClaudeRecords(filePath) {
+      let raw;
+      try {
+        raw = fs31.readFileSync(filePath, "utf-8");
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const line of raw.split("\n").filter(Boolean)) {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object") continue;
+        out.push(parsed);
+      }
+      return out;
+    }
+    function readClaudeToolBlockAt(record2, blockIndex) {
+      const message = record2.message && typeof record2.message === "object" ? record2.message : null;
+      if (!message) return null;
+      const content = message.content;
+      if (!Array.isArray(content)) return null;
+      if (blockIndex < 0 || blockIndex >= content.length) return null;
+      const block2 = content[blockIndex];
+      if (!block2 || typeof block2 !== "object") return null;
+      const b = block2;
+      const type2 = String(b.type || "").trim();
+      if (type2 === "tool_use") {
+        const toolName = String(b.name || "").trim() || "Tool";
+        const input = b.input;
+        const callArgs = input == null ? "" : typeof input === "string" ? input : safeStringifyPretty(input);
+        return { toolName, callArgs };
+      }
+      if (type2 === "tool_result") {
+        const result = flattenToolResultContent(b.content);
+        return { result };
+      }
+      return null;
+    }
+    function safeStringifyPretty(value) {
+      try {
+        return JSON.stringify(value, null, 2) ?? "";
+      } catch {
+        return "";
+      }
+    }
+    function parseTranscriptFile(filePath, sessionId, workspaceFallback, sourceMtimeMs = 0) {
       let raw;
       try {
         raw = fs31.readFileSync(filePath, "utf-8");
@@ -106738,6 +106746,7 @@ ${marker}`,
       const seenUsageMessageIds = /* @__PURE__ */ new Set();
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
+      let recordIndex = -1;
       for (const line of lines) {
         let parsed = null;
         try {
@@ -106746,6 +106755,7 @@ ${marker}`,
           continue;
         }
         if (!parsed || typeof parsed !== "object") continue;
+        recordIndex++;
         const record2 = parsed;
         const lineSessionId = String(record2.sessionId || "").trim();
         if (lineSessionId && lineSessionId !== sessionId) continue;
@@ -106789,6 +106799,7 @@ ${marker}`,
             };
             if (part.senderName) msg.senderName = part.senderName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
+            stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
             records.push(msg);
           }
         } else if (type2 === "assistant") {
@@ -106804,6 +106815,7 @@ ${marker}`,
             };
             if (part.senderName) msg.senderName = part.senderName;
             if (detectedWorkspace) msg.workspace = detectedWorkspace;
+            stampToolBlockRef(msg, part, recordIndex, sourceMtimeMs);
             records.push(msg);
           }
         }
@@ -106816,7 +106828,7 @@ ${marker}`,
       if (!isSafeSessionId(basename22)) return null;
       if (!fs31.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename22);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename22, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
@@ -106846,6 +106858,7 @@ ${marker}`,
         path34 = __toESM2(require("path"));
         init_usage_normalize();
         init_fs_utils();
+        init_native_history_tool_blocks();
       }
     });
     function extractTimestampValue2(value) {
@@ -106892,32 +106905,91 @@ ${marker}`,
     }
     function summarizeToolCall(payload) {
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
+      const argumentValue = codexToolCallArguments(payload);
+      if (!argumentValue) return { content: name, truncated: false };
+      const { text, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
+      return { content: text ? `${name}: ${text}` : name, truncated };
+    }
+    function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
-      let argumentValue = "";
       if (typeof rawArguments === "string") {
         const trimmed = rawArguments.trim();
         try {
-          argumentValue = summarizeToolArguments(JSON.parse(trimmed));
+          return summarizeToolArguments(JSON.parse(trimmed));
         } catch {
-          argumentValue = trimmed;
+          return trimmed;
         }
-      } else {
-        argumentValue = summarizeToolArguments(rawArguments);
       }
-      return argumentValue ? `${name}: ${argumentValue}` : name;
+      return summarizeToolArguments(rawArguments);
     }
     function extractToolOutputContent(payload) {
+      const raw = codexToolOutputText(payload);
+      if (!raw) return { content: "", truncated: false };
+      const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+      return { content: text, truncated };
+    }
+    function codexToolOutputText(payload) {
       const output = payload.output ?? payload.result ?? payload.content;
       const text = flattenCodexContent(output);
       if (text) return text;
       if (output && typeof output === "object") {
         try {
-          return JSON.stringify(output).trim();
+          return JSON.stringify(output, null, 2).trim();
         } catch {
           return "";
         }
       }
       return "";
+    }
+    function readCodexRecords(filePath) {
+      let raw;
+      try {
+        raw = fs32.readFileSync(filePath, "utf-8");
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const line of raw.split("\n").filter(Boolean)) {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!parsed || typeof parsed !== "object") continue;
+        out.push(parsed);
+      }
+      return out;
+    }
+    function readCodexToolBlockAt(record2) {
+      if (String(record2.type || "").trim() !== "response_item") return null;
+      const payload = record2.payload && typeof record2.payload === "object" ? record2.payload : null;
+      if (!payload) return null;
+      const payloadType = String(payload.type || "").trim();
+      if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+        const toolName = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
+        const rawArguments = payload.arguments ?? payload.input;
+        let callArgs = "";
+        if (typeof rawArguments === "string") {
+          const trimmed = rawArguments.trim();
+          try {
+            callArgs = JSON.stringify(JSON.parse(trimmed), null, 2);
+          } catch {
+            callArgs = trimmed;
+          }
+        } else if (rawArguments != null) {
+          try {
+            callArgs = JSON.stringify(rawArguments, null, 2) ?? "";
+          } catch {
+            callArgs = "";
+          }
+        }
+        return { toolName, callArgs };
+      }
+      if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
+        return { result: codexToolOutputText(payload) };
+      }
+      return null;
     }
     function hasAssistantStandardMessageSinceLastUser(records, content) {
       const normalized = content.trim();
@@ -106994,7 +107066,7 @@ ${marker}`,
         return null;
       }
     }
-    function parseSessionFile(filePath, sessionId, workspaceFallback, completionSignal = CODEX_DEFAULT_COMPLETION_SIGNAL) {
+    function parseSessionFile(filePath, sessionId, workspaceFallback, completionSignal = CODEX_DEFAULT_COMPLETION_SIGNAL, sourceMtimeMs = 0) {
       let raw;
       try {
         raw = fs32.readFileSync(filePath, "utf-8");
@@ -107007,6 +107079,7 @@ ${marker}`,
       const turnTerminalMarkers = [];
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
+      let recordIndex = -1;
       for (const line of lines) {
         let parsed = null;
         try {
@@ -107015,6 +107088,7 @@ ${marker}`,
           continue;
         }
         if (!parsed || typeof parsed !== "object") continue;
+        recordIndex++;
         const record2 = parsed;
         const receivedAt = extractTimestampValue2(record2.timestamp) || fallbackTs;
         fallbackTs = receivedAt + 1;
@@ -107098,7 +107172,7 @@ ${marker}`,
           if (detectedWorkspace) msg.workspace = detectedWorkspace;
           records.push(msg);
         } else if (payloadType === "function_call" || payloadType === "custom_tool_call") {
-          const content = summarizeToolCall(payload);
+          const { content, truncated } = summarizeToolCall(payload);
           if (!content) continue;
           const msg = {
             ts: new Date(receivedAt).toISOString(),
@@ -107111,9 +107185,12 @@ ${marker}`,
             historySessionId: sessionId
           };
           if (detectedWorkspace) msg.workspace = detectedWorkspace;
+          if (truncated && sourceMtimeMs > 0) {
+            msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
+          }
           records.push(msg);
         } else if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
-          const content = extractToolOutputContent(payload);
+          const { content, truncated } = extractToolOutputContent(payload);
           if (!content) continue;
           const msg = {
             ts: new Date(receivedAt).toISOString(),
@@ -107126,6 +107203,9 @@ ${marker}`,
             historySessionId: sessionId
           };
           if (detectedWorkspace) msg.workspace = detectedWorkspace;
+          if (truncated && sourceMtimeMs > 0) {
+            msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: -1 };
+          }
           records.push(msg);
         }
       }
@@ -107149,7 +107229,10 @@ ${marker}`,
         sessionPath,
         sessionId,
         workspaceFallback,
-        declaredSignal ?? CODEX_DEFAULT_COMPLETION_SIGNAL
+        declaredSignal ?? CODEX_DEFAULT_COMPLETION_SIGNAL,
+        // Seal refs with the mtime this session reports, so an expand minted from
+        // this read validates against the same number.
+        sourceMtimeMs
       );
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
@@ -107184,6 +107267,7 @@ ${marker}`,
         init_usage_normalize();
         init_native_turn_signal();
         init_fs_utils();
+        init_native_history_tool_blocks();
         CODEX_DEFAULT_COMPLETION_SIGNAL = {
           recordType: "task_complete",
           abortRecordType: "turn_aborted",
@@ -108231,6 +108315,66 @@ ${marker}`,
       }
       return parts.join("\n");
     }
+    function grokToolCallArguments(toolCalls) {
+      const parts = [];
+      for (const call of toolCalls) {
+        if (!call || typeof call !== "object") continue;
+        const args = call.arguments;
+        if (typeof args === "string") {
+          const trimmed = args.trim();
+          if (!trimmed) continue;
+          try {
+            parts.push(JSON.stringify(JSON.parse(trimmed), null, 2));
+          } catch {
+            parts.push(trimmed);
+          }
+        } else if (args != null) {
+          try {
+            parts.push(JSON.stringify(args, null, 2) ?? "");
+          } catch {
+          }
+        }
+      }
+      return parts.filter(Boolean).join("\n");
+    }
+    function readGrokRecords(filePath) {
+      let text;
+      try {
+        text = fs35.readFileSync(filePath, "utf8");
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let record2;
+        try {
+          record2 = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+        if (!record2 || typeof record2 !== "object") continue;
+        out.push(record2);
+      }
+      return out;
+    }
+    function readGrokToolBlockAt(record2) {
+      const type2 = typeof record2.type === "string" ? record2.type : "";
+      if (type2 === "assistant") {
+        const toolCalls = Array.isArray(record2.tool_calls) ? record2.tool_calls : [];
+        if (toolCalls.length === 0) return null;
+        const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
+        return {
+          toolName: names.length > 0 ? names.join(", ") : "tool",
+          callArgs: grokToolCallArguments(toolCalls)
+        };
+      }
+      if (type2 === "tool_result") {
+        return { result: blocksToText(record2.content).trim() };
+      }
+      return null;
+    }
     function parseGrokRecord(raw) {
       if (!raw || typeof raw !== "object") return null;
       const record2 = raw;
@@ -108250,14 +108394,19 @@ ${marker}`,
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
           const label = names.length > 0 ? names.join(", ") : "tool";
-          return { role: "assistant", content: `[tool: ${label}]`, kind: "tool" };
+          const args = grokToolCallArguments(toolCalls);
+          if (!args) return { role: "assistant", content: `[tool: ${label}]`, kind: "tool" };
+          const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
+          return { role: "assistant", content: `[tool: ${label}] ${summary}`, kind: "tool", truncated };
         }
         return { role: "assistant", content: text, kind: "standard" };
       }
       if (type2 === "tool_result") {
-        const text = blocksToText(record2.content).trim();
+        const raw2 = blocksToText(record2.content).trim();
+        if (!raw2) return null;
+        const { text, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
         if (!text) return null;
-        return { role: "assistant", content: text, kind: "tool" };
+        return { role: "assistant", content: text, kind: "tool", truncated };
       }
       return null;
     }
@@ -108284,6 +108433,7 @@ ${marker}`,
       const providerSessionId = path38.basename(sessionDir);
       const sourceMtimeMs = statMtimeMs(sourcePath);
       const parsed = [];
+      let recordIndex = -1;
       for (const line of text.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -108293,8 +108443,10 @@ ${marker}`,
         } catch {
           continue;
         }
+        if (!record2 || typeof record2 !== "object") continue;
+        recordIndex++;
         const message = parseGrokRecord(record2);
-        if (message) parsed.push(message);
+        if (message) parsed.push({ ...message, recordIndex });
       }
       const startMs = readSessionCreatedAtMs(sessionDir) || sourceMtimeMs;
       const endMs = Math.max(sourceMtimeMs, startMs);
@@ -108311,7 +108463,10 @@ ${marker}`,
           agent: "grok-cli",
           historySessionId: sessionId || providerSessionId,
           ...workspace ? { workspace } : {},
-          providerUnitKey: `${providerSessionId}:${index}`
+          providerUnitKey: `${providerSessionId}:${index}`,
+          // grok records ARE the tool block (no content array to index into), so
+          // blockIndex is -1 — the same record-level convention codex uses.
+          ...message.kind === "tool" && message.truncated && sourceMtimeMs > 0 ? { toolBlockRef: { sourceMtimeMs, recordIndex: message.recordIndex, blockIndex: -1 } } : {}
         };
       });
       return {
@@ -108407,6 +108562,7 @@ ${marker}`,
         path38 = __toESM2(require("path"));
         os25 = __toESM2(require("os"));
         init_fs_utils();
+        init_native_history_tool_blocks();
         USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
       }
     });
@@ -108468,7 +108624,13 @@ ${marker}`,
             content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
             receivedAt: typeof m.receivedAt === "number" ? m.receivedAt : Date.parse(m.timestamp || "") || Date.now(),
             kind: typeof m.kind === "string" ? m.kind : "standard",
-            workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0
+            workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0,
+            // (TOOL-EXPAND) Forward the reader's ref. This projection is an
+            // allow-list, so a ref the reader stamped is dropped here unless
+            // named explicitly — which is why it is validated rather than
+            // spread: a malformed ref reaching the dashboard would render an
+            // expand button that can only ever fail.
+            ...isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}
           })),
           providerSessionId: resolvedProviderSessionId,
           sourcePath: session.sourcePath,
@@ -108805,6 +108967,11 @@ ${marker}`,
         return { sessions };
       };
     }
+    function isToolBlockRef(v) {
+      if (!v || typeof v !== "object") return false;
+      const r = v;
+      return Number.isFinite(r.sourceMtimeMs) && Number.isInteger(r.recordIndex) && Number.isInteger(r.blockIndex) && r.recordIndex >= 0 && r.blockIndex >= -1;
+    }
     function normalizeRole2(r) {
       const s2 = String(r ?? "").toLowerCase();
       if (s2 === "user" || s2 === "human") return "user";
@@ -108835,6 +109002,176 @@ ${marker}`,
         codexRuntimeBindings = /* @__PURE__ */ new Map();
         AGY_SPAWN_CLAIM_GRACE_MS = 2e3;
         RECENT_WINDOW_MS = 5 * 60 * 1e3;
+      }
+    });
+    function expandBuiltinReaderToolBlock(reader, input, ref) {
+      if (reader !== "claude-cli" && reader !== "codex-cli" && reader !== "grok-cli") {
+        return { ok: false, reason: "unsupported_source" };
+      }
+      let sourcePath;
+      try {
+        const resolved = createNativeHistoryDispatcher(reader)(input);
+        if (!resolved?.sourcePath) return { ok: false, reason: "source_unavailable" };
+        sourcePath = resolved.sourcePath;
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      const currentMtimeMs = statMtimeMs(sourcePath);
+      if (!(currentMtimeMs > 0)) return { ok: false, reason: "source_unavailable" };
+      if (currentMtimeMs !== ref.sourceMtimeMs) return { ok: false, reason: "source_changed" };
+      let records;
+      try {
+        records = readRecords(reader, sourcePath);
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      if (ref.recordIndex >= records.length) return { ok: false, reason: "block_not_found" };
+      const record2 = records[ref.recordIndex];
+      if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
+      const block2 = readBlock(reader, record2, ref.blockIndex);
+      if (!block2) return { ok: false, reason: "not_a_tool_block" };
+      if (block2.callArgs !== void 0) {
+        return {
+          ok: true,
+          ...block2.toolName ? { toolName: block2.toolName } : {},
+          callArgs: block2.callArgs,
+          // Measured on the same whitespace-flattened text the readers cap,
+          // so `truncated` here means exactly what it meant there.
+          truncated: flatLength(block2.callArgs) > TOOL_CALL_SUMMARY_MAX
+        };
+      }
+      if (block2.result !== void 0) {
+        return {
+          ok: true,
+          result: block2.result,
+          truncated: flatLength(block2.result) > TOOL_RESULT_SUMMARY_MAX
+        };
+      }
+      return { ok: false, reason: "not_a_tool_block" };
+    }
+    function readRecords(reader, sourcePath) {
+      switch (reader) {
+        case "claude-cli":
+          return readClaudeRecords(sourcePath);
+        case "codex-cli":
+          return readCodexRecords(sourcePath);
+        case "grok-cli":
+          return readGrokRecords(sourcePath);
+        default:
+          return [];
+      }
+    }
+    function readBlock(reader, record2, blockIndex) {
+      switch (reader) {
+        // claude nests tool blocks in `message.content[]`, so the ref carries a
+        // real array position.
+        case "claude-cli":
+          return readClaudeToolBlockAt(record2, blockIndex);
+        // codex and grok persist each tool call/result as its own record; the
+        // record IS the block, which the ref marks with blockIndex -1.
+        case "codex-cli":
+          return readCodexToolBlockAt(record2);
+        case "grok-cli":
+          return readGrokToolBlockAt(record2);
+        default:
+          return null;
+      }
+    }
+    function flatLength(s2) {
+      return s2.replace(/\s+/g, " ").trim().length;
+    }
+    var init_builtin_tool_block_expand = __esm2({
+      "src/providers/native-history/builtin-tool-block-expand.ts"() {
+        "use strict";
+        init_dispatcher();
+        init_native_history_tool_blocks();
+        init_fs_utils();
+        init_claude_cli_transcript();
+        init_codex_cli_transcript();
+        init_grok_cli_transcript();
+      }
+    });
+    function isValidRef(ref) {
+      if (!ref || typeof ref !== "object") return false;
+      const r = ref;
+      return Number.isFinite(r.sourceMtimeMs) && Number.isInteger(r.recordIndex) && Number.isInteger(r.blockIndex) && r.recordIndex >= 0 && r.blockIndex >= -1;
+    }
+    function expandToolBlock(cfg, input, ref) {
+      if (!isValidRef(ref)) return { ok: false, reason: "block_not_found" };
+      if (cfg?.reader) return expandBuiltinReaderToolBlock(cfg.reader, input, ref);
+      if (cfg?.source?.kind !== "jsonl") return { ok: false, reason: "unsupported_source" };
+      const src = cfg.source;
+      let resolved;
+      try {
+        resolved = executeNativeHistory(cfg, input);
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      if (!resolved?.sourcePath) return { ok: false, reason: "source_unavailable" };
+      if (resolved.sourceMtimeMs !== ref.sourceMtimeMs) {
+        return { ok: false, reason: "source_changed" };
+      }
+      let lines;
+      try {
+        lines = readJsonlLines(resolved.sourcePath);
+      } catch {
+        return { ok: false, reason: "source_unavailable" };
+      }
+      if (ref.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
+      const record2 = lines[ref.recordIndex];
+      if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
+      const shape = compileRecordShapes(src).pick(record2);
+      const tmap = shape?.map.tools;
+      if (!tmap) return { ok: false, reason: "unsupported_source" };
+      let block2;
+      if (ref.blockIndex === -1) {
+        block2 = record2;
+      } else {
+        const contentRaw = jsonPathGet(record2, shape.map.content);
+        if (!Array.isArray(contentRaw)) return { ok: false, reason: "block_not_found" };
+        if (ref.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
+        block2 = contentRaw[ref.blockIndex];
+      }
+      if (block2 == null || typeof block2 !== "object") return { ok: false, reason: "block_not_found" };
+      return readToolBlock(block2, tmap);
+    }
+    function readToolBlock(block2, tmap) {
+      const typeVal = String(jsonPathGet(block2, tmap.block_type || "$.type") ?? "");
+      if (!typeVal) return { ok: false, reason: "not_a_tool_block" };
+      const callTypes = tmap.call_types ?? DEFAULT_TOOL_CALL_TYPES;
+      const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
+      if (callTypes.includes(typeVal)) {
+        const toolName = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
+        const callArgs = stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input"));
+        return {
+          ok: true,
+          toolName,
+          callArgs,
+          // Measured on the same whitespace-flattened text the parser caps,
+          // so "truncated" here means exactly what it meant there.
+          truncated: flatLength2(callArgs) > TOOL_CALL_SUMMARY_MAX
+        };
+      }
+      if (resultTypes.includes(typeVal)) {
+        const result = stringifyContent(jsonPathGet(block2, tmap.result_content || "$.content"));
+        return {
+          ok: true,
+          result,
+          truncated: flatLength2(result) > TOOL_RESULT_SUMMARY_MAX
+        };
+      }
+      return { ok: false, reason: "not_a_tool_block" };
+    }
+    function flatLength2(s2) {
+      return s2.replace(/\s+/g, " ").trim().length;
+    }
+    var init_tool_block_expand = __esm2({
+      "src/providers/spec/tool-block-expand.ts"() {
+        "use strict";
+        init_native_history_executor();
+        init_native_history_tool_blocks();
+        init_native_history_jsonl_cache();
+        init_builtin_tool_block_expand();
       }
     });
     function detectBackgroundTaskActive(cfg, input) {

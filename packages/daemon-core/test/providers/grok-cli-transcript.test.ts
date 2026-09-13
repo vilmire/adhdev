@@ -85,9 +85,17 @@ describe('grok-cli transcript — record parsing', () => {
     expect(parsed).toEqual({ role: 'assistant', content: 'Blue', kind: 'standard' });
   });
 
-  it('names the tool instead of emitting an empty bubble for a tool-call turn', () => {
+  it('names the tool AND its arguments instead of emitting an empty bubble for a tool-call turn', () => {
     const parsed = parseGrokRecord(ASSISTANT_TOOL_CALL);
-    expect(parsed).toEqual({ role: 'assistant', content: '[tool: read_file]', kind: 'tool' });
+    // The arguments ride along because the name alone does not say WHAT was
+    // called — `read_file` is only useful with the path next to it. Short
+    // arguments like this one fit under the cap, so no expand ref is warranted.
+    expect(parsed).toEqual({
+      role: 'assistant',
+      content: '[tool: read_file] { "target_file": "/tmp/blue64.png" }',
+      kind: 'tool',
+      truncated: false,
+    });
   });
 
   it('surfaces tool_result as a tool message', () => {
@@ -155,7 +163,7 @@ describe('grok-cli transcript — session read/list', () => {
     expect(shape).toEqual([
       ['user', 'standard', '<user_info>\nOS Version: macos\n</user_info>'],
       ['user', 'standard', 'What color is this image?'],
-      ['assistant', 'tool', '[tool: read_file]'],
+      ['assistant', 'tool', '[tool: read_file] { "target_file": "/tmp/blue64.png" }'],
       ['assistant', 'tool', 'Read image file: /tmp/blue64.png'],
       ['assistant', 'standard', 'Blue'],
     ]);

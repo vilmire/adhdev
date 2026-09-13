@@ -45,6 +45,7 @@ import {
 import type { NativeHistoryToolBlockRef } from './native-history-types.js';
 import { readJsonlLines } from './native-history-jsonl-cache.js';
 import type { NativeHistoryConfig, NativeHistoryToolMap } from './types.js';
+import { expandBuiltinReaderToolBlock } from '../native-history/builtin-tool-block-expand.js';
 
 /** Why an expand could not be served. Never "here is a best guess". */
 export type ToolBlockExpandFailure =
@@ -110,6 +111,15 @@ export function expandToolBlock(
     ref: unknown,
 ): ToolBlockExpandResult {
     if (!isValidRef(ref)) return { ok: false, reason: 'block_not_found' };
+
+    // Built-in readers (claude/codex/grok) declare `reader`, not `source`: they
+    // parse their provider's format in hand-written code rather than through
+    // the declarative jsonl map, so there is no `tools` map to project with.
+    // They mint their own refs and resolve them with their own parser — which
+    // is the point, since a ref is only meaningful to the parser that indexed
+    // it.
+    if (cfg?.reader) return expandBuiltinReaderToolBlock(cfg.reader, input, ref);
+
     // Only the declarative jsonl source exposes stable record indices. sqlite
     // stores re-run their session query per read and script overrides are
     // opaque, so neither can honour a positional ref; refuse rather than

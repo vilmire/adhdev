@@ -83,8 +83,15 @@ export function projectToolBlock(
  * expand ref. Note the truncation test is on the WHITESPACE-FLATTENED text: a
  * multi-line body that collapses to under the cap loses newlines but no words,
  * and offering "expand" for it would be noise.
+ *
+ * Exported so the built-in readers (`providers/native-history/*`) cap and
+ * decide "did this lose text?" with the SAME function the spec parser uses.
+ * Re-implementing it there is the failure mode the caps were exported to
+ * prevent: a reader that truncates at a different length, or judges truncation
+ * on the un-flattened string, would stamp refs on complete bubbles (expand
+ * returns the identical text) or omit them from lossy ones.
  */
-function oneLine(s: string, max: number): { text: string; truncated: boolean } {
+export function oneLine(s: string, max: number): { text: string; truncated: boolean } {
     const flat = s.replace(/\s+/g, ' ').trim();
     if (flat.length <= max) return { text: flat, truncated: false };
     return { text: flat.slice(0, max - 1) + '…', truncated: true };
