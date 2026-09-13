@@ -63,6 +63,14 @@ function flattenMessage(message: ChatMessage): TranscriptObservation['messages']
         bubbleState: message.bubbleState,
         senderName: message.senderName,
         toolName: undefined,
+        // (TOOL-EXPAND) The expand ref must survive THIS hop too. It is three
+        // integers addressing a block in the provider's own transcript file —
+        // content-free, so it is safe on the P2P transcript wire — and without
+        // it a truncated tool bubble reaches the dashboard with no way to fetch
+        // the rest, which is exactly the defect the caps would otherwise create.
+        // The downstream encoder re-validates it field by field; this map only
+        // has to stop dropping it (see the `sequence` note above).
+        toolBlockRef: message.toolBlockRef,
         meta,
     };
 }
