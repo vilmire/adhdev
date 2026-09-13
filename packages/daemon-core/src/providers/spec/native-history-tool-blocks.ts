@@ -25,6 +25,30 @@ export const TOOL_CALL_SUMMARY_MAX = 240;
 export const TOOL_RESULT_SUMMARY_MAX = 600;
 
 /**
+ * (TOOL-EXPAND) A ref is only worth stamping when it can actually be resolved.
+ *
+ * `safeMtimeMs` returns 0 when the stat fails, and nothing downstream rejects
+ * that: `isToolBlockRef` and the wire encoder both accept any finite number, so
+ * a `sourceMtimeMs: 0` ref reaches the dashboard, renders an expand control,
+ * and then fails every time — both expand resolvers compare the seal with a
+ * strict `!==` against the file's real mtime (`tool-block-expand.ts:142`,
+ * `builtin-tool-block-expand.ts:102`), which 0 can never match.
+ *
+ * The built-in readers already guard this (`claude-cli-transcript.ts`
+ * `stampToolBlockRef` requires `sourceMtimeMs > 0`); the spec path did not, so
+ * the same transcript yielded resolvable refs through one reader and permanently
+ * broken ones through the other. A bubble with no ref degrades to local
+ * truncation, which is honest; a bubble with an unresolvable ref promises the
+ * user a body it can never fetch.
+ */
+function isResolvableToolBlockRef(ref: NativeHistoryToolBlockRef | undefined): ref is NativeHistoryToolBlockRef {
+    if (!ref) return false;
+    if (!(ref.sourceMtimeMs > 0)) return false;
+    if (!Number.isInteger(ref.recordIndex) || ref.recordIndex < 0) return false;
+    return Number.isInteger(ref.blockIndex) && ref.blockIndex >= -1;
+}
+
+/**
  * Turn a single content block into a `kind:'tool'` message, or null if the
  * block is not a tool call/result. Field locations come from the spec's
  * `tools` map with Anthropic-block defaults.
@@ -63,14 +87,14 @@ export function projectToolBlock(
         const { text: args, truncated } = oneLine(stringifyContent(jsonPathGet(block, tmap.call_args || '$.input')), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `↗ ${name}: ${args}` : `↗ ${name}`;
         const msg: NativeHistoryMessage = { role: 'assistant', content, receivedAt: 0, kind: 'tool' };
-        if (truncated && ref) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
     }
     if (resultTypes.includes(typeVal)) {
         const { text: result, truncated } = oneLine(stringifyContent(jsonPathGet(block, tmap.result_content || '$.content')), TOOL_RESULT_SUMMARY_MAX);
         if (!result) return null;
         const msg: NativeHistoryMessage = { role: 'assistant', content: `↘ ${result}`, receivedAt: 0, kind: 'tool' };
-        if (truncated && ref) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
     }
     return null;

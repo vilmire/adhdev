@@ -105457,6 +105457,12 @@ ${marker}`,
         };
       }
     });
+    function isResolvableToolBlockRef(ref) {
+      if (!ref) return false;
+      if (!(ref.sourceMtimeMs > 0)) return false;
+      if (!Number.isInteger(ref.recordIndex) || ref.recordIndex < 0) return false;
+      return Number.isInteger(ref.blockIndex) && ref.blockIndex >= -1;
+    }
     function projectToolBlock(block2, role, tmap, deps, ref) {
       void role;
       if (block2 == null || typeof block2 !== "object") return null;
@@ -105470,14 +105476,14 @@ ${marker}`,
         const { text: args, truncated } = oneLine(stringifyContent2(jsonPathGet2(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
         const msg = { role: "assistant", content, receivedAt: 0, kind: "tool" };
-        if (truncated && ref) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
       }
       if (resultTypes.includes(typeVal)) {
         const { text: result, truncated } = oneLine(stringifyContent2(jsonPathGet2(block2, tmap.result_content || "$.content")), TOOL_RESULT_SUMMARY_MAX);
         if (!result) return null;
         const msg = { role: "assistant", content: `\u2198 ${result}`, receivedAt: 0, kind: "tool" };
-        if (truncated && ref) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
         return msg;
       }
       return null;
