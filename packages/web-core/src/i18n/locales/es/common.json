@@ -290,7 +290,9 @@
     "approval": {
         "processing": "PROCESANDO...",
         "actionRequired": "ACCIÓN REQUERIDA",
-        "alwaysAllowWarning": "Concede este permiso de forma permanente — las próximas ejecuciones no volverán a preguntar"
+        "alwaysAllowWarning": "Concede este permiso de forma permanente — las próximas ejecuciones no volverán a preguntar",
+        "questionPending": "PREGUNTA PENDIENTE",
+        "answerQuestion": "Responder la pregunta"
     },
     "newSession": {
         "title": "Iniciar sesión",

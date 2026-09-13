@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { dashboardWS } from '../compat'
 import { eventManager } from '../managers/EventManager'
 import type { StatusEventPayload, ToastConfig } from '../managers/EventManager'
-import type { Toast } from '../context/BaseDaemonContext'
+import type { Toast, BaseDaemonActions } from '../context/BaseDaemonContext'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
@@ -11,6 +11,12 @@ interface UseDashboardEventManagerOptions {
     sendDaemonCommand: (routeId: string, cmd: string, payload?: Record<string, unknown>) => Promise<any>
     setToasts: React.Dispatch<React.SetStateAction<Toast[]>>
     resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: session-state writer from
+     * `useBaseDaemonActions()`, registered on the eventManager so a
+     * `waiting_choice` event can fill in `activeInteractivePrompt`.
+     */
+    hydrateInteractivePrompt: BaseDaemonActions['hydrateInteractivePrompt']
 }
 
 export function useDashboardEventManager({
@@ -18,6 +24,7 @@ export function useDashboardEventManager({
     sendDaemonCommand,
     setToasts,
     resolveConversationByTarget,
+    hydrateInteractivePrompt,
 }: UseDashboardEventManagerOptions) {
     useEffect(() => {
         eventManager.setIdes(ides)
@@ -28,6 +35,14 @@ export function useDashboardEventManager({
             sendDaemonCommand(routeId, cmd, payload).catch(() => {})
         })
     }, [sendDaemonCommand])
+
+    // MULTISELECT-REMOTE-DEADLOCK: let `agent:waiting_choice` events hydrate the
+    // target session's `activeInteractivePrompt`, so the STRUCTURED picker renders
+    // even when the P2P rich status sync (previously this field's only carrier) is
+    // degraded. See BaseDaemonActions.hydrateInteractivePrompt.
+    useEffect(() => {
+        eventManager.setHydrateInteractivePrompt(hydrateInteractivePrompt)
+    }, [hydrateInteractivePrompt])
 
     useEffect(() => {
         const unsubToast = eventManager.onToast((toast: ToastConfig) => {

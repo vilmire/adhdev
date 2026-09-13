@@ -15,6 +15,8 @@ import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 import type { DaemonData, DashboardStatusEventPayload } from '../types'
+import type { InteractivePrompt } from '../interactive-prompt/types'
+import { normalizeInteractivePromptPrompt } from '../interactive-prompt/interactive-prompt-utils'
 import {
     buildApprovalToastDescriptors,
     buildViewRequestToastActions,
@@ -49,6 +51,14 @@ export type StatusEventCallback = (payload: StatusEventPayload) => void
 export type DesktopNotificationCallback = (title: string, body: string, tag: string) => void
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
+/**
+ * MULTISELECT-REMOTE-DEADLOCK: write an `agent:waiting_choice` event's structured
+ * prompt onto the target session's `activeInteractivePrompt`. Registered by the
+ * dashboard (which owns the `ides` state); see
+ * BaseDaemonActions.hydrateInteractivePrompt for why this second, transport-
+ * independent data path exists.
+ */
+export type HydrateInteractivePromptFn = (sessionId: string, prompt: InteractivePrompt) => void
 
 type KnownIdeEntry = Pick<DaemonData, 'id' | 'type' | 'daemonId' | 'machineNickname' | 'hostname' | 'machine' | 'sessionId' | 'childSessions' | 'muted'>
 
@@ -66,6 +76,7 @@ class EventManager {
     private statusEventCallbacks: StatusEventCallback[] = []
     private resolveActionFn: ResolveActionFn | null = null
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
+    private hydrateInteractivePromptFn: HydrateInteractivePromptFn | null = null
 
     // IDE lookup (set by Dashboard)
     private ides: KnownIdeEntry[] = []
@@ -101,6 +112,45 @@ class EventManager {
     /** Set the view request respond function (for team:view_request approval/rejection) */
     setViewRequestRespond(fn: ViewRequestRespondFn): void {
         this.viewRequestRespondFn = fn
+    }
+
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: register the session-state writer used to
+     * hydrate `activeInteractivePrompt` from `agent:waiting_choice` events.
+     * Set by the dashboard, which owns the `ides` state this manager only reads.
+     */
+    setHydrateInteractivePrompt(fn: HydrateInteractivePromptFn): void {
+        this.hydrateInteractivePromptFn = fn
+    }
+
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: push a `waiting_choice` event's structured
+     * prompt into the target session so the STRUCTURED picker renders regardless
+     * of transport health.
+     *
+     * Before this, `activeInteractivePrompt` arrived ONLY on the P2P rich status
+     * sync. When that sync was degraded (WS-only, replicaDegraded), the field
+     * stayed empty, the daemon's modal-park resolved to `waiting_approval`, and
+     * the dashboard fell back to the raw ApprovalBanner — whose single-select
+     * `'{index}\r'` injection cannot submit a checkbox picker, so every remote tap
+     * silently toggled a box and submitted nothing. Hydrating here removes the
+     * "structured prompt missing" precondition at its root: the event already
+     * carries the whole prompt, on whichever transport delivered it.
+     *
+     * Validated through the same `normalizeInteractivePromptPrompt` guard the
+     * status-snapshot path uses, so a malformed/partial payload is dropped rather
+     * than rendering an unanswerable modal.
+     */
+    private hydrateInteractivePromptFromEvent(payload: StatusEventPayload): void {
+        const hydrate = this.hydrateInteractivePromptFn
+        if (!hydrate) return
+        // Needs BOTH a session to attach to and a well-formed prompt. A
+        // session-less choice event cannot be routed to a modal at all.
+        const sessionId = payload.targetSessionId
+        if (!sessionId) return
+        const prompt = normalizeInteractivePromptPrompt(payload.interactivePrompt)
+        if (!prompt) return
+        hydrate(sessionId, prompt)
     }
 
     // ─── Dispatch helpers ─────────────────────────
@@ -230,6 +280,20 @@ class EventManager {
         const dedupTarget = conversationKey || payload.daemonId || ''
         const dedupDetail = payload.requestId || payload.targetName || payload.requesterName || payload.modalMessage || String(eventTimestamp)
         const dedupKey = `${dedupTarget}:${payload.event}:${dedupDetail}`
+
+        // MULTISELECT-REMOTE-DEADLOCK: hydrate the structured prompt BEFORE the
+        // dedup gate. `isDuplicate` exists to suppress duplicate NOTIFICATIONS
+        // (toast/audio/push) within a 5s window, which is the wrong policy for
+        // STATE: the same choice event legitimately arrives on both WS and P2P,
+        // and dropping the second copy must never mean the session is left
+        // without its prompt — that empty field is exactly what made the
+        // dashboard fall back to the unanswerable raw approval banner. The write
+        // is idempotent (same promptId → no-op, see
+        // hydrateInteractivePromptIntoIdes), so running it on every copy is free.
+        if (payload.event === 'agent:waiting_choice') {
+            this.hydrateInteractivePromptFromEvent(payload)
+        }
+
         if (this.isDuplicate(dedupKey)) return
 
         for (const callback of this.statusEventCallbacks) {
@@ -311,6 +375,9 @@ class EventManager {
 
         // ── agent:waiting_choice (AskUserQuestion picker parked) ──
         } else if (payload.event === 'agent:waiting_choice') {
+            // MULTISELECT-REMOTE-DEADLOCK (root fix): the session's structured
+            // prompt was already hydrated above the dedup gate — this arm used to
+            // be toast-ONLY, discarding the event's full `interactivePrompt`.
             msg = `❓ ${i18next.t('event.questionNeeded', { label: ideLabel })}`
             type = 'warning'
             // DELIBERATE: unlike agent:waiting_approval, this toast is NOT

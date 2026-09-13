@@ -871,6 +871,29 @@ export interface DashboardStatusEventPayload {
     elapsedSec?: number;
     modalMessage?: string;
     modalButtons?: string[];
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: the FULL structured AskUserQuestion payload
+     * carried by `agent:waiting_choice` (every question's header/question/
+     * multiSelect, every option's label/description/preview). status-transition.ts
+     * has always emitted it — it was simply absent from this interface, so the
+     * dashboard could not consume it without an `as any`.
+     *
+     * It is the authoritative signal for answering a question: the dashboard
+     * hydrates `activeInteractivePrompt` from it so the STRUCTURED picker renders
+     * even when the P2P rich status sync (previously the only carrier of that
+     * field) is degraded. Without it the session fell back to the raw
+     * single-select approval banner, which cannot submit a checkbox picker.
+     *
+     * P2P-plane only — this is agent-authored content and must NOT be added to
+     * the server-bound projection. The push path keeps using the
+     * already-approved `modalMessage`/`modalButtons` reduction instead. See
+     * buildServerStatusEvent in status/reporter.ts, which is an allow-list.
+     */
+    interactivePrompt?: InteractivePrompt;
+    /** Prompt id of `interactivePrompt`, surfaced flat for dedup/routing. */
+    promptId?: string;
+    /** Whether the FIRST question of `interactivePrompt` is multi-select. */
+    multiSelect?: boolean;
     requestId?: string;
     requesterName?: string;
     targetName?: string;

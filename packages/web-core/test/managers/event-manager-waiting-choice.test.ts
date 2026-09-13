@@ -69,3 +69,134 @@ describe('EventManager agent:waiting_choice toast', () => {
         expect(toasts.length).toBe(0)
     })
 })
+
+// ── MULTISELECT-REMOTE-DEADLOCK: structured-prompt hydration ────────────────
+//
+// This arm used to be toast-ONLY: the event's full `interactivePrompt` was
+// discarded. `activeInteractivePrompt` therefore arrived only on the P2P rich
+// status sync, and when that sync was degraded (WS-only / replicaDegraded) the
+// field stayed empty — so the session resolved to `waiting_approval` and fell
+// back to the raw ApprovalBanner, whose single-select `'{index}\r'` injection
+// cannot submit a multi-select checkbox picker. The owner could not answer from
+// mobile at all. Hydrating here removes that "structured prompt missing"
+// precondition at its root.
+
+const MULTISELECT_PROMPT = {
+    promptId: 'tool_multi_1',
+    origin: 'cli',
+    providerType: 'claude-cli',
+    createdAt: 1,
+    questions: [{
+        questionId: 'q1',
+        question: 'Pick any colors?',
+        header: 'Colors',
+        multiSelect: true,
+        options: [{ label: 'Red' }, { label: 'Green' }, { label: 'Blue' }],
+    }],
+}
+
+function choiceEventWithPrompt(sessionId: string, timestamp: number, prompt: unknown) {
+    return {
+        ...waitingChoiceEvent(sessionId, timestamp),
+        interactivePrompt: prompt,
+        multiSelect: true,
+    } as any
+}
+
+describe('EventManager agent:waiting_choice — hydrates activeInteractivePrompt', () => {
+    function captureHydrations(): { calls: Array<{ sessionId: string; promptId: string }>; restore: () => void } {
+        const calls: Array<{ sessionId: string; promptId: string }> = []
+        eventManager.setHydrateInteractivePrompt((sessionId, prompt) => {
+            calls.push({ sessionId, promptId: prompt.promptId })
+        })
+        // Leave a no-op registered afterwards so later tests in this file (and any
+        // other file sharing the eventManager singleton) see a clean manager.
+        return { calls, restore: () => eventManager.setHydrateInteractivePrompt(() => {}) }
+    }
+
+    it('forwards the event prompt to the session-state writer', () => {
+        eventManager.setIdes([{ id: 'wc-hyd', sessionId: 'wc-hyd', type: 'claude-cli' } as any])
+        const { calls, restore } = captureHydrations()
+
+        eventManager.handleRawEvent(choiceEventWithPrompt('wc-hyd', 51000, MULTISELECT_PROMPT), 'ws')
+        restore()
+
+        expect(calls).toEqual([{ sessionId: 'wc-hyd', promptId: 'tool_multi_1' }])
+    })
+
+    it('hydrates on the WS transport too — the whole point is P2P-independence', () => {
+        eventManager.setIdes([{ id: 'wc-hyd-ws', sessionId: 'wc-hyd-ws', type: 'claude-cli' } as any])
+        const { calls, restore } = captureHydrations()
+
+        // 'ws' is exactly the degraded case that produced the deadlock.
+        eventManager.handleRawEvent(choiceEventWithPrompt('wc-hyd-ws', 52000, MULTISELECT_PROMPT), 'ws')
+        restore()
+
+        expect(calls.length).toBe(1)
+    })
+
+    it('hydrates even for a MUTED conversation (a question cannot be auto-answered)', () => {
+        eventManager.setIdes([{ id: 'wc-hyd-muted', sessionId: 'wc-hyd-muted', type: 'claude-cli', muted: true } as any])
+        const { calls, restore } = captureHydrations()
+
+        eventManager.handleRawEvent(choiceEventWithPrompt('wc-hyd-muted', 53000, MULTISELECT_PROMPT), 'p2p')
+        restore()
+
+        expect(calls.length).toBe(1)
+    })
+
+    it('hydrates on a DUPLICATE copy of the event (state is not gated by toast dedup)', () => {
+        // isDuplicate exists to suppress duplicate NOTIFICATIONS within 5s. The
+        // same choice event legitimately arrives on both WS and P2P, and dropping
+        // the second copy must never leave the session without its prompt.
+        eventManager.setIdes([{ id: 'wc-hyd-dup', sessionId: 'wc-hyd-dup', type: 'claude-cli' } as any])
+        const { calls, restore } = captureHydrations()
+
+        const ev = choiceEventWithPrompt('wc-hyd-dup', 54000, MULTISELECT_PROMPT)
+        eventManager.handleRawEvent(ev, 'p2p')
+        eventManager.handleRawEvent(ev, 'ws') // same dedup key → toast suppressed
+        restore()
+
+        expect(calls.length).toBe(2)
+    })
+
+    it('drops a malformed prompt rather than rendering an unanswerable modal', () => {
+        eventManager.setIdes([{ id: 'wc-hyd-bad', sessionId: 'wc-hyd-bad', type: 'claude-cli' } as any])
+        const { calls, restore } = captureHydrations()
+
+        // No questions → normalizeInteractivePromptPrompt rejects it.
+        eventManager.handleRawEvent(
+            choiceEventWithPrompt('wc-hyd-bad', 55000, { ...MULTISELECT_PROMPT, questions: [] }), 'p2p')
+        // No prompt at all (a legacy daemon that never sent the structured payload).
+        eventManager.handleRawEvent(waitingChoiceEvent('wc-hyd-bad', 56000), 'p2p')
+        restore()
+
+        expect(calls).toEqual([])
+    })
+
+    it('drops a session-less choice event (nothing to attach a modal to)', () => {
+        const { calls, restore } = captureHydrations()
+        const ev = choiceEventWithPrompt('unused', 57000, MULTISELECT_PROMPT)
+        delete ev.targetSessionId
+        eventManager.handleRawEvent(ev, 'p2p')
+        restore()
+        expect(calls).toEqual([])
+    })
+
+    it('does NOT hydrate on agent:waiting_approval (that arm keeps its raw-button path)', () => {
+        eventManager.setIdes([{ id: 'wc-hyd-appr', sessionId: 'wc-hyd-appr', type: 'claude-cli' } as any])
+        const { calls, restore } = captureHydrations()
+
+        eventManager.handleRawEvent({
+            event: 'agent:waiting_approval',
+            timestamp: 58000,
+            targetSessionId: 'wc-hyd-appr',
+            modalMessage: 'Run this command?',
+            modalButtons: ['Run', 'Cancel'],
+            interactivePrompt: MULTISELECT_PROMPT,
+        } as any, 'p2p')
+        restore()
+
+        expect(calls).toEqual([])
+    })
+})

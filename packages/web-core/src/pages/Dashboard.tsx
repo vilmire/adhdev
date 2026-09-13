@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
+import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
@@ -75,6 +76,9 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     const ides: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
     const { updateRouteChats, setToasts } = daemonCtx
+    // MULTISELECT-REMOTE-DEADLOCK: read off the ACTIONS context (not `useDaemons`,
+    // which is the platform-injectable value context) — this is a state writer.
+    const { hydrateInteractivePrompt } = useBaseDaemonActions()
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
@@ -378,6 +382,11 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         sendDaemonCommand,
         setToasts,
         resolveConversationByTarget,
+        // MULTISELECT-REMOTE-DEADLOCK: lets `agent:waiting_choice` fill in the
+        // session's activeInteractivePrompt, so the structured picker renders even
+        // when the P2P rich status sync is degraded and the session would
+        // otherwise fall back to the unanswerable raw approval banner.
+        hydrateInteractivePrompt,
     })
     // Scope the modal to the SELECTED tab. Unscoped, this returned the first
     // prompt anywhere in `ides` — so a question belonging to another session

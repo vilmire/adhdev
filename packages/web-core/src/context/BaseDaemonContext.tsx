@@ -16,6 +16,7 @@ import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData } from '../utils/session-entry-merge'
 import { reconcileIdes, daemonArraysEqual } from './ides-reconcile'
+import { hydrateInteractivePromptIntoIdes } from './hydrate-interactive-prompt'
 
 // reconcileIdes lives in ./ides-reconcile (pure merge engine); re-exported here so the
 // existing import path (and the web-core barrel) stays byte-stable for consumers/tests.
@@ -77,6 +78,29 @@ export interface BaseDaemonActions {
     markLoaded: () => void
     /** Current ides reference */
     getIdes: () => DaemonData[]
+    /**
+     * MULTISELECT-REMOTE-DEADLOCK: hydrate ONE session's `activeInteractivePrompt`
+     * from an `agent:waiting_choice` status event.
+     *
+     * Why this exists as a field-scoped mutator rather than going through
+     * `injectEntries`: the structured picker (InteractivePromptModal) renders off
+     * `activeInteractivePrompt`, which only ever arrived on the P2P rich status
+     * sync. When that sync is degraded (WS-only transport, replicaDegraded), the
+     * field stayed empty and the session fell back to the raw ApprovalBanner —
+     * whose only answer verb is a single-select `'{index}\r'` injection that
+     * cannot submit a checkbox picker at all. That fallback was the remote
+     * deadlock. The `waiting_choice` event ALREADY carries the whole
+     * InteractivePrompt (all questions, all options — see status-transition.ts),
+     * so hydrating from it gives the structured modal a second, transport-
+     * independent data path.
+     *
+     * Deliberately NOT `injectEntries`: that runs the full richness-scored
+     * reconcile over a synthetic entry, which risks a partial payload competing
+     * with the authoritative status snapshot. This touches exactly one field on
+     * one existing entry and creates no entries — an event can only enrich a
+     * session the dashboard already knows about.
+     */
+    hydrateInteractivePrompt: (sessionId: string, prompt: InteractivePrompt) => void
 }
 
 const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
@@ -103,6 +127,7 @@ const ActionsCtx = createContext<BaseDaemonActions>({
     injectEntries: () => {},
     markLoaded: () => {},
     getIdes: () => [],
+    hydrateInteractivePrompt: () => {},
 })
 
 /**
@@ -505,11 +530,19 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
 
     const markLoaded = useCallback(() => setInitialLoaded(true), [])
 
+    // MULTISELECT-REMOTE-DEADLOCK: see BaseDaemonActions.hydrateInteractivePrompt.
+    // Merge semantics (existing-entries-only, same-promptId no-op, referential
+    // stability on no-op) live in the pure helper so they are directly testable.
+    const hydrateInteractivePrompt = useCallback((sessionId: string, prompt: InteractivePrompt) => {
+        setIdes(prev => hydrateInteractivePromptIntoIdes(prev, sessionId, prompt))
+    }, [])
+
     const actions = useMemo<BaseDaemonActions>(() => ({
         injectEntries,
         markLoaded,
         getIdes: () => idesRef.current,
-    }), [injectEntries, markLoaded])
+        hydrateInteractivePrompt,
+    }), [injectEntries, markLoaded, hydrateInteractivePrompt])
 
     const co = connectionOverrides
     const contextValue = useMemo<BaseDaemonContextValue>(() => ({
