@@ -24,9 +24,11 @@ declare class SessionHostServer extends EventEmitter {
     private exitWaiters;
     private lastNoOutputInputWarnAt;
     private stopRequests;
+    private stopPromise;
     constructor(options?: SessionHostServerOptions);
     start(): Promise<void>;
     stop(): Promise<void>;
+    private runStop;
     handleRequest(request: SessionHostRequest): Promise<SessionHostResponse>;
     private requireRuntime;
     private getAttachedClient;
@@ -63,4 +65,9 @@ declare class SessionHostServer extends EventEmitter {
     private handleRuntimeExit;
 }
 
-export { SessionHostServer, type SessionHostServerOptions };
+declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: number): (now: number) => {
+    exit: boolean;
+    countInWindow: number;
+};
+
+export { SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter };
