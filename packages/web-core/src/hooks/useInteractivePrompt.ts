@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { useTranslation } from 'react-i18next'
 import {
@@ -30,6 +30,33 @@ export interface UseInteractivePromptOptions {
   includeHidden?: boolean
 }
 
+// PICKER-DISMISS-SHARED-STORE (live defect, 2026-09-15): the dismissal used to be
+// per-hook-instance `useState`, but the dashboard mounts this hook more than once —
+// the modal surface (Dashboard → DashboardOverlays) and each ApprovalBanner
+// "Answer the question" CTA are SEPARATE instances. Closing the modal set the
+// dismissal only on the modal's instance; the banner's reopen() reset only its own
+// (already-null) instance, so the CTA was a dead button and a dismissed picker was
+// gone for good while the banner kept showing "Question waiting". The dismissal is
+// now module-level, shared by every hook instance, and keyed by promptId so a NEW
+// question (a different promptId) is never born pre-dismissed.
+let sharedDismissedPromptId: string | null = null
+const dismissedPromptListeners = new Set<() => void>()
+
+function subscribeDismissedPrompt(listener: () => void): () => void {
+  dismissedPromptListeners.add(listener)
+  return () => { dismissedPromptListeners.delete(listener) }
+}
+
+function getSharedDismissedPromptId(): string | null {
+  return sharedDismissedPromptId
+}
+
+function setSharedDismissedPromptId(next: string | null): void {
+  if (sharedDismissedPromptId === next) return
+  sharedDismissedPromptId = next
+  for (const listener of dismissedPromptListeners) listener()
+}
+
 /**
  * Hold the interactive prompt a dashboard surface should render.
  *
@@ -48,7 +75,13 @@ export function useInteractivePrompt(
   const { t } = useTranslation('common')
   const { ides, isP2PActive, p2pStates } = useBaseDaemons()
   const { sendCommand } = useTransport()
-  const [dismissedPromptId, setDismissedPromptId] = useState<string | null>(null)
+  // Shared across every hook instance (see PICKER-DISMISS-SHARED-STORE above), so a
+  // dismiss from the modal and a reopen from the banner act on the same state.
+  const dismissedPromptId = useSyncExternalStore(
+    subscribeDismissedPrompt,
+    getSharedDismissedPromptId,
+    getSharedDismissedPromptId,
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [responseError, setResponseError] = useState<string | null>(null)
   // Synchronous in-flight guard: `isSubmitting` is React state and only reaches the
@@ -100,7 +133,7 @@ export function useInteractivePrompt(
         useP2PCommand,
         sendCommand,
       })
-      setDismissedPromptId(promptSession.prompt.promptId)
+      setSharedDismissedPromptId(promptSession.prompt.promptId)
     } catch (error) {
       let msg = error instanceof Error ? error.message : String(error)
       // KEYS-WRITTEN-BUT-UNCONFIRMED (live defect 2026-09-06, corrected
@@ -113,7 +146,7 @@ export function useInteractivePrompt(
       // Still no "try again" invitation: if the answer DID land, resending
       // would submit it twice. Dismiss the modal for the same reason.
       if (msg.includes(CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX)) {
-        setDismissedPromptId(promptSession.prompt.promptId)
+        setSharedDismissedPromptId(promptSession.prompt.promptId)
         setResponseError(t('interactivePrompt.errorReviewUnconfirmed', {
           defaultValue: 'The answer keys reached the terminal, but the question is still on screen — the answer may not have been submitted. Check the terminal: if it was not submitted, answer there; resending from here could submit it twice.'
         }))
@@ -135,11 +168,11 @@ export function useInteractivePrompt(
   }, [isP2PActive, p2pStates, promptSession, sendCommand])
 
   const cancel = useCallback(() => {
-    if (promptSession) setDismissedPromptId(promptSession.prompt.promptId)
+    if (promptSession) setSharedDismissedPromptId(promptSession.prompt.promptId)
   }, [promptSession])
 
   const reopen = useCallback(() => {
-    setDismissedPromptId(null)
+    setSharedDismissedPromptId(null)
     setResponseError(null)
   }, [])
 

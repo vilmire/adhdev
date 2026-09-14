@@ -27,7 +27,12 @@ import { useInteractivePrompt } from '../../src/hooks/useInteractivePrompt'
 
 const DAEMON_ID = 'daemon_alpha'
 const SESSION_ID = 'sess_1'
-const PROMPT_ID = 'toolu_owner_repro'
+// Unique per test: the dismissal is a module-level shared store keyed by promptId
+// (PICKER-DISMISS-SHARED-STORE), and module state persists across the tests in this
+// file. A dismissed promptId must stay dismissed for the SAME question, so each
+// test asks a NEW question instead of reusing one id.
+let PROMPT_ID = 'toolu_owner_repro'
+let promptSeq = 0
 
 let sendCommandImpl: (daemonId: string, type: string, payload?: unknown) => Promise<unknown>
 
@@ -90,6 +95,7 @@ async function answer() {
 }
 
 beforeEach(() => {
+  PROMPT_ID = `toolu_owner_repro_${promptSeq++}`
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
