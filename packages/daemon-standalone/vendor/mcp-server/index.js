@@ -48927,11 +48927,28 @@ ${error48.message || ""}`;
       if (validateWorkspacePath(abs).ok !== true) return { error: "Workspace path is no longer valid" };
       return { config: { ...config2, defaultWorkspaceId: id } };
     }
+    function normalizeWorkspaceLabel(raw) {
+      const stripped = String(raw ?? "").replace(/[\u0000-\u001F\u007F]/g, "").trim();
+      if (!stripped) return "";
+      return stripped.slice(0, WORKSPACE_LABEL_MAX_LENGTH);
+    }
+    function setWorkspaceLabel(config2, rawPath, label) {
+      const abs = expandPath(rawPath);
+      if (!abs) return { error: "Path required" };
+      const existing = findWorkspaceByPath(config2, rawPath);
+      if (!existing) return { error: "Workspace not found" };
+      const nextLabel = normalizeWorkspaceLabel(label) || defaultWorkspaceLabel(expandPath(existing.path));
+      const list = (config2.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
+      const entry = list.find((w) => w.id === existing.id);
+      if (!entry) return { error: "Workspace not found" };
+      return { config: { ...config2, workspaces: list }, entry };
+    }
     var fs11;
     var os12;
     var path18;
     var import_crypto2;
     var MAX_WORKSPACES;
+    var WORKSPACE_LABEL_MAX_LENGTH;
     var init_workspaces = __esm2({
       "src/config/workspaces.ts"() {
         "use strict";
@@ -48940,6 +48957,7 @@ ${error48.message || ""}`;
         path18 = __toESM2(require("path"));
         import_crypto2 = require("crypto");
         MAX_WORKSPACES = 50;
+        WORKSPACE_LABEL_MAX_LENGTH = 64;
       }
     });
     function normalizeSummaryItem(item) {
@@ -151860,6 +151878,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const state2 = getWorkspaceState(result.config);
       return { success: true, ...state2 };
     }
+    function handleWorkspaceSetLabel(args) {
+      const rawPath = (args?.path || args?.dir || "").trim();
+      if (!rawPath) return { success: false, error: "path required" };
+      const config2 = loadWorkspaceConfig();
+      if ("error" in config2) return { success: false, error: config2.error };
+      const result = setWorkspaceLabel(config2, rawPath, args?.label);
+      if ("error" in result) return { success: false, error: result.error };
+      const saveResult = persistWorkspaceConfig(result.config);
+      if ("error" in saveResult) return { success: false, error: saveResult.error };
+      const state2 = getWorkspaceState(result.config);
+      return { success: true, entry: result.entry, ...state2 };
+    }
     var COMMAND_DEBUG_LEVELS = /* @__PURE__ */ new Set([
       "read_chat",
       "pty_input",
@@ -152289,6 +152319,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             return handleWorkspaceAdd(args);
           case "workspace_remove":
             return handleWorkspaceRemove(args);
+          case "workspace_set_label":
+            return handleWorkspaceSetLabel(args);
           case "registry_catalog":
             return this.handleRegistryCatalog(args);
           case "workspace_set_default":

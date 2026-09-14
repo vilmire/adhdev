@@ -3147,7 +3147,12 @@
             "newMeshSession": "Start a mesh coordinator session in this workspace",
             "newMeshSessionShort": "Mesh",
             "removeConfirmTitle": "Remove workspace",
-            "removeConfirmDescription": "Remove \"{{label}}\" from the list? The folder itself is not deleted."
+            "removeConfirmDescription": "Remove \"{{label}}\" from the list? The folder itself is not deleted.",
+            "rename": "Rename",
+            "renamePlaceholder": "Workspace name",
+            "saveName": "Save",
+            "cancelRename": "Cancel",
+            "renameFailed": "Could not update workspace name"
         },
         "overview": {
             "waitingForStats": "Waiting for live stats…",
@@ -3177,6 +3182,7 @@
             "selectProviderFirst": "Select a CLI or ACP provider first",
             "selectProvider": "Select a provider",
             "workspaceRemoved": "Workspace removed",
+            "workspaceLabelUpdated": "Workspace name updated",
             "defaultWorkspaceUpdated": "Default workspace updated",
             "defaultWorkspaceCleared": "Default workspace cleared",
             "idesFound_one": "Found {{count}} IDE",

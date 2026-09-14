@@ -238,3 +238,40 @@ export function setDefaultWorkspaceId(config: ADHDevConfig, id: string | null): 
     if (validateWorkspacePath(abs).ok !== true) return { error: 'Workspace path is no longer valid' };
     return { config: { ...config, defaultWorkspaceId: id } };
 }
+
+/** Max stored workspace label length (user-authored text). */
+export const WORKSPACE_LABEL_MAX_LENGTH = 64;
+
+/**
+ * Trim, strip C0/DEL control characters, cap at 64 chars.
+ * Empty after normalize means "reset to folder basename".
+ */
+export function normalizeWorkspaceLabel(raw: string | undefined | null): string {
+    const stripped = String(raw ?? '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
+    if (!stripped) return '';
+    return stripped.slice(0, WORKSPACE_LABEL_MAX_LENGTH);
+}
+
+/**
+ * Overwrite `workspaces[].label` for the entry matching `rawPath`.
+ * Empty / undefined label resets to the folder basename (display falls back
+ * to the folder name). Unknown paths return an error and do not mutate config.
+ */
+export function setWorkspaceLabel(
+    config: ADHDevConfig,
+    rawPath: string,
+    label?: string | null,
+): { config: ADHDevConfig; entry: WorkspaceEntry } | { error: string } {
+    const abs = expandPath(rawPath);
+    if (!abs) return { error: 'Path required' };
+    const existing = findWorkspaceByPath(config, rawPath);
+    if (!existing) return { error: 'Workspace not found' };
+
+    const nextLabel = normalizeWorkspaceLabel(label) || defaultWorkspaceLabel(expandPath(existing.path));
+    const list = (config.workspaces || []).map((w) => (
+        w.id === existing.id ? { ...w, label: nextLabel } : w
+    ));
+    const entry = list.find((w) => w.id === existing.id);
+    if (!entry) return { error: 'Workspace not found' };
+    return { config: { ...config, workspaces: list }, entry };
+}

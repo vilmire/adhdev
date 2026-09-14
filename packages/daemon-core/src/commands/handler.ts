@@ -556,6 +556,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'workspace_list': return WorkspaceCmd.handleWorkspaceList();
             case 'workspace_add': return WorkspaceCmd.handleWorkspaceAdd(args);
             case 'workspace_remove': return WorkspaceCmd.handleWorkspaceRemove(args);
+            case 'workspace_set_label': return WorkspaceCmd.handleWorkspaceSetLabel(args);
             case 'registry_catalog': return this.handleRegistryCatalog(args);
             case 'workspace_set_default':
                 return WorkspaceCmd.handleWorkspaceSetDefault(args);

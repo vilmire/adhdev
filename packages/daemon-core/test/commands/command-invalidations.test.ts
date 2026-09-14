@@ -43,6 +43,7 @@ describe('commandInvalidations — command → subscription-flush table (single 
 
     it('workspace_ and session_host_ prefixed commands invalidate daemon.metadata', () => {
         expect(commandInvalidations('workspace_list').has('daemon.metadata')).toBe(true);
+        expect(commandInvalidations('workspace_set_label').has('daemon.metadata')).toBe(true);
         expect(commandInvalidations('session_host_restart').has('daemon.metadata')).toBe(true);
     });
 

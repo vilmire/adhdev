@@ -1,5 +1,5 @@
 /**
- * workspace_* commands — list/add/remove/default (config.json)
+ * workspace_* commands — list/add/remove/default/set_label (config.json)
  */
 
 import { loadConfig, saveConfig } from '../config/config.js';
@@ -120,4 +120,19 @@ export function handleWorkspaceSetDefault(args: any): WorkspaceCommandResult {
     if ('error' in saveResult) return { success: false, error: saveResult.error };
     const state = W.getWorkspaceState(result.config);
     return { success: true, ...state };
+}
+
+export function handleWorkspaceSetLabel(args: any): WorkspaceCommandResult {
+    const rawPath = (args?.path || args?.dir || '').trim();
+    if (!rawPath) return { success: false, error: 'path required' };
+
+    const config = loadWorkspaceConfig();
+    if ('error' in config) return { success: false, error: config.error };
+    const result = W.setWorkspaceLabel(config, rawPath, args?.label);
+    if ('error' in result) return { success: false, error: result.error };
+
+    const saveResult = persistWorkspaceConfig(result.config);
+    if ('error' in saveResult) return { success: false, error: saveResult.error };
+    const state = W.getWorkspaceState(result.config);
+    return { success: true, entry: result.entry, ...state };
 }
