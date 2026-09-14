@@ -109,17 +109,24 @@ export class SubscriptionManager {
             current.handlers.delete(handler as TopicHandler)
             if (current.handlers.size > 0) return
             this.active.delete(id)
+            // Address the unsubscribe to the daemon the subscription is CURRENTLY
+            // bound to, not the one captured when this handle was created. A later
+            // subscribe on the same topic key can retarget the entry (see the
+            // `existing.daemonId = daemonId` reassignment above); using the stale
+            // capture sent the unsubscribe to a daemon that no longer held the
+            // subscription and left the live one streaming forever.
+            const targetDaemonId = current.daemonId
             const unsubscribeRequest: UnsubscribeRequest = {
                 type: 'unsubscribe',
                 topic: request.topic,
                 key: request.key,
             }
             logSubscriptionDebug('unsubscribe', {
-                daemonId,
+                daemonId: targetDaemonId,
                 topic: request.topic,
                 key: request.key,
             })
-            transport.sendData?.(daemonId, unsubscribeRequest)
+            transport.sendData?.(targetDaemonId, unsubscribeRequest)
         }) as SubscriptionHandle
 
         unsubscribe.initialSendAccepted = initialSendAccepted
