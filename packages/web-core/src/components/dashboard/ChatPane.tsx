@@ -466,9 +466,16 @@ export default function ChatPane({
     );
 
     /**
-     * (TOOL-EXPAND) Per-bubble expansion state, keyed by the same stable message
-     * key the list uses for React keys, so an expansion follows its bubble as
-     * the transcript tail grows rather than sliding onto a neighbour.
+     * (TOOL-EXPAND) Per-bubble expansion state.
+     *
+     * The key is chosen by the list (`getToolExpandStateKey`, falling back to
+     * the stable message key): a bubble carrying a `toolBlockRef` is keyed by
+     * the tool BLOCK it was summarised from, so the expansion follows that
+     * block rather than the bubble's rendered text. That matters on the replica
+     * lane, where the stable key can fall back to a content hash and a tool
+     * bubble's content is precisely what is rewritten as its result streams —
+     * which used to drop the expansion mid-read. Bubbles with no ref keep the
+     * stable key.
      */
     const [toolExpansions, setToolExpansions] = useState<Record<string, ToolExpandState>>({});
 
