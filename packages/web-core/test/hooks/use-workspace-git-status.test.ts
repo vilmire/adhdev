@@ -26,6 +26,39 @@ describe('useWorkspaceGitStatus helpers', () => {
     })
   })
 
+  /**
+   * D1#4 — the client multiplexes subscriptions by `topic:key` alone, so two
+   * daemons watching the same workspace path (ordinary in a mesh, where a repo
+   * path repeats across machines) collided on one entry and the later subscriber
+   * silently retargeted the earlier one's feed. The daemonId disambiguates.
+   */
+  it('scopes the subscription key to the daemon so two machines sharing a path do not collide', () => {
+    expect(getWorkspaceGitSubscriptionKey('/repo', 'daemon-a')).toBe('git:daemon-a:/repo')
+    expect(getWorkspaceGitSubscriptionKey('/repo', 'daemon-a'))
+      .not.toBe(getWorkspaceGitSubscriptionKey('/repo', 'daemon-b'))
+
+    expect(buildWorkspaceGitSubscribeRequest({
+      workspace: '/repo',
+      daemonId: 'daemon-a',
+      includeDiffSummary: true,
+      intervalMs: 2500,
+    })).toEqual({
+      type: 'subscribe',
+      topic: 'workspace.git',
+      key: 'git:daemon-a:/repo',
+      params: {
+        workspace: '/repo',
+        includeDiffSummary: true,
+        intervalMs: 2500,
+      },
+    })
+
+    // The daemon reads the workspace off params, never by parsing the key, so
+    // widening the key must not disturb the payload it acts on.
+    expect(buildWorkspaceGitSubscribeRequest({ workspace: '/repo', daemonId: 'daemon-a' }).params)
+      .toMatchObject({ workspace: '/repo' })
+  })
+
   it('unwraps daemon command responses and surfaces explicit errors', () => {
     const status = { workspace: '/repo', isGitRepo: true, lastCheckedAt: 1 }
     const diffSummary = { workspace: '/repo', isGitRepo: true, files: [], lastCheckedAt: 1 }

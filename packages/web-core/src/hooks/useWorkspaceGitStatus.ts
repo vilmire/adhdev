@@ -21,23 +21,34 @@ export interface UseWorkspaceGitStatusResult {
 
 export const DEFAULT_WORKSPACE_GIT_REFRESH_MS = 5_000
 
-export function getWorkspaceGitSubscriptionKey(workspace: string): string {
-    return `git:${workspace}`
+/**
+ * Subscription key for a workspace's git feed.
+ *
+ * The daemonId is part of the key because the client multiplexes subscriptions
+ * by `topic:key` alone: two daemons watching the same workspace path (a shared
+ * repo path across machines is ordinary in a mesh) would otherwise collide on
+ * one entry, and whichever subscribed last would silently retarget the other's
+ * feed. The daemon treats the key as opaque, so widening it costs nothing there.
+ */
+export function getWorkspaceGitSubscriptionKey(workspace: string, daemonId?: string | null): string {
+    return daemonId ? `git:${daemonId}:${workspace}` : `git:${workspace}`
 }
 
 export function buildWorkspaceGitSubscribeRequest({
     workspace,
+    daemonId,
     includeDiffSummary = false,
     intervalMs = DEFAULT_WORKSPACE_GIT_REFRESH_MS,
 }: {
     workspace: string
+    daemonId?: string | null
     includeDiffSummary?: boolean
     intervalMs?: number
 }): SubscribeRequest {
     return {
         type: 'subscribe',
         topic: 'workspace.git',
-        key: getWorkspaceGitSubscriptionKey(workspace),
+        key: getWorkspaceGitSubscriptionKey(workspace, daemonId),
         params: {
             workspace,
             includeDiffSummary,
@@ -164,8 +175,8 @@ export function useWorkspaceGitStatus({
 
     const request = useMemo(() => {
         if (!workspacePath) return null
-        return buildWorkspaceGitSubscribeRequest({ workspace: workspacePath, includeDiffSummary, intervalMs })
-    }, [includeDiffSummary, intervalMs, workspacePath])
+        return buildWorkspaceGitSubscribeRequest({ workspace: workspacePath, daemonId, includeDiffSummary, intervalMs })
+    }, [daemonId, includeDiffSummary, intervalMs, workspacePath])
 
     useEffect(() => {
         requestSeqRef.current += 1
