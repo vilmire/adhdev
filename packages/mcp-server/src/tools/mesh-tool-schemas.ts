@@ -1425,13 +1425,18 @@ export const MESH_NODE_SLOTS_PROPOSE_TOOL = {
 
 export const MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
     name: 'mesh_write_mesh_json_config',
-    description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes.',
+    description: 'Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) — distinct from the machine-local MAGI kind-panel writes. Targets the first mesh node unless `node_id` (or an explicit `workspace`) names another.',
     inputSchema: {
         type: 'object' as const,
         properties: {
+            // Declared because the handler ROUTES on it (resolveRefineConfigNode(ctx, args.node_id)),
+            // exactly like its read-only sibling mesh_refine_config. It was omitted here while the
+            // sibling declared it, so the unknown-arg gate rejected every {node_id} call and the
+            // repo-committed write could only ever target the coordinator's default node.
+            node_id: { type: 'string', description: 'Optional node whose workspace .adhdev/mesh.json is written; defaults to the first mesh node. `workspace` (below) still wins when both are given.' },
             write: { type: 'boolean', description: 'When true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview).' },
             overwrite: { type: 'boolean', description: 'When true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json).' },
-            workspace: { type: 'string', description: 'Optional workspace path whose .adhdev/mesh.json is written. Defaults to the coordinator node workspace.' },
+            workspace: { type: 'string', description: 'Optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node\'s workspace.' },
         },
     },
 };
