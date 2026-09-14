@@ -88859,6 +88859,238 @@ ${statusLine}`;
         TOMBSTONE_LOOKBACK_ENTRIES = 200;
       }
     });
+    function isMidGenerationSplitEligible(input) {
+      if (!input.specOptIn) return false;
+      if (input.bodyLength > MID_GENERATION_MAX_BODY_CHARS) return false;
+      return (input.platform ?? process.platform) !== "win32";
+    }
+    function bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs) {
+      if (!meshNodeIdMatches5({ id: task.targetNodeId }, bootstrapNodeId)) return false;
+      if (task.status === "assigned") return true;
+      const al = task.autoLaunch;
+      if (!al) return true;
+      if (al.status === "started" || al.status === "completed") {
+        const launchedAtMs = Date.parse(al.updatedAt);
+        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+      }
+      return true;
+    }
+    function shouldRequeueHollowCompletion(metadataEvent) {
+      const diagnostic = metadataEvent.completionDiagnostic && typeof metadataEvent.completionDiagnostic === "object" && !Array.isArray(metadataEvent.completionDiagnostic) ? metadataEvent.completionDiagnostic : void 0;
+      if (diagnostic?.finalAssistantContentLength !== 0) return false;
+      if (readNonEmptyString(metadataEvent.evidenceLevel) !== "insufficient") return false;
+      if (readWorkerResultMetadata(metadataEvent)) return false;
+      if (readNonEmptyString(diagnostic.finalSummarySource) === "tool_report") return false;
+      return true;
+    }
+    function nonRetryableProviderFailureReason(metadataEvent) {
+      const diagnostic = metadataEvent.completionDiagnostic && typeof metadataEvent.completionDiagnostic === "object" && !Array.isArray(metadataEvent.completionDiagnostic) ? metadataEvent.completionDiagnostic : void 0;
+      const reason = readNonEmptyString(diagnostic?.reason) || readNonEmptyString(metadataEvent.errorReason);
+      return reason === "auth_failed" || reason === "billing_failed" ? reason : null;
+    }
+    function resolveCoordinatorDrainDaemonIds(components) {
+      const statusInstanceId = readNonEmptyString(components.statusInstanceId);
+      const machineId = readNonEmptyString(getMachineId());
+      return expandDaemonIdForms([statusInstanceId, machineId]);
+    }
+    function buildRelayMetadataEvent(payload) {
+      const relayModalMessage = readNonEmptyString(payload.modalMessage);
+      const relayModalButtons = Array.isArray(payload.modalButtons) ? payload.modalButtons.filter((b) => typeof b === "string" && b.trim().length > 0) : null;
+      return {
+        // Preserve the dispatch task id across the machine boundary. The `received` trace
+        // stage reads payload.taskId; without mirroring it here the rebuilt metadataEvent
+        // loses it, so injectMeshSystemMessage's traceCtx.taskId and the
+        // updateDirectDispatchStatus(eventTaskId) call go undefined — the EvtTrace
+        // queued/surfaced stages show task=- and the direct-dispatch ledger falls back to a
+        // session_id match (which can flip a sibling row). The local in-process forward path
+        // keeps event.taskId/meshActiveTaskId for free; this mirrors it for the remote relay.
+        // Same taskId/meshActiveTaskId ordering the local unroutable trace uses.
+        taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
+        attemptId: readNonEmptyString(payload.attemptId) || readNonEmptyString(payload.meshActiveAttemptId),
+        ...typeof payload.dispatchNonce === "number" ? { dispatchNonce: payload.dispatchNonce } : typeof payload.meshActiveDispatchNonce === "number" ? { dispatchNonce: payload.meshActiveDispatchNonce } : {},
+        targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
+        providerType: readNonEmptyString(payload.providerType),
+        providerSessionId: readNonEmptyString(payload.providerSessionId),
+        // Preserve the originating coordinator SESSION id across the machine boundary so
+        // the completion routes back to the exact coordinator session (multi-coordinator).
+        // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
+        // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
+        // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
+        // anchors from this. Absent → daemon-level fallback (version-skew safe).
+        meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
+        // RC32: preserve the originating coordinator DAEMON anchor across the machine
+        // boundary — the daemon-level analogue of meshCoordinatorSessionId above. A
+        // sessionless producer (async refine terminal relayed via handleMeshForwardEvent)
+        // carries no session stamp; without this mirror the receive-side fallback in
+        // injectMeshSystemMessage has nothing to read and the re-queued event
+        // self-fallbacks to THIS daemon's id, stranding it from the real coordinator.
+        targetCoordinatorDaemonId: readNonEmptyString(payload.targetCoordinatorDaemonId),
+        // Carry the session identity fields the worker provider event emits so the
+        // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
+        // settings. Without these the remote-relay hop reconstructs metadataEvent with
+        // an empty workspace, and the dashboard flaps to the generic
+        // "Terminal (Mesh Node)" title (and degrades the provider label) between live
+        // events and the periodic get_status_metadata snapshot. The local in-process
+        // forward path (onMeshCoordinatorEventForwarded) already preserves these; this
+        // mirrors them for the remote-only relay path.
+        workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
+        workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
+        sessionTitle: readNonEmptyString(payload.sessionTitle),
+        sessionStatus: readNonEmptyString(payload.sessionStatus),
+        sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
+        providerName: readNonEmptyString(payload.providerName),
+        ...payload.sessionSettings && typeof payload.sessionSettings === "object" && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {},
+        finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+        evidenceLevel: readNonEmptyString(payload.evidenceLevel),
+        // T2: carry the worker's status-snapshot last-message preview across the machine
+        // boundary so a summary-less completion still surfaces the assistant reply in the
+        // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these
+        // (assistant-role only) when finalSummary is absent.
+        lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
+        lastMessageRole: readNonEmptyString(payload.lastMessageRole),
+        ...payload.lastMessageAt !== void 0 ? { lastMessageAt: payload.lastMessageAt } : {},
+        jobId: readNonEmptyString(payload.jobId),
+        interactionId: readNonEmptyString(payload.interactionId),
+        status: readNonEmptyString(payload.status),
+        targetDaemonId: readNonEmptyString(payload.targetDaemonId),
+        // Worker origin identity for a remotely cloned worktree's bootstrap event
+        // so the coordinator's hydrate-on-miss upsert is P2P-addressable.
+        originDaemonId: readNonEmptyString(payload.originDaemonId) || readNonEmptyString(payload.daemonId) || readNonEmptyString(payload.metadataEvent?.originDaemonId),
+        originMachineId: readNonEmptyString(payload.originMachineId) || readNonEmptyString(payload.machineId) || readNonEmptyString(payload.metadataEvent?.originMachineId),
+        startedAt: readNonEmptyString(payload.startedAt),
+        completedAt: readNonEmptyString(payload.completedAt),
+        retryOfJobId: readNonEmptyString(payload.retryOfJobId),
+        ...relayModalMessage ? { modalMessage: relayModalMessage } : {},
+        ...relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {},
+        // agent:waiting_choice (mission f1d25e11): carry the FULL structured question
+        // payload across the machine boundary so a REMOTE worker's AskUserQuestion reaches
+        // the coordinator with every question + option intact — the coordinator renders
+        // these and answers with mesh_answer_question. The local in-process forward path
+        // preserves the whole event for free; this mirrors the fields for the remote relay.
+        ...payload.interactivePrompt && typeof payload.interactivePrompt === "object" && !Array.isArray(payload.interactivePrompt) ? { interactivePrompt: payload.interactivePrompt } : {},
+        ...readNonEmptyString(payload.promptId) ? { promptId: readNonEmptyString(payload.promptId) } : {},
+        ...payload.multiSelect === true ? { multiSelect: true } : {},
+        ...payload.result && typeof payload.result === "object" && !Array.isArray(payload.result) ? { result: payload.result } : {},
+        ...payload.completionDiagnostic && typeof payload.completionDiagnostic === "object" && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {},
+        ...payload.workerResult && typeof payload.workerResult === "object" && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {},
+        ...payload.meshWorkerResult && typeof payload.meshWorkerResult === "object" && !Array.isArray(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {},
+        ...payload.structuredResult && typeof payload.structuredResult === "object" && !Array.isArray(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {},
+        ...payload.timestamp !== void 0 ? { timestamp: payload.timestamp } : {},
+        intentional: payload.intentional === true,
+        intentionalStop: payload.intentionalStop === true,
+        operatorCleanup: payload.operatorCleanup === true,
+        reason: readNonEmptyString(payload.reason),
+        stopReason: readNonEmptyString(payload.stopReason),
+        cleanupReason: readNonEmptyString(payload.cleanupReason),
+        source: readNonEmptyString(payload.source)
+      };
+    }
+    function flushPendingForMeshIdleCoordinators(components, meshId) {
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        if (store.pendingEventCount(meshId) === 0) return;
+      } catch {
+      }
+      const idleCoordinators = [];
+      const busyCoordinators = [];
+      try {
+        for (const inst of components.instanceManager.getByCategory("cli")) {
+          const state2 = inst.getState();
+          const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
+          if (readNonEmptyString(settings.meshCoordinatorFor) !== meshId) continue;
+          const status = readNonEmptyString(state2.status).toLowerCase();
+          const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
+          const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
+          const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
+          if (idle && !modalParked) {
+            idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
+          } else if (!modalParked) {
+            busyCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
+          }
+        }
+      } catch {
+        return;
+      }
+      if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
+      const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
+      let pendingEvents;
+      try {
+        pendingEvents = drainPendingMeshCoordinatorEvents3(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
+      } catch (e) {
+        LOG.warn("MeshEvents", `Event-driven coordinator drain failed for mesh ${meshId}: ${e?.message || e}`);
+        return;
+      }
+      if (pendingEvents.length === 0) return;
+      let delivered = 0;
+      let deliveredBusy = 0;
+      for (const pending of pendingEvents) {
+        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
+        const targets = wantSession ? idleCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : idleCoordinators;
+        if (targets.length === 0 && pending.coordinatorMessage && shouldForceInjectMeshEvent(pending.event)) {
+          const originSessionId = readNonEmptyString(
+            pending.metadataEvent?.targetSessionId
+          ) || readNonEmptyString(pending.metadataEvent?.sessionId);
+          const notSelf = (c) => !originSessionId || !sessionIdsEquivalent(c.sessionId, originSessionId);
+          const busyTargets = (wantSession ? busyCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : busyCoordinators).filter(notSelf);
+          if (busyTargets.length > 0) {
+            let busyDelivered = 0;
+            for (const c of busyTargets) {
+              const splitEligible = isMidGenerationSplitEligible({
+                specOptIn: typeof c.instance.supportsMidGenerationQueue === "function" && c.instance.supportsMidGenerationQueue() === true,
+                bodyLength: pending.coordinatorMessage.length
+              });
+              const outcome = injectPendingIntoCoordinator(c.instance, pending, {
+                mode: splitEligible ? "mid-generation-split" : "next-turn-queue"
+              });
+              if (outcome.delivered) busyDelivered++;
+            }
+            if (busyDelivered > 0) {
+              delivered += busyDelivered;
+              deliveredBusy += busyDelivered;
+              continue;
+            }
+          }
+        }
+        if (targets.length === 0 || !pending.coordinatorMessage) {
+          try {
+            requeueDrainedPendingMeshCoordinatorEvent(pending);
+          } catch {
+          }
+          continue;
+        }
+        const message = pending.coordinatorMessage;
+        const force = shouldForceInjectMeshEvent(pending.event);
+        for (const c of targets) {
+          c.instance.onEvent("send_message", {
+            input: { text: message, textFallback: message },
+            ...force ? { force: true } : {}
+          });
+          delivered++;
+        }
+      }
+      if (delivered > 0) {
+        LOG.info(
+          "MeshEvents",
+          `Event-driven drain delivered ${delivered} pending event(s) for mesh ${meshId} (${idleCoordinators.length} idle coordinator(s)` + (deliveredBusy > 0 ? `; ${deliveredBusy} to ${busyCoordinators.length} busy coordinator(s) without waiting for an idle edge` : "") + ")"
+        );
+      }
+    }
+    var MID_GENERATION_MAX_BODY_CHARS;
+    var init_mesh_event_delivery = __esm2({
+      "src/mesh/mesh-event-delivery.ts"() {
+        "use strict";
+        init_config();
+        init_logger();
+        init_mesh_runtime_store();
+        init_mesh_events_pending();
+        init_mesh_events_utils();
+        init_mesh_event_classify();
+        init_mesh_queue_assignment();
+        init_mesh_reconcile_coordinator_drain();
+        init_dist();
+        MID_GENERATION_MAX_BODY_CHARS = 512;
+      }
+    });
     function readLiveTurnPendingEvidence(instance) {
       const candidate = instance;
       try {
@@ -89853,40 +90085,6 @@ ${statusLine}`;
         ]);
       }
     });
-    function isMidGenerationSplitEligible(input) {
-      if (!input.specOptIn) return false;
-      if (input.bodyLength > MID_GENERATION_MAX_BODY_CHARS) return false;
-      return (input.platform ?? process.platform) !== "win32";
-    }
-    function bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs) {
-      if (!meshNodeIdMatches5({ id: task.targetNodeId }, bootstrapNodeId)) return false;
-      if (task.status === "assigned") return true;
-      const al = task.autoLaunch;
-      if (!al) return true;
-      if (al.status === "started" || al.status === "completed") {
-        const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
-      }
-      return true;
-    }
-    function shouldRequeueHollowCompletion(metadataEvent) {
-      const diagnostic = metadataEvent.completionDiagnostic && typeof metadataEvent.completionDiagnostic === "object" && !Array.isArray(metadataEvent.completionDiagnostic) ? metadataEvent.completionDiagnostic : void 0;
-      if (diagnostic?.finalAssistantContentLength !== 0) return false;
-      if (readNonEmptyString(metadataEvent.evidenceLevel) !== "insufficient") return false;
-      if (readWorkerResultMetadata(metadataEvent)) return false;
-      if (readNonEmptyString(diagnostic.finalSummarySource) === "tool_report") return false;
-      return true;
-    }
-    function nonRetryableProviderFailureReason(metadataEvent) {
-      const diagnostic = metadataEvent.completionDiagnostic && typeof metadataEvent.completionDiagnostic === "object" && !Array.isArray(metadataEvent.completionDiagnostic) ? metadataEvent.completionDiagnostic : void 0;
-      const reason = readNonEmptyString(diagnostic?.reason) || readNonEmptyString(metadataEvent.errorReason);
-      return reason === "auth_failed" || reason === "billing_failed" ? reason : null;
-    }
-    function resolveCoordinatorDrainDaemonIds(components) {
-      const statusInstanceId = readNonEmptyString(components.statusInstanceId);
-      const machineId = readNonEmptyString(getMachineId());
-      return expandDaemonIdForms([statusInstanceId, machineId]);
-    }
     function getCachedMeshByWorkspace(workspace) {
       const now = Date.now();
       const cached5 = meshByWorkspaceCache.get(workspace);
@@ -90757,98 +90955,6 @@ ${statusLine}`;
       }
       return { success: true, forwarded: 0 };
     }
-    function buildRelayMetadataEvent(payload) {
-      const relayModalMessage = readNonEmptyString(payload.modalMessage);
-      const relayModalButtons = Array.isArray(payload.modalButtons) ? payload.modalButtons.filter((b) => typeof b === "string" && b.trim().length > 0) : null;
-      return {
-        // Preserve the dispatch task id across the machine boundary. The `received` trace
-        // stage reads payload.taskId; without mirroring it here the rebuilt metadataEvent
-        // loses it, so injectMeshSystemMessage's traceCtx.taskId and the
-        // updateDirectDispatchStatus(eventTaskId) call go undefined — the EvtTrace
-        // queued/surfaced stages show task=- and the direct-dispatch ledger falls back to a
-        // session_id match (which can flip a sibling row). The local in-process forward path
-        // keeps event.taskId/meshActiveTaskId for free; this mirrors it for the remote relay.
-        // Same taskId/meshActiveTaskId ordering the local unroutable trace uses.
-        taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
-        attemptId: readNonEmptyString(payload.attemptId) || readNonEmptyString(payload.meshActiveAttemptId),
-        ...typeof payload.dispatchNonce === "number" ? { dispatchNonce: payload.dispatchNonce } : typeof payload.meshActiveDispatchNonce === "number" ? { dispatchNonce: payload.meshActiveDispatchNonce } : {},
-        targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
-        providerType: readNonEmptyString(payload.providerType),
-        providerSessionId: readNonEmptyString(payload.providerSessionId),
-        // Preserve the originating coordinator SESSION id across the machine boundary so
-        // the completion routes back to the exact coordinator session (multi-coordinator).
-        // buildForwardPayloadFromPending spreads the worker event's metadata, so the id
-        // arrives as payload.meshCoordinatorSessionId; the top-level targetCoordinatorSessionId
-        // is also accepted as a fallback. injectMeshSystemMessage re-derives the routing
-        // anchors from this. Absent → daemon-level fallback (version-skew safe).
-        meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
-        // RC32: preserve the originating coordinator DAEMON anchor across the machine
-        // boundary — the daemon-level analogue of meshCoordinatorSessionId above. A
-        // sessionless producer (async refine terminal relayed via handleMeshForwardEvent)
-        // carries no session stamp; without this mirror the receive-side fallback in
-        // injectMeshSystemMessage has nothing to read and the re-queued event
-        // self-fallbacks to THIS daemon's id, stranding it from the real coordinator.
-        targetCoordinatorDaemonId: readNonEmptyString(payload.targetCoordinatorDaemonId),
-        // Carry the session identity fields the worker provider event emits so the
-        // coordinator's mirror (updateMeshOwnedSession) gets a real workspace/title/
-        // settings. Without these the remote-relay hop reconstructs metadataEvent with
-        // an empty workspace, and the dashboard flaps to the generic
-        // "Terminal (Mesh Node)" title (and degrades the provider label) between live
-        // events and the periodic get_status_metadata snapshot. The local in-process
-        // forward path (onMeshCoordinatorEventForwarded) already preserves these; this
-        // mirrors them for the remote-only relay path.
-        workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
-        workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
-        sessionTitle: readNonEmptyString(payload.sessionTitle),
-        sessionStatus: readNonEmptyString(payload.sessionStatus),
-        sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
-        providerName: readNonEmptyString(payload.providerName),
-        ...payload.sessionSettings && typeof payload.sessionSettings === "object" && !Array.isArray(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {},
-        finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
-        evidenceLevel: readNonEmptyString(payload.evidenceLevel),
-        // T2: carry the worker's status-snapshot last-message preview across the machine
-        // boundary so a summary-less completion still surfaces the assistant reply in the
-        // coordinator's inbox mirror. resolveMeshSurfacedSessionPreview reads these
-        // (assistant-role only) when finalSummary is absent.
-        lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
-        lastMessageRole: readNonEmptyString(payload.lastMessageRole),
-        ...payload.lastMessageAt !== void 0 ? { lastMessageAt: payload.lastMessageAt } : {},
-        jobId: readNonEmptyString(payload.jobId),
-        interactionId: readNonEmptyString(payload.interactionId),
-        status: readNonEmptyString(payload.status),
-        targetDaemonId: readNonEmptyString(payload.targetDaemonId),
-        // Worker origin identity for a remotely cloned worktree's bootstrap event
-        // so the coordinator's hydrate-on-miss upsert is P2P-addressable.
-        originDaemonId: readNonEmptyString(payload.originDaemonId) || readNonEmptyString(payload.daemonId) || readNonEmptyString(payload.metadataEvent?.originDaemonId),
-        originMachineId: readNonEmptyString(payload.originMachineId) || readNonEmptyString(payload.machineId) || readNonEmptyString(payload.metadataEvent?.originMachineId),
-        startedAt: readNonEmptyString(payload.startedAt),
-        completedAt: readNonEmptyString(payload.completedAt),
-        retryOfJobId: readNonEmptyString(payload.retryOfJobId),
-        ...relayModalMessage ? { modalMessage: relayModalMessage } : {},
-        ...relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {},
-        // agent:waiting_choice (mission f1d25e11): carry the FULL structured question
-        // payload across the machine boundary so a REMOTE worker's AskUserQuestion reaches
-        // the coordinator with every question + option intact — the coordinator renders
-        // these and answers with mesh_answer_question. The local in-process forward path
-        // preserves the whole event for free; this mirrors the fields for the remote relay.
-        ...payload.interactivePrompt && typeof payload.interactivePrompt === "object" && !Array.isArray(payload.interactivePrompt) ? { interactivePrompt: payload.interactivePrompt } : {},
-        ...readNonEmptyString(payload.promptId) ? { promptId: readNonEmptyString(payload.promptId) } : {},
-        ...payload.multiSelect === true ? { multiSelect: true } : {},
-        ...payload.result && typeof payload.result === "object" && !Array.isArray(payload.result) ? { result: payload.result } : {},
-        ...payload.completionDiagnostic && typeof payload.completionDiagnostic === "object" && !Array.isArray(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {},
-        ...payload.workerResult && typeof payload.workerResult === "object" && !Array.isArray(payload.workerResult) ? { workerResult: payload.workerResult } : {},
-        ...payload.meshWorkerResult && typeof payload.meshWorkerResult === "object" && !Array.isArray(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {},
-        ...payload.structuredResult && typeof payload.structuredResult === "object" && !Array.isArray(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {},
-        ...payload.timestamp !== void 0 ? { timestamp: payload.timestamp } : {},
-        intentional: payload.intentional === true,
-        intentionalStop: payload.intentionalStop === true,
-        operatorCleanup: payload.operatorCleanup === true,
-        reason: readNonEmptyString(payload.reason),
-        stopReason: readNonEmptyString(payload.stopReason),
-        cleanupReason: readNonEmptyString(payload.cleanupReason),
-        source: readNonEmptyString(payload.source)
-      };
-    }
     function handleMeshForwardEvent(components, payload) {
       const eventName = readNonEmptyString(payload.event);
       if (!isMeshCoordinatorEvent(eventName)) {
@@ -90934,96 +91040,6 @@ ${statusLine}`;
       nudgeUnresolvedForwardRetry();
       LOG.info("MeshEvents", `Durably queued ${eventName} for unresolved-mesh worker at ${routing.workspace || "(no workspace)"} to coordinator daemon ${coordinatorDaemonId} (reconcile PHASE 0 delivers)`);
       return true;
-    }
-    function flushPendingForMeshIdleCoordinators(components, meshId) {
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        if (store.pendingEventCount(meshId) === 0) return;
-      } catch {
-      }
-      const idleCoordinators = [];
-      const busyCoordinators = [];
-      try {
-        for (const inst of components.instanceManager.getByCategory("cli")) {
-          const state2 = inst.getState();
-          const settings = state2.settings && typeof state2.settings === "object" ? state2.settings : {};
-          if (readNonEmptyString(settings.meshCoordinatorFor) !== meshId) continue;
-          const status = readNonEmptyString(state2.status).toLowerCase();
-          const modalParked = typeof inst.isModalParked === "function" ? inst.isModalParked() === true : status === "waiting_choice" || status === "waiting_approval";
-          const drainStatus = typeof inst.getDrainStatus === "function" ? inst.getDrainStatus() : null;
-          const idle = drainStatus !== null ? drainStatus === "idle" : status === "idle";
-          if (idle && !modalParked) {
-            idleCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
-          } else if (!modalParked) {
-            busyCoordinators.push({ instance: inst, sessionId: readNonEmptyString(state2.instanceId) });
-          }
-        }
-      } catch {
-        return;
-      }
-      if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
-      const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
-      let pendingEvents;
-      try {
-        pendingEvents = drainPendingMeshCoordinatorEvents3(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
-      } catch (e) {
-        LOG.warn("MeshEvents", `Event-driven coordinator drain failed for mesh ${meshId}: ${e?.message || e}`);
-        return;
-      }
-      if (pendingEvents.length === 0) return;
-      let delivered = 0;
-      let deliveredBusy = 0;
-      for (const pending of pendingEvents) {
-        const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
-        const targets = wantSession ? idleCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : idleCoordinators;
-        if (targets.length === 0 && pending.coordinatorMessage && shouldForceInjectMeshEvent(pending.event)) {
-          const originSessionId = readNonEmptyString(
-            pending.metadataEvent?.targetSessionId
-          ) || readNonEmptyString(pending.metadataEvent?.sessionId);
-          const notSelf = (c) => !originSessionId || !sessionIdsEquivalent(c.sessionId, originSessionId);
-          const busyTargets = (wantSession ? busyCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : busyCoordinators).filter(notSelf);
-          if (busyTargets.length > 0) {
-            let busyDelivered = 0;
-            for (const c of busyTargets) {
-              const splitEligible = isMidGenerationSplitEligible({
-                specOptIn: typeof c.instance.supportsMidGenerationQueue === "function" && c.instance.supportsMidGenerationQueue() === true,
-                bodyLength: pending.coordinatorMessage.length
-              });
-              const outcome = injectPendingIntoCoordinator(c.instance, pending, {
-                mode: splitEligible ? "mid-generation-split" : "next-turn-queue"
-              });
-              if (outcome.delivered) busyDelivered++;
-            }
-            if (busyDelivered > 0) {
-              delivered += busyDelivered;
-              deliveredBusy += busyDelivered;
-              continue;
-            }
-          }
-        }
-        if (targets.length === 0 || !pending.coordinatorMessage) {
-          try {
-            requeueDrainedPendingMeshCoordinatorEvent(pending);
-          } catch {
-          }
-          continue;
-        }
-        const message = pending.coordinatorMessage;
-        const force = shouldForceInjectMeshEvent(pending.event);
-        for (const c of targets) {
-          c.instance.onEvent("send_message", {
-            input: { text: message, textFallback: message },
-            ...force ? { force: true } : {}
-          });
-          delivered++;
-        }
-      }
-      if (delivered > 0) {
-        LOG.info(
-          "MeshEvents",
-          `Event-driven drain delivered ${delivered} pending event(s) for mesh ${meshId} (${idleCoordinators.length} idle coordinator(s)` + (deliveredBusy > 0 ? `; ${deliveredBusy} to ${busyCoordinators.length} busy coordinator(s) without waiting for an idle edge` : "") + ")"
-        );
-      }
     }
     function setupMeshEventForwarding(components) {
       registerMeshGraphQueueWakeHandler((wakeMeshId) => {
@@ -91157,14 +91173,12 @@ ${statusLine}`;
         flushPendingForMeshIdleCoordinators(components, routing.meshId);
       });
     }
-    var MID_GENERATION_MAX_BODY_CHARS;
     var REMOTE_IDLE_SESSION_TTL_MS;
     var meshByWorkspaceCache;
     var MESH_WORKSPACE_CACHE_TTL_MS;
     var init_mesh_event_forwarding = __esm2({
       "src/mesh/mesh-event-forwarding.ts"() {
         "use strict";
-        init_config();
         init_mesh_config();
         init_logger();
         init_mesh_ledger();
@@ -91186,7 +91200,8 @@ ${statusLine}`;
         init_dist();
         init_mesh_events_stale();
         init_mesh_task_inflight();
-        init_mesh_reconcile_coordinator_drain();
+        init_mesh_event_delivery();
+        init_mesh_event_delivery();
         init_mesh_graph_transition_runner();
         init_mesh_events_utils();
         init_mesh_event_classify();
@@ -91195,7 +91210,6 @@ ${statusLine}`;
         init_mesh_autolaunch_integrity();
         init_mesh_event_suppression();
         init_mesh_event_suppression();
-        MID_GENERATION_MAX_BODY_CHARS = 512;
         REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1e3;
         meshByWorkspaceCache = /* @__PURE__ */ new Map();
         MESH_WORKSPACE_CACHE_TTL_MS = 5e3;
@@ -112418,6 +112432,492 @@ ${text}` : text;
         init_interactive_prompt();
       }
     });
+    function normalizeApprovalLabel(value) {
+      return String(value || "").toLowerCase().replace(/^[\s\[(<{]*\d+(?:\s*[.)\]}>:-]|\s)+/, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    }
+    function isNegativeApprovalLabel(value) {
+      const label = normalizeApprovalLabel(value);
+      return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label) || /\bwithout\b/.test(label) || /\bdo not\b/.test(label);
+    }
+    function hasNegativeApprovalOption(buttons) {
+      return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || "")));
+    }
+    function hasReliableApprovalAffirmative(buttons) {
+      return (buttons || []).some((button) => {
+        const label = normalizeApprovalLabel(String(button || ""));
+        if (!label) return false;
+        if (/^always allow\b/.test(label)) return true;
+        if (/^yes\b/.test(label)) {
+          if (/\ballow\b/.test(label)) return true;
+          if (/\bask again\b/.test(label)) return true;
+          if (/\bduring this session\b/.test(label)) return true;
+          if (/\bfrom this project\b/.test(label)) return true;
+        }
+        return false;
+      });
+    }
+    function getApprovalPositiveHints(provider) {
+      const customHints = Array.isArray(provider?.approvalPositiveHints) ? provider.approvalPositiveHints.map((hint) => normalizeApprovalLabel(String(hint || ""))).filter(Boolean) : [];
+      return customHints.length > 0 ? customHints : DEFAULT_APPROVAL_POSITIVE_HINTS;
+    }
+    function pickApprovalButton(buttons, provider) {
+      const labels = (buttons || []).map((button) => String(button || "").trim()).filter(Boolean);
+      if (labels.length === 0) {
+        return { index: -1, label: "" };
+      }
+      const normalizedButtons = labels.map((label) => normalizeApprovalLabel(label));
+      const hints = getApprovalPositiveHints(provider);
+      const includesWord = (label, hint) => {
+        if (!label.includes(hint)) return false;
+        const re = new RegExp(`(?:^|\\s)${hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`);
+        return re.test(label);
+      };
+      const findMatch = (predicate) => {
+        for (const hint of hints) {
+          const idx = normalizedButtons.findIndex(
+            (label, index) => predicate(label, hint) && !isNegativeApprovalLabel(labels[index])
+          );
+          if (idx >= 0) return { index: idx, label: labels[idx] };
+        }
+        return null;
+      };
+      return findMatch((label, hint) => label === hint) ?? findMatch((label, hint) => label.startsWith(hint)) ?? findMatch((label, hint) => includesWord(label, hint)) ?? { index: -1, label: "" };
+    }
+    function pickAutoApprovalButton(buttons) {
+      const labels = (buttons || []).map((button) => String(button || "").trim());
+      const index = labels.findIndex(Boolean);
+      return index >= 0 ? { index, label: labels[index] } : { index: -1, label: "" };
+    }
+    function formatAutoApprovalMessage(modalMessage, buttonLabel) {
+      const lines = [`Auto-approved${buttonLabel ? `: ${buttonLabel}` : ""}`];
+      const cleanMessage = String(modalMessage || "").trim();
+      if (cleanMessage) lines.push(cleanMessage);
+      return lines.join("\n");
+    }
+    function looksLikeActiveApprovalPromptText(content) {
+      const text = content.trim();
+      if (!text || text.length > 2e3) return false;
+      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text) || /this command requires approval/i.test(text) || /quick safety check/i.test(text) || /is this a project you trust/i.test(text);
+      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text) || /^\s*1[.)]\s+yes\b/im.test(text);
+      if (hasApprovalQuestion && hasNumberedChoices) return true;
+      const lastLines = text.split(/\r?\n/).slice(-12).join("\n");
+      const hasDontAskAgain = /yes.*don'?t ask again/i.test(lastLines) || /yes.*always allow/i.test(lastLines);
+      const hasNoOption = /^\s*[❯›>]?\s*\d+[.)]\s+no\b/im.test(lastLines);
+      if (hasDontAskAgain && hasNoOption) return true;
+      if (/what do you want to do\?/i.test(text) && /^\s*\d+[.)]\s+\S/m.test(text)) return true;
+      return false;
+    }
+    var DEFAULT_APPROVAL_POSITIVE_HINTS;
+    var init_approval_utils = __esm2({
+      "src/providers/approval-utils.ts"() {
+        "use strict";
+        DEFAULT_APPROVAL_POSITIVE_HINTS = [
+          "yes",
+          "allow once",
+          "approve",
+          "accept",
+          "continue",
+          "run",
+          "proceed",
+          "confirm",
+          "save",
+          "ok",
+          "trust",
+          "allow",
+          "always allow"
+        ];
+      }
+    });
+    function getEffectDedupKey(effect) {
+      if (effect.id) return `provider_effect:${effect.id}`;
+      if (effect.type === "message") {
+        const content = typeof effect.message?.content === "string" ? effect.message.content : JSON.stringify(effect.message?.content || "");
+        return `provider_effect:message:${content}`;
+      }
+      if (effect.type === "notification") {
+        return `provider_effect:notification:${effect.notification?.title || ""}:${effect.notification?.body || ""}`;
+      }
+      return `provider_effect:toast:${effect.toast?.message || ""}`;
+    }
+    function formatApprovalRequestMessage(modalMessage, buttons) {
+      const lines = ["Approval requested"];
+      const cleanMessage = String(modalMessage || "").trim();
+      if (cleanMessage) lines.push(cleanMessage);
+      const labels = (buttons || []).map((button) => String(button || "").trim()).filter(Boolean);
+      if (labels.length > 0) {
+        lines.push(labels.map((label) => `[${label}]`).join(" "));
+      }
+      return lines.join("\n");
+    }
+    function formatMarkerTimestamp(timestamp2) {
+      const date5 = new Date(timestamp2);
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date5.getFullYear()}-${pad(date5.getMonth() + 1)}-${pad(date5.getDate())} ${pad(date5.getHours())}:${pad(date5.getMinutes())}:${pad(date5.getSeconds())}`;
+    }
+    var init_cli_provider_effect_format = __esm2({
+      "src/providers/cli-provider-effect-format.ts"() {
+        "use strict";
+      }
+    });
+    function isIdleStatus(value) {
+      const status = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return !status || status === "idle" || status === "ready";
+    }
+    function getMessageTime(message) {
+      if (!message || typeof message !== "object") return 0;
+      const record2 = message;
+      const value = Number(record2.receivedAt ?? record2.timestamp ?? 0);
+      return Number.isFinite(value) ? value : 0;
+    }
+    function hasNonEmptyCliModalButtons(activeModal) {
+      const buttons = activeModal?.buttons;
+      return Array.isArray(buttons) && buttons.some((button) => String(button || "").trim().length > 0);
+    }
+    function isCliGeneratingLikeStatus(status) {
+      return status === "generating" || status === "streaming" || status === "no_progress" || status === "long_generating" || status === "starting";
+    }
+    function computeTurnAnchoredDurationMs(engineTurnStartedAt, generatingStartedAt, now) {
+      const engineStart = typeof engineTurnStartedAt === "number" && Number.isFinite(engineTurnStartedAt) ? engineTurnStartedAt : 0;
+      if (engineStart > 0) return { durationMs: now - engineStart, anchor: "turn-start" };
+      if (generatingStartedAt > 0) return { durationMs: now - generatingStartedAt, anchor: "generatingStartedAt" };
+      return { durationMs: 0, anchor: "none" };
+    }
+    function getDatabaseSync() {
+      if (CachedDatabaseSync) return CachedDatabaseSync;
+      const requireFn = typeof require === "function" ? require : (0, import_node_module.createRequire)(path41.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
+      const sqliteModule = requireFn(`node:${"sqlite"}`);
+      CachedDatabaseSync = sqliteModule.DatabaseSync;
+      if (!CachedDatabaseSync) {
+        throw new Error("node:sqlite DatabaseSync unavailable");
+      }
+      return CachedDatabaseSync;
+    }
+    function getForcedNewSessionScriptName(provider, launchMode) {
+      if (!provider || launchMode !== "new") return null;
+      const resume = provider.resume;
+      if (!resume?.supported) return null;
+      if (Array.isArray(resume.newSessionArgs) && resume.newSessionArgs.length > 0) return null;
+      const controls = Array.isArray(provider.controls) ? provider.controls : [];
+      for (const control of controls) {
+        if (control?.type !== "action") continue;
+        if (typeof control?.confirmTitle === "string" && control.confirmTitle.trim()) continue;
+        if (typeof control?.confirmMessage === "string" && control.confirmMessage.trim()) continue;
+        if (typeof control?.confirmLabel === "string" && control.confirmLabel.trim()) continue;
+        const invokeScript = typeof control?.invokeScript === "string" ? control.invokeScript.trim() : "";
+        if (!invokeScript) continue;
+        const controlId = typeof control?.id === "string" ? control.id.trim() : "";
+        if (controlId === "new_session" || /^new.?session$/i.test(invokeScript)) {
+          return invokeScript;
+        }
+      }
+      return null;
+    }
+    async function waitForCliAdapterReady(adapter, options) {
+      const timeoutMs = Math.max(100, options?.timeoutMs ?? 15e3);
+      const pollMs = Math.max(10, options?.pollMs ?? 50);
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (adapter?.isReady?.()) return;
+        const status = adapter?.getStatus?.()?.status;
+        if (status === "stopped") {
+          throw new Error("CLI runtime stopped before it became ready");
+        }
+        await new Promise((resolve34) => setTimeout(resolve34, pollMs));
+      }
+      throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
+    }
+    var path41;
+    var import_node_module;
+    var CachedDatabaseSync;
+    var init_cli_provider_status_helpers = __esm2({
+      "src/providers/cli-provider-status-helpers.ts"() {
+        "use strict";
+        path41 = __toESM2(require("path"));
+        import_node_module = require("module");
+        CachedDatabaseSync = null;
+      }
+    });
+    function approvalModalSignature(message, affirmativeAnchor) {
+      return [typeof message === "string" ? message.trim() : "", affirmativeAnchor].join("::");
+    }
+    function autoApproveContinuityWindowMs(host) {
+      return host.autoApproveMaskSince > 0 && host.isAutonomousMeshSession() ? APPROVAL_FLAP_CONTINUITY_MS : APPROVAL_GATE_HYSTERESIS_MS;
+    }
+    function approvableModalSignature(host, modal) {
+      const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
+      if (!modal || buttons.length === 0) return null;
+      const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
+      if (modalKind !== "approval") return null;
+      const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
+      const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
+      if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
+      return approvalModalSignature(modal?.message, normalizeApprovalLabel(buttonLabel));
+    }
+    function resetPtyAutoApproveState(host) {
+      host.lastAutoApprovalSignature = "";
+      host.pendingAutoApprovalSignature = "";
+      host.pendingAutoApprovalSince = 0;
+      host.autoApproveInactiveSince = 0;
+      host.autoApproveMaskSince = 0;
+      host.stalledApprovalNudgeEpisode = 0;
+      host.autoApproveLastModalSeenAt = 0;
+      host.autoApproveBusy = false;
+      if (host.autoApproveSettleTimer) {
+        clearTimeout(host.autoApproveSettleTimer);
+        host.autoApproveSettleTimer = null;
+      }
+      if (host.autoApproveBusyTimer) {
+        clearTimeout(host.autoApproveBusyTimer);
+        host.autoApproveBusyTimer = null;
+      }
+    }
+    function autoApproveMaskStalled(host, now) {
+      return host.shouldUsePtyAutoApprove() && host.autoApproveMaskSince > 0 && now - host.autoApproveMaskSince > APPROVAL_AUTO_MASK_STALL_MS;
+    }
+    function armSettleRecheck(host, delayMs) {
+      if (host.autoApproveSettleTimer) clearTimeout(host.autoApproveSettleTimer);
+      host.autoApproveSettleTimer = setTimeout(() => {
+        host.autoApproveSettleTimer = null;
+        host.recheckAutoApproveSettled();
+      }, delayMs);
+    }
+    function maybeEmitStalledApprovalNudge(host, adapterStatus, now) {
+      if (!host.shouldUsePtyAutoApprove()) return;
+      if (!host.isMeshWorkerSession()) return;
+      if (adapterStatus?.status !== "waiting_approval") return;
+      const nudgeModal = adapterStatus.activeModal;
+      const nudgeModalKind = nudgeModal && typeof nudgeModal.kind === "string" ? nudgeModal.kind : null;
+      if (adapterStatus.activeInteractivePrompt && (!nudgeModal || nudgeModalKind === "picker")) return;
+      if (!autoApproveMaskStalled(host, now)) return;
+      const currentSignature = approvableModalSignature(host, adapterStatus.activeModal);
+      const settleProgressing = !!currentSignature && host.pendingAutoApprovalSince > 0 && currentSignature === host.pendingAutoApprovalSignature;
+      if (settleProgressing) return;
+      if (host.stalledApprovalNudgeEpisode === host.autoApproveMaskSince) return;
+      host.stalledApprovalNudgeEpisode = host.autoApproveMaskSince;
+      const modal = adapterStatus.activeModal;
+      const dirName = workingDirBasename(host.workingDir);
+      const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
+      host.appendRuntimeSystemMessage(
+        formatApprovalRequestMessage(modal?.message, modal?.buttons),
+        `approval_request:${now}`,
+        now
+      );
+      host.pushEvent({
+        event: "agent:waiting_approval",
+        chatTitle,
+        timestamp: now,
+        modalMessage: modal?.message,
+        modalButtons: modal?.buttons
+      });
+      LOG.info("CLI", `[${host.type}] stalled auto-approve nudge \u2192 coordinator (masked ${Math.round((now - host.autoApproveMaskSince) / 1e3)}s)`);
+    }
+    function maybeAutoApproveStatus(host, adapterStatus, now = Date.now()) {
+      if (!host.shouldUsePtyAutoApprove()) {
+        resetPtyAutoApproveState(host);
+        return false;
+      }
+      if (adapterStatus?.status === "waiting_approval" && host.shouldUsePtyAutoApprove() && host.manualAttendance.isAttended(now)) {
+        host.lastAutoApprovalSignature = "";
+        host.pendingAutoApprovalSignature = "";
+        host.pendingAutoApprovalSince = 0;
+        host.autoApproveInactiveSince = 0;
+        host.autoApproveMaskSince = 0;
+        host.stalledApprovalNudgeEpisode = 0;
+        host.autoApproveLastModalSeenAt = 0;
+        armSettleRecheck(host, host.manualAttendance.remainingMs(now) + 20);
+        return false;
+      }
+      const autoApproveActive = adapterStatus?.status === "waiting_approval" && host.shouldUsePtyAutoApprove();
+      if (!autoApproveActive) {
+        host.lastAutoApprovalSignature = "";
+        if (host.pendingAutoApprovalSince) {
+          if (!host.autoApproveInactiveSince) host.autoApproveInactiveSince = now;
+          const goneForMs = now - host.autoApproveInactiveSince;
+          const continuityMs = autoApproveContinuityWindowMs(host);
+          if (goneForMs < continuityMs) {
+            armSettleRecheck(host, continuityMs - goneForMs + 20);
+            return autoApproveActive;
+          }
+        }
+        host.pendingAutoApprovalSignature = "";
+        host.pendingAutoApprovalSince = 0;
+        host.autoApproveInactiveSince = 0;
+        host.autoApproveMaskSince = 0;
+        host.stalledApprovalNudgeEpisode = 0;
+        host.autoApproveLastModalSeenAt = 0;
+        if (host.autoApproveSettleTimer) {
+          clearTimeout(host.autoApproveSettleTimer);
+          host.autoApproveSettleTimer = null;
+        }
+        return autoApproveActive;
+      }
+      host.autoApproveInactiveSince = 0;
+      if (!host.autoApproveMaskSince) host.autoApproveMaskSince = now;
+      maybeEmitStalledApprovalNudge(host, adapterStatus, now);
+      const modal = adapterStatus.activeModal;
+      const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
+      if (!modal || buttons.length === 0) {
+        const blipForMs = host.autoApproveLastModalSeenAt ? now - host.autoApproveLastModalSeenAt : Infinity;
+        if (host.pendingAutoApprovalSince && blipForMs < autoApproveContinuityWindowMs(host)) {
+          armSettleRecheck(host, autoApproveContinuityWindowMs(host) - blipForMs + 20);
+          return autoApproveActive;
+        }
+        if (blipForMs >= autoApproveContinuityWindowMs(host)) {
+          host.pendingAutoApprovalSignature = "";
+          host.pendingAutoApprovalSince = 0;
+        }
+        return autoApproveActive;
+      }
+      host.autoApproveLastModalSeenAt = now;
+      const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
+      if (modalKind !== "approval") {
+        const modalText = `${String(modal?.title || "")}
+${String(modal?.message || "")}
+${buttons.join("\n")}`;
+        const looksLikeSelectionPicker = /Select (?:a |an )?(?:model|mode|option)\b|Switch between/i.test(modalText);
+        const looksLikeConsent = looksLikeActiveApprovalPromptText(modalText) || /Do you want to (?:proceed|create|make|edit|apply|run|delete|modify|allow)\b|allow all edits\b|don'?t ask again\b/i.test(modalText) || hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
+        if (looksLikeSelectionPicker && !looksLikeConsent) {
+          return autoApproveActive;
+        }
+      }
+      const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
+      const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
+      if (buttonIndex < 0 || !hasReliableConsentAnchor) {
+        return autoApproveActive;
+      }
+      const affirmativeAnchor = normalizeApprovalLabel(buttonLabel);
+      const modalSignature = approvalModalSignature(modal?.message, affirmativeAnchor);
+      const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === "number" ? adapterStatus.approvalEntrySeq : 0;
+      const busySignature = `${approvalEntrySeq}::${modalSignature}`;
+      if (host.autoApproveBusy && busySignature === host.lastAutoApprovalSignature) {
+        return autoApproveActive;
+      }
+      if (modalSignature !== host.pendingAutoApprovalSignature) {
+        host.pendingAutoApprovalSignature = modalSignature;
+        host.pendingAutoApprovalSince = now;
+      }
+      const settledForMs = now - host.pendingAutoApprovalSince;
+      if (settledForMs < APPROVAL_SETTLE_MS) {
+        armSettleRecheck(host, APPROVAL_SETTLE_MS - settledForMs + 20);
+        return autoApproveActive;
+      }
+      if (host.autoApproveSettleTimer) {
+        clearTimeout(host.autoApproveSettleTimer);
+        host.autoApproveSettleTimer = null;
+      }
+      host.autoApproveBusy = true;
+      host.lastAutoApprovalSignature = busySignature;
+      host.pendingAutoApprovalSignature = "";
+      host.pendingAutoApprovalSince = 0;
+      host.autoApproveInactiveSince = 0;
+      host.autoApproveMaskSince = 0;
+      host.stalledApprovalNudgeEpisode = 0;
+      host.autoApproveLastModalSeenAt = 0;
+      if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
+      host.autoApproveBusyTimer = setTimeout(() => {
+        host.autoApproveBusy = false;
+        host.autoApproveBusyTimer = null;
+        host.lastAutoApprovalSignature = "";
+      }, APPROVAL_FIRE_BUSY_WINDOW_MS);
+      host.recordAutoApproval(modal?.message, buttonLabel, now);
+      host.lastAutoApproveFiredAt = now;
+      setTimeout(() => {
+        const adapter = host.adapter;
+        if (typeof adapter.resolveModalMatched === "function") {
+          const matched = adapter.resolveModalMatched(buttonIndex);
+          if (!matched) {
+            if (host.lastAutoApproveFiredAt === now) host.lastAutoApproveFiredAt = 0;
+            LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) \u2014 surfacing approval to coordinator`);
+          }
+        } else {
+          adapter.resolveModal?.(buttonIndex);
+        }
+      }, 0);
+      return autoApproveActive;
+    }
+    function stabilizeFlappingApprovalStatus(host, adapterStatus, now = Date.now()) {
+      if (!host.isAutonomousMeshSession() || !host.shouldUsePtyAutoApprove()) return adapterStatus;
+      const rawStatus = adapterStatus?.status;
+      const resolvedAt = typeof host.adapter?.lastApprovalResolvedAt === "number" ? host.adapter.lastApprovalResolvedAt : 0;
+      if (rawStatus === "waiting_approval") {
+        if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal)) {
+          host.approvalStickyLastConcreteAt = now;
+          host.approvalStickyModal = adapterStatus.activeModal;
+          host.approvalStickyEntrySeq = typeof adapterStatus?.approvalEntrySeq === "number" ? adapterStatus.approvalEntrySeq : host.approvalStickyEntrySeq;
+        }
+        return adapterStatus;
+      }
+      if (host.approvalStickyLastConcreteAt > 0 && host.hasEmittedGenuineCompletionForCurrentEpoch()) {
+        host.approvalStickyLastConcreteAt = 0;
+        host.approvalStickyModal = null;
+        host.approvalStickyEntrySeq = 0;
+      }
+      if (host.approvalStickyLastConcreteAt > 0 && host.approvalStickyModal) {
+        const withinWindow = now - host.approvalStickyLastConcreteAt < APPROVAL_STICKY_FLAP_MS;
+        const resolvedSinceAnchor = resolvedAt >= host.approvalStickyLastConcreteAt;
+        if (withinWindow && !resolvedSinceAnchor) {
+          return {
+            ...adapterStatus,
+            status: "waiting_approval",
+            activeModal: host.approvalStickyModal,
+            ...host.approvalStickyEntrySeq ? { approvalEntrySeq: host.approvalStickyEntrySeq } : {},
+            approvalStickyOverlay: true
+          };
+        }
+        host.approvalStickyLastConcreteAt = 0;
+        host.approvalStickyModal = null;
+        host.approvalStickyEntrySeq = 0;
+      }
+      return adapterStatus;
+    }
+    var APPROVAL_SETTLE_MS;
+    var APPROVAL_GATE_HYSTERESIS_MS;
+    var APPROVAL_FLAP_CONTINUITY_MS;
+    var APPROVAL_AUTO_MASK_STALL_MS;
+    var APPROVAL_FIRE_BUSY_WINDOW_MS;
+    var APPROVAL_STICKY_FLAP_MS;
+    var init_approval_gate = __esm2({
+      "src/providers/completion/approval-gate.ts"() {
+        "use strict";
+        init_logger();
+        init_approval_utils();
+        init_working_dir();
+        init_cli_provider_effect_format();
+        init_cli_provider_status_helpers();
+        APPROVAL_SETTLE_MS = 600;
+        APPROVAL_GATE_HYSTERESIS_MS = 1500;
+        APPROVAL_FLAP_CONTINUITY_MS = 6e3;
+        APPROVAL_AUTO_MASK_STALL_MS = 10500;
+        APPROVAL_FIRE_BUSY_WINDOW_MS = 5e3;
+        APPROVAL_STICKY_FLAP_MS = 4e3;
+      }
+    });
+    var AUTO_APPROVE_SETTLE_MS;
+    var APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS;
+    var AUTO_APPROVE_GATE_HYSTERESIS_MS;
+    var AUTO_APPROVE_FLAP_CONTINUITY_MS;
+    var AUTO_APPROVE_MASK_STALL_MS;
+    var APPROVAL_STICKY_FLAP_MS2;
+    var APPROVAL_RESUME_GRACE_MS;
+    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
+    var MESH_WORKER_STALL_TURN_THRESHOLD_MS;
+    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
+    var init_cli_provider_instance_constants = __esm2({
+      "src/providers/cli-provider-instance-constants.ts"() {
+        "use strict";
+        init_approval_gate();
+        AUTO_APPROVE_SETTLE_MS = APPROVAL_SETTLE_MS;
+        APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = 8e3;
+        AUTO_APPROVE_GATE_HYSTERESIS_MS = APPROVAL_GATE_HYSTERESIS_MS;
+        AUTO_APPROVE_FLAP_CONTINUITY_MS = APPROVAL_FLAP_CONTINUITY_MS;
+        AUTO_APPROVE_MASK_STALL_MS = APPROVAL_AUTO_MASK_STALL_MS;
+        APPROVAL_STICKY_FLAP_MS2 = APPROVAL_STICKY_FLAP_MS;
+        APPROVAL_RESUME_GRACE_MS = 18e3;
+        MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 18e4;
+        MESH_WORKER_STALL_TURN_THRESHOLD_MS = 36e4;
+        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 6e5;
+      }
+    });
     function resolveBusyLeaseGate(providerType, env2 = process.env) {
       const boundRaw = Number(env2.ADHDEV_TX_BUSY_LEASE_BOUND_MS);
       const boundMs = Number.isFinite(boundRaw) && boundRaw > 0 ? Math.floor(boundRaw) : BUSY_LEASE_BOUND_MS;
@@ -112721,102 +113221,6 @@ ${text}` : text;
         MESH_TASK_ATTACHMENT_HISTORY_CAP = 8;
       }
     });
-    function normalizeApprovalLabel(value) {
-      return String(value || "").toLowerCase().replace(/^[\s\[(<{]*\d+(?:\s*[.)\]}>:-]|\s)+/, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-    }
-    function isNegativeApprovalLabel(value) {
-      const label = normalizeApprovalLabel(value);
-      return /^(no|deny|reject|cancel|skip|exit|stop)\b/.test(label) || /\bwithout\b/.test(label) || /\bdo not\b/.test(label);
-    }
-    function hasNegativeApprovalOption(buttons) {
-      return (buttons || []).some((button) => isNegativeApprovalLabel(String(button || "")));
-    }
-    function hasReliableApprovalAffirmative(buttons) {
-      return (buttons || []).some((button) => {
-        const label = normalizeApprovalLabel(String(button || ""));
-        if (!label) return false;
-        if (/^always allow\b/.test(label)) return true;
-        if (/^yes\b/.test(label)) {
-          if (/\ballow\b/.test(label)) return true;
-          if (/\bask again\b/.test(label)) return true;
-          if (/\bduring this session\b/.test(label)) return true;
-          if (/\bfrom this project\b/.test(label)) return true;
-        }
-        return false;
-      });
-    }
-    function getApprovalPositiveHints(provider) {
-      const customHints = Array.isArray(provider?.approvalPositiveHints) ? provider.approvalPositiveHints.map((hint) => normalizeApprovalLabel(String(hint || ""))).filter(Boolean) : [];
-      return customHints.length > 0 ? customHints : DEFAULT_APPROVAL_POSITIVE_HINTS;
-    }
-    function pickApprovalButton(buttons, provider) {
-      const labels = (buttons || []).map((button) => String(button || "").trim()).filter(Boolean);
-      if (labels.length === 0) {
-        return { index: -1, label: "" };
-      }
-      const normalizedButtons = labels.map((label) => normalizeApprovalLabel(label));
-      const hints = getApprovalPositiveHints(provider);
-      const includesWord = (label, hint) => {
-        if (!label.includes(hint)) return false;
-        const re = new RegExp(`(?:^|\\s)${hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`);
-        return re.test(label);
-      };
-      const findMatch = (predicate) => {
-        for (const hint of hints) {
-          const idx = normalizedButtons.findIndex(
-            (label, index) => predicate(label, hint) && !isNegativeApprovalLabel(labels[index])
-          );
-          if (idx >= 0) return { index: idx, label: labels[idx] };
-        }
-        return null;
-      };
-      return findMatch((label, hint) => label === hint) ?? findMatch((label, hint) => label.startsWith(hint)) ?? findMatch((label, hint) => includesWord(label, hint)) ?? { index: -1, label: "" };
-    }
-    function pickAutoApprovalButton(buttons) {
-      const labels = (buttons || []).map((button) => String(button || "").trim());
-      const index = labels.findIndex(Boolean);
-      return index >= 0 ? { index, label: labels[index] } : { index: -1, label: "" };
-    }
-    function formatAutoApprovalMessage(modalMessage, buttonLabel) {
-      const lines = [`Auto-approved${buttonLabel ? `: ${buttonLabel}` : ""}`];
-      const cleanMessage = String(modalMessage || "").trim();
-      if (cleanMessage) lines.push(cleanMessage);
-      return lines.join("\n");
-    }
-    function looksLikeActiveApprovalPromptText(content) {
-      const text = content.trim();
-      if (!text || text.length > 2e3) return false;
-      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text) || /this command requires approval/i.test(text) || /quick safety check/i.test(text) || /is this a project you trust/i.test(text);
-      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text) || /^\s*1[.)]\s+yes\b/im.test(text);
-      if (hasApprovalQuestion && hasNumberedChoices) return true;
-      const lastLines = text.split(/\r?\n/).slice(-12).join("\n");
-      const hasDontAskAgain = /yes.*don'?t ask again/i.test(lastLines) || /yes.*always allow/i.test(lastLines);
-      const hasNoOption = /^\s*[❯›>]?\s*\d+[.)]\s+no\b/im.test(lastLines);
-      if (hasDontAskAgain && hasNoOption) return true;
-      if (/what do you want to do\?/i.test(text) && /^\s*\d+[.)]\s+\S/m.test(text)) return true;
-      return false;
-    }
-    var DEFAULT_APPROVAL_POSITIVE_HINTS;
-    var init_approval_utils = __esm2({
-      "src/providers/approval-utils.ts"() {
-        "use strict";
-        DEFAULT_APPROVAL_POSITIVE_HINTS = [
-          "yes",
-          "allow once",
-          "approve",
-          "accept",
-          "continue",
-          "run",
-          "proceed",
-          "confirm",
-          "save",
-          "ok",
-          "trust",
-          "allow",
-          "always allow"
-        ];
-      }
-    });
     function parseCliScriptResult(result) {
       if (typeof result === "string") {
         try {
@@ -112908,7 +113312,7 @@ ${text}` : text;
           return uri.slice("file://".length);
         }
       }
-      if (path41.isAbsolute(uri)) return uri;
+      if (path42.isAbsolute(uri)) return uri;
       return null;
     }
     function extensionForImageMime(mimeType) {
@@ -112924,7 +113328,7 @@ ${text}` : text;
       const rawData = part.data.includes(",") ? part.data.split(",").pop() || "" : part.data;
       if (!rawData) return null;
       fs40.mkdirSync(dir, { recursive: true });
-      const filePath = path41.join(dir, safeInputImageBasename(index, part.mimeType));
+      const filePath = path42.join(dir, safeInputImageBasename(index, part.mimeType));
       fs40.writeFileSync(filePath, Buffer.from(rawData, "base64"));
       cleanupStaleMaterializedImages(dir);
       return filePath;
@@ -112937,7 +113341,7 @@ ${text}` : text;
         const entries = fs40.readdirSync(dir);
         for (const entry of entries) {
           if (!entry.startsWith("adhdev-input-image-")) continue;
-          const fullPath = path41.join(dir, entry);
+          const fullPath = path42.join(dir, entry);
           try {
             const stat2 = fs40.statSync(fullPath);
             if (now - stat2.mtimeMs > MATERIALIZED_IMAGE_MAX_AGE_MS) {
@@ -112953,7 +113357,7 @@ ${text}` : text;
       const promptParts = [];
       const imageRefs = [];
       const resourceRefs = [];
-      const materializeDir = options.materializeDir || path41.join(os27.tmpdir(), "adhdev-input-media");
+      const materializeDir = options.materializeDir || path42.join(os27.tmpdir(), "adhdev-input-media");
       input.parts.forEach((part, index) => {
         if (part.type === "text" && part.text.trim()) {
           promptParts.push(part.text.trim());
@@ -112987,7 +113391,7 @@ ${text}` : text;
       return ordered.join("\n");
     }
     var os27;
-    var path41;
+    var path42;
     var crypto5;
     var fs40;
     var IMAGE_MIME_EXTENSIONS;
@@ -112998,7 +113402,7 @@ ${text}` : text;
       "src/providers/cli-provider-input-prompt.ts"() {
         "use strict";
         os27 = __toESM2(require("os"));
-        path41 = __toESM2(require("path"));
+        path42 = __toESM2(require("path"));
         crypto5 = __toESM2(require("crypto"));
         fs40 = __toESM2(require("fs"));
         IMAGE_MIME_EXTENSIONS = {
@@ -113014,84 +113418,6 @@ ${text}` : text;
         MATERIALIZED_IMAGE_MAX_AGE_MS = 60 * 60 * 1e3;
         MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS = 5 * 60 * 1e3;
         lastMaterializedImageCleanupAt = 0;
-      }
-    });
-    function isIdleStatus(value) {
-      const status = typeof value === "string" ? value.trim().toLowerCase() : "";
-      return !status || status === "idle" || status === "ready";
-    }
-    function getMessageTime(message) {
-      if (!message || typeof message !== "object") return 0;
-      const record2 = message;
-      const value = Number(record2.receivedAt ?? record2.timestamp ?? 0);
-      return Number.isFinite(value) ? value : 0;
-    }
-    function hasNonEmptyCliModalButtons(activeModal) {
-      const buttons = activeModal?.buttons;
-      return Array.isArray(buttons) && buttons.some((button) => String(button || "").trim().length > 0);
-    }
-    function isCliGeneratingLikeStatus(status) {
-      return status === "generating" || status === "streaming" || status === "no_progress" || status === "long_generating" || status === "starting";
-    }
-    function computeTurnAnchoredDurationMs(engineTurnStartedAt, generatingStartedAt, now) {
-      const engineStart = typeof engineTurnStartedAt === "number" && Number.isFinite(engineTurnStartedAt) ? engineTurnStartedAt : 0;
-      if (engineStart > 0) return { durationMs: now - engineStart, anchor: "turn-start" };
-      if (generatingStartedAt > 0) return { durationMs: now - generatingStartedAt, anchor: "generatingStartedAt" };
-      return { durationMs: 0, anchor: "none" };
-    }
-    function getDatabaseSync() {
-      if (CachedDatabaseSync) return CachedDatabaseSync;
-      const requireFn = typeof require === "function" ? require : (0, import_node_module.createRequire)(path42.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
-      const sqliteModule = requireFn(`node:${"sqlite"}`);
-      CachedDatabaseSync = sqliteModule.DatabaseSync;
-      if (!CachedDatabaseSync) {
-        throw new Error("node:sqlite DatabaseSync unavailable");
-      }
-      return CachedDatabaseSync;
-    }
-    function getForcedNewSessionScriptName(provider, launchMode) {
-      if (!provider || launchMode !== "new") return null;
-      const resume = provider.resume;
-      if (!resume?.supported) return null;
-      if (Array.isArray(resume.newSessionArgs) && resume.newSessionArgs.length > 0) return null;
-      const controls = Array.isArray(provider.controls) ? provider.controls : [];
-      for (const control of controls) {
-        if (control?.type !== "action") continue;
-        if (typeof control?.confirmTitle === "string" && control.confirmTitle.trim()) continue;
-        if (typeof control?.confirmMessage === "string" && control.confirmMessage.trim()) continue;
-        if (typeof control?.confirmLabel === "string" && control.confirmLabel.trim()) continue;
-        const invokeScript = typeof control?.invokeScript === "string" ? control.invokeScript.trim() : "";
-        if (!invokeScript) continue;
-        const controlId = typeof control?.id === "string" ? control.id.trim() : "";
-        if (controlId === "new_session" || /^new.?session$/i.test(invokeScript)) {
-          return invokeScript;
-        }
-      }
-      return null;
-    }
-    async function waitForCliAdapterReady(adapter, options) {
-      const timeoutMs = Math.max(100, options?.timeoutMs ?? 15e3);
-      const pollMs = Math.max(10, options?.pollMs ?? 50);
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (adapter?.isReady?.()) return;
-        const status = adapter?.getStatus?.()?.status;
-        if (status === "stopped") {
-          throw new Error("CLI runtime stopped before it became ready");
-        }
-        await new Promise((resolve34) => setTimeout(resolve34, pollMs));
-      }
-      throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
-    }
-    var path42;
-    var import_node_module;
-    var CachedDatabaseSync;
-    var init_cli_provider_status_helpers = __esm2({
-      "src/providers/cli-provider-status-helpers.ts"() {
-        "use strict";
-        path42 = __toESM2(require("path"));
-        import_node_module = require("module");
-        CachedDatabaseSync = null;
       }
     });
     var STATUS_HYDRATION_TAIL_LIMIT;
@@ -113560,7 +113886,7 @@ ${text}` : text;
         return;
       }
       if (host.meshStallEmittedForAnchor) return;
-      const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS : MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
+      const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS2 : MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
       const stalledMs = now - host.meshStallAnchorAt;
       if (stalledMs < threshold) return;
       const turnPresentation = resolveSessionTurnPresentation({
@@ -113606,7 +113932,7 @@ ${text}` : text;
         return;
       }
       host.meshStallEmittedForAnchor = true;
-      if (host.meshStallLastFiredAt >= 0 && now - host.meshStallLastFiredAt < MESH_WORKER_STALL_REFIRE_COOLDOWN_MS) {
+      if (host.meshStallLastFiredAt >= 0 && now - host.meshStallLastFiredAt < MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2) {
         return;
       }
       host.meshStallLastFiredAt = now;
@@ -113628,304 +113954,18 @@ ${text}` : text;
         taskId: host.completingTurnTaskId()
       });
     }
-    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
-    var MESH_WORKER_STALL_TURN_THRESHOLD_MS;
-    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
+    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
+    var MESH_WORKER_STALL_TURN_THRESHOLD_MS2;
+    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2;
     var init_mesh_stall_watchdog = __esm2({
       "src/providers/completion/mesh-stall-watchdog.ts"() {
         "use strict";
         init_mesh_turn_presentation();
         init_mesh_turn_ledger();
         init_mesh_event_trace();
-        MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 18e4;
-        MESH_WORKER_STALL_TURN_THRESHOLD_MS = 36e4;
-        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 6e5;
-      }
-    });
-    function getEffectDedupKey(effect) {
-      if (effect.id) return `provider_effect:${effect.id}`;
-      if (effect.type === "message") {
-        const content = typeof effect.message?.content === "string" ? effect.message.content : JSON.stringify(effect.message?.content || "");
-        return `provider_effect:message:${content}`;
-      }
-      if (effect.type === "notification") {
-        return `provider_effect:notification:${effect.notification?.title || ""}:${effect.notification?.body || ""}`;
-      }
-      return `provider_effect:toast:${effect.toast?.message || ""}`;
-    }
-    function formatApprovalRequestMessage(modalMessage, buttons) {
-      const lines = ["Approval requested"];
-      const cleanMessage = String(modalMessage || "").trim();
-      if (cleanMessage) lines.push(cleanMessage);
-      const labels = (buttons || []).map((button) => String(button || "").trim()).filter(Boolean);
-      if (labels.length > 0) {
-        lines.push(labels.map((label) => `[${label}]`).join(" "));
-      }
-      return lines.join("\n");
-    }
-    function formatMarkerTimestamp(timestamp2) {
-      const date5 = new Date(timestamp2);
-      const pad = (value) => String(value).padStart(2, "0");
-      return `${date5.getFullYear()}-${pad(date5.getMonth() + 1)}-${pad(date5.getDate())} ${pad(date5.getHours())}:${pad(date5.getMinutes())}:${pad(date5.getSeconds())}`;
-    }
-    var init_cli_provider_effect_format = __esm2({
-      "src/providers/cli-provider-effect-format.ts"() {
-        "use strict";
-      }
-    });
-    function approvalModalSignature(message, affirmativeAnchor) {
-      return [typeof message === "string" ? message.trim() : "", affirmativeAnchor].join("::");
-    }
-    function autoApproveContinuityWindowMs(host) {
-      return host.autoApproveMaskSince > 0 && host.isAutonomousMeshSession() ? APPROVAL_FLAP_CONTINUITY_MS : APPROVAL_GATE_HYSTERESIS_MS;
-    }
-    function approvableModalSignature(host, modal) {
-      const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
-      if (!modal || buttons.length === 0) return null;
-      const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
-      if (modalKind !== "approval") return null;
-      const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
-      const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
-      if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
-      return approvalModalSignature(modal?.message, normalizeApprovalLabel(buttonLabel));
-    }
-    function resetPtyAutoApproveState(host) {
-      host.lastAutoApprovalSignature = "";
-      host.pendingAutoApprovalSignature = "";
-      host.pendingAutoApprovalSince = 0;
-      host.autoApproveInactiveSince = 0;
-      host.autoApproveMaskSince = 0;
-      host.stalledApprovalNudgeEpisode = 0;
-      host.autoApproveLastModalSeenAt = 0;
-      host.autoApproveBusy = false;
-      if (host.autoApproveSettleTimer) {
-        clearTimeout(host.autoApproveSettleTimer);
-        host.autoApproveSettleTimer = null;
-      }
-      if (host.autoApproveBusyTimer) {
-        clearTimeout(host.autoApproveBusyTimer);
-        host.autoApproveBusyTimer = null;
-      }
-    }
-    function autoApproveMaskStalled(host, now) {
-      return host.shouldUsePtyAutoApprove() && host.autoApproveMaskSince > 0 && now - host.autoApproveMaskSince > APPROVAL_AUTO_MASK_STALL_MS;
-    }
-    function armSettleRecheck(host, delayMs) {
-      if (host.autoApproveSettleTimer) clearTimeout(host.autoApproveSettleTimer);
-      host.autoApproveSettleTimer = setTimeout(() => {
-        host.autoApproveSettleTimer = null;
-        host.recheckAutoApproveSettled();
-      }, delayMs);
-    }
-    function maybeEmitStalledApprovalNudge(host, adapterStatus, now) {
-      if (!host.shouldUsePtyAutoApprove()) return;
-      if (!host.isMeshWorkerSession()) return;
-      if (adapterStatus?.status !== "waiting_approval") return;
-      const nudgeModal = adapterStatus.activeModal;
-      const nudgeModalKind = nudgeModal && typeof nudgeModal.kind === "string" ? nudgeModal.kind : null;
-      if (adapterStatus.activeInteractivePrompt && (!nudgeModal || nudgeModalKind === "picker")) return;
-      if (!autoApproveMaskStalled(host, now)) return;
-      const currentSignature = approvableModalSignature(host, adapterStatus.activeModal);
-      const settleProgressing = !!currentSignature && host.pendingAutoApprovalSince > 0 && currentSignature === host.pendingAutoApprovalSignature;
-      if (settleProgressing) return;
-      if (host.stalledApprovalNudgeEpisode === host.autoApproveMaskSince) return;
-      host.stalledApprovalNudgeEpisode = host.autoApproveMaskSince;
-      const modal = adapterStatus.activeModal;
-      const dirName = workingDirBasename(host.workingDir);
-      const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
-      host.appendRuntimeSystemMessage(
-        formatApprovalRequestMessage(modal?.message, modal?.buttons),
-        `approval_request:${now}`,
-        now
-      );
-      host.pushEvent({
-        event: "agent:waiting_approval",
-        chatTitle,
-        timestamp: now,
-        modalMessage: modal?.message,
-        modalButtons: modal?.buttons
-      });
-      LOG.info("CLI", `[${host.type}] stalled auto-approve nudge \u2192 coordinator (masked ${Math.round((now - host.autoApproveMaskSince) / 1e3)}s)`);
-    }
-    function maybeAutoApproveStatus(host, adapterStatus, now = Date.now()) {
-      if (!host.shouldUsePtyAutoApprove()) {
-        resetPtyAutoApproveState(host);
-        return false;
-      }
-      if (adapterStatus?.status === "waiting_approval" && host.shouldUsePtyAutoApprove() && host.manualAttendance.isAttended(now)) {
-        host.lastAutoApprovalSignature = "";
-        host.pendingAutoApprovalSignature = "";
-        host.pendingAutoApprovalSince = 0;
-        host.autoApproveInactiveSince = 0;
-        host.autoApproveMaskSince = 0;
-        host.stalledApprovalNudgeEpisode = 0;
-        host.autoApproveLastModalSeenAt = 0;
-        armSettleRecheck(host, host.manualAttendance.remainingMs(now) + 20);
-        return false;
-      }
-      const autoApproveActive = adapterStatus?.status === "waiting_approval" && host.shouldUsePtyAutoApprove();
-      if (!autoApproveActive) {
-        host.lastAutoApprovalSignature = "";
-        if (host.pendingAutoApprovalSince) {
-          if (!host.autoApproveInactiveSince) host.autoApproveInactiveSince = now;
-          const goneForMs = now - host.autoApproveInactiveSince;
-          const continuityMs = autoApproveContinuityWindowMs(host);
-          if (goneForMs < continuityMs) {
-            armSettleRecheck(host, continuityMs - goneForMs + 20);
-            return autoApproveActive;
-          }
-        }
-        host.pendingAutoApprovalSignature = "";
-        host.pendingAutoApprovalSince = 0;
-        host.autoApproveInactiveSince = 0;
-        host.autoApproveMaskSince = 0;
-        host.stalledApprovalNudgeEpisode = 0;
-        host.autoApproveLastModalSeenAt = 0;
-        if (host.autoApproveSettleTimer) {
-          clearTimeout(host.autoApproveSettleTimer);
-          host.autoApproveSettleTimer = null;
-        }
-        return autoApproveActive;
-      }
-      host.autoApproveInactiveSince = 0;
-      if (!host.autoApproveMaskSince) host.autoApproveMaskSince = now;
-      maybeEmitStalledApprovalNudge(host, adapterStatus, now);
-      const modal = adapterStatus.activeModal;
-      const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
-      if (!modal || buttons.length === 0) {
-        const blipForMs = host.autoApproveLastModalSeenAt ? now - host.autoApproveLastModalSeenAt : Infinity;
-        if (host.pendingAutoApprovalSince && blipForMs < autoApproveContinuityWindowMs(host)) {
-          armSettleRecheck(host, autoApproveContinuityWindowMs(host) - blipForMs + 20);
-          return autoApproveActive;
-        }
-        if (blipForMs >= autoApproveContinuityWindowMs(host)) {
-          host.pendingAutoApprovalSignature = "";
-          host.pendingAutoApprovalSince = 0;
-        }
-        return autoApproveActive;
-      }
-      host.autoApproveLastModalSeenAt = now;
-      const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
-      if (modalKind !== "approval") {
-        const modalText = `${String(modal?.title || "")}
-${String(modal?.message || "")}
-${buttons.join("\n")}`;
-        const looksLikeSelectionPicker = /Select (?:a |an )?(?:model|mode|option)\b|Switch between/i.test(modalText);
-        const looksLikeConsent = looksLikeActiveApprovalPromptText(modalText) || /Do you want to (?:proceed|create|make|edit|apply|run|delete|modify|allow)\b|allow all edits\b|don'?t ask again\b/i.test(modalText) || hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
-        if (looksLikeSelectionPicker && !looksLikeConsent) {
-          return autoApproveActive;
-        }
-      }
-      const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
-      const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
-      if (buttonIndex < 0 || !hasReliableConsentAnchor) {
-        return autoApproveActive;
-      }
-      const affirmativeAnchor = normalizeApprovalLabel(buttonLabel);
-      const modalSignature = approvalModalSignature(modal?.message, affirmativeAnchor);
-      const approvalEntrySeq = typeof adapterStatus?.approvalEntrySeq === "number" ? adapterStatus.approvalEntrySeq : 0;
-      const busySignature = `${approvalEntrySeq}::${modalSignature}`;
-      if (host.autoApproveBusy && busySignature === host.lastAutoApprovalSignature) {
-        return autoApproveActive;
-      }
-      if (modalSignature !== host.pendingAutoApprovalSignature) {
-        host.pendingAutoApprovalSignature = modalSignature;
-        host.pendingAutoApprovalSince = now;
-      }
-      const settledForMs = now - host.pendingAutoApprovalSince;
-      if (settledForMs < APPROVAL_SETTLE_MS) {
-        armSettleRecheck(host, APPROVAL_SETTLE_MS - settledForMs + 20);
-        return autoApproveActive;
-      }
-      if (host.autoApproveSettleTimer) {
-        clearTimeout(host.autoApproveSettleTimer);
-        host.autoApproveSettleTimer = null;
-      }
-      host.autoApproveBusy = true;
-      host.lastAutoApprovalSignature = busySignature;
-      host.pendingAutoApprovalSignature = "";
-      host.pendingAutoApprovalSince = 0;
-      host.autoApproveInactiveSince = 0;
-      host.autoApproveMaskSince = 0;
-      host.stalledApprovalNudgeEpisode = 0;
-      host.autoApproveLastModalSeenAt = 0;
-      if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
-      host.autoApproveBusyTimer = setTimeout(() => {
-        host.autoApproveBusy = false;
-        host.autoApproveBusyTimer = null;
-        host.lastAutoApprovalSignature = "";
-      }, APPROVAL_FIRE_BUSY_WINDOW_MS);
-      host.recordAutoApproval(modal?.message, buttonLabel, now);
-      host.lastAutoApproveFiredAt = now;
-      setTimeout(() => {
-        const adapter = host.adapter;
-        if (typeof adapter.resolveModalMatched === "function") {
-          const matched = adapter.resolveModalMatched(buttonIndex);
-          if (!matched) {
-            if (host.lastAutoApproveFiredAt === now) host.lastAutoApproveFiredAt = 0;
-            LOG.warn("CLI", `[${host.type}] auto-approve resolveModal matched no button (index ${buttonIndex}) \u2014 surfacing approval to coordinator`);
-          }
-        } else {
-          adapter.resolveModal?.(buttonIndex);
-        }
-      }, 0);
-      return autoApproveActive;
-    }
-    function stabilizeFlappingApprovalStatus(host, adapterStatus, now = Date.now()) {
-      if (!host.isAutonomousMeshSession() || !host.shouldUsePtyAutoApprove()) return adapterStatus;
-      const rawStatus = adapterStatus?.status;
-      const resolvedAt = typeof host.adapter?.lastApprovalResolvedAt === "number" ? host.adapter.lastApprovalResolvedAt : 0;
-      if (rawStatus === "waiting_approval") {
-        if (hasNonEmptyCliModalButtons(adapterStatus?.activeModal)) {
-          host.approvalStickyLastConcreteAt = now;
-          host.approvalStickyModal = adapterStatus.activeModal;
-          host.approvalStickyEntrySeq = typeof adapterStatus?.approvalEntrySeq === "number" ? adapterStatus.approvalEntrySeq : host.approvalStickyEntrySeq;
-        }
-        return adapterStatus;
-      }
-      if (host.approvalStickyLastConcreteAt > 0 && host.hasEmittedGenuineCompletionForCurrentEpoch()) {
-        host.approvalStickyLastConcreteAt = 0;
-        host.approvalStickyModal = null;
-        host.approvalStickyEntrySeq = 0;
-      }
-      if (host.approvalStickyLastConcreteAt > 0 && host.approvalStickyModal) {
-        const withinWindow = now - host.approvalStickyLastConcreteAt < APPROVAL_STICKY_FLAP_MS;
-        const resolvedSinceAnchor = resolvedAt >= host.approvalStickyLastConcreteAt;
-        if (withinWindow && !resolvedSinceAnchor) {
-          return {
-            ...adapterStatus,
-            status: "waiting_approval",
-            activeModal: host.approvalStickyModal,
-            ...host.approvalStickyEntrySeq ? { approvalEntrySeq: host.approvalStickyEntrySeq } : {},
-            approvalStickyOverlay: true
-          };
-        }
-        host.approvalStickyLastConcreteAt = 0;
-        host.approvalStickyModal = null;
-        host.approvalStickyEntrySeq = 0;
-      }
-      return adapterStatus;
-    }
-    var APPROVAL_SETTLE_MS;
-    var APPROVAL_GATE_HYSTERESIS_MS;
-    var APPROVAL_FLAP_CONTINUITY_MS;
-    var APPROVAL_AUTO_MASK_STALL_MS;
-    var APPROVAL_FIRE_BUSY_WINDOW_MS;
-    var APPROVAL_STICKY_FLAP_MS;
-    var init_approval_gate = __esm2({
-      "src/providers/completion/approval-gate.ts"() {
-        "use strict";
-        init_logger();
-        init_approval_utils();
-        init_working_dir();
-        init_cli_provider_effect_format();
-        init_cli_provider_status_helpers();
-        APPROVAL_SETTLE_MS = 600;
-        APPROVAL_GATE_HYSTERESIS_MS = 1500;
-        APPROVAL_FLAP_CONTINUITY_MS = 6e3;
-        APPROVAL_AUTO_MASK_STALL_MS = 10500;
-        APPROVAL_FIRE_BUSY_WINDOW_MS = 5e3;
-        APPROVAL_STICKY_FLAP_MS = 4e3;
+        MESH_WORKER_STALL_IDLE_THRESHOLD_MS2 = 18e4;
+        MESH_WORKER_STALL_TURN_THRESHOLD_MS2 = 36e4;
+        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2 = 6e5;
       }
     });
     function mergeConversationMessages(runtimeMessages, parsedMessages) {
@@ -115515,6 +115555,42 @@ ${buttons.join("\n")}`;
     function mergeRuntimeChatMessages(host, parsedMessages) {
       return mergeConversationMessages(host.runtimeMessages, host.parsedIngestTimestamps.stamp(parsedMessages));
     }
+    function recordAcknowledgedUserInput(host, input) {
+      const content = typeof input === "string" ? input.trim() : buildCliStructuredInputPrompt(input).trim();
+      if (!content) return;
+      const receivedAt = Date.now();
+      const ackContentKey = shortHash(`${host.instanceId}:${content}`, 24);
+      const lastAckAt = host.recentUserInputAcks.get(ackContentKey);
+      if (lastAckAt !== void 0 && receivedAt - lastAckAt <= USER_INPUT_ACK_DEDUP_WINDOW_MS) {
+        host.recentUserInputAcks.set(ackContentKey, receivedAt);
+        pruneRecentUserInputAcks(host, receivedAt);
+        return;
+      }
+      host.recentUserInputAcks.set(ackContentKey, receivedAt);
+      pruneRecentUserInputAcks(host, receivedAt);
+      host.lastAcknowledgedUserInputAt = receivedAt;
+      const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}`, 24)}`;
+      appendRuntimeMessage(host, buildChatMessage({
+        role: "user",
+        senderName: "User",
+        kind: "standard",
+        content,
+        receivedAt,
+        timestamp: receivedAt,
+        source: "runtime_input_ack",
+        meta: {
+          runtimeInputAck: true,
+          provider: host.type,
+          workspace: host.workingDir
+        }
+      }), dedupKey);
+    }
+    function pruneRecentUserInputAcks(host, now) {
+      if (host.recentUserInputAcks.size <= 1) return;
+      for (const [key2, at] of host.recentUserInputAcks) {
+        if (now - at > USER_INPUT_ACK_DEDUP_WINDOW_MS) host.recentUserInputAcks.delete(key2);
+      }
+    }
     var init_cli_provider_runtime_messages = __esm2({
       "src/providers/cli-provider-runtime-messages.ts"() {
         "use strict";
@@ -115522,6 +115598,9 @@ ${buttons.join("\n")}`;
         init_chat_message_normalization();
         init_working_dir();
         init_cli_provider_transcript_merge();
+        init_cli_provider_input_prompt();
+        init_hash();
+        init_cli_provider_instance_types();
       }
     });
     function toActiveChatMessage(message) {
@@ -116116,7 +116195,7 @@ ${buttons.join("\n")}`;
         init_provider_input_support();
         init_interactive_prompt();
         init_interactive_prompt_apply();
-        init_hash();
+        init_cli_provider_instance_constants();
         init_transcript_evidence();
         init_native_turn_signal();
         init_transcript_signal_source();
@@ -116182,196 +116261,23 @@ ${buttons.join("\n")}`;
           }
           type;
           category = "cli";
-          /**
-           * Quiet period an approval modal's signature must be stable before
-           * auto-approve sends the approve key. Guards against firing on a prompt
-           * that is still streaming into the PTY (the "resolves too fast" symptom):
-           * while the modal text/buttons are still changing, every frame yields a
-           * new signature and the settle clock restarts. Once the prompt finishes
-           * rendering the signature holds and the key is sent after this window.
-           * Bounded + small so genuine approvals stay timely. The FSM is already
-           * authoritative over the `waiting_approval` state; this only delays the
-           * keystroke until the modal *content* has settled.
-           */
-          static AUTO_APPROVE_SETTLE_MS = APPROVAL_SETTLE_MS;
-          /**
-           * APPROVAL-INBOX-BLINDSPOT (Fix A): how long after a LOCAL auto-approve fire the mesh
-           * event forwarder still treats the modal as "being resolved locally" and suppresses the
-           * coordinator notification. Chosen to comfortably cover the resolveModal → PTY absorb →
-           * status-leaves-approval round trip (incl. the win32 CR-resend loop) while staying short
-           * enough that a modal which auto-approve fired at but did NOT resolve re-surfaces to the
-           * coordinator on the next event. Aligned with the adapter's own approval cooldown scale.
-           */
-          static APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = 8e3;
-          /**
-           * Busy-side hysteresis for the settle gate. A momentary `generating` flip
-           * while the SAME approval modal's button block is still on screen (its
-           * question line scrolled out of the captured frame, only the buttons + a
-           * residual `esc to interrupt` spinner remain) briefly reports
-           * status!=waiting_approval. Without hysteresis that flip wipes the settle
-           * clock, and the modal→generating→modal flap restarts the 600ms window
-           * every time so auto-approve never fires. We keep the in-progress settle
-           * gate warm across an inactive blip up to this bound; only once the modal
-           * has genuinely stayed gone this long (a real resolution → idle) is the
-           * gate cleared. Bounded so a genuinely new, later approval still re-settles
-           * from scratch rather than firing on a stale timestamp.
-           */
-          static AUTO_APPROVE_GATE_HYSTERESIS_MS = APPROVAL_GATE_HYSTERESIS_MS;
-          /**
-           * AUTOAPPROVE-FLAP-RECUR (Fix B): extended busy-side continuity window for a
-           * DELEGATED-WORKER auto-approve episode that is genuinely still cycling.
-           *
-           * The default AUTO_APPROVE_GATE_HYSTERESIS_MS (1500) absorbs a *momentary*
-           * `generating` blip. But a delegated worker running a Bash approval observed
-           * the FSM cycle the FULL state waiting_approval → busy → waiting_approval on a
-           * 2–5s period (the button set scrolls in/out AND the modal question repaints,
-           * so the adapter genuinely reports status=generating for whole seconds between
-           * approval frames). Each busy phase outran the 1500ms hysteresis, so the
-           * settle clock was WIPED (the genuine-resolution branch), the 600ms settle
-           * window never accumulated across the flap, resolveModal never fired
-           * (resolveModal count 0), and the mask-stall clock instead tripped at 4500ms →
-           * coordinator nudge → the flap the coordinator observed.
-           *
-           * A genuine resolution and a flap both start with a busy phase; they diverge
-           * only in whether waiting_approval RETURNS. So we cannot simply lengthen the
-           * blanket hysteresis (that would make every real resolution hold the gate
-           * open for seconds). Instead this longer window applies ONLY while an active
-           * mask episode is alive (autoApproveMaskSince > 0) AND the session is a
-           * delegated worker — i.e. exactly the never-resolving-flap case. A foreground
-           * / attended session keeps the tight 1500ms window unchanged. The mask-stall
-           * bound below still caps the episode, so a worker whose approval truly never
-           * returns is surfaced to the coordinator within AUTO_APPROVE_MASK_STALL_MS
-           * rather than held forever.
-           *
-           * INVARIANT (do not regress the ordering): this window must fully BRIDGE a
-           * single busy phase, and the mask-stall bound below must in turn exceed it —
-           * AUTO_APPROVE_MASK_STALL_MS > AUTO_APPROVE_FLAP_CONTINUITY_MS + max_busy_phase
-           * + AUTO_APPROVE_SETTLE_MS. Observed flap geometry (delegated-worker Bash
-           * approval): approval frames last ~1.5s, busy phases (modal=none) last
-           * ~4.3–4.5s. With the old 4000ms this window was SHORTER than a busy phase, so
-           * the settle clock was torn down every cycle and never accrued 600ms while the
-           * 4500ms mask-stall tripped INSIDE the first busy phase → a stalled-approval
-           * nudge leaked to the coordinator. 6000ms bridges the ~4.5s busy phase with
-           * margin so the returning approval frame survives to resume its settle clock.
-           */
-          static AUTO_APPROVE_FLAP_CONTINUITY_MS = APPROVAL_FLAP_CONTINUITY_MS;
-          /**
-           * STATUS-MISMATCH: upper bound on how long the auto-approve→`generating` SURFACE
-           * mask may hide a worker's `waiting_approval` (status + activeModal) before we give
-           * up and surface the real prompt. The mask exists because auto-approve is expected
-           * to resolve the modal momentarily; but if it STALLS without ever calling
-           * resolveModal — the modal signature never settles for AUTO_APPROVE_SETTLE_MS (a
-           * perpetually-flapping/streaming prompt), no concrete modal is ever captured, or the
-           * modal is a picker/non-affirmative we never auto-pick — the mask would persist
-           * forever and read_chat / mesh_status / the dashboard would NEVER see the pending
-           * approval (the coordinator cannot mesh_approve what it cannot see). Once an episode
-           * exceeds this bound we stop masking. Generously larger than
-           * AUTO_APPROVE_SETTLE_MS (600) + AUTO_APPROVE_GATE_HYSTERESIS_MS (1500) so a
-           * legitimately slow-settling / blip-flapping prompt is never unmasked early; a
-           * genuine never-resolving stall surfaces within this window. The settle gate keeps
-           * running underneath, so a prompt that finally stabilises still auto-approves, and
-           * mesh_approve (raw FSM, unmasked) works throughout.
-           *
-           * INVARIANT (do not regress): must be STRICTLY GREATER than
-           * AUTO_APPROVE_FLAP_CONTINUITY_MS + max_busy_phase + AUTO_APPROVE_SETTLE_MS so
-           * that during a flap the settle clock (which FLAP_CONTINUITY keeps alive across
-           * each busy phase) gets to accrue its 600ms on the RETURNING approval frame
-           * before this stall bound can trip. Observed geometry — worker: approval ~1.5s,
-           * busy ~4.3–4.5s; coordinator self-session: approval ~1.5s, busy ~2.85s. Both
-           * now use the extended window (isAutonomousMeshSession covers worker +
-           * meshCoordinatorFor). Worst case: CONTINUITY(6000) + busy(~4.5s) + SETTLE(600)
-           * = ~11100ms, so the stall bound must exceed that. 10500ms satisfies the invariant
-           * for coordinator (6000 + 2850 + 600 = 9450 < 10500) and was previously 9000ms
-           * (which failed for a worker busy phase of 4.5s: 6000+4500+600=11100 > 9000).
-           * the old 4500ms tripped inside the very first busy phase (while modal=none, so
-           * the nudge was NOT deferred) and leaked to the coordinator.
-           */
-          static AUTO_APPROVE_MASK_STALL_MS = APPROVAL_AUTO_MASK_STALL_MS;
-          /**
-           * AUTOAPPROVE-FLAP-INBOX-MISSING: sticky-approval overlay window. Same time-tick
-           * hold idea as the FALSE-IDLE completion gate — an approval signal that was
-           * DOMINANT within this recent window is re-presented across a momentary busy blip
-           * instead of collapsing.
-           *
-           * RCA (live 2026-07-13): a claude-cli worker sitting at a Bash approval modal
-           * ("Do you want to proceed? ❯1.Yes") flaps waiting_approval↔busy on a ~2-3s period.
-           * The spec `approval→busy` transition fires whenever the footer/modal approval
-           * markers momentarily drop out of their parsed sections while the PRIOR command's
-           * residual spinner text ("✳ Checking vendor drift…") still matches the busy regex.
-           * On the busy frame the adapter reports status='generating', activeModal=null. That
-           * corrupts THREE consumers at once: (1) mesh_active_work samples 'generating' →
-           * collectPendingApprovals never sees 'awaiting_approval' → mesh_list_pending_approvals
-           * count:0 (inbox miss); (2) the auto-approve settle gate is torn down each busy phase
-           * so the 600ms settle never accrues → auto-approve never fires; (3) a mesh_approve
-           * landing on a busy frame hits "Not in approval state". The existing FLAP machinery
-           * (AUTO_APPROVE_FLAP_CONTINUITY_MS) only keeps the settle gate warm while status is
-           * STILL waiting_approval (buttons scrolled out) — it does nothing once the FSM fully
-           * commits to 'busy', and it never stabilises the status the inbox samples.
-           *
-           * Fix: when the raw adapter status flaps to generating/busy/idle but a
-           * waiting_approval WITH a concrete modal was observed within this window, overlay
-           * the cached modal and report status='waiting_approval'. This stabilized status
-           * feeds getState (→ inbox), detectStatusTransition (→ event emission), and
-           * maybeAutoApproveStatus (→ settle gate) uniformly, so the approval both registers
-           * in the inbox and settles for auto-approve across the flap. Bounded (a genuine
-           * resume that never returns to approval unmasks after this window) and scoped at the
-           * call site to autonomous mesh sessions. 4000ms bridges the observed ~2-3s flap with
-           * margin while staying well under AUTO_APPROVE_MASK_STALL_MS (a truly stalled/absent
-           * approval still surfaces).
-           */
-          static APPROVAL_STICKY_FLAP_MS = APPROVAL_STICKY_FLAP_MS;
-          /**
-           * FALSE-IDLE (inter-approval quiet valley): grace window after an auto-approve
-           * (or mesh_approve) RESOLVES a modal during which a subsequent generating→idle
-           * quiet valley must NOT be treated as turn completion.
-           *
-           * The RCA: auto-approve resolves a modal → the agent resumes the same turn →
-           * between resolving that approval and preparing the next tool/approval the agent
-           * falls briefly silent. The FSM sees idle + a recorded mid-turn assistant bubble
-           * and fires an early agent:generating_completed even though the turn is still in
-           * flight. Live evidence showed the same session resuming waiting_approval ~13s
-           * after a "clean" completion emit.
-           *
-           * The window must be comfortably larger than the observed resume gap (~13s) so
-           * the valley is bridged, but not so large that a turn that genuinely ended right
-           * after an approval is held for an annoying stretch. 18s clears 13s with margin
-           * while capping the worst-case extra hold on a truly-finished turn at 18s (still
-           * well under COMPLETED_FINALIZATION_MAX_WAIT_MS's 30s hard bound). The recency is
-           * measured from the engine's lastApprovalResolvedAt, which is stamped ONLY by
-           * resolveModal (auto-approve fire / dashboard / mesh_approve) — so a plain turn
-           * with no approval never carries recency and is never held (no regression).
-           */
-          static APPROVAL_RESUME_GRACE_MS = 18e3;
-          // MESH-STALL-WATCH (feature 1: STALL detection): how long a coordinator-spawned
-          // mesh worker's raw PTY output (lastOutputAt) may stay unchanged before the
-          // status-agnostic stall watchdog fires ONE informational monitor:no_progress
-          // event. Unlike the StatusMonitor no-progress watchdog (which only runs while a
-          // turn is generating), this observes pure screen stasis regardless of the
-          // reported status — a worker parked idle, wedged mid-turn, or spawned with no
-          // output at all.
-          //
-          // FALSE-STALL-WATCHDOG-OVERFIRE (fix C): the threshold is now turn-scoped. When
-          // an explicit turn is in flight (hasAdapterPendingResponse() — the adapter's
-          // currentTurnScope / isWaitingForResponse / isProcessing / partial buffer), a
-          // long silent thinking gap (claude-cli opus/high can go minutes between visible
-          // tokens) is normal, so the bar is raised to MESH_WORKER_STALL_TURN_THRESHOLD_MS.
-          // Outside a turn (idle) the tighter MESH_WORKER_STALL_IDLE_THRESHOLD_MS applies.
-          // This is a THRESHOLD RAISE, not a suppression: a genuine mid-turn wedge still
-          // fires (late, at the turn bound) rather than being hidden behind a sticky
-          // generating status. 180s matches DEFAULT_MONITOR_CONFIG.noProgressThresholdSec
-          // so the idle bound agrees with the StatusMonitor watchdog's "long interval".
-          static MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 18e4;
-          static MESH_WORKER_STALL_TURN_THRESHOLD_MS = 36e4;
-          // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): minimum spacing between two stall
-          // notifications for the SAME session, even across anchor re-arms. The
-          // per-anchor meshStallEmittedForAnchor guard already stops a single continuous
-          // stall from re-firing; this cooldown additionally throttles the churn where a
-          // worker dribbles one byte every few minutes (each re-arming the anchor and then
-          // re-crossing the bar), which would otherwise page the coordinator repeatedly.
-          // The stall is still fired for observability — just not more than once per
-          // window per session. Set larger than the stall thresholds so consecutive
-          // re-armed stalls a few minutes apart collapse into a single notification.
-          static MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 6e5;
+          // ── Approval-gate + mesh-stall tuning constants ────────────────────────────
+          // Values, and the full derivation for each, live in
+          // cli-provider-instance-constants.ts (pure move, file-size gate
+          // decomposition). They stay declared as class statics here because tests read
+          // them off the class — `(CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS`
+          // in cli-provider-auto-approve-{settle,mask-stall,flap-recur}.test.ts — so
+          // these aliases are load-bearing. Read the constants module for the why.
+          static AUTO_APPROVE_SETTLE_MS = AUTO_APPROVE_SETTLE_MS;
+          static APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS;
+          static AUTO_APPROVE_GATE_HYSTERESIS_MS = AUTO_APPROVE_GATE_HYSTERESIS_MS;
+          static AUTO_APPROVE_FLAP_CONTINUITY_MS = AUTO_APPROVE_FLAP_CONTINUITY_MS;
+          static AUTO_APPROVE_MASK_STALL_MS = AUTO_APPROVE_MASK_STALL_MS;
+          static APPROVAL_STICKY_FLAP_MS = APPROVAL_STICKY_FLAP_MS2;
+          static APPROVAL_RESUME_GRACE_MS = APPROVAL_RESUME_GRACE_MS;
+          static MESH_WORKER_STALL_IDLE_THRESHOLD_MS = MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
+          static MESH_WORKER_STALL_TURN_THRESHOLD_MS = MESH_WORKER_STALL_TURN_THRESHOLD_MS;
+          static MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
           adapter;
           context = null;
           events = [];
@@ -116936,41 +116842,11 @@ ${buttons.join("\n")}`;
             }
           }
           recordAcknowledgedUserInput(input) {
-            const content = typeof input === "string" ? input.trim() : buildCliStructuredInputPrompt(input).trim();
-            if (!content) return;
-            const receivedAt = Date.now();
-            const ackContentKey = shortHash(`${this.instanceId}:${content}`, 24);
-            const lastAckAt = this.recentUserInputAcks.get(ackContentKey);
-            if (lastAckAt !== void 0 && receivedAt - lastAckAt <= USER_INPUT_ACK_DEDUP_WINDOW_MS) {
-              this.recentUserInputAcks.set(ackContentKey, receivedAt);
-              this.pruneRecentUserInputAcks(receivedAt);
-              return;
-            }
-            this.recentUserInputAcks.set(ackContentKey, receivedAt);
-            this.pruneRecentUserInputAcks(receivedAt);
-            this.lastAcknowledgedUserInputAt = receivedAt;
-            const dedupKey = `user_input_ack:${shortHash(`${this.instanceId}:${content}:${receivedAt}`, 24)}`;
-            this.appendRuntimeMessage(buildChatMessage({
-              role: "user",
-              senderName: "User",
-              kind: "standard",
-              content,
-              receivedAt,
-              timestamp: receivedAt,
-              source: "runtime_input_ack",
-              meta: {
-                runtimeInputAck: true,
-                provider: this.type,
-                workspace: this.workingDir
-              }
-            }), dedupKey);
+            recordAcknowledgedUserInput(this, input);
           }
           /** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
           pruneRecentUserInputAcks(now) {
-            if (this.recentUserInputAcks.size <= 1) return;
-            for (const [key2, at] of this.recentUserInputAcks) {
-              if (now - at > USER_INPUT_ACK_DEDUP_WINDOW_MS) this.recentUserInputAcks.delete(key2);
-            }
+            pruneRecentUserInputAcks(this, now);
           }
           /**
            * Owner token for this session in the antigravity conversation-claim
