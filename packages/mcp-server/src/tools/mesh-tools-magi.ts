@@ -727,9 +727,15 @@ function magiPanelScope(meshId: string, meshName?: string) {
  */
 export async function meshMagiKindPanelSet(
     ctx: MeshContext,
-    args: { task_kind?: string; kind?: string; slots?: unknown; write?: boolean },
+    args: { task_kind?: string; slots?: unknown; write?: boolean },
 ): Promise<string> {
-    const kind = readString(args.task_kind) || readString(args.kind);
+    // D2#2: there used to be a `|| readString(args.kind)` fallback here. It was dead —
+    // validate-tool-args rejects any key the schema does not declare, and the schema
+    // declares only `task_kind`, so a {kind} call never reached this line. Removed
+    // rather than declared: the repo's alias convention is camelCase↔snake_case pairs
+    // of the same word (task_mode/taskMode, gate_id/gateId), and `kind` is a different,
+    // shorter word that also collides with the `kind` field magiPanelScope() returns.
+    const kind = readString(args.task_kind);
     if (!kind) return JSON.stringify({ success: false, error: 'task_kind required' });
     const write = args.write === true;
     const meshId = ctx.mesh.id;
@@ -792,9 +798,10 @@ export async function meshMagiKindPanelSet(
  */
 export async function meshMagiKindPanelList(
     ctx: MeshContext,
-    args: { task_kind?: string; kind?: string } = {},
+    args: { task_kind?: string } = {},
 ): Promise<string> {
-    const only = readString(args.task_kind) || readString(args.kind);
+    // D2#2: dead `|| readString(args.kind)` fallback removed — see meshMagiKindPanelSet.
+    const only = readString(args.task_kind);
     const meshId = ctx.mesh.id;
     const scope = magiPanelScope(meshId, ctx.mesh.name);
     const all = listMagiKindPanels(meshId);
