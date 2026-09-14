@@ -217,6 +217,37 @@ export interface TranscriptSnapshotCandidateMessage {
     readonly timestamp?: unknown;
     readonly turnKey?: unknown;
     readonly _turnKey?: unknown;
+    /**
+     * The per-message ordinal. Declared — and deliberately typed NARROWER than
+     * the `unknown` its neighbours use.
+     *
+     * ★ Why it is declared at all. `encodeTranscriptMessage` reads
+     * `candidate.sequence`, and until this line there was no such member: the
+     * read resolved against the `[extra: string]: unknown` index signature
+     * below. `sequence` is the only per-MESSAGE identity that survives to the
+     * wire (`turnKey` is turn-grained), so if it ever stops arriving the
+     * encoder silently emits `sequence: null` on every message and every bubble
+     * of a turn collapses onto one React key — see chatMessageHelpers.ts's note
+     * on the composite key. `toolBlockRef` directly above is declared for the
+     * same reason; this field was the omission.
+     *
+     * ★ Why `number | undefined` rather than `unknown`. An index signature
+     * admits any name, so a DECLARATION ALONE is inert here — verified by
+     * injection: with `[extra: string]: unknown` present, neither renaming this
+     * member nor a producer typo (`sequenceNo: message.sequence`) raises any
+     * error, because both still resolve through the index signature. Narrowing
+     * the TYPE is the part the index signature cannot override, and it does
+     * fire: retyping `ChatMessage.sequence` to `string` upstream now fails the
+     * build here instead of arriving as a coerced null.
+     *
+     * A rename of `ChatMessage.sequence` is already caught independently, at
+     * the producer hop (`commands/transcript-observation-builder.ts`), since
+     * `ChatMessage` itself has no index signature.
+     *
+     * Runtime behavior is unchanged either way — `numberField` already coerces
+     * whatever arrives.
+     */
+    readonly sequence?: number | undefined;
     readonly bubbleState?: unknown;
     readonly senderName?: unknown;
     readonly toolName?: unknown;
