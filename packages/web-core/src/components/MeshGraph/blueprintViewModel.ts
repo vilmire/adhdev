@@ -400,3 +400,35 @@ export function buildMissionThreadChain<T extends { id: string }>(
     if (placed.length < 2) return []
     return [...placed].sort((a, b) => timeKey(b).localeCompare(timeKey(a)))
 }
+
+/**
+ * What a card ACTIVATION does to the lit mission, for both input devices.
+ *
+ * The thread carries real information — which tasks belong to one mission, in
+ * time order — so it must stay reachable on touch. It was briefly suppressed
+ * there (2026-08-25) because a tap fires a synthetic `mouseenter` with no
+ * matching `mouseleave`, which stuck the thread on permanently; the fix is a
+ * dismiss gesture, not suppression (owner call 2026-09-15).
+ *
+ * Why the toggle-off half is hover-less-ONLY: on a pointer device
+ * `onNodeMouseEnter` has already stored this exact mission by the time the
+ * click lands, so an unconditional toggle would read the very first click as
+ * "second tap" and snuff a thread the pointer is still resting on. Desktop
+ * therefore only re-asserts what hover set, leaving the delayed mouseleave
+ * clear in charge. Touch has no such predecessor event, so there the second
+ * tap is genuinely a second tap.
+ *
+ * Extracted from the component because @xyflow/react renders zero edges under
+ * jsdom (nodes have no measured geometry), so a render-level assertion on the
+ * thread passes vacuously whatever the state — it cannot tell this rule from
+ * its inverse. This function is where the rule is actually pinned.
+ */
+export function nextHoveredMissionOnCardActivate(
+    current: string | null,
+    activatedMissionId: string | null | undefined,
+    pointerHasHover: boolean,
+): string | null {
+    const next = typeof activatedMissionId === 'string' && activatedMissionId ? activatedMissionId : null
+    if (pointerHasHover) return next
+    return current === next ? null : next
+}

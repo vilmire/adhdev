@@ -24,6 +24,7 @@ import {
     buildStateByNodeId,
     deriveBlueprintEdgeState,
     isSettledGraph,
+    nextHoveredMissionOnCardActivate,
     orderTasksForElk,
     resolveCollapsedGraphIds,
     getBlueprintGraphPagination,
@@ -455,6 +456,65 @@ describe('buildMissionThreadChain', () => {
         const input = [...nodes]
         buildMissionThreadChain(input, timeKey, allPlaced)
         expect(input.map(n => n.id)).toEqual(['oldest', 'newest', 'middle'])
+    })
+})
+
+/* The touch affordance for the same thread. The decoration was briefly
+ * suppressed outright on hover-less pointers (2026-08-25) because a tap fires
+ * a synthetic mouseenter with no matching mouseleave and the thread stuck on
+ * permanently. Suppression threw away real information — the thread is what
+ * shows which tasks share a mission, in time order — so the owner reversed it
+ * (2026-09-15): keep the thread on mobile and give the tap a way OUT.
+ *
+ * These live here, not in a render test, on purpose: @xyflow/react measures
+ * nothing under jsdom and renders ZERO edges whatever the hovered state is
+ * (verified on both media branches while writing this), so a render-level
+ * "is the thread drawn" assertion is vacuous in both directions. The rule is
+ * pinned where it actually decides. */
+describe('nextHoveredMissionOnCardActivate — the touch toggle', () => {
+    describe('hover-less pointer (touch)', () => {
+        const tap = (current: string | null, mission: string | null | undefined) =>
+            nextHoveredMissionOnCardActivate(current, mission, false)
+
+        it('lights a mission that was not lit — the whole point of un-suppressing mobile', () => {
+            expect(tap(null, 'm1')).toBe('m1')
+        })
+
+        it('a second tap on the SAME mission clears it — the dismiss gesture that suppression existed to avoid needing', () => {
+            expect(tap('m1', 'm1')).toBeNull()
+        })
+
+        it('tapping another mission REPLACES rather than accumulating, so only one thread is ever lit', () => {
+            expect(tap('m1', 'm2')).toBe('m2')
+        })
+
+        it('a card with no mission clears the thread instead of lighting an empty one', () => {
+            expect(tap('m1', undefined)).toBeNull()
+            expect(tap('m1', '')).toBeNull()
+            expect(tap('m1', null)).toBeNull()
+        })
+    })
+
+    describe('hover-capable pointer (desktop) — unchanged by this work', () => {
+        const click = (current: string | null, mission: string | null | undefined) =>
+            nextHoveredMissionOnCardActivate(current, mission, true)
+
+        /* The load-bearing asymmetry. onNodeMouseEnter has ALREADY stored this
+         * mission before the click lands, so if the toggle-off branch also ran
+         * on desktop, the very first click would read as "second tap" and snuff
+         * a thread the pointer is still resting on. Desktop only re-asserts;
+         * the delayed mouseleave clear stays in charge. */
+        it('clicking an already-lit mission KEEPS it lit — hover set it, the click must not toggle it off', () => {
+            expect(click('m1', 'm1')).toBe('m1')
+            // Same inputs, only the device differs — and the answers diverge.
+            expect(nextHoveredMissionOnCardActivate('m1', 'm1', false)).toBeNull()
+        })
+
+        it('still follows the clicked mission and still clears on a mission-less card', () => {
+            expect(click('m1', 'm2')).toBe('m2')
+            expect(click(null, 'm1')).toBe('m1')
+            expect(click('m1', undefined)).toBeNull()
+        })
     })
 })
 
