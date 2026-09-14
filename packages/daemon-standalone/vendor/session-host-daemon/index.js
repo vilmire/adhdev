@@ -31,7 +31,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
-  SessionHostServer: () => SessionHostServer
+  SessionHostServer: () => SessionHostServer,
+  createUncaughtExceptionLimiter: () => createUncaughtExceptionLimiter
 });
 module.exports = __toCommonJS(index_exports);
 var import_crypto = require("crypto");
@@ -712,6 +713,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
   // Records the most recent explicit stop/delete/restart/prune request per
   // session so the termination diagnostic can attribute the exit to it.
   stopRequests = /* @__PURE__ */ new Map();
+  // Shutdown is driven by independent SIGINT/SIGTERM handlers, so stop() can be
+  // entered twice. Cache the in-flight promise and hand it to every later caller
+  // instead of re-running flushAllPersistence()/runtime.stop() on already-cleared state.
+  stopPromise = null;
   constructor(options = {}) {
     super();
     this.endpoint = options.endpoint || (0, import_session_host_core5.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
@@ -783,6 +788,11 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }, 0);
   }
   async stop() {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = this.runStop();
+    return this.stopPromise;
+  }
+  async runStop() {
     this.flushAllPersistence();
     for (const runtime of this.runtimes.values()) {
       try {
@@ -1804,10 +1814,32 @@ async function main() {
   }
   throw new Error(`Unknown command: ${command}`);
 }
+var UNCAUGHT_EXCEPTION_WINDOW_MS = 6e4;
+var UNCAUGHT_EXCEPTION_LIMIT = 10;
+function createUncaughtExceptionLimiter(windowMs = UNCAUGHT_EXCEPTION_WINDOW_MS, limit = UNCAUGHT_EXCEPTION_LIMIT) {
+  let windowStartedAt = null;
+  let countInWindow = 0;
+  return function shouldExit(now) {
+    if (windowStartedAt === null || now - windowStartedAt > windowMs) {
+      windowStartedAt = now;
+      countInWindow = 0;
+    }
+    countInWindow += 1;
+    return { exit: countInWindow > limit, countInWindow };
+  };
+}
 if (require.main === module) {
+  const shouldExitOnUncaught = createUncaughtExceptionLimiter();
   process.on("uncaughtException", (err) => {
     console.error(`[session-host] Uncaught exception: ${err?.message}
 ${err?.stack || ""}`);
+    const { exit, countInWindow } = shouldExitOnUncaught(Date.now());
+    if (!exit) return;
+    console.error(
+      `[session-host] ${countInWindow} uncaught exceptions within ${UNCAUGHT_EXCEPTION_WINDOW_MS / 1e3}s (limit ${UNCAUGHT_EXCEPTION_LIMIT}); shutting down.`
+    );
+    removeSessionHostPid(SESSION_HOST_APP_NAME);
+    process.exit(1);
   });
   process.on("unhandledRejection", (reason) => {
     console.error(`[session-host] Unhandled rejection: ${reason?.message || reason}`);
@@ -1819,6 +1851,7 @@ ${err?.stack || ""}`);
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  SessionHostServer
+  SessionHostServer,
+  createUncaughtExceptionLimiter
 });
 //# sourceMappingURL=index.js.map
