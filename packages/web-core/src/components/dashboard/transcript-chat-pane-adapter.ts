@@ -105,6 +105,20 @@ export function buildTranscriptReadSourceAttributes(state: {
 
 /** One roster-mapped message.
  *
+ * @message-projection l2-decode
+ *
+ * The far side of the replica wire. `check:message-projection-parity` enforces
+ * that every field the encoder puts on the wire is still read back out here —
+ * dropping one at this hop loses it exactly as completely as never encoding it.
+ *
+ * ★ The gate's decode set deliberately excludes `toolName`, which is why this
+ * adapter's asymmetry with the mesh-side one (below) needs no per-site
+ * exclusion: the field is allow-listed on the WIRE but has no `ChatMessage`
+ * field to land in, so requiring it here would demand an assignment to a
+ * property that does not exist. That is a property of the field, not of this
+ * site, so it lives in the gate's `DECODE_CARRY_FIELDS` comment rather than
+ * being re-declared at each decoder.
+ *
  * ★ Identity mapping is deliberately NARROW. `turnKey` goes to `_turnKey` only —
  * it is TURN-grained (one value per user message, shared by every bubble of the
  * turn) and must never be assigned to the per-BUBBLE `bubbleId`, or all bubbles

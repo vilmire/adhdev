@@ -64,6 +64,13 @@ import type {
  * compactor reads (`isCoordinatorVisibleMessage`/`messageContent`, chat-
  * compact.ts).
  *
+ * @message-projection l2-decode
+ *
+ * The far side of the replica wire. `check:message-projection-parity` enforces
+ * that every field the encoder puts on the wire is still read back out here:
+ * dropping one at this hop loses it exactly as completely as never encoding it,
+ * and just as silently.
+ *
  * ★ `turnKey` is carried onto `_turnKey` ONLY — it must NOT stand in for
  * `bubbleId`. `turnKey` is TURN-grained (one value per user message, shared by
  * every bubble of that turn), while `bubbleId` is per-BUBBLE. Conflating them
