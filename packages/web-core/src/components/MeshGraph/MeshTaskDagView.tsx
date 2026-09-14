@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
+import { buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, formatTaskCardTime, scopeTaskDagTasks, taskCardTimeSource, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -34,6 +34,15 @@ const elk = new ELK()
 
 const TASK_CARD_WIDTH = 236
 const TASK_CARD_MIN_HEIGHT = 96
+
+/* Read at activation time rather than memoized at mount: a hybrid device
+ * (touch laptop, tablet + trackpad) can switch primary pointer mid-session,
+ * and the query is cheap. SSR and environments without matchMedia are treated
+ * as hover-capable, the historical desktop default. */
+function pointerHasHover(): boolean {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return !window.matchMedia('(hover: none)').matches
+}
 
 interface MeshTaskDagViewProps {
     tasks: RepoMeshQueueTask[]
@@ -1117,21 +1126,8 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     // Focus highlight driven by the stat-chip jump — separate from selection so
     // jumping never opens the detail surface, it only rings + centers the card.
     const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
-    /** Mission whose thread is lit up because the pointer rests on one of its cards. */
+    /** Mission whose thread is lit up — by hover on desktop, by tap on touch. */
     const [hoveredMissionId, setHoveredMissionId] = useState<string | null>(null)
-    /* The mission thread is a HOVER affordance, and a touch pointer has no
-     * hover: tapping a card fires a synthetic mouseenter with no matching
-     * mouseleave, so `hoveredMissionId` stuck and the thread became a permanent
-     * line across the mobile canvas. On a hover-less pointer the decoration is
-     * suppressed outright — the contract there is "no resting lines at all"
-     * (owner call 2026-08-25), and there is no gesture that could dismiss it.
-     * Desktop (hover-capable) keeps the existing behaviour untouched. */
-    const missionThreadsSupported = useMemo(
-        () => typeof window === 'undefined' || typeof window.matchMedia !== 'function'
-            ? true
-            : !window.matchMedia('(hover: none)').matches,
-        [],
-    )
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
     /** Axis marks for the vertical time rail — one per graph cluster, keyed to its stacked y. */
     // State (not a ref) so the live-fit effect reruns once the canvas mounts.
@@ -1445,12 +1441,15 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             }
             // Owner-tuned through three rounds (2026-08-25): always-on threads
             // were clutter, faint ones invisible, straight ones sliced across
-            // card bodies. Final shape — NO resting lines at all; hovering a
-            // mission's card draws that mission's thread as smoothstep wiring
-            // (routes around cards like every other edge) and rings its cards.
-            // Hover is the ONLY trigger, and a hover-less pointer (touch) never
-            // gets a reliable leave event — see `missionThreadsSupported`.
-            if (!missionThreadsSupported || !hoveredMissionId) return []
+            // card bodies. Final shape — NO resting lines at all; lighting a
+            // mission draws that mission's thread as smoothstep wiring (routes
+            // around cards like every other edge) and rings its cards.
+            // Two inputs drive the SAME state: hover on a pointer device, tap
+            // on a touch one (`handleNodeClick`). The thread carries real
+            // information — which tasks belong to one mission, in time order —
+            // so it stays available on mobile rather than being suppressed
+            // there (owner call 2026-09-15, revising the 08-25 suppression).
+            if (!hoveredMissionId) return []
             const nodes = byMission.get(hoveredMissionId) ?? []
             const stroke = meshTheme.isDark ? 'rgba(139, 148, 255, 0.85)' : 'rgba(88, 92, 235, 0.8)'
             const threads: Edge[] = []
@@ -1482,7 +1481,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             return threads
         })()
         return [...missionThreads, ...taskEdges, ...graphEdges]
-    }, [dag, fused, hoveredMissionId, meshTheme, missionThreadsSupported, positions])
+    }, [dag, fused, hoveredMissionId, meshTheme, positions])
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
@@ -1623,6 +1622,16 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             return
         }
         if (!isTaskFlowNode(node)) return
+        /* Touch has no hover, so the tap doubles as the thread trigger — the
+         * same `hoveredMissionId` the desktop pointer drives. Tapping another
+         * mission's card replaces it, tapping the SAME mission again clears it,
+         * and `onPaneClick` clears it too: three ways out, so a touch user can
+         * never end up with a thread stuck on the canvas (the 08-25 bug that
+         * had the decoration suppressed on mobile in the first place).
+         * The device split lives in `nextHoveredMissionOnCardActivate`, where
+         * it is unit-pinned. */
+        const activated = node.data.dagNode.task.missionId
+        setHoveredMissionId(current => nextHoveredMissionOnCardActivate(current, activated, pointerHasHover()))
         if (onTaskOpen) {
             onTaskOpen(node.data.dagNode.task)
             return
