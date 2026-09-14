@@ -36,6 +36,7 @@ import {
 import { getConversationSendBlockMessage, SEND_BLOCKED_PLACEHOLDER } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
+import { useReplicaDegradedBannerVisible } from './replica-degraded-banner';
 import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
 import { getInstallBaseForHost, PREVIEW_INSTALL_BASE } from '../../utils/install-base';
 import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessages, type PendingLocalMessage } from './conversation-message-snapshot';
@@ -276,6 +277,13 @@ export default function ChatPane({
         isVisible,
         tailLimit: defaultChatTailHydrateLimit,
     }))
+    // Display-only: the controller flag still flips immediately. The banner
+    // waits out a short grace so a replica that re-attaches after a transport
+    // bounce never flashes the notice. See `replica-degraded-banner.ts`.
+    const showReplicaDegradedBanner = useReplicaDegradedBannerVisible(
+        chatTailState.transcriptReplicaDegraded,
+        activeConv.tabKey,
+    )
 
     const [visibleLiveCount, setVisibleLiveCount] = useState(
         () => getRememberedVisibleLiveCount(activeConv.tabKey, defaultVisibleLiveMessages),
@@ -763,8 +771,13 @@ export default function ChatPane({
                 machine: the pane keeps working, the replica stays broken, and
                 nobody finds out — which would defeat running the replica on
                 preview to learn whether it works. It clears itself when the
-                replica recovers. */}
-            {chatTailState.transcriptReplicaDegraded && (
+                replica recovers.
+
+                Display is delayed by `REPLICA_DEGRADED_BANNER_GRACE_MS` so a
+                replica that recovers after a short rebind (`no_node`) never
+                flashes this. The controller flag, lease expiry, and legacy
+                re-arm still happen immediately. */}
+            {showReplicaDegradedBanner && (
                 <div
                     className="px-3 py-1.5 text-2xs text-amber-400/90 bg-amber-500/10 border-b border-amber-500/20"
                     role="status"
