@@ -53,6 +53,8 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     // Click ripple feedback
     const [ripples, setRipples] = useState<{ id: number; x: number; y: number; type: 'left' | 'right' | 'double' }[]>([]);
     const rippleIdRef = useRef(0);
+    // Ripple expiry timers, tracked so unmount can clear the ones still pending.
+    const rippleTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isImeOpen, setIsImeOpen] = useState(false);
     // Default to mouse mode on mobile
@@ -150,8 +152,15 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
             }
             mobileFillApplied.current = true;
         };
-        if (img.complete && img.naturalWidth) onLoad();
-        else img.addEventListener('load', onLoad, { once: true });
+        if (img.complete && img.naturalWidth) {
+            onLoad();
+            return;
+        }
+        img.addEventListener('load', onLoad, { once: true });
+        // {once:true} self-removes only AFTER the event fires. If the component
+        // unmounts (or deps change) while the image is still loading, the listener
+        // survives on a detached node and later calls setZoom on an unmounted tree.
+        return () => img.removeEventListener('load', onLoad);
     }, [displayScreenshot, isMobile]);
 
     // minZoom: allow zooming out freely (no forced fill lock)
@@ -190,6 +199,23 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         };
     };
 
+    // Schedule a ripple's expiry, keeping the handle so unmount can clear it.
+    const scheduleRippleExpiry = (id: number) => {
+        const timer = setTimeout(() => {
+            rippleTimersRef.current.delete(timer);
+            setRipples(prev => prev.filter(r => r.id !== id));
+        }, 600);
+        rippleTimersRef.current.add(timer);
+    };
+
+    useEffect(() => {
+        const timers = rippleTimersRef.current;
+        return () => {
+            for (const timer of timers) clearTimeout(timer);
+            timers.clear();
+        };
+    }, []);
+
     // Spawn a ripple effect at viewport-relative coordinates
     const spawnRipple = (clientX: number, clientY: number, type: 'left' | 'right' | 'double') => {
         const vp = viewportRef.current;
@@ -197,7 +223,7 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         const vpRect = vp.getBoundingClientRect();
         const id = ++rippleIdRef.current;
         setRipples(prev => [...prev, { id, x: clientX - vpRect.left, y: clientY - vpRect.top, type }]);
-        setTimeout(() => setRipples(prev => prev.filter(r => r.id !== id)), 600);
+        scheduleRippleExpiry(id);
     };
 
     // Spawn ripple from normalized image coordinates (for touch/cursor mode)
@@ -224,7 +250,7 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         const cy = imgRect.top - vpRect.top + offsetY + renderedH * ny;
         const id = ++rippleIdRef.current;
         setRipples(prev => [...prev, { id, x: cx, y: cy, type }]);
-        setTimeout(() => setRipples(prev => prev.filter(r => r.id !== id)), 600);
+        scheduleRippleExpiry(id);
     };
 
     const handleImageClick = async (e: MouseEvent<HTMLImageElement>) => {
