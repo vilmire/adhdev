@@ -49,15 +49,21 @@ const MIN_WINS_PARAMS = new Set(['intervalMs'])
  * overwrote the slot (last-writer-wins), which meant a subscriber asking for
  * less would silently downgrade the feed for one already asking for more.
  *
- * Merge rule, widest-wins per field:
+ * Only CAPABILITY params merge — the knobs describing how much of a feed to
+ * deliver. Widest-wins per field:
  *  - booleans: true beats false — an opt-in from any subscriber stays opted in.
  *  - numbers:  direction depends on the field, because the two numeric params in
  *              the topic contract widen opposite ways. `intervalMs` widens DOWN
  *              (1s serves a subscriber that asked for 30s, not vice versa),
  *              while `limit` widens UP (30 rows serve a subscriber that asked
  *              for 12). Picking one direction for both would starve one of them.
- *  - anything else: first writer wins, so an unrelated later subscriber cannot
- *              clobber an established value.
+ *
+ * IDENTITY params — strings like targetSessionId/historySessionId/workspace that
+ * select WHICH feed this is, not how much of it — take the newest value instead.
+ * Merging them would be actively wrong: re-pointing an identity is the entire
+ * purpose of a re-subscribe (a Codex runtime session resolving its real provider
+ * history id, say), and freezing the first writer's value would silently pin the
+ * subscriber to a stale session forever.
  */
 function mergeSubscriptionParams(
     handlerParams: Iterable<Record<string, unknown>>,
@@ -76,8 +82,10 @@ function mergeSubscriptionParams(
                 merged[field] = MIN_WINS_PARAMS.has(field)
                     ? Math.min(current, value)
                     : Math.max(current, value)
+            } else {
+                // Identity-style param: newest wins.
+                merged[field] = value
             }
-            // Otherwise keep the established value.
         }
     }
     return merged
