@@ -149744,7 +149744,55 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           returnedMsgCount: debugReadChat.returnedMsgCount,
           shouldPreferAdapterMessages: debugReadChat.shouldPreferAdapterMessages
         } : void 0,
+        // (G4) Lifted into the summary, not left in the bundle body: "can this
+        // session's tool bubbles still be expanded" is a one-glance question and
+        // the summary is what a reader sees first.
+        toolBlockRefSeals: bundle.toolBlockRefSeals,
         hasFrontendSnapshot: !!frontend
+      };
+    }
+    function auditToolBlockRefSeals(readChat2) {
+      const rc = readChat2;
+      if (!rc || rc.success !== true) return void 0;
+      const messages = Array.isArray(rc.messagesTail) ? rc.messagesTail : [];
+      const refMtimes = /* @__PURE__ */ new Map();
+      let messagesWithRef = 0;
+      for (const message of messages) {
+        const ref = message?.toolBlockRef;
+        const mtime = ref?.sourceMtimeMs;
+        if (typeof mtime !== "number" || !Number.isFinite(mtime)) continue;
+        messagesWithRef += 1;
+        refMtimes.set(mtime, (refMtimes.get(mtime) ?? 0) + 1);
+      }
+      const source = rc.messageSource;
+      const sourcePath = typeof source?.sourcePath === "string" ? source.sourcePath : "";
+      if (messagesWithRef === 0 && !sourcePath) return void 0;
+      let liveMtimeMs;
+      let statError;
+      if (sourcePath) {
+        try {
+          liveMtimeMs = fs59.statSync(sourcePath).mtimeMs;
+        } catch (error48) {
+          statError = String(error48?.code || error48?.message || "stat_failed");
+        }
+      }
+      return {
+        messagesInspected: messages.length,
+        messagesWithToolBlockRef: messagesWithRef,
+        // >1 means the tail spans more than one seal generation, i.e. the
+        // transcript was rewritten while the tail was being assembled.
+        distinctRefMtimes: refMtimes.size,
+        refMtimes: [...refMtimes.entries()].sort((a, b) => b[0] - a[0]).map(([sourceMtimeMs, messageCount]) => ({
+          sourceMtimeMs,
+          messageCount,
+          // undefined (not false) when the file could not be stat'd — an
+          // unknown seal and a broken one are different answers.
+          matchesLiveFile: liveMtimeMs === void 0 ? void 0 : sourceMtimeMs === liveMtimeMs
+        })),
+        ...liveMtimeMs !== void 0 ? { liveMtimeMs } : {},
+        ...statError ? { statError } : {},
+        // The single line a reader needs: would an expand succeed right now?
+        expandWouldSucceed: statError ? false : liveMtimeMs !== void 0 && refMtimes.size > 0 ? [...refMtimes.keys()].every((m) => m === liveMtimeMs) : void 0
       };
     }
     function storeChatDebugBundleOnDaemon(bundle, targetSessionId) {
@@ -149872,6 +149920,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           scriptInvocationTrace: typeof adapter.getScriptInvocationTrace === "function" ? adapter.getScriptInvocationTrace() : void 0
         } : null,
         readChat: readChat2,
+        // (G4) Computed from `readChat` rather than folded into it: this stats
+        // the transcript at BUNDLE time, which is deliberately later than the
+        // read. The gap between the two is exactly what a `source_changed`
+        // expand failure is made of, so collapsing them would erase the finding.
+        toolBlockRefSeals: auditToolBlockRefSeals(readChat2),
         frontend: args?.frontendSnapshot && typeof args.frontendSnapshot === "object" ? args.frontendSnapshot : null,
         recentLogs: getRecentLogs(80, "debug"),
         recentDebugTrace: getRecentDebugTrace({ limit: 120 })
@@ -149898,25 +149951,36 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       };
     }
     init_chat_commands_shared();
+    init_logger();
+    function describeRef(ref) {
+      const r = ref ?? {};
+      const num2 = (v) => typeof v === "number" && Number.isFinite(v) ? String(v) : "?";
+      return `mtime=${num2(r.sourceMtimeMs)} record=${num2(r.recordIndex)} block=${num2(r.blockIndex)}`;
+    }
     function canExpand(adapter) {
       return !!adapter && typeof adapter.expandToolBlock === "function";
     }
     function handleExpandToolBlock(h, args) {
       const ref = args?.toolBlockRef;
+      const sessionId = String(args?.targetSessionId || h.currentSession?.sessionId || "unknown-session");
       if (!ref || typeof ref !== "object") {
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} reason=missing_ref`);
         return { success: false, error: "toolBlockRef is required" };
       }
       const adapter = getTargetedCliAdapter(h, args);
       if (!canExpand(adapter)) {
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=unsupported_source (adapter cannot expand)`);
         return { success: false, error: "expand_unsupported", reason: "unsupported_source" };
       }
       let result;
       try {
         result = adapter.expandToolBlock(ref);
-      } catch {
+      } catch (err) {
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=source_unavailable (threw: ${err?.message || "unknown"})`);
         return { success: false, error: "expand_failed", reason: "source_unavailable" };
       }
       if (!result.ok) {
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=${result.reason}`);
         return { success: false, error: "expand_failed", reason: result.reason };
       }
       return {
