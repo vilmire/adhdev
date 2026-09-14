@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildBlueprintGraphTimeline, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
+import { buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, formatTaskCardTime, scopeTaskDagTasks, taskCardTimeSource, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -1119,6 +1119,19 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const [focusTaskId, setFocusTaskId] = useState<string | null>(null)
     /** Mission whose thread is lit up because the pointer rests on one of its cards. */
     const [hoveredMissionId, setHoveredMissionId] = useState<string | null>(null)
+    /* The mission thread is a HOVER affordance, and a touch pointer has no
+     * hover: tapping a card fires a synthetic mouseenter with no matching
+     * mouseleave, so `hoveredMissionId` stuck and the thread became a permanent
+     * line across the mobile canvas. On a hover-less pointer the decoration is
+     * suppressed outright — the contract there is "no resting lines at all"
+     * (owner call 2026-08-25), and there is no gesture that could dismiss it.
+     * Desktop (hover-capable) keeps the existing behaviour untouched. */
+    const missionThreadsSupported = useMemo(
+        () => typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+            ? true
+            : !window.matchMedia('(hover: none)').matches,
+        [],
+    )
     const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null)
     /** Axis marks for the vertical time rail — one per graph cluster, keyed to its stacked y. */
     // State (not a ref) so the live-fit effect reruns once the canvas mounts.
@@ -1435,12 +1448,19 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             // card bodies. Final shape — NO resting lines at all; hovering a
             // mission's card draws that mission's thread as smoothstep wiring
             // (routes around cards like every other edge) and rings its cards.
-            if (!hoveredMissionId) return []
+            // Hover is the ONLY trigger, and a hover-less pointer (touch) never
+            // gets a reliable leave event — see `missionThreadsSupported`.
+            if (!missionThreadsSupported || !hoveredMissionId) return []
             const nodes = byMission.get(hoveredMissionId) ?? []
-            if (nodes.length < 2) return []
             const stroke = meshTheme.isDark ? 'rgba(139, 148, 255, 0.85)' : 'rgba(88, 92, 235, 0.8)'
             const threads: Edge[] = []
-            const ordered = [...nodes].sort((a, b) => taskTimeKey(a).localeCompare(taskTimeKey(b)))
+            /* Ordering + placement filter both live in the view model, where
+             * they are unit-pinned: the chain must run the SAME direction as
+             * the ELK stack (newest-first) or every hop is backwards and
+             * smoothstep detours around the whole card column — the stray
+             * screen-wide dotted line. Unplaced nodes are dropped there too,
+             * matching every other `positions.has` filter in this file. */
+            const ordered = buildMissionThreadChain(nodes, taskTimeKey, id => Boolean(positions?.has(id)))
             for (let i = 0; i < ordered.length - 1; i += 1) {
                 threads.push({
                     id: `mt:${hoveredMissionId}:${i}`,
@@ -1462,7 +1482,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             return threads
         })()
         return [...missionThreads, ...taskEdges, ...graphEdges]
-    }, [dag, fused, hoveredMissionId, meshTheme, positions])
+    }, [dag, fused, hoveredMissionId, meshTheme, missionThreadsSupported, positions])
 
     const selectedNode = selectedTaskId ? dag.nodes.find(node => node.id === selectedTaskId) ?? null : null
 
@@ -1686,7 +1706,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 onNodeClick={handleNodeClick}
                 onNodeMouseEnter={handleNodeHover}
                 onNodeMouseLeave={handleNodeHoverEnd}
-                onPaneClick={() => { setSelectedTaskId(null); setFocusTaskId(null) }}
+                /* Tapping empty canvas also drops the mission thread. Belt and
+                 * braces with the hover-less suppression above: a pointer that
+                 * never sends mouseleave (touch, pen) would otherwise have no
+                 * way to put the thread down, including the one that the
+                 * mission modal's "show on canvas" lights up. That highlight
+                 * being dismissed by the next tap is accepted (owner). */
+                onPaneClick={() => { setSelectedTaskId(null); setFocusTaskId(null); setHoveredMissionId(null) }}
                 // NO built-in fitView (owner call 2026-09-02): it framed EVERY
                 // node — 20 settled graphs included — so the canvas opened at
                 // ~0.2 zoom and every card was an unreadable rectangle. The

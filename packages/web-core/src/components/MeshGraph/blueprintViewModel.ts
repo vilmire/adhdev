@@ -369,3 +369,34 @@ export function orderTasksForElk<T extends { id: string; dependsOn: string[] }>(
     const rest = nodes.filter(node => !isRoot(node))
     return [...roots, ...rest]
 }
+
+/**
+ * The hop list for one mission's hover thread — the dotted line chaining a
+ * mission's cards on the blueprint canvas.
+ *
+ * Two properties this function exists to pin, both of which produced the
+ * screen-wide stray dotted line the owner reported on mobile:
+ *
+ *  1. **Direction must match the ELK placement axis.** `orderTasksForElk` above
+ *     stacks roots NEWEST-FIRST (`timeKey(b).localeCompare(timeKey(a))`), so a
+ *     thread sorted oldest-first ran bottom-to-top against the stack. Cards
+ *     expose handles left=target / right=source only, so every backwards hop
+ *     forced `smoothstep` into a full detour around the card column — a dotted
+ *     line spanning the viewport. The chain is therefore sorted with the SAME
+ *     comparator direction as the ELK input, which keeps each hop forward
+ *     along the layout axis. Chronological reading is preserved (owner ask
+ *     2026-08-25); only the drawing direction changed.
+ *  2. **Unplaced nodes are excluded.** A node missing from the position map is
+ *     not on the canvas, and @xyflow/react renders an edge to it from (0,0) —
+ *     another stray line. Every other canvas consumer filters on `positions`;
+ *     the thread now does too.
+ */
+export function buildMissionThreadChain<T extends { id: string }>(
+    nodes: ReadonlyArray<T>,
+    timeKey: (node: T) => string,
+    isPlaced: (id: string) => boolean,
+): T[] {
+    const placed = nodes.filter(node => isPlaced(node.id))
+    if (placed.length < 2) return []
+    return [...placed].sort((a, b) => timeKey(b).localeCompare(timeKey(a)))
+}

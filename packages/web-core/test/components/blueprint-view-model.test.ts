@@ -17,6 +17,7 @@ import {
     buildBlueprintGraphOverviewArgs,
     buildBlueprintGraphTimeline,
     buildGateByNodeId,
+    buildMissionThreadChain,
     buildNodeIdByEndpoint,
     buildPinnedSlotLabels,
     buildRoutePreviewRequests,
@@ -409,6 +410,51 @@ describe('orderTasksForElk', () => {
         const out = orderTasksForElk(nodes, timeKey)
         expect(out).toHaveLength(3)
         expect([...out.map(n => n.id)].sort()).toEqual(['a', 'b', 'c'])
+    })
+})
+
+/* The mission hover thread. Both properties here were live defects: the chain
+ * ran opposite to the ELK stack (so every smoothstep hop detoured around the
+ * whole card column and read as a dotted line across the viewport), and it was
+ * the one canvas consumer with no `positions` filter (so an unplaced node got
+ * an edge anchored at (0,0)). Unit tests cannot see the smoothstep geometry —
+ * they pin the ordering and the filter, which is what produces it. */
+describe('buildMissionThreadChain', () => {
+    const timeKey = (node: { updatedAt: string }) => node.updatedAt
+    const allPlaced = () => true
+    const nodes = [
+        { id: 'oldest', updatedAt: '2026-09-01T09:00:00Z' },
+        { id: 'newest', updatedAt: '2026-09-01T12:00:00Z' },
+        { id: 'middle', updatedAt: '2026-09-01T10:00:00Z' },
+    ]
+
+    it('chains in the SAME direction as the ELK placement axis (newest first)', () => {
+        const chain = buildMissionThreadChain(nodes, timeKey, allPlaced).map(n => n.id)
+        expect(chain).toEqual(['newest', 'middle', 'oldest'])
+        // The invariant, stated against orderTasksForElk rather than a literal:
+        // reverse either comparator and this equality breaks, which is the
+        // whole point — the two must never drift apart again.
+        const elkOrder = orderTasksForElk(nodes.map(n => ({ ...n, dependsOn: [] })), timeKey).map(n => n.id)
+        expect(chain).toEqual(elkOrder)
+    })
+
+    it('drops nodes that are not placed on the canvas', () => {
+        const placed = new Set(['newest', 'oldest'])
+        const chain = buildMissionThreadChain(nodes, timeKey, id => placed.has(id)).map(n => n.id)
+        expect(chain).toEqual(['newest', 'oldest'])
+        expect(chain).not.toContain('middle')
+    })
+
+    it('yields no chain when fewer than two nodes survive the placement filter', () => {
+        expect(buildMissionThreadChain(nodes, timeKey, id => id === 'newest')).toEqual([])
+        expect(buildMissionThreadChain(nodes, timeKey, () => false)).toEqual([])
+        expect(buildMissionThreadChain([], timeKey, allPlaced)).toEqual([])
+    })
+
+    it('does not mutate the input array', () => {
+        const input = [...nodes]
+        buildMissionThreadChain(input, timeKey, allPlaced)
+        expect(input.map(n => n.id)).toEqual(['oldest', 'newest', 'middle'])
     })
 })
 
