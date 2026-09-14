@@ -92,5 +92,28 @@ describe('WorkspaceLabelEditor', () => {
         expect(onSave).toHaveBeenCalledTimes(1)
         expect(onSave).toHaveBeenCalledWith('/repos/adhdev', 'New Name')
     })
+
+    it('selects the entire input text upon entering edit mode', () => {
+        act(() => {
+            root.render(
+                <WorkspaceLabelEditor
+                    displayLabel="Mesh Lab"
+                    path="/repos/adhdev"
+                    busy={false}
+                    onSave={async () => true}
+                />,
+            )
+        })
+        act(() => {
+            container.querySelector('button[aria-label="machine.managedWorkspaces.rename"]')?.dispatchEvent(
+                new MouseEvent('click', { bubbles: true }),
+            )
+        })
+        const input = container.querySelector('input') as HTMLInputElement | null
+        expect(input).not.toBeNull()
+        expect(document.activeElement).toBe(input)
+        expect(input?.selectionStart).toBe(0)
+        expect(input?.selectionEnd).toBe('Mesh Lab'.length)
+    })
 })
 

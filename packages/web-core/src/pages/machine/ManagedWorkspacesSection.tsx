@@ -11,7 +11,7 @@
  *   - Remove a saved workspace
  *   - Rename a mesh workspace (daemon-config `workspaces[].label`)
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
@@ -54,6 +54,14 @@ export function WorkspaceLabelEditor({
     const [editing, setEditing] = useState(false)
     const [draft, setDraft] = useState(displayLabel)
     const [saving, setSaving] = useState(false)
+    const inputRef = useRef<HTMLInputElement>(null)
+
+    useEffect(() => {
+        if (editing) {
+            inputRef.current?.focus()
+            inputRef.current?.select()
+        }
+    }, [editing])
 
     const startEdit = () => {
         setDraft(displayLabel)
@@ -94,6 +102,7 @@ export function WorkspaceLabelEditor({
     return (
         <div className="flex items-center gap-1 min-w-0">
             <input
+                ref={inputRef}
                 autoFocus
                 value={draft}
                 maxLength={64}
