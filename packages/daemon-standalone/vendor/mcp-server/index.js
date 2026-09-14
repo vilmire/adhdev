@@ -168699,13 +168699,18 @@ var MESH_NODE_SLOTS_PROPOSE_TOOL = {
 };
 var MESH_WRITE_MESH_JSON_CONFIG_TOOL = {
   name: "mesh_write_mesh_json_config",
-  description: "Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) \u2014 distinct from the machine-local MAGI kind-panel writes.",
+  description: "Write `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Gated WRITE sibling of the draft-only export_mesh_json_config. Follows the mesh_init write/overwrite/dry-run precedent: defaults to dry-run (write=false), never clobbers an existing repo mesh.json unless overwrite=true, and validates before writing. Overwrite silently replaces the file, so present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope (commit target) \u2014 distinct from the machine-local MAGI kind-panel writes. Targets the first mesh node unless `node_id` (or an explicit `workspace`) names another.",
   inputSchema: {
     type: "object",
     properties: {
+      // Declared because the handler ROUTES on it (resolveRefineConfigNode(ctx, args.node_id)),
+      // exactly like its read-only sibling mesh_refine_config. It was omitted here while the
+      // sibling declared it, so the unknown-arg gate rejected every {node_id} call and the
+      // repo-committed write could only ever target the coordinator's default node.
+      node_id: { type: "string", description: "Optional node whose workspace .adhdev/mesh.json is written; defaults to the first mesh node. `workspace` (below) still wins when both are given." },
       write: { type: "boolean", description: "When true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview)." },
       overwrite: { type: "boolean", description: "When true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json)." },
-      workspace: { type: "string", description: "Optional workspace path whose .adhdev/mesh.json is written. Defaults to the coordinator node workspace." }
+      workspace: { type: "string", description: "Optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node's workspace." }
     }
   }
 };
@@ -174109,7 +174114,7 @@ function magiPanelScope(meshId, meshName) {
   };
 }
 async function meshMagiKindPanelSet(ctx, args) {
-  const kind = readString(args.task_kind) || readString(args.kind);
+  const kind = readString(args.task_kind);
   if (!kind) return JSON.stringify({ success: false, error: "task_kind required" });
   const write = args.write === true;
   const meshId = ctx.mesh.id;
@@ -174151,7 +174156,7 @@ async function meshMagiKindPanelSet(ctx, args) {
   }
 }
 async function meshMagiKindPanelList(ctx, args = {}) {
-  const only = readString(args.task_kind) || readString(args.kind);
+  const only = readString(args.task_kind);
   const meshId = ctx.mesh.id;
   const scope = magiPanelScope(meshId, ctx.mesh.name);
   const all = (0, import_daemon_core9.listMagiKindPanels)(meshId);
@@ -177452,6 +177457,14 @@ var import_types = require("@modelcontextprotocol/sdk/types.js");
 // src/transports/local.ts
 var import_daemon_core14 = __toESM(require_dist3());
 var DEFAULT_PORT = import_daemon_core14.DEFAULT_STANDALONE_PORT;
+var STATUS_TIMEOUT_MS = 1e4;
+function describeFetchFailure(what, timeoutMs, error48) {
+  const name = error48?.name;
+  if (name === "TimeoutError" || name === "AbortError") {
+    return new Error(`${what} timed out after ${Math.round(timeoutMs / 1e3)}s (standalone daemon did not respond)`);
+  }
+  return error48 instanceof Error ? error48 : new Error(String(error48));
+}
 var LocalTransport = class {
   baseUrl;
   authHeader;
@@ -177465,16 +177478,32 @@ var LocalTransport = class {
     return h;
   }
   async getStatus() {
-    const res = await fetch(`${this.baseUrl}/api/v1/status`, { headers: this.headers() });
+    let res;
+    try {
+      res = await fetch(`${this.baseUrl}/api/v1/status`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(STATUS_TIMEOUT_MS)
+      });
+    } catch (e) {
+      throw describeFetchFailure("Status fetch", STATUS_TIMEOUT_MS, e);
+    }
     if (!res.ok) throw new Error(`Status fetch failed: ${res.status}`);
     return res.json();
   }
   async command(type2, args = {}) {
-    const res = await fetch(`${this.baseUrl}/api/v1/command`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({ type: type2, ...args })
-    });
+    const nestedCommand = typeof args?.command === "string" ? args.command : "";
+    const timeoutMs = getTimeoutMs(type2, nestedCommand);
+    let res;
+    try {
+      res = await fetch(`${this.baseUrl}/api/v1/command`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ type: type2, ...args }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (e) {
+      throw describeFetchFailure(`Command ${type2}`, timeoutMs, e);
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
       throw new Error(`Command ${type2} failed: ${res.status} ${text}`);
