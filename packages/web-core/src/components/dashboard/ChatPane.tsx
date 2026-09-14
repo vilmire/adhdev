@@ -17,7 +17,7 @@ import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommand
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import { eventManager } from '../../managers/EventManager';
 import { getConversationViewStates } from './DashboardMobileChatShared';
-import type { ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
+import type { ToolExpandFailureReason, ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
 import type { ActiveConversation, DashboardMessage } from './types';
 import type { ChatMessage, DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
@@ -153,6 +153,29 @@ export function buildBusyChatInputStatusMessage(
  * web host), so the degraded-replica banner's reason suffix can never leak
  * into the production wording.
  */
+/**
+ * (TOOL-EXPAND) The five refusal reasons the daemon may return, as an
+ * allow-list.
+ *
+ * ★ An allow-list rather than a cast for the usual reason: this value crosses a
+ * process boundary from a daemon whose version we do not control, and it ends
+ * up selecting UI copy. Accepting only these five means a newer/tampered daemon
+ * can at worst land `undefined` (→ the generic "could not be fetched" branch),
+ * never an unrecognised label that leaks into the rendered string.
+ */
+const TOOL_EXPAND_FAILURE_REASONS: readonly ToolExpandFailureReason[] = [
+    'unsupported_source',
+    'source_unavailable',
+    'source_changed',
+    'block_not_found',
+    'not_a_tool_block',
+];
+
+/** Narrow a daemon-supplied reason to the known taxonomy; undefined otherwise. */
+export function toExpandFailureReason(value: unknown): ToolExpandFailureReason | undefined {
+    return TOOL_EXPAND_FAILURE_REASONS.find(reason => reason === value);
+}
+
 function isDevOrPreviewSurface(): boolean {
     if ((import.meta as any).env?.DEV) return true
     if (typeof window === 'undefined') return false
@@ -472,11 +495,11 @@ export default function ChatPane({
                 toolName?: string;
                 callArgs?: string;
                 result?: string;
+                reason?: string;
             } | null;
-            // A refusal (most importantly `source_changed`) is surfaced as an
-            // error rather than an empty expansion: the daemon declined to guess
-            // which block the ref now names, and the UI must not imply the
-            // output was empty.
+            // A refusal is surfaced as an error rather than an empty expansion:
+            // the daemon declined to guess which block the ref now names, and
+            // the UI must not imply the output was empty.
             const text = body?.success
                 ? (body.callArgs !== undefined
                     ? `${body.toolName ? `${body.toolName}: ` : ''}${body.callArgs}`
@@ -486,7 +509,15 @@ export default function ChatPane({
                 ...prev,
                 [messageKey]: text !== undefined
                     ? { status: 'expanded', text }
-                    : { status: 'error' },
+                    // ★ Carry the daemon's typed reason through. It already
+                    // travels on the command reply (`handleExpandToolBlock`
+                    // returns `{success:false, reason}` on every refusal path);
+                    // dropping it here is what made all five refusals render as
+                    // one "the transcript changed" sentence, four of which were
+                    // false. Validated rather than cast: an unrecognised or
+                    // absent value becomes undefined and takes the generic
+                    // branch, so a newer daemon cannot inject arbitrary text.
+                    : { status: 'error', error: toExpandFailureReason(body?.reason) },
             }));
         } catch {
             setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'error' } }));

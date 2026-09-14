@@ -332,15 +332,49 @@ export interface ChatMessageRowProps {
 }
 
 /**
+ * (TOOL-EXPAND) Why the daemon declined to serve an expansion.
+ *
+ * Mirrors `ToolBlockExpandFailure` (daemon-core
+ * `providers/spec/tool-block-expand.ts`) by name. It is a closed enum of
+ * five constants — no free text, no path, no body — so carrying it across the
+ * command reply is content-safe in the same sense the `toolBlockRef` integers
+ * are, and it travels the P2P command reply only (never the status path).
+ *
+ * Declared structurally rather than imported because web-core must not take a
+ * value dependency on daemon-core (see the barrel-import rule); a drift here
+ * shows up as an unrecognised reason, which falls into the generic branch.
+ */
+export type ToolExpandFailureReason =
+    | 'unsupported_source'
+    | 'source_unavailable'
+    | 'source_changed'
+    | 'block_not_found'
+    | 'not_a_tool_block';
+
+/**
  * (TOOL-EXPAND) Per-row expansion state. `text` replaces the summary once the
- * daemon answers; `error` carries a typed refusal — most importantly
- * `source_changed`, which must be SHOWN rather than silently swallowed, because
- * the honest answer is "that output is gone", not an empty box.
+ * daemon answers; `error` carries the typed refusal, which must be SHOWN rather
+ * than silently swallowed, because the honest answer is "that output is gone",
+ * not an empty box.
+ *
+ * ★ The reason is not decoration. The five refusals split into two situations
+ * the reader can actually act on differently, and collapsing them into one
+ * sentence told four of them a lie:
+ *
+ *   `source_changed` — the transcript moved under the ref, so the seal refused
+ *   rather than resolve a possibly-different block. The text still EXISTS; a
+ *   re-read mints fresh refs and expanding again works. "Reload" is the advice.
+ *
+ *   everything else — the source cannot be re-read at all (`unsupported_source`
+ *   for an adapter with no declarative history, `source_unavailable` for an
+ *   unreadable transcript) or the address does not name a tool block
+ *   (`block_not_found`, `not_a_tool_block`). Reloading changes nothing, and
+ *   telling the reader "the transcript has changed" would be false.
  */
 export interface ToolExpandState {
     status: 'loading' | 'expanded' | 'error';
     text?: string;
-    error?: string;
+    error?: ToolExpandFailureReason;
 }
 
 /** The expand / collapse footer of a truncated tool bubble. */
@@ -358,9 +392,18 @@ function ToolExpandControl({
         return <div className="chat-msg-tool-expand" aria-live="polite">{t('chat.toolExpandLoading')}</div>;
     }
     if (state?.status === 'error') {
+        // Two branches, not five: the distinction that matters to the reader is
+        // "stale, try again" vs "cannot be fetched". An unknown/absent reason —
+        // a transport error, or a daemon older than the typed reply — takes the
+        // generic branch, which is the honest answer when we do not know why.
+        const isStale = state.error === 'source_changed';
         return (
-            <div className="chat-msg-tool-expand chat-msg-tool-expand-error" role="status">
-                {t('chat.toolExpandUnavailable')}
+            <div
+                className="chat-msg-tool-expand chat-msg-tool-expand-error"
+                role="status"
+                data-expand-error-reason={state.error ?? 'unknown'}
+            >
+                {isStale ? t('chat.toolExpandStale') : t('chat.toolExpandUnavailable')}
             </div>
         );
     }
