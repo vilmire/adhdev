@@ -1,9 +1,9 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { StatusReportPayload } from '../types'
 import type { DaemonMetadataUpdate } from '@adhdev/daemon-core'
 import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
-import { subscriptionManager } from '../managers/SubscriptionManager'
+import { subscriptionManager, type SubscriptionHandle } from '../managers/SubscriptionManager'
 import { statusPayloadToEntries } from '../utils/status-transform'
 import { DEFAULT_DAEMON_METADATA_FRESH_MS } from '../utils/daemon-timing'
 import { shouldLoadDaemonMetadata } from '../utils/daemon-metadata-swr'
@@ -28,6 +28,24 @@ function unwrapStatusPayload(raw: unknown): StatusReportPayload | null {
 export function useDaemonMetadataLoader() {
     const { sendCommand, sendData } = useTransport()
     const { injectEntries, getIdes } = useBaseDaemonActions()
+
+    // Subscriptions this hook instance opened, so unmount can release them.
+    // The loader is an imperative callback invoked from event handlers (not an
+    // effect), so there is no per-call cleanup point — without this the handle
+    // returned by subscribe() would be dropped on the floor and both the local
+    // handler and the daemon-side subscription would live forever.
+    const ownedSubscriptionsRef = useRef(new Map<string, SubscriptionHandle>())
+
+    useEffect(() => {
+        const owned = ownedSubscriptionsRef.current
+        return () => {
+            for (const [daemonId, unsubscribe] of owned) {
+                unsubscribe()
+                metadataSubscriptions.delete(daemonId)
+            }
+            owned.clear()
+        }
+    }, [])
 
     return useCallback(async (daemonId: string, opts?: { force?: boolean; minFreshMs?: number }) => {
         if (!daemonId) return
@@ -82,6 +100,12 @@ export function useDaemonMetadataLoader() {
                         metadataLoadedAt.set(daemonId, Date.now())
                     },
                 )
+
+                // Release any handle this instance already held for the daemon
+                // before recording the new one, so a re-subscribe never orphans
+                // the previous handler.
+                ownedSubscriptionsRef.current.get(daemonId)?.()
+                ownedSubscriptionsRef.current.set(daemonId, unsubscribe)
 
                 if (unsubscribe.initialSendAccepted) {
                     metadataSubscriptions.add(daemonId)
