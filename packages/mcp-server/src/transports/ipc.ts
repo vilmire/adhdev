@@ -18,12 +18,21 @@ import { IDENTITY } from '@adhdev/daemon-core';
 const DEFAULT_IPC_PORT = IDENTITY.defaultPort;
 const DEFAULT_IPC_PATH = '/ipc';
 const DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15_000;
-// P5 (2026-08-18 freeze RCA): the 15s default is now env-overridable
-// (ADHDEV_IPC_COMMAND_TIMEOUT_MS) as an operator escape hatch. This is symptom
-// relief ONLY — it cannot prevent the daemon event-loop freeze that caused the
-// timeouts; the fixes for that are the Refinery concurrency cap and the probe
-// retry below. Per-command table entries above still win over this default.
-const IPC_COMMAND_TIMEOUT_ENV = 'ADHDEV_IPC_COMMAND_TIMEOUT_MS';
+// P5 (2026-08-18 freeze RCA): the 15s default is now env-overridable as an
+// operator escape hatch. This is symptom relief ONLY — it cannot prevent the
+// daemon event-loop freeze that caused the timeouts; the fixes for that are
+// the Refinery concurrency cap and the probe retry below. Per-command table
+// entries above still win over this default.
+//
+// D2 follow-up: getTimeoutMs() (below) is reused by LocalTransport (HTTP to the
+// standalone daemon, local.ts) as well as this file's own WS/IPC path, so the
+// name ADHDEV_IPC_COMMAND_TIMEOUT_MS is no longer accurate — it now governs the
+// default command budget for BOTH transports, not just IPC. COMMAND_TIMEOUT_ENV
+// is the neutral name going forward; the old IPC-scoped name is kept as a
+// fallback (checked when the new one is unset) so an operator who already set
+// it in their environment keeps working unchanged.
+const COMMAND_TIMEOUT_ENV = 'ADHDEV_COMMAND_TIMEOUT_MS';
+const LEGACY_IPC_COMMAND_TIMEOUT_ENV = 'ADHDEV_IPC_COMMAND_TIMEOUT_MS';
 // IPC (layer-1) is the OUTERMOST deadline. For a REMOTE node the coordinator wraps
 // the verb in `mesh_relay_command` (120s here), so getTimeoutMs() already covers the
 // relay/responder budget. But for a LOCAL node commandForNode() sends the BARE verb
@@ -152,7 +161,10 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 }
 
 function resolveDefaultCommandTimeoutMs(): number {
-  const parsed = parsePositiveInt(process.env[IPC_COMMAND_TIMEOUT_ENV], DEFAULT_IPC_COMMAND_TIMEOUT_MS);
+  // New neutral name wins; the legacy IPC-scoped name is a fallback for
+  // operators who set it before this default was shared with LocalTransport.
+  const raw = process.env[COMMAND_TIMEOUT_ENV] ?? process.env[LEGACY_IPC_COMMAND_TIMEOUT_ENV];
+  const parsed = parsePositiveInt(raw, DEFAULT_IPC_COMMAND_TIMEOUT_MS);
   return parsed > 0 ? parsed : DEFAULT_IPC_COMMAND_TIMEOUT_MS;
 }
 
