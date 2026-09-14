@@ -251,7 +251,97 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
             returnedMsgCount: debugReadChat.returnedMsgCount,
             shouldPreferAdapterMessages: debugReadChat.shouldPreferAdapterMessages,
         } : undefined,
+        // (G4) Lifted into the summary, not left in the bundle body: "can this
+        // session's tool bubbles still be expanded" is a one-glance question and
+        // the summary is what a reader sees first.
+        toolBlockRefSeals: bundle.toolBlockRefSeals,
         hasFrontendSnapshot: !!frontend,
+    };
+}
+
+/**
+ * (G4) Audit every tool bubble's `toolBlockRef` seal against the transcript file
+ * as it exists RIGHT NOW.
+ *
+ * ── The gap this closes ────────────────────────────────────────────────────
+ * The bundle already carried `messageSource.staleness.sourceMtimeMs` — the
+ * mtime the READ observed. What it could not answer is the question an expand
+ * failure actually raises: does that mtime still match the file, and can the
+ * file even be stat'd? Those are the exact two conditions `expandToolBlock`
+ * refuses on (`source_changed` / `source_unavailable`), so without them the
+ * bundle described everything about a broken expand except why it broke, and
+ * diagnosing one meant reproducing it live.
+ *
+ * ── What it reports ────────────────────────────────────────────────────────
+ * Per distinct ref-mtime found on the tail, whether it still matches the live
+ * file. Distinct MTIMES rather than per message, because a tail of 20 bubbles
+ * from one read shares one mtime and listing it 20 times says nothing extra —
+ * what matters is whether more than one seal generation is present, which is
+ * itself the signal that the transcript was rewritten mid-tail.
+ *
+ * ★ Identifiers and integers only: counts, mtimes, a boolean, and a stat errno
+ * code. No block bodies, no tool names. `sourcePath` is NOT re-stated here —
+ * the bundle already carries it under `messageSource`, and this is a local
+ * daemon file either way.
+ */
+export function auditToolBlockRefSeals(readChat: unknown): Record<string, unknown> | undefined {
+    const rc = readChat as Record<string, unknown> | null;
+    if (!rc || rc.success !== true) return undefined;
+    const messages = Array.isArray(rc.messagesTail) ? rc.messagesTail : [];
+
+    const refMtimes = new Map<number, number>();
+    let messagesWithRef = 0;
+    for (const message of messages) {
+        const ref = (message as Record<string, unknown> | null)?.toolBlockRef as Record<string, unknown> | undefined;
+        const mtime = ref?.sourceMtimeMs;
+        if (typeof mtime !== 'number' || !Number.isFinite(mtime)) continue;
+        messagesWithRef += 1;
+        refMtimes.set(mtime, (refMtimes.get(mtime) ?? 0) + 1);
+    }
+
+    const source = rc.messageSource as Record<string, unknown> | undefined;
+    const sourcePath = typeof source?.sourcePath === 'string' ? source.sourcePath : '';
+    // Nothing to audit: no refs on the tail AND no path to check. Returning
+    // undefined keeps the key out of the bundle rather than adding an empty
+    // block that reads like a measurement returning zero.
+    if (messagesWithRef === 0 && !sourcePath) return undefined;
+
+    let liveMtimeMs: number | undefined;
+    let statError: string | undefined;
+    if (sourcePath) {
+        try {
+            liveMtimeMs = fs.statSync(sourcePath).mtimeMs;
+        } catch (error: any) {
+            // ★ The stat FAILING is itself the finding — this is the
+            // `source_unavailable` refusal, captured instead of inferred. Record
+            // the errno code only; the message can embed the path.
+            statError = String(error?.code || error?.message || 'stat_failed');
+        }
+    }
+
+    return {
+        messagesInspected: messages.length,
+        messagesWithToolBlockRef: messagesWithRef,
+        // >1 means the tail spans more than one seal generation, i.e. the
+        // transcript was rewritten while the tail was being assembled.
+        distinctRefMtimes: refMtimes.size,
+        refMtimes: [...refMtimes.entries()]
+            .sort((a, b) => b[0] - a[0])
+            .map(([sourceMtimeMs, messageCount]) => ({
+                sourceMtimeMs,
+                messageCount,
+                // undefined (not false) when the file could not be stat'd — an
+                // unknown seal and a broken one are different answers.
+                matchesLiveFile: liveMtimeMs === undefined ? undefined : sourceMtimeMs === liveMtimeMs,
+            })),
+        ...(liveMtimeMs !== undefined ? { liveMtimeMs } : {}),
+        ...(statError ? { statError } : {}),
+        // The single line a reader needs: would an expand succeed right now?
+        expandWouldSucceed: statError
+            ? false
+            : liveMtimeMs !== undefined && refMtimes.size > 0
+                ? [...refMtimes.keys()].every((m) => m === liveMtimeMs)
+                : undefined,
     };
 }
 
@@ -370,6 +460,11 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
                 : undefined,
         } : null,
         readChat,
+        // (G4) Computed from `readChat` rather than folded into it: this stats
+        // the transcript at BUNDLE time, which is deliberately later than the
+        // read. The gap between the two is exactly what a `source_changed`
+        // expand failure is made of, so collapsing them would erase the finding.
+        toolBlockRefSeals: auditToolBlockRefSeals(readChat),
         frontend: args?.frontendSnapshot && typeof args.frontendSnapshot === 'object' ? args.frontendSnapshot : null,
         recentLogs: getRecentLogs(80, 'debug'),
         recentDebugTrace: getRecentDebugTrace({ limit: 120 }),
