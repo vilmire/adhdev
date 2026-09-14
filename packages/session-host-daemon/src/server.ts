@@ -69,6 +69,10 @@ export class SessionHostServer extends EventEmitter {
   // Records the most recent explicit stop/delete/restart/prune request per
   // session so the termination diagnostic can attribute the exit to it.
   private stopRequests = new Map<string, SessionTermination['requestedStop']>();
+  // Shutdown is driven by independent SIGINT/SIGTERM handlers, so stop() can be
+  // entered twice. Cache the in-flight promise and hand it to every later caller
+  // instead of re-running flushAllPersistence()/runtime.stop() on already-cleared state.
+  private stopPromise: Promise<void> | null = null;
 
   constructor(options: SessionHostServerOptions = {}) {
     super();
@@ -165,6 +169,12 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = this.runStop();
+    return this.stopPromise;
+  }
+
+  private async runStop(): Promise<void> {
     this.flushAllPersistence();
     for (const runtime of this.runtimes.values()) {
       try {

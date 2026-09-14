@@ -404,11 +404,47 @@ async function main(): Promise<void> {
   throw new Error(`Unknown command: ${command}`);
 }
 
+// Swallowing uncaught exceptions keeps a transient native fault (e.g. node-pty on
+// Windows) from killing sessions that are otherwise healthy. Swallowing them
+// *without limit* turns a permanently broken process into a zombie service that
+// still holds the socket and pid file while failing every request. So the intent
+// is preserved with a bound: tolerate bursts, exit once the process is clearly
+// wedged rather than pretending to serve.
+const UNCAUGHT_EXCEPTION_WINDOW_MS = 60_000;
+const UNCAUGHT_EXCEPTION_LIMIT = 10;
+
+export function createUncaughtExceptionLimiter(
+  windowMs = UNCAUGHT_EXCEPTION_WINDOW_MS,
+  limit = UNCAUGHT_EXCEPTION_LIMIT,
+) {
+  // null (not 0) marks "no window yet" — 0 is a valid timestamp, and using it as
+  // the sentinel would reset the window on every call in a 0-based clock.
+  let windowStartedAt: number | null = null;
+  let countInWindow = 0;
+  return function shouldExit(now: number): { exit: boolean; countInWindow: number } {
+    if (windowStartedAt === null || now - windowStartedAt > windowMs) {
+      windowStartedAt = now;
+      countInWindow = 0;
+    }
+    countInWindow += 1;
+    return { exit: countInWindow > limit, countInWindow };
+  };
+}
+
 if (require.main === module) {
-  // Prevent native crashes (e.g. node-pty on Windows) from silently killing the server process
+  const shouldExitOnUncaught = createUncaughtExceptionLimiter();
+
   process.on('uncaughtException', (err) => {
     console.error(`[session-host] Uncaught exception: ${err?.message}\n${err?.stack || ''}`);
-    // Do not exit — keep the server alive for existing sessions
+    const { exit, countInWindow } = shouldExitOnUncaught(Date.now());
+    if (!exit) return;
+    // Repeated faults in one window: the process is wedged, not hiccuping.
+    console.error(
+      `[session-host] ${countInWindow} uncaught exceptions within ` +
+        `${UNCAUGHT_EXCEPTION_WINDOW_MS / 1000}s (limit ${UNCAUGHT_EXCEPTION_LIMIT}); shutting down.`,
+    );
+    removeSessionHostPid(SESSION_HOST_APP_NAME);
+    process.exit(1);
   });
   process.on('unhandledRejection', (reason: any) => {
     console.error(`[session-host] Unhandled rejection: ${reason?.message || reason}`);
