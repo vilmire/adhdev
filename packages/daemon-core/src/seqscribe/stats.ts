@@ -30,6 +30,11 @@
  */
 
 import type { NodeStats } from 'seqscribe';
+// `shared/`, not `providers/`: `check:check-import-boundaries` forbids
+// seqscribe/** from importing providers/**, and this counter module is a
+// dependency-free leaf written by a providers/ hop and read here. Same reason
+// `mesh-event-trace.ts` and `usage-normalize.ts` were moved to shared/.
+import { projectionCarryCounters } from '../shared/projection-carry-counters.js';
 import type { SeqscribeThroughputSnapshot } from './throughput-collector.js';
 import type { TranscriptLatencyDetail } from './transcript-latency.js';
 
@@ -363,6 +368,39 @@ export interface SeqscribeStatusSummary {
      * (`buildCloudSeqscribeSummary`) deliberately does not name this key, and
      * `test/status/cloud-status-content-boundary.test.ts` keeps it out.
      */
+    /**
+     * (G1) Chat-message projection carry counters — how many messages passed
+     * through the shared carry helpers, and how many arrived missing each
+     * identity field.
+     *
+     * ★ Why this is here rather than only in the source gate.
+     * `check:message-projection-parity` proves every hop still MENTIONS each
+     * field; it cannot see whether anything flows. A provider that stops minting
+     * `sequence`, or a parser path that yields bubbles with no `_turnKey`, keeps
+     * the gate green while the dashboard's React key quietly falls through to
+     * the content-hash fallback and bubbles of one turn collide. `missingBubble
+     * Identity` is that condition counted at its cause instead of inferred from
+     * a bug report about duplicated bubbles.
+     *
+     * ★★ LOCAL-ONLY, for the same two independent reasons as `readRouting` and
+     * `transcriptLatencyDetail` above: these are raw monotonic counters that
+     * would make every status frame hash differently and turn an idle daemon
+     * into a permanent transmitter, and the server has no routing use for them.
+     * The keys are a fixed field-name set declared in
+     * `providers/projection-carry-counters.ts` and every value is an integer —
+     * no message text, session id, provider name or topic name can appear, by
+     * construction. `buildCloudSeqscribeSummary` (status/reporter.ts) is a
+     * fixed-key allow-list that does not name this key, and
+     * `test/status/cloud-status-content-boundary.test.ts` asserts it stays out.
+     */
+    projectionCarry?: {
+        observed: number;
+        missingSequence: number;
+        missingTurnKey: number;
+        missingBubbleState: number;
+        missingBubbleIdentity: number;
+        droppedToolBlockRef: number;
+    };
     transcriptCounterDetail?: {
         /** PTY dirty triggers collapsed behind the per-session throttle window. */
         ptyDirtyCoalesced: number;
@@ -550,6 +588,13 @@ export function summarizeSeqscribeStats(
         localDiagnostics = {
             applyRejects,
             stalledStreams,
+            // (G1) Read directly from the counter module rather than passed in
+            // as an option: it is a process-global monotonic counter with a
+            // single reader, so threading it through `SummarizeOptions` would
+            // add a parameter every caller has to remember and none can
+            // meaningfully vary. Gated by `includeLocalDiagnostics` like every
+            // raw counter here, which is what keeps it off the status frame.
+            projectionCarry: projectionCarryCounters(),
             ...(tp
                 ? {
                       transcriptParityDetail: {

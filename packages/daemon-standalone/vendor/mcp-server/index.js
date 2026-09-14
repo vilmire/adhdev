@@ -79383,7 +79383,45 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         INTERNAL_SOURCE_SET = new Set(CHAT_MESSAGE_INTERNAL_SOURCES);
       }
     });
+    function recordProjectionCarry(input, carriedToolBlockRef) {
+      counters3.observed += 1;
+      if (!input) {
+        counters3.missingSequence += 1;
+        counters3.missingTurnKey += 1;
+        counters3.missingBubbleState += 1;
+        counters3.missingBubbleIdentity += 1;
+        return;
+      }
+      const hasSequence = typeof input.sequence === "number" && Number.isFinite(input.sequence);
+      if (!hasSequence) counters3.missingSequence += 1;
+      if (!input._turnKey) counters3.missingTurnKey += 1;
+      if (!input.bubbleState) counters3.missingBubbleState += 1;
+      if (!input.bubbleId && !input.providerUnitKey && !hasSequence) {
+        counters3.missingBubbleIdentity += 1;
+      }
+      if (input.toolBlockRef && !carriedToolBlockRef) counters3.droppedToolBlockRef += 1;
+    }
+    function projectionCarryCounters() {
+      return { ...counters3 };
+    }
+    var counters3;
+    var init_projection_carry_counters = __esm2({
+      "src/shared/projection-carry-counters.ts"() {
+        "use strict";
+        counters3 = {
+          observed: 0,
+          missingSequence: 0,
+          missingTurnKey: 0,
+          missingBubbleState: 0,
+          missingBubbleIdentity: 0,
+          droppedToolBlockRef: 0
+        };
+      }
+    });
     function carryBubbleIdentity(message) {
+      if (!suppressCarryCounting) {
+        recordProjectionCarry(message, true);
+      }
       return {
         ...typeof message?.sequence === "number" && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {},
         ...message?._turnKey ? { _turnKey: message._turnKey } : {},
@@ -79393,10 +79431,17 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       };
     }
     function carryMessageRefs(message) {
-      return {
-        ...message?.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
-        ...carryBubbleIdentity(message)
-      };
+      const carriedToolBlockRef = Boolean(message?.toolBlockRef);
+      recordProjectionCarry(message, carriedToolBlockRef);
+      suppressCarryCounting = true;
+      try {
+        return {
+          ...carriedToolBlockRef ? { toolBlockRef: message.toolBlockRef } : {},
+          ...carryBubbleIdentity(message)
+        };
+      } finally {
+        suppressCarryCounting = false;
+      }
     }
     function projectCliChatMessage(message, options = {}) {
       return {
@@ -79439,10 +79484,13 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (sharedPrefixLength === previousMessages.length) return currentMessages.slice(sharedPrefixLength);
       return currentMessages;
     }
+    var suppressCarryCounting;
     var init_cli_provider_history_dedup = __esm2({
       "src/providers/cli-provider-history-dedup.ts"() {
         "use strict";
         init_contracts2();
+        init_projection_carry_counters();
+        suppressCarryCounting = false;
       }
     });
     function getHistoryDir() {
@@ -93616,20 +93664,20 @@ ${statusLine}`;
       return fields;
     }
     function compareTranscriptRevision(sessionKey2, expected, actual) {
-      counters3.runs++;
-      counters3.compared++;
+      counters4.runs++;
+      counters4.compared++;
       const seen = (observedSessions.get(sessionKey2) ?? 0) + 1;
       observedSessions.set(sessionKey2, seen);
-      if (seen === 1) counters3.sessionsObserved++;
-      else if (seen === 2) counters3.sessionsRepeated++;
-      if (pendingMissing2.has(sessionKey2)) counters3.pendingMissingRevisits++;
+      if (seen === 1) counters4.sessionsObserved++;
+      else if (seen === 2) counters4.sessionsRepeated++;
+      if (pendingMissing2.has(sessionKey2)) counters4.pendingMissingRevisits++;
       const redacted = redactSessionId(sessionKey2);
       const mismatches = [];
       if (actual.status === "missing") {
         mismatches.push({ kind: "missing_complete_revision", session: redacted });
-        counters3.missingCompleteRevision++;
+        counters4.missingCompleteRevision++;
         if (pendingMissing2.has(sessionKey2)) {
-          counters3.persistentMismatches++;
+          counters4.persistentMismatches++;
           LOG.warn("Seqscribe", `transcript parity mismatch PERSISTED session=${redacted} kind=missing_complete_revision`);
         }
         pendingMissing2.add(sessionKey2);
@@ -93637,30 +93685,30 @@ ${statusLine}`;
         pendingMissing2.delete(sessionKey2);
         if (expected.sessionId !== actual.snapshot.sessionId) {
           mismatches.push({ kind: "wrong_session", session: redacted });
-          counters3.wrongSession++;
-          counters3.persistentMismatches++;
+          counters4.wrongSession++;
+          counters4.persistentMismatches++;
         } else if (!daemonIdsEquivalent4(expected.producerDaemonId, actual.snapshot.producerDaemonId)) {
           mismatches.push({ kind: "wrong_owner", session: redacted });
-          counters3.wrongOwner++;
-          counters3.persistentMismatches++;
+          counters4.wrongOwner++;
+          counters4.persistentMismatches++;
         } else if (expected.messages.length !== actual.snapshot.messages.length) {
           mismatches.push({ kind: "extra_message", session: redacted });
-          counters3.extraMessage++;
-          counters3.persistentMismatches++;
+          counters4.extraMessage++;
+          counters4.persistentMismatches++;
         } else {
           const fields = [...diffScalars(expected, actual.snapshot), ...diffMessages(expected, actual.snapshot)];
           if (fields.length > 0) {
             mismatches.push({ kind: "field_mismatch", session: redacted, fields });
-            counters3.fieldMismatch++;
-            counters3.persistentMismatches++;
+            counters4.fieldMismatch++;
+            counters4.persistentMismatches++;
           } else if (contentDigest(expected) !== contentDigest(actual.snapshot)) {
             mismatches.push({ kind: "digest_mismatch", session: redacted });
-            counters3.digestMismatch++;
-            counters3.persistentMismatches++;
+            counters4.digestMismatch++;
+            counters4.persistentMismatches++;
           }
         }
       }
-      counters3.mismatches += mismatches.length;
+      counters4.mismatches += mismatches.length;
       if (mismatches.length > 0) {
         for (const m of mismatches) {
           LOG.info(
@@ -93672,28 +93720,28 @@ ${statusLine}`;
       return mismatches;
     }
     function transcriptParityCounters() {
-      return { ...counters3, pendingMissingOpen: pendingMissing2.size };
+      return { ...counters4, pendingMissingOpen: pendingMissing2.size };
     }
     function __resetTranscriptParityForTests() {
-      counters3.compared = 0;
-      counters3.missingCompleteRevision = 0;
-      counters3.fieldMismatch = 0;
-      counters3.extraMessage = 0;
-      counters3.wrongSession = 0;
-      counters3.wrongOwner = 0;
-      counters3.digestMismatch = 0;
-      counters3.mismatches = 0;
-      counters3.persistentMismatches = 0;
-      counters3.runs = 0;
-      counters3.sessionsObserved = 0;
-      counters3.sessionsRepeated = 0;
-      counters3.pendingMissingRevisits = 0;
-      counters3.pendingMissingOpen = 0;
-      counters3.since = Date.now();
+      counters4.compared = 0;
+      counters4.missingCompleteRevision = 0;
+      counters4.fieldMismatch = 0;
+      counters4.extraMessage = 0;
+      counters4.wrongSession = 0;
+      counters4.wrongOwner = 0;
+      counters4.digestMismatch = 0;
+      counters4.mismatches = 0;
+      counters4.persistentMismatches = 0;
+      counters4.runs = 0;
+      counters4.sessionsObserved = 0;
+      counters4.sessionsRepeated = 0;
+      counters4.pendingMissingRevisits = 0;
+      counters4.pendingMissingOpen = 0;
+      counters4.since = Date.now();
       pendingMissing2.clear();
       observedSessions.clear();
     }
-    var counters3;
+    var counters4;
     var observedSessions;
     var pendingMissing2;
     var init_transcript_parity = __esm2({
@@ -93702,7 +93750,7 @@ ${statusLine}`;
         init_dist();
         init_logger();
         init_transcript_projection();
-        counters3 = {
+        counters4 = {
           compared: 0,
           missingCompleteRevision: 0,
           fieldMismatch: 0,
@@ -153832,7 +153880,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       );
       return "shadow";
     }
-    var counters4 = {
+    var counters5 = {
       written: 0,
       failed: 0,
       dropped: 0,
@@ -153901,7 +153949,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         });
         const ceiling = resolveConstants().MAX_ENTRY_BYTES;
         if (estimated > ceiling) {
-          counters4.oversized++;
+          counters5.oversized++;
           warnOnce4(
             `fleet.status shadow skipped an oversized record (further occurrences logged once): estimated=${estimated}B ceiling=${ceiling}B. The entry is a fixed set of scalars \u2014 this is a producer-shape bug, not a transport one.`
           );
@@ -153914,14 +153962,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const attempt = inflightGate2.run(
           () => node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload),
           () => {
-            counters4.written++;
+            counters5.written++;
             if (activeNode3 === configuredNode && activeMode2 === "shadow" && configurationGeneration === configuredGeneration && thisAppendGeneration >= lastAppendedGeneration) {
               lastAppendedGeneration = thisAppendGeneration;
               lastAppendedEntryForParity = paritySnapshot;
             }
           },
           (error48) => {
-            counters4.failed++;
+            counters5.failed++;
             warnOnce4(
               `fleet.status shadow append failed (further failures logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
             );
@@ -153929,7 +153977,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         );
         if (!attempt.admitted) {
           if (attempt.reason === "shed") {
-            counters4.dropped++;
+            counters5.dropped++;
             warnOnce4(
               `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT2} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
             );
@@ -153939,7 +153987,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         return true;
       } catch (error48) {
-        counters4.failed++;
+        counters5.failed++;
         warnOnce4(
           `fleet.status shadow threw synchronously (further throws logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
         );
@@ -153982,7 +154030,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function emptyBuckets() {
       return Object.fromEntries(MISMATCH_KINDS.map((kind) => [kind, 0]));
     }
-    var counters5 = {
+    var counters6 = {
       runs: 0,
       compared: 0,
       mismatches: 0,
@@ -154022,18 +154070,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function summaryLine() {
       return [
         "fleet.status parity summary",
-        `runs=${counters5.runs}`,
-        `compared=${counters5.compared}`,
-        `mismatches=${counters5.mismatches}`,
-        ...MISMATCH_KINDS.map((kind) => `${kind}=${counters5.buckets[kind]}`)
+        `runs=${counters6.runs}`,
+        `compared=${counters6.compared}`,
+        `mismatches=${counters6.mismatches}`,
+        ...MISMATCH_KINDS.map((kind) => `${kind}=${counters6.buckets[kind]}`)
       ].join(" ");
     }
     function recordVerdict(result) {
-      counters5.runs++;
-      if (result.compared) counters5.compared++;
+      counters6.runs++;
+      if (result.compared) counters6.compared++;
       for (const kind of result.mismatches) {
-        counters5.buckets[kind]++;
-        counters5.mismatches++;
+        counters6.buckets[kind]++;
+        counters6.mismatches++;
       }
       if (result.mismatches.length > 0) summaryPending = true;
       const now = activeClock();
@@ -154119,14 +154167,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       };
     }
     function fleetStatusParityCounters() {
-      return { ...counters5, buckets: { ...counters5.buckets } };
+      return { ...counters6, buckets: { ...counters6.buckets } };
     }
     function __resetFleetStatusParityForTests() {
       configureFleetStatusParity(null);
-      counters5.runs = 0;
-      counters5.compared = 0;
-      counters5.mismatches = 0;
-      counters5.buckets = emptyBuckets();
+      counters6.runs = 0;
+      counters6.compared = 0;
+      counters6.mismatches = 0;
+      counters6.buckets = emptyBuckets();
       activeClock = () => Date.now();
       activeLog = (message) => LOG.info("Seqscribe", message);
       summaryIntervalMs = FLEET_STATUS_PARITY_SUMMARY_INTERVAL_MS;
@@ -163465,6 +163513,7 @@ data: ${JSON.stringify(msg.data)}
         remoteSeen: () => remoteSeen
       };
     }
+    init_projection_carry_counters();
     var FGEN_AGE_BUCKETS_H = [2, 6, 24, 72];
     var BACKLOG_BUCKETS = [1, 10, 100, 1e3];
     function bucket(value, thresholds) {
@@ -163521,6 +163570,13 @@ data: ${JSON.stringify(msg.data)}
         localDiagnostics = {
           applyRejects,
           stalledStreams,
+          // (G1) Read directly from the counter module rather than passed in
+          // as an option: it is a process-global monotonic counter with a
+          // single reader, so threading it through `SummarizeOptions` would
+          // add a parameter every caller has to remember and none can
+          // meaningfully vary. Gated by `includeLocalDiagnostics` like every
+          // raw counter here, which is what keeps it off the status frame.
+          projectionCarry: projectionCarryCounters(),
           ...tp ? {
             transcriptParityDetail: {
               runs: tp.runs,
@@ -165903,7 +165959,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         return null;
       }
       assertNoPlaintextHintTopics(handle.topics);
-      const counters6 = emptyCounters();
+      const counters7 = emptyCounters();
       const scopeOf = opts.topicScope ?? ((vectors) => [
         .../* @__PURE__ */ new Set([
           ...defaultBeaconTopicScope(vectors),
@@ -165916,16 +165972,16 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       const doPut = async (rawReport) => {
         const projected = projectBeaconReport(rawReport);
         if (!projected) {
-          counters6.rejected++;
+          counters7.rejected++;
           LOG.warn("Seqscribe", "beacon report failed the content projection; not sent");
           return;
         }
         lastScope = scopeOf(projected.vectors);
         try {
           await transport.put(projected);
-          counters6.put++;
+          counters7.put++;
         } catch (err) {
-          counters6.putFailed++;
+          counters7.putFailed++;
           LOG.info(
             "Seqscribe",
             `beacon put failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -165936,10 +165992,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       const rawQuery = async (topics) => {
         try {
           const res = await transport.get(topics);
-          counters6.get++;
+          counters7.get++;
           return res;
         } catch (err) {
-          counters6.getFailed++;
+          counters7.getFailed++;
           LOG.info(
             "Seqscribe",
             `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -165964,7 +166020,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         const mid = Math.ceil(topics.length / 2);
         const left = topics.slice(0, mid);
         const right = topics.slice(mid);
-        counters6.splitRetries++;
+        counters7.splitRetries++;
         const [leftRes, rightRes] = await Promise.all([
           queryWithSplitRetry(left, queriesUsed),
           queryWithSplitRetry(right, queriesUsed)
@@ -165983,7 +166039,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           reports = res.reports;
           truncated = res.truncated;
         } catch (err) {
-          counters6.getFailed++;
+          counters7.getFailed++;
           LOG.info(
             "Seqscribe",
             `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -165991,7 +166047,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           throw err;
         }
         if (truncated > 0) {
-          counters6.truncated += truncated;
+          counters7.truncated += truncated;
           LOG.info(
             "Seqscribe",
             `beacon get: ${truncated} peer report(s) remained truncated after split-retry (${queriesUsed.count} quer${queriesUsed.count === 1 ? "y" : "ies"})`
@@ -166031,10 +166087,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           }
           LOG.info(
             "Seqscribe",
-            `beacon stopped writer=${handle.writerId} put=${counters6.put}/${counters6.put + counters6.putFailed} get=${counters6.get}/${counters6.get + counters6.getFailed} splitRetries=${counters6.splitRetries} truncated=${counters6.truncated} rejected=${counters6.rejected}`
+            `beacon stopped writer=${handle.writerId} put=${counters7.put}/${counters7.put + counters7.putFailed} get=${counters7.get}/${counters7.get + counters7.getFailed} splitRetries=${counters7.splitRetries} truncated=${counters7.truncated} rejected=${counters7.rejected}`
           );
         },
-        counters: () => ({ ...counters6 }),
+        counters: () => ({ ...counters7 }),
         seedKnownBoard(seed) {
           if (stopped || !Array.isArray(seed?.reports)) return;
           const clean2 = seed.reports.map((report) => projectBeaconReport(report)).filter((report) => report !== null);
@@ -166051,7 +166107,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
               topicScope,
               capturedAt: Date.now()
             };
-            if (truncated > 0) counters6.truncated += truncated;
+            if (truncated > 0) counters7.truncated += truncated;
             LOG.info(
               "Seqscribe",
               `beacon auth seed writer=${handle.writerId} peers=${clean2.length} topics=${topicScope.length} truncated=${truncated}`
