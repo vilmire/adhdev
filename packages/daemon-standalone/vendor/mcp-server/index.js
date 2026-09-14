@@ -166243,7 +166243,8 @@ var import_daemon_core = __toESM(require_dist3());
 var DEFAULT_IPC_PORT = import_daemon_core.IDENTITY.defaultPort;
 var DEFAULT_IPC_PATH = "/ipc";
 var DEFAULT_IPC_COMMAND_TIMEOUT_MS = 15e3;
-var IPC_COMMAND_TIMEOUT_ENV = "ADHDEV_IPC_COMMAND_TIMEOUT_MS";
+var COMMAND_TIMEOUT_ENV = "ADHDEV_COMMAND_TIMEOUT_MS";
+var LEGACY_IPC_COMMAND_TIMEOUT_ENV = "ADHDEV_IPC_COMMAND_TIMEOUT_MS";
 var IPC_COMMAND_TIMEOUTS_MS = {
   mesh_relay_command: 12e4,
   agent_command: 3e4,
@@ -166348,7 +166349,8 @@ function parsePositiveInt(raw, fallback) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 function resolveDefaultCommandTimeoutMs() {
-  const parsed = parsePositiveInt(process.env[IPC_COMMAND_TIMEOUT_ENV], DEFAULT_IPC_COMMAND_TIMEOUT_MS);
+  const raw = process.env[COMMAND_TIMEOUT_ENV] ?? process.env[LEGACY_IPC_COMMAND_TIMEOUT_ENV];
+  const parsed = parsePositiveInt(raw, DEFAULT_IPC_COMMAND_TIMEOUT_MS);
   return parsed > 0 ? parsed : DEFAULT_IPC_COMMAND_TIMEOUT_MS;
 }
 function resolveProbeRetryMax() {
@@ -167903,6 +167905,7 @@ var MESH_QUEUE_CANCEL_TOOL = {
     type: "object",
     properties: {
       task_id: { type: "string", description: "Queue task ID to cancel." },
+      taskId: { type: "string", description: "CamelCase alias for task_id." },
       reason: { type: "string", description: "Optional operator-visible reason for cancellation." }
     },
     required: ["task_id"]
@@ -167915,11 +167918,16 @@ var MESH_QUEUE_REQUEUE_TOOL = {
     type: "object",
     properties: {
       task_id: { type: "string", description: "Queue task ID to requeue." },
+      taskId: { type: "string", description: "CamelCase alias for task_id." },
       reason: { type: "string", description: "Optional operator-visible reason for requeueing." },
       target_node_id: { type: "string", description: "Optional replacement target node ID." },
+      targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
       target_session_id: { type: "string", description: "Optional replacement target runtime session ID." },
+      targetSessionId: { type: "string", description: "CamelCase alias for target_session_id." },
       clear_target_node: { type: "boolean", description: "When true, remove any existing target node constraint." },
+      clearTargetNode: { type: "boolean", description: "CamelCase alias for clear_target_node." },
       keep_target_session: { type: "boolean", description: "When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets." },
+      keepTargetSession: { type: "boolean", description: "CamelCase alias for keep_target_session." },
       force: { type: "boolean", description: "When true, bypass the retry cap and requeue even if maxRetries has been exceeded. Use only for explicit operator recovery." },
       message: { type: "string", description: "Optional REPLACEMENT instruction for the task. Use when the situation moved on while the task waited \u2014 the common case for a parked delta, e.g. the worker already finished the part your correction was about, so the original wording would now be wrong or redundant. Preserves the task id, mission linkage and dependents (unlike cancel + re-enqueue). Omitted or blank leaves the existing message untouched." }
     },
@@ -168132,11 +168140,13 @@ var MESH_MISSION_UPSERT_TOOL = {
     type: "object",
     properties: {
       mission_id: { type: "string", description: "Full mission id (exact match) to update. Omit to create a new mission \u2014 do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id \u2014 use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided." },
+      missionId: { type: "string", description: "CamelCase alias for mission_id." },
       mission_ids: {
         type: "array",
         items: { type: "string" },
         description: "Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal."
       },
+      missionIds: { type: "array", items: { type: "string" }, description: "CamelCase alias for mission_ids." },
       title: { type: "string", description: "Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode." },
       goal: { type: "string", description: "Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode." },
       status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." }
@@ -168164,7 +168174,9 @@ var MESH_MISSION_LIST_TOOL = {
       },
       verbose: { type: "boolean", description: "Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact)." },
       include_stats: { type: "boolean", description: "Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough." },
-      include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." }
+      includeStats: { type: "boolean", description: "CamelCase alias for include_stats." },
+      include_magi: { type: "boolean", description: "Include completed MAGI cross-verification missions (hidden by default). Defaults to false." },
+      includeMagi: { type: "boolean", description: "CamelCase alias for include_magi." }
     }
   }
 };
@@ -168409,6 +168421,7 @@ var MESH_FORGET_NOTE_TOOL = {
     type: "object",
     properties: {
       note_id: { type: "string", description: "The ledger note id to retract (full/exact \u2014 no prefix matching). Returned by mesh_record_note as noteId, or visible in mesh_task_history entries. An id that does not match a live note returns success:false, code:note_not_found (the tombstone is still recorded, but nothing was actually retracted) \u2014 do not guess/truncate an id." },
+      noteId: { type: "string", description: "CamelCase alias for note_id." },
       text: { type: "string", description: "Retract every operating note whose trimmed text exactly matches this string. Use when you do not have the note id." },
       reason: { type: "string", description: "Optional short reason for the retraction, recorded on the tombstone for audit." }
     }
@@ -168581,12 +168594,17 @@ var MESH_MAGI_REVIEW_TOOL = {
       artifacts: { type: "array", items: { type: "string" }, description: "Inline content when not file-backed: a doc/diff, a log/error dump, or a prior single-worker RCA to refute." },
       n: { type: "number", description: "Global replica override per slot (clamped by the total-replica guard cap, default 12)." },
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "REQUIRED. Selects (1) the SINGLE output schema injected into each replica prompt and the strict parser used at collection (no schema-on-schema conflict), AND (2) the user-configured kind-panel binding that supplies the fan-out slots (mesh settings \u2192 magiKindPanels; errors magi_kind_not_configured if that kind has no configured slots \u2014 no named-panel/inline/preset fallback). claim_audit: {claims[],top_findings[],open_questions[]}. rca: {rootCause,failsAt,mechanism,evidence[],fixDirection,confidence}. design: {recommendation,rationale,alternatives[],tradeoffs[],risks[],evidence[],confidence}. freeform: no schema \u2014 natural-language answer, parsing/evidence checks waived, cross-verification is weak. Every kind except freeform requires non-empty evidence[]; an empty-evidence or schema-invalid answer triggers ONE delta re-request before being dropped as unparseable. Do NOT also embed an output-format schema in the question \u2014 it collides with this contract (a warning is surfaced if detected)." },
+      taskKind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "CamelCase alias for task_kind." },
       mode: { type: "string", enum: ["rca", "investigation", "claim_audit", "design_review", "code_audit"], description: "Synthesis emphasis hint \u2014 affects labels only, never the agent count or schema. Distinct from task_kind (which selects the output schema)." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
+      requireIndependentEvidence: { type: "boolean", description: "CamelCase alias for require_independent_evidence." },
       include_stale: { type: "boolean", description: "Default false. By default, panel slots whose node HEAD commit differs from the coordinator reference commit are EXCLUDED (they would investigate different code). Set true to fan out to them anyway \u2014 results will be git-skewed and a warning is surfaced. If exclusion drops the panel below 2 independent targets the call errors rather than degrading to N=1; include_stale=true is one way to recover." },
+      includeStale: { type: "boolean", description: "CamelCase alias for include_stale." },
       wait: { type: "boolean", description: "Default true \u2014 collect replica outputs and return the synthesis. Set false to dispatch async and return a consensusGroupId handle; collect later with mesh_magi_collect." },
       wait_timeout_ms: { type: "number", description: 'Max time to wait for replica completion before returning a partial "missing K of N" synthesis. Default 8 min, max 20 min.' },
-      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." }
+      waitTimeoutMs: { type: "number", description: "CamelCase alias for wait_timeout_ms." },
+      auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete unless overridden). Once all replicas are terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified) so repeated reviews don't accumulate idle worker sessions. Reused/coordinator/other sessions are never touched. Set false to preserve auto-launched worker sessions for inspection. No effect on a partial (non-terminal) collection." },
+      autoCleanup: { type: "boolean", description: "CamelCase alias for auto_cleanup." }
     },
     required: ["question", "task_kind"]
   }
@@ -168598,11 +168616,16 @@ var MESH_MAGI_COLLECT_TOOL = {
     type: "object",
     properties: {
       consensus_group_id: { type: "string", description: "The consensusGroupId returned by a wait=false mesh_magi_review." },
+      consensusGroupId: { type: "string", description: "CamelCase alias for consensus_group_id." },
       task_kind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "Optional override of the task_kind used to parse replica answers. Normally recovered automatically from the original dispatch \u2014 only set this if the dispatched ledger entry was pruned and auto-recovery falls back to claim_audit incorrectly." },
+      taskKind: { type: "string", enum: ["claim_audit", "rca", "design", "freeform"], description: "CamelCase alias for task_kind." },
       require_independent_evidence: { type: "boolean", description: "Default true \u2014 high-impact claims with no file:line/source evidence are routed to needs_verification." },
+      requireIndependentEvidence: { type: "boolean", description: "CamelCase alias for require_independent_evidence." },
       wait: { type: "boolean", description: "Default false (snapshot). Set true to block for outstanding replicas up to wait_timeout_ms before synthesizing." },
       wait_timeout_ms: { type: "number", description: "When wait=true, max time to wait for remaining replica completion. Default 8 min, max 20 min." },
+      waitTimeoutMs: { type: "number", description: "CamelCase alias for wait_timeout_ms." },
       auto_cleanup: { type: "boolean", description: "Default = mesh policy magiSessionCleanup (ON / stop_and_delete). When the collection is terminal, stop+delete ONLY the worker sessions THIS fan-out auto-launched (marker-verified). Reused/coordinator/other sessions are never touched. Set false to preserve them. No effect on a partial (non-terminal) snapshot." },
+      autoCleanup: { type: "boolean", description: "CamelCase alias for auto_cleanup." },
       verbose: { type: "boolean", description: "Default false. When true, each synthesis.replicas[] entry also carries rawAnswer \u2014 the replica's raw end-user answer text (capped). Omitted by default to keep the payload small; the structured clusters already carry the parsed claims." }
     },
     required: ["consensus_group_id"]
@@ -168652,6 +168675,7 @@ var MESH_NODE_SLOTS_SET_TOOL = {
     type: "object",
     properties: {
       node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id whose capability slots to set." },
+      nodeId: { type: "string", description: "CamelCase alias for node_id." },
       slots: {
         type: "array",
         description: "The COMPLETE desired capability-slot list for this node (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }.",
@@ -168680,7 +168704,8 @@ var MESH_NODE_SLOTS_LIST_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id whose capability slots to list." }
+      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id whose capability slots to list." },
+      nodeId: { type: "string", description: "CamelCase alias for node_id." }
     },
     required: ["node_id"]
   }
@@ -168692,7 +168717,9 @@ var MESH_NODE_SLOTS_PROPOSE_TOOL = {
     type: "object",
     properties: {
       node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id to detect installed CLI agents on and draft slots for." },
-      include_magi: { type: "boolean", description: "When true, also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel_set. Defaults false. Deliberately NOT a per-task_kind assignment \u2014 provider manifests carry no rca/design/claim_audit suitability data." }
+      nodeId: { type: "string", description: "CamelCase alias for node_id." },
+      include_magi: { type: "boolean", description: "When true, also draft a MAGI panel (one slot per detected provider, pinned to this node, models unpinned) for binding via mesh_magi_kind_panel_set. Defaults false. Deliberately NOT a per-task_kind assignment \u2014 provider manifests carry no rca/design/claim_audit suitability data." },
+      includeMagi: { type: "boolean", description: "CamelCase alias for include_magi." }
     },
     required: ["node_id"]
   }
