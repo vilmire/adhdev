@@ -47,6 +47,11 @@ interface AdhMuxControlEventEnvelope {
 
 type AdhMuxControlWireEnvelope = AdhMuxControlRequestEnvelope | AdhMuxControlResponseEnvelope | AdhMuxControlEventEnvelope;
 
+// Matches the sister client's budget (session-host-core ipc.ts). Without it a
+// server that accepts the connection but never answers leaves the CLI pending
+// forever, with Ctrl-C as the only exit.
+const CONTROL_REQUEST_TIMEOUT_MS = 30_000;
+
 function serializeEnvelope(envelope: AdhMuxControlWireEnvelope): string {
   return `${JSON.stringify(envelope)}\n`;
 }
@@ -111,7 +116,14 @@ export class AdhMuxControlClient {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const envelope: AdhMuxControlRequestEnvelope = { kind: 'request', requestId, request };
     const response = await new Promise<SessionHostResponse>((resolve, reject) => {
-      this.waiters.set(requestId, { resolve, reject });
+      const timeout = setTimeout(() => {
+        this.waiters.delete(requestId);
+        reject(new Error(`adhmux control request timed out after 30s (${request.type})`));
+      }, CONTROL_REQUEST_TIMEOUT_MS);
+      this.waiters.set(requestId, {
+        resolve: (value) => { clearTimeout(timeout); resolve(value); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      });
       this.socket?.write(serializeEnvelope(envelope));
     });
     return response as SessionHostResponse<T>;
