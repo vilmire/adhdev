@@ -123,17 +123,23 @@ export default function InteractivePromptModal({
     return installTopModalEscapeHandler(window, onCancel)
   }, [promptSession, onCancel])
 
-  // Focus trap: keep Tab/Shift+Tab cycling within the modal surface, and move
-  // initial focus into it so keyboard/screen-reader users aren't left on
-  // whatever was focused behind the overlay.
+  // Identity of the question currently on screen. P2P status polling rebuilds
+  // `promptSession` as a new object every few seconds even when the prompt is
+  // unchanged, so effects that move focus must depend on these stable ids —
+  // never the wrapper object — or they re-run and steal focus from Other.
+  const promptId = promptSession?.prompt.promptId
+  const sessionId = promptSession?.sessionId
+  const daemonId = promptSession?.daemonId
+
+  // Tab trap: keep Tab/Shift+Tab cycling within the modal surface. Separate
+  // from initial focus so a polling-replaced session object cannot re-focus
+  // the Close button while the user is already typing inside the dialog.
   useEffect(() => {
-    if (!promptSession) return
+    if (!promptId) return
     const surface = surfaceRef.current
     if (!surface) return
 
     const getFocusable = () => Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-    const focusable = getFocusable()
-    ;(focusable[0] || surface).focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
@@ -154,7 +160,20 @@ export default function InteractivePromptModal({
     }
     surface.addEventListener('keydown', onKeyDown)
     return () => surface.removeEventListener('keydown', onKeyDown)
-  }, [promptSession])
+  }, [promptId, sessionId, daemonId])
+
+  // Initial focus: once per new question, and only when focus is not already
+  // inside the dialog. The contains() guard is the hard stop against stealing
+  // Other/radio focus if this effect ever re-runs for any other reason.
+  useEffect(() => {
+    if (!promptId) return
+    const surface = surfaceRef.current
+    if (!surface) return
+    const active = document.activeElement
+    if (active instanceof Node && surface.contains(active)) return
+    const focusable = Array.from(surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    ;(focusable[0] || surface).focus()
+  }, [promptId, sessionId, daemonId])
 
   const questions = promptSession?.prompt.questions || []
   // A single question needs no section header/numbering; multiple questions are listed
