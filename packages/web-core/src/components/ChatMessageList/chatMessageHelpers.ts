@@ -114,6 +114,51 @@ function hashContent(input: string): string {
 }
 
 /**
+ * (TOOL-EXPAND) Identity of the tool BLOCK a bubble was summarised from, for
+ * keying per-bubble expansion state — deliberately NOT the React key.
+ *
+ * ── The defect ─────────────────────────────────────────────────────────────
+ * Expansion state was keyed by `getChatMessageStableKey`. On the replica lane a
+ * tool bubble carries neither `bubbleId` nor `providerUnitKey` (both are
+ * excluded from the wire on purpose — see `transcript-chat-pane-adapter.ts`),
+ * and `sequence` is `number | null` BY DESIGN, so the key can reduce to the
+ * turn-grained tier whose discriminator is `chash:<content hash>`. A tool
+ * bubble's content is exactly what moves — the summary is rewritten as the
+ * result streams in and again when it settles — so the key changed underneath
+ * an open expansion and the panel silently collapsed while the reader was
+ * looking at it.
+ *
+ * ── Why the two indices and NOT `sourceMtimeMs` ────────────────────────────
+ * The ref's three integers do not have equal stability. `recordIndex` and
+ * `blockIndex` address a POSITION in the transcript and do not move while that
+ * block exists. `sourceMtimeMs` is a freshness seal that changes on every
+ * append to the file — including appends that have nothing to do with this
+ * block. Folding it in would re-key every open expansion on each transcript
+ * write, which is the very churn this function exists to stop. The seal's job
+ * is to make the daemon REFUSE a stale read (`source_changed`), and it still
+ * does that on the request; it is not an identity component.
+ *
+ * ── Why this is separate from the React key ────────────────────────────────
+ * `getChatMessageStableKey` must stay byte-identical for every message that
+ * already had one, or bubbles remount (CHAT-FLAP-LONG-CONVO) and the
+ * `dupKeyPairs` uniqueness guarantee shifts. Ranking `toolBlockRef` into it
+ * would ALSO be wrong on its own terms: two distinct bubbles summarised from
+ * one block would then share a React key. Expansion state has no such
+ * constraint — it is a lookup, not a reconciliation identity — so it gets its
+ * own key and the React key is untouched.
+ *
+ * Returns null for any bubble with no ref, whose caller keeps the existing
+ * stable-key behaviour.
+ */
+export function getToolExpandStateKey(message: ChatMessage): string | null {
+    const ref = message.toolBlockRef;
+    if (!ref || typeof ref !== 'object') return null;
+    const { recordIndex, blockIndex } = ref as { recordIndex?: unknown; blockIndex?: unknown };
+    if (!Number.isInteger(recordIndex) || !Number.isInteger(blockIndex)) return null;
+    return `toolblock:${recordIndex}:${blockIndex}`;
+}
+
+/**
  * Stable React key for a chat message.
  *
  * The key MUST be position-independent: the message list is data-windowed and

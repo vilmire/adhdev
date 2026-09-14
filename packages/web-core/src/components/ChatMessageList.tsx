@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import {
     getRenderableTimestamp,
     getChatMessageStableKey,
+    getToolExpandStateKey,
     buildChatMessageStableKeys,
     type ActionLog,
 } from './ChatMessageList/chatMessageHelpers';
@@ -56,7 +57,7 @@ import type { ChatMessage } from '../types';
 // Re-export the pure helpers so existing import paths (tests, ChatPane) keep
 // resolving from this module after the C9 3/3 decomposition.
 export type { ActionLog } from './ChatMessageList/chatMessageHelpers';
-export { getChatMessageStableKey, buildChatMessageStableKeys } from './ChatMessageList/chatMessageHelpers';
+export { getChatMessageStableKey, getToolExpandStateKey, buildChatMessageStableKeys } from './ChatMessageList/chatMessageHelpers';
 export {
     buildChatScrollFingerprint,
     getChatScrollJumpButtonState,
@@ -629,6 +630,15 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 const receivedAt = m.receivedAt || receivedAtMap[getChatMessageStableKey(m, i)];
                 const expandKey = `${contextKey}-${messageKey}`;
                 const isTextExpanded = expandedTexts.has(expandKey);
+                // (TOOL-EXPAND) Expansion state is keyed by the tool BLOCK, not
+                // by the React key. On the replica lane the React key can fall
+                // back to a content hash, and a tool bubble's content is exactly
+                // what changes as its result streams — which silently dropped
+                // open expansions. `getToolExpandStateKey` addresses the block
+                // instead, so it survives the rewrite. Bubbles with no ref (not
+                // expandable, or a non-replica bubble with full identity) keep
+                // the previous key, byte-identical.
+                const toolExpandKey = getToolExpandStateKey(m) ?? messageKey;
                 return (
                     <ChatMessageRow
                         key={`msg-${messageKey}`}
@@ -641,9 +651,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
-                        toolExpand={toolExpansions?.[messageKey]}
-                        onExpandToolBlock={onExpandToolBlock ? (ref) => onExpandToolBlock(messageKey, ref) : undefined}
-                        onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(messageKey) : undefined}
+                        toolExpand={toolExpansions?.[toolExpandKey]}
+                        onExpandToolBlock={onExpandToolBlock ? (ref) => onExpandToolBlock(toolExpandKey, ref) : undefined}
+                        onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(toolExpandKey) : undefined}
                         onToggleTextExpanded={() => setExpandedTexts(prev => {
                             const next = new Set(prev);
                             isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
