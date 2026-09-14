@@ -11,7 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import InteractivePromptModal from '../../src/components/interactive-prompt/InteractivePromptModal'
 import type { InteractivePromptSession } from '../../src/interactive-prompt/interactive-prompt-utils'
 
-function session(): InteractivePromptSession {
+function session(overrides?: {
+  promptId?: string
+  questionId?: string
+  question?: string
+  allowFreeform?: boolean
+}): InteractivePromptSession {
   return {
     daemonId: 'daemon-1',
     sessionId: 'session-1',
@@ -19,15 +24,16 @@ function session(): InteractivePromptSession {
     providerType: 'claude-cli',
     title: 'Choose an option',
     prompt: {
-      promptId: 'prompt-1',
+      promptId: overrides?.promptId ?? 'prompt-1',
       origin: 'cli',
       providerType: 'claude-cli',
       createdAt: 123,
       questions: [
         {
-          questionId: 'q1',
-          question: 'Pick one',
+          questionId: overrides?.questionId ?? 'q1',
+          question: overrides?.question ?? 'Pick one',
           multiSelect: false,
+          allowFreeform: overrides?.allowFreeform,
           options: [
             { label: 'Option A' },
             { label: 'Option B' },
@@ -37,6 +43,9 @@ function session(): InteractivePromptSession {
     },
   } as InteractivePromptSession
 }
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 describe('InteractivePromptModal accessibility', () => {
   let container: HTMLDivElement
@@ -130,5 +139,79 @@ describe('InteractivePromptModal accessibility', () => {
 
     const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
     expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+
+  it('keeps Other textarea focus when promptSession is replaced with the same promptId', () => {
+    // P2P status polling rebuilds the session wrapper every few seconds with a
+    // new object identity but the same promptId. The focus-trap must not
+    // re-run `.focus()` onto the header Close button, or the mobile IME
+    // collapses while the user is typing in Other.
+    const first = session({ allowFreeform: true })
+    act(() => {
+      root.render(
+        <InteractivePromptModal promptSession={first} onSubmit={() => {}} onCancel={() => {}} />,
+      )
+    })
+
+    const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea).not.toBeNull()
+    textarea.focus()
+    expect(document.activeElement).toBe(textarea)
+
+    const second = session({ allowFreeform: true })
+    expect(second).not.toBe(first)
+    expect(second.prompt.promptId).toBe(first.prompt.promptId)
+
+    act(() => {
+      root.render(
+        <InteractivePromptModal promptSession={second} onSubmit={() => {}} onCancel={() => {}} />,
+      )
+    })
+
+    expect(document.activeElement).toBe(textarea)
+    const close = document.body.querySelector('[aria-label="Cancel interactive prompt"]')
+    expect(document.activeElement).not.toBe(close)
+    expect(document.activeElement?.tagName).toBe('TEXTAREA')
+  })
+
+  it('moves initial focus into the dialog when a new promptId appears', () => {
+    act(() => {
+      root.render(
+        <InteractivePromptModal
+          promptSession={session({ allowFreeform: true })}
+          onSubmit={() => {}}
+          onCancel={() => {}}
+        />,
+      )
+    })
+
+    const firstTextarea = document.body.querySelector('textarea') as HTMLTextAreaElement
+    firstTextarea.focus()
+    expect(document.activeElement).toBe(firstTextarea)
+
+    // A genuinely new question (new promptId + new questionId so the old
+    // textarea unmounts). Initial focus must land on the first focusable —
+    // currently the header Close button — not stay on Other.
+    act(() => {
+      root.render(
+        <InteractivePromptModal
+          promptSession={session({
+            promptId: 'prompt-2',
+            questionId: 'q2',
+            question: 'Pick another',
+            allowFreeform: true,
+          })}
+          onSubmit={() => {}}
+          onCancel={() => {}}
+        />,
+      )
+    })
+
+    const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    expect(focusable.length).toBeGreaterThan(0)
+    expect(document.activeElement).toBe(focusable[0])
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement?.tagName).not.toBe('TEXTAREA')
   })
 })
