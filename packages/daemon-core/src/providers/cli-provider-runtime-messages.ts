@@ -21,6 +21,10 @@ import { workingDirBasename } from './working-dir.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
+import type { InputEnvelope } from './contracts.js';
+import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
+import { shortHash } from '../system/hash.js';
+import { USER_INPUT_ACK_DEDUP_WINDOW_MS } from './cli-provider-instance-types.js';
 
 /** The narrow surface of CliProviderInstance this cluster reads/writes. */
 export interface RuntimeMessagesHost {
@@ -32,6 +36,9 @@ export interface RuntimeMessagesHost {
     adapter: { getScriptParsedStatus?: () => { title?: string } | null | undefined };
     runtimeMessages: Array<{ key: string; message: ChatMessage }>;
     parsedIngestTimestamps: ParsedIngestTimestampStamper;
+    /** TASKBUBBLE-DUP dedup ledger for user-input acks — see recordAcknowledgedUserInput. */
+    recentUserInputAcks: Map<string, number>;
+    lastAcknowledgedUserInputAt: number;
 }
 
 export function maybeAppendRuntimeRecoveryMessage(
@@ -121,4 +128,73 @@ export function mergeRuntimeChatMessages(
     parsedMessages: ChatMessage[],
 ): ChatMessage[] {
     return mergeConversationMessages(host.runtimeMessages, host.parsedIngestTimestamps.stamp(parsedMessages));
+}
+
+/**
+ * TASKBUBBLE-DUP: record the user-input ack bubble for a dispatched message,
+ * collapsing a redelivered dispatch to a single bubble.
+ *
+ * Pure move out of cli-provider-instance.ts (file-size gate decomposition,
+ * mission B1). Byte-identical logic; the dedup ledger and the
+ * lastAcknowledgedUserInputAt stamp stay HOST-owned exactly as before, so
+ * suites that seed or inspect them directly are unchanged.
+ */
+export function recordAcknowledgedUserInput(
+    host: RuntimeMessagesHost,
+    input: InputEnvelope | string,
+): void {
+    const content = typeof input === 'string'
+        ? input.trim()
+        : buildCliStructuredInputPrompt(input).trim();
+    if (!content) return;
+
+    const receivedAt = Date.now();
+
+    // TASKBUBBLE-DUP: collapse a redelivered dispatch to one bubble. A single
+    // mesh_send_task can reach this instance as TWO send_chat calls when the
+    // first injection is buffered during bootstrap/busy and a retry (dispatch-
+    // confirm-timeout requeue, or a reconcile re-dispatch) fires before the
+    // outbound queue drains. The previous dedupKey hashed receivedAt, so the
+    // two acks produced different keys and BOTH bubbled. Suppress an identical
+    // content ack seen within USER_INPUT_ACK_DEDUP_WINDOW_MS; a later resend of
+    // the same text (beyond the window) is a genuine new turn and still shows.
+    const ackContentKey = shortHash(`${host.instanceId}:${content}`, 24);
+    const lastAckAt = host.recentUserInputAcks.get(ackContentKey);
+    if (lastAckAt !== undefined && receivedAt - lastAckAt <= USER_INPUT_ACK_DEDUP_WINDOW_MS) {
+        // Refresh the timestamp so a steady stream of redeliveries keeps
+        // collapsing, and prune stale entries to bound the map size.
+        host.recentUserInputAcks.set(ackContentKey, receivedAt);
+        pruneRecentUserInputAcks(host, receivedAt);
+        return;
+    }
+    host.recentUserInputAcks.set(ackContentKey, receivedAt);
+    pruneRecentUserInputAcks(host, receivedAt);
+
+    host.lastAcknowledgedUserInputAt = receivedAt;
+    // The runtimeMessages dedupKey stays per-call unique (includes receivedAt)
+    // so a genuine resend of the same text after the window appends a fresh
+    // bubble; redelivery within the window is already suppressed above.
+    const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}`, 24)}`;
+    appendRuntimeMessage(host, buildChatMessage({
+        role: 'user',
+        senderName: 'User',
+        kind: 'standard',
+        content,
+        receivedAt,
+        timestamp: receivedAt,
+        source: 'runtime_input_ack',
+        meta: {
+            runtimeInputAck: true,
+            provider: host.type,
+            workspace: host.workingDir,
+        },
+    } as ChatMessage), dedupKey);
+}
+
+/** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
+export function pruneRecentUserInputAcks(host: RuntimeMessagesHost, now: number): void {
+    if (host.recentUserInputAcks.size <= 1) return;
+    for (const [key, at] of host.recentUserInputAcks) {
+        if (now - at > USER_INPUT_ACK_DEDUP_WINDOW_MS) host.recentUserInputAcks.delete(key);
+    }
 }
