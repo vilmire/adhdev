@@ -3147,7 +3147,12 @@
             "newMeshSession": "在此工作区启动网格协调器会话",
             "newMeshSessionShort": "网格",
             "removeConfirmTitle": "移除工作区",
-            "removeConfirmDescription": "从列表中移除 \"{{label}}\" 吗？文件夹本身不会被删除。"
+            "removeConfirmDescription": "从列表中移除 \"{{label}}\" 吗？文件夹本身不会被删除。",
+            "rename": "重命名",
+            "renamePlaceholder": "工作区名称",
+            "saveName": "保存",
+            "cancelRename": "取消",
+            "renameFailed": "无法更新工作区名称"
         },
         "overview": {
             "waitingForStats": "正在等待实时统计…",
@@ -3177,6 +3182,7 @@
             "selectProviderFirst": "请先选择 CLI 或 ACP 提供方",
             "selectProvider": "请选择提供方",
             "workspaceRemoved": "已移除工作区",
+            "workspaceLabelUpdated": "已更新工作区名称",
             "defaultWorkspaceUpdated": "已更新默认工作区",
             "defaultWorkspaceCleared": "已清除默认工作区",
             "idesFound_one": "找到 {{count}} 个 IDE",

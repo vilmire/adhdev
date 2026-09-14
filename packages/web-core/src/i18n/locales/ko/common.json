@@ -3147,7 +3147,12 @@
             "newMeshSession": "이 워크스페이스에서 메시 코디네이터 세션 시작",
             "newMeshSessionShort": "메시",
             "removeConfirmTitle": "워크스페이스 제거",
-            "removeConfirmDescription": "\"{{label}}\"을(를) 목록에서 제거할까요? 폴더 자체는 삭제되지 않습니다."
+            "removeConfirmDescription": "\"{{label}}\"을(를) 목록에서 제거할까요? 폴더 자체는 삭제되지 않습니다.",
+            "rename": "이름 바꾸기",
+            "renamePlaceholder": "워크스페이스 이름",
+            "saveName": "저장",
+            "cancelRename": "취소",
+            "renameFailed": "워크스페이스 이름을 바꾸지 못했습니다"
         },
         "overview": {
             "waitingForStats": "실시간 통계 대기 중…",
@@ -3177,6 +3182,7 @@
             "selectProviderFirst": "먼저 CLI 또는 ACP 프로바이더를 선택하세요",
             "selectProvider": "프로바이더를 선택하세요",
             "workspaceRemoved": "워크스페이스가 제거되었습니다",
+            "workspaceLabelUpdated": "워크스페이스 이름이 변경되었습니다",
             "defaultWorkspaceUpdated": "기본 워크스페이스가 변경되었습니다",
             "defaultWorkspaceCleared": "기본 워크스페이스가 해제되었습니다",
             "idesFound_one": "IDE {{count}}개를 찾았습니다",

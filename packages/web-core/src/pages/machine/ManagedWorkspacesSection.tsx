@@ -9,6 +9,7 @@
  *   - Set default workspace via a select
  *   - Open the folder browser dialog to add a new workspace
  *   - Remove a saved workspace
+ *   - Rename a mesh workspace (daemon-config `workspaces[].label`)
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,7 +18,7 @@ import { getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import { useDashboardMeshOverrides } from '../../context/DashboardMeshContext'
 import Card from '../../components/Card'
 import ConfirmDialog from '../../components/ConfirmDialog'
-import { IconFolder, IconPlus, IconTrash } from '../../components/Icons'
+import { IconCheck, IconFolder, IconPencil, IconPlus, IconTrash, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
@@ -30,6 +31,100 @@ import {
 
 function normalizeWorkspacePath(path: string): string {
     return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/** Daemon-config labels work for any saved workspace; first cut exposes
+ *  rename only on Repo Mesh workspace roots (owner: "when using Repo Mesh"). */
+export function canEditWorkspaceLabel(path: string, meshWorkspacePaths: Set<string>): boolean {
+    return meshWorkspacePaths.has(normalizeWorkspacePath(path))
+}
+
+export function WorkspaceLabelEditor({
+    displayLabel,
+    path,
+    busy,
+    onSave,
+}: {
+    displayLabel: string
+    path: string
+    busy: boolean
+    onSave: (path: string, label: string) => Promise<boolean>
+}) {
+    const { t } = useTranslation('common')
+    const [editing, setEditing] = useState(false)
+    const [draft, setDraft] = useState(displayLabel)
+    const [saving, setSaving] = useState(false)
+
+    const startEdit = () => {
+        setDraft(displayLabel)
+        setEditing(true)
+    }
+
+    const cancel = () => {
+        setEditing(false)
+        setDraft(displayLabel)
+    }
+
+    const save = async () => {
+        setSaving(true)
+        try {
+            const ok = await onSave(path, draft)
+            if (ok) setEditing(false)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    if (!editing) {
+        return (
+            <div className="flex items-center gap-1 min-w-0">
+                <div className="font-medium text-text-primary truncate">{displayLabel}</div>
+                <button
+                    type="button"
+                    title={t('machine.managedWorkspaces.rename')}
+                    aria-label={t('machine.managedWorkspaces.rename')}
+                    className="shrink-0 p-0.5 rounded text-text-muted/60 hover:text-text-primary hover:bg-bg-glass-hover transition-colors"
+                    disabled={busy}
+                    onClick={startEdit}
+                ><IconPencil size={12} /></button>
+            </div>
+        )
+    }
+
+    return (
+        <div className="flex items-center gap-1 min-w-0">
+            <input
+                autoFocus
+                value={draft}
+                maxLength={64}
+                disabled={busy || saving}
+                onChange={e => setDraft(e.target.value)}
+                onKeyDown={e => {
+                    if (e.key === 'Enter') void save()
+                    if (e.key === 'Escape') cancel()
+                }}
+                placeholder={t('machine.managedWorkspaces.renamePlaceholder')}
+                aria-label={t('machine.managedWorkspaces.rename')}
+                className="min-w-0 flex-1 px-1.5 py-0.5 rounded border border-accent/30 bg-bg-secondary text-text-primary text-2xs font-medium"
+            />
+            <button
+                type="button"
+                title={t('machine.managedWorkspaces.saveName')}
+                aria-label={t('machine.managedWorkspaces.saveName')}
+                className="shrink-0 p-0.5 rounded text-green-400 hover:bg-green-500/15 transition-colors"
+                disabled={busy || saving}
+                onClick={() => { void save() }}
+            ><IconCheck size={12} /></button>
+            <button
+                type="button"
+                title={t('machine.managedWorkspaces.cancelRename')}
+                aria-label={t('machine.managedWorkspaces.cancelRename')}
+                className="shrink-0 p-0.5 rounded text-text-muted/60 hover:text-text-primary hover:bg-bg-glass-hover transition-colors"
+                disabled={saving}
+                onClick={cancel}
+            ><IconX size={12} /></button>
+        </div>
+    )
 }
 
 interface ManagedWorkspacesSectionProps {
@@ -54,6 +149,7 @@ export default function ManagedWorkspacesSection({
     const {
         workspaceBusy,
         handleWorkspaceAdd, handleWorkspaceRemove, handleWorkspaceSetDefault,
+        handleWorkspaceSetLabel,
     } = actions
 
     const { t } = useTranslation('common')
@@ -187,9 +283,18 @@ export default function ManagedWorkspacesSection({
                                         }`}
                                     >★</button>
                                     <div className="min-w-0 flex-1">
-                                        <div className="font-medium text-text-primary truncate">
-                                            {getWorkspaceDisplayLabel(w.path, w.label)}
-                                        </div>
+                                        {canEditWorkspaceLabel(w.path, meshWorkspacePaths) ? (
+                                            <WorkspaceLabelEditor
+                                                displayLabel={getWorkspaceDisplayLabel(w.path, w.label)}
+                                                path={w.path}
+                                                busy={workspaceBusy}
+                                                onSave={handleWorkspaceSetLabel}
+                                            />
+                                        ) : (
+                                            <div className="font-medium text-text-primary truncate">
+                                                {getWorkspaceDisplayLabel(w.path, w.label)}
+                                            </div>
+                                        )}
                                         <div className="font-mono text-text-muted truncate text-3xs" title={w.path}>{w.path}</div>
                                     </div>
                                     <button

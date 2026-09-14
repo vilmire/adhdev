@@ -3147,7 +3147,12 @@
             "newMeshSession": "このワークスペースでメッシュコーディネーターセッションを開始",
             "newMeshSessionShort": "メッシュ",
             "removeConfirmTitle": "ワークスペースを削除",
-            "removeConfirmDescription": "\"{{label}}\" をリストから削除しますか？フォルダー自体は削除されません。"
+            "removeConfirmDescription": "\"{{label}}\" をリストから削除しますか？フォルダー自体は削除されません。",
+            "rename": "名前を変更",
+            "renamePlaceholder": "ワークスペース名",
+            "saveName": "保存",
+            "cancelRename": "キャンセル",
+            "renameFailed": "ワークスペース名を更新できませんでした"
         },
         "overview": {
             "waitingForStats": "ライブ統計を待っています…",
@@ -3177,6 +3182,7 @@
             "selectProviderFirst": "先に CLI または ACP プロバイダーを選択してください",
             "selectProvider": "プロバイダーを選択してください",
             "workspaceRemoved": "ワークスペースを削除しました",
+            "workspaceLabelUpdated": "ワークスペース名を更新しました",
             "defaultWorkspaceUpdated": "既定のワークスペースを更新しました",
             "defaultWorkspaceCleared": "既定のワークスペースをクリアしました",
             "idesFound_one": "{{count}} 件の IDE が見つかりました",

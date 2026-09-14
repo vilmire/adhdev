@@ -3152,7 +3152,12 @@
             "newMeshSession": "Iniciar una sesión de coordinador de mesh en este workspace",
             "newMeshSessionShort": "Mesh",
             "removeConfirmTitle": "Eliminar workspace",
-            "removeConfirmDescription": "¿Eliminar \"{{label}}\" de la lista? La carpeta en sí no se elimina."
+            "removeConfirmDescription": "¿Eliminar \"{{label}}\" de la lista? La carpeta en sí no se elimina.",
+            "rename": "Renombrar",
+            "renamePlaceholder": "Nombre del workspace",
+            "saveName": "Guardar",
+            "cancelRename": "Cancelar",
+            "renameFailed": "No se pudo actualizar el nombre del workspace"
         },
         "overview": {
             "waitingForStats": "Esperando estadísticas en vivo…",
@@ -3182,6 +3187,7 @@
             "selectProviderFirst": "Selecciona primero un proveedor CLI o ACP",
             "selectProvider": "Selecciona un proveedor",
             "workspaceRemoved": "Workspace eliminado",
+            "workspaceLabelUpdated": "Nombre del workspace actualizado",
             "defaultWorkspaceUpdated": "Workspace predeterminado actualizado",
             "defaultWorkspaceCleared": "Workspace predeterminado borrado",
             "idesFound_one": "Se encontró {{count}} IDE",

@@ -244,6 +244,29 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand, t])
 
+    const handleWorkspaceSetLabel = useCallback(async (path: string, label: string) => {
+        if (!machineId || !path.trim()) return false
+        setWorkspaceBusy(true)
+        try {
+            const res: any = await sendDaemonCommand(machineId, 'workspace_set_label', {
+                path: path.trim(),
+                label,
+            })
+            if (res?.success) {
+                await sendDaemonCommand(machineId, 'workspace_list', {})
+                addLog('info', t('machine.actions.workspaceLabelUpdated'), true)
+                return true
+            }
+            addLog('error', res?.error || t('machine.managedWorkspaces.renameFailed'), true)
+            return false
+        } catch (e: any) {
+            addLog('error', e.message, true)
+            return false
+        } finally {
+            setWorkspaceBusy(false)
+        }
+    }, [machineId, addLog, sendDaemonCommand, t])
+
     const handleWorkspaceResumePath = useCallback(async (absPath: string) => {
         if (!machineId || !absPath.trim()) return
         const p = absPath.trim()
@@ -290,7 +313,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         handleLaunchIde, runLaunchCliCore, handleLaunchCli,
         handleStopCli, handleRestartIde, handleStopIde, handleDetectIdes,
         handleWorkspaceAdd, handleWorkspaceRemove,
-        handleWorkspaceSetDefault, handleWorkspaceResumePath,
+        handleWorkspaceSetDefault, handleWorkspaceSetLabel, handleWorkspaceResumePath,
         handleSaveNickname,
         // Must be rendered once by the consuming page for confirm() to show.
         confirmDialog,
