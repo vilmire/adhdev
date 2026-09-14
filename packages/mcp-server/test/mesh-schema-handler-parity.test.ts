@@ -4,7 +4,21 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { MESH_MAGI_KIND_PANEL_LIST_TOOL, MESH_MAGI_KIND_PANEL_SET_TOOL, MESH_WRITE_MESH_JSON_CONFIG_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import {
+    MESH_FORGET_NOTE_TOOL,
+    MESH_MAGI_COLLECT_TOOL,
+    MESH_MAGI_KIND_PANEL_LIST_TOOL,
+    MESH_MAGI_KIND_PANEL_SET_TOOL,
+    MESH_MAGI_REVIEW_TOOL,
+    MESH_MISSION_LIST_TOOL,
+    MESH_MISSION_UPSERT_TOOL,
+    MESH_NODE_SLOTS_LIST_TOOL,
+    MESH_NODE_SLOTS_PROPOSE_TOOL,
+    MESH_NODE_SLOTS_SET_TOOL,
+    MESH_QUEUE_CANCEL_TOOL,
+    MESH_QUEUE_REQUEUE_TOOL,
+    MESH_WRITE_MESH_JSON_CONFIG_TOOL,
+} from '../src/tools/mesh-tool-schemas.js';
 import { rejectUnknownMeshToolArgs } from '../src/tools/validate-tool-args.js';
 
 /**
@@ -100,4 +114,119 @@ test('D2#2: task_kind — the declared key — passes on both kind-panel tools',
     assert.equal(rejectUnknownMeshToolArgs('mesh_magi_kind_panel_list', { task_kind: 'rca' }), null);
     assert.ok('task_kind' in (MESH_MAGI_KIND_PANEL_SET_TOOL.inputSchema.properties as object));
     assert.ok('task_kind' in (MESH_MAGI_KIND_PANEL_LIST_TOOL.inputSchema.properties as object));
+});
+
+/**
+ * D2#4 (this fix) — a follow-up sweep of the SAME class of bug found by D2#1/#2, this
+ * time for genuine camelCase↔snake_case ALIAS pairs (task_kind/taskKind, mission_id/
+ * missionId, etc — same word, not a different one like D2#2's `kind`). Each handler
+ * below already reads BOTH spellings (readString(args.x) || readString(args.xCamel), or
+ * args.x ?? args.xCamel), but the schema declared only the snake_case half, so the
+ * camelCase half was unreachable dead code exactly like D2#1's node_id. Fixed by
+ * declaring the missing camelCase alias, following the repo's established "CamelCase
+ * alias for x_y" convention (never by deleting the handler's read, since these ARE the
+ * same-word alias pairs D2#2 said the convention covers).
+ */
+const magiFullSrc = readFileSync(join(here, '../src/tools/mesh-tools-magi.ts'), 'utf8');
+const missionHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-mission.ts'), 'utf8');
+const queueHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-queue.ts'), 'utf8');
+const slotsHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slots.ts'), 'utf8');
+const slotAutodetectHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slot-autodetect.ts'), 'utf8');
+
+test('D2#4: mesh_magi_review accepts every camelCase alias its handler reads', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_review', {
+        question: 'q',
+        taskKind: 'rca',
+        includeStale: true,
+        requireIndependentEvidence: false,
+        waitTimeoutMs: 60000,
+        autoCleanup: false,
+    }), null);
+    const props = MESH_MAGI_REVIEW_TOOL.inputSchema.properties as Record<string, unknown>;
+    for (const key of ['taskKind', 'includeStale', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
+        assert.ok(key in props, `mesh_magi_review schema must declare ${key}`);
+    }
+    assert.match(magiFullSrc, /args\.task_kind\s*\?\?\s*args\.taskKind/);
+    assert.match(magiFullSrc, /args\.include_stale\s*\?\?\s*args\.includeStale/);
+});
+
+test('D2#4: mesh_magi_collect accepts every camelCase alias its handler reads', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_collect', {
+        consensusGroupId: 'magi_x',
+        taskKind: 'rca',
+        requireIndependentEvidence: false,
+        waitTimeoutMs: 60000,
+        autoCleanup: false,
+        verbose: true,
+    }), null);
+    const props = MESH_MAGI_COLLECT_TOOL.inputSchema.properties as Record<string, unknown>;
+    for (const key of ['consensusGroupId', 'taskKind', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
+        assert.ok(key in props, `mesh_magi_collect schema must declare ${key}`);
+    }
+    assert.match(magiFullSrc, /readString\(args\.consensus_group_id\)\s*\|\|\s*readString\(args\.consensusGroupId\)/);
+});
+
+test('D2#4: mesh_mission_upsert accepts missionId and missionIds', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionId: 'm_x', title: 't' }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionIds: ['a', 'b'], status: 'completed' }), null);
+    const props = MESH_MISSION_UPSERT_TOOL.inputSchema.properties as Record<string, unknown>;
+    assert.ok('missionId' in props);
+    assert.ok('missionIds' in props);
+    assert.match(missionHandlerSrc, /args\.mission_ids\s*\?\?\s*args\.missionIds/);
+    assert.match(missionHandlerSrc, /readString\(args\.mission_id\)\s*\|\|\s*readString\(args\.missionId\)/);
+});
+
+test('D2#4: mesh_mission_list accepts includeMagi and includeStats', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_mission_list', { includeMagi: true, includeStats: true }), null);
+    const props = MESH_MISSION_LIST_TOOL.inputSchema.properties as Record<string, unknown>;
+    assert.ok('includeMagi' in props);
+    assert.ok('includeStats' in props);
+    assert.match(missionHandlerSrc, /args\.include_magi\s*\?\?\s*args\.includeMagi/);
+    assert.match(missionHandlerSrc, /args\.include_stats\s*\?\?\s*args\.includeStats/);
+});
+
+test('D2#4: mesh_forget_note accepts noteId', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_forget_note', { noteId: 'n_x' }), null);
+    assert.ok('noteId' in (MESH_FORGET_NOTE_TOOL.inputSchema.properties as object));
+    assert.match(missionHandlerSrc, /readString\(args\.note_id\)\s*\|\|\s*readString\(args\.noteId\)/);
+});
+
+test('D2#4: mesh_queue_cancel accepts taskId', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_queue_cancel', { taskId: 't_x' }), null);
+    assert.ok('taskId' in (MESH_QUEUE_CANCEL_TOOL.inputSchema.properties as object));
+    assert.match(queueHandlerSrc, /args\.task_id\s*\|\|\s*args\.taskId/);
+});
+
+test('D2#4: mesh_queue_requeue accepts every camelCase alias its handler reads', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_queue_requeue', {
+        taskId: 't_x',
+        targetNodeId: 'n_x',
+        targetSessionId: 's_x',
+        clearTargetNode: true,
+        keepTargetSession: true,
+    }), null);
+    const props = MESH_QUEUE_REQUEUE_TOOL.inputSchema.properties as Record<string, unknown>;
+    for (const key of ['taskId', 'targetNodeId', 'targetSessionId', 'clearTargetNode', 'keepTargetSession']) {
+        assert.ok(key in props, `mesh_queue_requeue schema must declare ${key}`);
+    }
+    assert.match(queueHandlerSrc, /args\.target_node_id\s*\|\|\s*args\.targetNodeId/);
+});
+
+test('D2#4: mesh_node_slots_set / _list / _propose accept nodeId (and propose accepts includeMagi)', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots_set', { nodeId: 'n_x', slots: [{ provider: 'claude-cli' }] }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots_list', { nodeId: 'n_x' }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots_propose', { nodeId: 'n_x', includeMagi: true }), null);
+    assert.ok('nodeId' in (MESH_NODE_SLOTS_SET_TOOL.inputSchema.properties as object));
+    assert.ok('nodeId' in (MESH_NODE_SLOTS_LIST_TOOL.inputSchema.properties as object));
+    const proposeProps = MESH_NODE_SLOTS_PROPOSE_TOOL.inputSchema.properties as Record<string, unknown>;
+    assert.ok('nodeId' in proposeProps);
+    assert.ok('includeMagi' in proposeProps);
+    assert.match(slotsHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
+    assert.match(slotAutodetectHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
+});
+
+test('D2#4: an undeclared key is still rejected on the fixed tools (the gate was not widened wholesale)', () => {
+    const error = rejectUnknownMeshToolArgs('mesh_queue_cancel', { taskld: 't_x' });
+    assert.ok(error, 'a typo must still be rejected');
+    assert.match(error, /Unknown parameter/);
 });
