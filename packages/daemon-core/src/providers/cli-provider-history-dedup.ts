@@ -9,6 +9,7 @@
  */
 
 import { flattenContent } from './contracts.js';
+import { recordProjectionCarry } from '../shared/projection-carry-counters.js';
 
 export type PersistableCliHistoryMessage = {
     role: string;
@@ -59,7 +60,28 @@ export type BubbleIdentityFields = {
     bubbleId?: string;
 };
 
+/**
+ * (G1) Set only while `carryMessageRefs` delegates into `carryBubbleIdentity`,
+ * so one message is counted once rather than twice.
+ *
+ * A module-level boolean is safe here because both helpers are synchronous and
+ * allocation-free — there is no await between set and clear, so no other
+ * message can interleave on the event loop.
+ */
+let suppressCarryCounting = false;
+
 export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdentityFields {
+    // (G1) See `carryMessageRefs` below: it records on the caller's behalf and
+    // then delegates here, so recording again would double-count. This flag is
+    // set only for that internal delegation, never by an outside caller.
+    if (!suppressCarryCounting) {
+        // ★ `true` for the ref, NOT false. This helper is the identity-only hop
+        // by design (the on-disk writer must not persist an mtime-sealed ref),
+        // so a ref on the input is a deliberate non-carry, not a drop. Passing
+        // `true` means "no drop to report" without having to allocate a stripped
+        // copy of the message on a per-message hot path.
+        recordProjectionCarry(message, true);
+    }
     return {
         ...(typeof message?.sequence === 'number' && Number.isFinite(message.sequence) ? { sequence: message.sequence } : {}),
         ...(message?._turnKey ? { _turnKey: message._turnKey } : {}),
@@ -91,10 +113,25 @@ export function carryBubbleIdentity(message: BubbleIdentityFields): BubbleIdenti
 export function carryMessageRefs(message: BubbleIdentityFields & {
     toolBlockRef?: { sourceMtimeMs: number; recordIndex: number; blockIndex: number };
 }): Partial<Pick<PersistableCliHistoryMessage, 'toolBlockRef'>> & BubbleIdentityFields {
-    return {
-        ...(message?.toolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
-        ...carryBubbleIdentity(message),
-    };
+    const carriedToolBlockRef = Boolean(message?.toolBlockRef);
+    // (G1) Measured HERE rather than inside `carryBubbleIdentity`, even though
+    // that is the deeper helper: this function calls it, so instrumenting both
+    // would double-count every message that comes through this path. The
+    // identity-only hop is counted at its own call site instead.
+    recordProjectionCarry(message, carriedToolBlockRef);
+    suppressCarryCounting = true;
+    try {
+        return {
+            ...(carriedToolBlockRef ? { toolBlockRef: message.toolBlockRef } : {}),
+            ...carryBubbleIdentity(message),
+        };
+    } finally {
+        // `finally` rather than a plain reset after the return: `carryBubbleIdentity`
+        // is allocation-only and should not throw, but leaving this flag stuck on
+        // would silently stop counting for the rest of the process — a failure
+        // mode strictly worse than the one the counters exist to detect.
+        suppressCarryCounting = false;
+    }
 }
 
 /**
