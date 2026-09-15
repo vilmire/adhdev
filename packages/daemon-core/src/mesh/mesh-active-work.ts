@@ -393,8 +393,8 @@ function directDispatchTaskId(entry: MeshLedgerEntry): string {
  * The task's OWN terminal already retires it (the snapshot matcher prefers a real
  * terminal over an approval, and such records leave `activeWork` as terminal rows).
  * The uncovered shape is an approval task with no own terminal whose SESSION has
- * demonstrably moved on: a later task on the same session completed or failed, which
- * means the worker is no longer sitting on that modal.
+ * demonstrably moved on: a later task on the same session completed or failed, or the
+ * session itself stopped, which means the worker is no longer sitting on that modal.
  *
  * Deliberately SESSION-scoped, not node-scoped. The equivalent real-time guard for
  * approval NUDGES (`isApprovalNudgeResolved`, mesh-reconcile-coordinator-drain.ts)
@@ -405,8 +405,9 @@ function directDispatchTaskId(entry: MeshLedgerEntry): string {
  *
  * Weak/false-idle completions are excluded (same rule as
  * hasTerminalLedgerAuthorityForTask): a worker that may still be mid-turn is not
- * evidence the modal closed. Terminals at or before the approval are excluded too —
- * only a terminal that came AFTER can resolve it.
+ * evidence the modal closed. A session_stopped tombstone is conclusive without task
+ * completion evidence. Terminals at or before the approval are excluded too — only a
+ * terminal that came AFTER can resolve it.
  */
 function hasSessionTerminalAfterApproval(
     ledgerEntries: MeshLedgerEntry[] | undefined,
@@ -415,7 +416,7 @@ function hasSessionTerminalAfterApproval(
 ): boolean {
     if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
     for (const entry of ledgerEntries || []) {
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'session_stopped') continue;
         if (!sessionIdsEquivalent(readString(entry.sessionId), sessionId)) continue;
         if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload || {})) continue;
         const terminalAtMs = new Date(entry.timestamp).getTime();
@@ -733,16 +734,17 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
     const staleDirectWork: MeshActiveWorkRecord[] = [];
     const terminalDirectWork: MeshActiveWorkRecord[] = [];
 
-    // ACTIVEWORK-DUPLICATE-ROWS: recordDirectDispatchTask materialises an `assigned` QUEUE row
-    // for the same taskId alongside the direct-dispatch record, so a single mesh_send_task used
-    // to project TWO activeWork rows for one (taskId, attemptId) — inflating generatingCount in
-    // the coordinator's polling guidance and the dashboard. No consumer branches on `source`, so
-    // the two rows carried no distinct information. The queue row is kept (it carries taskMode /
-    // createdAt / updatedAt that the direct row lacks, and the turnOverlay logic is identical)
-    // and the direct row is skipped below, mirroring the `dbTaskIds.has()` idiom already used to
-    // de-duplicate ledger dispatches against MeshRuntimeStore dispatches.
+    // ACTIVEWORK-DUPLICATE-ROWS: recordDirectDispatchTask materialises a QUEUE row for the same
+    // taskId alongside the direct-dispatch/ledger record. Every queue row is authoritative for
+    // identity, including terminal rows: pending/assigned rows are emitted below, while a
+    // completed/failed/cancelled row is a tombstone that prevents an older ledger approval from
+    // resurrecting the task. Keeping only active ids in this set made a cancelled direct dispatch
+    // reappear as awaiting_approval. A terminal queue row cannot hide legitimate active work for
+    // the same task id: queue lifecycle is the task authority, and abandonment paths also
+    // terminalize the sibling direct-dispatch row (terminalizeSiblingDispatch).
     const queueTaskIds = new Set<string>();
     for (const task of opts.queue || []) {
+        queueTaskIds.add(task.id);
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
         const { title, summary } = summarizeMessage(task.message || '');
         const queueNodeId = task.assignedNodeId || task.targetNodeId;
@@ -780,7 +782,6 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             ? turnProjectionActiveWorkStatus(opts.meshId, task.id)
             : null;
         if (turnOverlay) queueStatus = turnOverlay.status;
-        queueTaskIds.add(task.id);
         records.push({
             taskId: task.id,
             source: 'queue',

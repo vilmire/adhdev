@@ -24,7 +24,7 @@
  * matcher prefers a real terminal over an approval for the same dispatch, and
  * such records leave activeWork as terminal rows. The uncovered shape is an
  * approval task with no own terminal whose SESSION demonstrably moved on — a
- * later task on the same session completed or failed.
+ * later task on the same session completed/failed, or the session itself stopped.
  *
  * THE FIX. Session-scoped ledger evidence as a SECONDARY contradiction, used
  * only when the live sniff produced nothing. It mirrors the already-shipped
@@ -40,6 +40,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import { buildMeshActiveWork, collectPendingApprovals } from '../../src/mesh/mesh-active-work.js'
+import { buildMeshStatusLineForNotification, renderMeshStatusLine } from '../../src/mesh/mesh-notification-status-line.js'
+import { __clearMeshLedgerForTests, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js'
+import { __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
 const NODE_ID = 'node_worker'
 const SESSION_ID = 'sess_worker'
@@ -72,14 +76,36 @@ function ledger(
  * Build with NO `nodes` — reproducing the notification-status-line / idle-reminder
  * call sites exactly. This is the condition under which the live-sniff guard is dead.
  */
-function buildWithoutLiveSniff(entries: any[]) {
+function buildWithoutLiveSniff(entries: any[], queue: any[] = []) {
     return buildMeshActiveWork({
         meshId: 'mesh_test',
-        queue: [] as any,
+        queue,
         ledgerEntries: entries,
         directDispatches: [] as any,
         now: NOW,
     })
+}
+
+function renderBannerSnapshot(built: ReturnType<typeof buildWithoutLiveSniff>) {
+    return renderMeshStatusLine({
+        activeWork: built.activeWork,
+        statusCounts: built.summary.statusCounts,
+        totalActiveCount: built.summary.totalActiveCount,
+    })
+}
+
+function queueRow(taskId: string, status: 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled') {
+    return {
+        id: taskId,
+        meshId: 'mesh_test',
+        message: 'direct dispatch awaiting approval',
+        status,
+        assignedNodeId: NODE_ID,
+        assignedSessionId: SESSION_ID,
+        createdAt: DISPATCH_AT,
+        updatedAt: TERMINAL_AT,
+        dispatchTimestamp: DISPATCH_AT,
+    } as any
 }
 
 const DISPATCH_AND_APPROVAL = [
@@ -121,6 +147,127 @@ describe('stale approval pinned with no live sniff available', () => {
         ])
         expect(summary.awaitingApprovalCount).toBe(0)
         expect(summary.statusCounts.awaiting_approval).toBe(0)
+    })
+
+    it.each(['cancelled', 'completed', 'failed'] as const)(
+        'does not resurrect a task whose queue row is terminal (%s) into banner activeWork',
+        (status) => {
+            const taskId = `terminal-queue-${status}`
+            const built = buildWithoutLiveSniff([
+                ledger('task_dispatched', DISPATCH_AT, { taskId }),
+                // Legacy/orphan shape: approval has no taskId and matches by session.
+                ledger('task_approval_needed', APPROVAL_AT, { taskId: undefined }),
+            ], [queueRow(taskId, status)])
+
+            expect(built.activeWork.some(record => record.taskId === taskId)).toBe(false)
+            expect(renderBannerSnapshot(built)).toBeNull()
+        },
+    )
+
+    it('keeps legitimate pending/assigned queue work visible exactly once', () => {
+        for (const status of ['pending', 'assigned'] as const) {
+            const taskId = `active-queue-${status}`
+            const built = buildWithoutLiveSniff([
+                ledger('task_dispatched', DISPATCH_AT, { taskId }),
+            ], [queueRow(taskId, status)])
+
+            expect(built.activeWork.filter(record => record.taskId === taskId)).toHaveLength(1)
+            expect(renderBannerSnapshot(built)).toContain(`[Mesh] active 1: 1 ${status}`)
+        }
+    })
+
+    it('removes a taskId-less approval from banner activeWork after its session stops', () => {
+        const taskId = 'stopped-session-task'
+        const built = buildWithoutLiveSniff([
+            ledger('task_dispatched', DISPATCH_AT, { taskId }),
+            ledger('task_approval_needed', APPROVAL_AT, { taskId: undefined }),
+            ledger('session_stopped', TERMINAL_AT, { taskId: undefined }),
+        ])
+
+        expect(built.activeWork.some(record => record.taskId === taskId)).toBe(false)
+        expect(renderBannerSnapshot(built)).toBeNull()
+    })
+
+    it('feeds session_stopped through the real banner ledger-kind collector', () => {
+        const meshId = `mesh_stopped_banner_${Date.now()}`
+        const taskId = 'stopped-session-collected-task'
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'task_dispatched',
+                timestamp: DISPATCH_AT,
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { taskId, source: 'direct', via: 'mesh_dispatch_task', message: 'direct dispatch awaiting approval' },
+            } as any)
+            appendLedgerEntry(meshId, {
+                kind: 'task_approval_needed',
+                timestamp: APPROVAL_AT,
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { event: 'agent:waiting_approval' },
+            } as any)
+            appendLedgerEntry(meshId, {
+                kind: 'session_stopped',
+                timestamp: TERMINAL_AT,
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { reason: 'worker stopped' },
+            } as any)
+
+            expect(buildMeshStatusLineForNotification(meshId, NOW)).toBeNull()
+        } finally {
+            __clearMeshLedgerForTests(meshId)
+        }
+    })
+
+    it('reproduces the 2026-09-02 phantom through the real banner collector and renders no ghost', () => {
+        const meshId = `mesh_phantom_banner_${Date.now()}`
+        const taskId = 'adcec3f6-e241-4c41-a64f-e4a824090b3e'
+        try {
+            MeshRuntimeStore.getInstance().insertQueueEntry({
+                ...queueRow(taskId, 'cancelled'),
+                meshId,
+                createdAt: '2026-09-02T10:00:00.000Z',
+                updatedAt: '2026-09-02T10:05:00.000Z',
+                dispatchTimestamp: '2026-09-02T10:00:00.000Z',
+            })
+            appendLedgerEntry(meshId, {
+                kind: 'task_dispatched',
+                timestamp: '2026-09-02T10:00:00.000Z',
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { taskId, source: 'direct', via: 'mesh_dispatch_task', message: 'direct dispatch awaiting approval' },
+            } as any)
+            appendLedgerEntry(meshId, {
+                kind: 'task_approval_needed',
+                timestamp: '2026-09-02T10:01:00.000Z',
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                // Historical orphan: payload.taskId absent, so ledger task_id is NULL.
+                payload: { event: 'agent:waiting_approval' },
+            } as any)
+            appendLedgerEntry(meshId, {
+                kind: 'session_stopped',
+                timestamp: '2026-09-02T10:05:00.000Z',
+                nodeId: NODE_ID,
+                sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { reason: 'worker stopped' },
+            } as any)
+            // Deliberately no task_completed/task_failed row. This calls the same
+            // getQueue/getActiveDirectDispatches/kind-filtered-ledger collector used at
+            // injectPendingIntoCoordinator, then the real banner renderer.
+            const thirteenDaysLater = new Date('2026-09-15T10:00:00.000Z').getTime()
+            expect(buildMeshStatusLineForNotification(meshId, thirteenDaysLater)).toBeNull()
+        } finally {
+            __clearMeshQueueForTests(meshId)
+            __clearMeshLedgerForTests(meshId)
+        }
     })
 
     // ---- Reverse regression: a REAL approval must survive every one of these ----

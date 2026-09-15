@@ -78265,7 +78265,7 @@ ${rendered}`, "utf-8");
     function hasSessionTerminalAfterApproval(ledgerEntries, sessionId, approvalAtMs) {
       if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
       for (const entry of ledgerEntries || []) {
-        if (entry.kind !== "task_completed" && entry.kind !== "task_failed") continue;
+        if (entry.kind !== "task_completed" && entry.kind !== "task_failed" && entry.kind !== "session_stopped") continue;
         if (!sessionIdsEquivalent(readString6(entry.sessionId), sessionId)) continue;
         if (entry.kind === "task_completed" && isWeakCompletionEvidence2(entry.payload || {})) continue;
         const terminalAtMs = new Date(entry.timestamp).getTime();
@@ -78410,6 +78410,7 @@ ${rendered}`, "utf-8");
       const terminalDirectWork = [];
       const queueTaskIds = /* @__PURE__ */ new Set();
       for (const task of opts.queue || []) {
+        queueTaskIds.add(task.id);
         if (task.status !== "pending" && task.status !== "assigned") continue;
         const { title, summary: summary2 } = summarizeMessage(task.message || "");
         const queueNodeId = task.assignedNodeId || task.targetNodeId;
@@ -78419,7 +78420,6 @@ ${rendered}`, "utf-8");
         let queueStatus = !queueTerminalAuthority && (queueLive.status === "awaiting_approval" || queueLive.status === "awaiting_choice" || queueLive.status === "generating") ? queueLive.status : task.status;
         const turnOverlay = task.status === "assigned" ? turnProjectionActiveWorkStatus(opts.meshId, task.id) : null;
         if (turnOverlay) queueStatus = turnOverlay.status;
-        queueTaskIds.add(task.id);
         records.push({
           taskId: task.id,
           source: "queue",
@@ -78717,7 +78717,8 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           "task_failed",
           "task_stalled",
           "task_approval_needed",
-          "task_question_pending"
+          "task_question_pending",
+          "session_stopped"
         ]);
         const summary = buildMeshActiveWork3({
           meshId,
@@ -88531,7 +88532,8 @@ ${cleanBody}`;
           "task_failed",
           "task_stalled",
           "task_approval_needed",
-          "task_question_pending"
+          "task_question_pending",
+          "session_stopped"
         ];
         STATUS_RENDER_ORDER = [
           "awaiting_approval",
@@ -90900,10 +90902,12 @@ ${statusLine}`;
             payload: {
               event: args.event,
               nodeLabel: args.nodeLabel,
-              // Fix B: fall back to the direct-dispatch taskId when no work-queue row
-              // matched, so the terminal entry is attributable in mesh task-stats
-              // (otherwise the direct task shows status='unknown' / terminalKind=null).
-              taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || void 0,
+              // Preserve the producer's causal task identity first. Blocked-level
+              // events do not run markSessionTerminal, so relying only on the two
+              // terminal fallbacks wrote task_approval_needed with no taskId. For
+              // completions, Fix B's fallbacks still attribute the row when a legacy
+              // event carries no taskId (otherwise direct task stats show unknown).
+              taskId: readNonEmptyString(args.metadataEvent.taskId) || completedTaskForLedger?.id || directDispatchTaskIdForLedger || void 0,
               providerSessionId,
               finalSummary,
               workerResult,

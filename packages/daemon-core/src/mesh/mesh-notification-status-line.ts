@@ -10,11 +10,12 @@
 // appended line so the common case needs no extra MCP call.
 //
 // ★THIS LINE IS A FILTER, NOT AN AUTHORITY ON APPROVALS. buildMeshActiveWork is
-// called here without `nodes`, so its live-overlay (turnProjectionActiveWorkStatus /
-// sessionStatusFromNodes) never runs — this line can under-report awaiting_approval
-// relative to true node state. Treat it as "at least this much is in flight",
-// never as proof that nothing needs approval. A coordinator that needs the real
-// answer must still call mesh_status / mesh_view_queue.
+// called here without `nodes`, so sessionStatusFromNodes cannot contribute a live
+// stale/dead-session verdict. Measured failure mode: a durable approval row can
+// outlive its cancelled queue task / stopped session and OVER-report
+// awaiting_approval unless those durable terminal facts fold it away. Treat the line
+// as a cheap snapshot, never as proof that a displayed approval is still actionable.
+// A coordinator that needs the live answer must still call mesh_status / mesh_view_queue.
 //
 // ── Three constraints, each load-bearing ────────────────────────────────────
 //
@@ -67,6 +68,7 @@ const ACTIVE_WORK_LEDGER_KINDS = [
     'task_stalled',
     'task_approval_needed',
     'task_question_pending',
+    'session_stopped',
 ] as const;
 
 /**
