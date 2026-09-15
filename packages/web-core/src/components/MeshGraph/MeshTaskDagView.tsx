@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { archiveColumnCount, buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
+import { archiveColumnCount, buildBlueprintGraphTimeline, buildMissionThreadChain, buildMissionThreadHops, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, splitFinalSummary, summarizeCollapsedGraph, type MissionThreadSide } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, formatTaskCardTime, scopeTaskDagTasks, taskCardTimeSource, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -34,6 +34,37 @@ const elk = new ELK()
 
 const TASK_CARD_WIDTH = 236
 const TASK_CARD_MIN_HEIGHT = 96
+
+/**
+ * Handle id for one side of a mission-thread hop. Kept as a helper so the
+ * card's rendered handles and the edge's `sourceHandle`/`targetHandle` can
+ * never drift into two different spellings — a mismatch does not error, it
+ * silently re-anchors the edge to the default handle and brings the
+ * card-crossing route straight back.
+ */
+function missionThreadHandleId(side: MissionThreadSide, role: 'source' | 'target'): string {
+    return `mt-${role}-${side}`
+}
+
+/** Every side a mission thread may leave or enter a card by. */
+const MISSION_THREAD_SIDES: readonly MissionThreadSide[] = ['left', 'right', 'top', 'bottom']
+
+const HANDLE_POSITION: Record<MissionThreadSide, Position> = {
+    left: Position.Left,
+    right: Position.Right,
+    top: Position.Top,
+    bottom: Position.Bottom,
+}
+
+/* One source + one target handle per side. React Flow requires a handle to
+ * exist before an edge can name it, and a `source`-type handle cannot receive
+ * an edge (nor a `target` one emit it), so both roles are declared for each
+ * side and the hop picks the pair its geometry calls for. */
+const MISSION_THREAD_HANDLES: ReadonlyArray<{ id: string; type: 'source' | 'target'; position: Position }> =
+    MISSION_THREAD_SIDES.flatMap(side => ([
+        { id: missionThreadHandleId(side, 'source'), type: 'source' as const, position: HANDLE_POSITION[side] },
+        { id: missionThreadHandleId(side, 'target'), type: 'target' as const, position: HANDLE_POSITION[side] },
+    ]))
 
 /* Read at activation time rather than memoized at mount: a hybrid device
  * (touch laptop, tablet + trackpad) can switch primary pointer mid-session,
@@ -214,6 +245,24 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
         >
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
+            {/* Mission-thread anchors. The dependency wiring above uses the two
+                DEFAULT (unnamed) handles and is untouched by these; a thread
+                hop names the side it needs so it can leave by whichever edge
+                keeps it outside the card column. Without a left-source /
+                right-target / vertical pair, every hop was forced right→left,
+                and a hop to a card at the SAME x then doubled back across the
+                column — the line seen crossing a card body. See
+                `buildMissionThreadHops`. */}
+            {MISSION_THREAD_HANDLES.map(handle => (
+                <Handle
+                    key={handle.id}
+                    id={handle.id}
+                    type={handle.type}
+                    position={handle.position}
+                    isConnectable={false}
+                    className="!h-1 !w-1 !border-0 !bg-transparent !opacity-0"
+                />
+            ))}
             {task.missionId && (
                 <button
                     type="button"
@@ -1536,7 +1585,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             // there (owner call 2026-09-15, revising the 08-25 suppression).
             if (!hoveredMissionId) return []
             const nodes = byMission.get(hoveredMissionId) ?? []
-            const stroke = meshTheme.isDark ? 'rgba(139, 148, 255, 0.85)' : 'rgba(88, 92, 235, 0.8)'
+            const stroke = meshTheme.missionThreadColor
             const threads: Edge[] = []
             /* Ordering + placement filter both live in the view model, where
              * they are unit-pinned: the chain must run the SAME direction as
@@ -1545,22 +1594,60 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
              * screen-wide dotted line. Unplaced nodes are dropped there too,
              * matching every other `positions.has` filter in this file. */
             const ordered = buildMissionThreadChain(nodes, taskTimeKey, id => Boolean(positions?.has(id)))
-            for (let i = 0; i < ordered.length - 1; i += 1) {
+            /* Which SIDE each hop leaves and enters by, from the two cards'
+             * real boxes. The chain's order alone is not enough: ELK advances x
+             * by dependency layer, not by time, so two same-mission tasks in
+             * one layer (and, since the archive packs into rows, two chips in
+             * one row) sit at the same x. Forced right→left, such a hop doubles
+             * back across the column and draws through the card between them —
+             * the crossing the owner reported. See `buildMissionThreadHops`. */
+            const hops = buildMissionThreadHops(ordered, id => {
+                const position = positions?.get(id)
+                if (!position) return undefined
+                const node = dag.nodes.find(candidate => candidate.id === id)
+                return {
+                    x: position.x,
+                    y: position.y,
+                    width: TASK_CARD_WIDTH,
+                    height: node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT,
+                }
+            })
+            for (let i = 0; i < hops.length; i += 1) {
+                const hop = hops[i]
                 threads.push({
                     id: `mt:${hoveredMissionId}:${i}`,
-                    source: ordered[i].id,
-                    target: ordered[i + 1].id,
+                    source: hop.sourceId,
+                    target: hop.targetId,
+                    sourceHandle: missionThreadHandleId(hop.sourceSide, 'source'),
+                    targetHandle: missionThreadHandleId(hop.targetSide, 'target'),
                     type: 'smoothstep' as const,
                     animated: false,
                     selectable: false,
                     focusable: false,
-                    zIndex: 0,
+                    /* Above the cards, not behind them (was zIndex 0). At 0 a
+                     * card body painted over the thread wherever the two met,
+                     * which is half of why the line read as faint and
+                     * ambiguous — it appeared to pass "under and through"
+                     * rather than around. The hop now routes clear of the
+                     * cards, so drawing it on top is honest rather than
+                     * hiding a bad route. */
+                    zIndex: 5,
                     // Fully pointer-transparent: an edge's invisible ~20px
                     // interaction path would otherwise steal the pointer from
                     // the hovered card, ending the hover that drew the thread —
                     // an appear/disappear flicker loop.
                     interactionWidth: 0,
-                    style: { stroke, strokeWidth: 2, strokeDasharray: '6 6', pointerEvents: 'none' as const },
+                    /* Contrast (owner call 2026-09-15: "관통 안 하게 + 더
+                     * 선명하게"). The thread sat at 2px of a translucent indigo
+                     * on a light drafting-paper ground and was not reliably
+                     * distinguishable from a card border. It is now a solid
+                     * themed colour at 2.5px with a longer dash period, so it
+                     * still reads as a decoration rather than a dependency
+                     * edge — those are 1.6px solid/6-4 dashed with arrowheads —
+                     * while being unmistakably a line. NOT animated: see the
+                     * `animated: false` above; a moving dash here would restore
+                     * the never-settling canvas that timed out capture. */
+                    style: { stroke, strokeWidth: 2.5, strokeDasharray: '8 5', pointerEvents: 'none' as const },
                 })
             }
             return threads
@@ -1578,6 +1665,11 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const selectedTaskIsTerminal = selectedNode?.task.status === 'completed' || selectedNode?.task.status === 'failed'
     const [selectedOutput, setSelectedOutput] = useState<{ finalSummary?: string; providerType?: string } | null>(null)
     const [selectedOutputFetching, setSelectedOutputFetching] = useState(false)
+    // Summary-first reading of the worker report — see the render block below.
+    const selectedFinalSummaryParts = useMemo(
+        () => splitFinalSummary(selectedOutput?.finalSummary),
+        [selectedOutput?.finalSummary],
+    )
     useEffect(() => {
         setSelectedOutput(null)
         if (onTaskOpen || !selectedTaskIsTerminal || !selectedTaskId || !daemonId || !sendDaemonCommand) return
@@ -1897,8 +1989,26 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     {!onTaskOpen && selectedTaskIsTerminal && (
                         <div className="mt-2">
                             <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummary')}</div>
-                            {selectedOutput?.finalSummary
-                                ? <div className={`whitespace-pre-wrap rounded-lg border px-2 py-1.5 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{selectedOutput.finalSummary}</div>
+                            {/* Summary first, report folded — same treatment as
+                                the overview modal's block; this narrow side
+                                panel is even less able to carry a full JSON
+                                report than that one was. */}
+                            {selectedFinalSummaryParts
+                                ? (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="whitespace-pre-wrap text-3xs leading-4">{selectedFinalSummaryParts.lead}</div>
+                                        {selectedFinalSummaryParts.rest && (
+                                            <details>
+                                                <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>
+                                                    {t('mesh.taskDag.finalSummaryFull')}
+                                                </summary>
+                                                <div className={`mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2 py-1.5 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                                                    {selectedFinalSummaryParts.rest}
+                                                </div>
+                                            </details>
+                                        )}
+                                    </div>
+                                )
                                 : selectedOutputFetching
                                     ? <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummaryLoading')}</div>
                                     : <div className={`text-3xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-400'}`}>{t('mesh.taskDag.finalSummaryUnavailable')}</div>}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText, stripMarkdownSyntax } from '../../utils/queue-task-label'
-import { splitTaskMessage } from './blueprintViewModel'
+import { splitFinalSummary, splitTaskMessage } from './blueprintViewModel'
 import { installTopModalEscapeHandler } from '../../utils/modal-escape'
 import ModalPortal from '../ui/ModalPortal'
 import type {
@@ -1022,6 +1022,11 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
         () => splitTaskMessage(queueTaskDisplayText(task.message)),
         [task.message],
     )
+    // Same summary-first reading for the worker's report — see the render block.
+    const finalSummaryParts = useMemo(
+        () => splitFinalSummary(output?.finalSummary),
+        [output?.finalSummary],
+    )
     /* Elapsed time. The queue row carries only createdAt/updatedAt, so for a
      * SETTLED task the span between them is its lifetime; for one still moving
      * it would just be "time since the last update", which is already the
@@ -1079,8 +1084,31 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
             {isTerminal && (
                 <div>
                     <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
-                    {output?.finalSummary
-                        ? <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{output.finalSummary}</div>
+                    {/* ── Summary FIRST, report folded — the other half of the
+                        same defect `babbc4ad` fixed for the instruction block.
+                        A worker's final summary is its whole report, usually a
+                        JSON body (measured: queue task 85adc645 on the preview
+                        mesh), and rendering it whole put a second wall of text
+                        directly above the task's own fields. `splitFinalSummary`
+                        leads with the report's own summary field when it parses
+                        as JSON, since a character cut through JSON yields a
+                        meaningless lead. ── */}
+                    {finalSummaryParts
+                        ? (
+                            <div className="flex flex-col gap-1">
+                                <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{finalSummaryParts.lead}</div>
+                                {finalSummaryParts.rest && (
+                                    <details>
+                                        <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>
+                                            {t('mesh.overview.detailLabelFullFinalSummary')}
+                                        </summary>
+                                        <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                                            {finalSummaryParts.rest}
+                                        </div>
+                                    </details>
+                                )}
+                            </div>
+                        )
                         : fetchingOutput
                             ? <div className={`text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.detailFinalSummaryLoading')}</div>
                             : outputError

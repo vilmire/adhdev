@@ -453,6 +453,90 @@ export function splitTaskMessage(
 }
 
 /**
+ * Keys a worker report is worth leading with, most informative first.
+ *
+ * A report is free-form JSON, so this cannot be a schema — it is a preference
+ * order over what agents in this repo actually emit (the task briefings ask for
+ * `status`, and for a one-line account of the work under various names).
+ */
+const FINAL_SUMMARY_LEAD_KEYS = ['summary', 'result', 'outcome', 'conclusion', 'status'] as const
+
+/**
+ * Split a task's FINAL SUMMARY into a lead and a folded remainder.
+ *
+ * `babbc4ad` gave the task's own `message` this treatment but left the final
+ * summary rendering whole, so a completed task's panel still opened with the
+ * entire worker report — measured on the live preview mesh as the full JSON
+ * body of queue task `85adc645`, in a scrollbox above everything the panel
+ * exists to answer. This closes that half.
+ *
+ * Why it is not simply `splitTaskMessage`: a worker report is usually a JSON
+ * object, and `splitTaskMessage`'s boundaries (paragraph, line, sentence) are
+ * prose boundaries that JSON does not have. Pretty-printed, it has no blank
+ * line, so the cut lands on whichever `",\n` fell inside the budget — a lead of
+ * `{` plus two arbitrary truncated fields. Minified, it has no break at all and
+ * the cut is mid-token. Either way the "summary" is noise.
+ *
+ * So JSON is summarised STRUCTURALLY: pick the most informative scalar field
+ * present (`FINAL_SUMMARY_LEAD_KEYS`) and lead with that, keeping the whole
+ * original — pretty-printed, since that is the readable form — behind the fold.
+ * Anything that does not parse as a JSON object is prose, and falls through to
+ * the same `splitTaskMessage` the instruction block uses, so the two blocks
+ * behave identically on prose.
+ */
+export function splitFinalSummary(
+    summary: string | null | undefined,
+    leadChars: number = TASK_MESSAGE_LEAD_CHARS,
+): { lead: string; rest: string } | null {
+    const text = typeof summary === 'string' ? summary.trim() : ''
+    if (!text) return null
+
+    const parsed = parseJsonObject(text)
+    if (!parsed) return splitTaskMessage(text, leadChars)
+
+    /* Lead with the best scalar the report offers. A nested object or array is
+     * skipped: flattening one back into the lead just rebuilds the wall of text
+     * this function exists to fold away. */
+    let lead = ''
+    for (const key of FINAL_SUMMARY_LEAD_KEYS) {
+        const value = parsed[key]
+        if (typeof value === 'string' && value.trim()) { lead = value.trim(); break }
+        if (typeof value === 'number' || typeof value === 'boolean') { lead = String(value); break }
+    }
+    /* No recognised key — say how big the thing is rather than inventing a
+     * summary from a field whose meaning is unknown. The reader still gets the
+     * report, one click away. */
+    if (!lead) {
+        const keys = Object.keys(parsed)
+        lead = keys.length ? `{ ${keys.slice(0, 6).join(', ')}${keys.length > 6 ? ', …' : ''} }` : '{ }'
+    }
+    if (lead.length > leadChars) lead = `${lead.slice(0, leadChars).trimEnd()}…`
+
+    // Pretty-print so the folded body is readable even when the report arrived
+    // minified; fall back to the original text if re-serialising ever fails.
+    let rest = text
+    try {
+        rest = JSON.stringify(parsed, null, 2)
+    } catch {
+        rest = text
+    }
+    return { lead, rest }
+}
+
+/** `JSON.parse` narrowed to plain objects — arrays and scalars are not reports. */
+function parseJsonObject(text: string): Record<string, unknown> | null {
+    if (!text.startsWith('{')) return null
+    try {
+        const parsed: unknown = JSON.parse(text)
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null
+    } catch {
+        return null
+    }
+}
+
+/**
  * Root-first ordering for the ELK input array. ELK's `considerModelOrder`
  * strategy is NODES_AND_EDGES, so the order nodes are handed in decides their
  * relative placement within a layer — which is exactly the knob the owner call
@@ -499,6 +583,108 @@ export function buildMissionThreadChain<T extends { id: string }>(
     const placed = nodes.filter(node => isPlaced(node.id))
     if (placed.length < 2) return []
     return [...placed].sort((a, b) => timeKey(b).localeCompare(timeKey(a)))
+}
+
+/** Where a thread hop attaches to a card. Mirrors @xyflow/react's `Position`. */
+export type MissionThreadSide = 'left' | 'right' | 'top' | 'bottom'
+
+/** One hop of the mission thread, with the sides it should leave and enter by. */
+export interface MissionThreadHop {
+    sourceId: string
+    targetId: string
+    sourceSide: MissionThreadSide
+    targetSide: MissionThreadSide
+}
+
+/** A placed card's box, in canvas coordinates. */
+export interface MissionThreadBox {
+    x: number
+    y: number
+    width: number
+    height: number
+}
+
+/**
+ * Turn an ordered mission chain into hops that route AROUND cards instead of
+ * through them.
+ *
+ * ## Why the previous fix was not enough
+ *
+ * `3e4a4631` aligned the chain's sort direction with `orderTasksForElk`, on the
+ * reasoning that a hop running backwards along the placement axis forces
+ * `smoothstep` into a detour. That is true, but it fixed the ORDER while
+ * leaving the real precondition unaddressed: every card exposes exactly two
+ * handles, `target=Left` and `source=Right`, so a hop is always drawn
+ * right-edge → left-edge.
+ *
+ * That is only a sane route when the target actually sits to the RIGHT of the
+ * source. ELK lays the canvas out with `elk.direction: RIGHT`, which advances x
+ * by dependency LAYER — not by time. Two tasks of one mission with no
+ * dependency between them land in the SAME layer at the same x, stacked
+ * vertically. Sorting them by time therefore says nothing about their x, and a
+ * hop between two same-x cards leaves the right edge, has to come back to a
+ * left edge at the same x, and `smoothstep` closes that loop by running back
+ * across the column — straight through the card sitting between them. That is
+ * the line the owner saw crossing `M-BLUEPRINT-CANVAS-UX`.
+ *
+ * The archive row-packing (`archiveColumnCount`, same day) made this far more
+ * visible rather than causing it: chips that used to sit in one column at one x
+ * now spread across up to four columns, so same-row hops became common and
+ * every one of them is a backwards hop at some point in the row.
+ *
+ * ## The rule
+ *
+ * Pick the sides from the two boxes' actual geometry:
+ *
+ *  - Target clearly to the right → `right → left`, the natural reading, which
+ *    is also what `smoothstep` draws most cleanly.
+ *  - Target clearly to the left → `left → right`. Leaving by the left edge is
+ *    what keeps the line outside the column instead of doubling back through
+ *    it.
+ *  - Neither (the same column, which is the archive-row and same-layer case) →
+ *    go vertically, `bottom → top` or `top → bottom` by which card is lower.
+ *    A vertical hop between two vertically-stacked cards is the one route that
+ *    cannot cross either of them.
+ *
+ * "Clearly" is the point of `slack`: two cards whose x differ by a few pixels
+ * are visually one column, and treating that as a horizontal hop reintroduces
+ * the near-zero-width detour this exists to remove.
+ */
+export function buildMissionThreadHops(
+    chain: ReadonlyArray<{ id: string }>,
+    boxOf: (id: string) => MissionThreadBox | undefined,
+    slack = 24,
+): MissionThreadHop[] {
+    const hops: MissionThreadHop[] = []
+    for (let i = 0; i < chain.length - 1; i += 1) {
+        const sourceId = chain[i].id
+        const targetId = chain[i + 1].id
+        const source = boxOf(sourceId)
+        const target = boxOf(targetId)
+        /* No geometry (not yet measured) — fall back to the plain left/right
+         * reading rather than dropping the hop, so the thread still draws. */
+        if (!source || !target) {
+            hops.push({ sourceId, targetId, sourceSide: 'right', targetSide: 'left' })
+            continue
+        }
+        const sourceRight = source.x + source.width
+        const targetRight = target.x + target.width
+        if (target.x >= sourceRight - slack) {
+            hops.push({ sourceId, targetId, sourceSide: 'right', targetSide: 'left' })
+        } else if (targetRight <= source.x + slack) {
+            hops.push({ sourceId, targetId, sourceSide: 'left', targetSide: 'right' })
+        } else {
+            // Overlapping x ranges: one column. Route vertically.
+            const sourceIsAbove = source.y + source.height / 2 <= target.y + target.height / 2
+            hops.push({
+                sourceId,
+                targetId,
+                sourceSide: sourceIsAbove ? 'bottom' : 'top',
+                targetSide: sourceIsAbove ? 'top' : 'bottom',
+            })
+        }
+    }
+    return hops
 }
 
 /**
