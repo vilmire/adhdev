@@ -2930,6 +2930,8 @@
             "newChannelTypesTitle": "New on the provider channel",
             "newChannelTypesDesc": "Published to the verified channel but never installed on this machine. Install activates the digest-verified bundle.",
             "installNewType": "Install",
+            "installFailedTitle": "Install failed",
+            "installFailedDigestMismatch": "Digest mismatch: the bundle on the provider channel does not match the digest the registry published. The registry entry is likely out of date and needs republishing.",
             "loadFailed": "Failed to load provider settings: {{error}}",
             "quotaToggleFailed": "Failed to update quota probe for {{provider}}: {{error}}"
         },

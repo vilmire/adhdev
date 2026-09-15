@@ -125345,6 +125345,68 @@ ${effect.notification.body || ""}`.trim();
         import_promises6 = require("stream/promises");
       }
     });
+    function parseGitHubArchiveUrl(url2) {
+      let parsed;
+      try {
+        parsed = new URL(url2);
+      } catch {
+        return null;
+      }
+      if (parsed.protocol !== "https:") return null;
+      if (parsed.hostname !== GITHUB_HOST) return null;
+      const match = /^\/([^/]+)\/([^/]+)\/archive\/(.+)\.tar\.gz$/.exec(parsed.pathname);
+      if (!match) return null;
+      const [, owner, repo, rawRef] = match;
+      if (!owner || !repo || !rawRef) return null;
+      const ref = decodeURIComponent(rawRef);
+      return { owner, repo, ref, pinned: SHA_RE.test(ref) };
+    }
+    function buildPinnedArchiveUrl(ref, commitSha) {
+      return `https://${GITHUB_HOST}/${ref.owner}/${ref.repo}/archive/${commitSha}.tar.gz`;
+    }
+    function toApiRevision(ref) {
+      return ref.replace(/^refs\/(heads|tags)\//, "");
+    }
+    async function listCandidateCommits(ref, fetchJson, limit = MAX_HISTORY_CANDIDATES) {
+      if (ref.pinned) return [ref.ref];
+      const revision = encodeURIComponent(toApiRevision(ref.ref));
+      const url2 = `${GITHUB_API_ORIGIN}/repos/${ref.owner}/${ref.repo}/commits?sha=${revision}&per_page=${Math.max(1, Math.min(100, limit))}`;
+      let body;
+      try {
+        body = await fetchJson(url2);
+      } catch {
+        return [];
+      }
+      if (!Array.isArray(body)) return [];
+      const shas = [];
+      for (const entry of body) {
+        const sha = entry?.sha;
+        if (typeof sha === "string" && SHA_RE.test(sha)) shas.push(sha);
+        if (shas.length >= limit) break;
+      }
+      return shas;
+    }
+    async function resolveTransportCandidates(url2, fetchJson, limit = MAX_HISTORY_CANDIDATES) {
+      const ref = parseGitHubArchiveUrl(url2);
+      if (!ref) return [url2];
+      if (ref.pinned) return [url2];
+      const commits = await listCandidateCommits(ref, fetchJson, limit);
+      if (commits.length === 0) return [url2];
+      return commits.map((sha) => buildPinnedArchiveUrl(ref, sha));
+    }
+    var SHA_RE;
+    var GITHUB_HOST;
+    var GITHUB_API_ORIGIN;
+    var MAX_HISTORY_CANDIDATES;
+    var init_pinned_transport = __esm2({
+      "src/providers/channel/pinned-transport.ts"() {
+        "use strict";
+        SHA_RE = /^[0-9a-f]{40}$/;
+        GITHUB_HOST = "github.com";
+        GITHUB_API_ORIGIN = "https://api.github.com";
+        MAX_HISTORY_CANDIDATES = 20;
+      }
+    });
     function toSyncError(e, fallbackCode, providerType) {
       if (e instanceof ProviderChannelError) {
         return { code: e.code, message: e.message, providerType: providerType ?? e.providerType };
@@ -125499,6 +125561,7 @@ ${effect.notification.body || ""}`.trim();
         init_contract();
         init_tree_digest();
         init_extract_tarball();
+        init_pinned_transport();
         REGISTRY_LIST_LIMIT = 100;
         ProviderChannelRuntime = class {
           store;
@@ -125506,6 +125569,7 @@ ${effect.notification.body || ""}`.trim();
           providerTarballUrl;
           logFn;
           fetchJson;
+          fetchTransportMetaJson;
           downloadFile;
           extractTarball;
           constructor(options) {
@@ -125515,6 +125579,7 @@ ${effect.notification.body || ""}`.trim();
             this.logFn = options.logFn ?? (() => {
             });
             this.fetchJson = options.fetchJson ?? defaultFetchJson;
+            this.fetchTransportMetaJson = options.fetchTransportMetaJson ?? defaultFetchJson;
             this.downloadFile = options.downloadFile ?? defaultDownloadFile;
             this.extractTarball = options.extractTarball ?? defaultExtractTarball;
           }
@@ -125616,37 +125681,63 @@ ${effect.notification.body || ""}`.trim();
             if (pending.length === 0) {
               return report;
             }
-            const stagingRoot = this.store.createStagingDir("sync");
-            try {
-              const tarPath = path51.join(stagingRoot, "providers.tar.gz");
-              const extractDir = path51.join(stagingRoot, "repo");
-              fs48.mkdirSync(extractDir, { recursive: true });
+            const candidates = await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
+            for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+              const transportUrl = candidates[attempt];
+              const isLastCandidate = attempt === candidates.length - 1;
+              const attemptErrors = [];
+              const attemptActivated = [];
+              const stagingRoot = this.store.createStagingDir("sync");
+              let retryWithOlderCommit = false;
               try {
-                await this.downloadFile(this.providerTarballUrl, tarPath);
-                await this.extractTarball(tarPath, extractDir);
-              } catch (e) {
-                report.errors.push({ code: "TRANSPORT_FAILED", message: `provider tarball transport failed: ${e?.message || e}` });
-                report.status = "error";
-                this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-                return report;
-              }
-              const repoRoot = findTarballRepoRoot(extractDir);
-              if (!repoRoot) {
-                report.errors.push({ code: "TRANSPORT_FAILED", message: "provider tarball has an unexpected structure (no repo root dir)" });
-                report.status = "error";
-                return report;
-              }
-              for (const entry of pending) {
-                const error48 = await this.tryActivateOne(channel, entry, repoRoot, stagingRoot);
-                if (error48) {
-                  report.errors.push(error48);
-                } else {
-                  const pointer = this.store.getPointer(channel, entry.providerType);
-                  if (pointer) report.activated.push(pointer.active);
+                const tarPath = path51.join(stagingRoot, "providers.tar.gz");
+                const extractDir = path51.join(stagingRoot, "repo");
+                fs48.mkdirSync(extractDir, { recursive: true });
+                try {
+                  await this.downloadFile(transportUrl, tarPath);
+                  await this.extractTarball(tarPath, extractDir);
+                } catch (e) {
+                  report.errors.push({ code: "TRANSPORT_FAILED", message: `provider tarball transport failed: ${e?.message || e}` });
+                  report.status = "error";
+                  this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
+                  return report;
                 }
+                const repoRoot = findTarballRepoRoot(extractDir);
+                if (!repoRoot) {
+                  report.errors.push({ code: "TRANSPORT_FAILED", message: "provider tarball has an unexpected structure (no repo root dir)" });
+                  report.status = "error";
+                  return report;
+                }
+                for (const entry of pending) {
+                  const error48 = await this.tryActivateOne(channel, entry, repoRoot, stagingRoot);
+                  if (error48) {
+                    attemptErrors.push(error48);
+                  } else {
+                    const pointer = this.store.getPointer(channel, entry.providerType);
+                    if (pointer) attemptActivated.push(pointer.active);
+                  }
+                }
+                const mismatches = attemptErrors.filter((e) => e.code === "DIGEST_MISMATCH");
+                retryWithOlderCommit = mismatches.length > 0 && mismatches.length === attemptErrors.length && !isLastCandidate;
+                if (retryWithOlderCommit) {
+                  this.log(
+                    `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? "y" : "ies"} \u2014 the published rows were not built from this commit; trying the previous commit`
+                  );
+                }
+              } finally {
+                this.store.removeStagingDir(stagingRoot);
               }
-            } finally {
-              this.store.removeStagingDir(stagingRoot);
+              if (retryWithOlderCommit) {
+                const resolved = new Set(attemptActivated.map((a) => a.providerType));
+                report.activated.push(...attemptActivated);
+                for (let i = pending.length - 1; i >= 0; i -= 1) {
+                  if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
+                }
+                continue;
+              }
+              report.activated.push(...attemptActivated);
+              report.errors.push(...attemptErrors);
+              break;
             }
             try {
               this.store.gc();
