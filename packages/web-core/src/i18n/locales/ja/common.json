@@ -2930,6 +2930,8 @@
             "newChannelTypesTitle": "チャンネルの新規プロバイダー",
             "newChannelTypesDesc": "検証チャンネルに公開済みですが、このマシンには未インストールです。インストールするとダイジェスト検証済みバンドルが有効化されます。",
             "installNewType": "インストール",
+            "installFailedTitle": "インストール失敗",
+            "installFailedDigestMismatch": "ダイジェスト不一致: プロバイダーチャンネルのバンドルがレジストリの公開ダイジェストと一致しません。レジストリ項目が古い可能性が高く、再公開が必要です。",
             "loadFailed": "プロバイダー設定の読み込みに失敗しました: {{error}}",
             "quotaToggleFailed": "{{provider}} のクォータ取得設定の変更に失敗しました: {{error}}"
         },
