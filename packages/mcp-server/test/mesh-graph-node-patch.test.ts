@@ -286,6 +286,81 @@ test('node-patch: an unknown node, an empty patch and a missing patch are all di
     assert.deepEqual(missing.missing, ['base_spec_patch']);
 });
 
+// ── id-vs-ref resolution: the behavior the canon-identity disables protect ───
+//
+// ★ These pin WHY `patchGraphNodeAndRetry` compares graph-row ids with a raw
+// `===` and NOT `meshNodeIdMatches()`. That helper reads `id ?? nodeId ??
+// node_id` and returns ONE boolean, so it cannot express the asymmetry below: a
+// node ID is globally unique (match ⇒ accept at once), while a `ref` is unique
+// only WITHIN a graph (match ⇒ keep scanning, and refuse if another graph has
+// it too). Collapsing both into one normalized read would make the id test
+// identical to the combined id-or-ref test, turning the refusal in the first
+// test here into "silently patch whichever graph was listed first" — the exact
+// wrong-node mutation this tool must never perform. If someone later "fixes"
+// the lint by swapping in the helper, the first test below goes red.
+
+test('★ node-patch: a ref present in TWO graphs is REFUSED, not silently resolved', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId);
+
+    // Two independent batches, both declaring a node with the ref `consume`.
+    const first = await blockedFixture(ctx, meshId);
+    const second = await enqueueBindingBatch(ctx, '/worker_result/wrongField');
+    assert.equal(second.success, true, JSON.stringify(second));
+    assert.notEqual(second.graphId, first.batch.graphId, 'the fixture must produce two distinct graphs');
+
+    const ambiguous = JSON.parse(await meshGraphNodePatch(ctx, {
+        node: 'consume',
+        base_spec_patch: {
+            inputs_from: [{ from: 'produce', select: '/worker_result/rootCause', as: 'report', required: true }],
+        },
+    }));
+    assert.equal(ambiguous.success, false, JSON.stringify(ambiguous));
+    assert.equal(ambiguous.code, 'ambiguous_node_ref');
+    assert.match(ambiguous.hint, /graph_id/);
+
+    // ★ And the refusal mutated NOTHING — neither graph's node was patched.
+    const consume = getQueue(meshId).find(t => t.id === first.consumeTaskId)!;
+    assert.equal(consume.blockedReason, 'materialization_error:required_input_missing:report');
+});
+
+test('★ node-patch: graph_id disambiguates, and an exact node ID is unambiguous on its own', async () => {
+    const meshId = nextMeshId();
+    const ctx = makeCtx(meshId);
+    const first = await blockedFixture(ctx, meshId);
+    await enqueueBindingBatch(ctx, '/worker_result/wrongField');
+
+    const repair = {
+        inputs_from: [{ from: 'produce', select: '/worker_result/rootCause', as: 'report', required: true }],
+    };
+
+    // (1) The same ambiguous ref + graph_id now resolves to exactly one node.
+    const scoped = JSON.parse(await meshGraphNodePatch(ctx, {
+        node: 'consume',
+        graph_id: first.batch.graphId,
+        base_spec_patch: repair,
+    }));
+    assert.equal(scoped.success, true, JSON.stringify(scoped));
+    assert.equal(scoped.recovered, true);
+    assert.equal(scoped.graphId, first.batch.graphId);
+
+    // (2) A node ID is globally unique, so it needs NO graph_id even though the
+    //     ref `consume` is still duplicated across graphs — this is the id-vs-ref
+    //     asymmetry, and it is why the two comparisons must stay separate.
+    const second = await enqueueBindingBatch(ctx, '/worker_result/wrongField');
+    const secondConsumeNodeId = second.tasks.find((t: any) => t.ref === 'consume').nodeId;
+    assert.ok(secondConsumeNodeId, 'the batch response must expose the graph node id');
+    completeProducer(meshId, second.tasks.find((t: any) => t.ref === 'produce').taskId);
+
+    const byId = JSON.parse(await meshGraphNodePatch(ctx, {
+        node: secondConsumeNodeId,
+        base_spec_patch: repair,
+    }));
+    assert.equal(byId.success, true, JSON.stringify(byId));
+    assert.equal(byId.nodeId, secondConsumeNodeId);
+    assert.equal(byId.recovered, true);
+});
+
 test('node-patch: the mutation is AUDITED, recording patched key names but never their values', async () => {
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId);
