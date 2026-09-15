@@ -33,6 +33,29 @@
  * cards in the same column`, `leaves by the left edge when the target is to the
  * left`, and `never routes a hop through a card that sits between the two
  * endpoints` all fail.
+ *
+ * ## Third pass (2026-09-15, live on rc.30)
+ *
+ * The fix above was half-right and shipped anyway, because every test in this
+ * file asserted which SIDE a hop uses — a proxy for the thing that matters.
+ * The proxy held and the thing failed: a same-column hop got the blessed
+ * `bottom → top` route and drew straight down the column, through a card of
+ * another mission stacked in the gap (`M-GRAPH-FEATURE-UNRELIAB…`). The
+ * function could not have done otherwise — it was handed the two endpoint boxes
+ * and nothing else, so no card between them existed as far as it was concerned.
+ * The horizontal hop lower in the same thread exited sideways and looked fine,
+ * which is why the defect read as "the fix works on some hops but not others".
+ *
+ * Two changes: `buildMissionThreadHops` now takes the obstacle set and only
+ * takes the vertical route when the corridor is clear, detouring sideways when
+ * it is not; and the `no hop corridor contains a card body` block below asserts
+ * the GEOMETRY — no card's box inside the region the line is confined to —
+ * instead of asserting a side name. Red-when-reverted for that block: drop the
+ * `obstacles` argument at the call site (or the `blocked` check in the
+ * function) and `does not run a vertical hop through a card stacked between the
+ * endpoints`, `detours toward the side with room…` and the full-layout case
+ * all fail with the "passes through" message, while the side-level tests above
+ * keep passing — which is precisely the gap that let this reach live.
  */
 import { describe, expect, it } from 'vitest'
 import { buildMissionThreadHops, type MissionThreadBox } from '../../src/components/MeshGraph/blueprintViewModel'
@@ -124,6 +147,127 @@ describe('buildMissionThreadHops', () => {
         }
         // Concretely: both hops in this row go leftwards, so neither may exit right.
         expect(hops.map(h => h.sourceSide)).toEqual(['left', 'left'])
+    })
+
+    /* ★ THE GEOMETRIC LEVEL.
+     *
+     * Everything above asserts which SIDE a hop uses. That is not the property
+     * anyone cares about — it is a proxy for it, and on 2026-09-15 the proxy
+     * held while the property failed: `routes vertically between two cards in
+     * the same column` passed, and the vertical route it blessed ran straight
+     * through a third card stacked in that column, because nothing in the
+     * function or the test could see that card.
+     *
+     * So assert the property directly. `hopCorridor` turns a hop into the
+     * region the line is constrained to — the vertical span for a vertical hop,
+     * the horizontal one for a sideways hop — and the test states that no
+     * card's body lies in it. That is a geometry calculation, and geometry
+     * calculations are unit-testable even though the smoothstep curve drawn
+     * inside the corridor is not.
+     */
+    describe('no hop corridor contains a card body', () => {
+        /* The region a hop's line is confined to, given the sides it uses.
+         * Vertical hops run down the x-span the two cards share; sideways hops
+         * (both ends on one side) bracket around the cards on that flank. */
+        function hopCorridor(
+            source: MissionThreadBox,
+            target: MissionThreadBox,
+            sourceSide: string,
+            targetSide: string,
+        ): MissionThreadBox | null {
+            if ((sourceSide === 'bottom' && targetSide === 'top') || (sourceSide === 'top' && targetSide === 'bottom')) {
+                const upper = source.y <= target.y ? source : target
+                const lower = source.y <= target.y ? target : source
+                const x = Math.max(upper.x, lower.x)
+                const right = Math.min(upper.x + upper.width, lower.x + lower.width)
+                const y = upper.y + upper.height
+                return { x, y, width: right - x, height: lower.y - y }
+            }
+            return null // sideways hops leave the column; nothing to assert here
+        }
+
+        function assertNoCardInAnyCorridor(
+            chain: ReadonlyArray<{ id: string }>,
+            boxes: Record<string, MissionThreadBox>,
+        ) {
+            const obstacles = Object.entries(boxes).map(([id, box]) => ({ id, box }))
+            const hops = buildMissionThreadHops(chain, boxesOf(boxes), undefined, obstacles)
+            expect(hops.length).toBeGreaterThan(0)
+            for (const hop of hops) {
+                const corridor = hopCorridor(
+                    boxes[hop.sourceId], boxes[hop.targetId], hop.sourceSide, hop.targetSide,
+                )
+                if (!corridor || corridor.width <= 0 || corridor.height <= 0) continue
+                for (const { id, box } of obstacles) {
+                    if (id === hop.sourceId || id === hop.targetId) continue
+                    const overlapsX = box.x < corridor.x + corridor.width && box.x + box.width > corridor.x
+                    const overlapsY = box.y < corridor.y + corridor.height && box.y + box.height > corridor.y
+                    expect(
+                        overlapsX && overlapsY,
+                        `hop ${hop.sourceId}→${hop.targetId} (${hop.sourceSide}→${hop.targetSide}) passes through ${id}`,
+                    ).toBe(false)
+                }
+            }
+            return hops
+        }
+
+        it('does not run a vertical hop through a card stacked between the endpoints', () => {
+            /* ★ THE rc.30 SCREENSHOT, as geometry. Three cards in one ELK
+             * column; the mission owns the outer two, and some other mission's
+             * card sits in the gap. Straight down is through it. */
+            const boxes = {
+                top: box(0, 0),
+                blocker: box(0, 160),
+                bottom: box(0, 320),
+            }
+            const hops = assertNoCardInAnyCorridor([{ id: 'top' }, { id: 'bottom' }], boxes)
+            // Concretely: it must NOT have taken the vertical route.
+            expect(hops[0].sourceSide).not.toBe('bottom')
+            expect(hops[0].sourceSide).toBe(hops[0].targetSide)
+        })
+
+        it('still takes the clean vertical route when the column between them is empty', () => {
+            // The detour is a fallback, not the new default — a blocker OFF to
+            // the side must not push this hop sideways.
+            const boxes = {
+                top: box(0, 0),
+                bottom: box(0, 320),
+                elsewhere: box(600, 160),
+            }
+            const hops = assertNoCardInAnyCorridor([{ id: 'top' }, { id: 'bottom' }], boxes)
+            expect(hops[0]).toEqual({
+                sourceId: 'top', targetId: 'bottom', sourceSide: 'bottom', targetSide: 'top',
+            })
+        })
+
+        it('detours toward the side with room rather than back across the canvas', () => {
+            // Column pinned against a neighbour on the left: going left would
+            // put the line through that neighbour's flank. Right has open canvas.
+            const boxes = {
+                top: box(400, 0),
+                blocker: box(400, 160),
+                bottom: box(400, 320),
+                leftNeighbour: box(400 - CARD_W - 8, 100),
+            }
+            const hops = assertNoCardInAnyCorridor([{ id: 'top' }, { id: 'bottom' }], boxes)
+            expect(hops[0].sourceSide).toBe('right')
+        })
+
+        it('holds over the full reported layout — a mission threaded across a populated canvas', () => {
+            /* Several columns, several missions interleaved, chained
+             * newest-first the way the view model orders them. The property is
+             * asserted over every hop at once. */
+            const boxes: Record<string, MissionThreadBox> = {
+                m1: box(0, 0),
+                other1: box(0, 150),
+                m2: box(0, 300),
+                other2: box(300, 0),
+                m3: box(300, 300),
+                other3: box(300, 150),
+                m4: box(600, 150),
+            }
+            assertNoCardInAnyCorridor([{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }, { id: 'm4' }], boxes)
+        })
     })
 
     it('falls back to the plain reading when a box has not been measured yet', () => {
