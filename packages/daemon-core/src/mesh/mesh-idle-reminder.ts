@@ -234,7 +234,7 @@ export function maybeInjectIdleActiveMissionReminder(
         //
         // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered to exactly the kinds buildMeshActiveWork
         // reads (task_dispatched/task_completed/task_failed/task_stalled/task_approval_needed/
-        // task_question_pending), no bare tail — same class as the refine gate below (:271):
+        // task_question_pending/session_stopped), no bare tail — same class as the refine gate below (:271):
         // a bare tail:200 window can be crowded out by unrelated mesh traffic while a
         // dispatch/terminal row for a still-active task falls out of the window, making this
         // gate wrongly conclude the mesh is fully idle.
@@ -245,6 +245,7 @@ export function maybeInjectIdleActiveMissionReminder(
             'task_stalled',
             'task_approval_needed',
             'task_question_pending',
+            'session_stopped',
         ]);
         const summary = buildMeshActiveWork({
             meshId,

@@ -1253,10 +1253,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 payload: {
                     event: args.event,
                     nodeLabel: args.nodeLabel,
-                    // Fix B: fall back to the direct-dispatch taskId when no work-queue row
-                    // matched, so the terminal entry is attributable in mesh task-stats
-                    // (otherwise the direct task shows status='unknown' / terminalKind=null).
-                    taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || undefined,
+                    // Preserve the producer's causal task identity first. Blocked-level
+                    // events do not run markSessionTerminal, so relying only on the two
+                    // terminal fallbacks wrote task_approval_needed with no taskId. For
+                    // completions, Fix B's fallbacks still attribute the row when a legacy
+                    // event carries no taskId (otherwise direct task stats show unknown).
+                    taskId: readNonEmptyString(args.metadataEvent.taskId)
+                        || completedTaskForLedger?.id
+                        || directDispatchTaskIdForLedger
+                        || undefined,
                     providerSessionId,
                     finalSummary,
                     workerResult,

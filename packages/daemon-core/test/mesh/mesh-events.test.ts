@@ -1066,10 +1066,12 @@ describe('setupMeshEventForwarding', () => {
       const { components, emit, coordinator } = createComponents(meshId, undefined, { coordinatorStatus: 'waiting_approval' })
 
       setupMeshEventForwarding(components)
+      const taskId = 'direct-approval-task-1'
       const approvalEvent = {
         event: 'agent:waiting_approval',
         instanceId: 'runtime-session-1',
         targetSessionId: 'runtime-session-1',
+        taskId,
         providerType: 'codex-cli',
         modalMessage: 'Allow git commit?',
         modalButtons: ['Allow once', 'Reject'],
@@ -1079,7 +1081,12 @@ describe('setupMeshEventForwarding', () => {
       emit(approvalEvent)
 
       // The duplicate is deduped before queuing: exactly one ledger entry and one queued event.
-      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_approval_needed')).toHaveLength(1)
+      const approvals = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_approval_needed')
+      expect(approvals).toHaveLength(1)
+      // A direct-dispatch approval must remain task-addressable. Before the fix both
+      // fields were absent because blocked-level events never run markSessionTerminal.
+      expect(approvals[0].payload.taskId).toBe(taskId)
+      expect(approvals[0].taskId).toBe(taskId)
       expect(getPendingMeshCoordinatorEvents(meshId)).toHaveLength(1)
 
       // The reconcile tick injects the single deduped approval exactly once.
