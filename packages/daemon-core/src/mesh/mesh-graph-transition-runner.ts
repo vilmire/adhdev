@@ -157,6 +157,23 @@ function parseGraphMaterializationBlock(reason: string | undefined): { nodeId: s
     return { nodeId: rest.slice(0, sep), version };
 }
 
+// ── Dead-workspace queue blocks (phase D) ────────────────────────────────────
+
+const WORKSPACE_DEAD_PREFIX = 'workspace_terminal:';
+
+/**
+ * The blockedReason for a node whose workspace saga reached a terminal state.
+ *
+ * Deliberately NOT a `graph_materialization_pending:` block: that prefix means
+ * "the graph will materialize this later", and the whole defect being fixed
+ * here is that a permanently-dead workspace wore exactly that label. The
+ * distinct prefix is what lets an operator — and mesh_graph_view — tell "still
+ * preparing" from "will never prepare".
+ */
+export function workspaceTerminalBlockReason(workspaceRef: string, sagaState: string): string {
+    return `${WORKSPACE_DEAD_PREFIX}${workspaceRef}:${sagaState}`;
+}
+
 // ── Coordinator-gate queue blocks (phase C2) ─────────────────────────────────
 
 const GATE_BLOCK_PREFIX = 'coordinator_gate:';
@@ -871,6 +888,18 @@ export function settleDownstreamNode(
     // ref stays blocked without a target. A ready intent binds targetNodeId and
     // the worktree=<branch> affinity tag. run_if / inputs_from stay C1 above/below.
     const workspaceBind = resolveWorkspaceRefForMaterialize(graphStore, target.graphId, baseSpec);
+    // A workspace that reached a terminal saga state will NEVER become ready, so
+    // deferring here would defer forever — the node would sit `pending` for the
+    // life of the graph with a `graph_materialization_pending:` block that
+    // promises a materialization that can never come. Fail it instead, with a
+    // reason that names the workspace and how it died.
+    if (workspaceBind.kind === 'dead') {
+        return markNodeFailedForDeadWorkspace(
+            store, target, queueEntry,
+            workspaceBind.workspaceRef, workspaceBind.sagaState, workspaceBind.lastError,
+            nowIso,
+        );
+    }
     if (workspaceBind.kind === 'unresolved') {
         if (target.state !== 'blocked') {
             graphStore.updateNodeState(target.graphId, target.nodeId, 'blocked', nowIso);
@@ -1006,6 +1035,63 @@ function markNodeSkipped(
         store.updateQueueEntry(queueEntry);
     }
     return { kind: 'skipped', reason };
+}
+
+/**
+ * A node whose workspace can never be prepared: TERMINAL, not deferred.
+ *
+ * `failed` rather than `skipped` is the deliberate choice. `skipped` means "the
+ * graph decided this work should not run" (a false run_if) and reads as a
+ * normal, expected outcome; this is "the work was supposed to run and its
+ * worktree died", which an operator must see as a failure. Both are terminal
+ * and neither satisfies `taskDependenciesSatisfied`, so downstream accounting is
+ * identical — only the operator-facing verdict differs, and it should.
+ *
+ * The queue placeholder goes `cancelled` for the same reason it does for a
+ * skip: the queue has no `failed` status for an unclaimed row, and `cancelled`
+ * is the terminal status that can never be mistaken for satisfied work. The
+ * distinguishing detail lives in `blockedReason`.
+ */
+function markNodeFailedForDeadWorkspace(
+    store: MeshRuntimeStore,
+    target: MeshTaskGraphNodeRow,
+    queueEntry: MeshWorkQueueEntry,
+    workspaceRef: string,
+    sagaState: string,
+    lastError: string | undefined,
+    nowIso: string,
+): SettleOutcome {
+    const graphStore = store.graphStore();
+    const blockedReason = workspaceTerminalBlockReason(workspaceRef, sagaState);
+    const failureReason =
+        `workspace '${workspaceRef}' is ${sagaState} and can never become ready`
+        + (lastError ? ` — ${summarizeWorkspaceError(lastError)}` : '');
+    graphStore.updateNodeState(target.graphId, target.nodeId, 'failed', nowIso, { failureReason });
+    target.state = 'failed';
+    target.failureReason = failureReason;
+    if (queueEntry.status === 'pending') {
+        queueEntry.status = 'cancelled';
+        queueEntry.blockedReason = blockedReason;
+        store.updateQueueEntry(queueEntry);
+    }
+    LOG.warn('MeshGraph', `Node ${target.nodeId} failed: ${failureReason}`);
+    return { kind: 'error', blockedReason };
+}
+
+/**
+ * `lastError` on a quarantined intent is a JSON evidence blob
+ * (quarantineCompensation); on a clone failure it is a bare message. Render
+ * whichever it is as one short human-readable clause.
+ */
+function summarizeWorkspaceError(lastError: string): string {
+    try {
+        const parsed = JSON.parse(lastError);
+        const refusals = Array.isArray(parsed?.refusals) ? parsed.refusals : null;
+        if (refusals && refusals.length > 0) return `refused: ${refusals.join(', ')}`;
+        if (typeof parsed?.code === 'string') return parsed.code;
+    } catch { /* not JSON — fall through to the raw message */ }
+    const oneLine = lastError.replace(/\s+/g, ' ').trim();
+    return oneLine.length > 200 ? `${oneLine.slice(0, 197)}...` : oneLine;
 }
 
 /**
