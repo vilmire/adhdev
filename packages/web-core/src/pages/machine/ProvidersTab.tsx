@@ -28,6 +28,7 @@ import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type Pro
 import ProviderCloneModal from './ProviderCloneModal'
 import ProviderInstallOptionsModal from './ProviderInstallOptionsModal'
 import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderRow'
+import { extractChannelSyncErrors, hasDigestMismatch, type ChannelSyncErrorInfo } from './providerChannelErrors'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
 import { IconSpinner } from '../../components/Icons'
@@ -58,6 +59,12 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     // Verified-channel types never activated/installed on this machine (kimi class).
     const [channelNewTypes, setChannelNewTypes] = useState<string[]>([])
     const [installingNewType, setInstallingNewType] = useState<string | null>(null)
+    // Why a channel install failed, per provider type. The daemon already
+    // returns the typed channelSync errors (DIGEST_MISMATCH, TRANSPORT_FAILED,
+    // …); before this they were dropped on the floor, so a refusing install
+    // just silently did nothing and the user had no way to tell a digest
+    // mismatch from a network failure.
+    const [installErrors, setInstallErrors] = useState<Record<string, ChannelSyncErrorInfo[]>>({})
     const [loading, setLoading] = useState(false)
     const [loadError, setLoadError] = useState<string | null>(null)
     const [savingKey, setSavingKey] = useState<string | null>(null)
@@ -198,11 +205,31 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const handleInstallNewType = useCallback(async (providerType: string) => {
         if (!machineId) return
         setInstallingNewType(providerType)
+        // Clear any previous failure for this type so a retry does not show a
+        // stale reason next to a fresh attempt.
+        setInstallErrors(prev => {
+            if (!(providerType in prev)) return prev
+            const next = { ...prev }
+            delete next[providerType]
+            return next
+        })
         try {
             // activate_provider_updates {types} unions the never-activated type
             // into the verified-channel sync target set (digest-verified,
             // atomic pointer flip — same machinery as updates).
-            await sendDaemonCommand(machineId, 'activate_provider_updates', { types: [providerType] })
+            const res = await sendDaemonCommand(machineId, 'activate_provider_updates', { types: [providerType] })
+            // Report why it refused. The daemon returns typed channelSync
+            // errors; dropping them is what made a DIGEST_MISMATCH look like
+            // a no-op button.
+            const errors = extractChannelSyncErrors(res)
+            if (errors.length > 0) {
+                setInstallErrors(prev => ({ ...prev, [providerType]: errors }))
+            }
+        } catch (e) {
+            setInstallErrors(prev => ({
+                ...prev,
+                [providerType]: [{ code: 'COMMAND_FAILED', message: e instanceof Error ? e.message : String(e) }],
+            }))
         } finally {
             setInstallingNewType(null)
             await fetchPins()
@@ -418,18 +445,49 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     <div className="text-2xs font-semibold uppercase tracking-wider text-accent-primary">{t('machine.providers.newChannelTypesTitle')}</div>
                     <div className="text-2xs text-text-muted mt-1 mb-2.5">{t('machine.providers.newChannelTypesDesc')}</div>
                     <div className="flex flex-col gap-1.5">
-                        {channelNewTypes.map((providerType) => (
-                            <div key={providerType} className="flex items-center justify-between gap-3 text-xxs">
-                                <span className="font-mono text-text-primary">{providerType}</span>
-                                <button
-                                    onClick={() => { void handleInstallNewType(providerType) }}
-                                    disabled={installingNewType !== null}
-                                    className="px-2.5 py-1 rounded-md text-xs font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
-                                >
-                                    {installingNewType === providerType ? <IconSpinner size={11} /> : t('machine.providers.installNewType')}
-                                </button>
-                            </div>
-                        ))}
+                        {channelNewTypes.map((providerType) => {
+                            const errors = installErrors[providerType] ?? []
+                            return (
+                                <div key={providerType} className="flex flex-col gap-1">
+                                    <div className="flex items-center justify-between gap-3 text-xxs">
+                                        <span className="font-mono text-text-primary">{providerType}</span>
+                                        <button
+                                            onClick={() => { void handleInstallNewType(providerType) }}
+                                            disabled={installingNewType !== null}
+                                            className="px-2.5 py-1 rounded-md text-xs font-medium bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 disabled:opacity-50"
+                                        >
+                                            {installingNewType === providerType ? <IconSpinner size={11} /> : t('machine.providers.installNewType')}
+                                        </button>
+                                    </div>
+                                    {errors.length > 0 && (
+                                        <div className="rounded-md border border-red-500/30 bg-red-500/[0.07] px-2.5 py-1.5">
+                                            <div className="text-3xs font-semibold uppercase tracking-wider text-red-300">
+                                                {t('machine.providers.installFailedTitle')}
+                                            </div>
+                                            {/* DIGEST_MISMATCH is not user-retryable — say so plainly
+                                                instead of leaving only the raw daemon string. */}
+                                            {hasDigestMismatch(errors) && (
+                                                <div className="text-3xs text-red-200/90 mt-1">
+                                                    {t('machine.providers.installFailedDigestMismatch')}
+                                                </div>
+                                            )}
+                                            {/* Every error, not just the first: a sync can refuse for
+                                                more than one reason and a truncated list hides the
+                                                one that actually explains the failure. */}
+                                            <ul className="mt-1 flex flex-col gap-0.5">
+                                                {errors.map((err, i) => (
+                                                    <li key={`${err.code}-${i}`} className="text-3xs text-text-muted font-mono break-all">
+                                                        <span className="text-red-300/90">{err.code}</span>
+                                                        {err.providerType ? ` [${err.providerType}]` : ''}
+                                                        {err.message ? `: ${err.message}` : ''}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        })}
                     </div>
                 </Card>
             )}

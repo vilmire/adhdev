@@ -2935,6 +2935,8 @@
             "newChannelTypesTitle": "Nuevos en el canal de providers",
             "newChannelTypesDesc": "Publicados en el canal verificado pero no instalados en esta máquina. Instalar activa el paquete verificado por digest.",
             "installNewType": "Instalar",
+            "installFailedTitle": "Error de instalación",
+            "installFailedDigestMismatch": "Digest no coincide: el paquete del canal de providers no coincide con el digest publicado en el registro. Es probable que la entrada del registro esté desactualizada y deba volver a publicarse.",
             "loadFailed": "No se pudo cargar la configuración de proveedores: {{error}}",
             "quotaToggleFailed": "No se pudo actualizar el sondeo de cuota para {{provider}}: {{error}}"
         },
