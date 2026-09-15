@@ -52541,11 +52541,22 @@ ${blocks.join("\n\n")}`;
         UNSAFE_BRANCH_CHARS = /[/\\:*?"<>|\s]+/g;
       }
     });
+    function isTerminalWorkspaceSagaState(state2) {
+      return state2 !== void 0 && TERMINAL_SAGA_STATES.includes(state2);
+    }
     function resolveWorkspaceRefForMaterialize(graphStore, graphId, baseSpec) {
       const workspaceRef = readWorkspaceRefFromSpec(baseSpec);
       if (!workspaceRef) return { kind: "none" };
       const intent = graphStore.getWorkspaceIntent(graphId, workspaceRef);
       const nodeId = typeof intent?.createdNodeId === "string" ? intent.createdNodeId.trim() : "";
+      if (intent && isTerminalWorkspaceSagaState(intent.sagaState)) {
+        return {
+          kind: "dead",
+          workspaceRef,
+          sagaState: intent.sagaState,
+          ...intent.lastError ? { lastError: intent.lastError } : {}
+        };
+      }
       if (!intent || intent.sagaState !== "ready" || !nodeId) {
         return { kind: "unresolved", workspaceRef };
       }
@@ -52563,10 +52574,16 @@ ${blocks.join("\n\n")}`;
       if (!tags.includes(tag)) tags.push(tag);
       return tags;
     }
+    var TERMINAL_SAGA_STATES;
     var init_mesh_graph_workspace_bind = __esm2({
       "src/mesh/mesh-graph-workspace-bind.ts"() {
         "use strict";
         init_mesh_graph_workspace_identity();
+        TERMINAL_SAGA_STATES = [
+          "failed",
+          "compensated",
+          "compensation_required"
+        ];
       }
     });
     function isSupportedMeshCoordinatorConfigFormat(format) {
@@ -53470,6 +53487,9 @@ ${lines.join("\n")}
       if (!Number.isInteger(version2) || version2 < 0) return null;
       return { nodeId: rest.slice(0, sep17), version: version2 };
     }
+    function workspaceTerminalBlockReason(workspaceRef, sagaState) {
+      return `${WORKSPACE_DEAD_PREFIX}${workspaceRef}:${sagaState}`;
+    }
     function coordinatorGateBlockReason(gateId) {
       return `${GATE_BLOCK_PREFIX}${gateId}`;
     }
@@ -53930,6 +53950,17 @@ ${lines.join("\n")}
         return markNodeSkipped(store, target, `run_if_false:${falseCondition ?? "condition"}`, nowIso);
       }
       const workspaceBind = resolveWorkspaceRefForMaterialize(graphStore, target.graphId, baseSpec);
+      if (workspaceBind.kind === "dead") {
+        return markNodeFailedForDeadWorkspace(
+          store,
+          target,
+          queueEntry,
+          workspaceBind.workspaceRef,
+          workspaceBind.sagaState,
+          workspaceBind.lastError,
+          nowIso
+        );
+      }
       if (workspaceBind.kind === "unresolved") {
         if (target.state !== "blocked") {
           graphStore.updateNodeState(target.graphId, target.nodeId, "blocked", nowIso);
@@ -54017,6 +54048,32 @@ ${lines.join("\n")}
         store.updateQueueEntry(queueEntry);
       }
       return { kind: "skipped", reason };
+    }
+    function markNodeFailedForDeadWorkspace(store, target, queueEntry, workspaceRef, sagaState, lastError, nowIso) {
+      const graphStore = store.graphStore();
+      const blockedReason = workspaceTerminalBlockReason(workspaceRef, sagaState);
+      const failureReason = `workspace '${workspaceRef}' is ${sagaState} and can never become ready` + (lastError ? ` \u2014 ${summarizeWorkspaceError(lastError)}` : "");
+      graphStore.updateNodeState(target.graphId, target.nodeId, "failed", nowIso, { failureReason });
+      target.state = "failed";
+      target.failureReason = failureReason;
+      if (queueEntry.status === "pending") {
+        queueEntry.status = "cancelled";
+        queueEntry.blockedReason = blockedReason;
+        store.updateQueueEntry(queueEntry);
+      }
+      LOG.warn("MeshGraph", `Node ${target.nodeId} failed: ${failureReason}`);
+      return { kind: "error", blockedReason };
+    }
+    function summarizeWorkspaceError(lastError) {
+      try {
+        const parsed = JSON.parse(lastError);
+        const refusals = Array.isArray(parsed?.refusals) ? parsed.refusals : null;
+        if (refusals && refusals.length > 0) return `refused: ${refusals.join(", ")}`;
+        if (typeof parsed?.code === "string") return parsed.code;
+      } catch {
+      }
+      const oneLine2 = lastError.replace(/\s+/g, " ").trim();
+      return oneLine2.length > 200 ? `${oneLine2.slice(0, 197)}...` : oneLine2;
     }
     function blockWithMaterializationError(store, graphStore, target, queueEntry, error48, nowIso) {
       const blockedReason = error48 instanceof MeshMaterializationError ? error48.blockedReason : "materialization_error:invalid_binding_spec";
@@ -54233,6 +54290,7 @@ ${lines.join("\n")}
       return result;
     }
     var GRAPH_BLOCK_PREFIX;
+    var WORKSPACE_DEAD_PREFIX;
     var GATE_BLOCK_PREFIX;
     var queueWakeHandler;
     var gateNotifyHandler;
@@ -54252,6 +54310,7 @@ ${lines.join("\n")}
         init_worker_mailbox();
         init_mesh_graph_derived_failure();
         GRAPH_BLOCK_PREFIX = "graph_materialization_pending:";
+        WORKSPACE_DEAD_PREFIX = "workspace_terminal:";
         GATE_BLOCK_PREFIX = "coordinator_gate:";
         GATE_NOTIFY_OUTBOX_KINDS = /* @__PURE__ */ new Set(["graph_gate_awaiting", "graph_gate_lease_expired"]);
         MESH_NODE_PATCH_KEYS3 = ["run_if", "on_false", "inputs_from", "workspace_ref"];
@@ -97001,6 +97060,26 @@ ${statusLine}`;
       const label = gate.ref || gate.gateId;
       return `'${label}' (${gate.action}, ${gate.state})`;
     }
+    function deadWorkspaceSummaries(graphStore, graphId) {
+      let intents;
+      try {
+        intents = graphStore.listWorkspaceIntents(graphId);
+      } catch {
+        return [];
+      }
+      return intents.filter((i) => isTerminalWorkspaceSagaState(i.sagaState)).map((i) => ({ workspaceRef: i.workspaceRef, sagaState: i.sagaState }));
+    }
+    function deadWorkspaceAdvice(sagaState) {
+      switch (sagaState) {
+        case "compensation_required":
+          return "its worktree could not be safely removed and still holds work \u2014 inspect the tree, resolve or move what is in it, then remove it manually";
+        case "compensated":
+          return "its worktree was removed, so any task still naming it must be re-enqueued against a new workspace";
+        case "failed":
+        default:
+          return "its worktree was never created \u2014 re-enqueue the affected tasks with a fresh workspace declaration once the underlying cause (disk, permissions, bad base revision) is fixed";
+      }
+    }
     function sweepMeshGraphStaleness(meshId, opts) {
       const nowMs = opts?.nowMs ?? Date.now();
       const staleThresholdMs = opts?.staleThresholdMs ?? getGraphStaleThresholdMs();
@@ -97029,9 +97108,11 @@ ${statusLine}`;
     function queueGraphReminder(graphStore, graph, nowMs, updatedAtMs, bucket2) {
       const nodes = graphStore.listNodes(graph.graphId);
       const gates = graphStore.listGatesByGraph(graph.graphId).filter((g3) => STALE_GATE_STATES.includes(g3.state));
+      const deadWorkspaces = deadWorkspaceSummaries(graphStore, graph.graphId);
       const age = staleHoursLabel(nowMs, updatedAtMs);
       const gatePart = gates.length > 0 ? ` Awaiting gates: ${gates.map(gateSummary).join("; ")} \u2014 claim with mesh_graph_gate_claim, then release with evidence or abandon.` : "";
-      const coordinatorMessage = `Graph ${graph.graphId} (${graph.status}) has not advanced for ${age}. Frontier: ${frontierSummary(nodes)}.${gatePart} Inspect with mesh_graph_view; resume the work, release/abandon its gates, or cancel dead tasks so the graph can settle.`;
+      const workspacePart = deadWorkspaces.length > 0 ? ` Dead workspaces: ${deadWorkspaces.map((w) => `'${w.workspaceRef}' (${w.sagaState}) \u2014 ${deadWorkspaceAdvice(w.sagaState)}`).join("; ")}. Tasks that named these workspaces are already failed with a workspace_terminal: reason; they will not recover on their own.` : "";
+      const coordinatorMessage = `Graph ${graph.graphId} (${graph.status}) has not advanced for ${age}. Frontier: ${frontierSummary(nodes)}.${gatePart}${workspacePart} Inspect with mesh_graph_view; resume the work, release/abandon its gates, or cancel dead tasks so the graph can settle.`;
       return queuePendingMeshCoordinatorEvent({
         event: "mesh:graph_stale",
         meshId: graph.meshId,
@@ -97045,6 +97126,7 @@ ${statusLine}`;
           graphStatus: graph.status,
           staleMs: nowMs - updatedAtMs,
           awaitingGateIds: gates.map((g3) => g3.gateId),
+          deadWorkspaceRefs: deadWorkspaces.map((w) => w.workspaceRef),
           coordinatorMessage
         },
         coordinatorMessage,
@@ -97085,6 +97167,7 @@ ${statusLine}`;
         "use strict";
         init_mesh_runtime_store();
         init_mesh_events_pending();
+        init_mesh_graph_workspace_bind();
         HOUR_MS2 = 60 * 60 * 1e3;
         DAY_MS3 = 24 * HOUR_MS2;
         DEFAULT_GRAPH_STALE_THRESHOLD_MS = DAY_MS3;

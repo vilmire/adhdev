@@ -21,6 +21,7 @@
  */
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
+import { isTerminalWorkspaceSagaState } from './mesh-graph-workspace-bind.js';
 import type { MeshGraphGateRow, MeshTaskGraphRow, MeshTaskGraphNodeRow } from './mesh-graph-types.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -100,6 +101,43 @@ function gateSummary(gate: MeshGraphGateRow): string {
 }
 
 /**
+ * Workspaces whose saga died. A stale graph carrying one of these is not
+ * waiting on anything — it is waiting on something that will never arrive — and
+ * the generic "resume the work" advice below cannot be acted on, because the
+ * thing to fix is a worktree, not a task. Naming the workspace and its state is
+ * what turns the reminder into an instruction.
+ */
+function deadWorkspaceSummaries(
+    graphStore: ReturnType<ReturnType<typeof MeshRuntimeStore.getInstance>['graphStore']>,
+    graphId: string,
+): Array<{ workspaceRef: string; sagaState: string }> {
+    let intents;
+    try {
+        intents = graphStore.listWorkspaceIntents(graphId);
+    } catch {
+        return [];
+    }
+    return intents
+        .filter(i => isTerminalWorkspaceSagaState(i.sagaState))
+        .map(i => ({ workspaceRef: i.workspaceRef, sagaState: i.sagaState }));
+}
+
+/** Per-state remediation — each names the actual next command, not "inspect it". */
+function deadWorkspaceAdvice(sagaState: string): string {
+    switch (sagaState) {
+        case 'compensation_required':
+            return 'its worktree could not be safely removed and still holds work — inspect the tree, '
+                + 'resolve or move what is in it, then remove it manually';
+        case 'compensated':
+            return 'its worktree was removed, so any task still naming it must be re-enqueued against a new workspace';
+        case 'failed':
+        default:
+            return 'its worktree was never created — re-enqueue the affected tasks with a fresh workspace declaration '
+                + 'once the underlying cause (disk, permissions, bad base revision) is fixed';
+    }
+}
+
+/**
  * Page the coordinator for every stale graph/gate in one mesh. Read-only over
  * graph state; the only side effect is queuePendingMeshCoordinatorEvent.
  * Cheap by construction: active/waiting_gate graphs are a small set, and node
@@ -148,13 +186,22 @@ function queueGraphReminder(
     const nodes = graphStore.listNodes(graph.graphId);
     const gates = graphStore.listGatesByGraph(graph.graphId)
         .filter(g => (STALE_GATE_STATES as readonly string[]).includes(g.state));
+    const deadWorkspaces = deadWorkspaceSummaries(graphStore, graph.graphId);
     const age = staleHoursLabel(nowMs, updatedAtMs);
     const gatePart = gates.length > 0
         ? ` Awaiting gates: ${gates.map(gateSummary).join('; ')} — claim with mesh_graph_gate_claim, then release with evidence or abandon.`
         : '';
+    // A dead workspace is the most actionable thing a stale graph can carry, so
+    // it is named BEFORE the generic advice — and with the remediation for its
+    // specific state, since "inspect with mesh_graph_view" tells an operator
+    // nothing about how to revive a worktree that no longer exists.
+    const workspacePart = deadWorkspaces.length > 0
+        ? ` Dead workspaces: ${deadWorkspaces.map(w => `'${w.workspaceRef}' (${w.sagaState}) — ${deadWorkspaceAdvice(w.sagaState)}`).join('; ')}.`
+        + ' Tasks that named these workspaces are already failed with a workspace_terminal: reason; they will not recover on their own.'
+        : '';
     const coordinatorMessage =
         `Graph ${graph.graphId} (${graph.status}) has not advanced for ${age}. `
-        + `Frontier: ${frontierSummary(nodes)}.${gatePart} `
+        + `Frontier: ${frontierSummary(nodes)}.${gatePart}${workspacePart} `
         + 'Inspect with mesh_graph_view; resume the work, release/abandon its gates, or cancel dead tasks so the graph can settle.';
     return queuePendingMeshCoordinatorEvent({
         event: 'mesh:graph_stale',
@@ -169,6 +216,7 @@ function queueGraphReminder(
             graphStatus: graph.status,
             staleMs: nowMs - updatedAtMs,
             awaitingGateIds: gates.map(g => g.gateId),
+            deadWorkspaceRefs: deadWorkspaces.map(w => w.workspaceRef),
             coordinatorMessage,
         },
         coordinatorMessage,
