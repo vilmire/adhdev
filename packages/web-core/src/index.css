@@ -4521,3 +4521,23 @@
     animation: mesh-glow-breathe 2s ease-in-out infinite;
     border-color: rgba(34,211,238,0.55) !important;
 }
+
+/* Honor OS reduced-motion on the mesh canvases.
+ *
+ * Both of these are `infinite` animations that run for as long as the view is
+ * open: @xyflow/react's `dashdraw` on an edge marked `animated` (0.5s linear
+ * infinite, from its own stylesheet) and the node "generating" breathe above.
+ *
+ * Besides the accessibility contract, a canvas that animates forever never
+ * presents a stable frame, so anything waiting for one — a screenshot or
+ * capture path, a visual-diff run — waits until it times out instead. Holding
+ * the final state still keeps every colour and dash pattern, so no state the
+ * animation encoded is lost; only the motion stops. */
+@media (prefers-reduced-motion: reduce) {
+    .react-flow__edge.animated path {
+        animation: none;
+    }
+    .mesh-node-generating {
+        animation: none;
+    }
+}

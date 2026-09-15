@@ -391,6 +391,68 @@ export function archiveColumnCount(availableWidth: number, entryWidth: number, g
 export const ARCHIVE_MAX_COLUMNS = 4
 
 /**
+ * How long a task's detail panel shows before it folds the rest away.
+ *
+ * Chosen to cover a genuine one-or-two-line task ("rerun the flaky suite on
+ * win32") without folding, while a dispatched briefing — measured at several
+ * thousand characters on the live mesh — folds after its opening lines.
+ */
+export const TASK_MESSAGE_LEAD_CHARS = 280
+
+/**
+ * Split a task message into the part shown immediately and the part folded
+ * behind a disclosure.
+ *
+ * A queue task's `message` is the entire instruction it was dispatched with.
+ * Rendering it whole at the top of the detail panel buried the fields the
+ * panel exists to answer — status, provider, difficulty, elapsed time, failure
+ * reason — under a wall of text with its own scrollbar, which is what the
+ * owner hit when clicking a card.
+ *
+ * Splitting on a paragraph or line boundary when one is available keeps the
+ * visible part readable; a hard character cut mid-sentence reads worse than
+ * slightly more text. Returns `rest: ''` when the whole message already fits,
+ * so a short task shows exactly as before with no disclosure at all.
+ */
+export function splitTaskMessage(
+    message: string | null | undefined,
+    leadChars: number = TASK_MESSAGE_LEAD_CHARS,
+): { lead: string; rest: string } | null {
+    const text = typeof message === 'string' ? message.trim() : ''
+    if (!text) return null
+    if (text.length <= leadChars) return { lead: text, rest: '' }
+
+    /* Cut on a structural boundary when there is one, so the visible part ends
+     * as a whole thought rather than mid-word.
+     *
+     * A task briefing almost always opens with a title line or short summary
+     * paragraph, so the FIRST paragraph break is the natural lead — not the
+     * last one inside the budget, which would drag unrelated body text along
+     * with it. Line breaks and sentence ends are the weaker fallbacks, and for
+     * those the last one inside the budget is right because it fills the lead.
+     *
+     * A break in the opening few characters is ignored: it would leave a lead
+     * too short to tell the reader anything. */
+    const window = text.slice(0, leadChars)
+    // Low enough to accept a real title line ("Fix the canvas zoom." is 20),
+    // high enough to reject a stray leading newline.
+    const minLead = 12
+
+    const paragraph = window.indexOf('\n\n')
+    if (paragraph >= minLead) {
+        return { lead: text.slice(0, paragraph).trim(), rest: text.slice(paragraph).trim() }
+    }
+
+    const floor = Math.floor(leadChars / 2)
+    for (const cut of [window.lastIndexOf('\n'), window.lastIndexOf('. ')]) {
+        if (cut >= floor) {
+            return { lead: text.slice(0, cut).trim(), rest: text.slice(cut).trim() }
+        }
+    }
+    return { lead: window.trim(), rest: text.slice(leadChars).trim() }
+}
+
+/**
  * Root-first ordering for the ELK input array. ELK's `considerModelOrder`
  * strategy is NODES_AND_EDGES, so the order nodes are handed in decides their
  * relative placement within a layer — which is exactly the knob the owner call

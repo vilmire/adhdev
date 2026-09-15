@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText, stripMarkdownSyntax } from '../../utils/queue-task-label'
+import { splitTaskMessage } from './blueprintViewModel'
 import { installTopModalEscapeHandler } from '../../utils/modal-escape'
 import ModalPortal from '../ui/ModalPortal'
 import type {
@@ -1016,6 +1017,22 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
     }, [isTerminal, daemonId, meshId, sendDaemonCommand, task.id])
 
     const completingProvider = task.assignedProviderType || output?.providerType
+    // Summary-first reading of the instruction — see the render block below.
+    const taskMessageParts = useMemo(
+        () => splitTaskMessage(queueTaskDisplayText(task.message)),
+        [task.message],
+    )
+    /* Elapsed time. The queue row carries only createdAt/updatedAt, so for a
+     * SETTLED task the span between them is its lifetime; for one still moving
+     * it would just be "time since the last update", which is already the
+     * Updated row, so it is shown for terminal tasks only. */
+    const elapsedLabel = useMemo(() => {
+        if (!isTerminal) return null
+        const started = Date.parse(task.createdAt)
+        const ended = Date.parse(task.updatedAt)
+        if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return null
+        return formatDuration(ended - started)
+    }, [isTerminal, task.createdAt, task.updatedAt])
 
     return (
         <div className="flex flex-col gap-3">
@@ -1025,7 +1042,40 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                 {completingProvider && <StatusBadge meshTheme={meshTheme} label={completingProvider} tone="muted" />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
-            {task.message && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{queueTaskDisplayText(task.message)}</div>}
+            {/* ── The task's own text: SUMMARY first, full instruction folded.
+                A dispatched task's message is the whole briefing — measured on
+                the live mesh, queue task 0dd248f0 carried several thousand
+                characters. Rendering it in full at the TOP of the detail meant
+                the things a reader actually opens this panel for (status,
+                provider, difficulty, elapsed, why it failed) were pushed below
+                a wall of text and its scrollbar.
+
+                The first line is the one a reader scans, so it stays visible;
+                the rest goes behind the same <details> idiom the payload block
+                below already uses. A short message has no second part and is
+                shown whole, so nothing is hidden that would have fit. ── */}
+            {taskMessageParts && (
+                <div className="flex flex-col gap-1">
+                    <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{taskMessageParts.lead}</div>
+                    {taskMessageParts.rest && (
+                        <details>
+                            <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>
+                                {t('mesh.overview.detailLabelFullInstruction')}
+                            </summary>
+                            <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                                {taskMessageParts.rest}
+                            </div>
+                        </details>
+                    )}
+                </div>
+            )}
+            {/* Why it stopped — the one thing a failed task is opened for. It
+                used to sit far below the full instruction dump. */}
+            {task.blockedReason && (
+                <div className={`rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                    {task.blockedReason}
+                </div>
+            )}
             {isTerminal && (
                 <div>
                     <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
@@ -1044,6 +1094,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelTaskId')} value={task.id} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCreated')} value={relativeTime(task.createdAt) ?? task.createdAt} />
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelUpdated')} value={relativeTime(task.updatedAt) ?? task.updatedAt} />
+                {elapsedLabel && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelElapsed')} value={elapsedLabel} />}
                 {task.missionId && (
                     <ModalRow
                         meshTheme={meshTheme}

@@ -1491,6 +1491,8 @@
             "detailLabelMissionId": "ID de misión",
             "detailLabelCreated": "Creada",
             "detailLabelUpdated": "Actualizada",
+            "detailLabelElapsed": "Duración",
+            "detailLabelFullInstruction": "Ver instrucción completa",
             "detailLabelLastActivity": "Última actividad de tarea",
             "detailLabelIncompleteEvidence": "Evidencia incompleta",
             "incompleteTaskCount_one": "{{count}} tarea",

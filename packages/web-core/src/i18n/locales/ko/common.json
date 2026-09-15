@@ -1486,6 +1486,8 @@
             "detailLabelMissionId": "미션 ID",
             "detailLabelCreated": "생성 시각",
             "detailLabelUpdated": "업데이트 시각",
+            "detailLabelElapsed": "소요 시간",
+            "detailLabelFullInstruction": "지시문 전문 보기",
             "detailLabelLastActivity": "마지막 태스크 활동",
             "detailLabelIncompleteEvidence": "미완료 증거",
             "incompleteTaskCount_one": "태스크 {{count}}개",
