@@ -2930,6 +2930,8 @@
             "newChannelTypesTitle": "渠道新发布的 Provider",
             "newChannelTypesDesc": "已发布到验证渠道但尚未安装到本机。安装后将激活经摘要校验的包。",
             "installNewType": "安装",
+            "installFailedTitle": "安装失败",
+            "installFailedDigestMismatch": "摘要不匹配：Provider 渠道中的包与注册表已发布的摘要不一致。注册表条目很可能已过期，需要重新发布。",
             "loadFailed": "加载提供方设置失败：{{error}}",
             "quotaToggleFailed": "更新 {{provider}} 的配额探测设置失败：{{error}}"
         },
