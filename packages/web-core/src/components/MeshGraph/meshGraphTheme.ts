@@ -21,6 +21,15 @@ export interface MeshGraphTheme {
     blueprintShellClass: string
     blueprintGridFineColor: string
     blueprintGridAccentColor: string
+    /** Stroke for the mission thread — the dotted line chaining one mission's
+     *  cards while it is lit. Indigo to echo the mission chip on the card, and
+     *  a THEME token rather than a literal at the call site because it has to
+     *  hold its own against the blueprint's own grid: it was previously a
+     *  translucent indigo that the owner could not reliably tell from a card
+     *  border on the light ground (2026-09-15). Kept fully opaque — the thread
+     *  is transient (it draws only while a mission is lit), so it does not need
+     *  to recede the way a resting decoration would. */
+    missionThreadColor: string
     edgeLabelTextColor: string
     edgeLabelBackgroundColor: string
     edgeLabelBorderColor: string
@@ -98,6 +107,11 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
             blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-200 bg-[radial-gradient(circle_at_top,_rgba(14,116,233,0.10),_rgba(240,247,255,0.98)_46%,_rgba(248,251,255,1))]',
             blueprintGridFineColor: 'rgba(59, 130, 246, 0.10)',
             blueprintGridAccentColor: 'rgba(59, 130, 246, 0.20)',
+            /* indigo-700. The pale drafting-paper ground is the hard case: the
+             * previous rgba(88,92,235,0.8) sat close enough to the blue grid
+             * accent to be lost against it. Solid and two steps darker clears
+             * both the grid and the card borders (slate-200). */
+            missionThreadColor: '#4338ca',
             edgeLabelTextColor: '#334155',
             edgeLabelBackgroundColor: 'rgba(255, 255, 255, 0.96)',
             edgeLabelBorderColor: 'rgba(148, 163, 184, 0.45)',
@@ -146,6 +160,11 @@ export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
         blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-400/15 bg-[radial-gradient(circle_at_top,_rgba(30,84,164,0.22),_rgba(6,17,38,0.99)_46%,_rgba(3,10,26,1))]',
         blueprintGridFineColor: 'rgba(96, 165, 250, 0.10)',
         blueprintGridAccentColor: 'rgba(96, 165, 250, 0.22)',
+        /* indigo-300. On the near-black blueprint ground the thread has to be
+         * LIGHTER than the card chrome rather than darker; the previous
+         * rgba(139,148,255,0.85) was close in hue but the alpha let the dark
+         * ground bleed through and flattened it into the grid. */
+        missionThreadColor: '#a5b4fc',
         edgeLabelTextColor: '#cbd5e1',
         edgeLabelBackgroundColor: 'rgba(2, 6, 23, 0.86)',
         edgeLabelBorderColor: 'rgba(148, 163, 184, 0.2)',
