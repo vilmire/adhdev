@@ -1280,17 +1280,41 @@ export function patchGraphNodeAndRetry(input: PatchGraphNodeAndRetryInput): Patc
         let target: MeshTaskGraphNodeRow | undefined;
         let graph: MeshTaskGraphRow | undefined;
         const ambiguous: string[] = [];
+        // ★ WHY RAW `===` AND NOT `meshNodeIdMatches()` (canon-identity rule,
+        // eslint.config.mjs). `MeshTaskGraphNodeRow.nodeId` is a GRAPH-ROW id
+        // minted by `newMeshGraphNodeId()` and living in one SQLite table — a
+        // different namespace from mesh NETWORK node ids. The row type carries no
+        // `id` / `node_id` field, and these ids never take the `mach_` /
+        // `daemon_mach_` / `standalone_mach_` forms the rule guards against; the
+        // rule matches on the property NAME `nodeId` alone, so it cannot tell the
+        // two namespaces apart. eslint-suppressions.README.md already classifies
+        // every `mesh-graph-*` site as this same "task-graph ids" class, and no
+        // mesh-graph module uses the helper.
+        //
+        // This is not a stylistic preference: `meshNodeIdMatches(node, id)` takes
+        // a `MeshNodeIdentified`, and `MeshTaskGraphNodeRow` is NOT assignable to
+        // it — passing one is a TS2345 compile error. The type system draws the
+        // same namespace boundary this comment does.
+        //
+        // `input.node` is compared as the caller typed it precisely BECAUSE it may
+        // be either a node id or a `ref`; telling those apart is this loop's job,
+        // and the id-only test below is what makes an id hit unambiguous while a
+        // ref hit stays subject to the cross-graph ambiguity check
+        // (`mesh-graph-node-patch.test.ts` pins both).
         for (const g of graphs) {
             if (g.meshId !== input.meshId) continue;
             for (const n of graphStore.listNodes(g.graphId)) {
+                // eslint-disable-next-line no-restricted-syntax -- graph-row id (newMeshGraphNodeId), not a mesh node id: different namespace, no mach_/daemon_mach_ forms, and MeshTaskGraphNodeRow is not even assignable to MeshNodeIdentified
                 if (n.nodeId !== input.node && n.ref !== input.node) continue;
                 // An exact node-id match is unambiguous by construction; a REF is
                 // only unique within one graph, so a bare ref that matches several
                 // live graphs must be refused rather than silently picking one.
+                // eslint-disable-next-line no-restricted-syntax -- graph-row id, same namespace argument as above; must test `nodeId` ONLY (never `ref`) so an id hit short-circuits while a ref hit stays ambiguity-checked
                 if (n.nodeId === input.node) { target = n; graph = g; ambiguous.length = 0; break; }
                 if (target) { ambiguous.push(`${g.graphId}:${n.nodeId}`); continue; }
                 target = n; graph = g; ambiguous.push(`${g.graphId}:${n.nodeId}`);
             }
+            // eslint-disable-next-line no-restricted-syntax -- graph-row id, same namespace argument; re-tests the id-only hit to stop scanning further graphs once an unambiguous id match is found
             if (target && target.nodeId === input.node) break;
         }
         if (!target || !graph) {
@@ -1334,6 +1358,7 @@ export function patchGraphNodeAndRetry(input: PatchGraphNodeAndRetryInput): Patc
         // settle run against the stale in-memory row would compute a digest the
         // CAS then rejects.
         const patched = graphStore.getNode(graph.graphId, target.nodeId)!;
+        // eslint-disable-next-line no-restricted-syntax -- both sides are graph-row ids read from the SAME graphStore inside the SAME transaction (listNodes + getNode on one graphId), so they are byte-identical by construction: no serialization boundary sits between them where a form could drift
         const nodes = graphStore.listNodes(graph.graphId).map(n => (n.nodeId === patched.nodeId ? patched : n));
         const byId = new Map(nodes.map(n => [n.nodeId, n]));
         const edges = graphStore.listEdges(graph.graphId);
