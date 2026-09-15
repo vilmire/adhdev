@@ -231,7 +231,11 @@ function TaskNodeCard({ data }: NodeProps<TaskFlowNode>) {
             )}
             <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse' : ''}`} aria-hidden />
+                    {/* motion-safe: the pulse is a never-ending CSS animation.
+                        Besides the a11y contract, an animation that never
+                        settles means the canvas never presents a stable frame,
+                        which is what a screenshot/capture path waits for. */}
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                     <span className="truncate text-3xs font-semibold uppercase tracking-wide opacity-80">{task.status}</span>
                 </span>
                 {/* Time label (owner call 2026-09-02): B-plan makes dependency
@@ -479,7 +483,8 @@ function GateNodeCard({ data }: NodeProps<GateFlowNode>) {
             <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-transparent" />
             <div className="flex items-center gap-1.5">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'animate-pulse' : ''}`} aria-hidden />
+                {/* motion-safe for the same reason as the task card's dot. */}
+                <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot} ${style.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
                 <span className="truncate text-3xs font-semibold uppercase tracking-wide opacity-85">⛩ {overlay.gate?.action ?? 'gate'}</span>
             </div>
             <div className="mt-1 truncate text-2xs font-medium" title={overlay.ref}>{overlay.ref}</div>
@@ -927,13 +932,15 @@ function layoutArchive(
     const originX = Number.isFinite(liveLeft) ? liveLeft : 0
     let cursorY = Number.isFinite(liveBottom) ? liveBottom + EXPANDED_GRAPH_LEAD_Y : 0
 
+    /* Indexed rather than scanned: both lookups below used a linear `.find`
+     * inside a per-member loop, so the archive pass was O(nodes x members).
+     * Building the two maps once keeps it linear. */
+    const gateStateById = new Map(overlays.gates.map(gate => [gate.id, gate.state]))
+    const taskNodeById = new Map(dag.nodes.map(node => [node.id, node]))
     const heightOf = (id: string): number => {
-        if (id.startsWith('gate:')) {
-            const gate = overlays.gates.find(candidate => candidate.id === id)
-            return gateNodeHeight(gate?.state ?? 'declared')
-        }
+        if (id.startsWith('gate:')) return gateNodeHeight(gateStateById.get(id) ?? 'declared')
         if (id.startsWith('plan:')) return PLAN_NODE_HEIGHT
-        const node = dag.nodes.find(candidate => candidate.id === id)
+        const node = taskNodeById.get(id)
         return node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT
     }
 
@@ -1287,13 +1294,17 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
 
     const overlayFlowNodes = useMemo<Node[]>(() => {
         if (!positions) return []
+        // Indexed for the same reason as layoutArchive's heightOf: this runs
+        // once per hull member, and a linear scan made it quadratic.
+        const gateStateById = new Map(fused.gates.map(gate => [gate.id, gate.state]))
+        const taskNodeById = new Map(dag.nodes.map(node => [node.id, node]))
         const sizeOf = (id: string): { w: number; h: number } => {
             if (id.startsWith('gate:')) {
-                const gate = fused.gates.find(candidate => candidate.id === id)
-                return { w: gateNodeWidth(gate?.state ?? 'declared'), h: gateNodeHeight(gate?.state ?? 'declared') }
+                const state = gateStateById.get(id) ?? 'declared'
+                return { w: gateNodeWidth(state), h: gateNodeHeight(state) }
             }
             if (id.startsWith('plan:')) return { w: PLAN_NODE_WIDTH, h: PLAN_NODE_HEIGHT }
-            const node = dag.nodes.find(candidate => candidate.id === id)
+            const node = taskNodeById.get(id)
             return { w: TASK_CARD_WIDTH, h: node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT }
         }
         const hulls = fused.clusters.flatMap(cluster => {
@@ -1425,6 +1436,18 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                 })),
         ]
     }, [fused, meshTheme, positions, collapsedGraphs, timelineLabels, toggleGraphExpanded, missionTitles])
+
+    /* Which legend keys the canvas has earned. Only the three states the
+     * legend can actually draw a swatch for count; the overlay's own
+     * inactive/idle greys are not part of that vocabulary. Order is fixed
+     * rather than first-seen so the key does not reshuffle as data arrives. */
+    const legendStates = useMemo<Array<'satisfied' | 'waiting' | 'failed'>>(() => {
+        if (!positions) return []
+        const present = new Set<string>()
+        for (const edge of dag.edges) present.add(edge.state)
+        for (const edge of fused.edges) present.add(edge.state)
+        return (['satisfied', 'waiting', 'failed'] as const).filter(state => present.has(state))
+    }, [dag, fused, positions])
 
     const flowEdges = useMemo<Edge[]>(() => {
         if (!positions) return []
@@ -1820,19 +1843,33 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             </ReactFlow>
 
 
-            {/* Edge-state legend */}
-            <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-3xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
-                {(['satisfied', 'waiting', 'failed'] as const).map(state => (
-                    <span key={state} className="flex items-center gap-1">
-                        <span
-                            className="inline-block h-0.5 w-4 rounded"
-                            style={{ backgroundColor: meshTheme.isDark ? EDGE_COLORS[state].dark : EDGE_COLORS[state].light }}
-                            aria-hidden
-                        />
-                        {t(`mesh.taskDag.legend.${state}`)}
-                    </span>
-                ))}
-            </div>
+            {/* ── Edge-state legend, showing only the states actually DRAWN.
+                It used to print all three unconditionally, which made it
+                describe a drawing that was not on screen: on the live mesh 19
+                of 20 graphs carry `gates:0`, so there are almost no edges at
+                all, and a fixed three-colour key for satisfied/waiting/failed
+                claimed distinctions the canvas never made. A legend that
+                disagrees with the picture is worse than no legend — the reader
+                hunts for colours that are not there.
+
+                Deriving from the rendered edges also makes it self-correcting:
+                the key grows back the moment real dependency edges exist. When
+                nothing is drawn it hides entirely rather than asserting a
+                vocabulary for an empty canvas. ── */}
+            {legendStates.length > 0 && (
+                <div className={`pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-3xs ${meshTheme.isDark ? 'border-white/10 bg-slate-950/80 text-slate-300' : 'border-slate-200 bg-white/90 text-slate-600'}`}>
+                    {legendStates.map(state => (
+                        <span key={state} className="flex items-center gap-1">
+                            <span
+                                className="inline-block h-0.5 w-4 rounded"
+                                style={{ backgroundColor: meshTheme.isDark ? EDGE_COLORS[state].dark : EDGE_COLORS[state].light }}
+                                aria-hidden
+                            />
+                            {t(`mesh.taskDag.legend.${state}`)}
+                        </span>
+                    ))}
+                </div>
+            )}
 
             {/* Selected task detail */}
             {selectedNode && (

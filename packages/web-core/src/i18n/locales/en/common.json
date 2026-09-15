@@ -1486,6 +1486,8 @@
             "detailLabelMissionId": "Mission id",
             "detailLabelCreated": "Created",
             "detailLabelUpdated": "Updated",
+            "detailLabelElapsed": "Elapsed",
+            "detailLabelFullInstruction": "Show full instruction",
             "detailLabelLastActivity": "Last task activity",
             "detailLabelIncompleteEvidence": "Incomplete evidence",
             "incompleteTaskCount_one": "{{count}} task",

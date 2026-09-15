@@ -1486,6 +1486,8 @@
             "detailLabelMissionId": "ミッションID",
             "detailLabelCreated": "作成日時",
             "detailLabelUpdated": "更新日時",
+            "detailLabelElapsed": "所要時間",
+            "detailLabelFullInstruction": "指示の全文を表示",
             "detailLabelLastActivity": "最終タスクアクティビティ",
             "detailLabelIncompleteEvidence": "未完了のエビデンス",
             "incompleteTaskCount_one": "{{count}} 件のタスク",

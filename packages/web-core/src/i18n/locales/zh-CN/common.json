@@ -1486,6 +1486,8 @@
             "detailLabelMissionId": "任务 ID",
             "detailLabelCreated": "创建时间",
             "detailLabelUpdated": "更新时间",
+            "detailLabelElapsed": "耗时",
+            "detailLabelFullInstruction": "显示完整指令",
             "detailLabelLastActivity": "最近任务活动",
             "detailLabelIncompleteEvidence": "未完成证据",
             "incompleteTaskCount_one": "{{count}} 个任务",
