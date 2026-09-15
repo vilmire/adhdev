@@ -105,10 +105,26 @@ export default defineConfig({
           // Rewrite only the stamp reads emitted by build-info.ts. The version is
           // deliberately preserved — it comes from package.json, not from git, so
           // it is already reproducible and is genuinely useful to report.
+          //
+          // ★ The short-hash pattern is ONE {7,40} range, not a {40} + {7,8} pair.
+          // The pair left a hole at 9..39 chars, and the repo grew straight into
+          // it: `git rev-parse --short HEAD` (build-stamp.mjs) emits git's
+          // AUTO-SCALED abbreviation, whose length rises with the object count to
+          // keep hashes unambiguous. This repo has crossed into 9 characters, so
+          // the {7,8} branch silently stopped matching and a real hash began
+          // surviving into the committed bundle — re-staling the vendor copy on
+          // every commit and blocking the refine gate. A committed artifact can
+          // never contain the hash of the commit containing it, so an unscrubbed
+          // stamp is unfixable by any number of re-sync commits; only scrubbing
+          // it at build time makes the bytes reproducible.
+          //
+          // Matching the full 7..40 range means no future abbreviation growth can
+          // reopen this. Scrubbing is still strictly narrower than the enclosing
+          // `readInjected(true ? "…" : void 0)` shape, so nothing but a build
+          // stamp can be caught by it.
           const patched = src
             .replace(/__DAEMON_BUILD_COMMIT__\s*=\s*"[0-9a-f]{7,40}"/g, '__DAEMON_BUILD_COMMIT__ = "unknown"')
-            .replace(/readInjected\(true \? "[0-9a-f]{40}" : void 0\)/g, 'readInjected(true ? "unknown" : void 0)')
-            .replace(/readInjected\(true \? "[0-9a-f]{7,8}" : void 0\)/g, 'readInjected(true ? "unknown" : void 0)')
+            .replace(/readInjected\(true \? "[0-9a-f]{7,40}" : void 0\)/g, 'readInjected(true ? "unknown" : void 0)')
             .replace(
               /readInjected\(true \? "\d{4}-\d{2}-\d{2}T[0-9:.]+Z" : void 0\)/g,
               'readInjected(true ? "unknown" : void 0)',
