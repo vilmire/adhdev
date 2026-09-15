@@ -46,7 +46,7 @@
 import { createHash } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { canonicalJson } from './mesh-graph-input-binding.js';
+import { canonicalJson, MeshMaterializationError, parseInputBindings } from './mesh-graph-input-binding.js';
 import {
     MESH_GRAPH_GATE_ACTIONS,
     MESH_GRAPH_GATE_TIMEOUT_POLICIES,
@@ -332,6 +332,65 @@ export function commitMeshGraphPlan(req: MeshGraphPlanRequest): MeshGraphPlanRes
     });
     tasks.forEach((t, i) => {
         pickEnum(t.on_upstream_skip, MESH_GRAPH_ON_UPSTREAM_SKIP_POLICIES, 'skip', 'invalid_on_upstream_skip', `tasks[${i}].on_upstream_skip`);
+    });
+
+    // ── `inputs_from` SHAPE, at ENQUEUE time (M-GRAPH-INPUTS-LATE-REJECT) ─────
+    // ★ THE DEFECT: the strict parser `parseInputBindings` had exactly ONE
+    // production caller — `settleDownstreamNode`'s materialization step, which
+    // only runs once every predecessor has COMPLETED. A typo'd binding was
+    // therefore accepted here, baked into the node's IMMUTABLE base spec, and
+    // rejected hours later at the moment the plan was finally ready to pay off:
+    // the whole upstream ran, and the one step that consumed it died. Measured
+    // live on graph `69103049` — A/B/C/D all `completed`, synthesis `blocked`.
+    //
+    // A shape error is knowable with NOTHING but the request itself, so it is
+    // validated where every other malformed-plan rejection already lives: before
+    // the transaction, so a bad batch writes no row at all (same atomicity as
+    // `duplicate_graph_ref` / `gate_ref_in_depends_on` / cycle detection). This
+    // is a pure CALL-SITE addition — the validator, its error codes and its
+    // details are C1's, unchanged, so enqueue and materialize can never disagree
+    // about what a well-formed binding is.
+    //
+    // ★ What this deliberately does NOT catch: `required_input_missing` — a
+    // well-formed binding whose source simply never produced that field. That is
+    // only knowable AFTER the upstream completes, so it stays a materialization
+    // error, and recovering from it is what `mesh_graph_node_patch` is for.
+    tasks.forEach((t, i) => {
+        if (t.inputs_from === undefined) return;
+        try {
+            parseInputBindings({ inputs_from: t.inputs_from });
+        } catch (e) {
+            const detail = e instanceof MeshMaterializationError ? e.detail : undefined;
+            throw new MeshGraphPlanError(
+                'invalid_binding_spec',
+                `task ${t.ref ? `'${t.ref}'` : `#${i}`} has a malformed inputs_from: ${e instanceof Error ? e.message : String(e)}`
+                + ' — each entry is {from: <predecessor ref>, select: <RFC-6901 JSON Pointer>, as: <name>}. '
+                + 'Rejected now rather than after the upstream work runs: the binding is baked into the node at enqueue '
+                + 'time, so a shape error accepted here only surfaces once every predecessor has already completed.',
+                { taskIndex: i, ...(t.ref ? { taskRef: t.ref } : {}), ...(detail ? { detail } : {}) },
+            );
+        }
+    });
+
+    // A binding's `from` must name something in THIS batch. The edge builder
+    // silently skips an unresolvable ref (`if (!fromNodeId) continue`), which is
+    // correct for `depends_on` — that may legitimately name a pre-existing queue
+    // task id — but NOT for a binding: no edge means no ordering AND no source
+    // envelope, so the node materializes with `upstream_output_missing` instead
+    // of waiting. Unknown here is a typo, and it reads exactly like the known
+    // `unknown_gate_ref` / `unknown_workspace_ref` rejections beside it.
+    tasks.forEach((t, i) => {
+        if (t.inputs_from === undefined) return;
+        for (const sourceRef of collectInputSourceRefs(t.inputs_from)) {
+            if (taskRefs.has(sourceRef) || gateRefs.has(sourceRef)) continue;
+            throw new MeshGraphPlanError(
+                'unknown_input_source_ref',
+                `task ${t.ref ? `'${t.ref}'` : `#${i}`} binds inputs_from '${sourceRef}', which is not a task or gate ref in this batch`
+                + ' — a binding reads a step declared in the SAME batch, so an unresolvable ref would leave the task with no '
+                + 'ordering edge and no source envelope at all.',
+                { taskIndex: i, ...(t.ref ? { taskRef: t.ref } : {}), sourceRef },
+            );
+        }
     });
 
     const result = store.transaction((): MeshGraphPlanResult => {

@@ -39,7 +39,7 @@ import {
   ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
   meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
   meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
-  meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon,
+  meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon, meshGraphNodePatch,
   meshReadDebug, meshReadTerminal, meshSendKeys,
   meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
   meshPlanOnboarding, meshCreate, meshAddNode,
@@ -374,6 +374,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_graph_gate_claim': text = await meshGraphGateClaim(meshCtx, a as any); break;
           case 'mesh_graph_gate_release': text = await meshGraphGateRelease(meshCtx, a as any); break;
           case 'mesh_graph_gate_abandon': text = await meshGraphGateAbandon(meshCtx, a as any); break;
+          case 'mesh_graph_node_patch': text = await meshGraphNodePatch(meshCtx, a as any); break;
           case 'mesh_queue_cancel': text = await meshQueueCancel(meshCtx, a as any); break;
           case 'mesh_queue_requeue': text = await meshQueueRequeue(meshCtx, a as any); break;
           case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;

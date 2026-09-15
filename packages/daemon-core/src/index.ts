@@ -401,6 +401,15 @@ export {
     MESH_GATE_NAMED_OUTCOMES,
     MESH_GATE_RELEASE_PATCH_KEYS,
 } from './mesh/mesh-graph-gates.js';
+// The coordinator node-patch + retry surface: the recovery path
+// `blockWithMaterializationError` has always promised for a node blocked on a
+// `materialization_error:*`. Exported so mesh_graph_node_patch can reach it —
+// before this, the only patch surface demanded a claimed gate.
+export { patchGraphNodeAndRetry, MESH_NODE_PATCH_KEYS } from './mesh/mesh-graph-transition-runner.js';
+export type {
+    PatchGraphNodeAndRetryInput,
+    PatchGraphNodeAndRetryResult,
+} from './mesh/mesh-graph-transition-runner.js';
 // G4: read-only convergence evidence attached where a coordinator meets a gate
 // (claim result; opt-in graph-view augmentation). Never releases anything.
 export { collectGateConvergenceEvidence } from './mesh/mesh-graph-gate-evidence.js';
@@ -452,6 +461,7 @@ export {
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,
+    recordGraphNodePatched,
     recordGraphGateExpired,
     MESH_VALID_SINGLE_REASONS,
     MESH_SUPERSEDED_SINGLE_REASONS,

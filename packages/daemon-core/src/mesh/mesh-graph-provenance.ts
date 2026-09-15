@@ -554,3 +554,39 @@ export function recordGraphGateAbandoned(
         ...(p.graphStatus ? { graphStatus: p.graphStatus } : {}),
     });
 }
+
+/**
+ * A coordinator rewrote a still-pending node's spec and re-settled it
+ * (`mesh_graph_node_patch`).
+ *
+ * The node's base spec is otherwise the IMMUTABLE plan, so every mutation of it
+ * belongs in the audit trail: this is the one path by which the instruction a
+ * worker eventually receives differs from the one the batch was accepted with.
+ * Only the patched KEY NAMES are recorded, never the patch values — a selector
+ * or condition is plan content, and the ledger is not a place to copy it.
+ */
+export function recordGraphNodePatched(
+    meshId: string,
+    p: {
+        graphId: string; nodeId: string; ref?: string; queueTaskId?: string;
+        patchedKeys: string[]; priorBlockedReason?: string;
+        outcome: string; state: string; blockedReason?: string;
+        materializationVersion: number; coordinatorSessionId?: string;
+    },
+): void {
+    safeAppend(meshId, 'graph_node_patched', {
+        graphId: p.graphId,
+        nodeId: p.nodeId,
+        ...(p.ref ? { ref: p.ref } : {}),
+        ...(p.queueTaskId ? { queueTaskId: p.queueTaskId } : {}),
+        patchedKeys: p.patchedKeys,
+        ...(p.priorBlockedReason ? { priorBlockedReason: p.priorBlockedReason.slice(0, 200) } : {}),
+        // Whether the retry actually recovered the node — the reason the patch
+        // was made at all, and the thing a later reader needs to know.
+        outcome: p.outcome,
+        state: p.state,
+        ...(p.blockedReason ? { blockedReason: p.blockedReason.slice(0, 200) } : {}),
+        materializationVersion: p.materializationVersion,
+        ...(p.coordinatorSessionId ? { coordinatorSessionId: p.coordinatorSessionId } : {}),
+    });
+}

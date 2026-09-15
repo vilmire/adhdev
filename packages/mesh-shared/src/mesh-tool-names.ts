@@ -31,6 +31,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_graph_gate_claim',
     'mesh_graph_gate_release',
     'mesh_graph_gate_abandon',
+    'mesh_graph_node_patch',
     'mesh_queue_cancel',
     'mesh_queue_requeue',
     'mesh_send_task',

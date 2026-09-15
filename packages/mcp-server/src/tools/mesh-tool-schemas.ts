@@ -41,6 +41,37 @@ const MESH_TASK_INPUT_SCHEMA = {
     },
 };
 
+/**
+ * One `inputs_from` entry (design :204-246).
+ *
+ * ★ This schema used to be a bare `{ type: 'object' }` — the field shapes lived
+ * ONLY in the prose description, so nothing machine-readable told a caller that
+ * `from`/`select`/`as` are mandatory. daemon-core's `parseInputBindings` is
+ * strict about all three, so a plausible-looking typo was accepted by the tool
+ * boundary and rejected much later, during materialization. The schema now
+ * states the contract the parser already enforces; daemon-core re-validates at
+ * enqueue regardless (a schema is a hint to the model, never the boundary).
+ *
+ * Kept deliberately in step with `parseInputBindings`: same required fields,
+ * same `as` pattern, same enums, same `max_bytes` ceiling.
+ */
+const MESH_INPUT_BINDING_SCHEMA = {
+    type: 'object' as const,
+    properties: {
+        from: { type: 'string' as const, description: 'Ref of the predecessor task or gate IN THIS BATCH whose output is read. Must resolve to a declared ref — an unknown ref rejects the batch.' },
+        select: { type: 'string' as const, description: 'RFC-6901 JSON Pointer into that step\'s completion envelope, e.g. `/summary` or `/result/sha`. Empty string selects the whole envelope. No JSONPath, wildcards, filters or expressions exist in this grammar.' },
+        as: { type: 'string' as const, pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$', description: 'Name this value gets in the evidence envelope appended to your instruction. Must match [A-Za-z][A-Za-z0-9_]{0,63} and be unique within the task.' },
+        required: { type: 'boolean' as const, description: 'When true (default false), the task BLOCKS if the source produced nothing at that pointer, instead of running without the value.' },
+        format: { type: 'string' as const, enum: ['text', 'json'], description: 'How the selected value is rendered into the envelope. Default `text`.' },
+        // Snake_case ONLY — unlike the task-level fields, `parseInputBindings`
+        // reads no camelCase alias for these, so advertising one would publish a
+        // field the parser silently ignores.
+        max_bytes: { type: 'number' as const, description: 'Per-binding size cap after UTF-8 serialization. Default 16384, hard maximum 65536 — a larger value is rejected, never silently clamped.' },
+        overflow: { type: 'string' as const, enum: ['error', 'truncate'], description: 'What to do when the value exceeds max_bytes. Default `error` — so a silently half-complete instruction never ships.' },
+    },
+    required: ['from', 'select', 'as'],
+};
+
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
     description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures. Also reports the running daemon build per daemonId under top-level daemonBuilds ({commit, commitShort, version, track}); track is stable/preview when explicitly reported by that daemon and unknown for legacy peers — it is never inferred from an rc version suffix. When a live daemon was built from a commit BEHIND its workspace HEAD it adds staleDaemonBuilds[] + staleDaemonBuildWarning — meaning a just-merged refinery/mesh-tool fix is NOT yet live on that daemon (awaiting deploy/restart; a local dist rebuild does not update a cloud daemon). When a daemon has a durable failed-upgrade notice on record it adds daemonUpgradeFailures{daemonId → {summary, recordedAt, ageLabel, targetVersion, noticePath, logPath}} + daemonUpgradeFailureWarning — meaning that daemon\'s LAST upgrade attempt failed and was rolled back, so it is still on the PREVIOUS version (an upgrade/restart response only ever reports "scheduled", never success). Do not repeatedly call this to wait for generating delegated work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
@@ -249,10 +280,10 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         //    using none of them takes the unchanged compatibility path. ──
                         inputs_from: {
                             type: 'array',
-                            description: 'Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker\'s text into the instruction. Each entry is {from: <ref of a predecessor task or gate>, select: <RFC-6901 JSON Pointer into that step\'s completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest — they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable.',
-                            items: { type: 'object' },
+                            description: 'Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker\'s text into the instruction. Each entry is {from: <ref of a predecessor task or gate IN THIS BATCH>, select: <RFC-6901 JSON Pointer into that step\'s completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest — they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable. The binding shape is validated when the batch is ACCEPTED, so a malformed entry rejects the whole batch immediately instead of failing later once the upstream work has already run.',
+                            items: MESH_INPUT_BINDING_SCHEMA,
                         },
-                        inputsFrom: { type: 'array', description: 'CamelCase alias for inputs_from.', items: { type: 'object' } },
+                        inputsFrom: { type: 'array', description: 'CamelCase alias for inputs_from.', items: MESH_INPUT_BINDING_SCHEMA },
                         run_if: { type: 'object', description: 'Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task — skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true.' },
                         runIf: { type: 'object', description: 'CamelCase alias for run_if.' },
                         on_false: { type: 'string', enum: ['skip'], description: 'What to do when run_if is false. Only `skip` is defined (and is the default).' },
@@ -417,6 +448,41 @@ export const MESH_GRAPH_GATE_ABANDON_TOOL = {
             coordinatorSessionId: { type: 'string', description: 'CamelCase alias for coordinator_session_id.' },
         },
         required: ['gate_id', 'reason'],
+    },
+};
+
+export const MESH_GRAPH_NODE_PATCH_TOOL = {
+    name: 'mesh_graph_node_patch',
+    description: 'Fix a graph node that could NOT be materialized, and retry it in the same call — the recovery path for a task blocked on `materialization_error:*` '
+        + '(seen in mesh_graph_view / as the task\'s blockedReason). A node\'s `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every '
+        + 'predecessor has COMPLETED, so a binding that cannot be resolved strands the one step that was meant to consume all that finished work. The graph retries such a node '
+        + 'automatically, but it re-reads the same spec and fails identically every time — it cannot heal itself, so use this to change the spec. '
+        + 'The patch and the retry are ONE transaction: the response tells you immediately whether the node materialized (recovered: true) or is still blocked, and with which new reason. '
+        + '★ Only run_if, on_false, inputs_from and workspace_ref may be patched — message, routing, permissions, task mode and model are immutable, and a task that is already '
+        + 'claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. '
+        + 'Most shape errors are now rejected up front by mesh_enqueue_batch; the case that still needs this is `required_input_missing` — a well-formed binding whose source never produced that field.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node: { type: 'string', description: 'Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused — pass graph_id too, or the exact node id.' },
+            node_id: { type: 'string', description: 'Alias for node.' },
+            nodeId: { type: 'string', description: 'CamelCase alias for node_id.' },
+            graph_id: { type: 'string', description: 'Disambiguate which graph the ref belongs to. Optional when `node` is a node id.' },
+            graphId: { type: 'string', description: 'CamelCase alias for graph_id.' },
+            base_spec_patch: {
+                type: 'object',
+                description: 'Keys to REPLACE on the node\'s spec. Allowed: run_if, on_false, inputs_from, workspace_ref. A replacement inputs_from is validated before anything is written, '
+                    + 'so swapping one malformed binding for another is rejected outright rather than silently re-blocking the node.',
+                properties: {
+                    inputs_from: { type: 'array', description: 'Replacement bindings — same shape as in mesh_enqueue_batch.', items: MESH_INPUT_BINDING_SCHEMA },
+                    run_if: { type: 'object', description: 'Replacement condition.' },
+                    on_false: { type: 'string', enum: ['skip'], description: 'What to do when run_if is false.' },
+                    workspace_ref: { type: 'string', description: 'Replacement workspace ref.' },
+                },
+            },
+            baseSpecPatch: { type: 'object', description: 'CamelCase alias for base_spec_patch.' },
+        },
+        required: ['node', 'base_spec_patch'],
     },
 };
 
@@ -1552,6 +1618,7 @@ export const ALL_MESH_TOOLS = [
     MESH_GRAPH_GATE_CLAIM_TOOL,
     MESH_GRAPH_GATE_RELEASE_TOOL,
     MESH_GRAPH_GATE_ABANDON_TOOL,
+    MESH_GRAPH_NODE_PATCH_TOOL,
     MESH_QUEUE_CANCEL_TOOL,
     MESH_QUEUE_REQUEUE_TOOL,
     MESH_SEND_TASK_TOOL,
