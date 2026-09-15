@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { archiveColumnCount, buildBlueprintGraphTimeline, buildMissionThreadChain, buildMissionThreadHops, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, splitFinalSummary, summarizeCollapsedGraph, type MissionThreadSide } from './blueprintViewModel'
+import { archiveColumnCount, buildBlueprintGraphTimeline, buildMissionThreadChain, buildMissionThreadHops, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, splitFinalSummary, summarizeCollapsedGraph, type MissionThreadBox, type MissionThreadSide } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, formatTaskCardTime, scopeTaskDagTasks, taskCardTimeSource, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -1600,8 +1600,15 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
              * one layer (and, since the archive packs into rows, two chips in
              * one row) sit at the same x. Forced right→left, such a hop doubles
              * back across the column and draws through the card between them —
-             * the crossing the owner reported. See `buildMissionThreadHops`. */
-            const hops = buildMissionThreadHops(ordered, id => {
+             * the crossing the owner reported. See `buildMissionThreadHops`.
+             *
+             * The obstacle list is EVERY placed card, not just this mission's.
+             * A vertical hop down a column is only clean if the column is
+             * empty, and what usually sits in it belongs to some other mission
+             * — passing only the chain's own cards would leave the routing
+             * blind to exactly the card it has to avoid (rc.30: the thread
+             * crossing `M-GRAPH-FEATURE-UNRELIAB…`). */
+            const boxOf = (id: string) => {
                 const position = positions?.get(id)
                 if (!position) return undefined
                 const node = dag.nodes.find(candidate => candidate.id === id)
@@ -1611,7 +1618,13 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
                     width: TASK_CARD_WIDTH,
                     height: node ? estimateTaskCardHeight(node) : TASK_CARD_MIN_HEIGHT,
                 }
-            })
+            }
+            const obstacles: Array<{ id: string; box: MissionThreadBox }> = []
+            for (const node of dag.nodes) {
+                const box = boxOf(node.id)
+                if (box) obstacles.push({ id: node.id, box })
+            }
+            const hops = buildMissionThreadHops(ordered, boxOf, undefined, obstacles)
             for (let i = 0; i < hops.length; i += 1) {
                 const hop = hops[i]
                 threads.push({

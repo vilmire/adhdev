@@ -642,18 +642,47 @@ export interface MissionThreadBox {
  *    what keeps the line outside the column instead of doubling back through
  *    it.
  *  - Neither (the same column, which is the archive-row and same-layer case) →
- *    go vertically, `bottom → top` or `top → bottom` by which card is lower.
- *    A vertical hop between two vertically-stacked cards is the one route that
- *    cannot cross either of them.
+ *    go vertically, `bottom → top` or `top → bottom` by which card is lower,
+ *    PROVIDED the column between them is empty. See below.
  *
  * "Clearly" is the point of `slack`: two cards whose x differ by a few pixels
  * are visually one column, and treating that as a horizontal hop reintroduces
  * the near-zero-width detour this exists to remove.
+ *
+ * ## Why the vertical case needed a second pass (2026-09-15)
+ *
+ * The rule above shipped with an unstated premise of its own — the mirror image
+ * of the one the previous fix died on. It claimed "a vertical hop between two
+ * vertically-stacked cards is the one route that cannot cross either of them",
+ * which is true of the two ENDPOINTS and says nothing about anybody else. This
+ * function only ever saw the two boxes it was hopping between; every other card
+ * on the canvas was invisible to it.
+ *
+ * So when two same-mission cards share a column with a THIRD card stacked
+ * between them — a card of some other mission, which is the normal state of an
+ * ELK layer — the `bottom → top` route drew a straight line down the column
+ * centre, straight through that third card's body. Observed on rc.30: the
+ * thread's upper vertical segment crossing `M-GRAPH-FEATURE-UNRELIAB…`. The
+ * hop BELOW it in the same thread was horizontal, exited sideways and cleared
+ * the column cleanly, which is exactly why one half of the thread looked
+ * correct and the other did not.
+ *
+ * The fix is to pass the obstacles in (`obstacles`) and check the corridor. A
+ * vertical hop is only taken when the span between the two cards is clear; when
+ * something blocks it, the hop leaves sideways instead — by whichever flank has
+ * room — so the line runs beside the column rather than down it. The vertical
+ * route stays the default because it is the cleanest one when it is available,
+ * and it usually is.
+ *
+ * `obstacles` is optional and defaults to empty, which reproduces the old
+ * behaviour exactly. That is deliberate: a caller that has not measured the
+ * canvas yet should still get a drawable thread rather than no thread.
  */
 export function buildMissionThreadHops(
     chain: ReadonlyArray<{ id: string }>,
     boxOf: (id: string) => MissionThreadBox | undefined,
     slack = 24,
+    obstacles: ReadonlyArray<{ id: string; box: MissionThreadBox }> = [],
 ): MissionThreadHop[] {
     const hops: MissionThreadHop[] = []
     for (let i = 0; i < chain.length - 1; i += 1) {
@@ -674,17 +703,101 @@ export function buildMissionThreadHops(
         } else if (targetRight <= source.x + slack) {
             hops.push({ sourceId, targetId, sourceSide: 'left', targetSide: 'right' })
         } else {
-            // Overlapping x ranges: one column. Route vertically.
+            // Overlapping x ranges: one column.
             const sourceIsAbove = source.y + source.height / 2 <= target.y + target.height / 2
-            hops.push({
-                sourceId,
-                targetId,
-                sourceSide: sourceIsAbove ? 'bottom' : 'top',
-                targetSide: sourceIsAbove ? 'top' : 'bottom',
+            const upper = sourceIsAbove ? source : target
+            const lower = sourceIsAbove ? target : source
+            /* Is the column between them actually empty? Only then is straight
+             * down the clean route; otherwise it is the route THROUGH the card
+             * sitting in the gap. */
+            const blocked = obstacles.some(obstacle => {
+                if (obstacle.id === sourceId || obstacle.id === targetId) return false
+                return verticalCorridorHits(upper, lower, obstacle.box, slack)
             })
+            if (!blocked) {
+                hops.push({
+                    sourceId,
+                    targetId,
+                    sourceSide: sourceIsAbove ? 'bottom' : 'top',
+                    targetSide: sourceIsAbove ? 'top' : 'bottom',
+                })
+                continue
+            }
+            /* Blocked: go around the column instead of down it. Pick the flank
+             * with more clearance so the detour is the shorter of the two, and
+             * so a column pinned against one edge of the canvas does not send
+             * the line back across everything. */
+            const side = clearerFlank(source, target, obstacles, sourceId, targetId, slack)
+            hops.push({ sourceId, targetId, sourceSide: side, targetSide: side })
         }
     }
     return hops
+}
+
+/**
+ * Does `candidate` sit inside the vertical corridor between two stacked cards?
+ *
+ * The corridor is the x-span the two cards share (that is where a vertical hop
+ * is drawn) and the y-gap strictly between them. `slack` is subtracted from
+ * every edge so that a card merely touching the corridor — the 1px abutments
+ * that ELK's own spacing produces — does not count as blocking it and push
+ * every hop onto the sideways route.
+ */
+function verticalCorridorHits(
+    upper: MissionThreadBox,
+    lower: MissionThreadBox,
+    candidate: MissionThreadBox,
+    slack: number,
+): boolean {
+    const corridorTop = upper.y + upper.height
+    const corridorBottom = lower.y
+    if (corridorBottom - corridorTop <= 0) return false
+    const corridorLeft = Math.max(upper.x, lower.x)
+    const corridorRight = Math.min(upper.x + upper.width, lower.x + lower.width)
+    if (corridorRight - corridorLeft <= 0) return false
+    const candidateRight = candidate.x + candidate.width
+    const candidateBottom = candidate.y + candidate.height
+    const overlapsX = candidate.x < corridorRight - slack && candidateRight > corridorLeft + slack
+    const overlapsY = candidate.y < corridorBottom - slack && candidateBottom > corridorTop + slack
+    return overlapsX && overlapsY
+}
+
+/**
+ * Which flank a blocked vertical hop should leave by.
+ *
+ * Both ends use the SAME side, which is what makes this a detour rather than a
+ * crossing: leaving left and entering right would run the line back through the
+ * column it is trying to avoid. Exiting and re-entering on one side draws a
+ * bracket around the column, clear of everything in it.
+ *
+ * The choice is by clearance — how much empty canvas lies beyond that side of
+ * the two cards. Ties go left only as a tiebreak; there is no meaning to the
+ * preference beyond determinism.
+ */
+function clearerFlank(
+    source: MissionThreadBox,
+    target: MissionThreadBox,
+    obstacles: ReadonlyArray<{ id: string; box: MissionThreadBox }>,
+    sourceId: string,
+    targetId: string,
+    slack: number,
+): 'left' | 'right' {
+    const top = Math.min(source.y, target.y)
+    const bottom = Math.max(source.y + source.height, target.y + target.height)
+    const left = Math.min(source.x, target.x)
+    const right = Math.max(source.x + source.width, target.x + target.width)
+    let leftClearance = left
+    let rightClearance = Number.POSITIVE_INFINITY
+    for (const obstacle of obstacles) {
+        if (obstacle.id === sourceId || obstacle.id === targetId) continue
+        const box = obstacle.box
+        /* Only cards level with the hop can crowd its flanks. */
+        if (box.y + box.height <= top + slack || box.y >= bottom - slack) continue
+        const boxRight = box.x + box.width
+        if (boxRight <= left) leftClearance = Math.min(leftClearance, left - boxRight)
+        else if (box.x >= right) rightClearance = Math.min(rightClearance, box.x - right)
+    }
+    return rightClearance >= leftClearance ? 'right' : 'left'
 }
 
 /**
