@@ -47884,6 +47884,7 @@ child.on('exit', () => process.exit(0));
           "mesh_graph_gate_claim",
           "mesh_graph_gate_release",
           "mesh_graph_gate_abandon",
+          "mesh_graph_node_patch",
           "mesh_queue_cancel",
           "mesh_queue_requeue",
           "mesh_send_task",
@@ -54134,11 +54135,109 @@ ${lines.join("\n")}
       }
       return result.materialized;
     }
+    function patchGraphNodeAndRetry3(input) {
+      const store = MeshRuntimeStore.getInstance();
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      for (const key2 of Object.keys(input.baseSpecPatch ?? {})) {
+        if (!MESH_NODE_PATCH_KEYS3.includes(key2)) {
+          throw new Error(
+            `node_patch_forbidden: key '${key2}' is outside the permitted patch surface (${MESH_NODE_PATCH_KEYS3.join(", ")}) \u2014 a node's message, routing, permissions, task mode and model are immutable`
+          );
+        }
+      }
+      if (input.baseSpecPatch?.inputs_from !== void 0) {
+        parseInputBindings({ inputs_from: input.baseSpecPatch.inputs_from });
+      }
+      const result = store.transaction(() => {
+        const graphStore = store.graphStore();
+        const graphs = input.graphId ? [graphStore.getGraph(input.graphId)].filter((g3) => !!g3) : graphStore.listGraphsByMesh(input.meshId);
+        if (input.graphId && graphs.length === 0) {
+          throw new Error(`graph_not_found: no graph '${input.graphId}' on this mesh`);
+        }
+        let target;
+        let graph;
+        const ambiguous = [];
+        for (const g3 of graphs) {
+          if (g3.meshId !== input.meshId) continue;
+          for (const n of graphStore.listNodes(g3.graphId)) {
+            if (n.nodeId !== input.node && n.ref !== input.node) continue;
+            if (n.nodeId === input.node) {
+              target = n;
+              graph = g3;
+              ambiguous.length = 0;
+              break;
+            }
+            if (target) {
+              ambiguous.push(`${g3.graphId}:${n.nodeId}`);
+              continue;
+            }
+            target = n;
+            graph = g3;
+            ambiguous.push(`${g3.graphId}:${n.nodeId}`);
+          }
+          if (target && target.nodeId === input.node) break;
+        }
+        if (!target || !graph) {
+          throw new Error(
+            `graph_node_not_found: no node with id or ref '${input.node}'` + (input.graphId ? ` in graph '${input.graphId}'` : " in any graph on this mesh") + " \u2014 use mesh_graph_view to list node ids and refs"
+          );
+        }
+        if (ambiguous.length > 1) {
+          throw new Error(
+            `ambiguous_node_ref: ref '${input.node}' matches ${ambiguous.length} nodes (${ambiguous.join(", ")}) \u2014 pass graph_id, or the exact node id`
+          );
+        }
+        if (target.kind !== "worker_task") {
+          throw new Error(
+            `node_not_patchable: node '${target.nodeId}' is a '${target.kind}', not a worker task \u2014 gate nodes are driven by mesh_graph_gate_claim/release/abandon`
+          );
+        }
+        if (target.queueTaskId) {
+          const entry = store.findQueueEntryById(target.meshId, target.queueTaskId);
+          if (entry && entry.status !== "pending") {
+            throw new Error(
+              `task_already_claimed: graph node '${target.nodeId}' backs queue task '${target.queueTaskId}' which is '${entry.status}' \u2014 an assigned/completed task is immutable (design :334)`
+            );
+          }
+        }
+        const rawSpec = safeParseJson(target.baseSpecJson);
+        const mergedSpec = {
+          ...rawSpec && typeof rawSpec === "object" ? rawSpec : {},
+          ...input.baseSpecPatch
+        };
+        graphStore.updateNodeBaseSpec(graph.graphId, target.nodeId, JSON.stringify(mergedSpec), nowIso);
+        const patched = graphStore.getNode(graph.graphId, target.nodeId);
+        const nodes = graphStore.listNodes(graph.graphId).map((n) => n.nodeId === patched.nodeId ? patched : n);
+        const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+        const edges = graphStore.listEdges(graph.graphId);
+        const outcome = settleDownstreamNode(store, patched, edges, byId, nowIso);
+        const entryAfter = patched.queueTaskId ? store.findQueueEntryById(patched.meshId, patched.queueTaskId) : void 0;
+        const fresh = graphStore.getNode(graph.graphId, patched.nodeId);
+        return {
+          graphId: graph.graphId,
+          nodeId: fresh.nodeId,
+          ...fresh.ref ? { ref: fresh.ref } : {},
+          ...fresh.queueTaskId ? { queueTaskId: fresh.queueTaskId } : {},
+          materializationVersion: fresh.materializationVersion,
+          state: fresh.state,
+          outcome,
+          ...entryAfter?.blockedReason ? { blockedReason: entryAfter.blockedReason } : {}
+        };
+      });
+      if (result.outcome.kind === "materialized") {
+        try {
+          drainMeshGraphOutbox(input.meshId);
+        } catch {
+        }
+      }
+      return result;
+    }
     var GRAPH_BLOCK_PREFIX;
     var GATE_BLOCK_PREFIX;
     var queueWakeHandler;
     var gateNotifyHandler;
     var GATE_NOTIFY_OUTBOX_KINDS;
+    var MESH_NODE_PATCH_KEYS3;
     var init_mesh_graph_transition_runner = __esm2({
       "src/mesh/mesh-graph-transition-runner.ts"() {
         "use strict";
@@ -54155,6 +54254,7 @@ ${lines.join("\n")}
         GRAPH_BLOCK_PREFIX = "graph_materialization_pending:";
         GATE_BLOCK_PREFIX = "coordinator_gate:";
         GATE_NOTIFY_OUTBOX_KINDS = /* @__PURE__ */ new Set(["graph_gate_awaiting", "graph_gate_lease_expired"]);
+        MESH_NODE_PATCH_KEYS3 = ["run_if", "on_false", "inputs_from", "workspace_ref"];
       }
     });
     function formatMeshTaskModeViolations(result) {
@@ -74772,6 +74872,7 @@ ${rules.join("\n")}`;
 | \`mesh_graph_gate_claim\` | Take the lease on a gate awaiting a coordinator; returns the fencing token + generation a release needs |
 | \`mesh_graph_gate_release\` | Pass a gate you hold \u2014 the ONLY way through one (no timeout ever passes a gate). **A gate and its dependents are one unit**: a gate earns its keep only when some task names it in \`gated_by\`, because releasing it is what dispatches that task. A gate nothing depends on opens nothing and is pure claim/release overhead \u2014 declare the follower in the same batch, or skip the gate |
 | \`mesh_graph_gate_abandon\` | Give up on a gate that can never be opened, so its graph can go terminal. **Not a pass**: it CANCELS everything the gate was holding and produces no gate outcome. Use it when you cancelled the work behind a gate \u2014 otherwise that gate stays awaiting forever and the graph reaches no terminal state, not even cancelled |
+| \`mesh_graph_node_patch\` | Repair a node the graph could NOT materialize (task blocked on \`materialization_error:*\`) and retry it in one call. A \`inputs_from\`/\`run_if\` spec is baked in at enqueue but only resolved once every predecessor COMPLETES, so the failure strands the one step meant to consume all that finished work \u2014 and the automatic retry re-reads the same spec, so it can never self-heal. Patches only \`run_if\`/\`on_false\`/\`inputs_from\`/\`workspace_ref\`; message/routing/mode/model stay immutable and a claimed task cannot be patched. Not a re-tasking tool |
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
@@ -96860,7 +96961,7 @@ ${statusLine}`;
         init_mesh_graph_transition_runner();
         MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
         MESH_GATE_NAMED_OUTCOMES = ["passed", "failed", "rejected"];
-        MESH_GATE_RELEASE_PATCH_KEYS = ["run_if", "on_false", "inputs_from", "workspace_ref"];
+        MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS3;
       }
     });
     function readStaleDurationEnvMs(name, fallback) {
@@ -97162,6 +97263,23 @@ ${statusLine}`;
         ...p.force ? { force: true } : {},
         ...p.cancelledNodeIds?.length ? { cancelledNodeIds: p.cancelledNodeIds } : {},
         ...p.graphStatus ? { graphStatus: p.graphStatus } : {}
+      });
+    }
+    function recordGraphNodePatched3(meshId, p) {
+      safeAppend(meshId, "graph_node_patched", {
+        graphId: p.graphId,
+        nodeId: p.nodeId,
+        ...p.ref ? { ref: p.ref } : {},
+        ...p.queueTaskId ? { queueTaskId: p.queueTaskId } : {},
+        patchedKeys: p.patchedKeys,
+        ...p.priorBlockedReason ? { priorBlockedReason: p.priorBlockedReason.slice(0, 200) } : {},
+        // Whether the retry actually recovered the node — the reason the patch
+        // was made at all, and the thing a later reader needs to know.
+        outcome: p.outcome,
+        state: p.state,
+        ...p.blockedReason ? { blockedReason: p.blockedReason.slice(0, 200) } : {},
+        materializationVersion: p.materializationVersion,
+        ...p.coordinatorSessionId ? { coordinatorSessionId: p.coordinatorSessionId } : {}
       });
     }
     var MESH_VALID_SINGLE_REASONS;
@@ -143991,6 +144109,7 @@ ${e?.stderr || ""}`;
       MESH_MISSION_LIST_STATUS_LIMIT: () => MESH_MISSION_LIST_STATUS_LIMIT,
       MESH_MISSION_STATUSES: () => MESH_MISSION_STATUSES3,
       MESH_NODE_LIVE_TRUTH_MARKER: () => MESH_NODE_LIVE_TRUTH_MARKER,
+      MESH_NODE_PATCH_KEYS: () => MESH_NODE_PATCH_KEYS3,
       MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT: () => MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
       MESH_REFINE_CONFIG_LOCATIONS: () => MESH_REFINE_CONFIG_LOCATIONS,
       MESH_REFINE_CONFIG_SCHEMA: () => MESH_REFINE_CONFIG_SCHEMA,
@@ -144472,6 +144591,7 @@ ${e?.stderr || ""}`;
       partitionChannelEntries: () => partitionChannelEntries,
       partitionSessionHostDiagnosticsSessions: () => import_session_host_core3.partitionSessionHostDiagnosticsSessions,
       partitionSessionHostRecords: () => import_session_host_core3.partitionSessionHostRecords,
+      patchGraphNodeAndRetry: () => patchGraphNodeAndRetry3,
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
       prepareSessionChatTailUpdate: () => prepareSessionChatTailUpdate,
@@ -144532,6 +144652,7 @@ ${e?.stderr || ""}`;
       recordGraphGateClaimed: () => recordGraphGateClaimed3,
       recordGraphGateExpired: () => recordGraphGateExpired,
       recordGraphGateReleased: () => recordGraphGateReleased3,
+      recordGraphNodePatched: () => recordGraphNodePatched3,
       recordMeshEventShadow: () => recordMeshEventShadow,
       recordMeshToolCall: () => recordMeshToolCall2,
       recordMissingSessionAttempt: () => recordMissingSessionAttempt,
@@ -145880,6 +146001,7 @@ ${e?.stderr || ""}`;
     init_mesh_graph_workspace_identity();
     init_mesh_graph_workspace_ports();
     init_mesh_graph_gates();
+    init_mesh_graph_transition_runner();
     init_mesh_graph_gate_evidence();
     var import_crypto18 = require("crypto");
     init_logger();
@@ -146033,6 +146155,30 @@ ${e?.stderr || ""}`;
       });
       tasks.forEach((t, i) => {
         pickEnum(t.on_upstream_skip, MESH_GRAPH_ON_UPSTREAM_SKIP_POLICIES, "skip", "invalid_on_upstream_skip", `tasks[${i}].on_upstream_skip`);
+      });
+      tasks.forEach((t, i) => {
+        if (t.inputs_from === void 0) return;
+        try {
+          parseInputBindings({ inputs_from: t.inputs_from });
+        } catch (e) {
+          const detail = e instanceof MeshMaterializationError ? e.detail : void 0;
+          throw new MeshGraphPlanError3(
+            "invalid_binding_spec",
+            `task ${t.ref ? `'${t.ref}'` : `#${i}`} has a malformed inputs_from: ${e instanceof Error ? e.message : String(e)} \u2014 each entry is {from: <predecessor ref>, select: <RFC-6901 JSON Pointer>, as: <name>}. Rejected now rather than after the upstream work runs: the binding is baked into the node at enqueue time, so a shape error accepted here only surfaces once every predecessor has already completed.`,
+            { taskIndex: i, ...t.ref ? { taskRef: t.ref } : {}, ...detail ? { detail } : {} }
+          );
+        }
+      });
+      tasks.forEach((t, i) => {
+        if (t.inputs_from === void 0) return;
+        for (const sourceRef of collectInputSourceRefs(t.inputs_from)) {
+          if (taskRefs.has(sourceRef) || gateRefs.has(sourceRef)) continue;
+          throw new MeshGraphPlanError3(
+            "unknown_input_source_ref",
+            `task ${t.ref ? `'${t.ref}'` : `#${i}`} binds inputs_from '${sourceRef}', which is not a task or gate ref in this batch \u2014 a binding reads a step declared in the SAME batch, so an unresolvable ref would leave the task with no ordering edge and no source envelope at all.`,
+            { taskIndex: i, ...t.ref ? { taskRef: t.ref } : {}, sourceRef }
+          );
+        }
       });
       const result = store.transaction(() => {
         const graphStore = store.graphStore();
@@ -166959,6 +167105,7 @@ var CANONICAL_MESH_TOOL_NAMES = [
   "mesh_graph_gate_claim",
   "mesh_graph_gate_release",
   "mesh_graph_gate_abandon",
+  "mesh_graph_node_patch",
   "mesh_queue_cancel",
   "mesh_queue_requeue",
   "mesh_send_task",
@@ -167497,6 +167644,11 @@ var TOOL_ANNOTATIONS = {
   // Gives up on a gate so the graph reaches a TERMINAL state — the work behind
   // it is abandoned, which is not recoverable by releasing it later.
   mesh_graph_gate_abandon: DESTRUCTIVE_LOCAL,
+  // Overwrites keys on a node's otherwise-IMMUTABLE base spec: the replaced
+  // run_if/inputs_from is not recoverable, so it is destructive in the same
+  // sense as mesh_queue_requeue's instruction overwrite — even though its
+  // purpose is repair. Not idempotent: it re-settles and bumps the generation.
+  mesh_graph_node_patch: DESTRUCTIVE_LOCAL,
   // ── Mesh: lifecycle / bootstrap ──────────────────────────────────────
   // Creates new mesh/node records. Additive; a repeat creates another.
   mesh_create: WRITE_LOCAL_ACCUMULATING,
@@ -167578,6 +167730,22 @@ var MESH_TASK_INPUT_SCHEMA = {
       items: { type: "object" }
     }
   }
+};
+var MESH_INPUT_BINDING_SCHEMA = {
+  type: "object",
+  properties: {
+    from: { type: "string", description: "Ref of the predecessor task or gate IN THIS BATCH whose output is read. Must resolve to a declared ref \u2014 an unknown ref rejects the batch." },
+    select: { type: "string", description: "RFC-6901 JSON Pointer into that step's completion envelope, e.g. `/summary` or `/result/sha`. Empty string selects the whole envelope. No JSONPath, wildcards, filters or expressions exist in this grammar." },
+    as: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$", description: "Name this value gets in the evidence envelope appended to your instruction. Must match [A-Za-z][A-Za-z0-9_]{0,63} and be unique within the task." },
+    required: { type: "boolean", description: "When true (default false), the task BLOCKS if the source produced nothing at that pointer, instead of running without the value." },
+    format: { type: "string", enum: ["text", "json"], description: "How the selected value is rendered into the envelope. Default `text`." },
+    // Snake_case ONLY — unlike the task-level fields, `parseInputBindings`
+    // reads no camelCase alias for these, so advertising one would publish a
+    // field the parser silently ignores.
+    max_bytes: { type: "number", description: "Per-binding size cap after UTF-8 serialization. Default 16384, hard maximum 65536 \u2014 a larger value is rejected, never silently clamped." },
+    overflow: { type: "string", enum: ["error", "truncate"], description: "What to do when the value exceeds max_bytes. Default `error` \u2014 so a silently half-complete instruction never ships." }
+  },
+  required: ["from", "select", "as"]
 };
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
@@ -167744,10 +167912,10 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             //    using none of them takes the unchanged compatibility path. ──
             inputs_from: {
               type: "array",
-              description: "Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker's text into the instruction. Each entry is {from: <ref of a predecessor task or gate>, select: <RFC-6901 JSON Pointer into that step's completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest \u2014 they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable.",
-              items: { type: "object" }
+              description: "Bind SELECTED outputs of predecessor steps into this task, instead of hand-copying a worker's text into the instruction. Each entry is {from: <ref of a predecessor task or gate IN THIS BATCH>, select: <RFC-6901 JSON Pointer into that step's completion envelope>, as: <binding name>, required?: bool}. Bound values are appended to your immutable instruction inside a clearly-marked untrusted-evidence envelope with provenance and a digest \u2014 they can never alter routing, permissions, task mode or model. Using this makes the task wait for the graph to bind it before it becomes claimable. The binding shape is validated when the batch is ACCEPTED, so a malformed entry rejects the whole batch immediately instead of failing later once the upstream work has already run.",
+              items: MESH_INPUT_BINDING_SCHEMA
             },
-            inputsFrom: { type: "array", description: "CamelCase alias for inputs_from.", items: { type: "object" } },
+            inputsFrom: { type: "array", description: "CamelCase alias for inputs_from.", items: MESH_INPUT_BINDING_SCHEMA },
             run_if: { type: "object", description: "Declarative condition deciding whether this task runs at all, evaluated against predecessor outputs and released gate outcomes (e.g. only run the deploy when the gate outcome was `passed`). A condition that is false SKIPS the task \u2014 skipped is terminal and, deliberately, is NOT treated as completed, so it never satisfies a downstream dependency. A malformed condition fails closed rather than defaulting to true." },
             runIf: { type: "object", description: "CamelCase alias for run_if." },
             on_false: { type: "string", enum: ["skip"], description: "What to do when run_if is false. Only `skip` is defined (and is the default)." },
@@ -167889,6 +168057,32 @@ var MESH_GRAPH_GATE_ABANDON_TOOL = {
       coordinatorSessionId: { type: "string", description: "CamelCase alias for coordinator_session_id." }
     },
     required: ["gate_id", "reason"]
+  }
+};
+var MESH_GRAPH_NODE_PATCH_TOOL = {
+  name: "mesh_graph_node_patch",
+  description: "Fix a graph node that could NOT be materialized, and retry it in the same call \u2014 the recovery path for a task blocked on `materialization_error:*` (seen in mesh_graph_view / as the task's blockedReason). A node's `inputs_from` / `run_if` are baked in when the batch is accepted but only resolved once every predecessor has COMPLETED, so a binding that cannot be resolved strands the one step that was meant to consume all that finished work. The graph retries such a node automatically, but it re-reads the same spec and fails identically every time \u2014 it cannot heal itself, so use this to change the spec. The patch and the retry are ONE transaction: the response tells you immediately whether the node materialized (recovered: true) or is still blocked, and with which new reason. \u2605 Only run_if, on_false, inputs_from and workspace_ref may be patched \u2014 message, routing, permissions, task mode and model are immutable, and a task that is already claimed or finished cannot be patched at all (cancel and enqueue a corrected step instead). This is a repair tool, not a way to re-task a worker. Most shape errors are now rejected up front by mesh_enqueue_batch; the case that still needs this is `required_input_missing` \u2014 a well-formed binding whose source never produced that field.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      node: { type: "string", description: "Node id or `ref` of the node to patch (from mesh_graph_view). A ref that matches several live graphs is refused \u2014 pass graph_id too, or the exact node id." },
+      node_id: { type: "string", description: "Alias for node." },
+      nodeId: { type: "string", description: "CamelCase alias for node_id." },
+      graph_id: { type: "string", description: "Disambiguate which graph the ref belongs to. Optional when `node` is a node id." },
+      graphId: { type: "string", description: "CamelCase alias for graph_id." },
+      base_spec_patch: {
+        type: "object",
+        description: "Keys to REPLACE on the node's spec. Allowed: run_if, on_false, inputs_from, workspace_ref. A replacement inputs_from is validated before anything is written, so swapping one malformed binding for another is rejected outright rather than silently re-blocking the node.",
+        properties: {
+          inputs_from: { type: "array", description: "Replacement bindings \u2014 same shape as in mesh_enqueue_batch.", items: MESH_INPUT_BINDING_SCHEMA },
+          run_if: { type: "object", description: "Replacement condition." },
+          on_false: { type: "string", enum: ["skip"], description: "What to do when run_if is false." },
+          workspace_ref: { type: "string", description: "Replacement workspace ref." }
+        }
+      },
+      baseSpecPatch: { type: "object", description: "CamelCase alias for base_spec_patch." }
+    },
+    required: ["node", "base_spec_patch"]
   }
 };
 var MESH_GRAPH_VIEW_TOOL = {
@@ -168823,6 +169017,7 @@ var ALL_MESH_TOOLS = [
   MESH_GRAPH_GATE_CLAIM_TOOL,
   MESH_GRAPH_GATE_RELEASE_TOOL,
   MESH_GRAPH_GATE_ABANDON_TOOL,
+  MESH_GRAPH_NODE_PATCH_TOOL,
   MESH_QUEUE_CANCEL_TOOL,
   MESH_QUEUE_REQUEUE_TOOL,
   MESH_SEND_TASK_TOOL,
@@ -172075,6 +172270,106 @@ function describeAbandonRefusal(reason, state) {
         return `The gate is already terminal (${state ?? reason.slice("gate_terminal:".length)}) and cannot be abandoned. A RELEASED gate already let its downstream run, so abandoning it would claim closure over work that is in flight or finished \u2014 cancel that work directly instead.`;
       }
       return `The gate could not be abandoned (${reason ?? "unknown reason"}).`;
+  }
+}
+var NODE_PATCH_ERROR_CODES = [
+  "graph_node_not_found",
+  "graph_not_found",
+  "ambiguous_node_ref",
+  "node_not_patchable",
+  "node_patch_forbidden",
+  "task_already_claimed"
+];
+function classifyNodePatchError(e, message) {
+  const code = e?.code;
+  if (typeof code === "string" && code) return code;
+  return NODE_PATCH_ERROR_CODES.find((c) => message.startsWith(`${c}:`) || message.includes(`${c}:`));
+}
+async function meshGraphNodePatch(ctx, args) {
+  recordMeshCoordinatorToolCall(ctx, "mesh_graph_node_patch");
+  const node = readString(args.node) || readString(args.node_id) || readString(args.nodeId) || readString(args.ref);
+  const patch = args.base_spec_patch ?? args.baseSpecPatch;
+  const missing = [
+    !node ? "node" : null,
+    !patch || typeof patch !== "object" || Array.isArray(patch) ? "base_spec_patch" : null
+  ].filter((f) => f !== null);
+  if (missing.length > 0) {
+    return JSON.stringify({
+      success: false,
+      code: "missing_patch_fields",
+      missing,
+      error: `mesh_graph_node_patch requires ${missing.join(", ")}. \`node\` is the node id or ref from mesh_graph_view; \`base_spec_patch\` holds the keys to replace (${import_daemon_core9.MESH_NODE_PATCH_KEYS.join(", ")}).`
+    });
+  }
+  if (Object.keys(patch).length === 0) {
+    return JSON.stringify({
+      success: false,
+      code: "empty_patch",
+      error: "base_spec_patch is empty \u2014 there is nothing to change, and re-settling an unchanged spec would fail exactly as before."
+    });
+  }
+  const graphId = readString(args.graph_id) || readString(args.graphId);
+  try {
+    const result = (0, import_daemon_core9.patchGraphNodeAndRetry)({
+      meshId: ctx.mesh.id,
+      node,
+      ...graphId ? { graphId } : {},
+      baseSpecPatch: patch
+    });
+    const recovered = result.outcome.kind === "materialized";
+    (0, import_daemon_core9.recordGraphNodePatched)(ctx.mesh.id, {
+      graphId: result.graphId,
+      nodeId: result.nodeId,
+      ...result.ref ? { ref: result.ref } : {},
+      ...result.queueTaskId ? { queueTaskId: result.queueTaskId } : {},
+      patchedKeys: Object.keys(patch),
+      outcome: result.outcome.kind,
+      state: result.state,
+      ...result.blockedReason ? { blockedReason: result.blockedReason } : {},
+      materializationVersion: result.materializationVersion,
+      ...ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}
+    });
+    const queueTrigger = recovered ? await triggerMeshQueueAndReport(ctx) : void 0;
+    return JSON.stringify({
+      success: true,
+      patched: true,
+      graphId: result.graphId,
+      nodeId: result.nodeId,
+      ...result.ref ? { ref: result.ref } : {},
+      ...result.queueTaskId ? { taskId: result.queueTaskId } : {},
+      patchedKeys: Object.keys(patch),
+      materializationVersion: result.materializationVersion,
+      // ★ The patch and the RETRY are one transaction, so this answers "did
+      // it actually work?" now — the caller never has to poll to find out.
+      retryOutcome: result.outcome.kind,
+      recovered,
+      state: result.state,
+      ...result.blockedReason ? { blockedReason: result.blockedReason } : {},
+      ...queueTrigger ? { queueTrigger } : {},
+      ...recovered ? { note: "The node materialized and its task is claimable again." } : {},
+      ...result.outcome.kind === "error" ? {
+        hint: `The patch was applied but the node still cannot materialize (${result.blockedReason ?? "see blockedReason"}). Read the new reason: \`required_input_missing\` means the upstream genuinely never produced that field \u2014 point the selector at something it did produce, or drop \`required\` \u2014 while \`invalid_selector\` / \`invalid_binding_spec\` mean the replacement is still malformed. Inspect the upstream envelope with mesh_graph_view.`
+      } : {},
+      ...result.outcome.kind === "deferred" ? {
+        hint: "The patch was applied but the node is not ready to settle yet \u2014 a predecessor has not completed, or an incoming gate is still unreleased. It will settle on its own when they do; nothing further is needed here."
+      } : {},
+      ...result.outcome.kind === "skipped" ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.outcome.reason}). Skipped is terminal and never satisfies a downstream dependency.` } : {}
+    });
+  } catch (e) {
+    const message = e?.message || String(e);
+    const code = classifyNodePatchError(e, message);
+    return JSON.stringify({
+      success: false,
+      patched: false,
+      node,
+      ...code ? { code } : {},
+      error: message,
+      ...code === "task_already_claimed" ? {
+        hint: "This node's task is already assigned or finished, and an assigned task is immutable. If the work must change, cancel it with mesh_queue_cancel and enqueue the corrected step."
+      } : {},
+      ...code === "node_patch_forbidden" ? { hint: `Only ${import_daemon_core9.MESH_NODE_PATCH_KEYS.join(", ")} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy \u2014 enqueue a new task instead.` } : {},
+      ...code === "ambiguous_node_ref" ? { hint: "That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view." } : {}
+    });
   }
 }
 async function meshGraphView(ctx, args) {
@@ -178858,6 +179153,9 @@ async function startMcpServer(opts) {
             break;
           case "mesh_graph_gate_abandon":
             text = await meshGraphGateAbandon(meshCtx, a);
+            break;
+          case "mesh_graph_node_patch":
+            text = await meshGraphNodePatch(meshCtx, a);
             break;
           case "mesh_queue_cancel":
             text = await meshQueueCancel(meshCtx, a);

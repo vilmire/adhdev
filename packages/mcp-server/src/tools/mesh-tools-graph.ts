@@ -54,9 +54,12 @@ import {
     buildMeshGraphViews,
     collectGateConvergenceEvidence,
     requestUsesGraphV2,
+    patchGraphNodeAndRetry,
+    MESH_NODE_PATCH_KEYS,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,
+    recordGraphNodePatched,
     readString,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
@@ -633,6 +636,176 @@ function describeAbandonRefusal(reason: string | undefined, state?: string): str
                     + 'flight or finished — cancel that work directly instead.';
             }
             return `The gate could not be abandoned (${reason ?? 'unknown reason'}).`;
+    }
+}
+
+/**
+ * Rejection codes `patchGraphNodeAndRetry` throws, matched by prefix like the
+ * gate codes so the caller gets a stable `code` rather than prose.
+ */
+const NODE_PATCH_ERROR_CODES = [
+    'graph_node_not_found',
+    'graph_not_found',
+    'ambiguous_node_ref',
+    'node_not_patchable',
+    'node_patch_forbidden',
+    'task_already_claimed',
+] as const;
+
+function classifyNodePatchError(e: unknown, message: string): string | undefined {
+    // A rejected replacement binding is a MeshMaterializationError, whose message
+    // carries NO code prefix — it exposes the code as a field instead. Read that
+    // field rather than pattern-matching prose, so the caller gets the parser's
+    // own precise vocabulary (`invalid_selector` vs `invalid_binding_spec`)
+    // instead of one flattened code.
+    const code = (e as { code?: unknown } | undefined)?.code;
+    if (typeof code === 'string' && code) return code;
+    return NODE_PATCH_ERROR_CODES.find(c => message.startsWith(`${c}:`) || message.includes(`${c}:`));
+}
+
+/**
+ * `mesh_graph_node_patch` — fix a node the graph could not materialize, and
+ * retry it in the same call.
+ *
+ * ★ WHY THIS TOOL EXISTS. `inputs_from` / `run_if` are baked into a node's
+ * IMMUTABLE base spec when the batch is accepted, but a binding that cannot be
+ * resolved is only rejected at MATERIALIZATION — which happens after every
+ * predecessor has completed. So the failure lands at the worst possible moment:
+ * the upstream work all succeeded, and the one step that was supposed to consume
+ * it is blocked on `materialization_error:*` forever. The graph does retry the
+ * node on later upstream terminals, but it re-reads the same baked spec and
+ * fails identically every time — it cannot self-heal, because nothing has
+ * changed. daemon-core documented the patch-and-retry recovery and implemented
+ * it, but nothing exposed it: the only patch surface was
+ * `mesh_graph_gate_release`, which needs a CLAIMED GATE and a direct gate edge,
+ * so a plain binding node with no gate was unrecoverable. This is that missing
+ * surface.
+ *
+ * It is NOT a way to re-task a worker. The patch surface is exactly the
+ * gate-release one — run_if, on_false, inputs_from, workspace_ref — so the
+ * message, routing, permissions, task mode and model stay immutable, and an
+ * already-claimed task cannot be patched at all. Prefer fixing the plan at
+ * enqueue: a malformed `inputs_from` is now rejected by mesh_enqueue_batch, so
+ * the case this tool remains necessary for is the one that is NOT knowable up
+ * front — `required_input_missing`, where the shape was right and the upstream
+ * simply never produced that field.
+ */
+export async function meshGraphNodePatch(
+    ctx: MeshContext,
+    args: {
+        node?: string; node_id?: string; nodeId?: string; ref?: string;
+        graph_id?: string; graphId?: string;
+        base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown>;
+    },
+): Promise<string> {
+    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_node_patch');
+    const node = readString(args.node) || readString(args.node_id) || readString(args.nodeId) || readString(args.ref);
+    const patch = (args.base_spec_patch ?? args.baseSpecPatch) as Record<string, unknown> | undefined;
+    const missing = [
+        !node ? 'node' : null,
+        !patch || typeof patch !== 'object' || Array.isArray(patch) ? 'base_spec_patch' : null,
+    ].filter((f): f is string => f !== null);
+    if (missing.length > 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'missing_patch_fields',
+            missing,
+            error: `mesh_graph_node_patch requires ${missing.join(', ')}. `
+                + '`node` is the node id or ref from mesh_graph_view; `base_spec_patch` holds the keys to replace '
+                + `(${MESH_NODE_PATCH_KEYS.join(', ')}).`,
+        });
+    }
+    if (Object.keys(patch!).length === 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'empty_patch',
+            error: 'base_spec_patch is empty — there is nothing to change, and re-settling an unchanged spec would fail exactly as before.',
+        });
+    }
+
+    const graphId = readString(args.graph_id) || readString(args.graphId);
+    try {
+        const result = patchGraphNodeAndRetry({
+            meshId: ctx.mesh.id,
+            node: node!,
+            ...(graphId ? { graphId } : {}),
+            baseSpecPatch: patch!,
+        });
+        const recovered = result.outcome.kind === 'materialized';
+        recordGraphNodePatched(ctx.mesh.id, {
+            graphId: result.graphId,
+            nodeId: result.nodeId,
+            ...(result.ref ? { ref: result.ref } : {}),
+            ...(result.queueTaskId ? { queueTaskId: result.queueTaskId } : {}),
+            patchedKeys: Object.keys(patch!),
+            outcome: result.outcome.kind,
+            state: result.state,
+            ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
+            materializationVersion: result.materializationVersion,
+            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+        });
+        // A recovered node is claimable now — nudge the queue rather than waiting
+        // for the next reconcile tick, exactly as a gate release does.
+        const queueTrigger = recovered ? await triggerMeshQueueAndReport(ctx) : undefined;
+        return JSON.stringify({
+            success: true,
+            patched: true,
+            graphId: result.graphId,
+            nodeId: result.nodeId,
+            ...(result.ref ? { ref: result.ref } : {}),
+            ...(result.queueTaskId ? { taskId: result.queueTaskId } : {}),
+            patchedKeys: Object.keys(patch!),
+            materializationVersion: result.materializationVersion,
+            // ★ The patch and the RETRY are one transaction, so this answers "did
+            // it actually work?" now — the caller never has to poll to find out.
+            retryOutcome: result.outcome.kind,
+            recovered,
+            state: result.state,
+            ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
+            ...(queueTrigger ? { queueTrigger } : {}),
+            ...(recovered
+                ? { note: 'The node materialized and its task is claimable again.' }
+                : {}),
+            ...(result.outcome.kind === 'error'
+                ? {
+                    hint: `The patch was applied but the node still cannot materialize (${result.blockedReason ?? 'see blockedReason'}). `
+                        + 'Read the new reason: `required_input_missing` means the upstream genuinely never produced that field — '
+                        + 'point the selector at something it did produce, or drop `required` — while `invalid_selector` / '
+                        + '`invalid_binding_spec` mean the replacement is still malformed. Inspect the upstream envelope with mesh_graph_view.',
+                }
+                : {}),
+            ...(result.outcome.kind === 'deferred'
+                ? {
+                    hint: 'The patch was applied but the node is not ready to settle yet — a predecessor has not completed, or an '
+                        + 'incoming gate is still unreleased. It will settle on its own when they do; nothing further is needed here.',
+                }
+                : {}),
+            ...(result.outcome.kind === 'skipped'
+                ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.outcome.reason}). Skipped is terminal and never satisfies a downstream dependency.` }
+                : {}),
+        });
+    } catch (e: any) {
+        const message = e?.message || String(e);
+        const code = classifyNodePatchError(e, message);
+        return JSON.stringify({
+            success: false,
+            patched: false,
+            node,
+            ...(code ? { code } : {}),
+            error: message,
+            ...(code === 'task_already_claimed'
+                ? {
+                    hint: 'This node\'s task is already assigned or finished, and an assigned task is immutable. If the work must change, '
+                        + 'cancel it with mesh_queue_cancel and enqueue the corrected step.',
+                }
+                : {}),
+            ...(code === 'node_patch_forbidden'
+                ? { hint: `Only ${MESH_NODE_PATCH_KEYS.join(', ')} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy — enqueue a new task instead.` }
+                : {}),
+            ...(code === 'ambiguous_node_ref'
+                ? { hint: 'That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view.' }
+                : {}),
+        });
     }
 }
 

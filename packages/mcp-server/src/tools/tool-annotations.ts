@@ -254,6 +254,11 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // Gives up on a gate so the graph reaches a TERMINAL state — the work behind
   // it is abandoned, which is not recoverable by releasing it later.
   mesh_graph_gate_abandon: DESTRUCTIVE_LOCAL,
+  // Overwrites keys on a node's otherwise-IMMUTABLE base spec: the replaced
+  // run_if/inputs_from is not recoverable, so it is destructive in the same
+  // sense as mesh_queue_requeue's instruction overwrite — even though its
+  // purpose is repair. Not idempotent: it re-settles and bumps the generation.
+  mesh_graph_node_patch: DESTRUCTIVE_LOCAL,
 
   // ── Mesh: lifecycle / bootstrap ──────────────────────────────────────
   // Creates new mesh/node records. Additive; a repeat creates another.

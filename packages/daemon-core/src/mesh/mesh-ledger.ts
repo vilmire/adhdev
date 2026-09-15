@@ -293,6 +293,16 @@ export type MeshLedgerKind =
     //   { graphId, gateId, ref?, action, priorState, reason, coordinatorSessionId?,
     //     force?, cancelledNodeIds?, graphStatus? }
     | 'graph_gate_abandoned'
+    // A coordinator rewrote a still-pending node's spec and re-settled it
+    // (mesh_graph_node_patch) — the recovery path for a node blocked on a
+    // `materialization_error:*`. The base spec is otherwise the immutable plan,
+    // so this is the ONE way the instruction a worker finally receives can
+    // differ from the one the batch was accepted with, and it is audited as
+    // such. Only patched KEY NAMES are recorded, never the patch values.
+    // payload:
+    //   { graphId, nodeId, ref?, queueTaskId?, patchedKeys, priorBlockedReason?,
+    //     outcome, state, blockedReason?, materializationVersion, coordinatorSessionId? }
+    | 'graph_node_patched'
     // QUOTA-CLAIM-GATE-LEDGER: the quota claim gate in tryAssignQueueTask (evaluateProviderQuotaGate)
     // previously only LOGGED a block (logQuotaClaimBlockTransition, LOG.info only) — no ledger
     // trace at all. That is a silent-forever risk specifically for MAGI: a kind-panel slot is

@@ -61,6 +61,7 @@ import {
     graphMaterializationBlockReason,
     isTerminalEquivalent,
     maybeOpenCoordinatorGate,
+    MESH_NODE_PATCH_KEYS,
     parseCoordinatorGateBlock,
     settleDownstreamNode,
 } from './mesh-graph-transition-runner.js';
@@ -75,8 +76,13 @@ export const MESH_GATE_NAMED_OUTCOMES = ['passed', 'failed', 'rejected'] as cons
  * The pending-task patch surface a release may touch (design :415, :418).
  * Everything else — `message`, routing, permissions, taskMode, model, tags,
  * gate action — is immutable by the security policy (design :294-295, :299).
+ *
+ * Aliased to the runner's `MESH_NODE_PATCH_KEYS` so the gate-release patch path
+ * and the standalone node-patch path share ONE list: they enforce the same
+ * policy, and a key added to one but not the other would be a silent asymmetry
+ * in what a coordinator may rewrite.
  */
-export const MESH_GATE_RELEASE_PATCH_KEYS = ['run_if', 'on_false', 'inputs_from', 'workspace_ref'] as const;
+export const MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS;
 
 // ── Gate spec (node base_spec_json) ──────────────────────────────────────────
 
