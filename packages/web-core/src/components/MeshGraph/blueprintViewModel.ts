@@ -353,6 +353,44 @@ export function summarizeCollapsedGraph(graph: MeshGraphView): CollapsedGraphSum
 }
 
 /**
+ * How many archive entries to place per row, given the width available.
+ *
+ * The archive used to be ONE column at a single x (`layoutArchive`), which is
+ * what made the blueprint unreadable rather than merely tall. Measured on the
+ * live mesh (20 graphs, 19 of them `gates:0`, so every one collapses to a
+ * chip): the drawing's bounding box came out 236 × 1230 — a strip narrower
+ * than a phone inside a ~1200px dialog. `fitView` frames by the LIMITING axis,
+ * so that height forced zoom to 0.474, at which a 236px card renders 112px
+ * wide (the "grey smudge" the owner reported) while 91% of the viewport width
+ * sat empty. It also made the zoom buttons feel broken: React Flow's
+ * `scaleBy(1.2)` per press means two presses only reach 0.68 — still below the
+ * card's design width — so pressing + twice visibly changed nothing.
+ *
+ * Packing the same entries into rows trades height for the width that was
+ * already there, which is the one move that fixes both readings at once: a
+ * wider, shorter box fits at a HIGHER zoom, so cards get bigger without
+ * touching the zoom limits, the card count stops driving legibility, and the
+ * empty 70% is actually used.
+ *
+ * Column count is derived from the measured canvas width rather than fixed, so
+ * a narrow dialog (or a phone) still degrades to the single column that shape
+ * genuinely wants — the old behaviour is the narrow-viewport special case, not
+ * the general one.
+ */
+export function archiveColumnCount(availableWidth: number, entryWidth: number, gap: number): number {
+    if (!Number.isFinite(availableWidth) || availableWidth <= 0) return 1
+    if (!Number.isFinite(entryWidth) || entryWidth <= 0) return 1
+    // n columns occupy n*entryWidth + (n-1)*gap. Solve for the largest n that
+    // fits, then clamp: at least one column always, and never so many that the
+    // archive becomes a wide thin band the eye cannot scan.
+    const n = Math.floor((availableWidth + gap) / (entryWidth + gap))
+    return Math.max(1, Math.min(ARCHIVE_MAX_COLUMNS, n))
+}
+
+/** Upper bound on archive columns — past this a row scans worse than it packs. */
+export const ARCHIVE_MAX_COLUMNS = 4
+
+/**
  * Root-first ordering for the ELK input array. ELK's `considerModelOrder`
  * strategy is NODES_AND_EDGES, so the order nodes are handed in decides their
  * relative placement within a layer — which is exactly the knob the owner call

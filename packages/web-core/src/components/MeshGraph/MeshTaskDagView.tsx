@@ -23,7 +23,7 @@ import {
 } from '@xyflow/react'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask } from '@adhdev/daemon-core'
-import { buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
+import { archiveColumnCount, buildBlueprintGraphTimeline, buildMissionThreadChain, buildNodeIdByEndpoint, buildStateByNodeId, deriveBlueprintEdgeState, nextHoveredMissionOnCardActivate, orderTasksForElk, resolveCollapsedGraphIds, resolveTaskPredictedSlot, summarizeCollapsedGraph } from './blueprintViewModel'
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import { buildTaskDag, formatTaskCardTime, scopeTaskDagTasks, taskCardTimeSource, TASK_DAG_LOAD_MORE_STEP, TASK_DAG_RECENT_TERMINAL_LIMIT, type TaskDagData, type TaskDagEdgeState, type TaskDagNode } from './taskDagViewModel'
@@ -674,6 +674,8 @@ const COLLAPSED_GRAPH_WIDTH = 236
 const COLLAPSED_GRAPH_HEIGHT = 52
 /** Gap between stacked collapsed chips, and clearance below the live drawing. */
 const COLLAPSED_STACK_GAP_Y = 10
+/** Gap between two chips sharing an archive row. */
+const COLLAPSED_STACK_GAP_X = 16
 /** Clearance between the live drawing and the first expanded graph below it. */
 const EXPANDED_GRAPH_LEAD_Y = HULL_PADDING * 2 + HULL_LABEL_CLEARANCE + 60
 /** Vertical gap between two graphs stacked in the same column. */
@@ -831,6 +833,7 @@ async function layoutTaskDag(
     composition: CanvasComposition,
     collapsed: ReadonlyArray<import('./blueprintViewModel').CollapsedGraphSummary>,
     timelineByGraphId: ReadonlyMap<string, number>,
+    canvasWidth: number,
 ): Promise<{ positions: Map<string, { x: number; y: number }> }> {
     // B-plan (owner call 2026-09-02): ONE placement system. Every task —
     // dependency-linked or loose — goes through the same ELK pass, so the
@@ -862,7 +865,7 @@ async function layoutTaskDag(
      * component-order options did not hold, so the invariant is enforced here
      * instead: anything belonging to an expanded graph is shifted below the
      * live drawing, preserving ELK's internal layout of each. */
-    layoutArchive(positions, dag, overlays, collapsed, timelineByGraphId)
+    layoutArchive(positions, dag, overlays, collapsed, timelineByGraphId, canvasWidth)
     /* Pin the drawing's origin. ELK returns coordinates relative to its own
      * bounding box, which changes as graphs expand — so with the viewport
      * transform completely unchanged, on-screen content still slid (measured:
@@ -910,6 +913,7 @@ function layoutArchive(
     overlays: FusedOverlays,
     collapsed: ReadonlyArray<import('./blueprintViewModel').CollapsedGraphSummary>,
     timelineByGraphId: ReadonlyMap<string, number>,
+    canvasWidth: number,
 ): void {
     const liveIds = new Set(dag.nodes.map(node => node.id))
     let liveBottom = -Infinity
@@ -972,11 +976,40 @@ function layoutArchive(
     // drawn above the frame's top edge and needs its own band on top of that,
     // hence the extra HULL_LABEL_BAND (measured: 10px short without it).
     const hullLeadIn = HULL_PADDING + HULL_LABEL_CLEARANCE + HULL_LABEL_BAND
+    /* Chips pack into ROWS, not one column (2026-09-15). See
+     * `archiveColumnCount` for the measurement that motivated this: as a single
+     * column, 20 collapsed graphs made the drawing 236 × 1230, and `fitView`
+     * framing by that height forced zoom to 0.474 — 112px cards, 91% of the
+     * viewport width unused. Expanded graphs are NOT packed: each keeps its own
+     * ELK shape at an arbitrary width, so two side by side would need a
+     * per-row width budget that the single-column stack never had to compute.
+     * A full row each keeps their internal layout exactly as ELK produced it.
+     *
+     * Column count follows the measured canvas width, so a narrow dialog
+     * resolves to 1 and reproduces the previous single-column shape — the old
+     * behaviour survives as the narrow case rather than as the only case. */
+    const chipColumns = archiveColumnCount(canvasWidth, COLLAPSED_GRAPH_WIDTH, COLLAPSED_STACK_GAP_X)
+    let chipColumn = 0
     for (const entry of entries) {
         if (entry.chipId) {
-            positions.set(entry.chipId, { x: originX, y: cursorY })
-            cursorY += COLLAPSED_GRAPH_HEIGHT + COLLAPSED_STACK_GAP_Y
+            positions.set(entry.chipId, {
+                x: originX + chipColumn * (COLLAPSED_GRAPH_WIDTH + COLLAPSED_STACK_GAP_X),
+                y: cursorY,
+            })
+            chipColumn += 1
+            // Close the row only once it is full; the trailing partial row is
+            // closed by whatever comes next (an expanded graph, or the end).
+            if (chipColumn >= chipColumns) {
+                chipColumn = 0
+                cursorY += COLLAPSED_GRAPH_HEIGHT + COLLAPSED_STACK_GAP_Y
+            }
             continue
+        }
+        // An expanded graph starts a fresh row — flush any partial chip row so
+        // the two never overlap.
+        if (chipColumn > 0) {
+            chipColumn = 0
+            cursorY += COLLAPSED_GRAPH_HEIGHT + COLLAPSED_STACK_GAP_Y
         }
         cursorY += hullLeadIn
         const ids = entry.expandedIds!
@@ -1147,6 +1180,35 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
     const jumpCycleRef = useRef<Record<string, number>>({})
     const fittedFingerprintRef = useRef('')
 
+    /* Canvas width, measured — the archive's column count is derived from it
+     * (archiveColumnCount). It is quantized to a step before it reaches the
+     * layout key so that dragging a window edge does not re-run ELK on every
+     * animation frame: only crossing a step boundary, which is the only place
+     * the column count can actually change, triggers a re-layout.
+     *
+     * A ResizeObserver rather than the CSS-only approach used for the Controls
+     * placement below: a column COUNT is a number the layout has to compute
+     * with, and CSS cannot hand a number to an ELK pass. */
+    const canvasRef = useRef<HTMLDivElement | null>(null)
+    const [canvasWidth, setCanvasWidth] = useState(0)
+    useEffect(() => {
+        const element = canvasRef.current
+        if (!element || typeof ResizeObserver === 'undefined') return
+        const apply = (width: number) => {
+            // Quantize: 120px steps are finer than one chip + gap, so no
+            // reachable column count is skipped, while a drag produces a
+            // handful of updates instead of hundreds.
+            const quantized = Math.round(width / 120) * 120
+            setCanvasWidth(current => (current === quantized ? current : quantized))
+        }
+        apply(element.clientWidth)
+        const observer = new ResizeObserver(entries => {
+            for (const entry of entries) apply(entry.contentRect.width)
+        })
+        observer.observe(element)
+        return () => observer.disconnect()
+    }, [])
+
     const composition = useMemo(() => buildCanvasComposition(dag), [dag, fused])
 
     /** graphId → its moment on the archive axis, for ordering the list. */
@@ -1180,7 +1242,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             setPositions(null)
             return
         }
-        void layoutTaskDag(dag, fused, composition, collapsedGraphs, timelineByGraphId)
+        void layoutTaskDag(dag, fused, composition, collapsedGraphs, timelineByGraphId, canvasWidth)
             .then(next => {
                 if (cancelled) return
                 setPositions(next.positions)
@@ -1191,7 +1253,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             })
         return () => { cancelled = true }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dagFingerprint])
+    }, [dagFingerprint, canvasWidth])
 
     const flowNodes = useMemo<TaskFlowNode[]>(() => {
         if (!positions) return []
@@ -1705,7 +1767,7 @@ export default function MeshTaskDagView({ tasks, emptyMessage, compact = false, 
             </div>
                 return statsContainer ? createPortal(statsRow, statsContainer) : statsRow
             })()}
-            <div className="relative min-h-0 flex-1">
+            <div ref={canvasRef} className="relative min-h-0 flex-1">
             <ReactFlow
                 className="h-full w-full"
                 nodes={[...flowNodes, ...overlayFlowNodes] as AnyFlowNode[]}
