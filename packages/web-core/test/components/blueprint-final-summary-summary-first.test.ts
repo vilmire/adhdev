@@ -119,24 +119,24 @@ describe('splitFinalSummary — prose and edges', () => {
     })
 })
 
-/* Both panels that render a final summary must actually use it — the helper
- * being green in isolation says nothing about what the owner sees. */
-describe('both final-summary panels are summary-first', () => {
+/* The panel that renders a final summary must actually use the splitter — the
+ * helper being green in isolation says nothing about what the owner sees.
+ * (The canvas side panel that shared this block died with MeshTaskDagView in
+ * the list redesign; the overview modal is now the single final-summary
+ * surface, and blueprint list rows route into it.) */
+describe('the final-summary panel is summary-first', () => {
     const CARDS = path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshOverviewCards.tsx')
-    const VIEW = path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshTaskDagView.tsx')
 
-    for (const [label, file] of [['overview modal', CARDS], ['canvas side panel', VIEW]] as const) {
-        it(`${label} folds the report behind a disclosure`, () => {
-            const text = fs.readFileSync(file, 'utf8')
-            expect(text).toContain('splitFinalSummary')
-            // The raw dump this replaced: the summary rendered as the sole
-            // child of a div, with no lead/rest split.
-            expect(text).not.toMatch(/>\{output\.finalSummary\}</)
-            expect(text).not.toMatch(/>\{selectedOutput\.finalSummary\}</)
-            // Lead visible, remainder behind <details> — the same idiom the
-            // instruction block uses.
-            expect(text).toMatch(/finalSummaryParts\.lead|FinalSummaryParts\.lead/)
-            expect(text).toMatch(/<details>/)
-        })
-    }
+    it('overview modal folds the report behind a disclosure', () => {
+        const text = fs.readFileSync(CARDS, 'utf8')
+        expect(text).toContain('splitFinalSummary')
+        // The raw dump this replaced: the summary rendered as the sole
+        // child of a div, with no lead/rest split.
+        expect(text).not.toMatch(/>\{output\.finalSummary\}</)
+        expect(text).not.toMatch(/>\{selectedOutput\.finalSummary\}</)
+        // Lead visible, remainder behind <details> — the same idiom the
+        // instruction block uses.
+        expect(text).toMatch(/finalSummaryParts\.lead|FinalSummaryParts\.lead/)
+        expect(text).toMatch(/<details>/)
+    })
 })

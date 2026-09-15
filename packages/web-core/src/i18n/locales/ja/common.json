@@ -1026,7 +1026,29 @@
             "schedUnpinned": "ピンなし",
             "schedUnpinnedTitle": "ピンなしで送った場合の仮想的な予測 — ノードにピン留めされたタスクはカードに個別の予測が表示されます",
             "schedPointInTime": "確定した割り当てではなく現時点の予測です — スロットが取得・解放されると空き状況はすぐに古くなります",
-            "schedulingShort": "スケジュール"
+            "schedulingShort": "スケジュール",
+            "list": {
+                "barActive": "実行 {{count}}",
+                "barBlocked": "ブロック {{count}}",
+                "barRecent": "最近 {{count}}",
+                "barMissions_one": "ミッション {{count}}件",
+                "barMissions_other": "ミッション {{count}}件",
+                "sectionRunning": "実行中",
+                "sectionBlocked": "ブロック中",
+                "sectionRecent": "最近",
+                "sectionHistory": "履歴",
+                "chipByMission": "ミッション別",
+                "generating": "生成中",
+                "approvalNeeded": "承認待ち",
+                "choiceNeeded": "選択待ち",
+                "planShow": "プラン",
+                "planHide": "閉じる",
+                "planTitle": "このタスクの依存プランを表示",
+                "noMission": "ミッションなし",
+                "loadMore_one": "さらに{{count}}件表示",
+                "loadMore_other": "さらに{{count}}件表示",
+                "emptyActive": "現在、実行中またはブロック中の作業はありません — 完了した作業は履歴にあります。"
+            }
         },
         "page": {
             "title": "Repo Mesh",

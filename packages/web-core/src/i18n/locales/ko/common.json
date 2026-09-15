@@ -1026,7 +1026,29 @@
             "schedUnpinned": "핀 없음",
             "schedUnpinnedTitle": "핀 없이 보낼 때의 가상 예측 — 노드가 핀 지정된 태스크는 카드에 별도 예측이 표시됩니다",
             "schedPointInTime": "확정된 배정이 아니라 현재 시점의 예측입니다 — 슬롯이 점유·해제되면 용량 정보는 즉시 낡을 수 있습니다",
-            "schedulingShort": "스케줄링"
+            "schedulingShort": "스케줄링",
+            "list": {
+                "barActive": "실행 {{count}}",
+                "barBlocked": "차단 {{count}}",
+                "barRecent": "최근 {{count}}",
+                "barMissions_one": "미션 {{count}}개",
+                "barMissions_other": "미션 {{count}}개",
+                "sectionRunning": "실행 중",
+                "sectionBlocked": "차단됨",
+                "sectionRecent": "최근",
+                "sectionHistory": "히스토리",
+                "chipByMission": "미션별",
+                "generating": "생성 중",
+                "approvalNeeded": "승인 필요",
+                "choiceNeeded": "선택 필요",
+                "planShow": "플랜",
+                "planHide": "접기",
+                "planTitle": "이 태스크의 의존성 플랜 보기",
+                "noMission": "미션 없음",
+                "loadMore_one": "{{count}}개 더 보기",
+                "loadMore_other": "{{count}}개 더 보기",
+                "emptyActive": "지금 실행 중이거나 차단된 작업이 없습니다 — 끝난 작업은 히스토리에 있습니다."
+            }
         },
         "page": {
             "title": "Repo Mesh",
