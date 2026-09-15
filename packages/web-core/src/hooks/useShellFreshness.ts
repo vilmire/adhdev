@@ -143,11 +143,38 @@ export function useShellFreshness(options: UseShellFreshnessOptions = {}): Shell
     const lastCheckAtRef = useRef(0)
     const inFlightRef = useRef<Promise<void> | null>(null)
 
+    /**
+     * ★ Hold the caller's `now`/`fetchImpl` in a ref rather than in dependency
+     * arrays.
+     *
+     * These are test seams, and the default `now` is `() => Date.now()` — a NEW
+     * function identity on every render. Depending on it made `maybeCheck` new
+     * every render, which made the mount effect below re-run every render, and
+     * that effect opens with a FORCED check that deliberately bypasses the
+     * min-interval floor. A successful check then calls `setDeployed`, which
+     * re-renders, which re-runs the effect, which forces another check: a
+     * self-sustaining request loop that no amount of throttling inside
+     * `maybeCheck` can stop, because `force` is precisely what skips the
+     * throttle. Measured at 500+ requests from a single mount with no parent
+     * re-render at all.
+     *
+     * A ref keeps the seam overridable while making the effect depend only on
+     * values that actually change the subscription (`enabled`, `pollMs`).
+     */
+    const nowRef = useRef(now)
+    nowRef.current = now
+    const fetchImplRef = useRef(fetchImpl)
+    fetchImplRef.current = fetchImpl
+    const urlRef = useRef(url)
+    urlRef.current = url
+    const minCheckIntervalRef = useRef(minCheckIntervalMs)
+    minCheckIntervalRef.current = minCheckIntervalMs
+
     const checkNow = useCallback(async (): Promise<void> => {
         // Single-flight: a visibility flip that also crosses the poll deadline
         // must not issue two requests.
         if (inFlightRef.current) return inFlightRef.current
-        const doFetch = fetchImpl || (typeof fetch !== 'undefined' ? fetch : undefined)
+        const doFetch = fetchImplRef.current || (typeof fetch !== 'undefined' ? fetch : undefined)
         if (!doFetch) return
         const run = (async () => {
             try {
@@ -155,7 +182,7 @@ export function useShellFreshness(options: UseShellFreshnessOptions = {}): Shell
                 // cached build-info can satisfy the check and the detector
                 // reports "fresh" forever — the same class of bug it exists to
                 // catch, one level down.
-                const res = await doFetch(url, { cache: 'no-store' })
+                const res = await doFetch(urlRef.current, { cache: 'no-store' })
                 if (!res || !('ok' in res) || !res.ok) return
                 const body = await res.json() as ShellBuildInfo | null
                 if (body && typeof body === 'object') setDeployed(body)
@@ -169,14 +196,14 @@ export function useShellFreshness(options: UseShellFreshnessOptions = {}): Shell
         })
         inFlightRef.current = run
         return run
-    }, [fetchImpl, url])
+    }, [])
 
     const maybeCheck = useCallback((force = false) => {
-        const at = now()
-        if (!force && at - lastCheckAtRef.current < minCheckIntervalMs) return
+        const at = nowRef.current()
+        if (!force && at - lastCheckAtRef.current < minCheckIntervalRef.current) return
         lastCheckAtRef.current = at
         void checkNow()
-    }, [checkNow, minCheckIntervalMs, now])
+    }, [checkNow])
 
     useEffect(() => {
         if (!enabled) return

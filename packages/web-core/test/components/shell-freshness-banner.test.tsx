@@ -10,7 +10,7 @@
 //     the user to ignore the banner permanently.
 // So both directions are asserted, plus the request-level guarantees that keep
 // the check itself from going stale (`cache: 'no-store'`) or chatty.
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -104,6 +104,59 @@ describe('ShellFreshnessBanner', () => {
             .find((b) => b.textContent?.includes('Reload'))
         act(() => { reloadButton?.click() })
         expect(reloadImpl).toHaveBeenCalledTimes(1)
+    })
+
+    it('★ issues exactly one request per mount, and none on re-render (poll storm)', async () => {
+        // ── The regression ──────────────────────────────────────────────────
+        // Observed in preview DevTools: 129 requests for build-info.json in a
+        // single session. The cause was NOT a remount and NOT the poll
+        // interval — it was a feedback loop wholly inside the hook:
+        //
+        //   default `now = () => Date.now()` is a new identity every render
+        //     -> `maybeCheck` is new every render
+        //       -> the mount effect (which depends on it) re-runs every render
+        //         -> it opens with maybeCheck(TRUE), which by design SKIPS the
+        //            60s floor
+        //           -> the response calls setDeployed -> re-render -> repeat.
+        //
+        // Throttling inside `maybeCheck` cannot catch this, because `force` is
+        // exactly what bypasses the throttle. Measured at 500+ requests from a
+        // single mount with no parent re-render before the fix.
+        //
+        // ★ The banner MUST be rendered with no props here: that is how
+        // Layout.tsx renders it, and passing a hoisted `fetchImpl` (as the
+        // other tests do) accidentally stabilises the very identity at fault,
+        // which is why this went unnoticed.
+        let count = 0
+        ;(globalThis as unknown as { fetch: typeof fetch }).fetch = (async () => {
+            count++
+            // A DIFFERING commit, so setDeployed genuinely changes state and
+            // the banner renders — the exact feedback path that looped. A
+            // matching commit would mask the bug by never changing state.
+            return { ok: true, json: async () => ({ commit: 'bbbbbbbbbbbb2222' }) }
+        }) as unknown as typeof fetch
+
+        let bump: (v: number) => void = () => {}
+        function Parent() {
+            const [v, setV] = useState(0)
+            bump = setV
+            return <div><span>{v}</span><ShellFreshnessBanner /></div>
+        }
+
+        await act(async () => { root.render(<Parent />) })
+        for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve() })
+        expect(count).toBe(1)
+
+        // Re-render the parent repeatedly. The banner is never unmounted, so a
+        // correctly-wired effect must not re-subscribe or re-check at all.
+        for (let i = 1; i <= 20; i++) {
+            await act(async () => { bump(i) })
+            await act(async () => { await Promise.resolve() })
+        }
+        expect(count).toBe(1)
+
+        // ...and the feature still works: it detected the newer commit.
+        expect(container.textContent).toContain('A new version')
     })
 
     it('can be dismissed without reloading', async () => {
