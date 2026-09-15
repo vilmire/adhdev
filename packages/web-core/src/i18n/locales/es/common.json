@@ -1031,7 +1031,29 @@
             "schedUnpinned": "sin fijar",
             "schedUnpinnedTitle": "Envío hipotético sin nodo fijado — las tareas fijadas a un nodo muestran su propia previsión en sus tarjetas",
             "schedPointInTime": "Predicción puntual, no una asignación definitiva: la capacidad de los slots puede quedar obsoleta en cuanto se ocupa o libera uno",
-            "schedulingShort": "Scheduling"
+            "schedulingShort": "Scheduling",
+            "list": {
+                "barActive": "Activas {{count}}",
+                "barBlocked": "Bloqueadas {{count}}",
+                "barRecent": "Recientes {{count}}",
+                "barMissions_one": "{{count}} misión",
+                "barMissions_other": "{{count}} misiones",
+                "sectionRunning": "En ejecución",
+                "sectionBlocked": "Bloqueadas",
+                "sectionRecent": "Recientes",
+                "sectionHistory": "Historial",
+                "chipByMission": "Por misión",
+                "generating": "generando",
+                "approvalNeeded": "requiere aprobación",
+                "choiceNeeded": "requiere elección",
+                "planShow": "plan",
+                "planHide": "ocultar",
+                "planTitle": "Ver el plan de dependencias de esta tarea",
+                "noMission": "Sin misión",
+                "loadMore_one": "Mostrar {{count}} más",
+                "loadMore_other": "Mostrar {{count}} más",
+                "emptyActive": "No hay trabajo en ejecución ni bloqueado ahora mismo — el trabajo terminado está en Historial."
+            }
         },
         "page": {
             "title": "Repo Mesh",
