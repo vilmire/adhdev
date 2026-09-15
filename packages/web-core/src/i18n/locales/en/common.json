@@ -1026,7 +1026,29 @@
             "schedUnpinned": "no pin",
             "schedUnpinnedTitle": "Hypothetical dispatch with no target pin — tasks pinned to a node show their own forecast on their cards",
             "schedPointInTime": "Point-in-time prediction, not a settled assignment: slot capacity can go stale as soon as a slot is claimed or released",
-            "schedulingShort": "Scheduling"
+            "schedulingShort": "Scheduling",
+            "list": {
+                "barActive": "Active {{count}}",
+                "barBlocked": "Blocked {{count}}",
+                "barRecent": "Recent {{count}}",
+                "barMissions_one": "{{count}} mission",
+                "barMissions_other": "{{count}} missions",
+                "sectionRunning": "Running",
+                "sectionBlocked": "Blocked",
+                "sectionRecent": "Recent",
+                "sectionHistory": "History",
+                "chipByMission": "By mission",
+                "generating": "generating",
+                "approvalNeeded": "approval needed",
+                "choiceNeeded": "choice needed",
+                "planShow": "plan",
+                "planHide": "hide",
+                "planTitle": "Show this task's dependency plan",
+                "noMission": "No mission",
+                "loadMore_one": "Show {{count}} more",
+                "loadMore_other": "Show {{count}} more",
+                "emptyActive": "Nothing is running or blocked right now — finished work is under History."
+            }
         },
         "page": {
             "title": "Repo Mesh",

@@ -1,5 +1,4 @@
 export { default as MeshGraphView } from './MeshGraphView'
-export { default as MeshTaskDagView } from './MeshTaskDagView'
 export { buildTaskDag, scopeTaskDagTasks, TASK_DAG_RECENT_TERMINAL_LIMIT, TASK_DAG_LOAD_MORE_STEP } from './taskDagViewModel'
 export type { TaskDagData, TaskDagNode, TaskDagEdge, TaskDagEdgeState, TaskDagStats, TaskDagScopeResult } from './taskDagViewModel'
 export { default as MeshGraphPanel } from './MeshGraphPanel'
