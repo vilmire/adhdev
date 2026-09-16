@@ -58,6 +58,8 @@ import {
 } from '../../cli-adapters/provider-cli-shared.js';
 import { LOG } from '../../logging/logger.js';
 import { publishSessionTermination } from '../../shared/session-termination-sink.js';
+import { publishProviderSignal } from '../../shared/provider-signal-sink.js';
+import type { SignalDetection } from './signal-rules.js';
 import {
     buildClaudeInteractiveTuiAnswerSteps,
     buildClaudeInteractiveToolResult,
@@ -1313,6 +1315,9 @@ export class SpecCliAdapter implements CliAdapter {
                 // otherwise this branch publishes the ordinary stopped transition.
                 if (!this.observeKimiAuthBillingOutput('', ev.exit_code ?? undefined)) this.statusCallback?.();
                 return;
+            case 'signal_detected':
+                this.publishSignalObservation(ev.signal);
+                return;
             case 'spec_error':
                 LOG.warn('SpecAdapter', `[${this.cliType}] spec reload error: ${ev.errors.join('; ')}`);
                 return;
@@ -1344,6 +1349,33 @@ export class SpecCliAdapter implements CliAdapter {
             workspace: this.workingDir,
             runtimeSettings: this.runtimeSettings,
             termination,
+        });
+    }
+
+    /**
+     * Publish a spec-declared screen signal to the neutral provider-signal seam.
+     *
+     * Same shape and same reasoning as publishTerminationObservation above: this
+     * layer reports WHAT IT SAW and resolves nothing. Deciding whether the
+     * session is mesh-bound and what to tell a coordinator belongs to the
+     * subscriber wired at daemon boot, because `providers/**` may not
+     * value-import `mesh/**` (scripts/check-import-boundaries.mjs). Forwarding
+     * `runtimeSettings` opaquely is what keeps this side mesh-unaware.
+     *
+     * A session with no owning session id is dropped: the consumer keys its
+     * notification on the session, so an unattributable signal has nowhere to go.
+     */
+    private publishSignalObservation(signal: SignalDetection): void {
+        if (!this.owningSessionId) return;
+        publishProviderSignal({
+            sessionId: this.owningSessionId,
+            providerType: this.cliType,
+            workspace: this.workingDir,
+            ruleId: signal.ruleId,
+            kind: signal.kind,
+            params: signal.params,
+            detectedAt: signal.detectedAt,
+            runtimeSettings: this.runtimeSettings,
         });
     }
 

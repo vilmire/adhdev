@@ -34,6 +34,10 @@ import {
     getDaemonLogDir,
     MAX_SIZE_ROTATION_GENERATIONS,
 } from './logger.js';
+// The backtracking screen is shared with the spec signal-rule compiler
+// (providers/spec/signal-rules.ts) so both untrusted-regex surfaces enforce one
+// policy instead of drifting apart. See shared/regex-safety.ts.
+import { REGEX_METACHAR, isBacktrackingSafeRegexSource } from '../shared/regex-safety.js';
 
 export const DEFAULT_TAIL_BYTES = 64 * 1024;
 export const MAX_TAIL_BYTES = 128 * 1024;
@@ -215,54 +219,6 @@ function parseLineEpochMs(line: string, fileDate: Date): number | null {
  *     Anything else falls back to a literal match rather than being compiled.
  */
 export const MAX_GREP_PATTERN_LENGTH = 200;
-
-/** Regex metacharacters — their absence means the source is a plain literal. */
-const REGEX_METACHAR = /[\\^$.|?*+()[\]{}]/;
-
-/**
- * Conservative safety screen for a source we are willing to compile.
- *
- * Rejects the constructs that make backtracking blow up rather than trying to
- * analyse the pattern properly: a quantifier applied to a group that itself
- * contains a quantifier (`(a+)+`, `(a*)*`, `(a|aa)+`), two quantifiers in a row
- * (`a+*`), and backreferences (`\1`). It is intentionally strict — a rejected
- * pattern still matches, as a literal, so a false negative costs precision but
- * never availability.
- */
-function isBacktrackingSafeRegexSource(source: string): boolean {
-    if (/\\[1-9]/.test(source)) return false; // backreference
-    if (/[*+?}][*+]/.test(source)) return false; // stacked quantifiers: a+*, a{2,}+
-
-    // Walk the source tracking group spans so we can reject a quantified group
-    // that contains a quantifier or an alternation of repeatable atoms.
-    const openStack: number[] = [];
-    for (let i = 0; i < source.length; i++) {
-        const ch = source[i];
-        if (ch === '\\') { i++; continue; } // skip the escaped char
-        if (ch === '[') { // skip a character class wholesale
-            i++;
-            while (i < source.length && source[i] !== ']') {
-                if (source[i] === '\\') i++;
-                i++;
-            }
-            continue;
-        }
-        if (ch === '(') { openStack.push(i); continue; }
-        if (ch === ')') {
-            const start = openStack.pop();
-            if (start === undefined) return false; // unbalanced — let it fail to compile
-            const next = source[i + 1];
-            const groupIsQuantified = next === '*' || next === '+' || next === '?' || next === '{';
-            if (groupIsQuantified) {
-                const body = source.slice(start + 1, i);
-                // A quantifier or alternation inside a quantified group is the
-                // classic exponential shape.
-                if (/[*+{]/.test(body.replace(/\\./g, '')) || body.includes('|')) return false;
-            }
-        }
-    }
-    return openStack.length === 0;
-}
 
 export type GrepPredicate = ((line: string) => boolean) & { mode: 'literal' | 'regex' };
 

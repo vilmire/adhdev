@@ -52,6 +52,10 @@ import {
     installMeshTerminationObserver,
     uninstallMeshTerminationObserver,
 } from '../mesh/mesh-termination-bridge.js';
+import {
+    installMeshProviderSignalObserver,
+    uninstallMeshProviderSignalObserver,
+} from '../mesh/mesh-signal-bridge.js';
 import { currentRefineExecutorBootId } from '../mesh/mesh-refine-executor-liveness.js';
 import { SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS } from '../providers/spec/fsm-driver.js';
 import { scheduleComposerResidueSweep, type ComposerResidueSweepHandle } from './composer-residue-sweep.js';
@@ -350,6 +354,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // ledger row. Must precede any provider spawn, or an early death goes
     // unrecorded — which is the exact blind spot this bridge exists to close.
     installMeshTerminationObserver();
+    // Arm the provider→mesh screen-signal seam, the same inversion as above: the
+    // spec driver publishes a matched `signal_rules[]` detection to a neutral
+    // sink, and this installs the mesh-side subscriber that pages the
+    // coordinator. Armed alongside the termination seam so a signal fired by an
+    // early-spawning provider is not dropped.
+    installMeshProviderSignalObserver();
 
     // 1.1 Apply persisted daemon env/flag overrides (config.json `envOverrides`)
     // to process.env BEFORE anything below reads a feature flag. Explicit
@@ -1426,6 +1436,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // Drop the termination observer too: sessions torn down below this point are
     // dying because the daemon is going away, not because something killed them.
     try { uninstallMeshTerminationObserver(); } catch { /* noop */ }
+    try { uninstallMeshProviderSignalObserver(); } catch { /* noop */ }
 
     // 2. Dispose agent stream
     try {

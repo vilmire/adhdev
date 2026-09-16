@@ -162,6 +162,20 @@ export function collectFsmSpecWarnings(raw: unknown): string[] {
     for (const [i, t] of (spec.transitions ?? []).entries()) {
         if (t.when) warns.push(...warnCondition(t.when, `transitions[${i}].when`));
     }
+    // signal_rules: ADVISORY only, deliberately. compileSignalRules already drops
+    // an invalid or unsafe rule (fail-closed, with its own warning), so the rule
+    // set cannot reach the engine in a bad state. Promoting these to
+    // validateFsmSpec errors would instead kill a working provider on upgrade for
+    // a flaw in an ADVISORY signal — exactly the trade this lint layer exists to
+    // avoid. What the compiler cannot see is the section namespace, so the
+    // cross-reference check lives here.
+    const sectionIds = new Set(Object.keys(spec.sections ?? {}));
+    for (const [i, r] of ((spec.signal_rules ?? []) as { section?: string }[]).entries()) {
+        const sec = r?.section;
+        if (sec && !sectionIds.has(sec)) {
+            warns.push(`signal_rules[${i}].section "${sec}" unknown — the rule will never match`);
+        }
+    }
     return warns;
 }
 
