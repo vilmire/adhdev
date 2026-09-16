@@ -212,9 +212,24 @@ export interface PreLaunchTrustSettingsArray {
  * against the real kimi-code source); the spec only SELECTS the scheme by
  * name — the same philosophy as native_history source kinds. New per-file
  * formats become new scheme names, never inline templates.
+ *
+ * 'grok_toml_file' is the second such scheme. grok's store is neither an array
+ * nor one-file-per-workspace: it is a SINGLE SHARED TOML file
+ * (`~/.grok/trusted_folders.toml`, honoring `GROK_HOME`) to which each trusted
+ * folder is APPENDED as its own `[folders."<realpath>"]` table. Because the
+ * file is shared, the writer appends rather than overwrites and no-ops when an
+ * entry already exists — it must never clobber a sibling entry, and must never
+ * flip a user's explicit `trusted = false` to true. The exact projection lives
+ * in providers/grok-workspace-trust.ts (verified live against grok 1.0.4).
+ *
+ * ★History: grok trust was originally wired into the legacy ProviderCliAdapter
+ * spawn path and was orphaned when that adapter was deleted in the spec
+ * migration, silently regressing first-run launches in workspaces carrying
+ * repo-local config (.mcp.json / .grok/lsp.json / hooks). Selecting the scheme
+ * from the spec is what reattaches it to the live path.
  */
 export interface PreLaunchTrustScheme {
-    scheme: 'kimi_workspace_file';
+    scheme: 'kimi_workspace_file' | 'grok_toml_file';
 }
 
 export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;

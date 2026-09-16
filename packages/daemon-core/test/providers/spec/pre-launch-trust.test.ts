@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { applyPreLaunchTrust } from '../../../src/providers/spec/pre-launch-trust.js';
 import { resolveLaunchTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
+import type { ResolvedTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
 
 describe('applyPreLaunchTrust', () => {
     let tmp: string;
@@ -81,5 +82,108 @@ describe('applyPreLaunchTrust', () => {
     it('does not throw on malformed existing JSON', () => {
         fs.writeFileSync(settingsPath, '{ not valid json', 'utf8');
         expect(() => applyPreLaunchTrust({ settings_path: settingsPath, key: 'trustedWorkspaces' }, plan())).not.toThrow();
+    });
+});
+
+/**
+ * grok_toml_file — the SHARED-store named scheme.
+ *
+ * The distinction from kimi_workspace_file is load-bearing. kimi writes one
+ * file per workspace, so file existence IS the idempotence key. grok writes
+ * every trusted folder into one shared `trusted_folders.toml`, so by the time
+ * a second workspace launches the file already exists — keying on existence
+ * would silently skip every workspace after the first. Idempotence therefore
+ * has to be keyed on the `[folders."<realpath>"]` table, and the write has to
+ * append so sibling entries (and any explicit `trusted = false` the user set)
+ * survive untouched.
+ */
+describe('applyPreLaunchTrust — grok_toml_file', () => {
+    let tmp: string;
+    let storePath: string;
+    let workspace: string;
+
+    beforeEach(() => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-grok-'));
+        storePath = path.join(tmp, '.grok', 'trusted_folders.toml');
+        workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-grok-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        fs.rmSync(workspace, { recursive: true, force: true });
+    });
+
+    function grokPlan(): ResolvedTrustPlan {
+        return {
+            provider: 'grok-cli',
+            workspaceRealpath: fs.realpathSync(workspace),
+            storePath,
+            scope: 'user',
+            origin: 'user_confirmed',
+            sessionKey: 'session-grok',
+            lifecycle: { kind: 'persistent', expiresAt: null },
+        };
+    }
+
+    it('creates the store and writes the folder table for the workspace realpath', () => {
+        const added = applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        const real = fs.realpathSync(workspace);
+        expect(added).toBe(real);
+        const toml = fs.readFileSync(storePath, 'utf8');
+        expect(toml).toContain(`[folders."${real}"]`);
+        expect(toml).toMatch(/trusted = true/);
+        expect(toml).toMatch(/decided_at = \d+/);
+    });
+
+    it('appends to a populated shared store without disturbing existing entries', () => {
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(
+            storePath,
+            '[folders."/already/trusted"]\ntrusted = true\ndecided_at = 111\n',
+            'utf8',
+        );
+        applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        const toml = fs.readFileSync(storePath, 'utf8');
+        expect(toml).toContain('[folders."/already/trusted"]');
+        expect(toml).toContain('decided_at = 111');
+        expect(toml).toContain(`[folders."${fs.realpathSync(workspace)}"]`);
+    });
+
+    it('★writes this workspace even though the shared store already exists', () => {
+        // The kimi rule (skip if the file exists) would drop this write entirely.
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, '[folders."/some/other/dir"]\ntrusted = true\n', 'utf8');
+        const added = applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        expect(added).toBe(fs.realpathSync(workspace));
+    });
+
+    it('is idempotent per folder — a second call adds no duplicate table', () => {
+        applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        const second = applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        expect(second).toBeNull();
+        const header = `[folders."${fs.realpathSync(workspace)}"]`;
+        const occurrences = fs.readFileSync(storePath, 'utf8')
+            .split(/\r?\n/)
+            .filter((line) => line.trim() === header);
+        expect(occurrences).toHaveLength(1);
+    });
+
+    it('never flips an existing trusted = false decision', () => {
+        const real = fs.realpathSync(workspace);
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, `[folders."${real}"]\ntrusted = false\ndecided_at = 222\n`, 'utf8');
+        expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan())).toBeNull();
+        const toml = fs.readFileSync(storePath, 'utf8');
+        expect(toml).toContain('trusted = false');
+        expect(toml).not.toContain('trusted = true');
+    });
+
+    it('separates a table from a store whose last line lacks a trailing newline', () => {
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, '[folders."/no/trailing/newline"]\ntrusted = true', 'utf8');
+        applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+        const toml = fs.readFileSync(storePath, 'utf8');
+        expect(toml).not.toMatch(/trusted = true\[folders/);
+        expect(toml).toContain(`\n[folders."${fs.realpathSync(workspace)}"]`);
     });
 });
