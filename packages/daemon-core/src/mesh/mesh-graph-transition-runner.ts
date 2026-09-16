@@ -65,7 +65,7 @@
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { proposeTurnCompletion, type CompletionProposalSource, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
+import { proposeTurnCompletion, type CompletionProposalSource, type CompletionRejectionReason, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { LOG } from '../logging/logger.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -130,8 +130,10 @@ export interface MeshTerminalCommitInput {
 export interface MeshTerminalCommitResult {
     /** The queue row after the transition (null when the task id is unknown). */
     entry: MeshWorkQueueEntry | null;
-    /** False only when the task id is unknown — the fence never refuses a first terminal. */
+    /** False when the task is unknown or a worker report fails the causal fence. */
     committed: boolean;
+    /** Typed causal refusal, distinct from a missing queue row. */
+    rejectionReason?: CompletionRejectionReason;
     /** True when the row was ALREADY terminal with the same status — a replayed event. */
     duplicate: boolean;
     /** Downstream graph nodes materialized by this transition (empty for unlinked tasks). */
@@ -326,24 +328,28 @@ export function commitTaskTerminalAndAdvanceGraph(
         const entry = store.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false, materializedNodeIds: [] as string[] };
         const priorTerminal = entry.status === 'completed' || entry.status === 'failed' || entry.status === 'cancelled';
+        // Worker reports are reducer-authorized proposals (worker-MCP design §4),
+        // unlike legacy status writers whose best-effort settle / terminal
+        // corrections were intentional in d18e9838 and 43f82a5c. A valid token
+        // does not authorize a stale attempt, even against a terminal queue row.
+        const requiresReducerAcceptance = terminal.source === 'worker_tool_report';
 
         // REPLAY FENCE (design :332-334): a replayed terminal event carries the same
         // outcome for an already-terminal row — accept it as a duplicate and perform
         // NO further transition (no new output version, no node advance, no outbox).
-        if (priorTerminal && entry.status === terminal.status) {
+        if (!requiresReducerAcceptance && priorTerminal && entry.status === terminal.status) {
             return { entry, committed: true, duplicate: true, materializedNodeIds: [] as string[] };
         }
 
         // Step 1 — fence and accept the terminal ATTEMPT. This is the one settle call
         // that d18e9838 placed in updateTaskStatus; it moved here so the attempt and
         // the row can never diverge regardless of which completion path fires first.
-        // Skipped for terminal→terminal corrections (the attempt already committed an
-        // outcome; a conflicting proposal would be rejected without mutating anyway).
-        // Idempotent by construction: an identical repeat returns committed+duplicate,
-        // a conflicting one is rejected WITHOUT mutating — and never fails the flip.
-        if (!priorTerminal) {
+        // Legacy terminal corrections retain their queue-authoritative contract.
+        // Worker reports must pass the reducer BEFORE replay handling or any
+        // output/queue/graph effects. Rejection leaves its diagnostic event durable.
+        if (!priorTerminal || requiresReducerAcceptance) {
             try {
-                proposeTurnCompletion({
+                const decision = proposeTurnCompletion({
                     meshId: terminal.meshId,
                     taskId: terminal.taskId,
                     attemptId: terminal.attemptId,
@@ -353,7 +359,16 @@ export function commitTaskTerminalAndAdvanceGraph(
                     occurredAtMs: terminal.occurredAtMs,
                     reason: terminal.reason ?? `task_status_terminal:${terminal.status}`,
                 });
-            } catch { /* reducer unavailable — the row write below still stands (pre-Stage-5 shadow mode) */ }
+                if (requiresReducerAcceptance && !decision.committed) {
+                    return { entry, committed: false, duplicate: false, rejectionReason: decision.reason, materializedNodeIds: [] as string[] };
+                }
+            } catch (error) {
+                if (requiresReducerAcceptance) throw error;
+                // Legacy reducer-unavailable fallback (pre-Stage-5 shadow mode).
+            }
+        }
+        if (priorTerminal && entry.status === terminal.status) {
+            return { entry, committed: true, duplicate: true, materializedNodeIds: [] as string[] };
         }
 
         // Step 2 — persist the normalized output version (append-only; a later
@@ -399,9 +414,11 @@ export function commitTaskTerminalAndAdvanceGraph(
     // Step 9 — AFTER commit: drain the outbox (queue wake + delivery marks). No
     // provider/git/network work happened inside the transaction; the wake handler
     // only SCHEDULES the ordinary queue trigger (setImmediate) outside the lock.
-    try {
-        drainMeshGraphOutbox(terminal.meshId);
-    } catch { /* drain is best-effort — the committed state stands. NOTE: there is no periodic re-drain; every drainMeshGraphOutbox call site is event-driven (post-commit), so a row that fails here stays 'pending' until the next graph event for this mesh drains it. Retention never collects 'pending' rows for exactly this reason. */ }
+    if (result.committed) {
+        try {
+            drainMeshGraphOutbox(terminal.meshId);
+        } catch { /* drain is best-effort — the committed state stands. NOTE: there is no periodic re-drain; every drainMeshGraphOutbox call site is event-driven (post-commit), so a row that fails here stays 'pending' until the next graph event for this mesh drains it. Retention never collects 'pending' rows for exactly this reason. */ }
+    }
     return result;
 }
 

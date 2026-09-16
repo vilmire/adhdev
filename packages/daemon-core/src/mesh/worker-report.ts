@@ -489,6 +489,9 @@ export function acceptWorkerCompletionReport(
     }
 
     if (!commit.committed) {
+        if (commit.rejectionReason) {
+            return { accepted: false, refusal: 'rejected_by_reducer', detail: commit.rejectionReason };
+        }
         return { accepted: false, refusal: 'unknown_task', detail: `no queue row for task ${identity.taskId}` };
     }
 

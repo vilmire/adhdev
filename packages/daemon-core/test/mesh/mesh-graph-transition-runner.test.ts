@@ -28,6 +28,8 @@ import { tmpdir } from 'os';
 //         delegate their terminal branch.
 //     (4) SETTLE OWNERSHIP — the attempt settle (proposeTurnCompletion) happens
 //         exactly once per terminal transition, inside the runner.
+//     (5) WORKER REPORT AUTHORITY — causal refusal prevents acceptance and all
+//         terminal effects, including queue replay/correction and token expiry.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-graph-runner-${randomUUID().slice(0, 8)}`);
 const testConfigDir = path.join(testTmpDir, '.adhdev');
@@ -64,6 +66,8 @@ import {
 } from '../../src/mesh/mesh-graph-transition-runner.js';
 import { MESH_UPSTREAM_DATA_PREAMBLE } from '../../src/mesh/mesh-graph-input-binding.js';
 import * as turnLedger from '../../src/mesh/mesh-turn-ledger.js';
+import { acceptWorkerCompletionReport, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report.js';
+import { mintWorkerTaskToken, verifyWorkerTaskToken, __resetWorkerTaskTokensForTest } from '../../src/mesh/worker-mcp-isolation.js';
 import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
@@ -93,6 +97,7 @@ function cleanup(id: string) {
 afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    __resetWorkerTaskTokensForTest();
 });
 
 function enqueue(mesh: string, message: string, opts: Record<string, unknown> = {}) {
@@ -276,6 +281,103 @@ describe('settle ownership — the runner, not the callers, settles the attempt'
 });
 
 // ── 3. OUTPUT PERSISTENCE: normalized envelope, same transaction ─────────────
+
+describe('worker report reducer authority', () => {
+    it.each(['stale_attempt', 'session_mismatch', 'already_terminal', 'unknown_attempt', 'reducer_error'] as const)(
+        'refuses %s without completing the queue or advancing the graph', (reason) => {
+            const id = meshId(reason);
+            try {
+                const { taskA, taskB, nodeA, nodeB, graphId } = buildTwoNodeGraph(id, { blockB: true });
+                const store = MeshRuntimeStore.getInstance();
+                store.updateQueueEntry({ ...store.findQueueEntryById(id, taskA.id)!, status: 'assigned', assignedSessionId: 'worker' });
+                const old = turnLedger.openTurnAttempt({ meshId: id, taskId: taskA.id, dispatchNonce: 1, sessionId: 'worker' }).attempt;
+                let tokenAttemptId = old.attemptId;
+                if (reason === 'stale_attempt') {
+                    turnLedger.closeAttemptForReassignment({ meshId: id, taskId: taskA.id, reason: 'retry' });
+                    turnLedger.openTurnAttempt({ meshId: id, taskId: taskA.id, dispatchNonce: 2, sessionId: 'worker' });
+                } else if (reason === 'already_terminal') {
+                    expect(turnLedger.proposeTurnCompletion({ meshId: id, taskId: taskA.id, attemptId: old.attemptId, outcome: 'failed', source: 'provider_event' }).committed).toBe(true);
+                } else if (reason === 'unknown_attempt') {
+                    tokenAttemptId = turnLedger.openTurnAttempt({ meshId: id, taskId: taskB.id, dispatchNonce: 1, sessionId: 'worker' }).attempt.attemptId;
+                } else if (reason === 'reducer_error') {
+                    vi.spyOn(turnLedger, 'proposeTurnCompletion').mockImplementation(() => { throw new Error('reducer unavailable'); });
+                }
+                const token = mintWorkerTaskToken({ meshId: id, taskId: taskA.id, attemptId: tokenAttemptId, sessionId: reason === 'session_mismatch' ? 'wrong-worker' : 'worker' });
+                const gs = store.graphStore();
+                const queueBefore = store.getQueueEntries(id);
+                const attemptBefore = store.getCurrentTurnAttempt(id, taskA.id);
+                const result = acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Late completion' });
+
+                // Assert the actual acceptance decision and all terminal effects,
+                // using the real reducer/SQLite graph rather than a routing spy.
+                expect.soft(result).toEqual({ accepted: false, refusal: 'rejected_by_reducer', detail: reason === 'reducer_error' ? 'reducer unavailable' : reason });
+                expect.soft(store.getQueueEntries(id)).toEqual(queueBefore);
+                expect.soft(store.getCurrentTurnAttempt(id, taskA.id)).toEqual(attemptBefore);
+                expect.soft(gs.getLatestOutput(taskA.id)).toBeNull();
+                expect.soft(gs.getNode(graphId, nodeA)?.state).toBe('declared');
+                expect.soft(gs.getNode(graphId, nodeB)?.state).toBe('declared');
+                expect.soft(gs.listOutboxEvents(id)).toEqual([]);
+                expect.soft(verifyWorkerTaskToken(token.token)).not.toBeNull();
+                expect(store.listTurnEventsByKind(id, WORKER_REPORT_EVENT_KIND)).toHaveLength(1);
+            } finally { cleanup(id); }
+        },
+    );
+
+    it.each(['completed', 'failed'] as const)('rejects an obsolete report against an already %s queue row', (status) => {
+        const id = meshId(`terminal_${status}`);
+        try {
+            const task = enqueue(id, 'work');
+            const store = MeshRuntimeStore.getInstance();
+            const old = turnLedger.openTurnAttempt({ meshId: id, taskId: task.id, dispatchNonce: 1, sessionId: 'worker' }).attempt;
+            turnLedger.closeAttemptForReassignment({ meshId: id, taskId: task.id, reason: 'retry' });
+            const current = turnLedger.openTurnAttempt({ meshId: id, taskId: task.id, dispatchNonce: 2, sessionId: 'worker' }).attempt;
+            expect(commitTaskTerminalAndAdvanceGraph({ meshId: id, taskId: task.id, status, attemptId: current.attemptId, sessionId: 'worker', source: 'provider_event' }).committed).toBe(true);
+            // A surviving token must still face causal checks before a queue replay
+            // or terminal correction can be accepted (design §4, §9.2.2).
+            const token = mintWorkerTaskToken({ meshId: id, taskId: task.id, attemptId: old.attemptId, sessionId: 'worker' });
+            const outputBefore = store.graphStore().getLatestOutput(task.id);
+            expect(acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary: 'Obsolete' })).toEqual({ accepted: false, refusal: 'rejected_by_reducer', detail: 'stale_attempt' });
+            expect(store.findQueueEntryById(id, task.id)?.status).toBe(status);
+            expect(store.graphStore().getLatestOutput(task.id)).toEqual(outputBefore);
+            expect(verifyWorkerTaskToken(token.token)).not.toBeNull();
+        } finally { cleanup(id); }
+    });
+
+    it('accepts a current report and a reducer-approved replay exactly once', () => {
+        const id = meshId('worker_success');
+        try {
+            const { taskA, nodeA, nodeB, graphId } = buildTwoNodeGraph(id, { blockB: true });
+            const store = MeshRuntimeStore.getInstance();
+            const attempt = turnLedger.openTurnAttempt({ meshId: id, taskId: taskA.id, dispatchNonce: 1, sessionId: 'worker' }).attempt;
+            const token = mintWorkerTaskToken({ meshId: id, taskId: taskA.id, attemptId: attempt.attemptId, sessionId: 'worker' });
+            const report = { outcome: 'completed' as const, summary: 'Current completion' };
+            expect(acceptWorkerCompletionReport({ token: token.token }, report)).toMatchObject({ accepted: true, duplicate: false });
+            expect(store.findQueueEntryById(id, taskA.id)?.status).toBe('completed');
+            expect(store.getTurnAttempt(attempt.attemptId)?.terminalOutcome).toBe('completed');
+            expect(store.graphStore().getNode(graphId, nodeA)?.state).toBe('completed');
+            expect(store.graphStore().getNode(graphId, nodeB)?.state).toBe('materialized');
+            expect(verifyWorkerTaskToken(token.token)).toBeNull();
+            const outputBefore = store.graphStore().getLatestOutput(taskA.id);
+            const outboxBefore = store.graphStore().listOutboxEvents(id);
+            const replayToken = mintWorkerTaskToken({ meshId: id, taskId: taskA.id, attemptId: attempt.attemptId, sessionId: 'worker' });
+            expect(acceptWorkerCompletionReport({ token: replayToken.token }, report)).toMatchObject({ accepted: true, duplicate: true });
+            expect(store.graphStore().getLatestOutput(taskA.id)).toEqual(outputBefore);
+            expect(store.graphStore().listOutboxEvents(id)).toEqual(outboxBefore);
+            expect(store.listTurnEventsByKind(id, WORKER_REPORT_EVENT_KIND)).toHaveLength(1);
+        } finally { cleanup(id); }
+    });
+
+    it('retains intentional legacy best-effort settlement and terminal corrections', () => {
+        const id = meshId('legacy_contract');
+        try {
+            const task = enqueue(id, 'work');
+            vi.spyOn(turnLedger, 'proposeTurnCompletion').mockReturnValue({ committed: false, reason: 'unknown_attempt' });
+            expect(updateTaskStatus(id, task.id, 'failed')?.status).toBe('failed');
+            expect(updateTaskStatus(id, task.id, 'completed')?.status).toBe('completed');
+            expect(MeshRuntimeStore.getInstance().graphStore().getLatestOutput(task.id)?.version).toBe(2);
+        } finally { cleanup(id); }
+    });
+});
 
 describe('output persistence (step 2)', () => {
     it('persists one immutable output version with a stable digest', () => {
