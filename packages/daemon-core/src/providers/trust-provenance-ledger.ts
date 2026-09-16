@@ -68,7 +68,9 @@ function resolveSettingsStorePath(declaredPath: string, storeHome: string, works
 /**
  * Resolve array-based trust stores. Named schemes retain their provider-owned
  * behavior until that provider receives a private HOME; this intentionally
- * leaves kimi's current KIMI_CODE_HOME/os.homedir() behavior unchanged.
+ * leaves kimi's KIMI_CODE_HOME/os.homedir() and grok's GROK_HOME/os.homedir()
+ * behavior unchanged. Both therefore return null here and are materialized by
+ * the driver's named-scheme branch instead.
  */
 export function resolveLaunchTrustPlan(input: ResolveTrustPlanInput): ResolvedTrustPlan | null {
     if ('scheme' in input.trust) return null;
@@ -94,6 +96,7 @@ export function loadPreLaunchTrustFromSpecPath(specPath: unknown): PreLaunchTrus
         if (!trust || typeof trust !== 'object' || Array.isArray(trust)) return null;
         const candidate = trust as { scheme?: unknown; settings_path?: unknown; key?: unknown };
         if (candidate.scheme === 'kimi_workspace_file') return { scheme: 'kimi_workspace_file' };
+        if (candidate.scheme === 'grok_toml_file') return { scheme: 'grok_toml_file' };
         if (typeof candidate.settings_path === 'string' && candidate.settings_path.trim()
             && typeof candidate.key === 'string' && candidate.key.trim()) {
             return { settings_path: candidate.settings_path, key: candidate.key };

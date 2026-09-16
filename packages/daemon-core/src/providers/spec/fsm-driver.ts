@@ -45,6 +45,7 @@ import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
 import { SendSubmitEngine } from './send-submit-engine.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
+import { applyGrokWorkspaceTrust } from '../grok-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
@@ -565,6 +566,16 @@ export class FsmDriver implements ISpecDriver {
                 // Kimi has no worker-private HOME yet. Keep its current
                 // KIMI_CODE_HOME/os.homedir() behavior until that isolation work lands.
                 applyKimiWorkspaceTrust(this.opts.workingDir);
+            } else if ('scheme' in this.spec.pre_launch_trust
+                && this.spec.pre_launch_trust.scheme === 'grok_toml_file') {
+                // Same standing as kimi: no worker-private HOME yet, so the
+                // provider module keeps owning GROK_HOME/os.homedir() resolution.
+                // Unlike the array stores below this is NOT a leak risk that
+                // warrants failing closed — grok's writer appends one scoped
+                // `[folders."<realpath>"]` table and refuses over-broad roots,
+                // so it can never widen an unrelated grant the way pushing into
+                // a shared trustedWorkspaces array could.
+                applyGrokWorkspaceTrust(this.opts.workingDir);
             } else {
                 // Fail closed for array stores: resolving `~` here would use the
                 // daemon's real HOME and recreate the worker trust leak.

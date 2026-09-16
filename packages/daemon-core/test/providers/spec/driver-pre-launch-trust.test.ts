@@ -211,6 +211,61 @@ describe('FsmDriver -- pre_launch_trust', () => {
     });
 
     /**
+     * ★GROK-TRUST-REWIRE regression guard.
+     *
+     * grok's folder-trust writer existed and was unit-tested the whole time, but
+     * its only CALLER was the legacy ProviderCliAdapter's spawn path. When that
+     * adapter was deleted in the spec migration the module was orphaned: every
+     * one of its direct unit tests stayed green while the live spec path wrote
+     * nothing, so a grok launch in a workspace carrying repo-local config
+     * (.mcp.json / .grok/lsp.json / hooks) stranded on a prompt that renders no
+     * radio rows and therefore cannot be answered by the FSM's approval
+     * machinery, by auto-approve, or from the dashboard.
+     *
+     * A module-level test cannot catch that class of regression — only driving
+     * the real FsmDriver.start() proves the production path reaches the writer.
+     * That is precisely what this test does, so it must not be reduced to a
+     * direct applyGrokWorkspaceTrust() call.
+     */
+    it('scheme "grok_toml_file" appends the folder-trust table on start()', () => {
+        const grokHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-grok-home-'));
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pretrust-grok-ws-'));
+        const prevEnv = process.env.GROK_HOME;
+        process.env.GROK_HOME = grokHome;
+        const factory = new StubFactory();
+        const driver = new FsmDriver({
+            specPath: writeSpec(baseSpec({ pre_launch_trust: { scheme: 'grok_toml_file' } })),
+            workingDir: workspace,
+            hotReload: false,
+            transportFactory: factory,
+        });
+        try {
+            driver.start();
+            const store = path.join(grokHome, 'trusted_folders.toml');
+            expect(fs.existsSync(store)).toBe(true);
+            const toml = fs.readFileSync(store, 'utf8');
+            expect(toml).toContain(`[folders."${fs.realpathSync(workspace)}"]`);
+            expect(toml).toMatch(/trusted = true/);
+            expect(toml).toMatch(/decided_at = \d+/);
+        } finally {
+            driver.shutdown();
+            if (prevEnv === undefined) delete process.env.GROK_HOME;
+            else process.env.GROK_HOME = prevEnv;
+            fs.rmSync(grokHome, { recursive: true, force: true });
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('the published grok-cli spec declares the grok_toml_file scheme', () => {
+        const specPath = path.resolve(
+            __dirname, '../../../../../../adhdev-providers/cli/grok-cli/specs/1.0.json',
+        );
+        if (!fs.existsSync(specPath)) return; // providers submodule not checked out
+        const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+        expect(spec.pre_launch_trust).toEqual({ scheme: 'grok_toml_file' });
+    });
+
+    /**
      * ★AGY-WORKER-TRUST-STALL diagnosability (2026-09-13).
      *
      * Fail-closed is CORRECT here and stays — resolving `~` against the daemon's
@@ -340,8 +395,9 @@ describe('FsmDriver -- pre_launch_trust', () => {
     it('validator accepts the scheme form and rejects unknown/mixed declarations', async () => {
         const { validateFsmSpec } = await import('../../../src/providers/spec/fsm-loader.js');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } }))).toEqual([]);
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'grok_toml_file' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'unknown_scheme' } })))
-            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file"');
+            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file" or "grok_toml_file"');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file', key: 'x' } })))
             .toContain('pre_launch_trust with scheme excludes settings_path/key');
     });

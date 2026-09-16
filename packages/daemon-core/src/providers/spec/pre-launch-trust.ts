@@ -27,6 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PreLaunchTrust } from './fsm-types.js';
 import { serializeKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
+import { serializeGrokWorkspaceTrust } from '../grok-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import { LOG } from '../../logging/logger.js';
 
@@ -54,11 +55,47 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
     }
     try {
         if ('scheme' in trust) {
-            if (trust.scheme !== 'kimi_workspace_file') return null;
-            if (fs.existsSync(settingsPath)) return null;
-            fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-            fs.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), 'utf8');
-            return real;
+            if (trust.scheme === 'kimi_workspace_file') {
+                // One file PER WORKSPACE: the file's mere existence means this
+                // workspace was already decided, so existence is the idempotence key.
+                if (fs.existsSync(settingsPath)) return null;
+                fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+                fs.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), 'utf8');
+                return real;
+            }
+            if (trust.scheme === 'grok_toml_file') {
+                // ★One SHARED TOML store for every folder. Existence therefore
+                // proves nothing about THIS workspace (the file is already there
+                // the moment any other folder was trusted), so idempotence is
+                // keyed on the `[folders."<real>"]` table instead — and the write
+                // must APPEND so sibling entries survive. Matching the header
+                // line is enough to stay idempotent without a TOML parser; a
+                // false negative merely rewrites an equivalent entry.
+                //
+                // An existing entry is never rewritten, which is what preserves a
+                // user's explicit `trusted = false` decision.
+                let existing = '';
+                try {
+                    existing = fs.readFileSync(settingsPath, 'utf8');
+                } catch (err: any) {
+                    if (err?.code !== 'ENOENT') throw err;
+                }
+                const header = `[folders."${real.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+                if (existing.split(/\r?\n/).some((line) => line.trim() === header)) {
+                    LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
+                    return null;
+                }
+                const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+                fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+                fs.appendFileSync(
+                    settingsPath,
+                    `${separator}${serializeGrokWorkspaceTrust(real)}`,
+                    { encoding: 'utf8', mode: 0o600 },
+                );
+                LOG.info('pre-launch-trust', `materialized ${plan.origin} grok folder trust in ${settingsPath}`);
+                return real;
+            }
+            return null;
         }
 
         const key = trust.key;
