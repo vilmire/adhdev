@@ -341,6 +341,79 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(result.cliArgs.join(' ')).not.toContain(result.env.ADHDEV_WORKER_SESSION_BIND)
     expect(result.workerIsolation?.configPath).toBeUndefined()
   })
+
+  /**
+   * ★WORKER-MCP-SHADOW regression (defect ②).
+   *
+   * The defect: the `empty_mcp_config` isolation rule unconditionally pointed
+   * `--mcp-config` at a zero-server file and added `--strict-mcp-config`. Under
+   * strict mode the CLI reads ONLY that file, so the worker config the SAME
+   * launch had just written — the one carrying the minimal worker toolset — was
+   * shadowed and the worker booted with zero tools.
+   *
+   * ★This asserts the PROPERTY, not a proxy: it parses the file that
+   * `--mcp-config` actually points at and requires a server entry in it. A test
+   * that merely checked "configPath was written" stayed green throughout the
+   * bug, because the config WAS written — it was just never read.
+   */
+  it('★--strict-mcp-config points at the worker config that has the toolset, not an empty file', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-claude-worker-'))
+    __tmpDirsToClean.push(workspace)
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'claude-cli',
+      workspace,
+      isolation: claudeIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_claude_worker',
+      bindContext: { meshId: 'mesh_claude', sessionId: 'sess_claude_worker', spawnedForTaskId: 'task_claude' },
+    })
+
+    // Strict mode is still on — this fix does not weaken isolation.
+    expect(result.cliArgs).toContain('--strict-mcp-config')
+
+    const flagIndex = result.cliArgs.indexOf('--mcp-config')
+    expect(flagIndex).toBeGreaterThanOrEqual(0)
+    const strictConfigPath = result.cliArgs[flagIndex + 1]
+    expect(existsSync(strictConfigPath)).toBe(true)
+
+    // THE property: the file the CLI is forced to read must contain the worker
+    // server. Before the fix this parsed to `{ mcpServers: {} }`.
+    const strictConfig = JSON.parse(readFileSync(strictConfigPath, 'utf-8'))
+    const serverNames = Object.keys(strictConfig.mcpServers || {})
+    expect(serverNames).toHaveLength(1)
+
+    const entry = strictConfig.mcpServers[serverNames[0]]
+    // ...and it must be the WORKER surface, not the coordinator's mesh mode.
+    expect(entry.args).toContain('--worker')
+    expect(entry.args).not.toContain('--repo-mesh')
+    expect(entry.env?.ADHDEV_WORKER_SESSION_BIND).toMatch(/^wsb_/)
+
+    // The isolation win is preserved: the written config is the one the daemon
+    // controls, and it carries exactly one (worker) server.
+    expect(realpathSync(strictConfigPath)).toBe(realpathSync(result.workerIsolation!.configPath!))
+    expect(result.workerIsolation?.configHasServer).toBe(true)
+  })
+
+  it('★keeps pointing at an EMPTY config when no worker server was written (Phase A shape)', () => {
+    // No bindContext ⇒ no server entry ⇒ the strict flag must still aim at a
+    // zero-server file. This is the branch that makes the fix above narrow:
+    // without it, "point at the worker config" would degrade isolation for
+    // every launch that has no worker toolset to deliver.
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-claude-nobind-'))
+    __tmpDirsToClean.push(workspace)
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'claude-cli',
+      workspace,
+      isolation: claudeIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_claude_nobind',
+    })
+
+    expect(result.cliArgs).toContain('--strict-mcp-config')
+    const strictConfigPath = result.cliArgs[result.cliArgs.indexOf('--mcp-config') + 1]
+    expect(JSON.parse(readFileSync(strictConfigPath, 'utf-8'))).toEqual({ mcpServers: {} })
+    expect(result.workerIsolation?.configHasServer).toBeUndefined()
+  })
 })
 
 /**

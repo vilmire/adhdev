@@ -904,6 +904,17 @@ export interface WorkerMcpIsolation {
     workerHome?: string;
     /** Config file actually written, if any. */
     configPath?: string;
+    /**
+     * True when `configPath` carries an actual worker MCP server entry (Phase B)
+     * rather than Phase A's zero-server config.
+     *
+     * Callers that FORCE a provider to read one specific config file — claude's
+     * `empty_mcp_config` rule pairs `--mcp-config <file>` with
+     * `--strict-mcp-config` — must point at this file instead of an empty one
+     * when this is true. Otherwise the isolation arg shadows the very worker
+     * toolset that was just written, and the worker boots with zero tools.
+     */
+    configHasServer?: boolean;
     /** Runtime delivery descriptor for providers without an auto-import path. */
     delivery?: WorkerMcpConfigOverrideDelivery;
     /**
@@ -1036,6 +1047,7 @@ export function resolveWorkerMcpIsolation(
             token: input.token,
             ...(pendingBind ? { bind: pendingBind.bind } : {}),
         });
+        if (input.server) result.configHasServer = true;
         if (pendingBind) result.bind = pendingBind.bind;
         // The bind itself is a secret and never enters the note text.
         notes.push(
