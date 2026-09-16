@@ -31,6 +31,7 @@ import type {
     Control, NotificationRule, DelegateTrigger,
     NativeHistoryConfig, SectionDef, ExtractTitle, ExtractButtons,
 } from './types.js';
+import type { SignalRule } from './signal-rules.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Conditions (v4)
@@ -392,6 +393,22 @@ export interface CliSpecV4 {
     states: FsmState[];
     transitions: FsmTransition[];
     control_bar?: Control[];
+    /**
+     * Declarative screen-signal extraction — see providers/spec/signal-rules.ts.
+     *
+     * Each rule names a pattern to look for in the rendered frame and captures
+     * named parameters out of it; a match is published to the coordinator as a
+     * STRUCTURED event (rule id + kind + params), never as prose. This is how a
+     * provider announcement the FSM has no state for — "you've hit your usage
+     * limit until 15:45" — becomes something the coordinator can act on.
+     *
+     * Orthogonal to `notifications`/`delegate` (state-keyed, no captures) and to
+     * `transitions` (which describe the machine's state; a signal deliberately
+     * does NOT move the FSM). Adding a signal type is a spec-only edit.
+     *
+     * Omitted by every spec that needs none — the engine then does nothing.
+     */
+    signal_rules?: SignalRule[];
     notifications?: NotificationRule[];
     delegate?: DelegateTrigger[];
     native_history?: NativeHistoryConfig;

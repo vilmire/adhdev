@@ -33,6 +33,10 @@ import {
 import { evaluateFsm, stableRegionKey, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
 import type { SignalSnapshot } from './signal-envelope.js';
 import {
+    compileSignalRules, evaluateSignalRules, SignalEmissionGate,
+    type CompiledSignalRule, type SignalDetection,
+} from './signal-rules.js';
+import {
     type CliSpecV4, type FsmState, type FsmTransition,
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
@@ -69,6 +73,16 @@ export type DashboardEvent =
         controls: { id: string; label: string; action_type: string }[] }
     | { kind: 'notification'; id: string; title: string; body: string }
     | { kind: 'delegate'; id: string; task: string }
+    /**
+     * A spec-declared `signal_rules[]` entry matched the rendered frame.
+     *
+     * `params` is a STRUCTURED capture map, deliberately not a rendered
+     * sentence: the values are provider-authored untrusted text that reaches a
+     * coordinator LLM, so the consumer must place them in quoted fields of a
+     * fixed template rather than splice them into prose. Already sanitized
+     * (control chars stripped, length-capped) by the detector.
+     */
+    | { kind: 'signal_detected'; signal: SignalDetection }
     | { kind: 'spec_trace'; entries: TraceEntry[] }
     | {
         kind: 'exit';
@@ -401,6 +415,13 @@ export class FsmDriver implements ISpecDriver {
     private spec!: CliSpecV4;
     private adapter: TerminalAdapter;
     private listeners = new Set<(ev: DashboardEvent) => void>();
+
+    // ── Spec-declared signal rules (signal-rules.ts). Compiled once per spec
+    //    load; the gate collapses a banner that repaints every frame into one
+    //    emission per cooldown window. Empty for every spec that declares none,
+    //    which is the no-op default.
+    private signalRules: CompiledSignalRule[] = [];
+    private readonly signalGate = new SignalEmissionGate();
 
     // ── The entire FSM state: which node we're in, and when we entered it.
     private currentStateId = '';
@@ -913,7 +934,19 @@ export class FsmDriver implements ISpecDriver {
         const res = loadFsmSpec(this.opts.specPath);
         if (!res.ok) throw new Error(`fsm spec invalid: ${res.errors.join('; ')}`);
         this.spec = res.spec;
+        this.compileSignalRules();
         reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
+    }
+
+    /** Compile the spec's declared signal_rules once per spec load (never per
+     *  frame) and reset the emission gate, so a hot-reloaded rule set starts
+     *  from a clean cooldown state rather than inheriting the old rules' clocks. */
+    private compileSignalRules(): void {
+        this.signalRules = compileSignalRules(
+            (this.spec as { signal_rules?: unknown }).signal_rules,
+            this.specTag(),
+        );
+        this.signalGate.reset();
     }
 
     private buildAdapterOpts(): TerminalAdapterOpts {
@@ -976,6 +1009,7 @@ export class FsmDriver implements ISpecDriver {
                     return;
                 }
                 this.spec = res.spec;
+                this.compileSignalRules();
                 reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
                 LOG.info('FsmDriver', `[${this.specTag()}] spec hot-reloaded`);
                 // Re-evaluate immediately with the new transitions.
@@ -1179,6 +1213,14 @@ export class FsmDriver implements ISpecDriver {
             || !sameControls(this.currentEval.controls, next.controls);
 
         this.currentEval = next;
+
+        // Signal rules are evaluated on EVERY frame, not only when the FSM state
+        // changed: a usage-limit banner can appear while the machine sits in one
+        // state the whole time, so gating this on `changed` below would miss the
+        // very case the feature exists for. Re-emission is controlled by the
+        // rule's own cooldown/fingerprint gate instead.
+        this.evaluateSignalRulesForFrame(sections, screen);
+
         if (this.pickerInProgress) this.tryAdvancePicker(screen);
 
         if (changed) {
@@ -1465,6 +1507,41 @@ export class FsmDriver implements ISpecDriver {
     // ────────────────────────────────────────────────────────────────────
     // Notifications & delegates
     // ────────────────────────────────────────────────────────────────────
+
+    /**
+     * Evaluate the spec's signal rules against the current frame and emit one
+     * `signal_detected` per rule that matched AND passed its emission gate.
+     *
+     * Wrapped in try/catch and fully no-op when the spec declares no rules:
+     * this runs on the status-evaluation hot path, so a malformed rule must
+     * never be able to break status detection. Detection is advisory — losing a
+     * signal is strictly preferable to wedging the FSM.
+     */
+    private evaluateSignalRulesForFrame(sections: ResolvedSection[], fullScreen: string): void {
+        if (this.signalRules.length === 0) return;
+        try {
+            const detections = evaluateSignalRules(
+                this.signalRules,
+                fullScreen,
+                (id) => sectionText(sections, id, fullScreen) || null,
+                this.signalGate,
+                Date.now(),
+            );
+            for (const signal of detections) {
+                // info-level keeps rule id + kind + param NAMES only. The captured
+                // VALUES are provider-authored text, so they stay at debug — the
+                // same split state.title already uses.
+                LOG.info(
+                    'FsmDriver',
+                    `[${this.specTag()}] signal ${signal.ruleId} (${signal.kind}) matched; params=[${Object.keys(signal.params).join(',')}]`,
+                );
+                LOG.debug('FsmDriver', `[${this.specTag()}] signal ${signal.ruleId} params=${JSON.stringify(signal.params)}`);
+                this.emit({ kind: 'signal_detected', signal });
+            }
+        } catch (e: any) {
+            LOG.warn('FsmDriver', `[${this.specTag()}] signal rule evaluation failed: ${e?.message || e}`);
+        }
+    }
 
     private fireNotifications(stateId: string, title: string | null): void {
         for (const n of this.spec.notifications ?? []) {
