@@ -53104,6 +53104,7 @@ ${blocks.join("\n\n")}`;
           token: input.token,
           ...pendingBind ? { bind: pendingBind.bind } : {}
         });
+        if (input.server) result.configHasServer = true;
         if (pendingBind) result.bind = pendingBind.bind;
         notes.push(
           `worker MCP config written to ${result.configPath}` + (pendingBind ? ` (session bind issued for ${pendingBind.sessionId})` : "")
@@ -120165,7 +120166,8 @@ ${rawInput}` : rawInput;
         if (!rule || typeof rule !== "object") continue;
         if (rule.mode === "empty_mcp_config") {
           if (rule.flag && !hasCliArg(cliArgs, rule.flag)) {
-            cliArgs.unshift(rule.flag, ensureEmptyDelegatedMcpConfig(input.workspace));
+            const strictConfigPath = workerIsolation?.configHasServer && workerIsolation.configPath ? workerIsolation.configPath : ensureEmptyDelegatedMcpConfig(input.workspace);
+            cliArgs.unshift(rule.flag, strictConfigPath);
           }
           if (rule.strictFlag && !hasCliArg(cliArgs, rule.strictFlag)) {
             cliArgs.unshift(rule.strictFlag);

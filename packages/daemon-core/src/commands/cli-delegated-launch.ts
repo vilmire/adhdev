@@ -366,7 +366,24 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         if (!rule || typeof rule !== 'object') continue;
         if (rule.mode === 'empty_mcp_config') {
             if (rule.flag && !hasCliArg(cliArgs, rule.flag)) {
-                cliArgs.unshift(rule.flag, ensureEmptyDelegatedMcpConfig(input.workspace));
+                // ★WORKER-MCP delivery vs. isolation (design §12.3). This rule
+                // pairs `--mcp-config <file>` with `--strict-mcp-config`, and
+                // under strict mode the CLI reads ONLY that file. So when the
+                // worker-MCP gate has just written a config that CARRIES the
+                // minimal worker toolset, pointing this flag at an EMPTY file
+                // does not isolate the worker further — it erases the six tools
+                // the same launch just granted, and the worker boots with zero.
+                //
+                // The isolation goal is "the worker must not inherit the
+                // coordinator's 60-tool entry", and the worker config satisfies
+                // that by construction: it is written by the daemon and contains
+                // exactly one server (`--mode worker`). Phase A's zero-server
+                // config remains the target whenever no server was written, so
+                // gate-off behavior is unchanged.
+                const strictConfigPath = workerIsolation?.configHasServer && workerIsolation.configPath
+                    ? workerIsolation.configPath
+                    : ensureEmptyDelegatedMcpConfig(input.workspace);
+                cliArgs.unshift(rule.flag, strictConfigPath);
             }
             if (rule.strictFlag && !hasCliArg(cliArgs, rule.strictFlag)) {
                 cliArgs.unshift(rule.strictFlag);
