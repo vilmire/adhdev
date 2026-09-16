@@ -53563,12 +53563,13 @@ ${lines.join("\n")}
         const entry = store.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false, materializedNodeIds: [] };
         const priorTerminal = entry.status === "completed" || entry.status === "failed" || entry.status === "cancelled";
-        if (priorTerminal && entry.status === terminal.status) {
+        const requiresReducerAcceptance = terminal.source === "worker_tool_report";
+        if (!requiresReducerAcceptance && priorTerminal && entry.status === terminal.status) {
           return { entry, committed: true, duplicate: true, materializedNodeIds: [] };
         }
-        if (!priorTerminal) {
+        if (!priorTerminal || requiresReducerAcceptance) {
           try {
-            proposeTurnCompletion({
+            const decision = proposeTurnCompletion({
               meshId: terminal.meshId,
               taskId: terminal.taskId,
               attemptId: terminal.attemptId,
@@ -53578,8 +53579,15 @@ ${lines.join("\n")}
               occurredAtMs: terminal.occurredAtMs,
               reason: terminal.reason ?? `task_status_terminal:${terminal.status}`
             });
-          } catch {
+            if (requiresReducerAcceptance && !decision.committed) {
+              return { entry, committed: false, duplicate: false, rejectionReason: decision.reason, materializedNodeIds: [] };
+            }
+          } catch (error48) {
+            if (requiresReducerAcceptance) throw error48;
           }
+        }
+        if (priorTerminal && entry.status === terminal.status) {
+          return { entry, committed: true, duplicate: true, materializedNodeIds: [] };
         }
         const graphStore = store.graphStore();
         const node = graphStore.findNodeByQueueTaskId(terminal.meshId, terminal.taskId);
@@ -53600,9 +53608,11 @@ ${lines.join("\n")}
         } catch {
         }
       }
-      try {
-        drainMeshGraphOutbox(terminal.meshId);
-      } catch {
+      if (result.committed) {
+        try {
+          drainMeshGraphOutbox(terminal.meshId);
+        } catch {
+        }
       }
       return result;
     }
@@ -83878,6 +83888,9 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
       }
       if (!commit.committed) {
+        if (commit.rejectionReason) {
+          return { accepted: false, refusal: "rejected_by_reducer", detail: commit.rejectionReason };
+        }
         return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
       }
       LOG.info(
