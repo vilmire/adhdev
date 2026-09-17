@@ -801,6 +801,27 @@
                         "minLength": 1
                       }
                     }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Pre-approve the launch's MCP servers for a CLI that gates MCP startup behind a per-workspace approval allowlist (cursor). Only applied when the launch has a worker-private HOME, so it can never approve the coordinator's global servers.",
+                    "required": [
+                      "mode",
+                      "flag"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "const": "approve_mcp_servers"
+                      },
+                      "flag": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "requiresPrivateHome": {
+                        "type": "boolean"
+                      }
+                    }
                   }
                 ]
               }

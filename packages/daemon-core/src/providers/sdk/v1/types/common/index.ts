@@ -209,7 +209,13 @@ export interface MeshCoordinatorWorkerMcpDeliveryDef {
 
 export type MeshCoordinatorDelegatedWorkerArgRuleDef =
   | { mode: 'empty_mcp_config'; flag: string; strictFlag?: string }
-  | { mode: 'config_override'; flag: string; key: string; value: string; dedupeKey?: string };
+  | { mode: 'config_override'; flag: string; key: string; value: string; dedupeKey?: string }
+  /**
+   * Pre-approve the launch's MCP servers for a CLI whose MCP startup is gated
+   * behind a per-workspace approval allowlist (cursor). Only applied when the
+   * launch has a worker-private HOME — see the daemon-side contract.
+   */
+  | { mode: 'approve_mcp_servers'; flag: string; requiresPrivateHome?: boolean };
 
 // ─── Compatibility ──────────────────────────────────────────────────────
 

@@ -26,6 +26,14 @@ const claudeIsolation = {
   ],
 }
 
+// Mirrors adhdev-providers/cli/cursor-cli/provider.v1.json
+// meshCoordinator.delegatedWorkerIsolation.
+const cursorIsolation = {
+  args: [
+    { mode: 'approve_mcp_servers' as const, flag: '--approve-mcps', requiresPrivateHome: true },
+  ],
+}
+
 const codexIsolation = {
   workerMcpDelivery: {
     mode: 'config_override' as const,
@@ -413,6 +421,103 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     const strictConfigPath = result.cliArgs[result.cliArgs.indexOf('--mcp-config') + 1]
     expect(JSON.parse(readFileSync(strictConfigPath, 'utf-8'))).toEqual({ mcpServers: {} })
     expect(result.workerIsolation?.configHasServer).toBeUndefined()
+  })
+
+  /**
+   * ★cursor worker MCP isolation (2026-09-17).
+   *
+   * Measured defect: a cursor worker held ZERO of its six worker tools and
+   * FIFTY of the owner's personal global MCP servers. Two gates, and the fix
+   * needs both halves — the approval flag alone would approve those fifty.
+   */
+  it('★passes --approve-mcps once the worker HOME has made the MCP surface private', () => {
+    // cursor drops an unapproved server SILENTLY (no prompt, no log): its
+    // per-workspace mcp-approvals.json is keyed <serverName>-<contentHash>, and
+    // the daemon-written worker entry hashes unlike anything the owner ever
+    // approved. Without this flag the worker boots with no tools at all.
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-'))
+    __tmpDirsToClean.push(realHome, workspace)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'cursor-cli',
+      workspace,
+      isolation: cursorIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_cursor_approve',
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-base-')),
+    })
+
+    expect(result.workerIsolation?.workerHome).toBeTruthy()
+    expect(result.cliArgs).toContain('--approve-mcps')
+    // And the HOME that makes it safe is actually exported.
+    expect(result.env.HOME).toBe(result.workerIsolation!.workerHome)
+  })
+
+  it('★WITHHOLDS --approve-mcps when there is no private HOME (it would approve the owner\'s global servers)', () => {
+    // The flag approves everything cursor merges, which includes the owner's
+    // ~/.cursor/mcp.json. Applying it without the empty private HOME is
+    // strictly worse than not isolating at all, so the daemon fails closed.
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-nohome-'))
+    __tmpDirsToClean.push(workspace)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      // A provider with no private-HOME spec, carrying cursor's rule.
+      cliType: 'kimi',
+      workspace,
+      isolation: cursorIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_cursor_nohome',
+    })
+
+    expect(result.workerIsolation?.workerHome).toBeUndefined()
+    expect(result.cliArgs).not.toContain('--approve-mcps')
+    expect(result.workerIsolation!.notes.join(' ')).toMatch(/--approve-mcps withheld/)
+  })
+
+  it('★does not pass --approve-mcps twice when the caller already supplied it', () => {
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-dup-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-dup-'))
+    __tmpDirsToClean.push(realHome, workspace)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'cursor-cli',
+      workspace,
+      cliArgs: ['--approve-mcps'],
+      isolation: cursorIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_cursor_dup',
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-dup-base-')),
+    })
+
+    expect(result.cliArgs.filter((arg) => arg === '--approve-mcps')).toHaveLength(1)
+  })
+
+  it('★writes the worker cursor config into the WORKSPACE, never the owner\'s global one', () => {
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-'))
+    __tmpDirsToClean.push(realHome, workspace)
+    mkdirSync(join(realHome, '.cursor'), { recursive: true })
+    const ownerGlobal = join(realHome, '.cursor', 'mcp.json')
+    writeFileSync(ownerGlobal, JSON.stringify({ mcpServers: { blender: { command: 'uvx' } } }))
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'cursor-cli',
+      workspace,
+      isolation: cursorIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_cursor_global',
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-base-')),
+    })
+
+    expect(result.workerIsolation?.configPath).toBe(join(workspace, '.cursor', 'mcp.json'))
+    // The owner's personal global config is untouched...
+    expect(JSON.parse(readFileSync(ownerGlobal, 'utf-8')).mcpServers.blender).toBeTruthy()
+    // ...and unreachable from the HOME the worker will actually read.
+    expect(existsSync(join(result.env.HOME!, '.cursor', 'mcp.json'))).toBe(false)
   })
 })
 
