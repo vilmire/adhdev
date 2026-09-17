@@ -343,9 +343,12 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // E-T0 (design §7.1): `mesh_notify_worker` is published ONLY when the
     // worker-MCP flag is on, so a flag-off coordinator's ListTools response is
     // byte-identical to before E-T0 existed (the promise every worker-MCP phase
-    // has kept since Phase A). `isWorkerMcpEnabled` is a pure env-flag read — see
-    // its doc comment in daemon-core's index.ts for why mcp-server is allowed to
-    // import it directly rather than going through a transport command.
+    // has kept since Phase A). ★That flag now defaults ON (2026-09-18 owner
+    // approval — runtime-defaults.ts), so this tool is published by default and
+    // the byte-identical response is what an explicit ADHDEV_WORKER_MCP=off
+    // yields. `isWorkerMcpEnabled` is a pure env-flag read — see its doc comment
+    // in daemon-core's index.ts for why mcp-server is allowed to import it
+    // directly rather than going through a transport command.
     const { isWorkerMcpEnabled } = await import('@adhdev/daemon-core');
     const meshTools = isWorkerMcpEnabled()
       ? [...ALL_MESH_TOOLS, ...annotateAll([MESH_NOTIFY_WORKER_TOOL])]

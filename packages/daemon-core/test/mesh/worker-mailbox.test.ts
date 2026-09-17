@@ -123,15 +123,16 @@ describe('worker mailbox — deposit/drain/discard', () => {
 
 describe('deposit_worker_mailbox low-family handler', () => {
   it('is a no-op refusal when the worker-MCP gate is off (byte-identical promise)', async () => {
-    // The handler resolves the gate against process.env (the production
-    // default of isWorkerMcpEnabled), so pin the ambient var off for this
-    // test: a daemon/CI shell that exports ADHDEV_WORKER_MCP=on (e.g. a
-    // preview session host, or a daemon with a persisted env override) would
-    // otherwise flip the gate on and break the byte-identical-off promise.
+    // The handler resolves the gate against process.env, so pin the ambient
+    // var off for this test rather than relying on whatever the daemon/CI
+    // shell happens to export.
+    // ★Explicit 'off', not `delete`: since the 2026-09-18 default flip
+    // (runtime-defaults.ts) an ABSENT var resolves to ON, so deleting it would
+    // enable the very thing this case asserts is refused.
     const originalEnv = process.env.ADHDEV_WORKER_MCP
-    delete process.env.ADHDEV_WORKER_MCP
+    process.env.ADHDEV_WORKER_MCP = 'off'
     try {
-      expect(isWorkerMcpEnabled({} as NodeJS.ProcessEnv)).toBe(false)
+      expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: 'off' } as NodeJS.ProcessEnv)).toBe(false)
       const taskId = uniqueTaskId()
       seedQueueEntry('m', taskId)
       const result: any = await workerMailboxHandlers.deposit_worker_mailbox(

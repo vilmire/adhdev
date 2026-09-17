@@ -20,9 +20,11 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 // need before any of those three gates could be safely loosened: correct
 // attribution across an overlapping attach.
 //
-// Everything is behind ADHDEV_WORKER_MCP (default off). Flag off: the turn-
-// aware history is never populated, so every method here falls through to
-// the exact pre-existing scalar-only behavior.
+// Everything is behind ADHDEV_WORKER_MCP (★default ON since 2026-09-18). Flag
+// off: the turn-aware history is never populated, so every method here falls
+// through to the exact pre-existing scalar-only behavior. Because the default
+// flipped, the "gate OFF" blocks below pin an explicit 'off' — deleting the var
+// now selects ON.
 describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attachment', () => {
   const ORIGINAL_FLAG = process.env.ADHDEV_WORKER_MCP
 
@@ -47,8 +49,8 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
     return instance
   }
 
-  describe('gate OFF (default) — byte-identical to pre-existing scalar-only behavior', () => {
-    beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+  describe('gate OFF (explicit opt-out) — byte-identical to pre-existing scalar-only behavior', () => {
+    beforeEach(() => { process.env.ADHDEV_WORKER_MCP = 'off' })
 
     it('a second attach before the first detaches still clobbers the scalar (documented pre-existing race)', () => {
       const instance = makeInstance({ launchedByCoordinator: true })

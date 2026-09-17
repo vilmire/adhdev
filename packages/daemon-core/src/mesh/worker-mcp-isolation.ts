@@ -36,9 +36,12 @@
  *
  * ─── Flag gate ──────────────────────────────────────────────────────────
  *
- * Everything here is behind `ADHDEV_WORKER_MCP` (default OFF). With the gate
- * off, `resolveWorkerMcpIsolation()` returns null and every caller must fall
- * through to byte-identical prior behavior.
+ * Everything here is behind `ADHDEV_WORKER_MCP` — ★default ON since 2026-09-18
+ * (owner approval; see runtime-defaults.ts for the flip and its rationale).
+ * With the gate explicitly off, `resolveWorkerMcpIsolation()` returns null and
+ * every caller must fall through to byte-identical prior behavior. That
+ * fall-through is still load-bearing: it is the supported rollback path, not a
+ * dead branch.
  *
  * ─── Scope boundary (Phase A) ───────────────────────────────────────────
  *
@@ -968,15 +971,22 @@ export interface WorkerTrustHome {
  * worker-private HOME) but answer to different requirements, and coupling them
  * produced a live hang:
  *
- *   ADHDEV_WORKER_MCP is OFF by default ⇒ resolveWorkerMcpIsolation() returns
+ *   ADHDEV_WORKER_MCP was OFF by default ⇒ resolveWorkerMcpIsolation() returns
  *   null ⇒ the delegated launch had no `workerHome` ⇒ no trust plan was built
  *   ⇒ fsm-driver's fail-closed branch skipped the pre-trust write ⇒ every
  *   antigravity worker sat forever on "Do you trust the files in this folder?".
  *
- * The MCP axis is a HARDENING feature and is correctly opt-in: with it off the
- * worker keeps the (weaker) isolation it always had, which is a degradation,
- * not a stall. The trust axis is not like that — with it off the worker does
- * not run at all. So it must not inherit the MCP flag's default-off.
+ * The MCP axis is a HARDENING feature: with it off the worker keeps the
+ * (weaker) isolation it always had, which is a degradation, not a stall. The
+ * trust axis is not like that — with it off the worker does not run at all. So
+ * it must not inherit the MCP flag's state in either direction.
+ *
+ * ★The MCP flag now defaults ON (2026-09-18), so the exact hang above is no
+ * longer reachable by default — but the decoupling stays, because
+ * ADHDEV_WORKER_MCP=off is still a supported opt-out and re-coupling these two
+ * axes would make that opt-out silently stall every antigravity worker again.
+ * The flip narrows this bug's blast radius; it does not remove the reason for
+ * the split.
  *
  * ─── Why this cannot just resolve `~` to the daemon's HOME ───────────────
  *

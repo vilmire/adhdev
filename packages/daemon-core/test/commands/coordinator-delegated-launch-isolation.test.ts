@@ -195,7 +195,9 @@ describe('worker-MCP gate OFF ⇒ delegated launch is unchanged', () => {
 
   const priorEnv = process.env.ADHDEV_WORKER_MCP
 
-  beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+  // ★Explicit 'off', not `delete`: since the 2026-09-18 default flip an absent
+  // var resolves to ON, which would invert every assertion in this block.
+  beforeEach(() => { process.env.ADHDEV_WORKER_MCP = 'off' })
   afterEach(() => {
     if (priorEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
     else process.env.ADHDEV_WORKER_MCP = priorEnv
@@ -544,7 +546,9 @@ describe('★delegated worker pre-launch trust is decoupled from the worker-MCP 
   } as const
 
   const priorEnv = process.env.ADHDEV_WORKER_MCP
-  beforeEach(() => { delete process.env.ADHDEV_WORKER_MCP })
+  // ★Explicit 'off', not `delete` — the point of this block is that the trust
+  // plan survives the MCP gate being off, which post-flip must be requested.
+  beforeEach(() => { process.env.ADHDEV_WORKER_MCP = 'off' })
   afterEach(() => {
     if (priorEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
     else process.env.ADHDEV_WORKER_MCP = priorEnv
@@ -814,9 +818,11 @@ describe('★absent delegatedWorkerIsolation is observable, not silent', () => {
     // This is the whole reason isolationNotes is a separate channel. With the
     // gate off resolveWorkerMcpIsolation() returns null, so anything pushed
     // through `workerIsolation?.notes` is optional-chained into oblivion —
-    // silently dropping the diagnostic in the configuration that is the
-    // DEFAULT. A note that vanishes when the gate is off explains nothing.
-    delete process.env.ADHDEV_WORKER_MCP
+    // silently dropping the diagnostic in a supported configuration. A note
+    // that vanishes when the gate is off explains nothing. (Gate-off stopped
+    // being the DEFAULT on 2026-09-18, hence the explicit assignment; it
+    // remains a supported opt-out, so the diagnostic must still survive it.)
+    process.env.ADHDEV_WORKER_MCP = 'off'
     const result = buildWithIsolation(undefined, '1.0.5')
 
     expect(result.workerIsolation).toBeUndefined()

@@ -22,6 +22,9 @@ import {
 } from '../../src/mesh/worker-mcp-isolation'
 
 const ON = { ADHDEV_WORKER_MCP: '1' } as NodeJS.ProcessEnv
+// ★Since the 2026-09-18 default flip, an EMPTY env means ON. Any case that
+// needs the gate off must say so explicitly — `{}` no longer does it.
+const OFF = { ADHDEV_WORKER_MCP: 'off' } as NodeJS.ProcessEnv
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -63,43 +66,82 @@ beforeEach(() => { __resetWorkerTaskTokensForTest() })
 afterEach(() => { __resetWorkerTaskTokensForTest() })
 
 describe('worker MCP flag gate', () => {
-  it('is OFF unless explicitly enabled', () => {
-    expect(isWorkerMcpEnabled({} as NodeJS.ProcessEnv)).toBe(false)
-    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: '' } as NodeJS.ProcessEnv)).toBe(false)
-    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: '0' } as NodeJS.ProcessEnv)).toBe(false)
-    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: 'false' } as NodeJS.ProcessEnv)).toBe(false)
-    // A typo'd value must not accidentally enable a security-relevant feature.
-    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: 'yep' } as NodeJS.ProcessEnv)).toBe(false)
+  // ★Default flipped OFF → ON on 2026-09-18 (owner approval, after the live
+  // verification found 6 of 7 CLIs healthy on both delivery and isolation).
+  // These cases assert the DEFAULT ITSELF rather than a proxy, because the
+  // whole point of the flip is what an unconfigured daemon does.
+  it('is ON when the var is unset — the default', () => {
+    expect(isWorkerMcpEnabled({} as NodeJS.ProcessEnv)).toBe(true)
   })
 
-  it('accepts the documented truthy spellings', () => {
+  it('treats an empty value as unset, not as off', () => {
+    // An inherited-but-blank var means "nobody chose", which is the default.
+    // config/env-overrides.ts draws the same line (it only considers a key
+    // explicitly set when it is a non-empty string), so the two surfaces agree.
+    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: '' } as NodeJS.ProcessEnv)).toBe(true)
+    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: '   ' } as NodeJS.ProcessEnv)).toBe(true)
+  })
+
+  it('★can still be turned OFF explicitly — the escape hatch survives the flip', () => {
+    // The flip changed the default only. An operator (or a canary rolling the
+    // feature back without a redeploy) must keep being able to disable it.
+    for (const value of ['0', 'false', 'off', 'no', 'FALSE', ' Off ']) {
+      expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: value } as NodeJS.ProcessEnv)).toBe(false)
+    }
+  })
+
+  it('still accepts the documented truthy spellings', () => {
     for (const value of ['1', 'true', 'on', 'yes', 'TRUE', ' On ']) {
       expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: value } as NodeJS.ProcessEnv)).toBe(true)
     }
   })
 
-  it('resolves to null with the gate off — the byte-identity guarantee', () => {
+  it('falls back to the default on an unrecognized value', () => {
+    // The safe direction inverted with the default. While it was OFF, a typo
+    // had to not ENABLE a security-relevant feature; now that it is ON, a typo
+    // must not silently DISABLE every worker's isolation. Either way the
+    // unrecognized value resolves to the default rather than its opposite.
+    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: 'yep' } as NodeJS.ProcessEnv)).toBe(true)
+    expect(isWorkerMcpEnabled({ ADHDEV_WORKER_MCP: 'disabled' } as NodeJS.ProcessEnv)).toBe(true)
+  })
+
+  it('resolves to null with the gate explicitly off — the byte-identity guarantee', () => {
     // This is THE regression that protects "gate off ⇒ nothing changes": every
     // consumer branches on this null, so a null here means no config write, no
-    // private HOME, no env.set application anywhere downstream.
+    // private HOME, no env.set application anywhere downstream. Post-flip the
+    // off state must be requested explicitly ({} now means ON).
     const result = resolveWorkerMcpIsolation({
       providerType: 'antigravity-cli',
       workspace: tmp('adhdev-ws-'),
       sessionKey: 'task_1',
       mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' },
-    }, {} as NodeJS.ProcessEnv)
+    }, OFF)
     expect(result).toBeNull()
   })
 
-  it('writes nothing to disk with the gate off', () => {
+  it('writes nothing to disk with the gate explicitly off', () => {
     const workspace = tmp('adhdev-ws-off-')
     resolveWorkerMcpIsolation({
       providerType: 'kimi',
       workspace,
       sessionKey: 'task_1',
       mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json' },
-    }, {} as NodeJS.ProcessEnv)
+    }, OFF)
     expect(existsSync(join(workspace, '.kimi-code', 'mcp.json'))).toBe(false)
+  })
+
+  it('★resolves isolation by DEFAULT now — an unconfigured daemon isolates its workers', () => {
+    // The consumer-level counterpart to the unit assertion above: flipping the
+    // default is only meaningful if the downstream resolve actually engages
+    // with no env configured at all. Asserting the flag alone would pass even
+    // if a consumer still branched on an off-by-default assumption.
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'antigravity-cli',
+      workspace: tmp('adhdev-ws-default-on-'),
+      sessionKey: 'task_default_on',
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' },
+    }, {} as NodeJS.ProcessEnv)
+    expect(result).not.toBeNull()
   })
 })
 
