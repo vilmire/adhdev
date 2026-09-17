@@ -696,16 +696,23 @@ describe('★delegated worker pre-launch trust is decoupled from the worker-MCP 
     // kimi declares pre_launch_trust via a named scheme and has no private-HOME
     // spec. Decoupling must NOT become "resolve `~` against the daemon home for
     // anyone" — a provider we cannot scope still gets a null plan.
+    //
+    // ★This case used `grok-cli` until 2026-09-18, when grok GAINED a
+    // private-HOME spec (its harness-compat layer imports the owner's
+    // HOME-scoped cursor/claude MCP config, so a workspace-scoped config alone
+    // isolated nothing). The assertion being made here is about the UNSCOPED
+    // branch, so it must name a provider that is genuinely unscoped — otherwise
+    // it silently stops exercising the fail-closed path it was written for.
     const workspace = mkdtempSync(join(tmpdir(), 'agy-trust-noscope-ws-'))
     __tmpDirsToClean.push(workspace)
     const workerBase = mkdtempSync(join(tmpdir(), 'agy-trust-noscope-base-'))
     __tmpDirsToClean.push(workerBase)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
-      cliType: 'grok-cli',
+      cliType: 'kimi',
       workspace,
       sessionKey: 'sess_noscope',
-      preLaunchTrust: { settings_path: '~/.grok/settings.json', key: 'trustedFolders' },
+      preLaunchTrust: { settings_path: '~/.kimi-code/settings.json', key: 'trustedFolders' },
       workerHomeBaseDir: workerBase,
     })
 

@@ -606,14 +606,34 @@ export class FsmDriver implements ISpecDriver {
                 applyKimiWorkspaceTrust(this.opts.workingDir);
             } else if ('scheme' in this.spec.pre_launch_trust
                 && this.spec.pre_launch_trust.scheme === 'grok_toml_file') {
-                // Same standing as kimi: no worker-private HOME yet, so the
-                // provider module keeps owning GROK_HOME/os.homedir() resolution.
-                // Unlike the array stores below this is NOT a leak risk that
-                // warrants failing closed — grok's writer appends one scoped
-                // `[folders."<realpath>"]` table and refuses over-broad roots,
-                // so it can never widen an unrelated grant the way pushing into
-                // a shared trustedWorkspaces array could.
-                applyGrokWorkspaceTrust(this.opts.workingDir);
+                // ★grok GAINED a worker-private HOME on 2026-09-18 (its
+                // harness-compat layer imports the owner's HOME-scoped
+                // cursor/claude MCP config, so a workspace-scoped config alone
+                // isolated nothing). The store must therefore follow the HOME
+                // the worker will actually read: `grokHome()` resolves
+                // `GROK_HOME` first and `os.homedir()` otherwise, and
+                // `os.homedir()` is the DAEMON's home, not the worker's. Passing
+                // the launch env makes a delegated worker's grant land in its own
+                // private `~/.grok/trusted_folders.toml`, and — the reason this
+                // matters in both directions — keeps a worker's automatic grant
+                // OUT of the owner's personal store.
+                //
+                // Unlike the array stores below this is still NOT a leak risk
+                // that warrants failing closed: grok's writer appends one scoped
+                // `[folders."<realpath>"]` table and refuses over-broad roots, so
+                // it can never widen an unrelated grant the way pushing into a
+                // shared trustedWorkspaces array could. A non-delegated launch
+                // has no HOME override and keeps its prior behavior exactly.
+                //
+                // ★Measured: an untrusted folder does NOT stall grok. Headless
+                // runs completed in a private HOME with no trust store at all,
+                // in both a git and a non-git workspace. Folder trust in grok
+                // gates HOOK/PLUGIN execution, not the session — so this is a
+                // correctness/containment fix, not a stall fix.
+                applyGrokWorkspaceTrust(this.opts.workingDir, {
+                    ...process.env,
+                    ...(this.opts.extraEnv || {}),
+                });
             } else {
                 // Fail closed for array stores: resolving `~` here would use the
                 // daemon's real HOME and recreate the worker trust leak.

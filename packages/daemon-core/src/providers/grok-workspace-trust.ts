@@ -56,10 +56,29 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
 
-/** grok's config home. Honors the `GROK_HOME` override the binary itself reads. */
+/**
+ * grok's config home. Honors the `GROK_HOME` override the binary itself reads.
+ *
+ * ★`env.HOME` is consulted before `os.homedir()` (2026-09-18). grok gained a
+ * worker-private HOME because its harness-compatibility layer imports the
+ * owner's HOME-scoped cursor/claude MCP config; the daemon redirects a delegated
+ * worker by exporting HOME, and `os.homedir()` does NOT follow that — on POSIX
+ * it reads the passwd entry, so it returns the DAEMON's home regardless.
+ *
+ * Without this, the pre-launch grant for a worker would be written into the
+ * OWNER's `~/.grok/trusted_folders.toml`: simultaneously useless to the worker
+ * (which reads its own private store) and a silent widening of the owner's
+ * personal trust — the exact worker-trust leak `resolveWorkerTrustHome()` exists
+ * to prevent, arriving by a different route.
+ *
+ * Callers that pass no env keep `process.env`, where HOME is the daemon's own,
+ * so non-delegated launches resolve exactly as before.
+ */
 function grokHome(env: NodeJS.ProcessEnv = process.env): string {
     const override = env.GROK_HOME?.trim();
-    return override ? override : path.join(os.homedir(), '.grok');
+    if (override) return override;
+    const home = env.HOME?.trim();
+    return path.join(home || os.homedir(), '.grok');
 }
 
 /**
