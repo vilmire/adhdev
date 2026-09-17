@@ -119,14 +119,29 @@ function task(meshId: string, taskId: string) {
   return getQueue(meshId).find(t => t.id === taskId)
 }
 
-/** Spend N units of the task's durable budget the way the launch path does. */
+/**
+ * Spend N units of the task's durable budget the way the launch path does.
+ *
+ * ★ SPAWN-CAP-TRANSPORT-AWARE: the budget is charged when a launch is known to have
+ * PRODUCED A SESSION, not on the pre-dispatch 'started' record (which is mere intent — a
+ * transport failure that never reached the target daemon used to spend a unit for a session
+ * that never existed). So the spending record here is the launch RESOLUTION, carrying the
+ * same explicit `spendSpawnBudget` assertion the production launch paths pass.
+ *
+ * 'launch_missing_session_id' is the resolution used because it both (a) genuinely spends
+ * budget — launch_cli succeeded, so a session very likely exists and the cap must charge for
+ * anything it cannot prove was never created — and (b) leaves no `completed` + sessionId pair,
+ * so the await-claim guard does not absorb the next scan pass. That models the crash-restart
+ * loop in which no launch ever produces a claim.
+ */
 function recordStartedLaunches(meshId: string, taskId: string, n: number) {
   for (let i = 0; i < n; i++) {
     recordTaskAutoLaunch(meshId, taskId, { status: 'started', nodeId: NODE_ID, providerType: 'codex-cli' })
-    // A real local launch follows 'started' with 'failed' or 'completed'; use 'failed'
-    // (no sessionId) so the await-claim guard does not absorb the next scan pass —
-    // this models the crash-restart loop where no launch ever produces a claim.
-    recordTaskAutoLaunch(meshId, taskId, { status: 'failed', reason: 'launch_missing_session_id', nodeId: NODE_ID, providerType: 'codex-cli' })
+    recordTaskAutoLaunch(
+      meshId, taskId,
+      { status: 'failed', reason: 'launch_missing_session_id', nodeId: NODE_ID, providerType: 'codex-cli' },
+      { spendSpawnBudget: true },
+    )
   }
 }
 

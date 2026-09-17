@@ -1521,6 +1521,9 @@ export class MeshRuntimeStore {
             // choke point every claim path funnels through (idle drain, inline launch
             // claim, remote claim, redrive, direct-delivery fallback all end here).
             delete entry.autoLaunchUnclaimedCount;
+            // SPAWN-CAP-TRANSPORT-AWARE: the dispatch-failure tally is scoped to the same
+            // "since the last successful claim" window, so it clears here too.
+            delete entry.autoLaunchDispatchFailedCount;
             entry.updatedAt = now;
 
             this.db.prepare(`

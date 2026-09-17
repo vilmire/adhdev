@@ -420,7 +420,48 @@ function resolveTaskDeliveryEvidence(meshId: string, taskId: string): TaskDelive
     return 'never_dispatched';
 }
 
-function actionableSkipGuidance(reason: string, evidence?: TaskDeliveryEvidence): { summary: string; nextAction: string } {
+/**
+ * SPAWN-CAP-TRANSPORT-AWARE: why a task's spawn budget ran out, as read from the task row.
+ *
+ *  - 'sessions_never_claimed' — real sessions were spawned and none claimed the task. The
+ *    original launch/claim MISMATCH the cap was built for; the evidence is on the target
+ *    node (its claim-refusal reasons).
+ *  - 'dispatch_failed'        — every launch attempt died in THIS coordinator's transport
+ *    before reaching the target daemon, so no session was ever created. The evidence is in
+ *    the coordinator's own auto-launch ledger; the target node has nothing to show, because
+ *    from its side nothing ever arrived.
+ *  - 'mixed'                  — both happened (e.g. a signalling outage partway through a
+ *    genuine mismatch). Name both so the coordinator checks both places.
+ *
+ * Why this matters enough to branch the copy: observed live 2026-09-17, a 26-minute
+ * coordinator WS reconnect storm degraded P2P signalling and ten launch dispatches failed at
+ * the signalling layer on two nodes. ZERO sessions were created — yet the page asserted "the
+ * daemon auto-launched 5+ worker sessions and NONE ever claimed", so the coordinator spent
+ * hours searching two healthy nodes' logs for sessions that had never existed. The whole
+ * value of the page is pointing at where the evidence actually IS.
+ */
+type SpawnCapCause = 'sessions_never_claimed' | 'dispatch_failed' | 'mixed';
+
+function resolveSpawnCapCause(task: MeshWorkQueueEntry | undefined): { cause: SpawnCapCause; dispatchFailures: number } {
+    const dispatchFailures = typeof task?.autoLaunchDispatchFailedCount === 'number' && task.autoLaunchDispatchFailedCount > 0
+        ? task.autoLaunchDispatchFailedCount
+        : 0;
+    // The spawn budget counts only launches that produced a session, so a non-zero remainder
+    // proves real sessions existed. Legacy rows (both fields absent) read as the historical
+    // case, which is also the safe default: it points at the node, as before.
+    const spentOnSessions = typeof task?.autoLaunchUnclaimedCount === 'number' && task.autoLaunchUnclaimedCount > 0
+        ? task.autoLaunchUnclaimedCount
+        : 0;
+    if (dispatchFailures > 0 && spentOnSessions > 0) return { cause: 'mixed', dispatchFailures };
+    if (dispatchFailures > 0) return { cause: 'dispatch_failed', dispatchFailures };
+    return { cause: 'sessions_never_claimed', dispatchFailures };
+}
+
+function actionableSkipGuidance(
+    reason: string,
+    evidence?: TaskDeliveryEvidence,
+    spawnCap?: { cause: SpawnCapCause; dispatchFailures: number },
+): { summary: string; nextAction: string } {
     if (reason === 'target_node_id_unmatched') return {
         summary: 'it is pinned to a target node id that matches no node in the mesh (the node may have been removed, or its id form does not resolve)',
         nextAction: 'Verify the target node still exists with mesh_status, then re-enqueue without the node pin or with a valid node id (or re-clone the node).',
@@ -446,9 +487,24 @@ function actionableSkipGuidance(reason: string, evidence?: TaskDeliveryEvidence)
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
     };
     if (reason === SPAWN_CAP_PARK_REASON) {
-        // AUTOLAUNCH-SPAWN-CAP (P3). Reached only after ≥ AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP
-        // real launches whose claims all failed, so the useful next step is diagnosing the
-        // launch/claim mismatch — not another launch, which the park now prevents.
+        // AUTOLAUNCH-SPAWN-CAP (P3), branched by cause (SPAWN-CAP-TRANSPORT-AWARE). The park
+        // itself is cause-agnostic — the budget is exhausted either way — but the DIAGNOSIS is
+        // not, and an unconditional "5+ sessions launched, none claimed" sends the coordinator
+        // to the wrong machine whenever the launches never actually left this daemon.
+        const cause = spawnCap?.cause ?? 'sessions_never_claimed';
+        const failures = spawnCap?.dispatchFailures ?? 0;
+        // The one place where NOT ONE session was created. Everything the coordinator needs is
+        // on its own side; the target node has no trace to find because nothing reached it.
+        if (cause === 'dispatch_failed') return {
+            summary: `its durable spawn cap PARKED it, but NOT because launched sessions failed to claim it — NO session was ever created. All ${failures} launch dispatch(es) for it failed inside THIS coordinator's own transport layer (P2P/signalling) before reaching the target daemon, so the target node never received a launch command at all`,
+            nextAction: `Diagnose the COORDINATOR's transport, not the target node — there is nothing to find in the node's logs because the command never arrived. Check this coordinator's auto-launch ledger for the 'remote_launch_dispatch_failed' records (they carry the real transport error: signalling rate limits, handshake/connect timeouts, or a reconnect backoff gate), and check whether this daemon was cycling its server WS connection during that window. If P2P is healthy again, mesh_queue_requeue(task_id='...') is enough on its own — it unparks the task and restores the spawn budget, and no configuration change is needed, because the task itself was never the problem.`,
+        };
+        // Both failure modes present — name both, and do not let either hide the other.
+        if (cause === 'mixed') return {
+            summary: `its durable spawn cap PARKED it after a MIX of two failure modes: some launches did spawn sessions that never claimed the task, and ${failures} further launch dispatch(es) failed inside THIS coordinator's transport layer before reaching the target daemon (creating no session at all)`,
+            nextAction: `Check BOTH sides, because either alone is an incomplete explanation: (1) this coordinator's auto-launch ledger for the 'remote_launch_dispatch_failed' records and this daemon's P2P/WS connection health in that window; (2) the claim-refusal reasons on the target node (mesh_read_node_logs) for the sessions that DID spawn — a difficulty/model floor, a provider/tag mismatch, or a claim gate refusing every candidate. Then mesh_queue_requeue(task_id='...') to unpark and restore the budget, or mesh_queue_cancel if no longer wanted. If the claim-side mismatch is real, fix it first — a requeue alone will burn the fresh budget the same way.`,
+        };
+        // The original mismatch case: real sessions, none of which could claim the task.
         return {
             summary: `the daemon auto-launched ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}+ worker sessions for it and NONE ever claimed the task, so its durable spawn cap PARKED it to break the launch loop (each further launch would only produce another idle orphan session)`,
             nextAction: `Diagnose why launched sessions cannot claim it — check mesh_view_queue (parkedTasks) and the claim-refusal reasons in the node logs (mesh_read_node_logs): typical causes are a difficulty/model floor the launched sessions cannot satisfy, a provider/tag mismatch, or a claim gate refusing every candidate. Fix the mismatch, then mesh_queue_requeue(task_id='...') — any requeue unparks it and resets the spawn budget — or mesh_queue_cancel it if no longer wanted. Do NOT just requeue without changing anything: the same mismatch will burn the fresh budget the same way.`,
@@ -571,7 +627,12 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     const evidence = reason === 'target_session_pin_expired' || reason === PARKED_SKIP_REASON
         ? resolveTaskDeliveryEvidence(meshId, taskId)
         : undefined;
-    const { summary, nextAction } = actionableSkipGuidance(reason!, evidence);
+    // SPAWN-CAP-TRANSPORT-AWARE: classify WHY the spawn budget ran out so the page names the
+    // real failure mode and points at the side that actually holds the evidence. Read only for
+    // the reason that branches on it; `task` may be undefined (unreadable queue), which the
+    // resolver treats as the historical mismatch case.
+    const spawnCap = reason === SPAWN_CAP_PARK_REASON ? resolveSpawnCapCause(task) : undefined;
+    const { summary, nextAction } = actionableSkipGuidance(reason!, evidence, spawnCap);
     // The trailing clause is reason-dependent. 'target_session_pin_expired' has ALREADY cleared
     // the pin by the time this fires (expireTaskTargetPin ran), so the task is claimable by any
     // compatible session — telling the coordinator it "stays pending until you resolve it" is
