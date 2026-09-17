@@ -1,4 +1,9 @@
-// Trunk flag for the worker-MCP feature (docs/design/2026-08-28-worker-mcp.md). Default OFF.
+// Trunk flag for the worker-MCP feature (docs/design/2026-08-28-worker-mcp.md).
+// ★Default ON since 2026-09-18 (owner approval). It shipped default-OFF through
+// the Phase A/B rollout; the 2026-09-18 live verification found delivery AND
+// isolation healthy on 6 of 7 CLIs (claude, codex, opencode, antigravity,
+// cursor, kimi), which is what the default-flip was gated on.
+//
 // Lives here (layer-neutral) rather than in mesh/worker-mcp-isolation.ts so both
 // mesh/** and providers/** can read it without a cross-layer value import
 // (import-boundary gate) — mesh/worker-mcp-isolation.ts re-exports it for its
@@ -6,11 +11,23 @@
 // tests can flip the variable per-case without module-cache surgery, and so a
 // daemon that has the flag toggled in its environment does not need a rebuild
 // to see it.
+//
+// ─── Why the unrecognized-value branch flipped with the default ─────────────
+//
+// While the default was OFF this read an ON-list: only '1'/'true'/'on'/'yes'
+// enabled it, so a typo'd value ('yep') left a security-relevant feature off —
+// the safe direction then. With the default ON the safe direction inverts, so
+// this is now an OFF-list: only the documented off spellings disable it, and a
+// typo falls through to the default rather than silently stripping every worker
+// of its isolation. The empty string is deliberately NOT an off spelling — an
+// inherited-but-blank var is "unset", not "the operator asked for off" (see
+// config/env-overrides.ts, which treats '' as absent for exactly this reason).
 export function isWorkerMcpEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     const raw = env.ADHDEV_WORKER_MCP;
-    if (typeof raw !== 'string') return false;
+    if (typeof raw !== 'string') return true;
     const value = raw.trim().toLowerCase();
-    return value === '1' || value === 'true' || value === 'on' || value === 'yes';
+    if (value === '') return true;
+    return !(value === '0' || value === 'false' || value === 'off' || value === 'no');
 }
 
 export const DEFAULT_CDP_SCAN_INTERVAL_MS = 30_000;

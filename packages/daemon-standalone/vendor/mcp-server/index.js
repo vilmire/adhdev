@@ -52694,9 +52694,10 @@ ${blocks.join("\n\n")}`;
     });
     function isWorkerMcpEnabled(env2 = process.env) {
       const raw = env2.ADHDEV_WORKER_MCP;
-      if (typeof raw !== "string") return false;
+      if (typeof raw !== "string") return true;
       const value = raw.trim().toLowerCase();
-      return value === "1" || value === "true" || value === "on" || value === "yes";
+      if (value === "") return true;
+      return !(value === "0" || value === "false" || value === "off" || value === "no");
     }
     function readMeshTimeoutEnvMs(names, defaultMs) {
       const candidates = Array.isArray(names) ? names : [names];

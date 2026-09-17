@@ -263,11 +263,13 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     // it into the per-worker copy immediately before PTY spawn.
     //
     // ★AGY-WORKER-TRUST-STALL (2026-09-13): this block used to be gated on
-    // `workerIsolation?.workerHome`, i.e. on ADHDEV_WORKER_MCP — which is OFF by
-    // default. So on every ordinary daemon a delegated antigravity worker got
-    // plan=null, fsm-driver fail-closed, and the worker hung forever on "Do you
-    // trust the files in this folder?". The trust axis must not inherit the MCP
-    // axis's opt-in default: MCP-off is a degradation, trust-off is a stall.
+    // `workerIsolation?.workerHome`, i.e. on ADHDEV_WORKER_MCP — which was OFF
+    // by default at the time. So on every ordinary daemon a delegated
+    // antigravity worker got plan=null, fsm-driver fail-closed, and the worker
+    // hung forever on "Do you trust the files in this folder?". The trust axis
+    // must not inherit the MCP axis's state: MCP-off is a degradation,
+    // trust-off is a stall. (That flag defaults ON since 2026-09-18, but
+    // ADHDEV_WORKER_MCP=off remains supported — so the decoupling still is.)
     //
     // The store HOME is therefore resolved on its OWN axis below. It is always a
     // worker-scoped directory — never the daemon's real HOME, which is what the
