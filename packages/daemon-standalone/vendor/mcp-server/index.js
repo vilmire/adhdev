@@ -53285,6 +53285,125 @@ ${blocks.join("\n\n")}`;
               // approvals into the owner's store.
               { projectsDir: path22.join(".cursor", "projects"), relativePath: "agent-transcripts", mode: "symlink" }
             ]
+          },
+          /**
+           * ★grok-cli (measured live 2026-09-18, grok 1.0.34).
+           *
+           * A grok worker was observed holding SIXTY-ONE tools where six were
+           * expected: the owner's personal `blender` (31), `godot` (13) and `tasks`
+           * (11) servers were all present, and the worker's system prompt carried the
+           * owner's cursor `user_rule` verbatim.
+           *
+           * ─── ★The measured mechanism, and why the obvious guess was wrong ────────
+           *
+           * The natural hypothesis was "grok shares `.mcp.json` with claude, so
+           * claude's isolation does not cover grok". That is NOT what happens, and
+           * acting on it would have fixed nothing.
+           *
+           * `grok inspect` labels every leaked server `.mcp.json [cursor]`, and the
+           * bracketed tag is grok's COMPAT-SOURCE label, not a file path. grok ships a
+           * harness-compatibility layer (`xai_grok_cursor::register()` in the binary;
+           * `grok inspect` renders it as a "Harness Compatibility" block with
+           * per-component `skills/rules/agents/mcps/hooks/sessions` toggles, all
+           * defaulting to ON) that imports cursor's, claude's and codex's
+           * configuration alongside its own.
+           *
+           * The leak is therefore HOME-scoped, and it was isolated to a single file by
+           * probe: an otherwise-empty HOME containing ONLY `~/.cursor/mcp.json` — with
+           * no `.mcp.json` anywhere and an empty workspace — still produced the server.
+           * The owner's `~/.cursor/mcp.json` holds exactly `godot`, `blender`,
+           * `context7`; `grok mcp list` (grok's own native store) is EMPTY. The same
+           * compat layer imports cursor `rules`, which is where the `user_rule` in the
+           * worker prompt came from.
+           *
+           * ∴ the leak arrives through `$HOME`, and a worker-private HOME closes it —
+           * the identical shape cursor-cli already uses, for the identical reason.
+           *
+           * ─── Why the env toggles are NOT the fix ────────────────────────────────
+           *
+           * The binary exposes `GROK_CURSOR_MCPS_ENABLED` / `GROK_CLAUDE_MCPS_ENABLED`
+           * (and per-component siblings), and setting them to `0` was measured to work
+           * — too well. grok classifies the WORKSPACE `.mcp.json` under the same
+           * compat source, so the toggle marks `adhdev-mesh` `[disabled]` along with
+           * the owner's servers and the worker boots with zero tools. It is the
+           * `--approve-mcps`-without-a-private-HOME failure in mirror image: an
+           * isolation knob that also erases the surface being granted. Do not add
+           * these to `env.set`.
+           *
+           * ─── ★The transcript trap (same class as antigravity's, and it applies) ──
+           *
+           * grok's manifest declares `nativeHistory.watchPath` as
+           * `~/.grok/sessions/**` + chat_history.jsonl`, and `expandPath()` in
+           * `providers/spec/native-history-executor.ts` expands a literal `~` through
+           * `os.homedir()` UNCONDITIONALLY — `envOverrides` is consulted only for
+           * `${VAR}` syntax. So a naive private HOME would have the worker writing
+           * sessions under `/tmp/…/.grok/sessions` while the daemon globs
+           * `~/.grok/sessions`, and every grok worker would report zero assistant
+           * messages with no diagnostic.
+           *
+           * `.grok/sessions` is therefore SYMLINKED through to the real home, and this
+           * was verified end-to-end rather than reasoned about: a headless run under a
+           * prepared private HOME wrote its transcript directory into the REAL
+           * `~/.grok/sessions/` (URL-encoded per cwd, as grok does).
+           *
+           * ─── What is isolated vs. linked ────────────────────────────────────────
+           *
+           *  - `.cursor` / `.claude` — created EMPTY. These are the ISOLATED surfaces:
+           *    empty means the compat layer finds no owner config to import, which is
+           *    the entire point. (`.grok` gets created implicitly by the imports.)
+           *  - `auth.json` — SYMLINKED, never copied. grok refreshes this blob in
+           *    place; a copy would strand the worker on a credential that expires
+           *    mid-task while the real one rotates. Measured sufficient on its own: a
+           *    headless run under the private HOME answered normally.
+           *  - `.grok/sessions` — SYMLINKED. The transcript trap above.
+           *  - `config.toml` — COPIED. Carries the owner's model default and
+           *    `permission_mode`, which a worker should inherit, but grok REWRITES it
+           *    (`grok mcp add` writes here), so a symlink would let a worker mutate
+           *    the owner's file. It is 0644, so `requireOwnerOnly` must NOT be set.
+           *  - `version.json` / `bin` — SYMLINKED so the worker resolves the same
+           *    installed build and does not re-report its channel as `[unknown]`.
+           *
+           * `trusted_folders.toml` is deliberately NOT imported, and the resulting
+           * `Project trusted: no` is ACCEPTED rather than worked around. In grok,
+           * folder trust gates HOOK and PLUGIN execution — not the session — and every
+           * probe ran to completion untrusted with no prompt. A worker that executes
+           * none of the owner's project hooks is the isolation goal, not a regression.
+           * Importing it would hand the worker the owner's hook-execution grants; a
+           * symlink would additionally let a worker write new grants into the owner's
+           * store, which is the worker-trust leak `resolveWorkerTrustHome()` exists to
+           * prevent.
+           *
+           * ★No `delegatedWorkerIsolation.args` rule is declared for grok, and that is
+           * correct, not an omission. cursor needs `--approve-mcps` because cursor
+           * silently drops unapproved servers; grok has no approval gate — the private
+           * HOME alone was measured to yield exactly one server (`adhdev-mesh`, source
+           * `config`) with the owner's servers absent. The manifest's existing
+           * `mcpConfig.path: ".mcp.json"` already lands the worker config where grok
+           * reads it, so no path change is needed either.
+           */
+          {
+            providerType: "grok-cli",
+            imports: [
+              // Auth. Symlinked so an in-place refresh stays shared — see above.
+              { relativePath: path22.join(".grok", "auth.json"), mode: "symlink", required: true, requireOwnerOnly: true },
+              // Transcripts — linked THROUGH so the daemon's os.homedir()-rooted
+              // `watchPath` still finds what the worker writes. Not `required`: a
+              // fresh machine may not have the directory yet, and grok creates it
+              // on first use inside the linked-through parent.
+              { relativePath: path22.join(".grok", "sessions"), mode: "symlink" },
+              // Non-secret preferences (model default, permission_mode). COPIED —
+              // grok rewrites this file, and it is 0644 so it must not assert
+              // owner-only.
+              { relativePath: path22.join(".grok", "config.toml"), mode: "copy" },
+              // Installed-build identity, so the worker resolves the same version
+              // and channel rather than reporting `[unknown]`.
+              { relativePath: path22.join(".grok", "version.json"), mode: "symlink" },
+              { relativePath: path22.join(".grok", "bin"), mode: "symlink" }
+            ],
+            // The ISOLATED surfaces: empty means grok's harness-compatibility layer
+            // has no owner cursor/claude config to import — neither MCP servers nor
+            // the `user_rule` that was observed in the worker prompt.
+            ensureDirs: [".cursor", ".claude"]
           }
         ];
         WORKER_HOME_PLACEHOLDER = "{{workerHome}}";
@@ -104416,7 +104535,9 @@ ${marker}`,
     });
     function grokHome2(env2 = process.env) {
       const override = env2.GROK_HOME?.trim();
-      return override ? override : path31.join(os21.homedir(), ".grok");
+      if (override) return override;
+      const home = env2.HOME?.trim();
+      return path31.join(home || os21.homedir(), ".grok");
     }
     function realWorkspacePath2(workingDir) {
       try {
@@ -104912,7 +105033,10 @@ decided_at = ${decidedAt}
               } else if ("scheme" in this.spec.pre_launch_trust && this.spec.pre_launch_trust.scheme === "kimi_workspace_file") {
                 applyKimiWorkspaceTrust(this.opts.workingDir);
               } else if ("scheme" in this.spec.pre_launch_trust && this.spec.pre_launch_trust.scheme === "grok_toml_file") {
-                applyGrokWorkspaceTrust(this.opts.workingDir);
+                applyGrokWorkspaceTrust(this.opts.workingDir, {
+                  ...process.env,
+                  ...this.opts.extraEnv || {}
+                });
               } else {
                 const delegated = typeof this.opts.extraEnv?.HOME === "string" && this.opts.extraEnv.HOME.trim() !== "";
                 LOG.warn(
