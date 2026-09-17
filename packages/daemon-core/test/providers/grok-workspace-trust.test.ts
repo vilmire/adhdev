@@ -134,6 +134,48 @@ describe('applyGrokWorkspaceTrust', () => {
         expect(() => applyGrokWorkspaceTrust(workspace, env())).not.toThrow();
         expect(applyGrokWorkspaceTrust(workspace, env())).toBeNull();
     });
+
+    it('★follows env.HOME so a worker grant lands in its PRIVATE store, not the owner\'s', () => {
+        // grok gained a worker-private HOME on 2026-09-18. The daemon redirects a
+        // delegated worker by exporting HOME — and `os.homedir()` does NOT follow
+        // that (on POSIX it reads the passwd entry). Resolving through os.homedir()
+        // would write the worker's grant into the OWNER's store: useless to the
+        // worker, which reads its own, and a silent widening of the owner's
+        // personal trust.
+        //
+        // Asserts the containment property in BOTH directions — the grant is in
+        // the worker store AND absent from the owner's.
+        const workerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'grok-worker-home-'));
+        const ownerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'grok-owner-home-'));
+        try {
+            const registered = applyGrokWorkspaceTrust(workspace, {
+                ...process.env,
+                GROK_HOME: '',
+                HOME: workerHome,
+            });
+            expect(registered).toBe(real());
+
+            const workerStore = path.join(workerHome, '.grok', 'trusted_folders.toml');
+            expect(fs.readFileSync(workerStore, 'utf8'))
+                .toContain(`[folders."${escapeTomlKey(real())}"]`);
+            expect(fs.existsSync(path.join(ownerHome, '.grok', 'trusted_folders.toml'))).toBe(false);
+        } finally {
+            fs.rmSync(workerHome, { recursive: true, force: true });
+            fs.rmSync(ownerHome, { recursive: true, force: true });
+        }
+    });
+
+    it('GROK_HOME still wins over env.HOME (the binary reads it first)', () => {
+        const workerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'grok-home-precedence-'));
+        try {
+            applyGrokWorkspaceTrust(workspace, { ...process.env, GROK_HOME: grokHome, HOME: workerHome });
+            expect(fs.readFileSync(storePath(), 'utf8'))
+                .toContain(`[folders."${escapeTomlKey(real())}"]`);
+            expect(fs.existsSync(path.join(workerHome, '.grok', 'trusted_folders.toml'))).toBe(false);
+        } finally {
+            fs.rmSync(workerHome, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('helpers', () => {

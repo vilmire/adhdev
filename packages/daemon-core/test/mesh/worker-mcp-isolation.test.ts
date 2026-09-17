@@ -263,13 +263,18 @@ describe('writeWorkerMcpConfig', () => {
 })
 
 describe('antigravity worker-private HOME', () => {
-  it('declares a spec for antigravity and cursor only', () => {
+  it('declares a spec for antigravity, cursor and grok only', () => {
     expect(findWorkerPrivateHomeSpec('antigravity-cli')).not.toBeNull()
     // cursor joined in 2026-09-17 (its global ~/.cursor/mcp.json is merged into
     // every launch, so a workspace-scoped config alone isolates nothing).
     expect(findWorkerPrivateHomeSpec('cursor-cli')).not.toBeNull()
+    // ★grok joined in 2026-09-18 for a RELATED but distinct reason: grok's
+    // harness-compatibility layer imports CURSOR's (and claude's) HOME-scoped
+    // config, so the owner's `~/.cursor/mcp.json` reached grok workers even
+    // though grok's own store was empty. Same remedy, different read path.
+    expect(findWorkerPrivateHomeSpec('grok-cli')).not.toBeNull()
     // hermes is deferred by owner decision §12-3; the rest are repo-local.
-    for (const other of ['hermes-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode']) {
+    for (const other of ['hermes-cli', 'claude-cli', 'codex-cli', 'kimi', 'opencode']) {
       expect(findWorkerPrivateHomeSpec(other)).toBeNull()
     }
   })
@@ -670,6 +675,163 @@ describe('cursor worker-private HOME', () => {
     const realHome = fakeCursorHome()
     const spec = findWorkerPrivateHomeSpec('cursor-cli')!
     const args = { workspace: tmp('adhdev-ws-cursor-rerun-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-rerun-') }
+    const first = prepareWorkerPrivateHome(spec, args)
+    expect(() => prepareWorkerPrivateHome(spec, args)).not.toThrow()
+    expect(prepareWorkerPrivateHome(spec, args).home).toBe(first.home)
+  })
+})
+
+/**
+ * Build a realistic fake home for grok.
+ *
+ * ★The leak surface is `~/.cursor/mcp.json` and `~/.claude.json`, NOT a grok
+ * file. grok's harness-compatibility layer imports cursor's / claude's config
+ * alongside its own, which is how the owner's personal servers reached a worker
+ * that declared none. Measured 2026-09-18 against grok 1.0.34: an otherwise
+ * EMPTY home containing only `~/.cursor/mcp.json` still produced the server,
+ * while `grok mcp list` (grok's own native store) was empty.
+ */
+function fakeGrokHome(): string {
+  const home = tmp('adhdev-grok-realhome-')
+  const grok = join(home, '.grok')
+  mkdirSync(grok, { recursive: true })
+  // Auth must be owner-only or the import is refused by design.
+  writeFileSync(join(grok, 'auth.json'), '{"token":"fixture"}')
+  chmodSync(join(grok, 'auth.json'), 0o600)
+  writeFileSync(join(grok, 'config.toml'), '[models]\ndefault = "grok-4.6"\n')
+  writeFileSync(join(grok, 'version.json'), '{"version":"1.0.34"}')
+  mkdirSync(join(grok, 'sessions'), { recursive: true })
+  mkdirSync(join(grok, 'bin'), { recursive: true })
+  // The owner's personal servers, reached through the CURSOR compat source.
+  mkdirSync(join(home, '.cursor'), { recursive: true })
+  writeFileSync(
+    join(home, '.cursor', 'mcp.json'),
+    JSON.stringify({ mcpServers: { blender: { command: 'uvx', args: ['blender-mcp'] } } }),
+  )
+  return home
+}
+
+describe('grok worker-private HOME', () => {
+  it('★the owner\'s ~/.cursor/mcp.json is NOT visible from the worker HOME', () => {
+    // The measured root cause. grok labels these servers `.mcp.json [cursor]`,
+    // where the bracket is a COMPAT-SOURCE tag, not a path — the file actually
+    // read is the owner's HOME-scoped cursor config. Live before/after in one
+    // workspace: 4 servers (3 owner-leaked) -> 1.
+    const realHome = fakeGrokHome()
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-global-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-global-'),
+    })
+
+    expect(existsSync(join(realHome, '.cursor', 'mcp.json'))).toBe(true)
+    expect(existsSync(join(prepared.home, '.cursor', 'mcp.json'))).toBe(false)
+    // `.cursor` / `.claude` exist but are real empty dirs, not links back.
+    for (const dir of ['.cursor', '.claude']) {
+      const worker = join(prepared.home, dir)
+      expect(existsSync(worker)).toBe(true)
+      expect(lstatSync(worker).isSymbolicLink()).toBe(false)
+    }
+  })
+
+  it('★a transcript the worker writes is visible at the path the DAEMON globs', () => {
+    // grok declares `nativeHistory.watchPath: ~/.grok/sessions/**`, and
+    // expandPath() resolves a literal `~` through os.homedir() unconditionally —
+    // it never sees the worker's HOME. So this asserts the end-to-end property:
+    // write through the WORKER path, read back from the REAL path. Without the
+    // symlink every grok worker silently reports zero assistant messages.
+    const realHome = fakeGrokHome()
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-transcript-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-transcript-'),
+    })
+
+    const workerSession = join(prepared.home, '.grok', 'sessions', 'encoded-cwd')
+    mkdirSync(workerSession, { recursive: true })
+    writeFileSync(join(workerSession, 'chat_history.jsonl'), '{"role":"assistant"}\n')
+
+    expect(readFileSync(join(realHome, '.grok', 'sessions', 'encoded-cwd', 'chat_history.jsonl'), 'utf-8'))
+      .toBe('{"role":"assistant"}\n')
+  })
+
+  it('★auth is SYMLINKED so an in-place refresh stays shared, config.toml is COPIED', () => {
+    // grok refreshes auth.json in place; a copy would strand the worker on a
+    // credential that expires mid-task. config.toml is the mirror case — grok
+    // REWRITES it, so a symlink would let a worker mutate the owner's file.
+    const realHome = fakeGrokHome()
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-auth-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-auth-'),
+    })
+
+    const workerAuth = join(prepared.home, '.grok', 'auth.json')
+    expect(lstatSync(workerAuth).isSymbolicLink()).toBe(true)
+    expect(realpathSync(workerAuth)).toBe(realpathSync(join(realHome, '.grok', 'auth.json')))
+
+    const workerConfig = join(prepared.home, '.grok', 'config.toml')
+    expect(lstatSync(workerConfig).isSymbolicLink()).toBe(false)
+    writeFileSync(workerConfig, '[models]\ndefault = "worker-edit"\n')
+    // The owner's file is untouched by the worker's rewrite.
+    expect(readFileSync(join(realHome, '.grok', 'config.toml'), 'utf-8'))
+      .toBe('[models]\ndefault = "grok-4.6"\n')
+  })
+
+  it('★does NOT import trusted_folders.toml (folder trust gates hooks/plugins)', () => {
+    // Deliberate, not an omission. In grok, folder trust gates HOOK and PLUGIN
+    // execution rather than the session — every probe ran to completion
+    // untrusted with no prompt. Importing it would hand the worker the owner's
+    // hook-execution grants; symlinking it would additionally let a worker write
+    // new grants into the owner's store.
+    const realHome = fakeGrokHome()
+    writeFileSync(join(realHome, '.grok', 'trusted_folders.toml'), '[folders."/owner/repo"]\ntrusted = true\n')
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-trust-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-trust-'),
+    })
+
+    expect(existsSync(join(prepared.home, '.grok', 'trusted_folders.toml'))).toBe(false)
+  })
+
+  it('launches on a host that has never run grok (non-required imports skip)', () => {
+    // A fresh machine has no sessions/ or version.json yet. Isolation must not
+    // turn a thin home into a spawn failure — only auth.json is `required`.
+    const realHome = tmp('adhdev-grok-thin-home-')
+    mkdirSync(join(realHome, '.grok'), { recursive: true })
+    writeFileSync(join(realHome, '.grok', 'auth.json'), '{"token":"fixture"}')
+    chmodSync(join(realHome, '.grok', 'auth.json'), 0o600)
+
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-thin-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-thin-'),
+    })
+
+    expect(prepared.imported).toContain(join('.grok', 'auth.json'))
+    expect(prepared.skipped).toContain(join('.grok', 'sessions'))
+    // The isolated surfaces are still created, which is what closes the leak.
+    expect(existsSync(join(prepared.home, '.cursor'))).toBe(true)
+  })
+
+  it('refuses a world-readable auth.json rather than laundering it', () => {
+    const realHome = fakeGrokHome()
+    chmodSync(join(realHome, '.grok', 'auth.json'), 0o644)
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    expect(() => prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-grok-perm-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-perm-'),
+    })).toThrow(/worker_private_home_insecure_source/)
+  })
+
+  it('is re-runnable for the same key (relaunch replaces the stale link)', () => {
+    const realHome = fakeGrokHome()
+    const spec = findWorkerPrivateHomeSpec('grok-cli')!
+    const args = {
+      workspace: tmp('adhdev-ws-grok-rerun-'), sessionKey: 'task_1', realHome,
+      baseDir: tmp('adhdev-whbase-grok-rerun-'),
+    }
     const first = prepareWorkerPrivateHome(spec, args)
     expect(() => prepareWorkerPrivateHome(spec, args)).not.toThrow()
     expect(prepareWorkerPrivateHome(spec, args).home).toBe(first.home)
