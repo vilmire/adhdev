@@ -240,6 +240,10 @@ export class SpecCliAdapter implements CliAdapter {
              *  replaces, relayed to the driver so they are stripped from the SPEC's
              *  `spawn_args` too — see route.ts's `removeArgs` parameter. */
             removeArgs?: string[];
+            /** ★SPAWN-LOG-VERSION: the MANIFEST's provider version, relayed to the
+             *  driver purely so the spawn diagnostic can name the bundle. The spec
+             *  itself has no version field, which is why that line read `vunknown`. */
+            providerVersion?: string;
         },
         resolvedTrustPlan?: ResolvedTrustPlan | null,
     ) {
@@ -274,6 +278,7 @@ export class SpecCliAdapter implements CliAdapter {
             sessionId,
             manifestSendDelayMs: manifestTuning?.sendDelayMs,
             removeSpawnArgs: manifestTuning?.removeArgs,
+            manifestProviderVersion: manifestTuning?.providerVersion,
             resolvedTrustPlan,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));

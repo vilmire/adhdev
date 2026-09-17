@@ -757,3 +757,130 @@ describe('★delegated worker pre-launch trust is decoupled from the worker-MCP 
       .toEqual([realpathSync(workspace)])
   })
 })
+
+// ★ISOLATION-OBSERVABILITY (2026-09-17 cursor incident).
+//
+// A daemon booted with cursor-cli v1.0.5, whose `meshCoordinator` key set
+// carried [supported, mcpConfig, systemPromptInjection, launchArgs] and NO
+// `delegatedWorkerIsolation`. The arg-rule loop iterated an empty array, so
+// neither the "applied" note nor the "withheld" note was produced — while
+// `mcpConfig` (present in 1.0.5) still wrote a config and logged that it had.
+// The log therefore read as though the MCP surface had been configured, when
+// `--approve-mcps` had never been passed and the worker booted with no tools.
+//
+// These tests assert the PROPERTY that was missing: "no rules declared" is a
+// third, separately observable state — not silence.
+describe('★absent delegatedWorkerIsolation is observable, not silent', () => {
+  const priorEnv = process.env.ADHDEV_WORKER_MCP
+  afterEach(() => {
+    if (priorEnv === undefined) delete process.env.ADHDEV_WORKER_MCP
+    else process.env.ADHDEV_WORKER_MCP = priorEnv
+  })
+
+  function buildWithIsolation(isolation: unknown, providerVersion?: string) {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-absent-rule-'))
+    __tmpDirsToClean.push(workspace)
+    return buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'cursor-cli',
+      workspace,
+      isolation: isolation as any,
+      ...(providerVersion ? { providerVersion } : {}),
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_absent_rule',
+    })
+  }
+
+  it('★reports the ABSENCE of a rule set — the v1.0.5 shape that produced no note at all', () => {
+    // The literal shape of cursor-cli v1.0.5: meshCoordinator exists and
+    // carries mcpConfig, but declares no delegatedWorkerIsolation whatsoever.
+    const result = buildWithIsolation(undefined, '1.0.5')
+
+    const notes = (result.isolationNotes || []).join(' ')
+    // The absence itself must be stated.
+    expect(notes).toMatch(/no delegatedWorkerIsolation args declared/)
+    // ...and attributed to the exact bundle that failed to declare it, since
+    // "which version am I actually running" was the unanswerable question.
+    expect(notes).toContain('cursor-cli@1.0.5')
+  })
+
+  it('★says so even with the worker-MCP gate OFF (workerIsolation.notes is null there)', () => {
+    // This is the whole reason isolationNotes is a separate channel. With the
+    // gate off resolveWorkerMcpIsolation() returns null, so anything pushed
+    // through `workerIsolation?.notes` is optional-chained into oblivion —
+    // silently dropping the diagnostic in the configuration that is the
+    // DEFAULT. A note that vanishes when the gate is off explains nothing.
+    delete process.env.ADHDEV_WORKER_MCP
+    const result = buildWithIsolation(undefined, '1.0.5')
+
+    expect(result.workerIsolation).toBeUndefined()
+    expect((result.isolationNotes || []).join(' ')).toMatch(/no delegatedWorkerIsolation args declared/)
+  })
+
+  it('★distinguishes absent from WITHHELD — the two must not read alike', () => {
+    // Withheld means "a rule existed and fail-closed logic declined it"
+    // (fixable by preparing a private HOME). Absent means "the bundle declares
+    // nothing" (fixable only by loading a newer bundle). Conflating them sends
+    // an operator to the wrong file — which is exactly what happened: hours
+    // went into re-reading requiresPrivateHome logic that never ran.
+    process.env.ADHDEV_WORKER_MCP = '1'
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-withheld-rule-'))
+    __tmpDirsToClean.push(workspace)
+    const withheld = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'kimi', // no private-HOME spec ⇒ fail-closed path
+      workspace,
+      isolation: cursorIsolation,
+      providerVersion: '1.0.11',
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_withheld_rule',
+    })
+
+    const absent = buildWithIsolation(undefined, '1.0.5')
+
+    // Withheld: the rule EXISTED and was declined — reported on the outcome
+    // channel, and the declaration channel confirms a rule was there to decline.
+    expect(withheld.workerIsolation!.notes.join(' ')).toMatch(/--approve-mcps withheld/)
+    expect((withheld.isolationNotes || []).join(' ')).toMatch(/1 delegatedWorkerIsolation arg rule\(s\) declared/)
+    expect((withheld.isolationNotes || []).join(' ')).not.toMatch(/no delegatedWorkerIsolation args declared/)
+
+    // Absent: no outcome note is possible, and the declaration channel says why.
+    expect((absent.isolationNotes || []).join(' ')).toMatch(/no delegatedWorkerIsolation args declared/)
+    expect(absent.workerIsolation?.notes?.join(' ') || '').not.toMatch(/--approve-mcps/)
+  })
+
+  it('★an empty args ARRAY reads as absent, not as a satisfied rule set', () => {
+    // `args: []` is the same operational state as no declaration — nothing
+    // will be applied — and must not be reported as if rules ran cleanly.
+    const result = buildWithIsolation({ args: [] }, '1.0.5')
+    expect((result.isolationNotes || []).join(' ')).toMatch(/no delegatedWorkerIsolation args declared/)
+  })
+
+  it('names the declared rule modes when rules ARE present, so a wrong rule set is visible too', () => {
+    process.env.ADHDEV_WORKER_MCP = '1'
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-present-rule-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-present-rule-'))
+    __tmpDirsToClean.push(realHome, workspace)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'cursor-cli',
+      workspace,
+      isolation: cursorIsolation,
+      providerVersion: '1.0.6',
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_present_rule',
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-present-rule-base-')),
+    })
+
+    const notes = (result.isolationNotes || []).join(' ')
+    expect(notes).toMatch(/1 delegatedWorkerIsolation arg rule\(s\) declared/)
+    expect(notes).toContain('approve_mcp_servers')
+    expect(notes).toContain('cursor-cli@1.0.6')
+    // And the rule genuinely applied — the good path stays intact.
+    expect(result.cliArgs).toContain('--approve-mcps')
+  })
+
+  it('falls back to an explicit unknown-version label rather than omitting the bundle identity', () => {
+    const result = buildWithIsolation(undefined)
+    expect((result.isolationNotes || []).join(' ')).toContain('cursor-cli@unknown-version')
+  })
+})

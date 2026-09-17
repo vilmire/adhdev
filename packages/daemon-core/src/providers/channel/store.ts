@@ -218,6 +218,50 @@ export class ProviderChannelStore {
     return { pointers, errors };
   }
 
+  /**
+   * ★STORE-RELOAD: a cheap fingerprint of a channel's active pointer set,
+   * for detecting an activation performed by ANOTHER process.
+   *
+   * Why this exists — the 2026-09-17 cursor incident. `activate()` below is a
+   * pure pointer flip with no loader callback, and `ProviderLoader.loadAll()`
+   * is only re-run from the loader's OWN `syncVerifiedChannel()`. So when the
+   * `provider publish/activate` CLI flipped cursor-cli from 1.0.5 to 1.0.6,
+   * the daemon that had been running since before the flip went on serving
+   * 1.0.5 from its in-memory map — for over an hour, with no signal anywhere
+   * that the pointer on disk and the map in memory had diverged. A worker
+   * launched in that window silently lost its MCP isolation args.
+   *
+   * Deliberately does NOT parse the pointer JSON: `writePointerAtomic` lands
+   * every pointer via `fs.renameSync`, so the file is replaced as a unit and
+   * its mtime advances on exactly the transitions we care about. That keeps
+   * this to one readdir + one stat per file, cheap enough to sit in front of
+   * a launch. A corrupt or unreadable pointer contributes its name with a
+   * sentinel rather than throwing — this is a change DETECTOR, and deciding
+   * what a pointer means stays with `listActiveActivations()`, which fails
+   * closed on exactly that case.
+   */
+  activationSignature(channel: ProviderChannel): string {
+    const dir = this.activeDir(channel);
+    let files: string[];
+    try {
+      files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    } catch {
+      // No active dir yet is a legitimate, stable state (empty store) — and it
+      // must compare equal to itself so it does not force a reload every call.
+      return '';
+    }
+    const parts: string[] = [];
+    for (const file of files.sort()) {
+      try {
+        const st = fs.statSync(path.join(dir, file));
+        parts.push(`${file}:${st.mtimeMs}:${st.size}`);
+      } catch {
+        parts.push(`${file}:?`);
+      }
+    }
+    return parts.join('|');
+  }
+
   /** Object dirs currently activated for a channel (for the loader). */
   listActiveActivations(channel: ProviderChannel): {
     activations: Array<{ ref: ActivationRef; objectDir: string }>;

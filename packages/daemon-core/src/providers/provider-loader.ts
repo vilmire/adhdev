@@ -67,6 +67,24 @@ import {
 } from './channel/runtime.js';
 
 /**
+ * ★STORE-RELOAD debounce: minimum gap between two activation-signature
+ * samples in `refreshIfChannelActivationChanged()`.
+ *
+ * Sized against the burst it exists to absorb. `publish-provider-channels
+ * --execute` activates the full provider set (51 types as of 2026-08-10) in a
+ * tight loop, and each flip changes the signature; without a floor, launches
+ * during that window would each trigger a full `loadAll()` — a re-walk and
+ * re-parse of every provider dir on disk — against a pointer set still being
+ * written. 5s is far longer than such a burst's per-flip spacing yet far below
+ * any human-noticeable staleness: the failure it prevents (a worker launched
+ * against a superseded bundle) was measured at over an HOUR of divergence.
+ *
+ * It bounds staleness, it does not create it: `syncVerifiedChannel()` still
+ * reloads immediately for activations this daemon performs itself.
+ */
+const CHANNEL_ACTIVATION_RECHECK_MS = 5_000;
+
+/**
  * Adds a provider-script root to the require whitelist. Wrapped in a
  * try/catch + null check so a loader hot-path can't crash on a path
  * that doesn't exist yet or one the whitelist hook rejects.
@@ -335,6 +353,15 @@ export class ProviderLoader {
   private siblingLogged = false;
   /** Active verified-channel object dirs, refreshed by loadAll(). */
   private channelObjectRoots: string[] = [];
+  /**
+   * ★STORE-RELOAD: the channel activation signature observed at the last
+   * loadAll(). `refreshIfChannelActivationChanged()` compares against it to
+   * decide whether this daemon's in-memory provider map still matches the
+   * pointers on disk. `null` = never sampled.
+   */
+  private channelActivationSignature: string | null = null;
+  /** Monotonic timestamp of the last signature sample, for the debounce below. */
+  private channelActivationCheckedAtMs = 0;
   private userDirSource: ProviderUserDirSource = 'home-default';
 
   /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
@@ -856,6 +883,18 @@ export class ProviderLoader {
   private loadVerifiedChannelActivations(): void {
     this.channelObjectRoots = [];
     if (!this.channelStore) return;
+    // ★STORE-RELOAD: stamp the signature of the pointer set we are about to
+    // read. Sampled BEFORE the reads so a concurrent activation landing during
+    // this load leaves a signature that no longer matches, and the next check
+    // reloads rather than concluding it is already current.
+    try {
+      this.channelActivationSignature = this.channelStore.activationSignature(this.channel);
+      this.channelActivationCheckedAtMs = Date.now();
+    } catch {
+      // A signature we cannot take must not be cached as "current" — leaving
+      // it null makes the next check re-sample instead of trusting a stale map.
+      this.channelActivationSignature = null;
+    }
     let result: ReturnType<ProviderChannelStore['listActiveActivations']>;
     try {
       result = this.channelStore.listActiveActivations(this.channel);
@@ -874,6 +913,92 @@ export class ProviderLoader {
     if (count > 0) {
       this.log(`Loaded ${count} verified channel providers (${this.channel}, content-addressed store)`);
     }
+  }
+
+ /**
+  * ★STORE-RELOAD: reload providers if another process activated a different
+  * bundle since this daemon last loaded.
+  *
+  * ── The gap this closes ────────────────────────────────────────────────
+  * `ProviderChannelStore.activate()` is a pure pointer flip with no callback
+  * into the loader, and the one place that reloads on activation —
+  * `syncVerifiedChannel()` above — only runs for syncs THIS daemon performs.
+  * Any other writer (the `provider publish`/`activate` CLI, a second daemon,
+  * a dashboard-driven activation in another process) changes what is on disk
+  * while this process keeps serving its boot-time map.
+  *
+  * Measured 2026-09-17: a daemon booted at 06:06 loaded cursor-cli v1.0.5
+  * (its own boot sync having failed with CHANNEL_METADATA_UNAVAILABLE); a
+  * separate process activated v1.0.6 at 07:11; a worker launched at 07:19
+  * still got 1.0.5 — whose `meshCoordinator` declares no
+  * `delegatedWorkerIsolation`, so `--approve-mcps` was never applied and the
+  * worker booted with zero MCP tools. Nothing in the system reported the
+  * divergence.
+  *
+  * ── Why polling the store rather than being notified ───────────────────
+  * The alternative — having the publishing CLI signal the daemon over IPC —
+  * was rejected: it couples correctness to the writer cooperating and to a
+  * daemon being alive and addressable at flip time, and on a machine running
+  * both a preview and a stable daemon it is ambiguous which to notify. Reading
+  * the store makes the daemon's own launch path responsible for its own
+  * freshness, which holds no matter who wrote.
+  *
+  * ── Why lazy rather than a timer or fs.watch ───────────────────────────
+  * `fs.watch` needs a watcher lifecycle the loader has no teardown hook for,
+  * and can fire mid-launch — reloading the provider map underneath a spawn
+  * that has already read from it. A timer reloads on a schedule unrelated to
+  * when anyone actually needs the data. Checking at the point of use is both
+  * cheaper at rest (nothing runs when nothing launches) and correctly ordered:
+  * the reload completes before the caller reads the map, never during.
+  *
+  * ── Debounce ───────────────────────────────────────────────────────────
+  * Bounded to one signature sample per CHANNEL_ACTIVATION_RECHECK_MS. Without
+  * it a burst of activations — `publish-provider-channels --execute` flips all
+  * 51 types in a tight loop — would have each subsequent launch re-running a
+  * full `loadAll()` (every provider dir on disk, re-parsed) against a pointer
+  * set still mid-flight. The window also collapses a fan-out of concurrent
+  * worker launches into a single check.
+  *
+  * Returns true when a reload actually happened.
+  */
+  refreshIfChannelActivationChanged(options?: { force?: boolean }): boolean {
+    if (!this.channelStore) return false;
+    const now = Date.now();
+    if (
+      !options?.force
+      && this.channelActivationSignature !== null
+      && now - this.channelActivationCheckedAtMs < CHANNEL_ACTIVATION_RECHECK_MS
+    ) {
+      return false;
+    }
+    let signature: string;
+    try {
+      signature = this.channelStore.activationSignature(this.channel);
+    } catch (e: any) {
+      // Fail closed toward the CURRENT map: an unreadable store is not
+      // evidence of a new activation, and reloading on it would turn a
+      // transient fs error into a provider-map rebuild on every launch.
+      this.log(`⚠ Verified channel signature unreadable (${this.channel}): ${e?.message || e}`);
+      this.channelActivationCheckedAtMs = now;
+      return false;
+    }
+    this.channelActivationCheckedAtMs = now;
+    if (this.channelActivationSignature === signature) return false;
+    const previous = this.channelActivationSignature;
+    // First sample (null) establishes the baseline without a reload — the map
+    // was just built by loadAll(), so it is current by construction.
+    if (previous === null) {
+      this.channelActivationSignature = signature;
+      return false;
+    }
+    this.log(
+      `Verified channel activations changed out-of-process on ${this.channel}`
+      + ' — reloading providers so this daemon stops serving the superseded bundle',
+    );
+    // loadAll() re-stamps channelActivationSignature via
+    // loadVerifiedChannelActivations(), so no manual assignment here.
+    this.loadAll();
+    return true;
   }
 
  /**

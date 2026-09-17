@@ -29,6 +29,21 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     env?: Record<string, string>;
     isolation?: MeshCoordinatorDelegatedWorkerIsolation;
     /**
+     * ★ISOLATION-OBSERVABILITY: the RESOLVED manifest version of the provider
+     * this launch is actually running — i.e. what the running daemon holds in
+     * memory, not what the repo checkout or the channel pointer says.
+     *
+     * The distinction is the whole point. On 2026-09-17 a daemon that had
+     * loaded cursor-cli v1.0.5 at boot kept serving v1.0.5 after a separate
+     * process flipped the channel pointer to v1.0.6, because an out-of-process
+     * pointer flip does not reload a running daemon's provider map. Every
+     * artifact an operator could reach — the repo, the store pointer, the
+     * installed bundle — said 1.0.6. Only the daemon disagreed, and it said so
+     * nowhere. Stamping the in-memory version onto the isolation notes makes
+     * that divergence readable from the log alone.
+     */
+    providerVersion?: string;
+    /**
      * WORKER-MCP: the provider's declared `meshCoordinator.mcpConfig`, used to
      * write a worker-scoped config to the path the provider already names.
      * Absent (or gate off) ⇒ prior behavior, unchanged.
@@ -85,6 +100,33 @@ export interface CoordinatorDelegatedCliLaunchOptions {
      * a caller logging both never double-reports).
      */
     trustNotes?: string[];
+    /**
+     * ★ISOLATION-OBSERVABILITY: notes about the provider's declared
+     * `meshCoordinator.delegatedWorkerIsolation.args` RULE SET ITSELF, as
+     * opposed to the outcome of applying a rule (which goes to
+     * `workerIsolation.notes`).
+     *
+     * This is a SEPARATE channel from `workerIsolation.notes` on purpose:
+     * that array lives on the object `resolveWorkerMcpIsolation()` returns,
+     * which is NULL whenever the ADHDEV_WORKER_MCP gate is off. A note pushed
+     * through `workerIsolation?.notes` is therefore silently swallowed in
+     * exactly the configuration where it is most needed. `trustNotes` was
+     * decoupled from the same gate for the same reason.
+     *
+     * Why it exists at all — the 2026-09-17 cursor incident: a daemon booted
+     * with cursor-cli v1.0.5, whose `meshCoordinator` key set had no
+     * `delegatedWorkerIsolation` at all. The arg-rule loop below therefore
+     * iterated an EMPTY array, so neither the "applied" note nor the
+     * "withheld" note was emitted — and `mcpConfig` (which v1.0.5 DID carry)
+     * still wrote a config and logged that it had. The log read as "the MCP
+     * surface was configured", while `--approve-mcps` was never passed and the
+     * worker booted with zero tools. Hours went into re-reading fail-closed
+     * logic that had never executed.
+     *
+     * "No rules declared" is a THIRD state, distinct from applied and from
+     * withheld, and it must be visible as such.
+     */
+    isolationNotes?: string[];
 }
 
 function hasCliArg(args: string[], flag: string): boolean {
@@ -362,7 +404,30 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         cliArgs.unshift(...deliveryArgs);
     }
 
-    for (const rule of input.isolation?.args || []) {
+    // ★ISOLATION-OBSERVABILITY: record the identity of the rule set BEFORE
+    // iterating it, so the empty case leaves a trace. The loop below can only
+    // ever speak about rules that exist — an absent declaration produces
+    // silence, and silence is indistinguishable from "nothing needed doing".
+    // See CoordinatorDelegatedCliLaunchOptions.isolationNotes for the incident.
+    const isolationNotes: string[] = [];
+    const declaredArgRules = Array.isArray(input.isolation?.args) ? input.isolation.args : [];
+    const providerLabel = input.providerVersion
+        ? `${input.cliType}@${input.providerVersion}`
+        : `${input.cliType}@unknown-version`;
+    if (declaredArgRules.length === 0) {
+        isolationNotes.push(
+            `no delegatedWorkerIsolation args declared for ${providerLabel}`
+            + ' — no isolation rule was applied OR withheld; the provider bundle this daemon'
+            + ' has loaded declares none',
+        );
+    } else {
+        isolationNotes.push(
+            `${declaredArgRules.length} delegatedWorkerIsolation arg rule(s) declared for ${providerLabel}`
+            + ` (${declaredArgRules.map((r) => (r && typeof r === 'object' ? String(r.mode || '?') : '?')).join(', ')})`,
+        );
+    }
+
+    for (const rule of declaredArgRules) {
         if (!rule || typeof rule !== 'object') continue;
         if (rule.mode === 'empty_mcp_config') {
             if (rule.flag && !hasCliArg(cliArgs, rule.flag)) {
@@ -428,5 +493,6 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         ...(workerIsolation ? { workerIsolation } : {}),
         ...(resolvedTrustPlan !== undefined ? { resolvedTrustPlan } : {}),
         ...(trustHomeNotes?.length ? { trustNotes: trustHomeNotes } : {}),
+        ...(isolationNotes.length ? { isolationNotes } : {}),
     };
 }

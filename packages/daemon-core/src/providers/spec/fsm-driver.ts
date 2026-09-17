@@ -336,6 +336,23 @@ export interface SpecDriverOpts {
      * `acceptEdits`, specs/4.0.json `default`).
      */
     removeSpawnArgs?: string[];
+    /**
+     * ★SPAWN-LOG-VERSION: the provider MANIFEST's version, threaded in from
+     * route.ts purely for the spawn diagnostic line.
+     *
+     * `CliSpecV4` (specs/4.0.json) is the FSM runtime spec and carries no
+     * version of its own, so buildAdapterOpts() had nothing to pass and every
+     * spec-path spawn logged `Spawning (spec vunknown)`. That line is the one
+     * record of which bundle a session is running — and it mattered on
+     * 2026-09-17, when a daemon was serving a provider version several hours
+     * behind the activated pointer and the log could not say so.
+     *
+     * The manifest version was never unavailable, only unthreaded: route.ts
+     * holds the resolved `CliProviderModule` at construction time. Optional,
+     * so tests and out-of-tree embedders that build a driver without a
+     * manifest keep logging `vunknown` rather than breaking.
+     */
+    manifestProviderVersion?: string;
 }
 
 /** No-output escape hatch for spawn priming. Live agy startup output arrived at
@@ -978,10 +995,16 @@ export class FsmDriver implements ISpecDriver {
             extraEnv: this.opts.extraEnv ?? {},
             geometry: { cols, rows },
             // CliSpecV4 is the FSM runtime spec (specs/4.0.json), not the
-            // provider manifest, so it carries no `type`/`providerVersion`.
-            // `id`/`name` is the identity this path actually has; the manifest
-            // version is genuinely unavailable here rather than omitted.
+            // provider manifest, so it carries no `type`/`providerVersion` —
+            // `id`/`name` is the identity this path has of its own.
+            //
+            // ★SPAWN-LOG-VERSION: the manifest version is NOT unavailable here,
+            // as this comment previously asserted; it is simply not on the spec.
+            // route.ts holds the resolved manifest and now threads it down (see
+            // SpecDriverOpts.manifestProviderVersion), which is what ends the
+            // `Spawning (spec vunknown)` line this path logged for every CLI.
             diagnosticCliType: this.spec.id || this.spec.name,
+            diagnosticProviderVersion: this.opts.manifestProviderVersion,
         });
         return {
             binary: plan.shellCmd,

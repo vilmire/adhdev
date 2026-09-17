@@ -51,22 +51,46 @@ describe('spawn argv logging', () => {
     });
 
     it('logs on the spec/FSM path too, which the adapter-local log missed', () => {
-        // FsmDriver passes spec identity but has no manifest version to give
-        // (CliSpecV4 is the FSM runtime spec, not the provider manifest).
+        // ★SPAWN-LOG-VERSION (2026-09-17): this case used to assert `spec
+        // vunknown` here, on the premise that FsmDriver "has no manifest
+        // version to give". The premise was wrong in a way that cost real
+        // diagnostic time: CliSpecV4 indeed carries no version, but route.ts
+        // holds the resolved manifest at construction and simply never passed
+        // it down. So EVERY spec-path spawn — which, since the legacy engine
+        // was deleted in 48e5ed1a, is every CLI — logged `vunknown`, defeating
+        // the exact purpose this file's header states ("Version in the line is
+        // what distinguishes 'our expansion is wrong' from 'this machine is
+        // pinned to an old spec'"). It is now threaded through
+        // SpecDriverOpts.manifestProviderVersion.
         resolveCliSpawnPlanFromParts({
             command: 'codex',
             baseArgs: [],
             workingDir: '/tmp/ws',
             extraArgs: ['resume', '019fb1b3-a66a-7b33-bbc3-a5f9e8b1a65c'],
             diagnosticCliType: 'codex-cli',
+            diagnosticProviderVersion: '1.0.7',
         });
 
         const lines = spawnLines();
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain('resume 019fb1b3-a66a-7b33-bbc3-a5f9e8b1a65c');
         expect(lines[0]).toContain('[codex-cli]');
-        // Honest about what it does not know, rather than implying a version.
-        expect(lines[0]).toContain('spec vunknown');
+        expect(lines[0]).toContain('spec v1.0.7');
+        expect(lines[0]).not.toContain('vunknown');
+    });
+
+    it('still says vunknown only when a version genuinely was not supplied', () => {
+        // Out-of-tree embedders and tests build a driver without a manifest.
+        // `vunknown` remains honest THERE — the regression was that the real
+        // production path fell into this branch for every provider.
+        resolveCliSpawnPlanFromParts({
+            command: 'codex',
+            baseArgs: [],
+            workingDir: '/tmp/ws',
+            extraArgs: [],
+            diagnosticCliType: 'codex-cli',
+        });
+        expect(spawnLines()[0]).toContain('spec vunknown');
     });
 
     it('passes short args through unchanged (no over-truncation)', () => {

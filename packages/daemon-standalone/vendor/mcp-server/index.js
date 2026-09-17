@@ -105253,10 +105253,16 @@ decided_at = ${decidedAt}
               extraEnv: this.opts.extraEnv ?? {},
               geometry: { cols, rows },
               // CliSpecV4 is the FSM runtime spec (specs/4.0.json), not the
-              // provider manifest, so it carries no `type`/`providerVersion`.
-              // `id`/`name` is the identity this path actually has; the manifest
-              // version is genuinely unavailable here rather than omitted.
-              diagnosticCliType: this.spec.id || this.spec.name
+              // provider manifest, so it carries no `type`/`providerVersion` —
+              // `id`/`name` is the identity this path has of its own.
+              //
+              // ★SPAWN-LOG-VERSION: the manifest version is NOT unavailable here,
+              // as this comment previously asserted; it is simply not on the spec.
+              // route.ts holds the resolved manifest and now threads it down (see
+              // SpecDriverOpts.manifestProviderVersion), which is what ends the
+              // `Spawning (spec vunknown)` line this path logged for every CLI.
+              diagnosticCliType: this.spec.id || this.spec.name,
+              diagnosticProviderVersion: this.opts.manifestProviderVersion
             });
             return {
               binary: plan.shellCmd,
@@ -111438,6 +111444,7 @@ ${text}` : text;
               sessionId,
               manifestSendDelayMs: manifestTuning?.sendDelayMs,
               removeSpawnArgs: manifestTuning?.removeArgs,
+              manifestProviderVersion: manifestTuning?.providerVersion,
               resolvedTrustPlan
             });
             this.driver.subscribe((ev) => this.handleEvent(ev));
@@ -112981,7 +112988,16 @@ ${text}` : text;
       LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path41.relative(dir || "", specPath) || specPath})`);
       return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
-        removeArgs
+        removeArgs,
+        // ★SPAWN-LOG-VERSION: the manifest version, which the SPEC does not
+        // carry. `CliSpecV4` is the FSM runtime spec (specs/4.0.json) and has
+        // no `providerVersion` field at all, so the spec path logged
+        // `Spawning (spec vunknown)` for every CLI — the one line an operator
+        // reads to learn which bundle a session is actually running. The
+        // manifest is right here, already resolved; it just was never handed
+        // down. Threaded through the existing `manifestTuning` bag, the same
+        // seam MANIFEST-SEND-DELAY used for the identical reason.
+        providerVersion: provider.providerVersion
       }, resolvedTrustPlan);
     }
     var fs40;
@@ -120575,7 +120591,19 @@ ${rawInput}` : rawInput;
         const deliveryArgs = renderWorkerMcpDeliveryArgs(cliArgs, workerIsolation.delivery);
         cliArgs.unshift(...deliveryArgs);
       }
-      for (const rule of input.isolation?.args || []) {
+      const isolationNotes = [];
+      const declaredArgRules = Array.isArray(input.isolation?.args) ? input.isolation.args : [];
+      const providerLabel = input.providerVersion ? `${input.cliType}@${input.providerVersion}` : `${input.cliType}@unknown-version`;
+      if (declaredArgRules.length === 0) {
+        isolationNotes.push(
+          `no delegatedWorkerIsolation args declared for ${providerLabel} \u2014 no isolation rule was applied OR withheld; the provider bundle this daemon has loaded declares none`
+        );
+      } else {
+        isolationNotes.push(
+          `${declaredArgRules.length} delegatedWorkerIsolation arg rule(s) declared for ${providerLabel} (${declaredArgRules.map((r) => r && typeof r === "object" ? String(r.mode || "?") : "?").join(", ")})`
+        );
+      }
+      for (const rule of declaredArgRules) {
         if (!rule || typeof rule !== "object") continue;
         if (rule.mode === "empty_mcp_config") {
           if (rule.flag && !hasCliArg(cliArgs, rule.flag)) {
@@ -120612,7 +120640,8 @@ ${rawInput}` : rawInput;
         env: env2,
         ...workerIsolation ? { workerIsolation } : {},
         ...resolvedTrustPlan !== void 0 ? { resolvedTrustPlan } : {},
-        ...trustHomeNotes?.length ? { trustNotes: trustHomeNotes } : {}
+        ...trustHomeNotes?.length ? { trustNotes: trustHomeNotes } : {},
+        ...isolationNotes.length ? { isolationNotes } : {}
       };
     }
     var os30;
@@ -121754,6 +121783,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 const dir = resolved.path;
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error("cliType required");
+                try {
+                  this.providerLoader.refreshIfChannelActivationChanged?.();
+                } catch (e) {
+                  LOG.warn("ProviderStore", `channel activation refresh failed: ${e?.message || e}`);
+                }
                 const providerType = this.providerLoader.resolveAlias(cliType);
                 const provLookup = this.providerLoader.getMeta(providerType);
                 let settingsOverride = args?.settings && typeof args.settings === "object" ? args.settings : void 0;
@@ -121787,6 +121821,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   cliArgs: args?.cliArgs,
                   env: args?.env,
                   isolation: provLookup?.meshCoordinator?.delegatedWorkerIsolation,
+                  // ★ISOLATION-OBSERVABILITY: the bundle version THIS DAEMON
+                  // holds in memory (provLookup is the live map entry) — the
+                  // value that diverges from the channel pointer after an
+                  // out-of-process activation.
+                  providerVersion: provLookup?.providerVersion,
                   // WORKER-MCP: the declared config path is what lets the
                   // daemon write a worker config for the 6 providers that
                   // declare no isolation rules of their own.
@@ -121820,8 +121859,12 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     }
                   } : {}
                 }) : null;
+                const delegatedProviderLabel = provLookup?.providerVersion ? `${cliType}@${provLookup.providerVersion}` : `${cliType}@unknown-version`;
+                if (delegatedLaunch?.isolationNotes?.length) {
+                  LOG.info("WorkerIsolation", `[${delegatedProviderLabel}] ${delegatedLaunch.isolationNotes.join("; ")}`);
+                }
                 if (delegatedLaunch?.workerIsolation?.notes.length) {
-                  LOG.info("WorkerMcp", `[${cliType}] ${delegatedLaunch.workerIsolation.notes.join("; ")}`);
+                  LOG.info("WorkerMcp", `[${delegatedProviderLabel}] ${delegatedLaunch.workerIsolation.notes.join("; ")}`);
                 }
                 if (delegatedLaunch?.trustNotes?.length) {
                   LOG.info("WorkerTrust", `[${cliType}] ${delegatedLaunch.trustNotes.join("; ")}`);
@@ -125651,6 +125694,47 @@ ${effect.notification.body || ""}`.trim();
             }
             return { pointers, errors };
           }
+          /**
+           * ★STORE-RELOAD: a cheap fingerprint of a channel's active pointer set,
+           * for detecting an activation performed by ANOTHER process.
+           *
+           * Why this exists — the 2026-09-17 cursor incident. `activate()` below is a
+           * pure pointer flip with no loader callback, and `ProviderLoader.loadAll()`
+           * is only re-run from the loader's OWN `syncVerifiedChannel()`. So when the
+           * `provider publish/activate` CLI flipped cursor-cli from 1.0.5 to 1.0.6,
+           * the daemon that had been running since before the flip went on serving
+           * 1.0.5 from its in-memory map — for over an hour, with no signal anywhere
+           * that the pointer on disk and the map in memory had diverged. A worker
+           * launched in that window silently lost its MCP isolation args.
+           *
+           * Deliberately does NOT parse the pointer JSON: `writePointerAtomic` lands
+           * every pointer via `fs.renameSync`, so the file is replaced as a unit and
+           * its mtime advances on exactly the transitions we care about. That keeps
+           * this to one readdir + one stat per file, cheap enough to sit in front of
+           * a launch. A corrupt or unreadable pointer contributes its name with a
+           * sentinel rather than throwing — this is a change DETECTOR, and deciding
+           * what a pointer means stays with `listActiveActivations()`, which fails
+           * closed on exactly that case.
+           */
+          activationSignature(channel) {
+            const dir = this.activeDir(channel);
+            let files;
+            try {
+              files = fs46.readdirSync(dir).filter((f) => f.endsWith(".json"));
+            } catch {
+              return "";
+            }
+            const parts = [];
+            for (const file2 of files.sort()) {
+              try {
+                const st = fs46.statSync(path50.join(dir, file2));
+                parts.push(`${file2}:${st.mtimeMs}:${st.size}`);
+              } catch {
+                parts.push(`${file2}:?`);
+              }
+            }
+            return parts.join("|");
+          }
           /** Object dirs currently activated for a channel (for the loader). */
           listActiveActivations(channel) {
             const { pointers, errors } = this.listPointers(channel);
@@ -128440,6 +128524,7 @@ ${effect.notification.body || ""}`.trim();
     var fs50;
     var path54;
     var chokidar;
+    var CHANNEL_ACTIVATION_RECHECK_MS;
     var ProviderLoader;
     var init_provider_loader = __esm2({
       "src/providers/provider-loader.ts"() {
@@ -128461,6 +128546,7 @@ ${effect.notification.body || ""}`.trim();
         init_config_dir();
         init_store2();
         init_runtime();
+        CHANNEL_ACTIVATION_RECHECK_MS = 5e3;
         ProviderLoader = class _ProviderLoader {
           providers = /* @__PURE__ */ new Map();
           providerAvailability = /* @__PURE__ */ new Map();
@@ -128533,6 +128619,15 @@ ${effect.notification.body || ""}`.trim();
           siblingLogged = false;
           /** Active verified-channel object dirs, refreshed by loadAll(). */
           channelObjectRoots = [];
+          /**
+           * ★STORE-RELOAD: the channel activation signature observed at the last
+           * loadAll(). `refreshIfChannelActivationChanged()` compares against it to
+           * decide whether this daemon's in-memory provider map still matches the
+           * pointers on disk. `null` = never sampled.
+           */
+          channelActivationSignature = null;
+          /** Monotonic timestamp of the last signature sample, for the debounce below. */
+          channelActivationCheckedAtMs = 0;
           userDirSource = "home-default";
           /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
           static siblingStderrLogged = /* @__PURE__ */ new Set();
@@ -128852,6 +128947,12 @@ ${effect.notification.body || ""}`.trim();
           loadVerifiedChannelActivations() {
             this.channelObjectRoots = [];
             if (!this.channelStore) return;
+            try {
+              this.channelActivationSignature = this.channelStore.activationSignature(this.channel);
+              this.channelActivationCheckedAtMs = Date.now();
+            } catch {
+              this.channelActivationSignature = null;
+            }
             let result;
             try {
               result = this.channelStore.listActiveActivations(this.channel);
@@ -128870,6 +128971,79 @@ ${effect.notification.body || ""}`.trim();
             if (count > 0) {
               this.log(`Loaded ${count} verified channel providers (${this.channel}, content-addressed store)`);
             }
+          }
+          /**
+           * ★STORE-RELOAD: reload providers if another process activated a different
+           * bundle since this daemon last loaded.
+           *
+           * ── The gap this closes ────────────────────────────────────────────────
+           * `ProviderChannelStore.activate()` is a pure pointer flip with no callback
+           * into the loader, and the one place that reloads on activation —
+           * `syncVerifiedChannel()` above — only runs for syncs THIS daemon performs.
+           * Any other writer (the `provider publish`/`activate` CLI, a second daemon,
+           * a dashboard-driven activation in another process) changes what is on disk
+           * while this process keeps serving its boot-time map.
+           *
+           * Measured 2026-09-17: a daemon booted at 06:06 loaded cursor-cli v1.0.5
+           * (its own boot sync having failed with CHANNEL_METADATA_UNAVAILABLE); a
+           * separate process activated v1.0.6 at 07:11; a worker launched at 07:19
+           * still got 1.0.5 — whose `meshCoordinator` declares no
+           * `delegatedWorkerIsolation`, so `--approve-mcps` was never applied and the
+           * worker booted with zero MCP tools. Nothing in the system reported the
+           * divergence.
+           *
+           * ── Why polling the store rather than being notified ───────────────────
+           * The alternative — having the publishing CLI signal the daemon over IPC —
+           * was rejected: it couples correctness to the writer cooperating and to a
+           * daemon being alive and addressable at flip time, and on a machine running
+           * both a preview and a stable daemon it is ambiguous which to notify. Reading
+           * the store makes the daemon's own launch path responsible for its own
+           * freshness, which holds no matter who wrote.
+           *
+           * ── Why lazy rather than a timer or fs.watch ───────────────────────────
+           * `fs.watch` needs a watcher lifecycle the loader has no teardown hook for,
+           * and can fire mid-launch — reloading the provider map underneath a spawn
+           * that has already read from it. A timer reloads on a schedule unrelated to
+           * when anyone actually needs the data. Checking at the point of use is both
+           * cheaper at rest (nothing runs when nothing launches) and correctly ordered:
+           * the reload completes before the caller reads the map, never during.
+           *
+           * ── Debounce ───────────────────────────────────────────────────────────
+           * Bounded to one signature sample per CHANNEL_ACTIVATION_RECHECK_MS. Without
+           * it a burst of activations — `publish-provider-channels --execute` flips all
+           * 51 types in a tight loop — would have each subsequent launch re-running a
+           * full `loadAll()` (every provider dir on disk, re-parsed) against a pointer
+           * set still mid-flight. The window also collapses a fan-out of concurrent
+           * worker launches into a single check.
+           *
+           * Returns true when a reload actually happened.
+           */
+          refreshIfChannelActivationChanged(options) {
+            if (!this.channelStore) return false;
+            const now = Date.now();
+            if (!options?.force && this.channelActivationSignature !== null && now - this.channelActivationCheckedAtMs < CHANNEL_ACTIVATION_RECHECK_MS) {
+              return false;
+            }
+            let signature;
+            try {
+              signature = this.channelStore.activationSignature(this.channel);
+            } catch (e) {
+              this.log(`\u26A0 Verified channel signature unreadable (${this.channel}): ${e?.message || e}`);
+              this.channelActivationCheckedAtMs = now;
+              return false;
+            }
+            this.channelActivationCheckedAtMs = now;
+            if (this.channelActivationSignature === signature) return false;
+            const previous = this.channelActivationSignature;
+            if (previous === null) {
+              this.channelActivationSignature = signature;
+              return false;
+            }
+            this.log(
+              `Verified channel activations changed out-of-process on ${this.channel} \u2014 reloading providers so this daemon stops serving the superseded bundle`
+            );
+            this.loadAll();
+            return true;
           }
           /**
            * Sync verified channel activations for the installed provider set
