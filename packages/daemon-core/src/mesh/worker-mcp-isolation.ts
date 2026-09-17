@@ -50,7 +50,7 @@
 import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
-import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, statSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, symlinkSync, copyFileSync, statSync, rmSync, realpathSync } from 'fs';
 
 import { shortHash } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
@@ -432,6 +432,46 @@ export interface WorkerHomeImport {
     requireOwnerOnly?: boolean;
 }
 
+/**
+ * A surface whose path inside HOME is not knowable until launch time because it
+ * is derived from the WORKSPACE.
+ *
+ * ★Why this exists at all (measured 2026-09-17, cursor-cli).
+ *
+ * `WorkerHomeImport.relativePath` is a static string, which works for every
+ * antigravity surface because antigravity roots its transcripts at a fixed
+ * `~/.gemini/antigravity-cli/conversations`. cursor does not: it files each
+ * workspace under `~/.cursor/projects/<slug>/`, where `<slug>` is derived from
+ * the workspace path. A static spec cannot name that directory.
+ *
+ * The daemon still reads transcripts from the REAL home — `expandPath()` in
+ * `providers/spec/native-history-executor.ts` expands a literal `~` through
+ * `os.homedir()` unconditionally, consulting `envOverrides` only for `${VAR}`
+ * syntax. So a cursor worker writing transcripts into its private HOME would be
+ * invisible to the daemon and every cursor worker would report zero assistant
+ * messages — the same trap documented for antigravity below, arriving through a
+ * path a static `relativePath` cannot express.
+ *
+ * ★`relativePath` here is deliberately the LEAF (`agent-transcripts`), never the
+ * project directory itself. The project directory also holds `mcp-approvals.json`
+ * and `.workspace-trusted`; linking the parent would route the worker's approval
+ * writes straight back into the owner's real store — re-opening exactly the leak
+ * the private HOME exists to close.
+ */
+export interface WorkerWorkspaceLink {
+    /**
+     * Directory under HOME that holds one entry per workspace,
+     * e.g. `.cursor/projects`.
+     */
+    projectsDir: string;
+    /**
+     * Surface INSIDE the per-workspace directory to link through. Must be a
+     * leaf, not the per-workspace directory itself — see the note above.
+     */
+    relativePath: string;
+    mode: 'symlink';
+}
+
 export interface WorkerPrivateHomeSpec {
     /** Provider type this spec applies to. */
     providerType: string;
@@ -442,6 +482,60 @@ export interface WorkerPrivateHomeSpec {
      * falling back to the real HOME's copy.
      */
     ensureDirs?: string[];
+    /**
+     * Surfaces keyed by a workspace-derived directory name, resolved at prepare
+     * time from `opts.workspace`. See `WorkerWorkspaceLink`.
+     */
+    workspaceLinks?: WorkerWorkspaceLink[];
+}
+
+/**
+ * Derive cursor's per-workspace project directory name from a workspace path.
+ *
+ * ★The rule is: collapse every run of non-alphanumeric characters to ONE `-`,
+ * then strip leading/trailing dashes. Not a per-separator substitution.
+ *
+ * ★This was measured live 2026-09-17 by running `cursor-agent` under an
+ * isolated HOME and reading back the directory it created — and the first
+ * measurement got it WRONG in a way worth recording, because it is the exact
+ * silent-failure this whole mechanism is exposed to.
+ *
+ * The first probe used a workspace whose path contained no dashes, so
+ * "replace each separator with a dash" and "collapse runs of non-alphanumerics"
+ * produced identical output and the probe could not tell them apart. Against a
+ * real ADHDev worktree path — which contains `/-Users-vilmire--adhdev-…` — the
+ * two rules diverge: cursor writes `…-501-Users-vilmire-adhdev-…` where the
+ * naive rule yields `…-501--Users-vilmire--adhdev-…`. A second probe with a
+ * deliberately dash-laden path (`/-lead--double/x` → `…-lead-double-x`) settled
+ * it, and the collapse rule then reproduced all three live observations exactly,
+ * including a 186-character slug.
+ *
+ * ★The failure mode is silent: a wrong slug is not an error, it is a symlink to
+ * a directory the CLI never writes. Transcripts would land in the worker's
+ * private HOME, the daemon would glob the real home and find nothing, and every
+ * cursor worker would report zero assistant messages with no diagnostic. Do not
+ * "simplify" this back to a separator substitution.
+ *
+ * ★No length cap: a 186-char slug was produced intact. The `…--<7hex>`-suffixed
+ * directories in the owner's real store are a SEPARATE cursor disambiguation
+ * case (five distinct worktree paths sharing one 51-char prefix), deliberately
+ * not modelled here — it has not been measured, and guessing at it would
+ * reintroduce exactly the silent mis-key described above.
+ *
+ * Resolves symlinks first because cursor keys off the path it actually opens.
+ */
+export function deriveCursorWorkspaceSlug(workspace: string, realpath?: (p: string) => string): string {
+    const raw = path.resolve(String(workspace || ''));
+    let resolved = raw;
+    try {
+        resolved = (realpath || realpathSync)(raw);
+    } catch {
+        // A workspace that does not exist yet keeps its literal path — the
+        // launch will create it, and the unresolved form is what cursor sees.
+    }
+    // Collapse every run of non-alphanumerics (separators, dashes, dots, win32
+    // drive colons) to a single dash, then trim the ends.
+    return resolved.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 /**
@@ -553,6 +647,61 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
         ],
         ensureDirs: [path.join('.gemini', 'config')],
     },
+    /**
+     * ★cursor-cli (owner-approved 2026-09-17). Two measured gates, not one.
+     *
+     * A cursor worker was observed holding ZERO of its six worker tools while
+     * carrying FIFTY of the owner's personal global MCP servers. The worker MCP
+     * config the daemon writes is correct — cursor's READ side drops it:
+     *
+     *  ① Approval gate. `~/.cursor/projects/<slug>/mcp-approvals.json` is an
+     *     allowlist keyed `<serverName>-<contentHash>`. The worker entry hashes
+     *     differently from the coordinator's (different args and env), so it is
+     *     unapproved — and an unapproved server is dropped SILENTLY, with no
+     *     prompt. Worktree slugs have no approvals file at all, and the
+     *     empty/absent state was measured to be the same silent drop.
+     *  ② Global merge. cursor unions `~/.cursor/mcp.json` with the workspace
+     *     config. The owner's personal servers arrive through that union, which
+     *     is why the workspace-scoped config alone never isolated anything.
+     *     (opencode looked isolated only because the owner has no global block.)
+     *
+     * The private HOME answers ②: `.cursor` is created EMPTY, so there is no
+     * global `mcp.json` to union in. `meshCoordinator.launchArgs`'
+     * `--approve-mcps` answers ①, and the two are a PAIR — `--approve-mcps`
+     * without the empty HOME would approve the owner's global servers wholesale,
+     * which is strictly worse than the status quo. Do not ship either alone.
+     *
+     * `cli-config.json` is deliberately NOT imported. It holds no token (auth
+     * rides the keychain, and a `Library/Keychains` symlink alone was measured
+     * sufficient: `✓ Logged in as …`), cursor REWRITES it on every invocation so
+     * a symlink would let a worker mutate the owner's file, and it is 0644 so
+     * `requireOwnerOnly` would throw on it. cursor recreates it unprompted.
+     *
+     * ★Workspace trust resets inside a private HOME, and the thing that keeps
+     * cursor workers from wedging on the trust prompt is `--trust` in the
+     * provider's `spawn.args`. An arg refactor that drops it stalls EVERY cursor
+     * worker — the prompt is unanswerable inside a worker PTY.
+     */
+    {
+        providerType: 'cursor-cli',
+        imports: [
+            // Auth. Measured sufficient on its own for `✓ Logged in as …`.
+            // No requireOwnerOnly: this is a shared macOS data directory, not a
+            // single credential file, and it is legitimately group-readable.
+            { relativePath: path.join('Library', 'Keychains'), mode: 'symlink' },
+        ],
+        // The ISOLATED surface: empty means the owner's global `~/.cursor/mcp.json`
+        // is not reachable and therefore cannot be merged in.
+        ensureDirs: ['.cursor'],
+        workspaceLinks: [
+            // Transcripts must stay readable by the daemon, which globs the REAL
+            // `~/.cursor/projects/*/agent-transcripts/*`. Leaf only — the parent
+            // project directory holds `mcp-approvals.json` and
+            // `.workspace-trusted`, and linking it would write the worker's
+            // approvals into the owner's store.
+            { projectsDir: path.join('.cursor', 'projects'), relativePath: 'agent-transcripts', mode: 'symlink' },
+        ],
+    },
 ];
 
 export function findWorkerPrivateHomeSpec(providerType: string): WorkerPrivateHomeSpec | null {
@@ -644,6 +793,40 @@ export function prepareWorkerPrivateHome(
             copyFileSync(source, target);
         }
         imported.push(entry.relativePath);
+    }
+
+    // ─── Workspace-derived links ────────────────────────────────────────
+    //
+    // Resolved HERE rather than declared statically because the directory name
+    // is a function of the workspace, which only this call knows. See
+    // `WorkerWorkspaceLink` for why a static `relativePath` cannot express it.
+    //
+    // ★The real-side directory is CREATED when absent. A first-ever launch in a
+    // workspace has no project directory yet, and the generic missing-import
+    // skip contract would be wrong here: skipping leaves the worker writing
+    // transcripts into its private HOME, where the daemon never looks — a
+    // silent zero-message session rather than a visible failure. Creating the
+    // real leaf is also what the CLI would have done on its own.
+    for (const link of spec.workspaceLinks || []) {
+        const slug = deriveCursorWorkspaceSlug(opts.workspace || '');
+        if (!slug) continue;
+        const rel = path.join(link.projectsDir, slug, link.relativePath);
+        const source = path.join(realHome, rel);
+        const target = path.join(home, rel);
+        try {
+            mkdirSync(source, { recursive: true });
+            mkdirSync(path.dirname(target), { recursive: true });
+            try { rmSync(target, { force: true, recursive: true }); } catch { /* best effort */ }
+            symlinkSync(source, target);
+            imported.push(rel);
+        } catch (err: any) {
+            // Never fatal. A worker that writes transcripts somewhere the daemon
+            // cannot read is degraded, but a worker that fails to LAUNCH over a
+            // transcript link is an outage — and on win32 without developer mode
+            // a directory symlink is simply unavailable.
+            LOG.warn('WorkerMcp', `workspace link ${rel} unavailable: ${err?.message || err}`);
+            skipped.push(rel);
+        }
     }
 
     return { home, imported, skipped };

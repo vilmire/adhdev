@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import {
   __resetWorkerTaskTokensForTest,
+  deriveCursorWorkspaceSlug,
   expandWorkerIsolationPlaceholders,
   expireWorkerTaskTokensForTask,
   findWorkerPrivateHomeSpec,
@@ -262,10 +263,13 @@ describe('writeWorkerMcpConfig', () => {
 })
 
 describe('antigravity worker-private HOME', () => {
-  it('declares a spec only for antigravity in Phase A', () => {
+  it('declares a spec for antigravity and cursor only', () => {
     expect(findWorkerPrivateHomeSpec('antigravity-cli')).not.toBeNull()
+    // cursor joined in 2026-09-17 (its global ~/.cursor/mcp.json is merged into
+    // every launch, so a workspace-scoped config alone isolates nothing).
+    expect(findWorkerPrivateHomeSpec('cursor-cli')).not.toBeNull()
     // hermes is deferred by owner decision §12-3; the rest are repo-local.
-    for (const other of ['hermes-cli', 'claude-cli', 'codex-cli', 'cursor-cli', 'grok-cli', 'kimi', 'opencode']) {
+    for (const other of ['hermes-cli', 'claude-cli', 'codex-cli', 'grok-cli', 'kimi', 'opencode']) {
       expect(findWorkerPrivateHomeSpec(other)).toBeNull()
     }
   })
@@ -472,6 +476,203 @@ describe('antigravity worker-private HOME', () => {
     expect(prepared.skipped).toContain(join('Library', 'Keychains'))
     expect(existsSync(join(prepared.home, 'Library', 'Keychains'))).toBe(false)
     expect(prepared.skipped).toContain(join('.gemini', 'nope.json'))
+  })
+})
+
+/**
+ * Build a realistic fake `~` for cursor: a personal global MCP config (the
+ * thing being isolated away) plus the per-project store that the daemon's
+ * transcript glob reads from.
+ */
+function fakeCursorHome(): string {
+  const home = tmp('adhdev-cursor-realhome-')
+  mkdirSync(join(home, '.cursor'), { recursive: true })
+  // The owner's personal global servers. cursor UNIONS this into every launch,
+  // which is how 50 of them reached a worker that declared none.
+  writeFileSync(
+    join(home, '.cursor', 'mcp.json'),
+    JSON.stringify({ mcpServers: { blender: { command: 'uvx', args: ['blender-mcp'] } } }),
+  )
+  mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true })
+  writeFileSync(join(home, 'Library', 'Keychains', 'login.keychain-db'), 'fixture-keychain')
+  return home
+}
+
+/**
+ * The slug cursor derives for `workspace`, written out independently of the
+ * implementation so these tests pin the MEASURED rule rather than agreeing with
+ * whatever the source currently does: collapse runs of non-alphanumerics to one
+ * dash, trim the ends.
+ */
+function cursorSlug(workspace: string): string {
+  return realpathSync(workspace).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+describe('cursor worker-private HOME', () => {
+  it('★the owner\'s global ~/.cursor/mcp.json is NOT visible from the worker HOME', () => {
+    // The whole reason cursor needs a private HOME. cursor merges the global
+    // config into every launch, so a workspace-scoped worker config alone left
+    // the worker holding the owner's personal servers.
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const workspace = tmp('adhdev-ws-cursor-global-')
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace, sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-global-'),
+    })
+
+    // Present in the real home...
+    expect(existsSync(join(realHome, '.cursor', 'mcp.json'))).toBe(true)
+    // ...and unreachable from the worker's.
+    expect(existsSync(join(prepared.home, '.cursor', 'mcp.json'))).toBe(false)
+    // `.cursor` exists (so the CLI has somewhere to write) but is a real empty
+    // directory, not a link back to the owner's.
+    const workerCursor = join(prepared.home, '.cursor')
+    expect(existsSync(workerCursor)).toBe(true)
+    expect(lstatSync(workerCursor).isSymbolicLink()).toBe(false)
+  })
+
+  it('★a transcript the worker writes is visible at the path the DAEMON globs', () => {
+    // The daemon reads `~/.cursor/projects/*/agent-transcripts/*` with a
+    // literal `~`, which native-history-executor's expandPath() resolves
+    // through os.homedir() unconditionally — it never sees the worker's HOME.
+    // So this asserts the end-to-end property, not "a symlink was created":
+    // write through the WORKER path, read back from the REAL path.
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const workspace = tmp('adhdev-ws-cursor-transcript-')
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace, sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-transcript-'),
+    })
+
+    const slug = cursorSlug(workspace)
+    const workerTranscripts = join(prepared.home, '.cursor', 'projects', slug, 'agent-transcripts')
+    const daemonTranscripts = join(realHome, '.cursor', 'projects', slug, 'agent-transcripts')
+
+    mkdirSync(join(workerTranscripts, 'sess-uuid'), { recursive: true })
+    writeFileSync(join(workerTranscripts, 'sess-uuid', 'transcript.jsonl'), '{"role":"assistant"}\n')
+
+    // The assertion that matters: the daemon-side path has the content.
+    expect(existsSync(daemonTranscripts)).toBe(true)
+    expect(readFileSync(join(daemonTranscripts, 'sess-uuid', 'transcript.jsonl'), 'utf-8'))
+      .toBe('{"role":"assistant"}\n')
+  })
+
+  it('★derives the project slug cursor actually uses (COLLAPSES dash runs)', () => {
+    // Measured live 2026-09-17 against cursor-agent under an isolated HOME.
+    // A wrong slug does not error — it links a directory nothing ever writes,
+    // so every cursor worker silently reports zero assistant messages.
+    expect(deriveCursorWorkspaceSlug('/private/tmp/foo/bar')).toBe('private-tmp-foo-bar')
+
+    // ★The case that a naive "separator → dash" rule gets WRONG, and the reason
+    // this test exists. Real ADHDev worktree paths contain `/-Users-vilmire--`;
+    // cursor collapses the run, the naive rule doubles it. The first live probe
+    // used a dash-free path and could not distinguish the two.
+    expect(deriveCursorWorkspaceSlug('/tmp/x/-lead--double/y')).toBe('tmp-x-lead-double-y')
+    expect(deriveCursorWorkspaceSlug('/private/tmp/claude-501/-Users-vilmire--adhdev/ws'))
+      .toBe('private-tmp-claude-501-Users-vilmire-adhdev-ws')
+    // Never a leading or trailing dash.
+    expect(deriveCursorWorkspaceSlug('/-a-/')).toBe('a')
+
+    // No length cap: a 186-char slug was produced intact by the live CLI.
+    const deep = '/' + Array.from({ length: 12 }, (_, i) => `segment-number-${i}`).join('/')
+    expect(deriveCursorWorkspaceSlug(deep).length).toBeGreaterThan(158)
+    expect(deriveCursorWorkspaceSlug(deep)).not.toMatch(/--/)
+  })
+
+  it('★links ONLY agent-transcripts — worker approvals must not land in the owner store', () => {
+    // mcp-approvals.json and .workspace-trusted sit in the SAME project
+    // directory as agent-transcripts. Linking the parent would route the
+    // worker's approval writes into the owner's real store, re-opening the
+    // leak the private HOME exists to close.
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const workspace = tmp('adhdev-ws-cursor-approvals-')
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace, sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-approvals-'),
+    })
+
+    const slug = cursorSlug(workspace)
+    const workerProject = join(prepared.home, '.cursor', 'projects', slug)
+    const realProject = join(realHome, '.cursor', 'projects', slug)
+
+    // The project directory itself is a real directory in the worker HOME.
+    expect(lstatSync(workerProject).isSymbolicLink()).toBe(false)
+    // Only the transcripts leaf is linked through.
+    expect(lstatSync(join(workerProject, 'agent-transcripts')).isSymbolicLink()).toBe(true)
+
+    // A worker approval write stays worker-side.
+    writeFileSync(join(workerProject, 'mcp-approvals.json'), JSON.stringify({ 'adhdev-mesh-worker': true }))
+    writeFileSync(join(workerProject, '.workspace-trusted'), '')
+    expect(existsSync(join(realProject, 'mcp-approvals.json'))).toBe(false)
+    expect(existsSync(join(realProject, '.workspace-trusted'))).toBe(false)
+  })
+
+  it('★does NOT import cli-config.json (no token in it, and cursor rewrites it every run)', () => {
+    // Measured: a Library/Keychains symlink alone yields `✓ Logged in as …`.
+    // cli-config.json holds identity metadata, not credentials; cursor rewrites
+    // it on every invocation (a symlink would let a worker mutate the owner's
+    // file) and it is 0644, so requireOwnerOnly would throw on it.
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    expect(spec.imports.some((entry) => entry.relativePath.includes('cli-config.json'))).toBe(false)
+
+    const realHome = fakeCursorHome()
+    writeFileSync(join(realHome, '.cursor', 'cli-config.json'), JSON.stringify({ authInfo: { email: 'owner@example.com' } }))
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-cursor-cliconfig-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-cliconfig-'),
+    })
+    expect(existsSync(join(prepared.home, '.cursor', 'cli-config.json'))).toBe(false)
+  })
+
+  it('links Library/Keychains so the worker stays logged in', () => {
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-cursor-auth-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-auth-'),
+    })
+    const linked = join(prepared.home, 'Library', 'Keychains')
+    expect(lstatSync(linked).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(linked, 'login.keychain-db'), 'utf-8')).toBe('fixture-keychain')
+  })
+
+  it('creates the real-side project dir on a first-ever launch in a workspace', () => {
+    // A workspace cursor has never opened has no project directory. Skipping
+    // the link there would leave the worker writing transcripts into its
+    // private HOME, where the daemon never looks — a silent zero-message
+    // session rather than a visible failure.
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const workspace = tmp('adhdev-ws-cursor-firstrun-')
+    expect(existsSync(join(realHome, '.cursor', 'projects'))).toBe(false)
+
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace, sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-firstrun-'),
+    })
+    const slug = cursorSlug(workspace)
+    expect(existsSync(join(realHome, '.cursor', 'projects', slug, 'agent-transcripts'))).toBe(true)
+    expect(prepared.imported).toContain(join('.cursor', 'projects', slug, 'agent-transcripts'))
+  })
+
+  it('gives two cursor workers on one workspace DIFFERENT private homes', () => {
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const workspace = tmp('adhdev-ws-cursor-two-')
+    const baseDir = tmp('adhdev-whbase-cursor-two-')
+    const a = prepareWorkerPrivateHome(spec, { workspace, sessionKey: 'task_1', realHome, baseDir })
+    const b = prepareWorkerPrivateHome(spec, { workspace, sessionKey: 'task_2', realHome, baseDir })
+    expect(a.home).not.toBe(b.home)
+    // Both still reach the same daemon-read transcript directory.
+    const slug = cursorSlug(workspace)
+    const rel = join('.cursor', 'projects', slug, 'agent-transcripts')
+    expect(realpathSync(join(a.home, rel))).toBe(realpathSync(join(b.home, rel)))
+  })
+
+  it('is re-runnable for the same key (relaunch replaces the stale link)', () => {
+    const realHome = fakeCursorHome()
+    const spec = findWorkerPrivateHomeSpec('cursor-cli')!
+    const args = { workspace: tmp('adhdev-ws-cursor-rerun-'), sessionKey: 'task_1', realHome, baseDir: tmp('adhdev-whbase-cursor-rerun-') }
+    const first = prepareWorkerPrivateHome(spec, args)
+    expect(() => prepareWorkerPrivateHome(spec, args)).not.toThrow()
+    expect(prepareWorkerPrivateHome(spec, args).home).toBe(first.home)
   })
 })
 

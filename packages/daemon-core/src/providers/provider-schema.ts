@@ -520,11 +520,11 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(
         }
         const item = rule as Record<string, unknown>
         const mode = item.mode
-        if (mode !== 'empty_mcp_config' && mode !== 'config_override') {
-          errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override`)
+        if (mode !== 'empty_mcp_config' && mode !== 'config_override' && mode !== 'approve_mcp_servers') {
+          errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override, approve_mcp_servers`)
           continue
         }
-        for (const key of mode === 'empty_mcp_config' ? ['flag'] : ['flag', 'key', 'value']) {
+        for (const key of mode === 'config_override' ? ['flag', 'key', 'value'] : ['flag']) {
           const value = item[key]
           if (typeof value !== 'string' || !value.trim()) {
             errors.push(`${prefix}.${key} must be a non-empty string`)
@@ -535,6 +535,9 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(
           if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
             errors.push(`${prefix}.${key} must be a non-empty string when provided`)
           }
+        }
+        if (item.requiresPrivateHome !== undefined && typeof item.requiresPrivateHome !== 'boolean') {
+          errors.push(`${prefix}.requiresPrivateHome must be a boolean when provided`)
         }
       }
     }

@@ -489,6 +489,35 @@ export type MeshCoordinatorDelegatedWorkerArgRule =
       value: string;
       /** Optional broader key prefix used for duplicate detection. */
       dedupeKey?: string;
+    }
+  | {
+      /**
+       * Pre-approve the MCP servers the worker's config declares, for a CLI
+       * that gates MCP startup behind a per-workspace approval allowlist.
+       *
+       * ★cursor-cli is the measured case (2026-09-17). Its
+       * `~/.cursor/projects/<slug>/mcp-approvals.json` is keyed
+       * `<serverName>-<contentHash>`; the daemon-written worker entry hashes
+       * differently from anything the owner approved interactively, so cursor
+       * drops it SILENTLY — no prompt, no log, just a worker with zero tools.
+       * A fresh worktree has no approvals file at all, which measured the same.
+       *
+       * ★This flag approves EVERY server visible to the launch, so it is only
+       * safe where the worker's MCP surface is already reduced to the servers
+       * the daemon itself wrote. The daemon therefore refuses to apply it
+       * without a worker-private HOME (`requiresPrivateHome`): without one the
+       * CLI would union in the owner's personal global servers and this rule
+       * would approve those too — strictly worse than not isolating at all.
+       */
+      mode: 'approve_mcp_servers';
+      /** CLI flag that approves the launch's MCP servers, e.g. '--approve-mcps'. */
+      flag: string;
+      /**
+       * Refuse to apply `flag` unless this launch has a worker-private HOME.
+       * Defaults to true; set false only for a CLI whose approval flag is
+       * scoped to an explicitly-passed config rather than everything it merges.
+       */
+      requiresPrivateHome?: boolean;
     };
 
 /**

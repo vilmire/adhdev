@@ -52752,6 +52752,7 @@ ${blocks.join("\n\n")}`;
       WORKER_TOKEN_CANARY_PREFIX: () => WORKER_TOKEN_CANARY_PREFIX,
       __resetWorkerSessionBindsForTest: () => __resetWorkerSessionBindsForTest,
       __resetWorkerTaskTokensForTest: () => __resetWorkerTaskTokensForTest,
+      deriveCursorWorkspaceSlug: () => deriveCursorWorkspaceSlug,
       exchangeWorkerSessionBind: () => exchangeWorkerSessionBind,
       expandWorkerIsolationPlaceholders: () => expandWorkerIsolationPlaceholders,
       expireWorkerTaskTokensForTask: () => expireWorkerTaskTokensForTask,
@@ -52915,6 +52916,15 @@ ${blocks.join("\n\n")}`;
     function liveWorkerSessionBindCount() {
       return LIVE_BINDS.size;
     }
+    function deriveCursorWorkspaceSlug(workspace, realpath4) {
+      const raw = path22.resolve(String(workspace || ""));
+      let resolved = raw;
+      try {
+        resolved = (realpath4 || import_fs6.realpathSync)(raw);
+      } catch {
+      }
+      return resolved.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    }
     function findWorkerPrivateHomeSpec(providerType) {
       const type2 = String(providerType || "").trim();
       if (!type2) return null;
@@ -52967,6 +52977,26 @@ ${blocks.join("\n\n")}`;
           (0, import_fs6.copyFileSync)(source, target);
         }
         imported.push(entry.relativePath);
+      }
+      for (const link of spec.workspaceLinks || []) {
+        const slug = deriveCursorWorkspaceSlug(opts.workspace || "");
+        if (!slug) continue;
+        const rel = path22.join(link.projectsDir, slug, link.relativePath);
+        const source = path22.join(realHome, rel);
+        const target = path22.join(home, rel);
+        try {
+          (0, import_fs6.mkdirSync)(source, { recursive: true });
+          (0, import_fs6.mkdirSync)(path22.dirname(target), { recursive: true });
+          try {
+            (0, import_fs6.rmSync)(target, { force: true, recursive: true });
+          } catch {
+          }
+          (0, import_fs6.symlinkSync)(source, target);
+          imported.push(rel);
+        } catch (err) {
+          LOG.warn("WorkerMcp", `workspace link ${rel} unavailable: ${err?.message || err}`);
+          skipped.push(rel);
+        }
       }
       return { home, imported, skipped };
     }
@@ -53200,6 +53230,61 @@ ${blocks.join("\n\n")}`;
               { relativePath: path22.join(".gemini", "antigravity-cli", "history.jsonl"), mode: "symlink" }
             ],
             ensureDirs: [path22.join(".gemini", "config")]
+          },
+          /**
+           * ★cursor-cli (owner-approved 2026-09-17). Two measured gates, not one.
+           *
+           * A cursor worker was observed holding ZERO of its six worker tools while
+           * carrying FIFTY of the owner's personal global MCP servers. The worker MCP
+           * config the daemon writes is correct — cursor's READ side drops it:
+           *
+           *  ① Approval gate. `~/.cursor/projects/<slug>/mcp-approvals.json` is an
+           *     allowlist keyed `<serverName>-<contentHash>`. The worker entry hashes
+           *     differently from the coordinator's (different args and env), so it is
+           *     unapproved — and an unapproved server is dropped SILENTLY, with no
+           *     prompt. Worktree slugs have no approvals file at all, and the
+           *     empty/absent state was measured to be the same silent drop.
+           *  ② Global merge. cursor unions `~/.cursor/mcp.json` with the workspace
+           *     config. The owner's personal servers arrive through that union, which
+           *     is why the workspace-scoped config alone never isolated anything.
+           *     (opencode looked isolated only because the owner has no global block.)
+           *
+           * The private HOME answers ②: `.cursor` is created EMPTY, so there is no
+           * global `mcp.json` to union in. `meshCoordinator.launchArgs`'
+           * `--approve-mcps` answers ①, and the two are a PAIR — `--approve-mcps`
+           * without the empty HOME would approve the owner's global servers wholesale,
+           * which is strictly worse than the status quo. Do not ship either alone.
+           *
+           * `cli-config.json` is deliberately NOT imported. It holds no token (auth
+           * rides the keychain, and a `Library/Keychains` symlink alone was measured
+           * sufficient: `✓ Logged in as …`), cursor REWRITES it on every invocation so
+           * a symlink would let a worker mutate the owner's file, and it is 0644 so
+           * `requireOwnerOnly` would throw on it. cursor recreates it unprompted.
+           *
+           * ★Workspace trust resets inside a private HOME, and the thing that keeps
+           * cursor workers from wedging on the trust prompt is `--trust` in the
+           * provider's `spawn.args`. An arg refactor that drops it stalls EVERY cursor
+           * worker — the prompt is unanswerable inside a worker PTY.
+           */
+          {
+            providerType: "cursor-cli",
+            imports: [
+              // Auth. Measured sufficient on its own for `✓ Logged in as …`.
+              // No requireOwnerOnly: this is a shared macOS data directory, not a
+              // single credential file, and it is legitimately group-readable.
+              { relativePath: path22.join("Library", "Keychains"), mode: "symlink" }
+            ],
+            // The ISOLATED surface: empty means the owner's global `~/.cursor/mcp.json`
+            // is not reachable and therefore cannot be merged in.
+            ensureDirs: [".cursor"],
+            workspaceLinks: [
+              // Transcripts must stay readable by the daemon, which globs the REAL
+              // `~/.cursor/projects/*/agent-transcripts/*`. Leaf only — the parent
+              // project directory holds `mcp-approvals.json` and
+              // `.workspace-trusted`, and linking it would write the worker's
+              // approvals into the owner's store.
+              { projectsDir: path22.join(".cursor", "projects"), relativePath: "agent-transcripts", mode: "symlink" }
+            ]
           }
         ];
         WORKER_HOME_PLACEHOLDER = "{{workerHome}}";
@@ -120502,6 +120587,19 @@ ${rawInput}` : rawInput;
           }
           continue;
         }
+        if (rule.mode === "approve_mcp_servers") {
+          const flag = String(rule.flag || "").trim();
+          if (!flag || hasCliArg(cliArgs, flag)) continue;
+          if (rule.requiresPrivateHome !== false && !workerIsolation?.workerHome) {
+            workerIsolation?.notes.push(
+              `${flag} withheld \u2014 no worker-private HOME, so it would approve the coordinator's global MCP servers`
+            );
+            continue;
+          }
+          cliArgs.unshift(flag);
+          workerIsolation?.notes.push(`${flag} applied (worker MCP surface is private-HOME scoped)`);
+          continue;
+        }
         if (rule.mode === "config_override") {
           const key2 = String(rule.dedupeKey || rule.key || "").trim();
           const flag = String(rule.flag || "").trim();
@@ -124957,11 +125055,11 @@ ${effect.notification.body || ""}`.trim();
             }
             const item = rule;
             const mode = item.mode;
-            if (mode !== "empty_mcp_config" && mode !== "config_override") {
-              errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override`);
+            if (mode !== "empty_mcp_config" && mode !== "config_override" && mode !== "approve_mcp_servers") {
+              errors.push(`${prefix}.mode must be one of: empty_mcp_config, config_override, approve_mcp_servers`);
               continue;
             }
-            for (const key2 of mode === "empty_mcp_config" ? ["flag"] : ["flag", "key", "value"]) {
+            for (const key2 of mode === "config_override" ? ["flag", "key", "value"] : ["flag"]) {
               const value = item[key2];
               if (typeof value !== "string" || !value.trim()) {
                 errors.push(`${prefix}.${key2} must be a non-empty string`);
@@ -124972,6 +125070,9 @@ ${effect.notification.body || ""}`.trim();
               if (value !== void 0 && (typeof value !== "string" || !value.trim())) {
                 errors.push(`${prefix}.${key2} must be a non-empty string when provided`);
               }
+            }
+            if (item.requiresPrivateHome !== void 0 && typeof item.requiresPrivateHome !== "boolean") {
+              errors.push(`${prefix}.requiresPrivateHome must be a boolean when provided`);
             }
           }
         }
@@ -127373,6 +127474,27 @@ ${effect.notification.body || ""}`.trim();
                               dedupeKey: {
                                 type: "string",
                                 minLength: 1
+                              }
+                            }
+                          },
+                          {
+                            type: "object",
+                            additionalProperties: false,
+                            description: "Pre-approve the launch's MCP servers for a CLI that gates MCP startup behind a per-workspace approval allowlist (cursor). Only applied when the launch has a worker-private HOME, so it can never approve the coordinator's global servers.",
+                            required: [
+                              "mode",
+                              "flag"
+                            ],
+                            properties: {
+                              mode: {
+                                const: "approve_mcp_servers"
+                              },
+                              flag: {
+                                type: "string",
+                                minLength: 1
+                              },
+                              requiresPrivateHome: {
+                                type: "boolean"
                               }
                             }
                           }

@@ -390,6 +390,30 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
             }
             continue;
         }
+        if (rule.mode === 'approve_mcp_servers') {
+            const flag = String(rule.flag || '').trim();
+            if (!flag || hasCliArg(cliArgs, flag)) continue;
+            // ★The approval flag and the private HOME are a PAIR, and applying
+            // one without the other is worse than applying neither.
+            //
+            // cursor unions `~/.cursor/mcp.json` into every launch. With the
+            // private HOME the worker's `.cursor` is empty, so "approve
+            // everything" approves exactly the one server the daemon wrote. With
+            // the gate off (or a HOME that failed to prepare) the union is the
+            // OWNER's personal servers — 50 of them were measured on this
+            // machine — and this flag would silently approve all of them for a
+            // worker. Fail closed: no HOME, no approval, worker keeps the
+            // pre-existing (weaker, but not widened) behavior.
+            if (rule.requiresPrivateHome !== false && !workerIsolation?.workerHome) {
+                workerIsolation?.notes.push(
+                    `${flag} withheld — no worker-private HOME, so it would approve the coordinator's global MCP servers`,
+                );
+                continue;
+            }
+            cliArgs.unshift(flag);
+            workerIsolation?.notes.push(`${flag} applied (worker MCP surface is private-HOME scoped)`);
+            continue;
+        }
         if (rule.mode === 'config_override') {
             const key = String(rule.dedupeKey || rule.key || '').trim();
             const flag = String(rule.flag || '').trim();
