@@ -1721,6 +1721,19 @@ export class DaemonCliManager {
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error('cliType required');
 
+                // ★STORE-RELOAD: check provider-map freshness here — right before
+                // the map is read for a launch, never during a spawn in flight.
+                // Debounced inside the loader (see refreshIfChannelActivationChanged
+                // for the out-of-process activation gap this closes).
+                //
+                // Guarded twice: optional-called (embedders/tests inject duck-typed
+                // loaders with only resolveAlias/getMeta/getResolvedSpecPath) and
+                // wrapped. A stale map is a degradation; a failed spawn is an outage.
+                try {
+                    this.providerLoader.refreshIfChannelActivationChanged?.();
+                } catch (e: any) {
+                    LOG.warn('ProviderStore', `channel activation refresh failed: ${e?.message || e}`);
+                }
                 const providerType = this.providerLoader.resolveAlias(cliType);
                 const provLookup = this.providerLoader.getMeta(providerType) as ProviderModule | undefined;
                 let settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
@@ -1777,6 +1790,11 @@ export class DaemonCliManager {
                         cliArgs: args?.cliArgs,
                         env: args?.env,
                         isolation: provLookup?.meshCoordinator?.delegatedWorkerIsolation,
+                        // ★ISOLATION-OBSERVABILITY: the bundle version THIS DAEMON
+                        // holds in memory (provLookup is the live map entry) — the
+                        // value that diverges from the channel pointer after an
+                        // out-of-process activation.
+                        providerVersion: provLookup?.providerVersion,
                         // WORKER-MCP: the declared config path is what lets the
                         // daemon write a worker config for the 6 providers that
                         // declare no isolation rules of their own.
@@ -1821,8 +1839,21 @@ export class DaemonCliManager {
                             : {}),
                     })
                     : null;
+                // ★ISOLATION-OBSERVABILITY: stamp the resolved bundle version on
+                // every delegated-launch diagnostic, so a stale in-memory provider
+                // is legible from the log line itself.
+                const delegatedProviderLabel = provLookup?.providerVersion
+                    ? `${cliType}@${provLookup.providerVersion}`
+                    : `${cliType}@unknown-version`;
+                // Logged independently of the worker-MCP gate: this note describes
+                // the provider's DECLARATION, which exists (or not) regardless of
+                // the gate. Routing it through workerIsolation.notes would drop it
+                // whenever the gate is off — the very case it explains.
+                if (delegatedLaunch?.isolationNotes?.length) {
+                    LOG.info('WorkerIsolation', `[${delegatedProviderLabel}] ${delegatedLaunch.isolationNotes.join('; ')}`);
+                }
                 if (delegatedLaunch?.workerIsolation?.notes.length) {
-                    LOG.info('WorkerMcp', `[${cliType}] ${delegatedLaunch.workerIsolation.notes.join('; ')}`);
+                    LOG.info('WorkerMcp', `[${delegatedProviderLabel}] ${delegatedLaunch.workerIsolation.notes.join('; ')}`);
                 }
                 // Trust-axis notes only appear separately when the worker-MCP
                 // gate is off; with it on they are already inside the notes

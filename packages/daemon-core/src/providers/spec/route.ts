@@ -92,5 +92,14 @@ export function createCliAdapter(
     return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
         removeArgs,
+        // ★SPAWN-LOG-VERSION: the manifest version, which the SPEC does not
+        // carry. `CliSpecV4` is the FSM runtime spec (specs/4.0.json) and has
+        // no `providerVersion` field at all, so the spec path logged
+        // `Spawning (spec vunknown)` for every CLI — the one line an operator
+        // reads to learn which bundle a session is actually running. The
+        // manifest is right here, already resolved; it just was never handed
+        // down. Threaded through the existing `manifestTuning` bag, the same
+        // seam MANIFEST-SEND-DELAY used for the identical reason.
+        providerVersion: provider.providerVersion,
     }, resolvedTrustPlan);
 }

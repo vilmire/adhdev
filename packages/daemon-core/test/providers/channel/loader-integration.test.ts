@@ -220,3 +220,148 @@ describe('Channel contract — standalone/cloud boot caller parity', () => {
   });
 
 });
+
+// ★STORE-RELOAD (2026-09-17 cursor incident).
+//
+// `ProviderChannelStore.activate()` is a pure pointer flip with no callback
+// into the loader, and the only reload-on-activation lives in the loader's own
+// `syncVerifiedChannel()`. So an activation performed by ANOTHER process — the
+// `provider publish/activate` CLI, a second daemon, a dashboard-driven flip —
+// left a running daemon serving its boot-time map indefinitely.
+//
+// Measured: daemon booted 06:06 with cursor-cli v1.0.5 (its own boot sync
+// having failed with CHANNEL_METADATA_UNAVAILABLE); v1.0.6 activated 07:11 by
+// a separate process; a worker launched 07:19 still received 1.0.5 — which
+// declares no delegatedWorkerIsolation, so `--approve-mcps` was never applied.
+//
+// These tests assert the OUTCOME (the loader serves the new bundle), not that
+// a particular function was called.
+describe('★out-of-process channel activation is picked up by a running loader', () => {
+  let tmpRoot = '';
+  let configDirBefore: string | undefined;
+  let store: ProviderChannelStore;
+  let logs: string[];
+
+  beforeEach(() => {
+    tmpRoot = makeTmp('adhdev-store-reload-');
+    configDirBefore = process.env.ADHDEV_CONFIG_DIR;
+    process.env.ADHDEV_CONFIG_DIR = tmpRoot;
+    store = new ProviderChannelStore(ProviderChannelStore.defaultRoot());
+    logs = [];
+    mkdirSync(join(tmpRoot, 'providers', '.upstream'), { recursive: true });
+  });
+
+  afterEach(() => {
+    if (configDirBefore === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = configDirBefore;
+    tmpRoot = '';
+  });
+
+  function newLoader() {
+    return new ProviderLoader({
+      channelStore: store,
+      logFn: (msg) => logs.push(msg),
+      probeStarts: [join(tmpRoot, 'no-sibling-here')],
+    });
+  }
+
+  /**
+   * Activate through a SECOND store instance pointed at the same root — the
+   * faithful model of the incident. The publishing CLI is a different process
+   * with its own store object; the running daemon's loader holds a different
+   * one and is never told.
+   */
+  function activateOutOfProcess(type: string, name: string, version: string) {
+    const other = new ProviderChannelStore(ProviderChannelStore.defaultRoot());
+    const { dir, digest } = buildObjectStaging({
+      category: 'cli',
+      dirname: type,
+      type,
+      manifestExtra: { name },
+    });
+    other.activate('stable', {
+      providerType: type,
+      providerVersion: version,
+      category: 'cli',
+      bundleDigest: digest,
+      digestAlgorithm: TREE_DIGEST_ALGORITHM,
+    }, dir);
+    return digest;
+  }
+
+  it('★serves the NEW bundle after an out-of-process activation (the incident, inverted)', () => {
+    activateOutOfProcess('cursor-cli', 'cursor v1.0.5', '1.0.5');
+    const loader = newLoader();
+    loader.loadAll();
+    expect((loader.getMeta('cursor-cli') as any)?.name).toBe('cursor v1.0.5');
+
+    // Another process flips the pointer. The loader is not notified.
+    activateOutOfProcess('cursor-cli', 'cursor v1.0.6', '1.0.6');
+
+    // Before the fix this returned the stale 1.0.5 forever.
+    const reloaded = loader.refreshIfChannelActivationChanged({ force: true });
+    expect(reloaded).toBe(true);
+    expect((loader.getMeta('cursor-cli') as any)?.name).toBe('cursor v1.0.6');
+  });
+
+  it('★picks up a provider type that did not exist in the map at boot', () => {
+    // The kimi class: a type published after this daemon bootstrapped is in
+    // neither the pins nor .upstream, so a stale map has no entry at all.
+    const loader = newLoader();
+    loader.loadAll();
+    expect(loader.getMeta('late-cli')).toBeFalsy();
+
+    activateOutOfProcess('late-cli', 'late arrival', '1.0.0');
+
+    expect(loader.refreshIfChannelActivationChanged({ force: true })).toBe(true);
+    expect((loader.getMeta('late-cli') as any)?.name).toBe('late arrival');
+  });
+
+  it('does not reload when nothing changed (no churn on an idle daemon)', () => {
+    activateOutOfProcess('cursor-cli', 'cursor v1.0.5', '1.0.5');
+    const loader = newLoader();
+    loader.loadAll();
+
+    expect(loader.refreshIfChannelActivationChanged({ force: true })).toBe(false);
+    expect(loader.refreshIfChannelActivationChanged({ force: true })).toBe(false);
+    expect((loader.getMeta('cursor-cli') as any)?.name).toBe('cursor v1.0.5');
+  });
+
+  it('★debounces: a burst of activations does not trigger a loadAll per launch', () => {
+    // `publish-provider-channels --execute` flips the whole provider set (51
+    // types as of 2026-08-10) in a tight loop. Without a floor, every launch
+    // during that window re-walks and re-parses every provider dir on disk,
+    // against a pointer set still being written.
+    activateOutOfProcess('cursor-cli', 'cursor v1.0.5', '1.0.5');
+    const loader = newLoader();
+    loader.loadAll();
+
+    let loadAllCount = 0;
+    const realLoadAll = loader.loadAll.bind(loader);
+    (loader as any).loadAll = () => { loadAllCount += 1; realLoadAll(); };
+
+    // Simulate the burst: many activations, each followed by a launch-path check.
+    for (let i = 0; i < 20; i += 1) {
+      activateOutOfProcess('cursor-cli', `cursor burst ${i}`, `1.0.${i}`);
+      loader.refreshIfChannelActivationChanged();
+    }
+
+    // The debounce window (5s) is far wider than this loop's wall-clock, so the
+    // whole burst collapses to at most one reload — NOT one per activation.
+    expect(loadAllCount).toBeLessThanOrEqual(1);
+
+    // ...and the daemon is not left permanently stale: the next check past the
+    // window still converges on the final bundle.
+    expect(loader.refreshIfChannelActivationChanged({ force: true })).toBe(true);
+    expect((loader.getMeta('cursor-cli') as any)?.name).toBe('cursor burst 19');
+  });
+
+  it('a self-performed load establishes the baseline without an extra reload', () => {
+    // loadAll() stamps the signature itself, so the first check after a load
+    // must be a no-op rather than an immediate second full rebuild.
+    activateOutOfProcess('cursor-cli', 'cursor v1.0.5', '1.0.5');
+    const loader = newLoader();
+    loader.loadAll();
+    expect(loader.refreshIfChannelActivationChanged({ force: true })).toBe(false);
+  });
+});
