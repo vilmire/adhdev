@@ -383,12 +383,21 @@ export interface MeshWorkQueueEntry {
      * SUCCESSFUL claim. Deliberately a sibling of `autoLaunch` (which is overwritten
      * wholesale on every transition) and deliberately DURABLE — it rides in the payload
      * JSON so a daemon crash/restart cannot reset it, which is exactly how the in-memory
-     * brakes re-ignited the 2026-09-08 launch runaway. Incremented on each 'started'
-     * record (recordTaskAutoLaunch), reset by claim success (claimNextQueueTask) and by
-     * any explicit requeue. Absent on legacy rows → 0. Full rationale + the cap that
-     * consumes it: mesh-autolaunch-spawn-cap.ts.
+     * brakes re-ignited the 2026-09-08 launch runaway. Incremented once per launch that
+     * actually PRODUCED A SESSION (recordTaskAutoLaunch's `spendSpawnBudget`), reset by
+     * claim success (claimNextQueueTask) and by any explicit requeue. Absent on legacy
+     * rows → 0. Full rationale + the cap that consumes it: mesh-autolaunch-spawn-cap.ts.
      */
     autoLaunchUnclaimedCount?: number;
+    /**
+     * SPAWN-CAP-TRANSPORT-AWARE: launches that never reached the target daemon at all —
+     * the dispatch threw in this coordinator's own transport, so NO session was created.
+     * Same lifecycle as the budget above (reset by claim success and by any requeue) but a
+     * SEPARATE axis: it spends no budget, it only records that the failures happened, so
+     * the park page can name the real failure mode instead of blaming the target node.
+     * Rationale: mesh-autolaunch-spawn-budget.ts; consumer: mesh-skip-notify.ts.
+     */
+    autoLaunchDispatchFailedCount?: number;
     /** ISO timestamp when the task was dispatched (assigned) to a node/session. Used for precise matching on completion. */
     dispatchTimestamp?: string;
     /**
@@ -1361,26 +1370,13 @@ export function updateTaskStatus(
     return result ? result.entry : null;
 }
 
-export function recordTaskAutoLaunch(
-    meshId: string,
-    taskId: string,
-    autoLaunch: Omit<NonNullable<MeshWorkQueueEntry['autoLaunch']>, 'updatedAt'>,
-): MeshWorkQueueEntry | null {
-    return withQueueLock(meshId, () => {
-        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        if (!entry) return null;
-        const now = new Date().toISOString();
-        // AUTOLAUNCH-SPAWN-CAP (P3): every 'started' spends one unit of the task's
-        // durable spawn budget. 'skipped'/'failed'/'completed' spend nothing — a launch
-        // is counted exactly once, at the moment it fires.
-        if (autoLaunch.status === 'started') {
-            entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
-        }
-        entry.autoLaunch = { ...autoLaunch, updatedAt: now };
-        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        return entry;
-    });
-}
+// SPAWN-CAP-TRANSPORT-AWARE: the auto-launch record writer and the two durable spawn-cap
+// counter mutators live together in mesh-autolaunch-spawn-budget.ts — a leaf needing only the
+// store and this file's entry type (import type, so no cycle). They moved there because this
+// file sits at the 2,400-line file-size gate, and they belong together: the counters are
+// deliberately NOT routed through recordTaskAutoLaunch's clobber-guarded `autoLaunch` write.
+// Re-exported here so every existing importer (and test) is unaffected by the move.
+export { recordTaskAutoLaunch } from './mesh-autolaunch-spawn-budget.js';
 
 /**
  * Mark a queue task as manually cancelled without deleting audit history.
@@ -1678,6 +1674,10 @@ export function requeueTask(
             delete entry.parked;
             // AUTOLAUNCH-SPAWN-CAP (P3): same explicit decision → fresh spawn budget.
             delete entry.autoLaunchUnclaimedCount;
+            // SPAWN-CAP-TRANSPORT-AWARE: the dispatch-failure tally describes the run that
+            // just ended, so it resets on the same explicit decision — otherwise a stale
+            // tally would keep re-labelling later, unrelated parks as transport failures.
+            delete entry.autoLaunchDispatchFailedCount;
             // Escalating backoff (dispatch attempt 1→2: DISPATCH_RETRY_BACKOFF_BASE_MS,
             // 2→3: ×2, …), so a re-dispatch lands after the session has had more time to
             // finish booting rather than racing the same window that just failed —
@@ -1727,6 +1727,8 @@ export function requeueTask(
         // park — it must also restore the durable launch budget, or the unparked row
         // would re-park on its very next launch attempt (a dead exit).
         delete entry.autoLaunchUnclaimedCount;
+        // SPAWN-CAP-TRANSPORT-AWARE: reset the dispatch-failure tally on the same decision.
+        delete entry.autoLaunchDispatchFailedCount;
         // DISPATCH-BOOT-RACE: a caller-supplied backoff holds the row pending until the
         // session has had time to finish booting, instead of an immediate re-claim that
         // races the exact window that failed the first attempt. Absent → immediately

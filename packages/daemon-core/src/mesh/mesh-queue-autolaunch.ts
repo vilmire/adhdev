@@ -16,6 +16,7 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
+import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDeferredClaim } from './mesh-claim-refusal.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
@@ -149,6 +150,19 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     // LEDGER-TASK-TRACEABILITY (D): resolved execution profile for started/completed.
     model?: string;
     thinkingLevel?: string;
+    /**
+     * SPAWN-CAP-TRANSPORT-AWARE: set by the launch paths at the moment a session is known
+     * to exist (or cannot be proven NOT to exist), to spend one unit of the task's durable
+     * spawn budget. Never set on the pre-dispatch 'started' record — see
+     * recordTaskAutoLaunch for why intent is the wrong thing to charge for.
+     */
+    spendSpawnBudget?: boolean;
+    /**
+     * SPAWN-CAP-TRANSPORT-AWARE: set when the launch dispatch died in this coordinator's
+     * own transport (no session created anywhere). Recorded on its own durable axis so the
+     * park page can name the real failure mode instead of blaming the target node.
+     */
+    dispatchFailedInTransport?: boolean;
 }) {
     const reason = args.reason || args.error;
     const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
@@ -161,8 +175,16 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
             nodeId: args.nodeId,
             providerType: args.providerType,
             sessionId: args.sessionId,
-        });
+        }, { spendSpawnBudget: args.spendSpawnBudget });
+    } else if (args.spendSpawnBudget) {
+        // The clobber guards protect the `autoLaunch` FIELD (which launch owns the record),
+        // NOT the spawn budget. A suppressed write still represents a session that came into
+        // existence, so the budget must be spent regardless — otherwise a racing launch pair
+        // could spawn two sessions and be charged for one, the exact undercount the runaway
+        // defense cannot afford. Spend it without touching the protected field.
+        spendTaskAutoLaunchSpawnBudget(meshId, taskId);
     }
+    if (args.dispatchFailedInTransport) recordTaskAutoLaunchDispatchFailure(meshId, taskId);
     recordAutoLaunchEvent(meshId, {
         phase: args.status,
         taskId,
@@ -977,6 +999,10 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                             meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
                             meshCoordinatorNodeId: nodeId,
                         };
+                        // SPAWN-CAP-TRANSPORT-AWARE: 'started' is pre-dispatch INTENT and spends
+                        // no spawn budget — the charge happens below, once a session is known to
+                        // exist. Charging here is precisely what let a 26-minute signalling
+                        // outage burn two healthy nodes' entire budgets with zero sessions created.
                         markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                         let launchResult: any;
                         try {
@@ -1000,7 +1026,11 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                                 ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
                             }));
                         } catch (e: any) {
-                            markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType });
+                            // SPAWN-CAP-TRANSPORT-AWARE: the dispatch never reached the target
+                            // daemon, so NO session exists — spend no spawn budget. Record it on
+                            // the dispatch-failure axis instead, which is what lets the park page
+                            // point the coordinator at its own ledger rather than at this node.
+                            markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
                             autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                             return false;
                         }
@@ -1017,7 +1047,10 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                         // which (forwarded back here) drives the claim via the normal event path / PHASE 1
                         // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
                         const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                        markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                        // SPAWN-CAP-TRANSPORT-AWARE: launch_cli reported success, so a remote
+                        // session now exists (or is booting). THIS is the event the spawn budget
+                        // exists to count — a real session that must go on to claim the task.
+                        markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
                         logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                         // REMOTE-READY-WAIT: readiness barrier, symmetric with the local path's
@@ -1052,6 +1085,7 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                         return true;
                     }
 
+                    // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
                     markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
                     const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
                         cliType: effectiveProviderType,
@@ -1071,11 +1105,17 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                     }
                     const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
                     if (!sessionId) {
-                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: effectiveProviderType });
+                        // SPAWN-CAP-TRANSPORT-AWARE: launch_cli SUCCEEDED but returned no session
+                        // id. A session very likely exists and is simply unidentifiable to us, so
+                        // this DOES spend budget — the cap must charge for anything it cannot
+                        // prove was never created, or an id-reporting bug becomes a spawn leak.
+                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: effectiveProviderType, spendSpawnBudget: true });
                         autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
                         return false;
                     }
-                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+                    // SPAWN-CAP-TRANSPORT-AWARE: a local session demonstrably exists — spend one
+                    // unit of the spawn budget (the mismatch detector's counted unit).
+                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
                     logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
                     // Readiness barrier: a freshly-spawned local CLI session is NOT yet
                     // interactive — its PTY prints the input prompt (and the adapter flips

@@ -56280,6 +56280,46 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         PARK_RETENTION_EXPIRED_REASON = "parked_task_retention_expired";
       }
     });
+    function withEntryLock(fn) {
+      return MeshRuntimeStore.getInstance().transaction(fn);
+    }
+    function recordTaskAutoLaunch(meshId, taskId, autoLaunch, opts) {
+      return withEntryLock(() => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        if (opts?.spendSpawnBudget) {
+          entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
+        }
+        entry.autoLaunch = { ...autoLaunch, updatedAt: now };
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        return entry;
+      });
+    }
+    function spendTaskAutoLaunchSpawnBudget(meshId, taskId) {
+      return withEntryLock(() => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        return entry;
+      });
+    }
+    function recordTaskAutoLaunchDispatchFailure(meshId, taskId) {
+      return withEntryLock(() => {
+        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!entry) return null;
+        entry.autoLaunchDispatchFailedCount = (entry.autoLaunchDispatchFailedCount ?? 0) + 1;
+        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
+        return entry;
+      });
+    }
+    var init_mesh_autolaunch_spawn_budget = __esm2({
+      "src/mesh/mesh-autolaunch-spawn-budget.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+      }
+    });
     function isWorkerAbsenceDispatchFailure(reason) {
       const text = readNonEmptyString(reason);
       if (!text) return false;
@@ -65691,19 +65731,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
       return result ? result.entry : null;
     }
-    function recordTaskAutoLaunch(meshId, taskId, autoLaunch) {
-      return withQueueLock(meshId, () => {
-        const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        if (!entry) return null;
-        const now = (/* @__PURE__ */ new Date()).toISOString();
-        if (autoLaunch.status === "started") {
-          entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
-        }
-        entry.autoLaunch = { ...autoLaunch, updatedAt: now };
-        MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        return entry;
-      });
-    }
     function cancelTask3(meshId, taskId, opts) {
       requireMeshHostQueueOwner(opts);
       const result = withQueueLock(meshId, () => {
@@ -65796,6 +65823,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           applyRequeueMessageEdit(entry, opts?.message);
           delete entry.parked;
           delete entry.autoLaunchUnclaimedCount;
+          delete entry.autoLaunchDispatchFailedCount;
           const backoffMs = DISPATCH_RETRY_BACKOFF_BASE_MS * Math.pow(2, dispatchFailures - 1);
           entry.notBefore = resolveNotBefore2(Math.min(backoffMs, DISPATCH_RETRY_BACKOFF_MAX_MS));
           MeshRuntimeStore.getInstance().updateQueueEntry(entry);
@@ -65827,6 +65855,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         applyRequeueMessageEdit(entry, opts?.message);
         delete entry.parked;
         delete entry.autoLaunchUnclaimedCount;
+        delete entry.autoLaunchDispatchFailedCount;
         const notBefore = resolveNotBefore2(opts?.notBefore);
         if (notBefore) entry.notBefore = notBefore;
         else delete entry.notBefore;
@@ -66148,6 +66177,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_worker_mcp_isolation();
         init_mesh_task_parking();
         init_mesh_task_mode_guardrail();
+        init_mesh_autolaunch_spawn_budget();
         init_mesh_reconcile_acked_hold();
         MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
         MESH_TASK_PRIORITIES = ["low", "normal", "high"];
@@ -71658,6 +71688,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               entry.dispatchTimestamp = now;
               entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
               delete entry.autoLaunchUnclaimedCount;
+              delete entry.autoLaunchDispatchFailedCount;
               entry.updatedAt = now;
               this.db.prepare(`
                 UPDATE mesh_queue SET
@@ -83316,7 +83347,14 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       return "never_dispatched";
     }
-    function actionableSkipGuidance(reason, evidence) {
+    function resolveSpawnCapCause(task) {
+      const dispatchFailures = typeof task?.autoLaunchDispatchFailedCount === "number" && task.autoLaunchDispatchFailedCount > 0 ? task.autoLaunchDispatchFailedCount : 0;
+      const spentOnSessions = typeof task?.autoLaunchUnclaimedCount === "number" && task.autoLaunchUnclaimedCount > 0 ? task.autoLaunchUnclaimedCount : 0;
+      if (dispatchFailures > 0 && spentOnSessions > 0) return { cause: "mixed", dispatchFailures };
+      if (dispatchFailures > 0) return { cause: "dispatch_failed", dispatchFailures };
+      return { cause: "sessions_never_claimed", dispatchFailures };
+    }
+    function actionableSkipGuidance(reason, evidence, spawnCap) {
       if (reason === "target_node_id_unmatched") return {
         summary: "it is pinned to a target node id that matches no node in the mesh (the node may have been removed, or its id form does not resolve)",
         nextAction: "Verify the target node still exists with mesh_status, then re-enqueue without the node pin or with a valid node id (or re-clone the node)."
@@ -83342,6 +83380,16 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign."
       };
       if (reason === SPAWN_CAP_PARK_REASON) {
+        const cause = spawnCap?.cause ?? "sessions_never_claimed";
+        const failures = spawnCap?.dispatchFailures ?? 0;
+        if (cause === "dispatch_failed") return {
+          summary: `its durable spawn cap PARKED it, but NOT because launched sessions failed to claim it \u2014 NO session was ever created. All ${failures} launch dispatch(es) for it failed inside THIS coordinator's own transport layer (P2P/signalling) before reaching the target daemon, so the target node never received a launch command at all`,
+          nextAction: `Diagnose the COORDINATOR's transport, not the target node \u2014 there is nothing to find in the node's logs because the command never arrived. Check this coordinator's auto-launch ledger for the 'remote_launch_dispatch_failed' records (they carry the real transport error: signalling rate limits, handshake/connect timeouts, or a reconnect backoff gate), and check whether this daemon was cycling its server WS connection during that window. If P2P is healthy again, mesh_queue_requeue(task_id='...') is enough on its own \u2014 it unparks the task and restores the spawn budget, and no configuration change is needed, because the task itself was never the problem.`
+        };
+        if (cause === "mixed") return {
+          summary: `its durable spawn cap PARKED it after a MIX of two failure modes: some launches did spawn sessions that never claimed the task, and ${failures} further launch dispatch(es) failed inside THIS coordinator's transport layer before reaching the target daemon (creating no session at all)`,
+          nextAction: `Check BOTH sides, because either alone is an incomplete explanation: (1) this coordinator's auto-launch ledger for the 'remote_launch_dispatch_failed' records and this daemon's P2P/WS connection health in that window; (2) the claim-refusal reasons on the target node (mesh_read_node_logs) for the sessions that DID spawn \u2014 a difficulty/model floor, a provider/tag mismatch, or a claim gate refusing every candidate. Then mesh_queue_requeue(task_id='...') to unpark and restore the budget, or mesh_queue_cancel if no longer wanted. If the claim-side mismatch is real, fix it first \u2014 a requeue alone will burn the fresh budget the same way.`
+        };
         return {
           summary: `the daemon auto-launched ${AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP}+ worker sessions for it and NONE ever claimed the task, so its durable spawn cap PARKED it to break the launch loop (each further launch would only produce another idle orphan session)`,
           nextAction: `Diagnose why launched sessions cannot claim it \u2014 check mesh_view_queue (parkedTasks) and the claim-refusal reasons in the node logs (mesh_read_node_logs): typical causes are a difficulty/model floor the launched sessions cannot satisfy, a provider/tag mismatch, or a claim gate refusing every candidate. Fix the mismatch, then mesh_queue_requeue(task_id='...') \u2014 any requeue unparks it and resets the spawn budget \u2014 or mesh_queue_cancel it if no longer wanted. Do NOT just requeue without changing anything: the same mismatch will burn the fresh budget the same way.`
@@ -83409,7 +83457,8 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const targetCoordinatorSessionId = readNonEmptyString(task?.sourceCoordinatorSessionId);
       const nodeLabel = readNonEmptyString(nodeId) || readNonEmptyString(task?.targetNodeId);
       const evidence = reason === "target_session_pin_expired" || reason === PARKED_SKIP_REASON ? resolveTaskDeliveryEvidence(meshId, taskId) : void 0;
-      const { summary, nextAction } = actionableSkipGuidance(reason, evidence);
+      const spawnCap = reason === SPAWN_CAP_PARK_REASON ? resolveSpawnCapCause(task) : void 0;
+      const { summary, nextAction } = actionableSkipGuidance(reason, evidence, spawnCap);
       const providerAvailabilityResult = reason.startsWith("provider") || reason === "missing_provider_priority";
       const reachabilityResult = reason.startsWith("remote_auto_launch");
       const closing = reason === PARKED_SKIP_REASON || reason === SPAWN_CAP_PARK_REASON ? `This task is claimable by NOBODY until you act on it \u2014 no session will pick it up and no timer will re-home it. It is held for ${Math.round(PARKED_TASK_RETENTION_MS / 36e5)}h and then failed (with another notification), so it is never silently discarded. Parked rows are listed under parkedTasks in mesh_view_queue, and any mesh_queue_requeue unparks it \u2014 including one that only rewrites its message.` : reason === "target_session_pin_expired" ? "The stale pin has already been cleared, so the task is now claimable by any compatible session \u2014 the action above is about the session it was originally addressed to." : providerAvailabilityResult ? "This result needs action if it persists: a later provider-status refresh or an already-starting usable session can clear it, but a genuinely missing, disabled, or misconfigured provider will keep the task pending until you fix that configuration." : reachabilityResult ? "This result needs action if it persists: the node reconnecting (or re-registering its daemon id) clears it on its own, but a node that stays unreachable will keep the task pending until you bring it back or re-target the task." : "This is an actionable blocker \u2014 it will NOT clear on its own; the task stays pending until you resolve it.";
@@ -84691,8 +84740,11 @@ ${block2.text}`,
           nodeId: args.nodeId,
           providerType: args.providerType,
           sessionId: args.sessionId
-        });
+        }, { spendSpawnBudget: args.spendSpawnBudget });
+      } else if (args.spendSpawnBudget) {
+        spendTaskAutoLaunchSpawnBudget(meshId, taskId);
       }
+      if (args.dispatchFailedInTransport) recordTaskAutoLaunchDispatchFailure(meshId, taskId);
       recordAutoLaunchEvent(meshId, {
         phase: args.status,
         taskId,
@@ -85179,7 +85231,7 @@ ${block2.text}`,
                     ...effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}
                   }));
                 } catch (e) {
-                  markAutoLaunch(meshId, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType });
+                  markAutoLaunch(meshId, task.id, { status: "failed", reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
                   autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
                   sweepExpiredCooldowns();
                   return false;
@@ -85193,7 +85245,7 @@ ${block2.text}`,
                   return false;
                 }
                 const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+                markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
                 logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0);
                 autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
                 sweepExpiredCooldowns();
@@ -85233,12 +85285,12 @@ ${block2.text}`,
               }
               const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
               if (!sessionId) {
-                markAutoLaunch(meshId, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: effectiveProviderType });
+                markAutoLaunch(meshId, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: effectiveProviderType, spendSpawnBudget: true });
                 autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
                 sweepExpiredCooldowns();
                 return false;
               }
-              markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {} });
+              markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
               logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
               await waitForLocalSessionReady(components, sessionId);
               const routingDecision = buildRoutingDecision();
@@ -85267,6 +85319,7 @@ ${block2.text}`,
         "use strict";
         init_cli_detector();
         init_logger();
+        init_mesh_autolaunch_spawn_budget();
         init_mesh_work_queue();
         init_mesh_claim_refusal();
         init_mesh_remote_ready_wait();
