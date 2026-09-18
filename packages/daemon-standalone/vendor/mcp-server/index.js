@@ -132571,6 +132571,70 @@ ${tail}`;
       if (!remoteMainRef) return "undeterminable";
       return probeGitAncestry(submoduleRepoPath, commit, remoteMainRef);
     }
+    function unmergedPathsIn(repoPath) {
+      try {
+        return (0, import_node_child_process8.execFileSync)(GIT2, ["diff", "--name-only", "--diff-filter=U"], { cwd: repoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() }).split("\n").map((s2) => s2.trim()).filter(Boolean);
+      } catch {
+        return [];
+      }
+    }
+    function isRegularFileConflictIn(repoPath, p) {
+      try {
+        const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: repoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+        return staged.trim() !== "" && !/^160000\s/m.test(staged);
+      } catch {
+        return false;
+      }
+    }
+    function runRebaseIn(repoPath, args) {
+      try {
+        (0, import_node_child_process8.execFileSync)(GIT2, args, {
+          cwd: repoPath,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: GIT_LOCAL_TIMEOUT_MS2,
+          windowsHide: true,
+          env: { ...gitChildEnv(), GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" }
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    function resolveGeneratedBundleConflictsAtStop(repoPath, conflicts) {
+      const bundleConflicts = conflicts.filter(
+        (p) => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflictIn(repoPath, p)
+      );
+      if (bundleConflicts.length === 0) return { resolved: [], remaining: conflicts };
+      for (const p of bundleConflicts) {
+        try {
+          (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "--theirs", "--", p], { cwd: repoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+          (0, import_node_child_process8.execFileSync)(GIT2, ["add", "--", p], { cwd: repoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+        } catch {
+          return void 0;
+        }
+      }
+      return { resolved: bundleConflicts, remaining: unmergedPathsIn(repoPath) };
+    }
+    function driveSubmoduleRebaseResolvingGeneratedBundles(submoduleRepoPath, baseCommit) {
+      const resolvedGeneratedBundlePaths = [];
+      let ok = runRebaseIn(submoduleRepoPath, ["rebase", baseCommit]);
+      let guard = 0;
+      while (!ok) {
+        if (guard++ > 100) return { ok: false, reason: "rebase_error", resolvedGeneratedBundlePaths };
+        const conflicts = unmergedPathsIn(submoduleRepoPath);
+        if (conflicts.length === 0) return { ok: false, reason: "rebase_error", resolvedGeneratedBundlePaths };
+        const stop = resolveGeneratedBundleConflictsAtStop(submoduleRepoPath, conflicts);
+        if (!stop) return { ok: false, reason: "rebase_error", resolvedGeneratedBundlePaths };
+        if (stop.remaining.length > 0) {
+          return { ok: false, reason: "non_generated_bundle_conflict", resolvedGeneratedBundlePaths };
+        }
+        for (const p of stop.resolved) {
+          if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+        }
+        ok = runRebaseIn(submoduleRepoPath, ["rebase", "--continue"]);
+      }
+      return { ok: true, resolvedGeneratedBundlePaths };
+    }
     function convergeDivergedSubmoduleGitlinks(worktreeRoot, baseRepoRoot, baseHead, branchHead, options = {}) {
       const changed = readChangedGitlinkPaths(worktreeRoot, baseHead, branchHead);
       if (changed.length === 0) {
@@ -132666,9 +132730,12 @@ ${tail}`;
           return { converged: false, reason: "submodule_publish_required", resolutions: [], gitlinks };
         }
         let rebasedCommit;
+        const resolvedSubmoduleBundlePaths = [];
         try {
           (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", branchCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "ignore", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
-          (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", baseCommit], { cwd: submoduleRepoPath, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+          const driven = driveSubmoduleRebaseResolvingGeneratedBundles(submoduleRepoPath, baseCommit);
+          if (!driven.ok) throw new Error(`submodule rebase conflict: ${driven.reason || "unknown"}`);
+          resolvedSubmoduleBundlePaths.push(...driven.resolvedGeneratedBundlePaths);
           rebasedCommit = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: submoduleRepoPath, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() }).trim();
         } catch {
           try {
@@ -132713,7 +132780,11 @@ ${tail}`;
           branchCommit,
           rebasedCommit,
           action: "rebased",
-          ...willMintUnpublishedCommit ? { mintedUnpublishedCommit: true, remoteMainRef } : {}
+          ...willMintUnpublishedCommit ? { mintedUnpublishedCommit: true, remoteMainRef } : {},
+          // ★Never resolve a generated bundle invisibly: the resulting bundle may be
+          // STALE, and naming it here is what lets the stage record point at
+          // `check:vendor` as the gate that proves it is not.
+          ...resolvedSubmoduleBundlePaths.length > 0 ? { resolvedGeneratedBundlePaths: resolvedSubmoduleBundlePaths } : {}
         });
         resolutions.push({ path: path68, baseCommit, branchCommit, rebasedCommit });
       }
@@ -132756,44 +132827,14 @@ ${tail}`;
     }
     function rootRebaseResolvingGitlinks(worktreeRoot, baseHead, resolutions) {
       const resolveByPath = new Map(resolutions.map((r) => [r.path, r.rebasedCommit]));
-      const runRebase = (args) => {
-        try {
-          (0, import_node_child_process8.execFileSync)(GIT2, args, {
-            cwd: worktreeRoot,
-            stdio: ["ignore", "pipe", "pipe"],
-            timeout: GIT_LOCAL_TIMEOUT_MS2,
-            windowsHide: true,
-            // A rebase editor prompt would hang; keep it non-interactive.
-            // Built on `gitChildEnv()` — not raw `process.env` — so an inherited
-            // `GIT_DIR` cannot redirect this REBASE at a different repository.
-            env: { ...gitChildEnv(), GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" }
-          });
-          return { ok: true };
-        } catch {
-          return { ok: false };
-        }
-      };
-      const unmergedPaths = () => {
-        try {
-          return (0, import_node_child_process8.execFileSync)(GIT2, ["diff", "--name-only", "--diff-filter=U"], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() }).split("\n").map((s2) => s2.trim()).filter(Boolean);
-        } catch {
-          return [];
-        }
-      };
+      const runRebase = (args) => ({ ok: runRebaseIn(worktreeRoot, args) });
+      const unmergedPaths = () => unmergedPathsIn(worktreeRoot);
       const abort = (reason, conflictPaths) => {
         try {
           (0, import_node_child_process8.execFileSync)(GIT2, ["rebase", "--abort"], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
         } catch {
         }
         return { ok: false, reason, conflictPaths };
-      };
-      const isRegularFileConflict = (p) => {
-        try {
-          const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
-          return staged.trim() !== "" && !/^160000\s/m.test(staged);
-        } catch {
-          return false;
-        }
       };
       const resolvedGeneratedBundlePaths = [];
       let progress = runRebase(["rebase", baseHead]);
@@ -132804,19 +132845,14 @@ ${tail}`;
         if (conflicts.length === 0) {
           return abort("rebase_error");
         }
-        const generatedBundleConflicts = conflicts.filter(
-          (p) => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflict(p)
-        );
-        for (const p of generatedBundleConflicts) {
-          try {
-            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "--theirs", "--", p], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
-            (0, import_node_child_process8.execFileSync)(GIT2, ["add", "--", p], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
-            if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
-          } catch {
-            return abort("rebase_error", conflicts);
-          }
+        const stop = resolveGeneratedBundleConflictsAtStop(worktreeRoot, conflicts);
+        if (!stop) {
+          return abort("rebase_error", conflicts);
         }
-        const remaining = generatedBundleConflicts.length > 0 ? unmergedPaths() : conflicts;
+        for (const p of stop.resolved) {
+          if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+        }
+        const remaining = stop.remaining;
         if (remaining.length === 0) {
           progress = runRebase(["rebase", "--continue"]);
           continue;
