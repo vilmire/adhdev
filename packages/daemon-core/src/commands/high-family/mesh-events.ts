@@ -210,15 +210,30 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
                 describeActiveInteractivePrompt?: () => unknown;
             }).describeActiveInteractivePrompt;
             const active = typeof describeActive === 'function' ? describeActive.call(instance) : null;
+            const errorMessage = e?.message || String(e);
+            // SCREEN-MISMATCH RETRY LOOP (live defect, 2026-09-18): "focused
+            // question does not match" / "review page does not match" mean the
+            // TUI on screen isn't the page the answer was built against — a
+            // parse/timing mismatch, not a bad label or index. The old advice
+            // ("re-answer using a label or 1-based index") sent the caller
+            // straight back into the SAME rejected answer every time, since
+            // the label/index was never the problem — an infinite loop with no
+            // recovery but abandoning the task. Re-reading status lets the
+            // caller see the actual on-screen question before retrying instead
+            // of blindly repeating a call that is guaranteed to fail the same
+            // way.
+            const isScreenMismatch = /does not match the active interactive prompt/.test(errorMessage);
             return {
                 success: false,
                 delivered: false,
                 submitted: false,
-                error: e?.message || String(e),
+                error: errorMessage,
                 ...(active ? { activePrompt: active, waitingChoice: true } : {}),
-                nextStep: active
-                    ? 'The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options.'
-                    : 'The question was not answered. Re-read the session status to see whether a prompt is still open.',
+                nextStep: isScreenMismatch
+                    ? 'The on-screen question did not match what mesh_answer_question expected — retrying the same label/index will fail identically. Re-read the session status to see the CURRENT on-screen question, then re-answer only if it still matches activePrompt.'
+                    : active
+                        ? 'The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options.'
+                        : 'The question was not answered. Re-read the session status to see whether a prompt is still open.',
             };
         }
     },

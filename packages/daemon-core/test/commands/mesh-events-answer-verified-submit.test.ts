@@ -97,6 +97,37 @@ describe('interactive_prompt_response — verified submit (no silent success)', 
         expect(result.activePrompt.questions[0].options).toEqual(['Append at the end', 'Insert at the top']);
         expect(result.waitingChoice).toBe(true);
         expect(applied).toHaveLength(0);
+        // Unknown-label failures are genuinely fixable by retrying with a
+        // correct label/index — keep advising that (regression guard for the
+        // screen-mismatch nextStep fix below, which must not blanket-replace
+        // this message for every failure mode).
+        expect(result.nextStep).toContain('label or 1-based index');
+    });
+
+    it('★a screen-mismatch failure (wrapped-question false-negative) does NOT advise a same-answer retry', async () => {
+        // Reproduces the live defect (2026-09-18): the TUI screen the adapter
+        // just read does not match what applyInteractivePromptResponse
+        // expected — e.g. assertFocusedClaudeTuiQuestion's "focused question
+        // does not match the active interactive prompt" thrown when a wrapped
+        // question was parsed with box-drawing artifacts and could never
+        // match the freshly re-read screen. Retrying with a label or index is
+        // useless here: the label/index was never the problem, and the old
+        // advice sent every retry into the identical rejection forever.
+        const { ctx } = makeVerifiedCtx({
+            injectionError: new Error(
+                'Claude TUI focused question does not match the active interactive prompt '
+                + '(expected "Q"; focused question is "Q")',
+            ),
+        });
+        const result = await meshEventsHandlers.interactive_prompt_response(ctx, {
+            targetSessionId: 'sessW',
+            response: { promptId: 'ask-user-tui-deadbeef', answers: [{ select: 'Append at the end' }] },
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.submitted).toBe(false);
+        expect(result.nextStep).not.toContain('label or 1-based index');
+        expect(result.nextStep).toContain('Re-read the session status');
     });
 
     it('an exact label answer succeeds and reports submitted:true with the resolved answers', async () => {

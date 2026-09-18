@@ -311,7 +311,18 @@ function readClaudeTuiScreenLines(screenText: string): ClaudeTuiScreenLine[] {
 
 function joinClaudeTuiRows(lines: ClaudeTuiScreenLine[], start: number, end: number): string {
   return lines.slice(start, end)
-    .map(line => line.text.trim())
+    // readClaudeTuiScreenLines only strips a RIGHT-side panel divider, which
+    // requires leading whitespace before the │/┃ (see its comment). When a
+    // question/option/description itself wraps across rows, claude's TUI can
+    // draw the wrapped continuation flush-left starting with │ (a left box
+    // border, zero padding) — that glyph is not a panel and never survives
+    // the trailing-panel regex. Left uncaught, it joins straight into the
+    // reconstructed text (live defect 2026-09-18: a wrapped question came
+    // back as "│ first half of question │ second half", which then never
+    // matched the freshly re-read screen and made mesh_answer_question fail
+    // closed forever on any answer attempt). Strip a leading border glyph
+    // per row before joining; it is never legitimate question/option text.
+    .map(line => line.text.trim().replace(/^[│┃]\s*/, ''))
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')
