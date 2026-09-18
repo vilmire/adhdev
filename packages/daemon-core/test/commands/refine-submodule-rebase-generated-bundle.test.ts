@@ -44,19 +44,59 @@ import {
  *      submodule commit.
  */
 
+/**
+ * ★Committer identity must be supplied explicitly, and in BOTH of the two ways
+ * below, because the fixture commits from three different kinds of process.
+ *
+ * On a developer Mac `git` silently invents an identity from the OS user record
+ * (gecos full name + hostname), so a repo with no `user.name`/`user.email` still
+ * commits fine. A CI runner's account has an empty gecos field, so the very same
+ * commit dies with `fatal: empty ident name`. That asymmetry is exactly why this
+ * file passed locally and failed on every oss CI run (measured 2026-09-18).
+ *
+ *   1. `GIT_{AUTHOR,COMMITTER}_*` in the helper env — covers repos this fixture
+ *      never ran `initRepo` on: the `git clone`d worktree and the checkouts that
+ *      `git submodule add`/`submodule update` materialize. Setting only repo-local
+ *      config would miss all of those.
+ *   2. repo-local `git config` in `initRepo`/`configureIdentity` — covers the git
+ *      processes the PRODUCTION code spawns (the rebase under test commits inside
+ *      `work` and `work/oss`). Those inherit `process.env`, not this helper's env,
+ *      so the env vars above never reach them.
+ *
+ * `--global` is deliberately untouched: other suites and other workers share this
+ * machine.
+ */
+const IDENT_NAME = 'Test User'
+const IDENT_EMAIL = 'test@example.com'
+
+const GIT_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_EDITOR: 'true',
+  GIT_AUTHOR_NAME: IDENT_NAME,
+  GIT_AUTHOR_EMAIL: IDENT_EMAIL,
+  GIT_COMMITTER_NAME: IDENT_NAME,
+  GIT_COMMITTER_EMAIL: IDENT_EMAIL,
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-c', 'protocol.file.allow=always', ...args], {
     cwd,
     encoding: 'utf-8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_EDITOR: 'true' },
+    env: { ...process.env, ...GIT_ENV },
   }).trim()
+}
+
+/** Pin identity into a repo that already exists (a clone, or a submodule checkout). */
+function configureIdentity(repo: string) {
+  git(repo, ['config', 'user.email', IDENT_EMAIL])
+  git(repo, ['config', 'user.name', IDENT_NAME])
 }
 
 function initRepo(repo: string) {
   mkdirSync(repo, { recursive: true })
   git(repo, ['init', '-q', '-b', 'main'])
-  git(repo, ['config', 'user.email', 'test@example.com'])
-  git(repo, ['config', 'user.name', 'Test User'])
+  configureIdentity(repo)
 }
 
 function writeFile(repo: string, rel: string, content: string) {
@@ -134,6 +174,7 @@ function buildSubmoduleSiblingScenario(opts: {
   git(repo, ['commit', '-q', '-m', 'base'])
   if (opts.nestedGitlinkConflict) {
     git(repo, ['submodule', 'add', '-q', join(root, 'nested'), 'vendor/seqscribe'])
+    configureIdentity(join(repo, 'vendor/seqscribe'))
     git(repo, ['add', '-A'])
     git(repo, ['commit', '-q', '-m', 'add nested'])
   }
@@ -285,6 +326,7 @@ describe('Gap A + Gap B end-to-end — submodule rebase then root gitlink remap'
     git(baseRepo, ['add', '-A'])
     git(baseRepo, ['commit', '-q', '-m', 'r0'])
     git(baseRepo, ['submodule', 'add', '-q', subOrigin, 'oss'])
+    configureIdentity(join(baseRepo, 'oss'))
     git(baseRepo, ['add', '-A'])
     git(baseRepo, ['commit', '-q', '-m', 'add oss'])
     const rootBaseZero = git(baseRepo, ['rev-parse', 'HEAD'])
@@ -293,7 +335,11 @@ describe('Gap A + Gap B end-to-end — submodule rebase then root gitlink remap'
     // --- the worktree (branch side), cloned from base ----------------------
     const work = join(root, 'work')
     git(root, ['clone', '-q', baseRepo, work])
+    configureIdentity(work)
     git(work, ['submodule', 'update', '-q', '--init'])
+    // ★`work/oss` is where the production rebase under test mints its commits, and
+    // that git runs in a child process inheriting `process.env` — not GIT_ENV.
+    configureIdentity(join(work, 'oss'))
 
     // sibling A lands in BASE: advances oss (regenerating the bundle) + root gitlink.
     const baseSub = join(baseRepo, 'oss')

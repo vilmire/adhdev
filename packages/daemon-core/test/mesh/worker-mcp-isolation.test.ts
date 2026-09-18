@@ -979,6 +979,26 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
     expect(result!.notes.join(' ')).toMatch(/no mcpConfig.path declared/)
   })
 
+  /**
+   * A `$HOME` that satisfies every private-HOME spec's REQUIRED imports.
+   *
+   * ★This is what makes the coverage count below a property of the CODE rather
+   * than of the machine. Passing no `realHome` lets `resolveWorkerMcpIsolation`
+   * fall through to the host's actual home, so the result depended on whether
+   * the person running the suite happened to have used grok — which is exactly
+   * how this test passed on the owner's Mac and failed on every CI runner
+   * (measured 2026-09-18: 4 of 5 on a runner, 5 of 5 locally).
+   */
+  function homeSatisfyingPrivateHomeSpecs(): string {
+    const home = tmp('adhdev-worker-coverhome-')
+    // grok-cli declares `.grok/auth.json` as `required` + `requireOwnerOnly`.
+    mkdirSync(join(home, '.grok'), { recursive: true })
+    writeFileSync(join(home, '.grok', 'auth.json'), '{"access_token":"x"}', { mode: 0o600 })
+    // cursor-cli's only import (`Library/Keychains`) is NOT required, so a host
+    // without it still prepares a private HOME — no fixture needed here.
+    return home
+  }
+
   it('★covers the five repo-local auto-import providers — counted', () => {
     // Gate-authoring checklist ②: count the scanned surface, do not assume it.
     const repoLocal = [
@@ -988,6 +1008,7 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
       { providerType: 'kimi', path: '.kimi-code/mcp.json', format: 'claude_mcp_json' },
       { providerType: 'opencode', path: 'opencode.json', format: 'opencode_json' },
     ]
+    const realHome = homeSatisfyingPrivateHomeSpecs()
     let written = 0
     for (const provider of repoLocal) {
       const workspace = tmp(`adhdev-ws-cover-${provider.providerType}-`)
@@ -995,11 +1016,48 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
         providerType: provider.providerType,
         workspace,
         sessionKey: 'task_1',
+        realHome,
+        baseDir: tmp(`adhdev-whbase-cover-${provider.providerType}-`),
         mcpConfig: { mode: 'auto_import', format: provider.format, path: provider.path },
       }, ON)
       if (result?.configPath && existsSync(result.configPath)) written += 1
     }
     expect(written).toBe(repoLocal.length)
+  })
+
+  /**
+   * ★The other half of the count: a private-HOME provider whose REQUIRED import
+   * is absent must write NO workspace config at all.
+   *
+   * This is the fail-closed contract at `resolveWorkerMcpIsolation`'s private-HOME
+   * catch, and it is deliberate — writing the workspace config while the private
+   * HOME failed would leave the worker reading the COORDINATOR's `$HOME`, which is
+   * the leak the private HOME exists to close (grok's compat layer imports
+   * `~/.cursor/mcp.json`; a worker was measured holding 61 tools where 6 were
+   * expected). A config-without-isolation is strictly worse than no config.
+   *
+   * Pinned here because CI surfaced it by accident rather than by assertion: the
+   * runner has no `~/.grok`, so grok took this branch and the count above came
+   * back 4. The behaviour was correct; only the count's hidden host-dependency
+   * was wrong. Asserting it explicitly means a future change to the catch is
+   * caught by a red test instead of by a confusing off-by-one somewhere else.
+   */
+  it('★fails CLOSED: a private-HOME provider missing a required import writes no config', () => {
+    const emptyHome = tmp('adhdev-worker-emptyhome-')
+    const workspace = tmp('adhdev-ws-cover-grok-nohome-')
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'grok-cli',
+      workspace,
+      sessionKey: 'task_1',
+      realHome: emptyHome,
+      baseDir: tmp('adhdev-whbase-grok-nohome-'),
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json' },
+    }, ON)
+
+    expect(result!.workerHome).toBeUndefined()
+    expect(result!.configPath).toBeUndefined()
+    expect(existsSync(join(workspace, '.mcp.json'))).toBe(false)
+    expect(result!.notes.join(' ')).toMatch(/private HOME unavailable .*\.grok\/auth\.json not found/)
   })
 })
 
