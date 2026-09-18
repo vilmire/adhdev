@@ -28,6 +28,16 @@ type MeshGraphMetadataSubscriptionArgs = {
     extraLiveSessions?: Array<MeshGraphLiveSessionStatus | null | undefined>
 }
 
+// Stable reference so callers that omit `extraLiveSessions` (e.g. RepoMesh.tsx)
+// don't hand the hook a fresh `[]` every render. mergeExtraLiveSessions()
+// currently early-returns metadataLiveSessions unchanged when extras is
+// empty, which absorbs a fresh-literal default too — but relying on that is
+// fragile: any future change to the merge, or a consumer that reads
+// extraLiveSessions itself in a dependency array, would reintroduce a real
+// every-render identity change. Same pattern as EMPTY_SECTIONS/EMPTY_ITEMS
+// in AppShell.tsx.
+export const EMPTY_LIVE_SESSIONS: MeshGraphLiveSessionStatus[] = []
+
 function readString(value: unknown): string {
     return typeof value === 'string' ? value.trim() : ''
 }
@@ -233,7 +243,7 @@ export function useMeshGraphMetadataSubscription({
     extraDaemonIds,
     meshId,
     sendData,
-    extraLiveSessions = [],
+    extraLiveSessions = EMPTY_LIVE_SESSIONS,
 }: MeshGraphMetadataSubscriptionArgs): RepoMeshStatus | null {
     // Per-daemon live session state: Map<daemonId, MeshGraphLiveSessionStatus[]>
     const [perDaemonSessions, setPerDaemonSessions] = useState<Map<string, MeshGraphLiveSessionStatus[]>>(new Map)
