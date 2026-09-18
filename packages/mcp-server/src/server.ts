@@ -37,23 +37,14 @@ import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, MESH_PLAN_ONBOARDING_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
-  meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
-  meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
-  meshGraphView, meshGraphGateClaim, meshGraphGateRelease, meshGraphGateAbandon, meshGraphNodePatch,
-  meshReadDebug, meshReadTerminal, meshSendKeys,
-  meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon, meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
+  // Standard mode publishes these three mesh-bootstrap tools outside mesh mode,
+  // so it dispatches them directly rather than through the mesh registry.
   meshPlanOnboarding, meshCreate, meshAddNode,
-  meshCloneNode, meshRemoveNode, meshCleanupWorktreeNodes, meshRefineNode,
-  meshRefineConfig, meshInit, meshReinit, meshRefinePlan, meshRefineBatch,
-  meshChangeImpactConfig,
-  meshCleanupSessions, meshPruneStaleDirect, meshTaskHistory, meshLedgerQuery, meshRecordNote, meshForgetNote, meshReconcileLedger, meshRequeueHeldEvents, meshMissionUpsert, meshNotifyWorker,
-  meshMissionList, meshReviewInbox,
-  meshMagiReview, meshMagiCollect,
-  meshMagiKindPanelSet, meshMagiKindPanelList, meshWriteMeshJsonConfig,
-  meshNodeSlotsSet, meshNodeSlotsList, meshNodeSlotsPropose,
-  meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet
+  // Flag-gated, so it is not an entry in either dispatch table — see below.
+  meshNotifyWorker,
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
+import { resolveMeshToolHandler } from './tools/mesh-tool-dispatch.js';
 import { rejectUnknownMeshToolArgs, unknownToolArgsError } from './tools/validate-tool-args.js';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
@@ -364,92 +355,22 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       // `session_ids` once deleted a live worker session).
       const unknownArgsError = rejectUnknownMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: 'text', text: unknownArgsError }], isError: true };
+      // ★Dispatch via the type-enforced registry (mesh-tool-dispatch.ts), not a
+      // hand-maintained switch. A canonical tool with no handler is now a
+      // compile error rather than a published tool that answers
+      // "Unknown tool" at runtime.
       try {
         let text: string;
-        switch (name) {
-          case 'mesh_status': text = await meshStatus(meshCtx, a as any); break;
-          case 'mesh_route_preview': text = await meshRoutePreview(meshCtx, a as any); break;
-          case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
-          case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
-          case 'mesh_enqueue_batch': text = await meshEnqueueBatch(meshCtx, a as any); break;
-          case 'mesh_view_queue': text = await meshViewQueue(meshCtx, a as any); break;
-          case 'mesh_graph_view': text = await meshGraphView(meshCtx, a as any); break;
-          case 'mesh_graph_gate_claim': text = await meshGraphGateClaim(meshCtx, a as any); break;
-          case 'mesh_graph_gate_release': text = await meshGraphGateRelease(meshCtx, a as any); break;
-          case 'mesh_graph_gate_abandon': text = await meshGraphGateAbandon(meshCtx, a as any); break;
-          case 'mesh_graph_node_patch': text = await meshGraphNodePatch(meshCtx, a as any); break;
-          case 'mesh_queue_cancel': text = await meshQueueCancel(meshCtx, a as any); break;
-          case 'mesh_queue_requeue': text = await meshQueueRequeue(meshCtx, a as any); break;
-          case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
-          case 'mesh_notify_worker':
-            if (!isWorkerMcpEnabled()) {
-              text = JSON.stringify({ success: false, error: 'worker_mcp_disabled' });
-            } else {
-              text = await meshNotifyWorker(meshCtx, a as any);
-            }
-            break;
-          case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
-          case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;
-          case 'mesh_read_terminal': text = await meshReadTerminal(meshCtx, a as any); break;
-          case 'mesh_send_keys': text = await meshSendKeys(meshCtx, a as any); break;
-          case 'mesh_launch_session': text = await meshLaunchSession(meshCtx, a as any); break;
-          case 'mesh_git_status': text = await meshGitStatus(meshCtx, a as any); break;
-          case 'mesh_read_node_logs': text = await meshReadNodeLogs(meshCtx, a as any); break;
-          case 'mesh_fast_forward_node': text = await meshFastForwardNode(meshCtx, a as any); break;
-          case 'mesh_restart_daemon': text = await meshRestartDaemon(meshCtx, a as any); break;
-          case 'mesh_checkpoint': text = await meshCheckpoint(meshCtx, a as any); break;
-          case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
-          case 'mesh_answer_question': text = await meshAnswerQuestion(meshCtx, a as any); break;
-          case 'mesh_list_pending_approvals': text = await meshListPendingApprovals(meshCtx, a as any); break;
-          case 'mesh_plan_onboarding': text = await meshPlanOnboarding(meshCtx.transport, a as any, meshCtx.mesh.id); break;
-          case 'mesh_create': text = await meshCreate(meshCtx.transport, a as any); break;
-          case 'mesh_add_node': text = await meshAddNode(meshCtx.transport, { ...a, inline_mesh: meshCtx.mesh } as any, meshCtx.mesh.id); break;
-          case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
-          case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
-          case 'mesh_cleanup_worktree_nodes': text = await meshCleanupWorktreeNodes(meshCtx, a as any); break;
-          case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
-          case 'mesh_refine_batch': text = await meshRefineBatch(meshCtx, a as any); break;
-          case 'mesh_refine_config': text = await meshRefineConfig(meshCtx, a as any); break;
-          // Hidden 1-release aliases (Part 8-4): the former standalone config tools are no
-          // longer published in ALL_MESH_TOOLS but stay dispatchable, forwarding to the
-          // unified mesh_refine_config handler with the corresponding mode so pre-consolidation
-          // callers keep working.
-          case 'mesh_refine_config_schema': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'schema' }); break;
-          case 'mesh_validate_refine_config': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'validate' }); break;
-          case 'mesh_suggest_refine_config': text = await meshRefineConfig(meshCtx, { ...(a as any), mode: 'suggest' }); break;
-          case 'mesh_change_impact_config': text = await meshChangeImpactConfig(meshCtx, a as any); break;
-          // Hidden 1-release aliases (symmetric to Part 8-4): the former standalone change-impact
-          // config tools are no longer published in ALL_MESH_TOOLS but stay dispatchable, forwarding
-          // to the unified mesh_change_impact_config handler with the corresponding mode so
-          // pre-consolidation callers keep working.
-          case 'mesh_change_impact_config_schema': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'schema' }); break;
-          case 'mesh_validate_change_impact_config': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'validate' }); break;
-          case 'mesh_suggest_change_impact_config': text = await meshChangeImpactConfig(meshCtx, { ...(a as any), mode: 'suggest' }); break;
-          case 'mesh_init': text = await meshInit(meshCtx, a as any); break;
-          case 'mesh_reinit': text = await meshReinit(meshCtx, a as any); break;
-          case 'mesh_write_mesh_json_config': text = await meshWriteMeshJsonConfig(meshCtx, a as any); break;
-          case 'mesh_refine_plan': text = await meshRefinePlan(meshCtx, a as any); break;
-          case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
-          case 'mesh_prune_stale_direct': text = await meshPruneStaleDirect(meshCtx, a as any); break;
-          case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
-          case 'mesh_ledger_query': text = await meshLedgerQuery(meshCtx, a as any); break;
-          case 'mesh_record_note': text = await meshRecordNote(meshCtx, a as any); break;
-          case 'mesh_forget_note': text = await meshForgetNote(meshCtx, a as any); break;
-          case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;
-          case 'mesh_requeue_held_events': text = await meshRequeueHeldEvents(meshCtx, a as any); break;
-          case 'mesh_mission_upsert': text = await meshMissionUpsert(meshCtx, a as any); break;
-          case 'mesh_mission_list': text = await meshMissionList(meshCtx, a as any); break;
-          case 'mesh_review_inbox': text = await meshReviewInbox(meshCtx, a as any); break;
-          case 'mesh_magi_review': text = await meshMagiReview(meshCtx, a as any); break;
-          case 'mesh_magi_collect': text = await meshMagiCollect(meshCtx, a as any); break;
-          case 'mesh_magi_kind_panel_set': text = await meshMagiKindPanelSet(meshCtx, a as any); break;
-          case 'mesh_magi_kind_panel_list': text = await meshMagiKindPanelList(meshCtx, a as any); break;
-          case 'mesh_node_slots_set': text = await meshNodeSlotsSet(meshCtx, a as any); break;
-          case 'mesh_node_slots_list': text = await meshNodeSlotsList(meshCtx, a as any); break;
-          case 'mesh_node_slots_propose': text = await meshNodeSlotsPropose(meshCtx, a as any); break;
-          case 'mesh_coordinator_prompt_append_get': text = await meshCoordinatorPromptAppendGet(meshCtx, a as any); break;
-          case 'mesh_coordinator_prompt_append_set': text = await meshCoordinatorPromptAppendSet(meshCtx, a as any); break;
-          default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+        if (name === 'mesh_notify_worker') {
+          // Flag-gated rather than alias-shaped: its behaviour depends on a
+          // runtime env read, so it cannot be a fixed entry in either table.
+          text = isWorkerMcpEnabled()
+            ? await meshNotifyWorker(meshCtx, a as any)
+            : JSON.stringify({ success: false, error: 'worker_mcp_disabled' });
+        } else {
+          const handler = resolveMeshToolHandler(name);
+          if (!handler) return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+          text = await handler(meshCtx, a);
         }
         return { content: [{ type: 'text', text }] };
       } catch (err: any) {
