@@ -138488,6 +138488,245 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         waitQueue = [];
       }
     });
+    function buildRefineJobKey(self, meshId, nodeId) {
+      return `${meshId}:${nodeId}`;
+    }
+    function buildRefineJobHandle(self, args) {
+      return {
+        success: true,
+        async: true,
+        status: args.status || "accepted",
+        jobId: args.jobId || `refine_${createInteractionId()}`,
+        interactionId: args.interactionId || createInteractionId(),
+        meshId: args.meshId,
+        nodeId: args.nodeId,
+        targetNodeId: args.nodeId,
+        targetDaemonId: readStringValue(args.node?.daemonId),
+        workspace: readStringValue(args.node?.workspace),
+        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
+        ...args.completedAt ? { completedAt: args.completedAt } : {},
+        ...args.retryOfJobId ? { retryOfJobId: args.retryOfJobId } : {},
+        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
+        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
+        eventDelivery: { pendingEvents: true, ledger: true },
+        evidence: {
+          pendingEventsCommand: "get_pending_mesh_events",
+          ledgerCommand: "get_mesh_ledger_slice",
+          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
+        }
+      };
+    }
+    function extractValidationFailureDiagnostics(validationSummary) {
+      if (!validationSummary || typeof validationSummary !== "object") return void 0;
+      const commandsRun = Array.isArray(validationSummary.commandsRun) ? validationSummary.commandsRun : [];
+      const failed = commandsRun.find((c) => c.passed === false);
+      const summaryFailureKind = validationSummary.failureKind;
+      if (!failed) {
+        return summaryFailureKind !== void 0 ? { failureKind: summaryFailureKind } : void 0;
+      }
+      const firstFailedCommand = typeof failed.displayCommand === "string" ? failed.displayCommand : typeof failed.command === "string" ? [failed.command, ...Array.isArray(failed.args) ? failed.args : []].join(" ").trim() : void 0;
+      const rawOutput = [failed.stderr, failed.stdout, failed.output].filter((s2) => typeof s2 === "string" && s2.length > 0).join("\n");
+      const outputTail = rawOutput.length > 600 ? rawOutput.slice(-600) : rawOutput;
+      return {
+        ...firstFailedCommand ? { firstFailedCommand } : {},
+        ...failed.exitCode !== void 0 ? { exitCode: failed.exitCode } : {},
+        ...failed.failureKind !== void 0 ? { failureKind: failed.failureKind } : summaryFailureKind !== void 0 ? { failureKind: summaryFailureKind } : {},
+        ...outputTail ? { outputTail } : {}
+      };
+    }
+    function slimRefineEventResult(result) {
+      const slim = {};
+      for (const key2 of [
+        "success",
+        "code",
+        "error",
+        "convergenceStatus",
+        "blockedReason",
+        "branch",
+        "into",
+        "terminalKind",
+        "nextStep",
+        "finalBranchConvergenceState",
+        // QW4: merge conflict paths; QW5: cleanup branch-ref / residue warnings.
+        "conflictPaths",
+        "branchRefWarning",
+        "residueWarning",
+        "branchRefDeleted",
+        // GHOST-FAILURE: merge-landing facts. The coordinator sees ONLY this slim
+        // result; without these it cannot tell a pre-merge failure (nothing landed)
+        // from a post-merge one (the change IS on origin) without a manual git check.
+        "merged",
+        "mergedLocal",
+        "pushed",
+        "mergedSha",
+        "postMergeWarning",
+        "refineLanding",
+        // ★REBASE-FAILURE-CLASSIFY: the coordinator sees ONLY this slim result. Without
+        // these it cannot tell "the rebase hit conflicts" from "the rebase refused to
+        // start on a dirty worktree" — the exact confusion that nearly produced a
+        // manual re-push of an already-merged branch on 2026-08-20. `rebaseStderr` is
+        // git's own words, bounded by buildRefineRebaseFailureError's excerpt limit.
+        "rebaseFailureDetail",
+        "rebaseConflict",
+        "rebaseStderr"
+      ]) {
+        if (result[key2] !== void 0) slim[key2] = result[key2];
+      }
+      if (Array.isArray(result.unreachableSubmoduleCommits)) {
+        slim.unreachableSubmoduleCommits = result.unreachableSubmoduleCommits.map((e) => ({ path: e?.path, autoPublishAllowed: e?.autoPublishAllowed }));
+      }
+      if (result.validationSummary && typeof result.validationSummary === "object") {
+        const vs = result.validationSummary;
+        const diagnostics = vs.status === "failed" ? extractValidationFailureDiagnostics(vs) : void 0;
+        slim.validationSummary = {
+          status: vs.status,
+          failureCode: vs.failureCode,
+          failureKind: vs.failureKind,
+          configSource: vs.configSource,
+          configSourceType: vs.configSourceType,
+          commandsRunCount: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : void 0,
+          ...diagnostics ? { failure: diagnostics } : {}
+        };
+      }
+      if (result.patchEquivalence && typeof result.patchEquivalence === "object") {
+        const pe = result.patchEquivalence;
+        slim.patchEquivalence = { status: pe.status, equivalent: pe.equivalent };
+      }
+      if (result.submoduleReachability && typeof result.submoduleReachability === "object") {
+        const sr = result.submoduleReachability;
+        slim.submoduleReachability = {
+          checked: Array.isArray(sr.entries) ? sr.entries.length : void 0,
+          unreachable: Array.isArray(sr.unreachable) ? sr.unreachable.length : void 0
+        };
+      }
+      return slim;
+    }
+    function queueRefineJobEvent(self, event, handle, result) {
+      const slimResult = result ? slimRefineEventResult(result) : void 0;
+      const metadataEvent = {
+        source: "refine_mesh_node_async_job",
+        jobId: handle.jobId,
+        interactionId: handle.interactionId,
+        meshId: handle.meshId,
+        nodeId: handle.targetNodeId,
+        targetDaemonId: handle.targetDaemonId,
+        workspace: handle.workspace,
+        status: handle.status,
+        startedAt: handle.startedAt,
+        completedAt: handle.completedAt,
+        retryOfJobId: handle.retryOfJobId,
+        ...slimResult ? { result: slimResult } : {}
+      };
+      const eventPayload = {
+        event,
+        meshId: handle.meshId,
+        nodeLabel: handle.targetNodeId,
+        nodeId: handle.targetNodeId,
+        workspace: handle.workspace,
+        metadataEvent: {
+          ...metadataEvent,
+          // REFINE-EVENT-SESSION-SCOPED-UNICAST: mirror the session INSIDE
+          // metadataEvent too. handleMeshForwardEvent reads the coordinator session
+          // anchor from `metadataEvent.meshCoordinatorSessionId` (a top-level field
+          // alone is dropped when the event crosses a machine boundary), so this is
+          // what survives the P2P relay for a remote-executing refine.
+          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+        },
+        queuedAt: Date.now(),
+        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+        // THE FIX: address the terminal event to the requesting coordinator SESSION,
+        // not just its daemon. stampPendingEventV2 folds this into the v2 unicast
+        // `intendedFor`, so identityDeliversTo's both-sides-session branch excludes a
+        // sibling coordinator session on the same daemon. Absent (legacy requester) →
+        // session-less intendedFor → daemon-level delivery exactly as before.
+        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
+      };
+      if (typeof self.deps.instanceManager?.getByCategory === "function") {
+        const forwarded = handleMeshForwardEvent(
+          { instanceManager: self.deps.instanceManager },
+          {
+            event,
+            meshId: handle.meshId,
+            nodeId: handle.targetNodeId,
+            workspace: handle.workspace,
+            jobId: handle.jobId,
+            interactionId: handle.interactionId,
+            status: handle.status,
+            targetDaemonId: handle.targetDaemonId,
+            startedAt: handle.startedAt,
+            completedAt: handle.completedAt,
+            retryOfJobId: handle.retryOfJobId,
+            // RC32: carry the return address through the forward payload too (it
+            // already rode the queued eventPayload below). Sessionless refine has
+            // no live worker session, so injectMeshSystemMessage can only recover
+            // the coordinator anchor from this relayed field — without it the
+            // re-queued event self-fallbacks to THIS (the executing/worker)
+            // daemon and the real coordinator's drain excludes it.
+            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
+            // REFINE-EVENT-SESSION-SCOPED-UNICAST: carry the SESSION half of the
+            // return address across the relay as well. buildRelayMetadataEvent
+            // reads meshCoordinatorSessionId (falling back to
+            // targetCoordinatorSessionId), so both spellings are supplied.
+            ...handle.targetCoordinatorSessionId ? {
+              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
+              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
+            } : {},
+            ...slimResult ? { result: slimResult } : {}
+          }
+        );
+        if (forwarded?.success === true) return;
+        LOG.warn("Mesh", `[Refinery] Failed to forward async refine event ${event}: ${forwarded?.error || "unknown error"}`);
+      }
+      queuePendingMeshCoordinatorEvent(eventPayload);
+    }
+    async function appendRefineJobLedger(self, kind, handle, result) {
+      try {
+        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
+        const executorStamp = kind === "task_dispatched" ? (await Promise.resolve().then(() => (init_mesh_refine_executor_liveness(), mesh_refine_executor_liveness_exports))).buildRefineExecutorStamp() : void 0;
+        appendLedgerEntry22(handle.meshId, {
+          kind,
+          nodeId: handle.targetNodeId,
+          payload: {
+            source: "refine_mesh_node_async_job",
+            refineJob: {
+              jobId: handle.jobId,
+              interactionId: handle.interactionId,
+              status: handle.status,
+              meshId: handle.meshId,
+              nodeId: handle.targetNodeId,
+              targetDaemonId: handle.targetDaemonId,
+              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
+              workspace: handle.workspace,
+              startedAt: handle.startedAt,
+              completedAt: handle.completedAt,
+              retryOfJobId: handle.retryOfJobId,
+              ...executorStamp ? { executor: executorStamp } : {}
+            },
+            async: true,
+            retryOfJobId: handle.retryOfJobId,
+            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
+            ...result ? {
+              success: result.success === true,
+              result,
+              finalBranchConvergenceState: result.finalBranchConvergenceState,
+              ...result.blockerContext ? { blockerContext: result.blockerContext } : {}
+            } : {}
+          }
+        });
+      } catch (e) {
+        LOG.warn("Mesh", `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
+      }
+    }
+    var init_router_refine_jobs = __esm2({
+      "src/commands/router-refine-jobs.ts"() {
+        "use strict";
+        init_logger();
+        init_debug_trace();
+        init_mesh_events();
+        init_mesh_node_identity();
+      }
+    });
     function resolveRefineResumeDispatchGraceMs() {
       return resolveTunedReconcileMs("MESH_REFINE_RESUME_DISPATCH_GRACE_MS", 6e4, 0, 10 * 6e4);
     }
@@ -138601,6 +138840,280 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         init_mesh_reconcile_acked_hold();
         init_mesh_refine_executor_liveness();
         init_router_refine();
+      }
+    });
+    async function refinePatchEquivalenceStage(self, ctx) {
+      const { meshId, nodeId, args, repoRoot, baseHead, branch, baseBranch, mesh, node, validationSummary, refineStages } = ctx;
+      const branchHead = ctx.branchHead;
+      const patchEquivalenceStarted = Date.now();
+      const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
+      recordMeshRefineStage(refineStages, "patch_equivalence", patchEquivalence.status, patchEquivalenceStarted, {
+        equivalent: patchEquivalence.equivalent,
+        expectedPatchId: patchEquivalence.expectedPatchId,
+        actualPatchId: patchEquivalence.actualPatchId,
+        error: patchEquivalence.error,
+        actionableHint: patchEquivalence.actionableHint
+      });
+      if (!patchEquivalence.equivalent) {
+        const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
+        if (!alreadyMergedViaOtherPath) {
+          const classification = await classifyAndWarnPatchEquivalenceFailure(node.id, repoRoot, baseHead, branchHead, patchEquivalence, {
+            targetBaseRef: baseHead,
+            worktreeRoot: node.workspace,
+            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace).enabled
+          });
+          recordMeshRefineStage(refineStages, "patch_equivalence_classification", "failed", patchEquivalenceStarted, {
+            detailedReason: classification.detailedReason,
+            recommendedAction: classification.recommendedAction,
+            ...classification.evidence.submoduleReachabilityUndeterminable ? { submoduleReachabilityUndeterminable: true } : {}
+          });
+          return { kind: "terminal", result: {
+            success: false,
+            code: "patch_equivalence_failed",
+            detailedReason: classification.detailedReason,
+            detailedReasonDescription: classification.detailedReasonDescription,
+            recommendedAction: classification.recommendedAction,
+            evidence: classification.evidence,
+            convergenceStatus: "blocked_review",
+            error: "Refinery patch-equivalence preflight failed; merge/refine was not attempted.",
+            branch,
+            into: baseBranch,
+            validationSummary,
+            patchEquivalence,
+            refineStages,
+            finalBranchConvergenceState: {
+              branch,
+              baseBranch,
+              merged: false,
+              removed: false,
+              validation: "passed",
+              patchEquivalence: "failed",
+              status: "blocked_review"
+            }
+          } };
+        }
+        {
+          recordMeshRefineStage(refineStages, "merge", "skipped", Date.now(), {
+            reason: "already_merged_via_other_path",
+            note: "actualPatchId is empty; branch content is already present in base via a different commit path"
+          });
+          const cleanupStarted = Date.now();
+          const removeResult = await self.execute("remove_mesh_node", {
+            meshId,
+            nodeId,
+            sessionCleanupMode: "preserve",
+            inlineMesh: args?.inlineMesh
+          });
+          recordMeshRefineStage(refineStages, "cleanup", removeResult?.success === false ? "failed" : "passed", cleanupStarted, {
+            removed: removeResult?.removed,
+            code: removeResult?.code,
+            error: removeResult?.error
+          });
+          try {
+            const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+            appendLedgerEntry22(meshId, {
+              kind: "node_removed",
+              nodeId,
+              payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence }
+            });
+          } catch {
+          }
+          return { kind: "terminal", result: {
+            success: removeResult?.success !== false,
+            code: "already_merged",
+            merged: false,
+            alreadyMergedViaOtherPath: true,
+            branch,
+            into: baseBranch,
+            removeResult,
+            validationSummary,
+            patchEquivalence,
+            refineStages,
+            finalBranchConvergenceState: {
+              branch: baseBranch,
+              mergedBranch: branch,
+              baseBranch,
+              merged: false,
+              alreadyMergedViaOtherPath: true,
+              removed: removeResult?.success !== false,
+              validation: "passed",
+              patchEquivalence: "already_merged",
+              status: removeResult?.success === false ? "merged_cleanup_failed" : "merged_to_main"
+            }
+          } };
+        }
+      }
+      ctx.branchHead = branchHead;
+      ctx.patchEquivalence = patchEquivalence;
+      return { kind: "continue", ctx };
+    }
+    async function refineSubmoduleReachabilityStage(self, ctx) {
+      const { mesh, node, repoRoot, branch, baseBranch, branchHead, validationSummary, patchEquivalence, refineStages } = ctx;
+      const submoduleReachabilityStarted = Date.now();
+      const autoPublishSubmoduleMainCommits = resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace);
+      const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead, {
+        allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
+        autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
+        worktreeRoot: node.workspace
+      });
+      recordMeshRefineStage(refineStages, "submodule_reachability", submoduleReachability.status, submoduleReachabilityStarted, {
+        checked: submoduleReachability.checked,
+        autoPublishAllowed: submoduleReachability.autoPublishAllowed,
+        autoPublishPolicySource: submoduleReachability.autoPublishPolicySource,
+        autoPublished: submoduleReachability.entries.filter((entry) => entry.autoPublishAttempted).map((entry) => ({
+          path: entry.path,
+          commit: entry.commit,
+          remote: entry.remote,
+          remoteUrl: entry.remoteUrl,
+          remoteMainBranch: entry.remoteMainBranch,
+          refspec: entry.autoPublishRefspec,
+          succeeded: entry.autoPublishSucceeded,
+          verified: entry.autoPublishVerified,
+          remoteMainReachable: entry.remoteMainReachable,
+          error: entry.error
+        })),
+        autoPublishSkipped: submoduleReachability.entries.filter((entry) => entry.autoPublishAllowed === true && entry.autoPublishAttempted !== true).map((entry) => ({
+          path: entry.path,
+          commit: entry.commit,
+          remote: entry.remote,
+          remoteUrl: entry.remoteUrl,
+          remoteMainBranch: entry.remoteMainBranch,
+          reason: entry.autoPublishSkippedReason || entry.error || "auto-publish was allowed but no publish attempt was possible"
+        })),
+        unreachable: submoduleReachability.unreachable.map((entry) => ({
+          path: entry.path,
+          commit: entry.commit,
+          equivalentPublishedCommit: entry.equivalentPublishedCommit,
+          publishRequired: entry.publishRequired === true,
+          autoPublishAllowed: entry.autoPublishAllowed,
+          autoPublishAttempted: entry.autoPublishAttempted,
+          autoPublishSucceeded: entry.autoPublishSucceeded,
+          autoPublishVerified: entry.autoPublishVerified,
+          autoPublishRefspec: entry.autoPublishRefspec,
+          autoPublishSkippedReason: entry.autoPublishSkippedReason,
+          remote: entry.remote,
+          remoteUrl: entry.remoteUrl,
+          remoteReachable: entry.remoteReachable,
+          remoteMainBranch: entry.remoteMainBranch,
+          remoteMainReachable: entry.remoteMainReachable,
+          error: entry.error
+        })),
+        error: submoduleReachability.error
+      });
+      if (submoduleReachability.status === "failed") {
+        const nextStep = buildSubmodulePublishRequiredNextStep(submoduleReachability.unreachable);
+        const convergeToPublished = submoduleReachability.unreachable.length > 0 && submoduleReachability.unreachable.every((entry) => !!entry.equivalentPublishedCommit);
+        const blockedReason = convergeToPublished ? "submodule_converge_to_published" : "submodule_publish_required";
+        return { kind: "terminal", result: {
+          success: false,
+          code: "submodule_reachability_failed",
+          convergenceStatus: "blocked_review",
+          publishRequired: !convergeToPublished,
+          ...convergeToPublished ? { convergeToPublished: true } : {},
+          blockedReason,
+          error: convergeToPublished ? "Refinery submodule reachability preflight found submodule gitlink commit(s) that are not reachable from their configured remote main branch, but each has an equivalent commit (identical tree) already published there; converge the gitlink(s) to the published commit(s) instead of publishing same-content twins. Merge/refine cleanup was not attempted." : "Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.",
+          nextStep,
+          nextSteps: convergeToPublished ? [
+            "Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.",
+            "Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.",
+            "Rerun mesh_refine_node after the gitlink points at the published commit.",
+            "Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main."
+          ] : [
+            "Ask the user for explicit approval before pushing or publishing any submodule commit.",
+            "Push/publish each unreachable submodule commit to the configured submodule remote main branch shown in the evidence.",
+            "Rerun mesh_refine_node after remote reachability is confirmed.",
+            "Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main."
+          ],
+          unreachableSubmoduleCommits: submoduleReachability.unreachable.map((entry) => ({
+            path: entry.path,
+            commit: entry.commit,
+            equivalentPublishedCommit: entry.equivalentPublishedCommit,
+            remote: entry.remote,
+            remoteUrl: entry.remoteUrl,
+            remoteReachable: entry.remoteReachable,
+            remoteMainBranch: entry.remoteMainBranch,
+            remoteMainReachable: entry.remoteMainReachable,
+            autoPublishAllowed: entry.autoPublishAllowed,
+            autoPublishAttempted: entry.autoPublishAttempted,
+            autoPublishSucceeded: entry.autoPublishSucceeded,
+            autoPublishVerified: entry.autoPublishVerified,
+            autoPublishRefspec: entry.autoPublishRefspec,
+            autoPublishSkippedReason: entry.autoPublishSkippedReason,
+            error: entry.error
+          })),
+          branch,
+          into: baseBranch,
+          validationSummary,
+          patchEquivalence,
+          submoduleReachability,
+          refineStages,
+          finalBranchConvergenceState: {
+            branch,
+            baseBranch,
+            merged: false,
+            removed: false,
+            validation: "passed",
+            patchEquivalence: "passed",
+            submoduleReachability: "failed",
+            status: "blocked_review",
+            reason: blockedReason,
+            nextStep
+          }
+        } };
+      }
+      ctx.submoduleReachability = submoduleReachability;
+      return { kind: "continue", ctx };
+    }
+    async function refineEffectiveDiffStage(self, ctx) {
+      const { repoRoot, baseHead, branchHead, branch, baseBranch, validationSummary, patchEquivalence, refineStages } = ctx;
+      const effectiveDiffStarted = Date.now();
+      const effectiveDiff = await runMeshRefineEffectiveDiffGate(repoRoot, baseHead, branchHead);
+      recordMeshRefineStage(refineStages, "effective_diff", effectiveDiff.status, effectiveDiffStarted, {
+        hasEffectiveDiff: effectiveDiff.hasEffectiveDiff,
+        changedPaths: effectiveDiff.changedPaths,
+        submoduleHints: effectiveDiff.submoduleHints,
+        ...effectiveDiff.error ? { error: effectiveDiff.error } : {}
+      });
+      if (effectiveDiff.status === "failed" && !effectiveDiff.hasEffectiveDiff) {
+        const hintLines = (effectiveDiff.submoduleHints || []).map((h) => `  - ${h.path}: ${h.reason}`);
+        const message = [
+          `Refinery no-op guard: branch '${branch}' has no effective root-tree diff against '${baseBranch}' (${baseHead.slice(0, 12)}); nothing would merge.`,
+          "This usually means a submodule (e.g. oss) has commits but the root branch never committed the gitlink (pointer) bump, so the merge would be a silent no-op while the real change never reaches main.",
+          hintLines.length ? `Submodules with uncommitted pointer bumps:
+${hintLines.join("\n")}` : "",
+          `Fix: commit the submodule pointer bump on '${branch}' (git add <submodule-path> && git commit), then re-run refine.`
+        ].filter(Boolean).join("\n");
+        return { kind: "terminal", result: {
+          success: false,
+          code: "no_effective_diff",
+          convergenceStatus: "blocked_review",
+          error: message,
+          branch,
+          into: baseBranch,
+          validationSummary,
+          patchEquivalence,
+          effectiveDiff,
+          refineStages,
+          finalBranchConvergenceState: {
+            branch,
+            baseBranch,
+            merged: false,
+            removed: false,
+            validation: "passed",
+            patchEquivalence: "passed",
+            effectiveDiff: "no_effective_diff",
+            status: "blocked_review",
+            reason: "no_effective_diff",
+            ...effectiveDiff.submoduleHints?.length ? { submoduleHints: effectiveDiff.submoduleHints } : {}
+          }
+        } };
+      }
+      return { kind: "continue", ctx };
+    }
+    var init_router_refine_preflight_stages = __esm2({
+      "src/commands/router-refine-preflight-stages.ts"() {
+        "use strict";
+        init_mesh_refine_gates();
       }
     });
     async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
@@ -139163,236 +139676,6 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       startMeshRefineBatchJob: () => startMeshRefineBatchJob,
       startMeshRefineJob: () => startMeshRefineJob
     });
-    function buildRefineJobKey(self, meshId, nodeId) {
-      return `${meshId}:${nodeId}`;
-    }
-    function buildRefineJobHandle(self, args) {
-      return {
-        success: true,
-        async: true,
-        status: args.status || "accepted",
-        jobId: args.jobId || `refine_${createInteractionId()}`,
-        interactionId: args.interactionId || createInteractionId(),
-        meshId: args.meshId,
-        nodeId: args.nodeId,
-        targetNodeId: args.nodeId,
-        targetDaemonId: readStringValue(args.node?.daemonId),
-        workspace: readStringValue(args.node?.workspace),
-        startedAt: args.startedAt || (/* @__PURE__ */ new Date()).toISOString(),
-        ...args.completedAt ? { completedAt: args.completedAt } : {},
-        ...args.retryOfJobId ? { retryOfJobId: args.retryOfJobId } : {},
-        ...args.coordinatorDaemonId ? { targetCoordinatorDaemonId: args.coordinatorDaemonId } : {},
-        ...args.coordinatorSessionId ? { targetCoordinatorSessionId: args.coordinatorSessionId } : {},
-        eventDelivery: { pendingEvents: true, ledger: true },
-        evidence: {
-          pendingEventsCommand: "get_pending_mesh_events",
-          ledgerCommand: "get_mesh_ledger_slice",
-          taskHistoryKind: args.status === "completed" ? "task_completed" : args.status === "failed" ? "task_failed" : "task_dispatched"
-        }
-      };
-    }
-    function extractValidationFailureDiagnostics(validationSummary) {
-      if (!validationSummary || typeof validationSummary !== "object") return void 0;
-      const commandsRun = Array.isArray(validationSummary.commandsRun) ? validationSummary.commandsRun : [];
-      const failed = commandsRun.find((c) => c.passed === false);
-      const summaryFailureKind = validationSummary.failureKind;
-      if (!failed) {
-        return summaryFailureKind !== void 0 ? { failureKind: summaryFailureKind } : void 0;
-      }
-      const firstFailedCommand = typeof failed.displayCommand === "string" ? failed.displayCommand : typeof failed.command === "string" ? [failed.command, ...Array.isArray(failed.args) ? failed.args : []].join(" ").trim() : void 0;
-      const rawOutput = [failed.stderr, failed.stdout, failed.output].filter((s2) => typeof s2 === "string" && s2.length > 0).join("\n");
-      const outputTail = rawOutput.length > 600 ? rawOutput.slice(-600) : rawOutput;
-      return {
-        ...firstFailedCommand ? { firstFailedCommand } : {},
-        ...failed.exitCode !== void 0 ? { exitCode: failed.exitCode } : {},
-        ...failed.failureKind !== void 0 ? { failureKind: failed.failureKind } : summaryFailureKind !== void 0 ? { failureKind: summaryFailureKind } : {},
-        ...outputTail ? { outputTail } : {}
-      };
-    }
-    function slimRefineEventResult(result) {
-      const slim = {};
-      for (const key2 of [
-        "success",
-        "code",
-        "error",
-        "convergenceStatus",
-        "blockedReason",
-        "branch",
-        "into",
-        "terminalKind",
-        "nextStep",
-        "finalBranchConvergenceState",
-        // QW4: merge conflict paths; QW5: cleanup branch-ref / residue warnings.
-        "conflictPaths",
-        "branchRefWarning",
-        "residueWarning",
-        "branchRefDeleted",
-        // GHOST-FAILURE: merge-landing facts. The coordinator sees ONLY this slim
-        // result; without these it cannot tell a pre-merge failure (nothing landed)
-        // from a post-merge one (the change IS on origin) without a manual git check.
-        "merged",
-        "mergedLocal",
-        "pushed",
-        "mergedSha",
-        "postMergeWarning",
-        "refineLanding",
-        // ★REBASE-FAILURE-CLASSIFY: the coordinator sees ONLY this slim result. Without
-        // these it cannot tell "the rebase hit conflicts" from "the rebase refused to
-        // start on a dirty worktree" — the exact confusion that nearly produced a
-        // manual re-push of an already-merged branch on 2026-08-20. `rebaseStderr` is
-        // git's own words, bounded by buildRefineRebaseFailureError's excerpt limit.
-        "rebaseFailureDetail",
-        "rebaseConflict",
-        "rebaseStderr"
-      ]) {
-        if (result[key2] !== void 0) slim[key2] = result[key2];
-      }
-      if (Array.isArray(result.unreachableSubmoduleCommits)) {
-        slim.unreachableSubmoduleCommits = result.unreachableSubmoduleCommits.map((e) => ({ path: e?.path, autoPublishAllowed: e?.autoPublishAllowed }));
-      }
-      if (result.validationSummary && typeof result.validationSummary === "object") {
-        const vs = result.validationSummary;
-        const diagnostics = vs.status === "failed" ? extractValidationFailureDiagnostics(vs) : void 0;
-        slim.validationSummary = {
-          status: vs.status,
-          failureCode: vs.failureCode,
-          failureKind: vs.failureKind,
-          configSource: vs.configSource,
-          configSourceType: vs.configSourceType,
-          commandsRunCount: Array.isArray(vs.commandsRun) ? vs.commandsRun.length : void 0,
-          ...diagnostics ? { failure: diagnostics } : {}
-        };
-      }
-      if (result.patchEquivalence && typeof result.patchEquivalence === "object") {
-        const pe = result.patchEquivalence;
-        slim.patchEquivalence = { status: pe.status, equivalent: pe.equivalent };
-      }
-      if (result.submoduleReachability && typeof result.submoduleReachability === "object") {
-        const sr = result.submoduleReachability;
-        slim.submoduleReachability = {
-          checked: Array.isArray(sr.entries) ? sr.entries.length : void 0,
-          unreachable: Array.isArray(sr.unreachable) ? sr.unreachable.length : void 0
-        };
-      }
-      return slim;
-    }
-    function queueRefineJobEvent(self, event, handle, result) {
-      const slimResult = result ? slimRefineEventResult(result) : void 0;
-      const metadataEvent = {
-        source: "refine_mesh_node_async_job",
-        jobId: handle.jobId,
-        interactionId: handle.interactionId,
-        meshId: handle.meshId,
-        nodeId: handle.targetNodeId,
-        targetDaemonId: handle.targetDaemonId,
-        workspace: handle.workspace,
-        status: handle.status,
-        startedAt: handle.startedAt,
-        completedAt: handle.completedAt,
-        retryOfJobId: handle.retryOfJobId,
-        ...slimResult ? { result: slimResult } : {}
-      };
-      const eventPayload = {
-        event,
-        meshId: handle.meshId,
-        nodeLabel: handle.targetNodeId,
-        nodeId: handle.targetNodeId,
-        workspace: handle.workspace,
-        metadataEvent: {
-          ...metadataEvent,
-          // REFINE-EVENT-SESSION-SCOPED-UNICAST: mirror the session INSIDE
-          // metadataEvent too. handleMeshForwardEvent reads the coordinator session
-          // anchor from `metadataEvent.meshCoordinatorSessionId` (a top-level field
-          // alone is dropped when the event crosses a machine boundary), so this is
-          // what survives the P2P relay for a remote-executing refine.
-          ...handle.targetCoordinatorSessionId ? { meshCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-        },
-        queuedAt: Date.now(),
-        ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-        // THE FIX: address the terminal event to the requesting coordinator SESSION,
-        // not just its daemon. stampPendingEventV2 folds this into the v2 unicast
-        // `intendedFor`, so identityDeliversTo's both-sides-session branch excludes a
-        // sibling coordinator session on the same daemon. Absent (legacy requester) →
-        // session-less intendedFor → daemon-level delivery exactly as before.
-        ...handle.targetCoordinatorSessionId ? { targetCoordinatorSessionId: handle.targetCoordinatorSessionId } : {}
-      };
-      if (typeof self.deps.instanceManager?.getByCategory === "function") {
-        const forwarded = handleMeshForwardEvent(
-          { instanceManager: self.deps.instanceManager },
-          {
-            event,
-            meshId: handle.meshId,
-            nodeId: handle.targetNodeId,
-            workspace: handle.workspace,
-            jobId: handle.jobId,
-            interactionId: handle.interactionId,
-            status: handle.status,
-            targetDaemonId: handle.targetDaemonId,
-            startedAt: handle.startedAt,
-            completedAt: handle.completedAt,
-            retryOfJobId: handle.retryOfJobId,
-            // RC32: carry the return address through the forward payload too (it
-            // already rode the queued eventPayload below). Sessionless refine has
-            // no live worker session, so injectMeshSystemMessage can only recover
-            // the coordinator anchor from this relayed field — without it the
-            // re-queued event self-fallbacks to THIS (the executing/worker)
-            // daemon and the real coordinator's drain excludes it.
-            ...handle.targetCoordinatorDaemonId ? { targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId } : {},
-            // REFINE-EVENT-SESSION-SCOPED-UNICAST: carry the SESSION half of the
-            // return address across the relay as well. buildRelayMetadataEvent
-            // reads meshCoordinatorSessionId (falling back to
-            // targetCoordinatorSessionId), so both spellings are supplied.
-            ...handle.targetCoordinatorSessionId ? {
-              targetCoordinatorSessionId: handle.targetCoordinatorSessionId,
-              meshCoordinatorSessionId: handle.targetCoordinatorSessionId
-            } : {},
-            ...slimResult ? { result: slimResult } : {}
-          }
-        );
-        if (forwarded?.success === true) return;
-        LOG.warn("Mesh", `[Refinery] Failed to forward async refine event ${event}: ${forwarded?.error || "unknown error"}`);
-      }
-      queuePendingMeshCoordinatorEvent(eventPayload);
-    }
-    async function appendRefineJobLedger(self, kind, handle, result) {
-      try {
-        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
-        const executorStamp = kind === "task_dispatched" ? (await Promise.resolve().then(() => (init_mesh_refine_executor_liveness(), mesh_refine_executor_liveness_exports))).buildRefineExecutorStamp() : void 0;
-        appendLedgerEntry22(handle.meshId, {
-          kind,
-          nodeId: handle.targetNodeId,
-          payload: {
-            source: "refine_mesh_node_async_job",
-            refineJob: {
-              jobId: handle.jobId,
-              interactionId: handle.interactionId,
-              status: handle.status,
-              meshId: handle.meshId,
-              nodeId: handle.targetNodeId,
-              targetDaemonId: handle.targetDaemonId,
-              targetCoordinatorDaemonId: handle.targetCoordinatorDaemonId,
-              workspace: handle.workspace,
-              startedAt: handle.startedAt,
-              completedAt: handle.completedAt,
-              retryOfJobId: handle.retryOfJobId,
-              ...executorStamp ? { executor: executorStamp } : {}
-            },
-            async: true,
-            retryOfJobId: handle.retryOfJobId,
-            ...originatingStamp ? { originatingCoordinator: originatingStamp } : {},
-            ...result ? {
-              success: result.success === true,
-              result,
-              finalBranchConvergenceState: result.finalBranchConvergenceState,
-              ...result.blockerContext ? { blockerContext: result.blockerContext } : {}
-            } : {}
-          }
-        });
-      } catch (e) {
-        LOG.warn("Mesh", `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
-      }
-    }
     async function executeMeshRefineNodeSynchronously(self, meshId, nodeId, args) {
       const refineStages = [];
       try {
@@ -139871,274 +140154,6 @@ ${tail}` : ""
             removed: false,
             validation: "unavailable",
             status: "blocked_review"
-          }
-        } };
-      }
-      return { kind: "continue", ctx };
-    }
-    async function refinePatchEquivalenceStage(self, ctx) {
-      const { meshId, nodeId, args, repoRoot, baseHead, branch, baseBranch, mesh, node, validationSummary, refineStages } = ctx;
-      const branchHead = ctx.branchHead;
-      const patchEquivalenceStarted = Date.now();
-      const patchEquivalence = await runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead);
-      recordMeshRefineStage(refineStages, "patch_equivalence", patchEquivalence.status, patchEquivalenceStarted, {
-        equivalent: patchEquivalence.equivalent,
-        expectedPatchId: patchEquivalence.expectedPatchId,
-        actualPatchId: patchEquivalence.actualPatchId,
-        error: patchEquivalence.error,
-        actionableHint: patchEquivalence.actionableHint
-      });
-      if (!patchEquivalence.equivalent) {
-        const alreadyMergedViaOtherPath = !patchEquivalence.actualPatchId && !!patchEquivalence.expectedPatchId;
-        if (!alreadyMergedViaOtherPath) {
-          const classification = await classifyAndWarnPatchEquivalenceFailure(node.id, repoRoot, baseHead, branchHead, patchEquivalence, {
-            targetBaseRef: baseHead,
-            worktreeRoot: node.workspace,
-            autoPublishSubmoduleMainCommits: resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace).enabled
-          });
-          recordMeshRefineStage(refineStages, "patch_equivalence_classification", "failed", patchEquivalenceStarted, {
-            detailedReason: classification.detailedReason,
-            recommendedAction: classification.recommendedAction,
-            ...classification.evidence.submoduleReachabilityUndeterminable ? { submoduleReachabilityUndeterminable: true } : {}
-          });
-          return { kind: "terminal", result: {
-            success: false,
-            code: "patch_equivalence_failed",
-            detailedReason: classification.detailedReason,
-            detailedReasonDescription: classification.detailedReasonDescription,
-            recommendedAction: classification.recommendedAction,
-            evidence: classification.evidence,
-            convergenceStatus: "blocked_review",
-            error: "Refinery patch-equivalence preflight failed; merge/refine was not attempted.",
-            branch,
-            into: baseBranch,
-            validationSummary,
-            patchEquivalence,
-            refineStages,
-            finalBranchConvergenceState: {
-              branch,
-              baseBranch,
-              merged: false,
-              removed: false,
-              validation: "passed",
-              patchEquivalence: "failed",
-              status: "blocked_review"
-            }
-          } };
-        }
-        {
-          recordMeshRefineStage(refineStages, "merge", "skipped", Date.now(), {
-            reason: "already_merged_via_other_path",
-            note: "actualPatchId is empty; branch content is already present in base via a different commit path"
-          });
-          const cleanupStarted = Date.now();
-          const removeResult = await self.execute("remove_mesh_node", {
-            meshId,
-            nodeId,
-            sessionCleanupMode: "preserve",
-            inlineMesh: args?.inlineMesh
-          });
-          recordMeshRefineStage(refineStages, "cleanup", removeResult?.success === false ? "failed" : "passed", cleanupStarted, {
-            removed: removeResult?.removed,
-            code: removeResult?.code,
-            error: removeResult?.error
-          });
-          try {
-            const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-            appendLedgerEntry22(meshId, {
-              kind: "node_removed",
-              nodeId,
-              payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence }
-            });
-          } catch {
-          }
-          return { kind: "terminal", result: {
-            success: removeResult?.success !== false,
-            code: "already_merged",
-            merged: false,
-            alreadyMergedViaOtherPath: true,
-            branch,
-            into: baseBranch,
-            removeResult,
-            validationSummary,
-            patchEquivalence,
-            refineStages,
-            finalBranchConvergenceState: {
-              branch: baseBranch,
-              mergedBranch: branch,
-              baseBranch,
-              merged: false,
-              alreadyMergedViaOtherPath: true,
-              removed: removeResult?.success !== false,
-              validation: "passed",
-              patchEquivalence: "already_merged",
-              status: removeResult?.success === false ? "merged_cleanup_failed" : "merged_to_main"
-            }
-          } };
-        }
-      }
-      ctx.branchHead = branchHead;
-      ctx.patchEquivalence = patchEquivalence;
-      return { kind: "continue", ctx };
-    }
-    async function refineSubmoduleReachabilityStage(self, ctx) {
-      const { mesh, node, repoRoot, branch, baseBranch, branchHead, validationSummary, patchEquivalence, refineStages } = ctx;
-      const submoduleReachabilityStarted = Date.now();
-      const autoPublishSubmoduleMainCommits = resolveRefineryAutoPublishSubmoduleMainCommits(mesh, node.workspace);
-      const submoduleReachability = await runMeshRefineSubmoduleReachabilityGate(repoRoot, patchEquivalence.mergedTree || branchHead, {
-        allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
-        autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
-        worktreeRoot: node.workspace
-      });
-      recordMeshRefineStage(refineStages, "submodule_reachability", submoduleReachability.status, submoduleReachabilityStarted, {
-        checked: submoduleReachability.checked,
-        autoPublishAllowed: submoduleReachability.autoPublishAllowed,
-        autoPublishPolicySource: submoduleReachability.autoPublishPolicySource,
-        autoPublished: submoduleReachability.entries.filter((entry) => entry.autoPublishAttempted).map((entry) => ({
-          path: entry.path,
-          commit: entry.commit,
-          remote: entry.remote,
-          remoteUrl: entry.remoteUrl,
-          remoteMainBranch: entry.remoteMainBranch,
-          refspec: entry.autoPublishRefspec,
-          succeeded: entry.autoPublishSucceeded,
-          verified: entry.autoPublishVerified,
-          remoteMainReachable: entry.remoteMainReachable,
-          error: entry.error
-        })),
-        autoPublishSkipped: submoduleReachability.entries.filter((entry) => entry.autoPublishAllowed === true && entry.autoPublishAttempted !== true).map((entry) => ({
-          path: entry.path,
-          commit: entry.commit,
-          remote: entry.remote,
-          remoteUrl: entry.remoteUrl,
-          remoteMainBranch: entry.remoteMainBranch,
-          reason: entry.autoPublishSkippedReason || entry.error || "auto-publish was allowed but no publish attempt was possible"
-        })),
-        unreachable: submoduleReachability.unreachable.map((entry) => ({
-          path: entry.path,
-          commit: entry.commit,
-          equivalentPublishedCommit: entry.equivalentPublishedCommit,
-          publishRequired: entry.publishRequired === true,
-          autoPublishAllowed: entry.autoPublishAllowed,
-          autoPublishAttempted: entry.autoPublishAttempted,
-          autoPublishSucceeded: entry.autoPublishSucceeded,
-          autoPublishVerified: entry.autoPublishVerified,
-          autoPublishRefspec: entry.autoPublishRefspec,
-          autoPublishSkippedReason: entry.autoPublishSkippedReason,
-          remote: entry.remote,
-          remoteUrl: entry.remoteUrl,
-          remoteReachable: entry.remoteReachable,
-          remoteMainBranch: entry.remoteMainBranch,
-          remoteMainReachable: entry.remoteMainReachable,
-          error: entry.error
-        })),
-        error: submoduleReachability.error
-      });
-      if (submoduleReachability.status === "failed") {
-        const nextStep = buildSubmodulePublishRequiredNextStep(submoduleReachability.unreachable);
-        const convergeToPublished = submoduleReachability.unreachable.length > 0 && submoduleReachability.unreachable.every((entry) => !!entry.equivalentPublishedCommit);
-        const blockedReason = convergeToPublished ? "submodule_converge_to_published" : "submodule_publish_required";
-        return { kind: "terminal", result: {
-          success: false,
-          code: "submodule_reachability_failed",
-          convergenceStatus: "blocked_review",
-          publishRequired: !convergeToPublished,
-          ...convergeToPublished ? { convergeToPublished: true } : {},
-          blockedReason,
-          error: convergeToPublished ? "Refinery submodule reachability preflight found submodule gitlink commit(s) that are not reachable from their configured remote main branch, but each has an equivalent commit (identical tree) already published there; converge the gitlink(s) to the published commit(s) instead of publishing same-content twins. Merge/refine cleanup was not attempted." : "Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.",
-          nextStep,
-          nextSteps: convergeToPublished ? [
-            "Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.",
-            "Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.",
-            "Rerun mesh_refine_node after the gitlink points at the published commit.",
-            "Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main."
-          ] : [
-            "Ask the user for explicit approval before pushing or publishing any submodule commit.",
-            "Push/publish each unreachable submodule commit to the configured submodule remote main branch shown in the evidence.",
-            "Rerun mesh_refine_node after remote reachability is confirmed.",
-            "Do not merge the root branch until every submodule gitlink commit is reachable from submodule origin/main."
-          ],
-          unreachableSubmoduleCommits: submoduleReachability.unreachable.map((entry) => ({
-            path: entry.path,
-            commit: entry.commit,
-            equivalentPublishedCommit: entry.equivalentPublishedCommit,
-            remote: entry.remote,
-            remoteUrl: entry.remoteUrl,
-            remoteReachable: entry.remoteReachable,
-            remoteMainBranch: entry.remoteMainBranch,
-            remoteMainReachable: entry.remoteMainReachable,
-            autoPublishAllowed: entry.autoPublishAllowed,
-            autoPublishAttempted: entry.autoPublishAttempted,
-            autoPublishSucceeded: entry.autoPublishSucceeded,
-            autoPublishVerified: entry.autoPublishVerified,
-            autoPublishRefspec: entry.autoPublishRefspec,
-            autoPublishSkippedReason: entry.autoPublishSkippedReason,
-            error: entry.error
-          })),
-          branch,
-          into: baseBranch,
-          validationSummary,
-          patchEquivalence,
-          submoduleReachability,
-          refineStages,
-          finalBranchConvergenceState: {
-            branch,
-            baseBranch,
-            merged: false,
-            removed: false,
-            validation: "passed",
-            patchEquivalence: "passed",
-            submoduleReachability: "failed",
-            status: "blocked_review",
-            reason: blockedReason,
-            nextStep
-          }
-        } };
-      }
-      ctx.submoduleReachability = submoduleReachability;
-      return { kind: "continue", ctx };
-    }
-    async function refineEffectiveDiffStage(self, ctx) {
-      const { repoRoot, baseHead, branchHead, branch, baseBranch, validationSummary, patchEquivalence, refineStages } = ctx;
-      const effectiveDiffStarted = Date.now();
-      const effectiveDiff = await runMeshRefineEffectiveDiffGate(repoRoot, baseHead, branchHead);
-      recordMeshRefineStage(refineStages, "effective_diff", effectiveDiff.status, effectiveDiffStarted, {
-        hasEffectiveDiff: effectiveDiff.hasEffectiveDiff,
-        changedPaths: effectiveDiff.changedPaths,
-        submoduleHints: effectiveDiff.submoduleHints,
-        ...effectiveDiff.error ? { error: effectiveDiff.error } : {}
-      });
-      if (effectiveDiff.status === "failed" && !effectiveDiff.hasEffectiveDiff) {
-        const hintLines = (effectiveDiff.submoduleHints || []).map((h) => `  - ${h.path}: ${h.reason}`);
-        const message = [
-          `Refinery no-op guard: branch '${branch}' has no effective root-tree diff against '${baseBranch}' (${baseHead.slice(0, 12)}); nothing would merge.`,
-          "This usually means a submodule (e.g. oss) has commits but the root branch never committed the gitlink (pointer) bump, so the merge would be a silent no-op while the real change never reaches main.",
-          hintLines.length ? `Submodules with uncommitted pointer bumps:
-${hintLines.join("\n")}` : "",
-          `Fix: commit the submodule pointer bump on '${branch}' (git add <submodule-path> && git commit), then re-run refine.`
-        ].filter(Boolean).join("\n");
-        return { kind: "terminal", result: {
-          success: false,
-          code: "no_effective_diff",
-          convergenceStatus: "blocked_review",
-          error: message,
-          branch,
-          into: baseBranch,
-          validationSummary,
-          patchEquivalence,
-          effectiveDiff,
-          refineStages,
-          finalBranchConvergenceState: {
-            branch,
-            baseBranch,
-            merged: false,
-            removed: false,
-            validation: "passed",
-            patchEquivalence: "passed",
-            effectiveDiff: "no_effective_diff",
-            status: "blocked_review",
-            reason: "no_effective_diff",
-            ...effectiveDiff.submoduleHints?.length ? { submoduleHints: effectiveDiff.submoduleHints } : {}
           }
         } };
       }
@@ -140793,7 +140808,11 @@ ${e?.stderr || ""}`;
         init_mesh_refine_gates();
         init_mesh_refine_base_cas();
         init_mesh_refine_concurrency();
+        init_router_refine_jobs();
+        init_router_refine_jobs();
         init_router_refine_resume();
+        init_router_refine_preflight_stages();
+        init_router_refine_preflight_stages();
         init_router_refine_batch_jobs();
         RETRYABLE_BASE_MOVEMENT_CODES = /* @__PURE__ */ new Set(["base_moved", "base_locked", "base_cas_undeterminable"]);
       }
