@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { summarizeSeqscribeStats } from '../../src/seqscribe/stats.js';
 import type { NodeStats } from 'seqscribe';
 
@@ -354,6 +354,33 @@ describe('summarizeSeqscribeStats', () => {
             );
             expect(summary.transcriptParityDetail?.since).toBeGreaterThanOrEqual(before);
             expect(summary.transcriptParityDetail?.uptimeMs).toBe(0);
+        });
+
+        it('reads the clock exactly once, so `since` and `uptimeMs` cannot straddle a millisecond boundary', () => {
+            // The previous implementation called `Date.now()` twice — once for
+            // the `since` default, once for `uptimeMs` — so on the rare tick
+            // where the wall clock advances between the two reads, the
+            // default-`since` path could compute a nonzero `uptimeMs` from a
+            // gap that never actually elapsed. Asserting the call count
+            // directly (rather than relying on `uptimeMs === 0`, which a
+            // same-millisecond re-run can pass by luck) pins the fix at its
+            // source instead of at a statistical proxy.
+            const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+            try {
+                const summary = summarizeSeqscribeStats(
+                    { topics: { t: topic() }, peers: [] },
+                    {
+                        authorityEnabled: true,
+                        includeLocalDiagnostics: true,
+                        transcriptParity: { runs: 1, mismatches: 0 },
+                    },
+                );
+                expect(nowSpy).toHaveBeenCalledTimes(1);
+                expect(summary.transcriptParityDetail?.since).toBe(1_700_000_000_000);
+                expect(summary.transcriptParityDetail?.uptimeMs).toBe(0);
+            } finally {
+                nowSpy.mockRestore();
+            }
         });
 
         it('omits the detail unless local diagnostics are requested', () => {
