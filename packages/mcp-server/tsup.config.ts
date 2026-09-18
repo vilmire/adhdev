@@ -96,15 +96,75 @@ export default defineConfig({
       // no-stamp path. The shipped daemons (daemon-core dist, daemon-cloud,
       // daemon-standalone) are untouched and keep a real stamp, so
       // staleDaemonBuild detection is unaffected.
+      //
+      // ── Release stamp (version + channel) ────────────────────────────────
+      //
+      // The commit/builtAt scrub above was not sufficient. daemon-core's dist
+      // ALSO carries two release-stamp literals, and they leak by the same path:
+      //
+      //   const version2 = readInjected(true ? "1.0.59" : void 0) ?? ...
+      //   const injected = true ? "" : void 0;   ← ADHDEV_BUILD_CHANNEL
+      //
+      // `deploy:preview` builds daemon-core with ADHDEV_BUILD_CHANNEL=preview at
+      // an rc version and LEAVES that dist on disk. Every later vendor operation —
+      // the CI gate (check-vendor-drift), the pre-commit hook, bundle:vendor:all,
+      // or a bare `npm run bundle:vendor` — then re-bundles those rc/preview bytes
+      // into the COMMITTED vendor copies and dirties the worktree, with no deploy
+      // involved at all. Measured 2026-09-18: four manual `git checkout --`
+      // cleanups in one day, one of which blocked a Refinery merge ("local changes
+      // would be overwritten") AFTER validation and patch_equivalence had passed.
+      //
+      // Neutralizing HERE (rather than post-hoc over the vendored files) is what
+      // keeps the emitted .js and its .map self-consistent: esbuild generates both
+      // from this patched source, so no byte offsets shift underneath the
+      // sourcemap. Rewriting the vendored index.js afterwards left index.js.map's
+      // `mappings` stream off by one column — clean .js, still-dirty worktree.
+      //
+      // ★ This is NOT "removing the stamp". The SHIPPED artifact keeps a real one:
+      // daemon-cloud and daemon-standalone bundle daemon-core themselves, with
+      // their own tsup `define`, and their dist/ is what carries the published
+      // channel (asserted by assertPreviewBuildStamp / assertStableBuildStamp in
+      // the deploy scripts). This bundle is the vendored MCP CLIENT, whose own
+      // stamp is never published as a track identity — it is committed bytes that
+      // must be reproducible. The `version` is pinned to daemon-core's own
+      // package.json version for the same reason the commit hash is scrubbed:
+      // a committed artifact cannot contain the identity of the release that
+      // supersedes it.
       name: 'strip-daemon-build-stamp',
       setup(build) {
         const distIndex = path.resolve(__dirname, '../daemon-core/dist/index.js');
+        // Pin the version stamp to daemon-core's package.json version.
+        //
+        // ★ Read from the WORKTREE, deliberately — not from git HEAD. A release is
+        // exactly the case where they differ: scripts/version-bump.sh bumps every
+        // package.json, re-syncs the vendor bundles and STAGES them, and only then
+        // runs `npm run ci` (whose check:vendor rebuilds and diffs). Pinning to
+        // HEAD there would bake the PRE-bump version into the freshly staged
+        // bundles and fail the gate the bump exists to satisfy.
+        //
+        // The deploy's temporary rc rewrite is handled at the other end instead:
+        // restoreNeutralVendorBuildState() in scripts/deploy-preview-local.mjs
+        // rebuilds and re-vendors AFTER withTemporaryFileEdits has restored
+        // package.json, so the rc version never survives in the committed copy.
+        const daemonCoreVersion: string = JSON.parse(
+          fs.readFileSync(path.resolve(__dirname, '../daemon-core/package.json'), 'utf8'),
+        ).version;
         build.onLoad({ filter: /daemon-core[\\/]dist[\\/]index\.js$/ }, async (args) => {
           if (path.resolve(args.path) !== distIndex) return undefined;
           const src = await fs.promises.readFile(args.path, 'utf8');
-          // Rewrite only the stamp reads emitted by build-info.ts. The version is
-          // deliberately preserved — it comes from package.json, not from git, so
-          // it is already reproducible and is genuinely useful to report.
+          // Rewrite only the stamp reads emitted by build-info.ts.
+          //
+          // ★ The version was ORIGINALLY left alone here, on the reasoning that it
+          // comes from package.json rather than git and is therefore already
+          // reproducible. That reasoning held only while package.json was stable at
+          // build time. It is not: `deploy:preview` TEMPORARILY rewrites every
+          // package.json to the rc version (withTemporaryFileEdits in
+          // scripts/deploy-preview-local.mjs) and builds daemon-core inside that
+          // window, so the dist left on disk carries "1.0.60-rc.N" — and every
+          // later vendor run copies it into the committed bundle. Pinning the
+          // version to daemon-core's CURRENT package.json version below restores
+          // the reproducibility the original comment assumed: after the deploy
+          // restores package.json, a rebuild reproduces the committed bytes.
           //
           // ★ The short-hash pattern is ONE {7,40} range, not a {40} + {7,8} pair.
           // The pair left a hole at 9..39 chars, and the repo grew straight into
@@ -128,7 +188,33 @@ export default defineConfig({
             .replace(
               /readInjected\(true \? "\d{4}-\d{2}-\d{2}T[0-9:.]+Z" : void 0\)/g,
               'readInjected(true ? "unknown" : void 0)',
+            )
+            // Version stamp → daemon-core's own package.json version, so a deploy's
+            // temporary rc rewrite cannot survive into the committed bundle.
+            // Anchored on the `const <name> = readInjected(` shape emitted by
+            // build-info.ts's version read; the commit/builtAt reads above are bare
+            // `readInjected(...)` calls and are already rewritten, so they cannot
+            // be caught here.
+            .replace(
+              /(\bconst version\d* = readInjected\(true \? )"[^"]*"( : void 0\))/g,
+              `$1"${daemonCoreVersion}"$2`,
             );
+          // ★ The CHANNEL stamp is deliberately NOT rewritten above.
+          //
+          // It is load-bearing in the shipped bundle. vendor/mcp-server/index.js is
+          // the published runtime (daemon-standalone's `bin.adhdev-mcp` points
+          // straight at it), and daemon-cloud spawns it with `{ ...process.env }` —
+          // no explicit ADHDEV_CONFIG_DIR (packages/daemon-cloud/src/cli/
+          // mcp-commands.ts). So when a user runs `adhdev-preview mcp` from a clean
+          // shell, this bundle's own inlined resolveBuildTrack() is the only thing
+          // deciding ~/.adhdev vs ~/.adhdev-preview. Neutralizing it would make a
+          // preview MCP server silently read the stable config dir.
+          //
+          // It does not need rewriting for reproducibility either: the channel is ''
+          // in every build EXCEPT one run with ADHDEV_BUILD_CHANNEL set, and the
+          // deploy scripts scope that env to the publish commands — plus
+          // restoreNeutralVendorBuildState() rebuilds it away afterwards. Pinning the
+          // version above removes the drift that actually recurred.
           return { contents: patched, loader: 'js' };
         });
       },
