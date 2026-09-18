@@ -584,7 +584,11 @@ export function summarizeSeqscribeStats(
         // `since` defaults to now rather than 0 when a caller passes only the
         // three bucket fields: a 0 stamp would render as a 1970 date and read as
         // "counting for 56 years", the opposite of the honesty this field is for.
-        const tpSince = tp?.since ?? Date.now();
+        // Single read: `since` and `uptimeMs` must come from the same instant,
+        // or the default-`since` path (since := now) can compute a nonzero
+        // uptimeMs from two clock reads straddling a millisecond boundary.
+        const now = Date.now();
+        const tpSince = tp?.since ?? now;
         localDiagnostics = {
             applyRejects,
             stalledStreams,
@@ -613,7 +617,7 @@ export function summarizeSeqscribeStats(
                           pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
                           pendingMissingOpen: tp.pendingMissingOpen ?? 0,
                           since: tpSince,
-                          uptimeMs: Math.max(0, Date.now() - tpSince),
+                          uptimeMs: Math.max(0, now - tpSince),
                       },
                   }
                 : {}),
