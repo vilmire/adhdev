@@ -20,10 +20,11 @@ import {
 } from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
 import { isNativeSourceCanonicalHistory } from '../config/chat-history.js';
-// normalizeNativeHistoryMessages stays in chat-commands-read.ts: it is a
-// public export with call sites in handleReadChat / handleChatHistory that
-// are out of scope for this split.
-import { normalizeNativeHistoryMessages } from './chat-commands-read.js';
+// normalizeNativeHistoryMessages now lives in the leaf module
+// chat-commands-read-native-normalize.ts (chat-commands-read.ts re-exports it
+// for its public surface). Importing the leaf directly avoids the cycle this
+// module previously had with chat-commands-read.ts.
+import { normalizeNativeHistoryMessages } from './chat-commands-read-native-normalize.js';
 
 // (A2.2) CLI_NATIVE_HISTORY_FRESH_MS removed with isNativeHistoryFreshEnough.
 // Hardcoded native-transcript provider allow-list. Deprecated. Kept only as a

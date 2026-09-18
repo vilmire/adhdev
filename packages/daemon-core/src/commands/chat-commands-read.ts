@@ -10,10 +10,7 @@ import type { CliAdapter } from '../cli-adapter-types.js';
 import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
-import { clearPersistedProviderSessionPins, loadPersistedProviderSessionPins, recordPersistedProviderSessionPin } from '../config/state-store.js';
 import { LOG } from '../logging/logger.js';
-import { recordDebugTrace } from '../logging/debug-trace.js';
-import { hashSignatureParts } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
 import { filterUserFacingChatMessages, isActivityChatMessage, normalizeChatMessages, hasTrailingToolActivityAfterFinalAssistant } from '../providers/chat-message-normalization.js';
 import {
@@ -29,7 +26,6 @@ import {
 } from './chat-commands-shared.js';
 import { evaluateReadChatNodeWorkspaceScope, resolveTargetSessionActualWorkspace } from './chat-commands-scope.js';
 import {
-    maybeHideCoordinatorPromptMessage,
     normalizeReadChatMessages,
     normalizeReadChatTailLimit,
 } from './read-chat-message-filters.js';
@@ -48,6 +44,29 @@ import {
     finalizeStreamingMessagesWhenIdle,
     hasNonEmptyModalButtons,
 } from './read-chat-presentation.js';
+// Read-path session-id resolution + the durable read-pin map — pure-move
+// extraction (file-size gate); logic unchanged, see the module header.
+import {
+    getExplicitHistorySessionId,
+    getHistorySessionId,
+    recordBoundProviderSessionId,
+    resolveCliNativeHistorySessionId,
+    resolveNativeHistoryReadSession,
+    shouldSkipLiveCliNativeHistoryWithoutProviderSession,
+    traceProviderEvent,
+} from './chat-commands-read-session-id.js';
+// Native-history identity/normalization — pure-move extraction (file-size gate);
+// logic unchanged, see the module header.
+import {
+    normalizeAndFilterNativeHistory,
+    readHistorySessionIdFromMessages,
+} from './chat-commands-read-native-normalize.js';
+
+// Re-exported so this module's public surface is unchanged by the extraction:
+// chat-commands.ts re-exports the two test hooks, and normalizeNativeHistoryMessages
+// is imported from here by read-chat-source-decision.ts and by the daemon-core tests.
+export { __getProviderSessionPinForTest, __resetProviderSessionPinsForTest } from './chat-commands-read-session-id.js';
+export { normalizeNativeHistoryMessages } from './chat-commands-read-native-normalize.js';
 
 // Minimum tail floor for hot-path history/mirror reads. The dashboard requests a
 // bounded tail (~60); we keep a small floor so a tiny requested tailLimit still
@@ -57,461 +76,6 @@ import {
 // with this floor, not with total accumulated history.
 const HOT_TAIL_MIN_LIMIT = 60;
 
-// Last successfully-bound provider-native session id, keyed by the mesh session
-// id (targetSessionId) the read was scoped to. The live pin lives on the
-// CliProviderInstance and is torn down when the turn ends; a *post-turn* read
-// then finds historySessionId empty AND canBindFromLiveSession=false (no live
-// spawnedAtMs), so readCliProviderNativeHistory would fail closed with
-// native_history_workspace_only_lookup_unsafe and surface providerSessionId=null
-// + zero rows even though the transcript is physically present in state.db.
-// Persisting the last resolved id here lets that later read reuse the known pin
-// and run the native query normally instead of fail-closing. Refreshed on every
-// successful bind; never lets an empty id clear a known pin. Keyed by mesh
-// session id so pins never alias across distinct sessions sharing a workspace.
-//
-// The map is ALSO mirrored to disk (state.json sessionProviderSessionPins) so a
-// pin survives a daemon restart. Without that, an attach-restored antigravity
-// session (spawnedAtMs=0, so no live spawn floor) that has sat idle past the
-// native reader's recency window can no longer resolve its own conversation .db
-// after the daemon comes back — read_chat falls to the PTY parse and the
-// dashboard shows the user prompt with the assistant tail missing
-// (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP). The in-memory map stays the hot path;
-// disk is the cold-start hydration source, read lazily on the first miss.
-const lastBoundProviderSessionIdByMeshSession = new Map<string, string>();
-let persistedProviderSessionPinsHydrated = false;
-
-function hydratePersistedProviderSessionPinsOnce(): void {
-    if (persistedProviderSessionPinsHydrated) return;
-    persistedProviderSessionPinsHydrated = true;
-    try {
-        for (const [key, value] of Object.entries(loadPersistedProviderSessionPins())) {
-            // Never let a stale persisted value clobber a fresher in-memory bind
-            // recorded earlier this process lifetime.
-            if (!lastBoundProviderSessionIdByMeshSession.has(key)) {
-                lastBoundProviderSessionIdByMeshSession.set(key, value);
-            }
-        }
-    } catch {
-        // Best-effort: a missing/corrupt state file just means no cold-start pins.
-    }
-}
-
-function recordBoundProviderSessionId(h: CommandHelpers, meshSessionId: string | undefined, providerSessionId: string | undefined): void {
-    const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
-    const value = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
-    if (!key || !value) return;
-    // SSOT: the session registry entry (keyed by sessionId == instanceId) is the
-    // authoritative sessionId → conversation-uuid record. Writing it here — the
-    // moment a native read resolves the real conversation id — makes
-    // getHistorySessionId return it directly on every subsequent read, so the
-    // conversation is exact-bound instead of re-resolved by the spawn-floor/mtime
-    // heuristic (the crosswire/theft source). The pin below stays as the durable
-    // cross-restart mirror (the registry is in-memory and cleared on restart).
-    try { h.ctx?.sessionRegistry?.setProviderSessionId?.(key, value); } catch { /* best-effort SSOT write-back */ }
-    lastBoundProviderSessionIdByMeshSession.set(key, value);
-    // Always attempt the disk mirror — recordPersistedProviderSessionPin is itself a
-    // no-op when the ON-DISK value already matches, so it does not rewrite state.json
-    // on steady re-reads, yet it still lands a pin the in-memory map already holds but
-    // disk lost (a prior write clobbered by another state-store writer, or a restart
-    // whose hydration ran before this bind). Gating on the in-memory previous value
-    // let the in-memory and on-disk pin diverge permanently, defeating the persistence.
-    try { recordPersistedProviderSessionPin(key, value); } catch { /* best-effort disk mirror */ }
-}
-
-function getBoundProviderSessionIdPin(meshSessionId: string | undefined): string | undefined {
-    const key = typeof meshSessionId === 'string' ? meshSessionId.trim() : '';
-    if (!key) return undefined;
-    hydratePersistedProviderSessionPinsOnce();
-    const pinned = lastBoundProviderSessionIdByMeshSession.get(key);
-    return pinned && pinned.trim() ? pinned.trim() : undefined;
-}
-
-/**
- * Test-only: clear the in-memory read-pin map and re-arm cold-start hydration so
- * each test starts from a clean pin state. The on-disk mirror is isolated per
- * test process via ADHDEV_CONFIG_DIR (test/helpers/setup-env.ts); this resets the
- * module-level cache that would otherwise leak a pin across tests sharing the
- * worker. Not part of the runtime contract.
- */
-export function __resetProviderSessionPinsForTest(): void {
-    lastBoundProviderSessionIdByMeshSession.clear();
-    persistedProviderSessionPinsHydrated = false;
-    try { clearPersistedProviderSessionPins(); } catch { /* best-effort */ }
-}
-
-/**
- * Test-only: read the in-memory read-pin (the mesh-session → conversation-uuid
- * bind recorded by recordBoundProviderSessionId and mirrored to state.json
- * sessionProviderSessionPins). Lets the antigravity-coordinator-pin tests assert
- * that an owner-confirmed workspace-latest read recorded the pin — and that a
- * non-owner-confirmed read did NOT. Not part of the runtime contract.
- */
-export function __getProviderSessionPinForTest(meshSessionId: string): string | undefined {
-    return getBoundProviderSessionIdPin(meshSessionId);
-}
-
-function getExplicitHistorySessionId(args: any): string | undefined {
-    const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
-    if (explicit) return explicit;
-
-    const explicitProviderSessionId = typeof args?.providerSessionId === 'string' ? args.providerSessionId.trim() : '';
-    if (explicitProviderSessionId) return explicitProviderSessionId;
-
-    return undefined;
-}
-
-/**
- * A native-history session id is a "runtime fallback" — the daemon's own
- * ADHDev session id (targetSessionId) standing in for a real provider-native
- * conversation uuid — when it exactly equals targetSessionId. For an
- * antigravity coordinator (agy takes no --session-id, so its providerSessionId
- * never surfaces to the web), getConversationHistorySessionId falls back to the
- * ADHDev sessionId, and the browser then sends that runtime id back as
- * args.historySessionId. That id is NOT the on-disk conversations/<uuid>.db
- * name (e.g. targetSessionId 28c530af vs stamped conv uuid 07f6ed3e), so a
- * native read keyed on it can never exact-bind — it fail-closes to pty-parser
- * (user-echo only) AND bypasses the owner-confirmed pin/live-bind resolution
- * (which only runs when historySessionId is empty). Detect it whether it
- * arrived EXPLICITLY (args.historySessionId === targetSessionId, the browser's
- * poisoned read) OR only via getHistorySessionId's internal fallback (empty
- * args), and in both cases treat historySessionId as ABSENT so the owner-
- * confirmed native resolution engages and returns [user, assistant, ...].
- * A REAL, DISTINCT provider conv uuid (≠ targetSessionId) is never a runtime
- * fallback and must still exact-bind as before.
- */
-function isRuntimeFallbackHistorySessionId(
-    candidateHistorySessionId: string | undefined,
-    targetSessionId: string | undefined,
-): boolean {
-    const target = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
-    if (!target) return false;
-    const candidate = typeof candidateHistorySessionId === 'string' ? candidateHistorySessionId.trim() : '';
-    return candidate === target;
-}
-
-interface ResolvedNativeHistoryReadSession {
-    /**
-     * True when the candidate history id is the daemon runtime session id (==
-     * targetSessionId) standing in for a real provider-native conv uuid — reached
-     * either via getHistorySessionId's internal fallback (empty args) or because
-     * the browser explicitly echoed targetSessionId back as historySessionId (the
-     * poisoned agy-coordinator read). See isRuntimeFallbackHistorySessionId.
-     */
-    isRuntimeFallback: boolean;
-    /** Owner-confirmed pin recorded by a prior bound read for this mesh session, if any. */
-    pinnedProviderSessionId: string | undefined;
-    /**
-     * The id to key the native read on: the pin (or undefined) when the candidate
-     * is a runtime fallback so pin / workspace-latest resolution engages, else the
-     * candidate unchanged (a real DISTINCT provider uuid still exact-binds).
-     */
-    effectiveHistorySessionId: string | undefined;
-}
-
-/**
- * Resolve the runtime-fallback → pin substitution shared by every native-history
- * read path (handleChatHistory, the CLI-adapter main read, and the history-only
- * read). Each site previously inlined this same four-step computation verbatim:
- * detect the runtime fallback (candidate === targetSessionId AND no distinct
- * explicit id), look up the owner-confirmed pin, and drop the runtime id in favor
- * of the pin (or undefined) so readCliProviderNativeHistory's pin / workspace-
- * latest paths can engage instead of fail-closing to pty-parser. Extracted to a
- * single helper so the D9 historySessionId-poison guard has one definition.
- * Behavior is identical to the inlined blocks — same target (args.targetSessionId),
- * same explicit-id source, same pin key (getBoundProviderSessionIdPin trims).
- */
-function resolveNativeHistoryReadSession(
-    args: any,
-    candidateHistorySessionId: string | undefined,
-): ResolvedNativeHistoryReadSession {
-    const targetSid = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    const explicitHistorySessionId = getExplicitHistorySessionId(args);
-    const isRuntimeFallback = Boolean(
-        targetSid
-        && isRuntimeFallbackHistorySessionId(candidateHistorySessionId, targetSid)
-        && (!explicitHistorySessionId
-            || isRuntimeFallbackHistorySessionId(explicitHistorySessionId, targetSid)),
-    );
-    const pinnedProviderSessionId = getBoundProviderSessionIdPin(args?.targetSessionId);
-    const effectiveHistorySessionId = isRuntimeFallback
-        ? (pinnedProviderSessionId || undefined)
-        : candidateHistorySessionId;
-    return { isRuntimeFallback, pinnedProviderSessionId, effectiveHistorySessionId };
-}
-
-function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
-    const explicit = getExplicitHistorySessionId(args);
-    if (explicit) return explicit;
-
-    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    if (!targetSessionId) return undefined;
-
-    const session = h.ctx.sessionRegistry?.get(targetSessionId) as any;
-    const registeredProviderSessionId = typeof session?.providerSessionId === 'string' ? session.providerSessionId.trim() : '';
-    if (registeredProviderSessionId) return registeredProviderSessionId;
-
-    const instance = getTargetInstance(h, args);
-    const state = instance?.getState?.();
-    const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
-    if (providerSessionId) return providerSessionId;
-
-    const currentSession = h.currentSession as any;
-    if (currentSession?.sessionId === targetSessionId) {
-        const currentProviderSessionId = typeof currentSession.providerSessionId === 'string'
-            ? currentSession.providerSessionId.trim()
-            : '';
-        if (currentProviderSessionId) return currentProviderSessionId;
-    }
-
-    return targetSessionId;
-}
-
-function resolveCliNativeHistorySessionId(args: any, currentHistorySessionId: string | undefined, parsedProviderSessionId: string | undefined): string | undefined {
-    const explicit = getExplicitHistorySessionId(args);
-    if (explicit) return explicit;
-
-    const parsed = typeof parsedProviderSessionId === 'string' ? parsedProviderSessionId.trim() : '';
-    const current = typeof currentHistorySessionId === 'string' ? currentHistorySessionId.trim() : '';
-    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-
-    // getHistorySessionId falls back to the runtime session id when no native
-    // handle has been registered yet. For live CLI adapters the parser may
-    // already know the provider-native handle; prefer it over the runtime id so
-    // exact native reads do not miss the worker transcript and fall back to PTY
-    // or same-workspace history.
-    if (parsed && (!current || current === targetSessionId)) return parsed;
-    return current || parsed || undefined;
-}
-
-function shouldSkipLiveCliNativeHistoryWithoutProviderSession(args: {
-    adapter?: CliAdapter | null;
-    providerType?: string;
-    readChatArgs: any;
-    nativeHistorySessionId?: string;
-    parsedProviderSessionId?: string;
-}): boolean {
-    const explicit = getExplicitHistorySessionId(args.readChatArgs);
-    if (explicit) return false;
-
-    const targetSessionId = typeof args.readChatArgs?.targetSessionId === 'string'
-        ? args.readChatArgs.targetSessionId.trim()
-        : '';
-    if (!targetSessionId) return false;
-
-    const resolved = typeof args.nativeHistorySessionId === 'string'
-        ? args.nativeHistorySessionId.trim()
-        : '';
-    if (!resolved || resolved !== targetSessionId) return false;
-
-    const parsed = typeof args.parsedProviderSessionId === 'string'
-        ? args.parsedProviderSessionId.trim()
-        : '';
-    if (parsed) return false;
-
-    const cliType = args.adapter?.cliType || args.providerType || '';
-    if (cliType !== 'codex-cli') return false;
-
-    // A live Codex session starts with only the daemon runtime UUID. That UUID
-    // is not the provider-native rollout id, so using it for native history
-    // lets the file picker fall back to the newest same-workspace transcript
-    // and makes concurrent fresh sessions all show the same old conversation.
-    return !!args.adapter;
-}
-
-function getInteractionId(args: any): string | undefined {
-    return typeof args?._interactionId === 'string' && args._interactionId.trim()
-        ? args._interactionId.trim()
-        : undefined;
-}
-
-function traceProviderEvent(
-    args: any,
-    category: 'provider' | 'parser',
-    stage: string,
-    options: {
-        h: CommandHelpers;
-        provider?: ProviderModule;
-        payload?: Record<string, unknown>;
-        level?: 'debug' | 'info' | 'warn' | 'error';
-    },
-): void {
-    recordDebugTrace({
-        interactionId: getInteractionId(args),
-        category,
-        stage,
-        level: options.level || 'info',
-        sessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : options.h.currentSession?.sessionId,
-        providerType: options.provider?.type || options.h.currentProviderType || options.h.currentSession?.providerType,
-        payload: options.payload,
-    });
-}
-function readHistorySessionIdFromMessages(messages: ChatMessage[]): string | undefined {
-    for (const message of messages as Array<ChatMessage & { historySessionId?: unknown }>) {
-        const historySessionId = typeof message?.historySessionId === 'string' ? message.historySessionId.trim() : '';
-        if (historySessionId) return historySessionId;
-    }
-    return undefined;
-}
-
-function shouldPreserveNativeIdentity(providerType: string, sessionId: string, message: ChatMessage): boolean {
-    const providerUnitKey = typeof message.providerUnitKey === 'string' ? message.providerUnitKey.trim() : '';
-    const turnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
-    if (!providerUnitKey) return false;
-    // (A2.3) v2 stamped identity is producer-owned and globally stable; trust it
-    // unconditionally. Producers may omit _turnKey (the daemon recomputes it
-    // from the current ordering), so do not require turnKey for v2 messages.
-    // (CHAT-FLAP-LONG-CONVO) v3 native identity is daemon-stamped and
-    // position-independent (see normalizeNativeHistoryMessages); trust it the
-    // same way so a re-read of an already-normalized message preserves its key.
-    if (providerUnitKey.startsWith('v2:') || providerUnitKey.startsWith('v2-pty:') || providerUnitKey.startsWith('v3:')) {
-        return true;
-    }
-    // v1 identity always required both keys to be present.
-    if (!turnKey) return false;
-    if (providerType === 'hermes-cli' && sessionId) {
-        return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`)
-            && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
-    }
-    return true;
-}
-
-/**
- * Convenience wrapper used at every native-history call site: normalize +
- * conditionally drop the coordinator system-prompt message. Avoids
- * duplicating the filter at four read_chat code paths.
- */
-function normalizeAndFilterNativeHistory(
-    h: CommandHelpers,
-    providerType: string,
-    args: any,
-    messages: ChatMessage[],
-    nativeSessionId?: string,
-): ChatMessage[] {
-    const normalized = normalizeNativeHistoryMessages(providerType, messages, nativeSessionId);
-    const sessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId
-        : typeof args?.sessionId === 'string' ? args.sessionId
-        : undefined;
-    return maybeHideCoordinatorPromptMessage(h, providerType, sessionId, normalized);
-}
-
-export function normalizeNativeHistoryMessages(providerType: string, messages: ChatMessage[], nativeSessionId?: string): ChatMessage[] {
-    let turnIndex = 0;
-    // (CHAT-FLAP-LONG-CONVO root fix) The providerUnitKey / bubbleId MUST be
-    // position-independent: native history is re-derived on every read_chat, so
-    // sending a user message grows the tail and shifts every array index by one.
-    // A key that embeds `index` therefore changes for every pre-existing bubble
-    // across a send → web-core getChatMessageStableKey (which correctly trusts
-    // bubbleId/providerUnitKey as identity) sees a new React key → unmount+remount
-    // flash. The invariant we enforce here: the same logical message keeps the
-    // same key as the tail grows; different messages get different keys.
-    //
-    // Position-independent identity = (role, kind, content-signature) plus, for
-    // messages whose (role, kind, content-signature) collides (e.g. an identical
-    // reply repeated in the transcript, or ts-less messages), a stable occurrence
-    // ordinal: the count of prior messages sharing the same signature. Appending
-    // to the tail never renumbers earlier occurrences, so the ordinal is stable.
-    // A provider-supplied native id (message.id) short-circuits the ordinal — it
-    // is already globally unique and position-independent.
-    const signatureOccurrences = new Map<string, number>();
-    // Anchor for the ts-less sequence fallback (see below): the last real
-    // timestamp seen, plus a running offset so consecutive ts-less messages stay
-    // strictly ordered after it.
-    let lastSequenceAnchor = 0;
-    let anchorOffset = 0;
-    return normalizeChatMessages(messages).map((message, index) => {
-        const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-        const kind = typeof message.kind === 'string' && message.kind.trim() ? message.kind.trim() : (role === 'system' ? 'system' : 'standard');
-        if ((role === 'user' || role === 'human') && index > 0) turnIndex += 1;
-        const historySessionId = typeof (message as any).historySessionId === 'string'
-            ? (message as any).historySessionId.trim()
-            : '';
-        // Content signature is intentionally position-independent: the ts fallback
-        // is '' (NOT `index`) so a message with no timestamp still hashes the same
-        // regardless of where it sits in the array. Hash the FULL flattened content
-        // (no slice) so distinct long messages that share a 12-char prefix do not
-        // collide.
-        const contentSignature = hashSignatureParts([
-            providerType,
-            historySessionId,
-            String(message.receivedAt || message.timestamp || ''),
-            role,
-            kind,
-            flattenContent(message.content),
-        ]);
-        const contentHash = contentSignature.slice(0, 12);
-        const nativeIdentitySessionId = historySessionId || (typeof nativeSessionId === 'string' ? nativeSessionId.trim() : '');
-        // Stable occurrence ordinal for signature collisions (0 for the first,
-        // 1 for the second identical-signature message, …). A provider-native id,
-        // when present, is preferred as the collision discriminator because it is
-        // globally unique and never renumbers.
-        const nativeMessageId = typeof message.id === 'string' && message.id.trim() ? message.id.trim() : '';
-        const occurrence = signatureOccurrences.get(contentSignature) ?? 0;
-        signatureOccurrences.set(contentSignature, occurrence + 1);
-        const collisionDiscriminator = nativeMessageId || `#${occurrence}`;
-        const preserveNativeIdentity = shouldPreserveNativeIdentity(providerType, nativeIdentitySessionId, message);
-        const existingProviderUnitKey = typeof message.providerUnitKey === 'string' ? message.providerUnitKey.trim() : '';
-        const existingTurnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
-        const providerUnitKey = preserveNativeIdentity
-            ? existingProviderUnitKey
-            : `v3:${providerType}:native:${nativeIdentitySessionId || 'workspace'}:${role || 'message'}:${kind}:${contentHash}:${collisionDiscriminator}`;
-        const meta = message.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : undefined;
-        const isSystemSessionStart = role === 'system' || kind === 'system' || kind === 'session_start';
-        const isActivity = role === 'assistant' && (kind === 'tool' || kind === 'terminal' || kind === 'thought');
-        // (A2.3) sequence emit. Producer-supplied wins (v2-stamped messages
-        // bring their own monotonic sequence); otherwise derive from
-        // receivedAt/timestamp; otherwise positional. Always present on the
-        // output so consumers (ChatSourceMachine) have a stable ordering key.
-        const existingSequence = typeof (message as any).sequence === 'number'
-            && Number.isFinite((message as any).sequence)
-                ? (message as any).sequence
-                : null;
-        const tsCandidate = Number(message.receivedAt || message.timestamp || 0);
-        // (CHAT-FLAP-LONG-CONVO) sequence is part of web-core's React-key
-        // composite, so a ts-less fallback of `index` would also shift the key
-        // across a send. Anchor a ts-less message to the last real timestamp
-        // seen (plus its occurrence offset within that anchor) so the value stays
-        // ordered AND stable under tail-append instead of tracking the raw
-        // array position.
-        let sequence: number;
-        if (existingSequence !== null) {
-            sequence = existingSequence;
-        } else if (tsCandidate > 0) {
-            sequence = tsCandidate;
-            lastSequenceAnchor = tsCandidate;
-            anchorOffset = 0;
-        } else {
-            anchorOffset += 1;
-            sequence = lastSequenceAnchor + anchorOffset;
-        }
-        return {
-            ...message,
-            role: role === 'human' ? 'user' : (role || 'assistant'),
-            kind: isSystemSessionStart ? 'system' : kind,
-            ...(nativeIdentitySessionId ? { historySessionId: nativeIdentitySessionId } : {}),
-            providerUnitKey,
-            bubbleId: typeof message.bubbleId === 'string' && message.bubbleId.trim()
-                && preserveNativeIdentity
-                ? message.bubbleId.trim()
-                : `bubble:${providerUnitKey}`,
-            sequence,
-            _turnKey: preserveNativeIdentity
-                ? existingTurnKey
-                : `${providerType}:native-turn:${nativeIdentitySessionId || 'workspace'}:${turnIndex}`,
-            bubbleState: message.bubbleState || 'final',
-            ...(isSystemSessionStart ? {
-                visibility: message.visibility || 'hidden',
-                transcriptVisibility: message.transcriptVisibility || 'hidden',
-                audience: message.audience || 'internal',
-                source: message.source || 'runtime_status',
-            } : isActivity ? {
-                source: message.source || (kind === 'terminal' ? 'terminal_command' : 'tool_call'),
-                meta: { ...meta, label: message.senderName || meta?.label || (kind === 'terminal' ? 'Terminal' : 'Tool') },
-            } : {
-                source: message.source || (role === 'assistant' ? 'assistant_text' : undefined),
-            }),
-        } as ChatMessage;
-    });
-}
 
 /**
  * Codex-only unsafe-native fallback: when the primary native fetch produced

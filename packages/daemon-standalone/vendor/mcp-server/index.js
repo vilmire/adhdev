@@ -148780,10 +148780,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_contracts2();
     init_read_chat_contract();
     init_chat_history();
-    init_state_store();
     init_logger();
-    init_debug_trace();
-    init_chat_signatures();
     init_chat_message_normalization();
     init_chat_commands_shared();
     init_read_chat_message_filters();
@@ -149159,6 +149156,103 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     var CHAT_SOURCE_REGISTRY = new ChatSourceRegistry();
     init_chat_history();
+    init_contracts2();
+    init_chat_message_normalization();
+    init_chat_signatures();
+    init_read_chat_message_filters();
+    function readHistorySessionIdFromMessages(messages) {
+      for (const message of messages) {
+        const historySessionId = typeof message?.historySessionId === "string" ? message.historySessionId.trim() : "";
+        if (historySessionId) return historySessionId;
+      }
+      return void 0;
+    }
+    function shouldPreserveNativeIdentity(providerType, sessionId, message) {
+      const providerUnitKey = typeof message.providerUnitKey === "string" ? message.providerUnitKey.trim() : "";
+      const turnKey = typeof message._turnKey === "string" ? message._turnKey.trim() : "";
+      if (!providerUnitKey) return false;
+      if (providerUnitKey.startsWith("v2:") || providerUnitKey.startsWith("v2-pty:") || providerUnitKey.startsWith("v3:")) {
+        return true;
+      }
+      if (!turnKey) return false;
+      if (providerType === "hermes-cli" && sessionId) {
+        return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`) && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
+      }
+      return true;
+    }
+    function normalizeAndFilterNativeHistory(h, providerType, args, messages, nativeSessionId) {
+      const normalized = normalizeNativeHistoryMessages(providerType, messages, nativeSessionId);
+      const sessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId : typeof args?.sessionId === "string" ? args.sessionId : void 0;
+      return maybeHideCoordinatorPromptMessage(h, providerType, sessionId, normalized);
+    }
+    function normalizeNativeHistoryMessages(providerType, messages, nativeSessionId) {
+      let turnIndex = 0;
+      const signatureOccurrences = /* @__PURE__ */ new Map();
+      let lastSequenceAnchor = 0;
+      let anchorOffset = 0;
+      return normalizeChatMessages(messages).map((message, index) => {
+        const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
+        const kind = typeof message.kind === "string" && message.kind.trim() ? message.kind.trim() : role === "system" ? "system" : "standard";
+        if ((role === "user" || role === "human") && index > 0) turnIndex += 1;
+        const historySessionId = typeof message.historySessionId === "string" ? message.historySessionId.trim() : "";
+        const contentSignature = hashSignatureParts([
+          providerType,
+          historySessionId,
+          String(message.receivedAt || message.timestamp || ""),
+          role,
+          kind,
+          flattenContent(message.content)
+        ]);
+        const contentHash = contentSignature.slice(0, 12);
+        const nativeIdentitySessionId = historySessionId || (typeof nativeSessionId === "string" ? nativeSessionId.trim() : "");
+        const nativeMessageId = typeof message.id === "string" && message.id.trim() ? message.id.trim() : "";
+        const occurrence = signatureOccurrences.get(contentSignature) ?? 0;
+        signatureOccurrences.set(contentSignature, occurrence + 1);
+        const collisionDiscriminator = nativeMessageId || `#${occurrence}`;
+        const preserveNativeIdentity = shouldPreserveNativeIdentity(providerType, nativeIdentitySessionId, message);
+        const existingProviderUnitKey = typeof message.providerUnitKey === "string" ? message.providerUnitKey.trim() : "";
+        const existingTurnKey = typeof message._turnKey === "string" ? message._turnKey.trim() : "";
+        const providerUnitKey = preserveNativeIdentity ? existingProviderUnitKey : `v3:${providerType}:native:${nativeIdentitySessionId || "workspace"}:${role || "message"}:${kind}:${contentHash}:${collisionDiscriminator}`;
+        const meta3 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
+        const isSystemSessionStart = role === "system" || kind === "system" || kind === "session_start";
+        const isActivity = role === "assistant" && (kind === "tool" || kind === "terminal" || kind === "thought");
+        const existingSequence = typeof message.sequence === "number" && Number.isFinite(message.sequence) ? message.sequence : null;
+        const tsCandidate = Number(message.receivedAt || message.timestamp || 0);
+        let sequence;
+        if (existingSequence !== null) {
+          sequence = existingSequence;
+        } else if (tsCandidate > 0) {
+          sequence = tsCandidate;
+          lastSequenceAnchor = tsCandidate;
+          anchorOffset = 0;
+        } else {
+          anchorOffset += 1;
+          sequence = lastSequenceAnchor + anchorOffset;
+        }
+        return {
+          ...message,
+          role: role === "human" ? "user" : role || "assistant",
+          kind: isSystemSessionStart ? "system" : kind,
+          ...nativeIdentitySessionId ? { historySessionId: nativeIdentitySessionId } : {},
+          providerUnitKey,
+          bubbleId: typeof message.bubbleId === "string" && message.bubbleId.trim() && preserveNativeIdentity ? message.bubbleId.trim() : `bubble:${providerUnitKey}`,
+          sequence,
+          _turnKey: preserveNativeIdentity ? existingTurnKey : `${providerType}:native-turn:${nativeIdentitySessionId || "workspace"}:${turnIndex}`,
+          bubbleState: message.bubbleState || "final",
+          ...isSystemSessionStart ? {
+            visibility: message.visibility || "hidden",
+            transcriptVisibility: message.transcriptVisibility || "hidden",
+            audience: message.audience || "internal",
+            source: message.source || "runtime_status"
+          } : isActivity ? {
+            source: message.source || (kind === "terminal" ? "terminal_command" : "tool_call"),
+            meta: { ...meta3, label: message.senderName || meta3?.label || (kind === "terminal" ? "Terminal" : "Tool") }
+          } : {
+            source: message.source || (role === "assistant" ? "assistant_text" : void 0)
+          }
+        };
+      });
+    }
     var CLI_NATIVE_TRANSCRIPT_PROVIDERS = /* @__PURE__ */ new Set(["codex-cli", "claude-cli", "hermes-cli", "antigravity-cli"]);
     var warnedLegacyNativeAllowlistHits = /* @__PURE__ */ new Set();
     function warnLegacyNativeAllowlistHit(providerType) {
@@ -149419,7 +149513,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return args.nativeSelected || args.safeMapping ? readChatNativeTurnTerminalMarkers(args.history) : void 0;
     }
     init_read_chat_presentation();
-    var HOT_TAIL_MIN_LIMIT = 60;
+    init_state_store();
+    init_debug_trace();
+    init_chat_commands_shared();
     var lastBoundProviderSessionIdByMeshSession = /* @__PURE__ */ new Map();
     var persistedProviderSessionPinsHydrated = false;
     function hydratePersistedProviderSessionPinsOnce() {
@@ -149533,99 +149629,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         payload: options.payload
       });
     }
-    function readHistorySessionIdFromMessages(messages) {
-      for (const message of messages) {
-        const historySessionId = typeof message?.historySessionId === "string" ? message.historySessionId.trim() : "";
-        if (historySessionId) return historySessionId;
-      }
-      return void 0;
-    }
-    function shouldPreserveNativeIdentity(providerType, sessionId, message) {
-      const providerUnitKey = typeof message.providerUnitKey === "string" ? message.providerUnitKey.trim() : "";
-      const turnKey = typeof message._turnKey === "string" ? message._turnKey.trim() : "";
-      if (!providerUnitKey) return false;
-      if (providerUnitKey.startsWith("v2:") || providerUnitKey.startsWith("v2-pty:") || providerUnitKey.startsWith("v3:")) {
-        return true;
-      }
-      if (!turnKey) return false;
-      if (providerType === "hermes-cli" && sessionId) {
-        return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`) && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
-      }
-      return true;
-    }
-    function normalizeAndFilterNativeHistory(h, providerType, args, messages, nativeSessionId) {
-      const normalized = normalizeNativeHistoryMessages(providerType, messages, nativeSessionId);
-      const sessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId : typeof args?.sessionId === "string" ? args.sessionId : void 0;
-      return maybeHideCoordinatorPromptMessage(h, providerType, sessionId, normalized);
-    }
-    function normalizeNativeHistoryMessages(providerType, messages, nativeSessionId) {
-      let turnIndex = 0;
-      const signatureOccurrences = /* @__PURE__ */ new Map();
-      let lastSequenceAnchor = 0;
-      let anchorOffset = 0;
-      return normalizeChatMessages(messages).map((message, index) => {
-        const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
-        const kind = typeof message.kind === "string" && message.kind.trim() ? message.kind.trim() : role === "system" ? "system" : "standard";
-        if ((role === "user" || role === "human") && index > 0) turnIndex += 1;
-        const historySessionId = typeof message.historySessionId === "string" ? message.historySessionId.trim() : "";
-        const contentSignature = hashSignatureParts([
-          providerType,
-          historySessionId,
-          String(message.receivedAt || message.timestamp || ""),
-          role,
-          kind,
-          flattenContent(message.content)
-        ]);
-        const contentHash = contentSignature.slice(0, 12);
-        const nativeIdentitySessionId = historySessionId || (typeof nativeSessionId === "string" ? nativeSessionId.trim() : "");
-        const nativeMessageId = typeof message.id === "string" && message.id.trim() ? message.id.trim() : "";
-        const occurrence = signatureOccurrences.get(contentSignature) ?? 0;
-        signatureOccurrences.set(contentSignature, occurrence + 1);
-        const collisionDiscriminator = nativeMessageId || `#${occurrence}`;
-        const preserveNativeIdentity = shouldPreserveNativeIdentity(providerType, nativeIdentitySessionId, message);
-        const existingProviderUnitKey = typeof message.providerUnitKey === "string" ? message.providerUnitKey.trim() : "";
-        const existingTurnKey = typeof message._turnKey === "string" ? message._turnKey.trim() : "";
-        const providerUnitKey = preserveNativeIdentity ? existingProviderUnitKey : `v3:${providerType}:native:${nativeIdentitySessionId || "workspace"}:${role || "message"}:${kind}:${contentHash}:${collisionDiscriminator}`;
-        const meta3 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
-        const isSystemSessionStart = role === "system" || kind === "system" || kind === "session_start";
-        const isActivity = role === "assistant" && (kind === "tool" || kind === "terminal" || kind === "thought");
-        const existingSequence = typeof message.sequence === "number" && Number.isFinite(message.sequence) ? message.sequence : null;
-        const tsCandidate = Number(message.receivedAt || message.timestamp || 0);
-        let sequence;
-        if (existingSequence !== null) {
-          sequence = existingSequence;
-        } else if (tsCandidate > 0) {
-          sequence = tsCandidate;
-          lastSequenceAnchor = tsCandidate;
-          anchorOffset = 0;
-        } else {
-          anchorOffset += 1;
-          sequence = lastSequenceAnchor + anchorOffset;
-        }
-        return {
-          ...message,
-          role: role === "human" ? "user" : role || "assistant",
-          kind: isSystemSessionStart ? "system" : kind,
-          ...nativeIdentitySessionId ? { historySessionId: nativeIdentitySessionId } : {},
-          providerUnitKey,
-          bubbleId: typeof message.bubbleId === "string" && message.bubbleId.trim() && preserveNativeIdentity ? message.bubbleId.trim() : `bubble:${providerUnitKey}`,
-          sequence,
-          _turnKey: preserveNativeIdentity ? existingTurnKey : `${providerType}:native-turn:${nativeIdentitySessionId || "workspace"}:${turnIndex}`,
-          bubbleState: message.bubbleState || "final",
-          ...isSystemSessionStart ? {
-            visibility: message.visibility || "hidden",
-            transcriptVisibility: message.transcriptVisibility || "hidden",
-            audience: message.audience || "internal",
-            source: message.source || "runtime_status"
-          } : isActivity ? {
-            source: message.source || (kind === "terminal" ? "terminal_command" : "tool_call"),
-            meta: { ...meta3, label: message.senderName || meta3?.label || (kind === "terminal" ? "Terminal" : "Tool") }
-          } : {
-            source: message.source || (role === "assistant" ? "assistant_text" : void 0)
-          }
-        };
-      });
-    }
+    var HOT_TAIL_MIN_LIMIT = 60;
     function applyUnsafeNativeDaemonFallback(args) {
       if (args.adapter.cliType !== "codex-cli") {
         return;
