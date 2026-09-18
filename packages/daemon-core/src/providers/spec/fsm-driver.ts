@@ -1775,13 +1775,43 @@ export class FsmDriver implements ISpecDriver {
 
         const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
         if (rule?.select_mode === 'arrow_keys') {
+            // MESHAPPROVE-STALE-MODAL (live 2026-09-18, MoltBook claude-cli):
+            // an `arrow_keys` modal is a LIVE cursor list, and claude-cli always
+            // paints `❯` on the focused row while one is open. So "no row carries
+            // the cursor marker" is not a formatting quirk — it means the choice
+            // list on screen is SCROLLBACK: the picker is already gone and the
+            // TUI is back at the `❯` composer (often with a spinner running).
+            // deriveModal reads a scrollback-inclusive buffer on purpose (tall
+            // prompts scroll the box out of the viewport), so those dead
+            // `1. Yes / 2. No` lines still parse into a full modal and the state
+            // stays `approval`.
+            //
+            // The old `?? 1` fabricated a cursor origin from that dead list:
+            // delta became 0, no nav was emitted, and submitModalConfirm wrote a
+            // BARE CR — straight into the composer, submitting an EMPTY message.
+            // claude-cli spun on it briefly and repainted the same stale screen,
+            // which is exactly the observed approval → approval_resolving → busy
+            // → approval loop. resolveModalMatched still returned true, so
+            // mesh_approve reported `{success:true, buttonIndex:0, button:"Yes"}`
+            // on every one of six attempts across 56 minutes while nothing was
+            // ever approved.
+            //
+            // There is no safe keystroke to emit here: we cannot know where a
+            // cursor that is not on screen sits, and guessing writes into the
+            // composer. Fail LOUDLY and write NOTHING — `false` flows out through
+            // resolveModalMatched so mesh_approve surfaces the miss instead of a
+            // false success. A real open picker always has its marker, so this
+            // costs the healthy path nothing.
+            if (!m.buttons.some(b => b.current)) {
+                LOG.warn('FsmDriver', `[${this.spec.id}] click_modal_button(${index}) refused — no cursor marker on any row of an arrow_keys modal, so the choice list is stale scrollback and the live picker is gone. Writing a bare CR here would submit an empty message into the composer. No keys written.`);
+                return false;
+            }
             // Cursor-list approval modal (claude-cli new TUI): number keys are
             // IGNORED — sending `btn.key` ("1\r") types a literal "1" into the
             // composer and the trailing CR submits it as a chat message. Drive
             // the cursor from its current row to the target row with arrows,
-            // then confirm. The cursor opens on the first option, so when the
-            // marker isn't detected we step down from row 1 (index - 1).
-            const from = m.buttons.find(b => b.current)?.index ?? 1;
+            // then confirm.
+            const from = m.buttons.find(b => b.current)!.index;
             const up = rule.cursor_keys?.up ?? '\x1b[A';
             const down = rule.cursor_keys?.down ?? '\x1b[B';
             const delta = btn.index - from;

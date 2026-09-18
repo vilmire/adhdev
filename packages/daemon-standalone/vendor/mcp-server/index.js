@@ -105951,7 +105951,11 @@ decided_at = ${decidedAt}
             }
             const rule = stateById(this.spec, this.currentStateId)?.extract?.buttons;
             if (rule?.select_mode === "arrow_keys") {
-              const from = m.buttons.find((b) => b.current)?.index ?? 1;
+              if (!m.buttons.some((b) => b.current)) {
+                LOG.warn("FsmDriver", `[${this.spec.id}] click_modal_button(${index}) refused \u2014 no cursor marker on any row of an arrow_keys modal, so the choice list is stale scrollback and the live picker is gone. Writing a bare CR here would submit an empty message into the composer. No keys written.`);
+                return false;
+              }
+              const from = m.buttons.find((b) => b.current).index;
               const up = rule.cursor_keys?.up ?? "\x1B[A";
               const down = rule.cursor_keys?.down ?? "\x1B[B";
               const delta = btn.index - from;

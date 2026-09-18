@@ -127,14 +127,23 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         expect(sent).toEqual(expectKeys([`${UP}${UP}`, '\r']));
     });
 
-    it('falls back to stepping down from row 1 when no cursor marker is detected', () => {
+    // MESHAPPROVE-STALE-MODAL (live 2026-09-18, MoltBook claude-cli): this case
+    // USED to "fall back to stepping down from row 1", on the assumption that a
+    // missing cursor marker just meant the marker was not rendered yet. Live
+    // measurement disproved it: an `arrow_keys` picker always paints `❯` on its
+    // focused row while it is open, so NO marker on ANY row means the list on
+    // screen is dead scrollback (deriveModal reads a scrollback-inclusive buffer
+    // by design) and the TUI is back at the composer. The old fallback made
+    // delta 0 and wrote a BARE CR into that composer, submitting an empty
+    // message — the approval → approval_resolving → busy → approval loop that
+    // reported {success:true} six times while approving nothing.
+    it('refuses and writes NOTHING when no cursor marker is detected (stale scrollback)', () => {
         const noCursor = APPROVAL_BUTTONS.map(b => ({ ...b, current: false }));
         const { driver, sent } = makeDriver(noCursor, ARROW_RULE);
 
-        driver.handleClickModalButton(2);
-
-        // No detected cursor → assume the modal opened on row 1 → 1× DOWN + CR.
-        expect(sent).toEqual(expectKeys([DOWN, '\r']));
+        expect(driver.handleClickModalButton(2)).toBe(false);
+        // Nothing may reach the PTY — a guessed keystroke lands in the composer.
+        expect(sent).toEqual([]);
     });
 
     it('honors custom cursor_keys overrides', () => {
