@@ -48,6 +48,7 @@ import {
     RefineContext,
     RefineExecFileAsync,
     RefineStageOutcome,
+    buildGeneratedBundleResolutionStageDetail,
     buildSubmoduleConvergeDeclineDetails,
     classifyAndWarnPatchEquivalenceFailure,
     collectTrivialFastForwardGitlinkResolutions,
@@ -793,29 +794,35 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
             // baseHead. A conflict aborts and terminates blocked_review (retryable=false —
             // a real content conflict needs human resolution, not a base-movement retry).
             //
-            // When STEP 1 converged a diverged submodule gitlink, use the gitlink-aware
-            // root rebase (STEP 2): git's recursive merge refuses to auto-merge the still-
-            // diverged intermediate gitlink, so we drive the rebase and resolve each
-            // submodule-gitlink conflict to the converged commit. A non-gitlink conflict
-            // aborts and falls through to the same blocked_review handling as a plain
-            // rebase conflict below (via the thrown gitlinkRebaseError).
+            // The rebase is ALWAYS driven through rootRebaseResolvingGitlinks (STEP 2),
+            // which resolves two conflict classes git cannot auto-merge and a human would
+            // never hand-merge, then `--continue`s:
+            //   - submodule gitlinks converged by STEP 1 ("Recursive merging with
+            //     submodules currently only supports trivial cases");
+            //   - ★generated vendor bundles, when a sibling branch landed a re-bundle
+            //     first (rationale: mesh-refine-generated-bundles.ts). That false-block has
+            //     no gitlink divergence at all, so it used to take a plain `git rebase` here
+            //     and abort on build output alone.
+            // Anything else — a genuine authored conflict included — still aborts and falls
+            // through to the blocked_review handling below (via the thrown error), and an
+            // empty resolution map leaves the gitlink handling inert.
             const rebaseStarted = Date.now();
             const rebaseExec = { cwd: node.workspace, stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[], timeout: REFINE_GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }; // ★bounds the SYNCHRONOUS rebase pair (blocks the event loop)
             try {
-                if (gitlinkResolutions.length > 0) {
-                    const gitlinkRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
-                    if (!gitlinkRebase.ok) {
-                        // Surface as a rebase failure so the shared blocked_review handling
-                        // (submodule-hint recovery included) runs — nothing was left mid-rebase
-                        // (rootRebaseResolvingGitlinks aborts on failure).
-                        const err: any = new Error(`gitlink-aware rebase aborted: ${gitlinkRebase.reason || 'unknown'}`);
-                        err.gitlinkRebaseReason = gitlinkRebase.reason;
-                        err.gitlinkRebaseConflicts = gitlinkRebase.conflictPaths;
-                        err.alreadyAborted = true;
-                        throw err;
-                    }
-                } else {
-                    execFileSync('git', ['rebase', baseHead], rebaseExec);
+                const drivenRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
+                if (!drivenRebase.ok) {
+                    // Surface as a rebase failure so the shared blocked_review handling
+                    // (submodule-hint recovery included) runs — the driver already aborted.
+                    const err: any = new Error(`gitlink-aware rebase aborted: ${drivenRebase.reason || 'unknown'}`);
+                    err.gitlinkRebaseReason = drivenRebase.reason;
+                    err.gitlinkRebaseConflicts = drivenRebase.conflictPaths;
+                    err.alreadyAborted = true;
+                    throw err;
+                }
+                // Name what was auto-resolved instead of resolving it invisibly.
+                if (drivenRebase.resolvedGeneratedBundlePaths?.length) {
+                    recordMeshRefineStage(refineStages, 'generated_bundle_conflict_resolved', 'passed', rebaseStarted,
+                        buildGeneratedBundleResolutionStageDetail(drivenRebase.resolvedGeneratedBundlePaths));
                 }
             } catch (rebaseErr: any) {
                 if (!rebaseErr?.alreadyAborted) {

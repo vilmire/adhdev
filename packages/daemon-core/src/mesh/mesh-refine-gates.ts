@@ -31,6 +31,8 @@ import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommit
 // Submodule-gitlink convergence lives in its own module (pure move, file-size gate);
 // re-exported here so existing importers of this module are unaffected.
 export * from './mesh-refine-submodule-converge.js';
+// Generated-vendor-bundle rebase policy — same barrel-preserving pattern.
+export * from './mesh-refine-generated-bundles.js';
 export * from './mesh-refine-gitlink-utils.js';
 import type { CommandRouterResult } from '../commands/router.js';
 

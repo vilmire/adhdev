@@ -147,8 +147,18 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
         expect(rebaseExec).toMatch(/env: gitChildEnv\(\)/);
         // ★Unbounded, a rebase that stalls (lock contention, a hung filter/hook)
         // freezes the daemon outright — it is SYNCHRONOUS.
+        //
+        // Count is 1 (was 2): the plain `git rebase baseHead` call site is gone.
+        // sync_base now ALWAYS drives the rebase through
+        // `rootRebaseResolvingGitlinks`, which is what resolves a conflict in a
+        // generated vendor bundle (mesh-refine-generated-bundles.ts) and which
+        // bounds its own git children with GIT_LOCAL_TIMEOUT_MS + gitChildEnv()
+        // — covered by the 'submodule-converge path' assertion above. The
+        // remaining site here is the `rebase --abort` in the failure handler.
+        // The invariant is unchanged and is the second assertion, not the count:
+        // every sync rebase call site in THIS file goes through `rebaseExec`.
         const rebaseCalls = src.match(/execFileSync\('git', \['rebase'[^;]*?\);/g) ?? [];
-        expect(rebaseCalls).toHaveLength(2);
+        expect(rebaseCalls).toHaveLength(1);
         expect(rebaseCalls.filter(call => !/rebaseExec/.test(call))).toEqual([]);
 
         const inlineSync = src.match(/execFileSync\('git',(?![^;]*rebaseExec)[\s\S]{0,240}?\}\)/g) ?? [];
