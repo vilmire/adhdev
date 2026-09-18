@@ -39662,7 +39662,7 @@ var require_dist3 = __commonJS({
       });
     }
     function joinClaudeTuiRows(lines, start, end) {
-      return lines.slice(start, end).map((line) => line.text.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      return lines.slice(start, end).map((line) => line.text.trim().replace(/^[│┃]\s*/, "")).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     }
     function readClaudeQuestionBeforeOption(lines, firstOptionIndex, lowerBound) {
       let end = firstOptionIndex;
@@ -135669,13 +135669,15 @@ ${mergeTreeErr?.stderr || ""}`;
             } catch (e) {
               const describeActive = instance.describeActiveInteractivePrompt;
               const active = typeof describeActive === "function" ? describeActive.call(instance) : null;
+              const errorMessage = e?.message || String(e);
+              const isScreenMismatch = /does not match the active interactive prompt/.test(errorMessage);
               return {
                 success: false,
                 delivered: false,
                 submitted: false,
-                error: e?.message || String(e),
+                error: errorMessage,
                 ...active ? { activePrompt: active, waitingChoice: true } : {},
-                nextStep: active ? "The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options." : "The question was not answered. Re-read the session status to see whether a prompt is still open."
+                nextStep: isScreenMismatch ? "The on-screen question did not match what mesh_answer_question expected \u2014 retrying the same label/index will fail identically. Re-read the session status to see the CURRENT on-screen question, then re-answer only if it still matches activePrompt." : active ? "The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options." : "The question was not answered. Re-read the session status to see whether a prompt is still open."
               };
             }
           }
