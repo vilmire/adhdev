@@ -102243,6 +102243,10 @@ ${marker}`,
         init_dist();
       }
     });
+    function isStandaloneArgv(argv1) {
+      return !!argv1 && ARGV_STANDALONE_PATH_SEGMENT.test(argv1);
+    }
+    var ARGV_STANDALONE_PATH_SEGMENT;
     var daemonLifecycleHandlers;
     var init_daemon_lifecycle = __esm2({
       "src/commands/low-family/daemon-lifecycle.ts"() {
@@ -102254,11 +102258,12 @@ ${marker}`,
         init_version_compare();
         init_track_identity();
         init_app_name();
+        ARGV_STANDALONE_PATH_SEGMENT = /[\\/]daemon-standalone[\\/]/;
         daemonLifecycleHandlers = {
           daemon_upgrade: async (ctx, args) => {
             LOG.info("Upgrade", "Remote upgrade requested from dashboard");
             try {
-              const isStandalone = ctx.deps.packageName === "@adhdev/daemon-standalone" || process.argv[1]?.includes("daemon-standalone");
+              const isStandalone = ctx.deps.packageName === "@adhdev/daemon-standalone" || isStandaloneArgv(process.argv[1]);
               const pkgName = isStandalone ? "@adhdev/daemon-standalone" : "adhdev";
               const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
               const requestedChannelRaw = args?.channel ?? args?.updatePolicy?.channel ?? null;
@@ -102378,7 +102383,7 @@ ${marker}`,
           daemon_restart: async (ctx, args) => {
             LOG.info("Restart", "Restart-only requested (no package reinstall)");
             try {
-              const isStandalone = ctx.deps.packageName === "@adhdev/daemon-standalone" || process.argv[1]?.includes("daemon-standalone");
+              const isStandalone = ctx.deps.packageName === "@adhdev/daemon-standalone" || isStandaloneArgv(process.argv[1]);
               const pkgName = isStandalone ? "@adhdev/daemon-standalone" : "adhdev";
               const killSessionHost = args?.killSessionHost === true;
               if (killSessionHost) {
