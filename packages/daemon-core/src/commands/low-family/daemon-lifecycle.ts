@@ -35,13 +35,26 @@ import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionHostAppName } from '../../session-host/app-name.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 
+// Matches the installed package directory ("…/@adhdev/daemon-standalone/…" or
+// "…/daemon-standalone/…" in a monorepo checkout) as a bounded path SEGMENT,
+// not a bare substring. `String.includes('daemon-standalone')` also fires on
+// an unrelated ancestor directory name (e.g. a worktree checked out under a
+// path containing "daemon-standalone"), which flips this daemon's own
+// upgrade package identity to '@adhdev/daemon-standalone' even when it is
+// running as 'adhdev'.
+const ARGV_STANDALONE_PATH_SEGMENT = /[\\/]daemon-standalone[\\/]/;
+
+function isStandaloneArgv(argv1: string | undefined): boolean {
+    return !!argv1 && ARGV_STANDALONE_PATH_SEGMENT.test(argv1);
+}
+
 export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
     daemon_upgrade: async (ctx: LowFamilyContext, args: any) => {
         LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
         try {
             // Detect package name for upgrade
             const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
-                || process.argv[1]?.includes('daemon-standalone');
+                || isStandaloneArgv(process.argv[1]);
             const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
             const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
             // Deprecated channel hints (args.channel / args.updatePolicy.channel /
@@ -244,7 +257,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         LOG.info('Restart', 'Restart-only requested (no package reinstall)');
         try {
             const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
-                || process.argv[1]?.includes('daemon-standalone');
+                || isStandaloneArgv(process.argv[1]);
             const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
             const killSessionHost = args?.killSessionHost === true;
             if (killSessionHost) {
