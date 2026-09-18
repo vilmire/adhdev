@@ -65,6 +65,19 @@ import {
   collectSyncTargetTypes,
   type ChannelSyncReport,
 } from './channel/runtime.js';
+import {
+  registerProviderScriptRootSafely,
+  buildScriptWrappersFromDir,
+  parseArgsSetting,
+  getPlatformVersionCommand,
+  getSyntheticSettings,
+  matchesVersion,
+} from './provider-loader-support.js';
+import {
+  loadProviderDir,
+  findProviderDirInternal,
+} from './provider-loader-manifest-scan.js';
+import { applySpecNativeHistoryWiring } from './provider-loader-spec-wiring.js';
 
 /**
  * ★STORE-RELOAD debounce: minimum gap between two activation-signature
@@ -83,26 +96,6 @@ import {
  * reloads immediately for activations this daemon performs itself.
  */
 const CHANNEL_ACTIVATION_RECHECK_MS = 5_000;
-
-/**
- * Adds a provider-script root to the require whitelist. Wrapped in a
- * try/catch + null check so a loader hot-path can't crash on a path
- * that doesn't exist yet or one the whitelist hook rejects.
- *
- * The require-whitelist module is loaded lazily on first call. Eagerly
- * top-level importing it pulls `node:fs.realpathSync.native` into
- * module evaluation, which breaks unit tests that partially mock `fs`
- * (e.g. test/commands/get-logs-incremental.test.ts mocks only
- * existsSync + readFileSync). Lazy load keeps that mock surface valid.
- */
-function registerProviderScriptRootSafely(root: string | null | undefined): void {
-  if (!root || typeof root !== 'string') return;
-  try {
-    const { registerProviderScriptRoot } =
-      require('./sdk/v1/sandbox/require-whitelist.js') as typeof import('./sdk/v1/sandbox/require-whitelist.js');
-    registerProviderScriptRoot(root);
-  } catch { /* boot-time only — swallow */ }
-}
 
 interface ProviderAvailabilityState {
   installed: boolean;
@@ -153,77 +146,6 @@ export interface MachineProviderConfig {
   lastVerification?: MachineProviderCheckResult;
 }
 
-/**
- * Translate a spec `control_bar` array into the web-facing
- * `ProviderControlDef[]` shape the dashboard renders.
- *
- * The two shapes are distinct: `control_bar` entries are daemon-side
- * `{ id, label, visible_when_state, action }` records driving
- * SpecCliAdapter.invokeScript, while the dashboard's chat bar reads
- * `ProviderControlDef` (`{ id, type, label, placement, ... }`). Spec
- * providers (claude-cli / codex-cli) historically declared *only*
- * `control_bar`, so the dashboard saw no controls at all — the Model / Mode
- * pickers never rendered. This bridges that gap without changing how the
- * controls actually dispatch.
- *
- * Script-name contract: the dashboard sends the control's
- * `listScript` / `setScript` / `invokeScript` name through
- * `invoke_provider_script`, which gates on `provider.scripts[<name>]` and then
- * routes to `SpecCliAdapter.invokeScript(<name>)` — which matches the name
- * against `control_bar[].id`. So every synthesized script name MUST equal the
- * control id (the loader stubs `provider.scripts[id]` from the same source).
- *
- * Mapping:
- *   open_picker  → select (dynamic): list + set both keyed on the control id;
- *                  the adapter distinguishes LIST vs SELECT by the presence of
- *                  a choice arg, so one id serves both roles.
- *   send_keys    → action: one-shot keystroke (stop, cycle_mode).
- *   attach_image → skipped: it needs an image blob from a file picker, not a
- *                  bare bar button; surfacing it as an `action` would only
- *                  produce a button that errors with "requires args.blob".
- */
-function synthesizeControlsFromControlBar(specControls: any[]): ProviderControlDef[] {
-  const out: ProviderControlDef[] = [];
-  specControls.forEach((ctl, index) => {
-    const id = typeof ctl?.id === 'string' ? ctl.id.trim() : '';
-    const actionType = ctl?.action?.type;
-    if (!id || !actionType) return;
-    const label = typeof ctl?.label === 'string' && ctl.label.trim() ? ctl.label : id;
-    // Preserve the spec's state gating so the web bar can mirror the daemon's
-    // FsmDriver.handleClickControl enforcement (otherwise the button renders in
-    // states where the daemon would silently drop the click).
-    const visibleWhenState = Array.isArray(ctl?.visible_when_state)
-      ? ctl.visible_when_state.filter((s: unknown): s is string => typeof s === 'string')
-      : undefined;
-    if (actionType === 'open_picker') {
-      out.push({
-        id,
-        type: 'select',
-        label,
-        placement: 'bar',
-        dynamic: true,
-        listScript: id,
-        setScript: id,
-        readFrom: id,
-        order: index,
-        ...(visibleWhenState && visibleWhenState.length > 0 ? { visibleWhenState } : {}),
-      });
-    } else if (actionType === 'send_keys') {
-      out.push({
-        id,
-        type: 'action',
-        label,
-        placement: 'bar',
-        invokeScript: id,
-        resultDisplay: 'none',
-        order: index,
-        ...(visibleWhenState && visibleWhenState.length > 0 ? { visibleWhenState } : {}),
-      });
-    }
-    // attach_image intentionally skipped — see fn doc.
-  });
-  return out;
-}
 
 type CliDetectionEntry = {
   id: string;
@@ -1759,50 +1681,7 @@ export class ProviderLoader {
   }
 
   private parseArgsSetting(value: string): string[] {
-    const args: string[] = [];
-    let current = '';
-    let quote: 'single' | 'double' | null = null;
-    let escaping = false;
-    for (const ch of value.trim()) {
-      if (escaping) {
-        current += ch;
-        escaping = false;
-        continue;
-      }
-      if (ch === '\\') {
-        escaping = true;
-        continue;
-      }
-      if (quote === 'single') {
-        if (ch === "'") quote = null;
-        else current += ch;
-        continue;
-      }
-      if (quote === 'double') {
-        if (ch === '"') quote = null;
-        else current += ch;
-        continue;
-      }
-      if (ch === "'") {
-        quote = 'single';
-        continue;
-      }
-      if (ch === '"') {
-        quote = 'double';
-        continue;
-      }
-      if (/\s/.test(ch)) {
-        if (current) {
-          args.push(current);
-          current = '';
-        }
-        continue;
-      }
-      current += ch;
-    }
-    if (escaping) current += '\\';
-    if (current) args.push(current);
-    return args;
+    return parseArgsSetting(value);
   }
 
   setProviderAvailability(type: string, state: { installed: boolean; detectedPath?: string | null }): void {
@@ -2133,215 +2012,8 @@ export class ProviderLoader {
     // (spec migration) Late-binding spec.json native-history hook. Runs
     // *after* every script-loading path (compatibility / defaultScriptDir /
     // overrides) so it deterministically wins over a legacy v1 scripts.js
-    // export. Three modes, picked by spec.json's native_history block:
-    //   1. source     — declarative jsonl/sqlite executor (new-provider path,
-    //                   no daemon change needed for new on-disk formats)
-    //   2. override_path — provider-supplied reader file (escape hatch for
-    //                   exotic formats); module default-exports a reader fn
-    //   3. reader     — built-in reader id (claude-cli / codex-cli /
-    //                   antigravity-cli / hermes-cli), kept for backwards
-    //                   compatibility with the four shipped providers
-    if (providerDir) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const fs = require('node:fs');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const path = require('node:path');
-        // Pick the right spec file for the detected CLI version. Resolution
-        // order:
-        //   1. compatibility[i].spec where ideVersion matches currentVersion
-        //      (lets a provider ship specs/2.0.json, specs/2.1.json, etc.
-        //      alongside the matching scriptDir)
-        //   2. specs/default.json — explicit fallback
-        //   3. spec.json — legacy single-spec layout
-        // Missing files fall through silently to the next candidate.
-        const candidates: string[] = [];
-        if (Array.isArray((base as any).compatibility)) {
-          for (const entry of (base as any).compatibility) {
-            if (typeof entry?.spec !== 'string') continue;
-            // If currentVersion is unknown (cli-manager hasn't probed yet)
-            // we still let compatibility entries that don't pin a version
-            // through, plus any entry whose pin matches.
-            const matches = !entry.ideVersion
-              || (currentVersion && this.matchesVersion(currentVersion, entry.ideVersion))
-              || !currentVersion;
-            if (matches) candidates.push(path.join(providerDir, entry.spec));
-          }
-        }
-        candidates.push(path.join(providerDir, 'specs', 'default.json'));
-        candidates.push(path.join(providerDir, 'spec.json'));
-        const specPath = candidates.find((p: string) => fs.existsSync(p));
-        // native_history block, resolved from either the separate spec file
-        // (snake_case `native_history`) or — for v1-manifest-only providers that
-        // ship no specs/*.json — the inline camelCase `nativeHistory` on the
-        // manifest itself. The separate spec file wins when both exist. Without
-        // the v1-manifest fallback, a provider whose ONLY declaration is an
-        // inline `nativeHistory.source` (e.g. opencode's sqlite source) never got
-        // its `scripts.readNativeHistory` wired: the whole block was gated on
-        // `specPath`, so read_chat returned native-unavailable, the assistant
-        // reply (only in the on-disk store, never in the PTY snapshot) was
-        // dropped, providerSessionId stayed null, and the session wedged in
-        // `generating` because no native completion evidence ever arrived.
-        let nh: any | undefined;
-        if (specPath) {
-          // Hand the resolved spec path off to route.ts via a hidden field
-          // so the routing layer doesn't have to repeat the candidate walk.
-          (resolved as any)._resolvedSpecPath = specPath;
-          // Extract control_bar + native_history directly from the JSON header.
-          let specControls: any[] | undefined;
-          try {
-            const rawSpec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
-            specControls = rawSpec.control_bar;
-            nh = rawSpec.native_history;
-          } catch { /* unreadable spec — leave controls/native unavailable */ }
-          // Stub each control_bar entry as a provider.scripts.<id>. The
-          // upstream invoke_provider_script gate checks that the script
-          // name exists on provider.scripts before calling adapter.invokeScript;
-          // for spec providers the *actual* dispatch happens inside
-          // SpecCliAdapter.invokeScript which maps the name to control_bar.
-          // The stub is just a presence marker so the gate doesn't reject.
-          if (specControls && specControls.length > 0) {
-            resolved.scripts = { ...(resolved.scripts || {}) };
-            for (const ctl of specControls) {
-              if (!(resolved.scripts as any)[ctl.id]) {
-                (resolved.scripts as any)[ctl.id] = (..._args: unknown[]) => ({
-                  __spec_control: true,
-                  controlId: ctl.id,
-                  actionType: ctl.action.type,
-                });
-              }
-            }
-            // Bridge the spec control_bar into the web-facing controls schema so
-            // the dashboard chat bar actually renders Model/Mode pickers. Only
-            // synthesize when the provider hasn't already declared its own
-            // `controls` in provider.v1.json (e.g. hermes-cli) — an explicit
-            // declaration wins and must not be clobbered.
-            const hasDeclaredControls = Array.isArray((resolved as any).controls)
-              && (resolved as any).controls.length > 0;
-            if (!hasDeclaredControls) {
-              const synthesized = synthesizeControlsFromControlBar(specControls);
-              if (synthesized.length > 0) {
-                resolved.controls = synthesized;
-              }
-            }
-          }
-        }
-        // Fall back to the v1 manifest's inline `nativeHistory` (camelCase) when
-        // no separate spec file provided a `native_history` block. Only treat it
-        // as a declarative reader source when it actually carries source/
-        // override_path/reader — a bare `nativeHistory` marker that only names
-        // `scripts.readSession` (claude/codex/antigravity, whose real reader is
-        // wired from their specs/*.json) must not be mistaken for one.
-        if (!nh) {
-          const inlineNh = (base as any)?.nativeHistory || (resolved as any)?.nativeHistory;
-          if (inlineNh && (inlineNh.source || inlineNh.override_path || inlineNh.reader)) {
-            nh = inlineNh;
-          }
-        }
-        if (nh) {
-          let reader: ((input: any) => any) | null = null;
-          // lister enumerates all saved sessions for the store. Only the
-          // declarative jsonl `source` path can enumerate by directory walk;
-          // override/reader providers wire their own listSessions (or none).
-          let lister: ((input: any) => any) | null = null;
-          let format = 'spec';
-
-          if (nh.source) {
-            format = `spec-${nh.source.kind}`;
-            reader = (input: any) => executeNativeHistory(nh, input);
-            // Only jsonl stores are file-per-session and enumerable by a
-            // directory walk. sqlite sources enumerate through their own
-            // `session_query` (not implemented as a lister yet), so leave
-            // listSessions unwired there rather than advertising an enumerator
-            // that always returns empty.
-            if (nh.source.kind === 'jsonl') {
-              lister = (input: any) => executeNativeHistoryList(nh, input);
-            }
-          } else if (nh.override_path) {
-            const overrideFile = path.resolve(providerDir, nh.override_path);
-            if (fs.existsSync(overrideFile)) {
-              try {
-                registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
-                delete require.cache[require.resolve(overrideFile)];
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const mod = require(overrideFile);
-                const fn = typeof mod === 'function' ? mod : (mod && typeof mod.default === 'function' ? mod.default : null);
-                if (fn) {
-                  format = 'spec-override';
-                  reader = (input: any) => fn(input);
-                }
-              } catch { /* fall through — leave native unavailable */ }
-            }
-          } else if (nh.reader) {
-            const dispatch = createNativeHistoryDispatcher(nh.reader as ReaderId);
-            format = nh.reader;
-            reader = (input: any) => dispatch(input);
-            // Readers whose on-disk store is enumerable expose a lister too.
-            // Without it `list_saved_sessions` returns [] no matter how many
-            // transcripts exist (same gap the declarative jsonl path fills
-            // above). Returns null for readers that have no enumerator, so the
-            // existing claude/codex/antigravity/hermes wiring is unchanged.
-            const listDispatch = createNativeHistoryListDispatcher(nh.reader as ReaderId);
-            if (listDispatch) lister = (input: any) => listDispatch(input);
-          }
-
-          if (reader) {
-            resolved.scripts = { ...(resolved.scripts || {}) };
-            // (excludeInProgressTurn restore) Apply the in-flight tool-tail trim
-            // HERE — the one choke point every native-history route funnels
-            // through (declarative source / override_path / built-in reader) —
-            // rather than inside a single route's executor.
-            //
-            // The flag was honoured only by `_shared/native_history.js`'s
-            // `trimIncompleteLastTurn`. When providers moved to spec-driven
-            // reading, `codex-cli`'s declaration became the sole surviving record
-            // of the intent while no live route consumed it, so during
-            // `waiting_approval` every provider rendered the very tool call
-            // awaiting approval as an already-executed `⏺ Tool` bubble.
-            // Wrapping the dispatch restores it for all of them at once and
-            // keeps future routes covered by construction.
-            //
-            // The trim is idempotent (see trimInProgressTurnToolTail), so an
-            // out-of-tree script that still trims its own result is unaffected.
-            (resolved.scripts as any).readNativeHistory = (input: any) => {
-              const result = reader!(input);
-              const wantsTrim = input?.excludeInProgressTurn === true || input?.args?.excludeInProgressTurn === true;
-              if (!wantsTrim || !result || !Array.isArray(result.messages)) return result;
-              const trimmed = trimInProgressTurnToolTail(result.messages);
-              return trimmed === result.messages ? result : { ...result, messages: trimmed };
-            };
-            // Wire the enumerator alongside the reader. Without both the
-            // `scripts.listSessions` marker AND the `listNativeHistory` fn,
-            // `getProviderNativeHistoryScript(...,'listSessions')` resolves to
-            // undefined and `list_saved_sessions` returns [] for every
-            // declarative-source provider (claude/codex/antigravity/kimi/cursor)
-            // regardless of how many transcripts are on disk.
-            const scriptsMarker: { readSession: string; listSessions?: string } = { readSession: 'readNativeHistory' };
-            if (lister) {
-              (resolved.scripts as any).listNativeHistory = lister;
-              scriptsMarker.listSessions = 'listNativeHistory';
-            }
-            // Spread the declarative block FIRST so source/override_path/
-            // reader/contractVersion survive, then override only the runtime
-            // fields. The previous shape dropped `source`, and
-            // ProviderCliAdapter.detectBackgroundTask requires it — so a
-            // loader-resolved declarative provider (production kimi) always
-            // reported background detection inactive even though the detector
-            // unit tests (which pass the manifest shape directly) passed
-            // (rc.29 production-shape gap).
-            (resolved as any).nativeHistory = {
-              ...nh,
-              format,
-              watchPath: undefined,
-              scripts: scriptsMarker,
-              mode: 'native-source',
-            };
-          }
-        }
-      } catch {
-        // Best-effort — spec wiring failure must not break legacy providers.
-      }
-    }
+    // export. Body lives in provider-loader-spec-wiring.ts.
+    applySpecNativeHistoryWiring(resolved, base, providerDir, currentVersion);
 
     return resolved;
   }
@@ -2624,20 +2296,7 @@ export class ProviderLoader {
   }
 
   private getPlatformVersionCommand(versionCommand?: ProviderModule['versionCommand']): string | undefined {
-    if (!versionCommand) return undefined;
-    if (typeof versionCommand === 'string') {
-      const trimmed = versionCommand.trim();
-      return trimmed || undefined;
-    }
-    const platformValue = versionCommand[process.platform];
-    if (typeof platformValue === 'string' && platformValue.trim()) {
-      return platformValue.trim();
-    }
-    const defaultValue = versionCommand.default;
-    if (typeof defaultValue === 'string' && defaultValue.trim()) {
-      return defaultValue.trim();
-    }
-    return undefined;
+    return getPlatformVersionCommand(versionCommand);
   }
 
   private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
@@ -2667,405 +2326,52 @@ export class ProviderLoader {
   }
 
   private getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
-    const result: Record<string, ProviderSettingDef> = {};
-
-    if (provider.category === 'cli' || provider.category === 'acp') {
-      result.enabled = {
-        type: 'boolean',
-        default: false,
-        public: true,
-        label: 'Enabled on this machine',
-        description: 'Opt in before ADHDev detects, launches, or verifies this provider on this machine.',
-      };
-    }
-
-    if (!provider.settings?.autoApprove) {
-      result.autoApprove = {
-        type: 'boolean',
-        // (fix) Safe default is *off*. Auto-approving every modal without the
-        // user opting in produced silent-bash-execution surprises and the
-        // "Auto-approved: ..." system-message flood seen on AGY/Codex.
-        default: false,
-        public: true,
-        label: 'Auto Approve',
-        description: 'Automatically approve actionable prompts without sending approval alerts.',
-      };
-    }
-
-    if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executablePath) {
-      result.executablePath = {
-        type: 'string',
-        default: '',
-        public: true,
-        label: 'Executable path',
-        description: 'Optional absolute path for this provider binary. Leave blank to use the default PATH lookup.',
-      };
-    }
-
-    if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executableArgs) {
-      result.executableArgs = {
-        type: 'string',
-        default: '',
-        public: true,
-        label: 'Executable arguments',
-        description: 'Optional replacement for provider default command arguments. Leave blank to use the provider default.',
-      };
-    }
-
-    if (provider.category === 'ide') {
-      if (provider.cli && !provider.settings?.cliPathOverride) {
-        result.cliPathOverride = {
-          type: 'string',
-          default: '',
-          public: true,
-          label: 'CLI path override',
-          description: 'Optional absolute path for the IDE CLI launcher. Leave blank to use the detected default.',
-        };
-      }
-      if (provider.paths && !provider.settings?.appPathOverride) {
-        result.appPathOverride = {
-          type: 'string',
-          default: '',
-          public: true,
-          label: 'App path override',
-          description: 'Optional absolute path for the IDE app bundle or executable. Leave blank to use the default install locations.',
-        };
-      }
-    }
-
-    return result;
+    return getSyntheticSettings(type, provider);
   }
 
  // ─── Private ───────────────────────────────────
 
   /**
    * Find the on-disk directory for a provider by type.
-   * Canonical shape: root/category/type.
+   * Body lives in provider-loader-manifest-scan.ts.
    */
   private findProviderDirInternal(type: string): string | null {
-    const provider = this.providers.get(type);
-    if (!provider) return null;
-    const cat = provider.category;
-
-    const searchRoots = this.getProviderRoots();
-    const hasManifest = (dir: string) =>
-      fs.existsSync(path.join(dir, 'provider.v1.json')) || fs.existsSync(path.join(dir, 'provider.json'));
-    const readManifestType = (dir: string): string | null => {
-      for (const file of ['provider.v1.json', 'provider.json']) {
-        const p = path.join(dir, file);
-        if (!fs.existsSync(p)) continue;
-        try {
-          const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-          if (typeof data?.type === 'string') return data.type;
-        } catch { /* skip */ }
-      }
-      return null;
-    };
-    for (const root of searchRoots) {
-      if (!fs.existsSync(root)) continue;
-      const candidate = this.getProviderDir(root, cat, type);
-      if (hasManifest(candidate)) return candidate;
-      // Scan category dir for type match
-      const catDir = path.join(root, cat);
-      if (fs.existsSync(catDir)) {
-        try {
-          for (const entry of fs.readdirSync(catDir, { withFileTypes: true })) {
-            if (!entry.isDirectory()) continue;
-            const entryDir = path.join(catDir, entry.name);
-            const manifestType = readManifestType(entryDir);
-            if (manifestType === type) return entryDir;
-          }
-        } catch { /* skip */ }
-      }
-    }
-    return null;
+    return findProviderDirInternal(
+      {
+        providers: this.providers,
+        getProviderRoots: () => this.getProviderRoots(),
+        getProviderDir: (root, category, type_) => this.getProviderDir(root, category, type_),
+      },
+      type,
+    );
   }
 
   /**
    * Build a scripts function map from individual .js files in a directory.
-   * Each file is wrapped as: (params?) => fs.readFileSync(filePath, 'utf-8')
-   * (template substitution is NOT applied here — scripts.js handles that)
+   * Body lives in provider-loader-support.ts.
    */
   private buildScriptWrappersFromDir(dir: string): Partial<ProviderScripts> {
-    // Use a dedicated scripts.js in the alt dir if present
-    const scriptsJs = path.join(dir, 'scripts.js');
-    if (fs.existsSync(scriptsJs)) {
-      try {
-        delete require.cache[require.resolve(scriptsJs)];
-        return require(scriptsJs);
-      } catch { /* fall through to individual file loading */ }
-    }
-
-    // Individual files: list_models.js → scripts.listModels, etc.
-    const toCamel = (name: string) =>
-      name.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-
-    const result: Partial<ProviderScripts> = {};
-    try {
-      for (const file of fs.readdirSync(dir)) {
-        if (!file.endsWith('.js')) continue;
-        const scriptName = toCamel(file.replace('.js', ''));
-        const filePath = path.join(dir, file);
-        result[scriptName] = (...args: any[]): string => {
-          try {
-            let content = fs.readFileSync(filePath, 'utf-8');
-            if (args[0] && typeof args[0] === 'object') {
-              for (const [key, val] of Object.entries(args[0])) {
-                let v = val;
-                if (typeof v === 'string') {
-                  // If it doesn't start with a quote, user probably passed raw text
-                  if (!v.startsWith('"') && !v.startsWith("'") && !v.startsWith('`')) {
-                    v = JSON.stringify(v);
-                  }
-                } else {
-                  v = JSON.stringify(v);
-                }
-                const re = new RegExp(`\\$\\{\\s*${key}\\s*\\}`, 'g');
-                content = content.replace(re, String(v));
-              }
-            } else if (typeof args[0] === 'string') {
-              // Fallback for single-string arg passed as firstVal
-              const re = new RegExp(`\\$\\{\\s*MESSAGE\\s*\\}`, 'g');
-              let v = args[0];
-              if (!v.startsWith('"') && !v.startsWith("'") && !v.startsWith('`')) {
-                v = JSON.stringify(v);
-              }
-              content = content.replace(re, String(v));
-            } else if (args[0] !== undefined) {
-               // legacy fallback for single argument usually MESSAGE
-               let v = String(args[0]);
-               if (!v.startsWith('"') && !v.startsWith("'") && !v.startsWith('`')) {
-                   v = JSON.stringify(v);
-               }
-               content = content.replace(new RegExp(`\\$\\{\\s*MESSAGE\\s*\\}`, 'g'), v);
-            }
-            return content;
-          } catch { return ''; }
-        };
-      }
-    } catch { /* ignore */ }
-    return result;
+    return buildScriptWrappersFromDir(dir);
   }
 
  /**
-  * Recursively scan directory to load provider files
-  * Supports two formats:
-  *   1. provider.json (metadata) + scripts.js (optional CDP scripts)
-  *   2. provider.js (legacy — everything in one file)
-  * Structure: dir/category/agent-name/provider.{json,js}
+  * Recursively scan directory to load provider files.
+  * Body lives in provider-loader-manifest-scan.ts; this forwards the
+  * instance state the scanner needs.
   */
    private loadDir(dir: string, excludeDirs?: string[]): number {
-    if (!fs.existsSync(dir)) return 0;
-    let count = 0;
-
-    const scan = (d: string) => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(d, { withFileTypes: true });
-      } catch {
-        return;
-      }
-
-      // v1-first manifest selection. provider.v1.json (the SDK-shape
-      // manifest with `overrides`, `tui`, `source`, `canonicalHistory`)
-      // wins over provider.json (legacy). Without this branch the v1
-      // file is silently ignored — that's how the codex-cli `overrides`
-      // path and the tui-block builders went un-honored for the first
-      // pass of SDK rollout.
-      const hasV1 = entries.some(e => e.name === 'provider.v1.json');
-      const hasJson = entries.some(e => e.name === 'provider.json');
-
-      if (hasV1 || hasJson) {
-        const manifestFile = hasV1 ? 'provider.v1.json' : 'provider.json';
-        const jsonPath = path.join(d, manifestFile);
-        try {
-          const raw = fs.readFileSync(jsonPath, 'utf-8');
-          const mod = JSON.parse(raw) as Omit<ProviderModule, 'extensionIdPattern'> & {
-            extensionIdPattern?: RegExp | string;
-          };
-
-          // Validate v1 manifests against the SDK schema. Failures are
-          // surfaced as a single warning line with all issues attached
-          // so manifest authors don't need to guess which field is wrong.
-          // Loading still proceeds — bricking the daemon on a single
-          // bad field would be worse than running with a known warning.
-          if (hasV1 && (mod?.category === 'cli' || mod?.category === 'acp')) {
-            try {
-              const { validateCliProviderManifest, validateAcpProviderManifest, formatManifestValidationIssues } =
-                require('./sdk/v1/validators/manifest.js') as typeof import('./sdk/v1/validators/manifest.js');
-              const validation = mod.category === 'acp'
-                ? validateAcpProviderManifest(mod)
-                : validateCliProviderManifest(mod);
-              if (!validation.ok) {
-                this.log(`⚠ ${jsonPath}: schema validation failed:\n${formatManifestValidationIssues(validation.issues)}`);
-              }
-            } catch (e: any) {
-              // Validator load failed — log once and continue so a
-              // broken validator can't take down provider loading.
-              this.log(`⚠ ${jsonPath}: validator unavailable: ${e?.message || e}`);
-            }
-          }
-
-          // Restore RegExp fields from JSON (extensionIdPattern)
-          if (typeof mod.extensionIdPattern === 'string') {
-            const flags = mod.extensionIdPattern_flags || '';
-            mod.extensionIdPattern = new RegExp(mod.extensionIdPattern, flags);
-          }
-          const { extensionIdPattern_flags, extensionIdPattern, ...providerFields } = mod;
-          const normalizedProvider: ProviderModule = {
-            ...providerFields,
-            ...(extensionIdPattern instanceof RegExp ? { extensionIdPattern } : {}),
-          };
-
-          // v1 manifests use `nativeHistory` as the canonical field name.
-          // Legacy v0 manifests use `canonicalHistory`. The daemon's
-          // runtime + downstream code reads `provider.nativeHistory`, so
-          // for legacy manifests we copy `canonicalHistory` into
-          // `nativeHistory` here. We also keep `canonicalHistory`
-          // populated in both directions (deprecated alias) so any
-          // external consumers still reading the old name keep working
-          // during the one-release deprecation window.
-          const nh = (normalizedProvider as any).nativeHistory;
-          const ch = (normalizedProvider as any).canonicalHistory;
-          if (nh && !ch) {
-            (normalizedProvider as any).canonicalHistory = nh;
-          } else if (ch && !nh) {
-            (normalizedProvider as any).nativeHistory = ch;
-          }
-
-          const validation = validateProviderDefinition(normalizedProvider);
-          for (const warning of validation.warnings) {
-            this.log(`⚠ ${jsonPath}: ${warning}`);
-          }
-          if (validation.errors.length > 0) {
-            this.log(`⚠ Invalid provider at ${jsonPath}: ${validation.errors.join('; ')}`);
-          } else {
-            // Load scripts.js if exists (IDE/Extension)
-            // Skip for compatibility-format providers — scripts loaded lazily in resolve()
-            const hasCompatibility = Array.isArray(normalizedProvider.compatibility);
-            const scriptsPath = path.join(d, 'scripts.js');
-            if (!hasCompatibility && fs.existsSync(scriptsPath)) {
-              try {
-                // Gate the IDE/extension scripts.js (legacy single-file
-                // format) under the same whitelist. `d` here is the
-                // provider dir; its grandparent contains _shared.
-                registerProviderScriptRootSafely(path.dirname(path.dirname(d)));
-                delete require.cache[require.resolve(scriptsPath)];
-                const scripts = require(scriptsPath) as Partial<ProviderScripts>;
-                normalizedProvider.scripts = scripts;
-              } catch (e) {
-                this.log(`⚠ Failed to load scripts: ${scriptsPath}: ${(e as Error).message}`);
-              }
-            }
-
-            // Classify trust based on which on-disk layer this manifest
-            // came from + whether it ships JavaScript hooks. The dashboard
-            // uses this to render trust badges; non-spec external manifests
-            // need an explicit user confirm before activation.
-            const externalDirAbs = path.join(getConfigDir(), 'external');
-            // The verified channel store (<configDir>/providers/.store/…)
-            // lives under the default user dir but is verified upstream
-            // content, not a user override — exclude it explicitly.
-            const isChannelStoreObject = d.includes(`${path.sep}.store${path.sep}`);
-            const layer: 'user' | 'upstream' | 'external' = d.startsWith(externalDirAbs)
-              ? 'external'
-              : (d.startsWith(this.userDir) && !d.includes('.upstream') && !isChannelStoreObject ? 'user' : 'upstream');
-            try {
-              const { inspectManifestShape, classifyTrust } =
-                require('./provider-trust.js') as typeof import('./provider-trust.js');
-              const shape = inspectManifestShape(mod as Record<string, unknown>);
-              const trust = classifyTrust(layer, shape);
-              (normalizedProvider as any)._sourceLayer = layer;
-              (normalizedProvider as any)._sourceTrust = trust;
-              (normalizedProvider as any)._manifestShape = shape;
-              // For external-namespaced layouts (external/<source>/…) record
-              // which source the manifest came from so dashboards can name
-              // it in the trust badge.
-              if (layer === 'external') {
-                const rel = path.relative(externalDirAbs, d);
-                const firstSeg = rel.split(path.sep)[0];
-                if (firstSeg && firstSeg !== '..') (normalizedProvider as any)._sourceName = firstSeg;
-              }
-            } catch { /* best-effort — trust is enrichment, not gating */ }
-
-            const existed = this.providers.has(normalizedProvider.type);
-            this.providers.set(normalizedProvider.type, normalizedProvider);
-            count++;
-            const source = (normalizedProvider as any)._sourceLayer ?? 'upstream';
-            const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES upstream' : '';
-            const sourceName = (normalizedProvider as any)._sourceName;
-            // Say WHERE the manifest was actually read from, not just which
-            // precedence slot it occupies. A content-addressed store object
-            // takes the `upstream` TRUST layer (deliberately — see the layer
-            // derivation above, which must not change), but logging it as
-            // `[upstream]` reads as "~/.adhdev/providers/.upstream", and the
-            // store load runs AFTER and overwrites that directory's entries.
-            // Two separate misdiagnoses came from trusting that label while
-            // the daemon was really running a pinned store object of a
-            // different version, so name the store and pin the version.
-            const pinnedVersion = (normalizedProvider as any).providerVersion;
-            const sourceLabel = isChannelStoreObject
-              ? `channel-store:${this.channel}${pinnedVersion ? ` v${pinnedVersion}` : ''}`
-              : (sourceName ? `${source}/${sourceName}` : source);
-            this.log(`  ${existed ? '🔄' : '✅'} ${normalizedProvider.type} (${normalizedProvider.category}) — ${normalizedProvider.name} [${sourceLabel}]${overrideWarning}`);
-          }
-        } catch (e) {
-          this.log(`⚠ Failed to load ${jsonPath}: ${(e as Error).message}`);
-        }
-      }
-
-      // Continue scanning subdirectories (only for dirs without provider.json)
-      if (!hasJson) {
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
-          // `examples/` is a documentation / scaffold tree (e.g. stub-cli),
-          // not a real provider source. SDK authors copy from here when
-          // writing a new provider; daemon-core tests reference the
-          // manifest by path. Keep it off the dashboard's provider list.
-          if (d === dir && entry.name === 'examples') continue;
-          if (excludeDirs && d === dir && excludeDirs.includes(entry.name)) continue;
-          scan(path.join(d, entry.name));
-        }
-      }
-    };
-
-    scan(dir);
-    return count;
+    return loadProviderDir(
+      { log: (m) => this.log(m), userDir: this.userDir, providers: this.providers, channel: this.channel },
+      dir,
+      excludeDirs,
+    );
   }
 
  /**
- * Simple semver range matching
- * Supported formats: '>=4.0.0', '<3.0.0', '>=2.1.0'
+ * Simple semver range matching — delegates to the extracted pure helper.
+ * Kept as a private method so existing call sites are untouched.
  */
   private matchesVersion(current: string, range: string): boolean {
-    const match = range.match(/^([><=!]+)\s*(\d+\.\d+\.\d+)$/);
-    if (!match) return false;
-
-    const [, op, target] = match;
-    const cmp = this.compareVersions(current, target);
-
-    switch (op) {
-      case '>=': return cmp >= 0;
-      case '>': return cmp > 0;
-      case '<=': return cmp <= 0;
-      case '<': return cmp < 0;
-      case '=':
-      case '==': return cmp === 0;
-      case '!=': return cmp !== 0;
-      default: return false;
-    }
-  }
-
-  private compareVersions(a: string, b: string): number {
-    const normalize = (v: string) => v.split(/[-_+]/)[0].split('.').map(x => parseInt(x, 10) || 0);
-    const pa = normalize(a);
-    const pb = normalize(b);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const va = pa[i] || 0;
-      const vb = pb[i] || 0;
-      if (va !== vb) return va - vb;
-    }
-    return 0;
+    return matchesVersion(current, range);
   }
 }
