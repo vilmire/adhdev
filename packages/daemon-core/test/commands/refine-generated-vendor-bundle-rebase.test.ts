@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -145,27 +145,63 @@ describe('generated vendor bundle path policy', () => {
    * would be auto-resolved and never checked for staleness.
    */
   it('lists exactly the vendor dirs the drift gates verify', () => {
-    const repoRoot = join(__dirname, '..', '..', '..', '..', '..')
+    // ★This package is built in TWO checkout shapes and the gate must hold in both.
+    //
+    //   - nested (proprietary `adhdev-cloud`): this file sits at
+    //     `<root>/oss/packages/daemon-core/test/commands/`, so BOTH drift scripts
+    //     exist — `<root>/scripts/…` and `<root>/oss/scripts/…`.
+    //   - standalone (public `vilmire/adhdev`, which is what oss CI checks out):
+    //     `oss/` IS the root, so only `<ossRoot>/scripts/…` exists. There is no
+    //     proprietary root above it, and walking up five levels leaves the
+    //     checkout entirely.
+    //
+    // The old five-level walk-up assumed the nested shape unconditionally, so oss
+    // CI died on `ENOENT /home/runner/work/adhdev/scripts/check-vendor-drift.mjs`
+    // while the same test passed locally (measured 2026-09-18). That is the
+    // "OSS tests must not read proprietary sources" class: the ROOT script is
+    // cloud-only (its three entries are all `packages/daemon-cloud/vendor/…`) and
+    // is legitimately absent from the public repo.
+    const ossRoot = join(__dirname, '..', '..', '..', '..')
+    const cloudRoot = join(ossRoot, '..')
+
     const readVendorPaths = (script: string): string[] => {
-      const src = readFileSync(join(repoRoot, script), 'utf-8')
+      const src = readFileSync(script, 'utf-8')
       const block = /const VENDOR_PATHS = \[([\s\S]*?)\]/.exec(src)
       expect(block, `VENDOR_PATHS not found in ${script}`).toBeTruthy()
       return [...block![1].matchAll(/'([^']+)'/g)].map(m => m[1])
     }
-    const rootVerified = readVendorPaths('scripts/check-vendor-drift.mjs')
-    const ossVerified = readVendorPaths('oss/scripts/check-vendor-drift.mjs')
 
-    // 3 root copies + 2 oss copies, each oss one in both spellings = 7 entries.
-    expect(rootVerified.length).toBe(3)
+    // The oss-side gate is present in BOTH shapes, so it is always asserted.
+    const ossVerified = readVendorPaths(join(ossRoot, 'scripts', 'check-vendor-drift.mjs'))
     expect(ossVerified.length).toBe(2)
-    expect(REFINE_GENERATED_VENDOR_BUNDLE_PATHS.length).toBe(rootVerified.length + ossVerified.length * 2)
-
-    // Every verified path is covered, in the spelling(s) the Refinery can see.
-    for (const p of rootVerified) expect(isRefineGeneratedVendorBundlePath(`${p}/index.js`)).toBe(true)
     for (const p of ossVerified) {
       expect(isRefineGeneratedVendorBundlePath(`${p}/index.js`)).toBe(true)
       expect(isRefineGeneratedVendorBundlePath(`oss/${p}/index.js`)).toBe(true)
     }
+
+    // The root-side gate exists only in the nested checkout. When it is there the
+    // FULL count is still asserted exactly — nothing is relaxed in the shape that
+    // can check it; the standalone shape simply has nothing to read.
+    // The list still has to account for EVERY entry in both shapes, so split it on
+    // the one thing that identifies a cloud entry without reading the cloud repo:
+    // its `packages/daemon-cloud/` prefix. The counts below stay exact — the
+    // standalone shape loses the ability to cross-check the cloud entries against
+    // the real script, not the ability to count them.
+    const cloudEntries = REFINE_GENERATED_VENDOR_BUNDLE_PATHS.filter(p => p.startsWith('packages/daemon-cloud/'))
+    const ossEntries = REFINE_GENERATED_VENDOR_BUNDLE_PATHS.filter(p => !p.startsWith('packages/daemon-cloud/'))
+    // 3 cloud copies + 2 oss copies in both spellings = 7 entries, in either shape.
+    expect(cloudEntries.length).toBe(3)
+    expect(ossEntries.length).toBe(ossVerified.length * 2)
+    expect(REFINE_GENERATED_VENDOR_BUNDLE_PATHS.length).toBe(cloudEntries.length + ossVerified.length * 2)
+
+    const rootScript = join(cloudRoot, 'scripts', 'check-vendor-drift.mjs')
+    if (!existsSync(rootScript)) return // standalone: the cloud gate is not in this repo to read
+
+    // Nested only: cross-check the cloud entries against the gate that verifies them.
+    const rootVerified = readVendorPaths(rootScript)
+    expect(rootVerified.length).toBe(cloudEntries.length)
+    expect([...rootVerified].sort()).toEqual([...cloudEntries].sort())
+    for (const p of rootVerified) expect(isRefineGeneratedVendorBundlePath(`${p}/index.js`)).toBe(true)
   })
 })
 
