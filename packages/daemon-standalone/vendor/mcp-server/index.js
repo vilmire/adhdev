@@ -66403,205 +66403,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         REDRIVE_SUPERSEDE_WINDOW_MS = 5 * 6e4;
       }
     });
-    function migrateMeshGraphSchema(db) {
-      db.exec(`
-        -- design :103-120 \u2014 one row per accepted graph. UNIQUE(mesh_id, batch_id)
-        -- makes client retries idempotent: a repeated request with the same
-        -- normalized-plan digest returns the existing graph; the same key with a
-        -- different digest fails with batch_id_conflict (enforced in phase E).
-        CREATE TABLE IF NOT EXISTS mesh_task_graphs (
-            graph_id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            batch_id TEXT NOT NULL,
-            mission_id TEXT,
-            source_coordinator_session_id TEXT,
-            enqueue_surface TEXT NOT NULL,
-            schema_version INTEGER NOT NULL DEFAULT 2,
-            status TEXT NOT NULL DEFAULT 'preparing',
-            task_count INTEGER NOT NULL DEFAULT 0,
-            gate_count INTEGER NOT NULL DEFAULT 0,
-            workspace_count INTEGER NOT NULL DEFAULT 0,
-            dependency_edge_count INTEGER NOT NULL DEFAULT 0,
-            plan_digest TEXT,
-            policy_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            activated_at TEXT,
-            terminal_at TEXT,
-            updated_at TEXT NOT NULL,
-            UNIQUE (mesh_id, batch_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graphs_mesh_status
-            ON mesh_task_graphs(mesh_id, status);
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graphs_mission
-            ON mesh_task_graphs(mesh_id, mission_id);
-
-        -- design :122-137 \u2014 persistent node identity; the batch-local ref is
-        -- RETAINED here (unlike legacy batches) and included in every graph
-        -- event. queue_task_id is preallocated for worker nodes, NULL for gates.
-        CREATE TABLE IF NOT EXISTS mesh_task_graph_nodes (
-            graph_id TEXT NOT NULL,
-            node_id TEXT NOT NULL,
-            mesh_id TEXT NOT NULL,
-            ref TEXT,
-            kind TEXT NOT NULL,
-            queue_task_id TEXT,
-            state TEXT NOT NULL DEFAULT 'declared',
-            base_spec_json TEXT NOT NULL DEFAULT '{}',
-            materialization_version INTEGER NOT NULL DEFAULT 0,
-            materialized_digest TEXT,
-            skip_reason TEXT,
-            failure_reason TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            state_changed_at TEXT,
-            PRIMARY KEY (graph_id, node_id),
-            UNIQUE (graph_id, ref)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_nodes_mesh
-            ON mesh_task_graph_nodes(mesh_id, state);
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_nodes_queue_task
-            ON mesh_task_graph_nodes(queue_task_id);
-
-        -- design :139-143 \u2014 the full DAG. The queue row's dependsOn is only the
-        -- execution projection of active worker-to-worker edges; this table is
-        -- the superset the projection is derived from.
-        CREATE TABLE IF NOT EXISTS mesh_task_graph_edges (
-            graph_id TEXT NOT NULL,
-            mesh_id TEXT NOT NULL,
-            from_node_id TEXT NOT NULL,
-            to_node_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            condition_json TEXT,
-            omit_on_skip INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (graph_id, from_node_id, to_node_id, kind)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_edges_to
-            ON mesh_task_graph_edges(graph_id, to_node_id);
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_edges_mesh
-            ON mesh_task_graph_edges(mesh_id);
-
-        -- design :145-171 \u2014 one immutable, versioned completion envelope per
-        -- successful task attempt. Later side-effect evidence is a NEW version
-        -- (PRIMARY KEY(task_id, version)), never an in-place mutation.
-        CREATE TABLE IF NOT EXISTS mesh_task_outputs (
-            task_id TEXT NOT NULL,
-            version INTEGER NOT NULL,
-            mesh_id TEXT NOT NULL,
-            graph_id TEXT,
-            node_id TEXT,
-            attempt INTEGER NOT NULL DEFAULT 1,
-            status TEXT NOT NULL,
-            envelope_json TEXT NOT NULL,
-            digest TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (task_id, version)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_outputs_mesh
-            ON mesh_task_outputs(mesh_id);
-        CREATE INDEX IF NOT EXISTS idx_mesh_task_outputs_graph_node
-            ON mesh_task_outputs(graph_id, node_id);
-
-        -- design :173-177 + gate contract :373-439 \u2014 persistent, leased
-        -- coordinator gates. lease_generation is monotonically increasing; the
-        -- fencing token makes a stale claimant's release rejectable. There is
-        -- no auto-release path: on_timeout \u2208 {hold, cancel_downstream, fail_graph}.
-        CREATE TABLE IF NOT EXISTS mesh_graph_gates (
-            gate_id TEXT PRIMARY KEY,
-            graph_id TEXT NOT NULL,
-            node_id TEXT NOT NULL,
-            mesh_id TEXT NOT NULL,
-            ref TEXT,
-            state TEXT NOT NULL DEFAULT 'declared',
-            action TEXT NOT NULL,
-            instructions TEXT,
-            eligible_coordinator_session_id TEXT,
-            lease_owner_session_id TEXT,
-            lease_generation INTEGER NOT NULL DEFAULT 0,
-            fencing_token TEXT,
-            lease_expires_at TEXT,
-            deadline_at TEXT,
-            on_timeout TEXT NOT NULL DEFAULT 'hold',
-            release_outcome TEXT,
-            release_evidence_json TEXT,
-            release_evidence_digest TEXT,
-            release_idempotency_key TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_gates_graph
-            ON mesh_graph_gates(graph_id);
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_gates_mesh_state
-            ON mesh_graph_gates(mesh_id, state);
-
-        -- design :179-183 + workspace saga :441-511 \u2014 the graph (not a
-        -- coordinator transcript) owns prepared workspaces. Compensation is an
-        -- idempotent saga with owned-resource checks; never claimed to be
-        -- atomic with git/filesystem side effects.
-        CREATE TABLE IF NOT EXISTS mesh_graph_workspace_intents (
-            graph_id TEXT NOT NULL,
-            workspace_ref TEXT NOT NULL,
-            mesh_id TEXT NOT NULL,
-            source_node_id TEXT,
-            base_revision TEXT,
-            branch_identity TEXT,
-            desired_path TEXT,
-            saga_state TEXT NOT NULL DEFAULT 'declared',
-            owner_tag TEXT,
-            lease_owner TEXT,
-            lease_generation INTEGER NOT NULL DEFAULT 0,
-            fencing_token TEXT,
-            lease_expires_at TEXT,
-            created_node_id TEXT,
-            created_worktree_path TEXT,
-            cleanup_on_graph_failure INTEGER NOT NULL DEFAULT 0,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (graph_id, workspace_ref)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_workspace_intents_mesh
-            ON mesh_graph_workspace_intents(mesh_id, saga_state);
-
-        -- design :185-190 \u2014 transactional outbox. Graph notifications and queue
-        -- wakeups are inserted in the SAME SQLite transaction as the state
-        -- change; the daemon drains them after commit. This prevents "state
-        -- committed but coordinator never notified" and "queue woken before
-        -- materialization committed" races.
-        CREATE TABLE IF NOT EXISTS mesh_graph_outbox (
-            id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            graph_id TEXT,
-            kind TEXT NOT NULL,
-            payload TEXT NOT NULL DEFAULT '{}',
-            status TEXT NOT NULL DEFAULT 'pending',
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at_ms INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_due
-            ON mesh_graph_outbox(status, next_attempt_at_ms);
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_mesh
-            ON mesh_graph_outbox(mesh_id, status);
-        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_graph
-            ON mesh_graph_outbox(graph_id, status);
-    `);
-      migrateLegacyDependencyFailedQueueBlocks(db);
-    }
-    var init_mesh_graph_schema = __esm2({
-      "src/mesh/mesh-graph-schema.ts"() {
-        "use strict";
-        init_mesh_graph_derived_failure();
-      }
-    });
     function mapGraphRow(r) {
       return {
         graphId: r.graph_id,
@@ -70795,6 +70596,1100 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_runtime_store_turn_rows();
       }
     });
+    function migrateMeshGraphSchema(db) {
+      db.exec(`
+        -- design :103-120 \u2014 one row per accepted graph. UNIQUE(mesh_id, batch_id)
+        -- makes client retries idempotent: a repeated request with the same
+        -- normalized-plan digest returns the existing graph; the same key with a
+        -- different digest fails with batch_id_conflict (enforced in phase E).
+        CREATE TABLE IF NOT EXISTS mesh_task_graphs (
+            graph_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            batch_id TEXT NOT NULL,
+            mission_id TEXT,
+            source_coordinator_session_id TEXT,
+            enqueue_surface TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 2,
+            status TEXT NOT NULL DEFAULT 'preparing',
+            task_count INTEGER NOT NULL DEFAULT 0,
+            gate_count INTEGER NOT NULL DEFAULT 0,
+            workspace_count INTEGER NOT NULL DEFAULT 0,
+            dependency_edge_count INTEGER NOT NULL DEFAULT 0,
+            plan_digest TEXT,
+            policy_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            activated_at TEXT,
+            terminal_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE (mesh_id, batch_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graphs_mesh_status
+            ON mesh_task_graphs(mesh_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graphs_mission
+            ON mesh_task_graphs(mesh_id, mission_id);
+
+        -- design :122-137 \u2014 persistent node identity; the batch-local ref is
+        -- RETAINED here (unlike legacy batches) and included in every graph
+        -- event. queue_task_id is preallocated for worker nodes, NULL for gates.
+        CREATE TABLE IF NOT EXISTS mesh_task_graph_nodes (
+            graph_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            ref TEXT,
+            kind TEXT NOT NULL,
+            queue_task_id TEXT,
+            state TEXT NOT NULL DEFAULT 'declared',
+            base_spec_json TEXT NOT NULL DEFAULT '{}',
+            materialization_version INTEGER NOT NULL DEFAULT 0,
+            materialized_digest TEXT,
+            skip_reason TEXT,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            state_changed_at TEXT,
+            PRIMARY KEY (graph_id, node_id),
+            UNIQUE (graph_id, ref)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_nodes_mesh
+            ON mesh_task_graph_nodes(mesh_id, state);
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_nodes_queue_task
+            ON mesh_task_graph_nodes(queue_task_id);
+
+        -- design :139-143 \u2014 the full DAG. The queue row's dependsOn is only the
+        -- execution projection of active worker-to-worker edges; this table is
+        -- the superset the projection is derived from.
+        CREATE TABLE IF NOT EXISTS mesh_task_graph_edges (
+            graph_id TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            from_node_id TEXT NOT NULL,
+            to_node_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            condition_json TEXT,
+            omit_on_skip INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (graph_id, from_node_id, to_node_id, kind)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_edges_to
+            ON mesh_task_graph_edges(graph_id, to_node_id);
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_graph_edges_mesh
+            ON mesh_task_graph_edges(mesh_id);
+
+        -- design :145-171 \u2014 one immutable, versioned completion envelope per
+        -- successful task attempt. Later side-effect evidence is a NEW version
+        -- (PRIMARY KEY(task_id, version)), never an in-place mutation.
+        CREATE TABLE IF NOT EXISTS mesh_task_outputs (
+            task_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            mesh_id TEXT NOT NULL,
+            graph_id TEXT,
+            node_id TEXT,
+            attempt INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL,
+            envelope_json TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (task_id, version)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_outputs_mesh
+            ON mesh_task_outputs(mesh_id);
+        CREATE INDEX IF NOT EXISTS idx_mesh_task_outputs_graph_node
+            ON mesh_task_outputs(graph_id, node_id);
+
+        -- design :173-177 + gate contract :373-439 \u2014 persistent, leased
+        -- coordinator gates. lease_generation is monotonically increasing; the
+        -- fencing token makes a stale claimant's release rejectable. There is
+        -- no auto-release path: on_timeout \u2208 {hold, cancel_downstream, fail_graph}.
+        CREATE TABLE IF NOT EXISTS mesh_graph_gates (
+            gate_id TEXT PRIMARY KEY,
+            graph_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            ref TEXT,
+            state TEXT NOT NULL DEFAULT 'declared',
+            action TEXT NOT NULL,
+            instructions TEXT,
+            eligible_coordinator_session_id TEXT,
+            lease_owner_session_id TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0,
+            fencing_token TEXT,
+            lease_expires_at TEXT,
+            deadline_at TEXT,
+            on_timeout TEXT NOT NULL DEFAULT 'hold',
+            release_outcome TEXT,
+            release_evidence_json TEXT,
+            release_evidence_digest TEXT,
+            release_idempotency_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_gates_graph
+            ON mesh_graph_gates(graph_id);
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_gates_mesh_state
+            ON mesh_graph_gates(mesh_id, state);
+
+        -- design :179-183 + workspace saga :441-511 \u2014 the graph (not a
+        -- coordinator transcript) owns prepared workspaces. Compensation is an
+        -- idempotent saga with owned-resource checks; never claimed to be
+        -- atomic with git/filesystem side effects.
+        CREATE TABLE IF NOT EXISTS mesh_graph_workspace_intents (
+            graph_id TEXT NOT NULL,
+            workspace_ref TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            source_node_id TEXT,
+            base_revision TEXT,
+            branch_identity TEXT,
+            desired_path TEXT,
+            saga_state TEXT NOT NULL DEFAULT 'declared',
+            owner_tag TEXT,
+            lease_owner TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0,
+            fencing_token TEXT,
+            lease_expires_at TEXT,
+            created_node_id TEXT,
+            created_worktree_path TEXT,
+            cleanup_on_graph_failure INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (graph_id, workspace_ref)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_workspace_intents_mesh
+            ON mesh_graph_workspace_intents(mesh_id, saga_state);
+
+        -- design :185-190 \u2014 transactional outbox. Graph notifications and queue
+        -- wakeups are inserted in the SAME SQLite transaction as the state
+        -- change; the daemon drains them after commit. This prevents "state
+        -- committed but coordinator never notified" and "queue woken before
+        -- materialization committed" races.
+        CREATE TABLE IF NOT EXISTS mesh_graph_outbox (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            graph_id TEXT,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at_ms INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_due
+            ON mesh_graph_outbox(status, next_attempt_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_mesh
+            ON mesh_graph_outbox(mesh_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mesh_graph_outbox_graph
+            ON mesh_graph_outbox(graph_id, status);
+    `);
+      migrateLegacyDependencyFailedQueueBlocks(db);
+    }
+    var init_mesh_graph_schema = __esm2({
+      "src/mesh/mesh-graph-schema.ts"() {
+        "use strict";
+        init_mesh_graph_derived_failure();
+      }
+    });
+    function hasLoggedMigrationFailure() {
+      return loggedMigrationFailureFlag;
+    }
+    function markLoggedMigrationFailure() {
+      loggedMigrationFailureFlag = true;
+    }
+    function migrate(self) {
+      self.db.exec(`
+        CREATE TABLE IF NOT EXISTS mesh_queue (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            target_node_id TEXT,
+            target_session_id TEXT,
+            assigned_node_id TEXT,
+            assigned_session_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_queue_mesh_status_created
+            ON mesh_queue(mesh_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
+            ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
+
+        -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
+        -- also carries meshId as its first '::'-joined segment (see
+        -- buildMeshCompletionFingerprint) \u2014 that string-prefix defense is kept; this
+        -- column makes cross-mesh suppression impossible even if the string format
+        -- drifts or two meshes ever collide on a fingerprint body.
+        CREATE TABLE IF NOT EXISTS mesh_completion_fingerprints (
+            fingerprint TEXT PRIMARY KEY,
+            expires_at INTEGER NOT NULL,
+            mesh_id TEXT NOT NULL DEFAULT ''
+        );
+        -- NOTE: the (mesh_id, fingerprint) index is created in migrateMeshIsolationColumns,
+        -- NOT here. A pre-isolation DB still has the legacy table (CREATE IF NOT EXISTS is a
+        -- no-op), so referencing mesh_id in an index before the ALTER ADD COLUMN runs would
+        -- fail with "no such column". The migration adds the column then the index.
+
+        CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
+            task_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            node_id TEXT,
+            session_id TEXT,
+            provider_type TEXT,
+            message TEXT NOT NULL,
+            -- MESH-IMAGE-DISPATCH: serialized multipart input envelope (JSON) that
+            -- accompanied the message, or NULL for an ordinary text-only dispatch.
+            -- Nullable and additive so pre-existing rows read back exactly as before.
+            input TEXT,
+            task_mode TEXT,
+            via TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'dispatched',
+            dispatched_to_idle_session INTEGER NOT NULL DEFAULT 0,
+            dispatched_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
+            ON mesh_direct_dispatches(mesh_id, session_id, status);
+
+        -- MESH-ISOLATION-LEAK: mesh_id is part of the PK so a nodeId shared across two
+        -- meshes (same machine in multiple repos) keeps a separate idle-session row per
+        -- mesh, and getRemoteIdleSessions(meshId) can never surface another mesh's
+        -- session for a queue claim.
+        CREATE TABLE IF NOT EXISTS remote_idle_sessions (
+            mesh_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            provider_type TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            metadata TEXT,
+            PRIMARY KEY (mesh_id, node_id, session_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS mesh_session_delivery (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            node_id TEXT,
+            session_id TEXT,
+            provider_type TEXT,
+            task_id TEXT,
+            kind TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL,
+            -- MESH-IMAGE-DISPATCH: see mesh_direct_dispatches.input \u2014 same nullable
+            -- serialized multipart envelope, so a queued delivery can carry an
+            -- attachment through to the moment the session goes idle.
+            input TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            deliver_after TEXT,
+            expires_at TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            source_coordinator_session_id TEXT,
+            source_coordinator_daemon_id TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_mesh_status
+            ON mesh_session_delivery(mesh_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_session
+            ON mesh_session_delivery(mesh_id, session_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
+            ON mesh_session_delivery(mesh_id, task_id);
+
+        -- MESH-COMPLEXITY-AUDIT Part 8-2: mesh_completion_conflicts removed
+        -- (write-only fingerprint-collision diagnostic, no production reader,
+        -- no no-loss role). Dropped in migrateMeshIsolationColumns step 6.
+
+        CREATE TABLE IF NOT EXISTS mesh_tool_call_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mesh_id TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            session_id TEXT,
+            caller_role TEXT,
+            called_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
+            ON mesh_tool_call_log(mesh_id, tool, called_at);
+
+        -- G2: Event ledger \u2014 runtime source of truth for task/session lifecycle events.
+        -- JSONL files are retained as export/import/debug/legacy artifacts only.
+        CREATE TABLE IF NOT EXISTS mesh_event_ledger (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            node_id TEXT,
+            session_id TEXT,
+            provider_type TEXT,
+            -- LEDGER-TASK-TRACEABILITY (B): the task a lifecycle entry pertains to,
+            -- promoted from payload.taskId so kind+task_id joins are index-backed
+            -- (legacy DBs get this column via migrateMeshIsolationColumns' ALTER).
+            task_id TEXT,
+            payload TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_time
+            ON mesh_event_ledger(mesh_id, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_kind
+            ON mesh_event_ledger(mesh_id, kind, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
+            ON mesh_event_ledger(mesh_id, session_id, timestamp);
+
+        -- G3: Pending coordinator event inbox \u2014 replaces <meshId>.pending-events.jsonl.
+        -- Coordinator drains this table on get_pending_mesh_events, then deletes drained rows.
+        CREATE TABLE IF NOT EXISTS mesh_pending_events (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            coordinator_daemon_id TEXT,
+            event TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            fingerprint TEXT,
+            queued_at INTEGER NOT NULL,
+            drained INTEGER NOT NULL DEFAULT 0,
+            drained_at INTEGER,
+            -- v2 protocol envelope (B2a). All nullable so pre-v2 rows and events
+            -- emitted before a coordinator identity is known coexist as v1. The
+            -- authoritative copy of each also rides inside the payload column; these
+            -- columns exist for queryable idempotency (event_id) and scope-based drain
+            -- filtering without JSON-parsing every row. dispatched_by / intended_for
+            -- hold the JSON-serialized CoordinatorIdentity.
+            protocol_version TEXT,
+            event_id TEXT,
+            scope TEXT,
+            dispatched_by TEXT,
+            intended_for TEXT,
+            -- REFINE-EVENT-SESSION-SCOPED-UNICAST: WHO consumed this row. The ledger
+            -- previously recorded only THAT an event was drained, never by which
+            -- coordinator identity \u2014 so a mis-delivered unicast (a sibling session
+            -- consuming another coordinator's event) left no evidence and had to be
+            -- inferred. Written at drain time as the JSON-serialized drainer
+            -- CoordinatorIdentity. NULL on rows drained before this column existed
+            -- and on any drain whose caller passed no identity (daemon-level drain).
+            drained_by TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
+            ON mesh_pending_events(mesh_id, drained, queued_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
+            ON mesh_pending_events(mesh_id, fingerprint)
+            WHERE fingerprint IS NOT NULL;
+
+        -- M3: persistent mission records. Plans live in the system, not in the
+        -- coordinator LLM's context. Progress is derived from task statuses at
+        -- query time (mission_id on queue tasks) \u2014 never stored here.
+        CREATE TABLE IF NOT EXISTS mesh_missions (
+            id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            goal TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            source TEXT,
+            -- G3: idempotency marker for the mission_close_candidate coordinator
+            -- event. Set to the emit timestamp when all of a mission's tasks first
+            -- become terminal (so the "consider closing this" nudge fires exactly
+            -- once per all-terminal edge), and cleared back to NULL when the mission
+            -- returns to a non-terminal state (new/re-opened task) so a later
+            -- re-completion can nudge again. Never drives a status transition \u2014 the
+            -- coordinator/human still decides via mesh_mission_upsert.
+            close_candidate_emitted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
+            ON mesh_missions(mesh_id, status, updated_at);
+
+        -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
+        -- the schedulingStrategy spreads work ('fitness' with no task in scope),
+        -- eligible nodes tied at the same (priority, load) are rotated by this
+        -- cursor so the tie-break winner cycles across scheduling passes instead
+        -- of always favouring the same array-order node. Persisted (not a module
+        -- Map) so rotation survives daemon restarts and stays a single source of
+        -- truth across scheduling entry points.
+        CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
+            mesh_id TEXT PRIMARY KEY,
+            cursor INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- T2 (B2b): persistent acked-hold state for in-flight direct dispatches.
+        -- The reconcile loop's PHASE-4 acked-hold (death-consequence counter,
+        -- fast-track idle streak, live-confirmed flag) used to live only in a
+        -- process-local Map (mesh-reconcile-loop.ts inFlightAckedHoldState), so a
+        -- daemon restart lost it \u2014 re-opening the door to the duplicate-emit / drop
+        -- window that the PHASE-4 transcript synth backstop then had to correct after
+        -- the fact. Persisting it lets the state survive a restart: the loop
+        -- rehydrates the Map from this table on first touch and stays read-through /
+        -- write-through against it thereafter. Keyed by task_id (one hold per
+        -- in-flight dispatch); mesh_id is carried for per-mesh listing / prune.
+        --   hold_reason         \u2014 'live' once a conclusive read confirmed the session
+        --                         reachable since the ack, else 'unconfirmed' (drives
+        --                         the death-backstop's liveConfirmedSinceAck gate).
+        --   held_at             \u2014 ms epoch the hold row was first created.
+        --   first_idle_since_ack \u2014 ms epoch of the FIRST tick in the current continuous
+        --                         idle-with-final-assistant run (fast-track streak); NULL
+        --                         when the streak is broken / not yet started.
+        --   read_failure_count  \u2014 consecutive read_chat failures since the last
+        --                         conclusive read (death backstop (a)).
+        CREATE TABLE IF NOT EXISTS mesh_inflight_hold (
+            task_id TEXT PRIMARY KEY,
+            mesh_id TEXT,
+            hold_reason TEXT,
+            held_at INTEGER,
+            first_idle_since_ack INTEGER,
+            read_failure_count INTEGER,
+            updated_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
+            ON mesh_inflight_hold(mesh_id);
+
+        -- TURN-LEDGER (Stage 5): the authoritative causal turn transaction per task
+        -- ATTEMPT. One row per (mesh_id, task_id, attempt_seq); attempt_seq is the
+        -- dispatch nonce the attempt was opened under (monotonic per task), so a
+        -- reclaim/re-dispatch opens a NEW attempt row while late events against the
+        -- old attempt are rejected by identity, never applied. The stage column is a
+        -- monotonic causal FSM (accepted \u2192 delivered \u2192 consumed \u2192 generating \u2192
+        -- [waiting_approval|waiting_choice] \u2192 finalizing \u2192 terminal); terminal_outcome
+        -- is committed at most once via a conditional UPDATE (exactly-once logical
+        -- completion). JSONL/ledger tables remain audit/export only \u2014 THIS table is
+        -- the single mutable source of truth for turn state.
+        CREATE TABLE IF NOT EXISTS mesh_turn_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            attempt_seq INTEGER NOT NULL,
+            node_id TEXT,
+            session_id TEXT,
+            provider_type TEXT,
+            coordinator_daemon_id TEXT,
+            coordinator_session_id TEXT,
+            dispatch_nonce INTEGER,
+            stage TEXT NOT NULL DEFAULT 'accepted',
+            redrive_count INTEGER NOT NULL DEFAULT 0,
+            lease_deadline_ms INTEGER,
+            accepted_at TEXT,
+            delivered_at TEXT,
+            consumed_at TEXT,
+            terminal_outcome TEXT,
+            terminal_reason TEXT,
+            terminal_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (mesh_id, task_id, attempt_seq)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_task
+            ON mesh_turn_attempts(mesh_id, task_id, attempt_seq);
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_session
+            ON mesh_turn_attempts(mesh_id, session_id);
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_stage
+            ON mesh_turn_attempts(mesh_id, stage);
+
+        -- TURN-LEDGER (Stage 5): append-only, idempotency-keyed causal event log per
+        -- attempt. UNIQUE(attempt_id, kind, dedupe_key) makes repeated/reordered ACKs
+        -- and duplicate completion proposals insert-once (INSERT OR IGNORE \u2192 the
+        -- reducer reads the existing row and treats the re-arrival as a duplicate).
+        CREATE TABLE IF NOT EXISTS mesh_turn_events (
+            event_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL DEFAULT '{}',
+            occurred_at_ms INTEGER,
+            recorded_at TEXT NOT NULL,
+            UNIQUE (attempt_id, kind, dedupe_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
+            ON mesh_turn_events(mesh_id, task_id, kind);
+
+        -- WORKER-MCP (design \xA75): by-kind probes; see mesh-turn-event-queries.ts.
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
+            ON mesh_turn_events(mesh_id, kind, recorded_at);
+
+        -- \u2605 Stage 5c-1: mesh_turn_outbox was defined here. It is no longer
+        -- created; existing DBs have it dropped by migrateMeshIsolationColumns
+        -- step 9. The re-drive guarantee it carried is now the seqscribe
+        -- redrive consumer's durable cursor (mesh-terminal-redrive.ts).
+
+        -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
+        -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
+        -- (a fast picker fires ahead of the generating_started processing, whose
+        -- attempt-resolution preamble defers the consumed write). The causal FSM
+        -- rightly refuses accepted/delivered \u2192 waiting_*; instead of dropping the
+        -- edge, the reducer holds it here \u2014 attempt/session/epoch-scoped and
+        -- content-free \u2014 insert-once via hold_id (<attempt_id>:<stage>). The
+        -- consumed commit applies the hold through the SAME FSM in the same
+        -- transaction; the restart reconcile drain covers a crash between hold
+        -- and consumed; terminal commits resolve held rows as dropped so a held
+        -- picker can never resurrect a finished/reassigned attempt.
+        CREATE TABLE IF NOT EXISTS mesh_turn_held_suspensions (
+            hold_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            session_id TEXT,
+            dispatch_nonce INTEGER,
+            occurred_at_ms INTEGER,
+            recorded_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'held',
+            resolution TEXT,
+            resolved_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_mesh
+            ON mesh_turn_held_suspensions(mesh_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
+            ON mesh_turn_held_suspensions(attempt_id, status);
+    `);
+      migrateMeshIsolationColumns(self);
+      migrateMeshGraphSchema(self.db);
+    }
+    function tableColumns(self, table) {
+      const rows = self.db.prepare(`PRAGMA table_info(${table})`).all();
+      return new Set(rows.map((r) => r.name));
+    }
+    function migrateMeshIsolationColumns(self) {
+      try {
+        const fpCols = tableColumns(self, "mesh_completion_fingerprints");
+        if (!fpCols.has("mesh_id")) {
+          self.db.exec(`ALTER TABLE mesh_completion_fingerprints ADD COLUMN mesh_id TEXT NOT NULL DEFAULT ''`);
+          self.db.exec(`
+                UPDATE mesh_completion_fingerprints
+                SET mesh_id = substr(fingerprint, 1, instr(fingerprint, '::') - 1)
+                WHERE instr(fingerprint, '::') > 0 AND mesh_id = ''
+            `);
+        }
+        self.db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_mesh_completion_fingerprints_mesh
+                ON mesh_completion_fingerprints(mesh_id, fingerprint)
+        `);
+        const idleCols = tableColumns(self, "remote_idle_sessions");
+        if (!idleCols.has("mesh_id")) {
+          self.db.exec(`
+                DROP TABLE IF EXISTS remote_idle_sessions;
+                CREATE TABLE remote_idle_sessions (
+                    mesh_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    provider_type TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    metadata TEXT,
+                    PRIMARY KEY (mesh_id, node_id, session_id)
+                );
+            `);
+        }
+        const missionCols = tableColumns(self, "mesh_missions");
+        if (!missionCols.has("source")) {
+          self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
+        }
+        if (!missionCols.has("close_candidate_emitted_at")) {
+          self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
+        }
+        const pendingCols = tableColumns(self, "mesh_pending_events");
+        for (const col of ["protocol_version", "event_id", "scope", "dispatched_by", "intended_for", "drained_by"]) {
+          if (!pendingCols.has(col)) {
+            self.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
+          }
+        }
+        const directDispatchCols = tableColumns(self, "mesh_direct_dispatches");
+        if (!directDispatchCols.has("input")) {
+          self.db.exec(`ALTER TABLE mesh_direct_dispatches ADD COLUMN input TEXT`);
+        }
+        const sessionDeliveryCols = tableColumns(self, "mesh_session_delivery");
+        if (!sessionDeliveryCols.has("input")) {
+          self.db.exec(`ALTER TABLE mesh_session_delivery ADD COLUMN input TEXT`);
+        }
+        self.db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_event_id
+                ON mesh_pending_events(mesh_id, event_id)
+                WHERE event_id IS NOT NULL
+        `);
+        self.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
+        self.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
+        const ledgerCols = tableColumns(self, "mesh_event_ledger");
+        if (!ledgerCols.has("task_id")) {
+          self.db.exec(`ALTER TABLE mesh_event_ledger ADD COLUMN task_id TEXT`);
+        }
+        self.db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_task
+                ON mesh_event_ledger(mesh_id, task_id, timestamp)
+                WHERE task_id IS NOT NULL
+        `);
+        const toolCallCols = tableColumns(self, "mesh_tool_call_log");
+        if (!toolCallCols.has("caller_role")) {
+          self.db.exec(`ALTER TABLE mesh_tool_call_log ADD COLUMN caller_role TEXT`);
+        }
+        self.db.exec(`DROP TABLE IF EXISTS mesh_turn_outbox`);
+      } catch (err) {
+        if (!hasLoggedMigrationFailure()) {
+          markLoggedMigrationFailure();
+          LOG.warn("MeshRuntimeStore", `mesh-isolation column migration failed: ${err?.message || err}`);
+        }
+      }
+    }
+    var loggedMigrationFailureFlag;
+    var init_mesh_runtime_store_schema = __esm2({
+      "src/mesh/mesh-runtime-store-schema.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_graph_schema();
+        loggedMigrationFailureFlag = false;
+      }
+    });
+    function appendLedgerEntry22(self, entry) {
+      if (!entry.kind || !String(entry.kind).trim()) {
+        LOG.warn("MeshRuntimeStore", `Refusing to append ledger entry with empty kind for mesh ${entry.meshId} (id ${entry.id})`);
+        return;
+      }
+      self.db.prepare(
+        `INSERT OR IGNORE INTO mesh_event_ledger
+         (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        entry.id,
+        entry.meshId,
+        entry.timestamp,
+        entry.kind,
+        entry.nodeId ?? null,
+        entry.sessionId ?? null,
+        entry.providerType ?? null,
+        entry.taskId ?? null,
+        JSON.stringify(entry.payload ?? {})
+      );
+      self.maybeCheckpointWal();
+    }
+    function readLedgerEntries22(self, meshId, opts) {
+      const limit = opts?.tail ?? opts?.limit ?? 200;
+      let query;
+      const params = [meshId];
+      if (opts?.kind && opts?.since) {
+        query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
+        params.push(opts.kind, opts.since, limit);
+      } else if (opts?.kind) {
+        query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? ORDER BY timestamp DESC LIMIT ?`;
+        params.push(opts.kind, limit);
+      } else if (opts?.since) {
+        query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
+        params.push(opts.since, limit);
+      } else {
+        query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? ORDER BY timestamp DESC LIMIT ?`;
+        params.push(limit);
+      }
+      const rows = self.db.prepare(query).all(...params);
+      return rows.map((r) => ({
+        id: r.id,
+        meshId: r.mesh_id,
+        timestamp: r.timestamp,
+        kind: r.kind,
+        nodeId: r.node_id,
+        sessionId: r.session_id,
+        providerType: r.provider_type,
+        taskId: r.task_id ?? null,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })()
+      }));
+    }
+    function readLedgerEntriesOrdered(self, meshId, opts) {
+      const params = [meshId];
+      let whereClause = "mesh_id = ?";
+      if (opts?.since) {
+        whereClause += " AND timestamp >= ?";
+        params.push(opts.since);
+      }
+      const kinds = Array.isArray(opts?.kinds) ? opts.kinds.filter((k) => typeof k === "string" && k.trim()) : [];
+      if (kinds.length > 0) {
+        whereClause += ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
+        params.push(...kinds);
+      }
+      let query;
+      if (opts?.tail && opts.tail > 0) {
+        query = `SELECT * FROM (
+            SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause}
+            ORDER BY timestamp DESC, rowid DESC LIMIT ?
+        ) ORDER BY timestamp ASC, rid ASC`;
+        params.push(Math.floor(opts.tail));
+      } else {
+        query = `SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, rowid ASC`;
+      }
+      const rows = self.db.prepare(query).all(...params);
+      return rows.map((r) => ({
+        id: r.id,
+        meshId: r.mesh_id,
+        timestamp: r.timestamp,
+        kind: r.kind,
+        nodeId: r.node_id,
+        sessionId: r.session_id,
+        providerType: r.provider_type,
+        taskId: r.task_id ?? null,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })()
+      }));
+    }
+    function clearLedgerForMesh(self, meshId) {
+      return self.db.prepare("DELETE FROM mesh_event_ledger WHERE mesh_id = ?").run(meshId).changes;
+    }
+    function deleteLedgerEntries(self, meshId, ids) {
+      if (!ids.length) return 0;
+      let deleted = 0;
+      const stmt = self.db.prepare("DELETE FROM mesh_event_ledger WHERE mesh_id = ? AND id = ?");
+      self.db.transaction(() => {
+        for (const id of ids) {
+          deleted += stmt.run(meshId, id).changes;
+        }
+      })();
+      return deleted;
+    }
+    function hasLedgerEntry(self, meshId, id) {
+      const row = self.db.prepare(
+        "SELECT 1 FROM mesh_event_ledger WHERE mesh_id = ? AND id = ? LIMIT 1"
+      ).get(meshId, id);
+      return row !== void 0;
+    }
+    function ledgerEntryCount(self, meshId) {
+      const row = self.db.prepare(
+        "SELECT COUNT(*) as cnt FROM mesh_event_ledger WHERE mesh_id = ?"
+      ).get(meshId);
+      return row?.cnt ?? 0;
+    }
+    function importLedgerEntries(self, entries) {
+      let imported = 0;
+      const stmt = self.db.prepare(
+        `INSERT OR IGNORE INTO mesh_event_ledger
+         (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      self.db.transaction(() => {
+        for (const e of entries) {
+          if (!e.kind || !String(e.kind).trim()) continue;
+          const result = stmt.run(
+            e.id,
+            e.meshId,
+            e.timestamp,
+            e.kind,
+            e.nodeId ?? null,
+            e.sessionId ?? null,
+            e.providerType ?? null,
+            e.taskId ?? null,
+            JSON.stringify(e.payload ?? {})
+          );
+          if (result.changes > 0) imported++;
+        }
+      })();
+      return imported;
+    }
+    function readLedgerSlice4(self, meshId, opts) {
+      const MAX_LIMIT = 500;
+      const DEFAULT_LIMIT = 100;
+      const limit = typeof opts?.limit === "number" && Number.isFinite(opts.limit) ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(opts.limit))) : DEFAULT_LIMIT;
+      const afterId = typeof opts?.afterId === "string" && opts.afterId.trim() ? opts.afterId.trim() : null;
+      const params = [meshId];
+      let whereClause = "mesh_id = ?";
+      if (opts?.kind) {
+        whereClause += " AND kind = ?";
+        params.push(opts.kind);
+      }
+      if (opts?.since) {
+        whereClause += " AND timestamp >= ?";
+        params.push(opts.since);
+      }
+      if (afterId) {
+        whereClause += ` AND (timestamp > (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) OR (timestamp = (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) AND id > ?))`;
+        params.push(afterId, meshId, afterId, meshId, afterId);
+      }
+      const query = `SELECT * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, id ASC LIMIT ?`;
+      params.push(limit + 1);
+      const rows = self.db.prepare(query).all(...params);
+      const hasMore = rows.length > limit;
+      const bounded = hasMore ? rows.slice(0, limit) : rows;
+      const entries = bounded.map((r) => ({
+        id: r.id,
+        meshId: r.mesh_id,
+        timestamp: r.timestamp,
+        kind: r.kind,
+        nodeId: r.node_id,
+        sessionId: r.session_id,
+        providerType: r.provider_type,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })()
+      }));
+      return {
+        protocol: "adhdev.mesh.ledger.slice.v1",
+        meshId,
+        entries,
+        cursor: {
+          afterId,
+          nextAfterId: entries.length ? entries[entries.length - 1].id : afterId,
+          limit,
+          hasMore
+        },
+        sourceOfTruth: {
+          kind: "local_sqlite",
+          table: "mesh_event_ledger",
+          bounded: true,
+          maxLimit: MAX_LIMIT
+        }
+      };
+    }
+    var init_mesh_runtime_store_ledger = __esm2({
+      "src/mesh/mesh-runtime-store-ledger.ts"() {
+        "use strict";
+        init_logger();
+      }
+    });
+    function insertPendingEvent(self, event) {
+      const result = self.db.prepare(
+        `INSERT OR IGNORE INTO mesh_pending_events
+         (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at,
+          protocol_version, event_id, scope, dispatched_by, intended_for)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        event.id,
+        event.meshId,
+        event.coordinatorDaemonId ?? null,
+        event.event,
+        JSON.stringify(event.payload ?? {}),
+        event.fingerprint ?? null,
+        event.queuedAt,
+        event.protocolVersion ?? null,
+        event.eventId ?? null,
+        event.scope ?? null,
+        event.dispatchedBy ?? null,
+        event.intendedFor ?? null
+      );
+      self.maybeCheckpointWal();
+      return result.changes > 0;
+    }
+    function drainPendingEvents(self, meshId, coordinatorDaemonId, opts) {
+      return self.transaction(() => {
+        const onlyEvents = opts?.onlyEvents;
+        if (onlyEvents && onlyEvents.size === 0) return [];
+        const eventList = onlyEvents ? [...onlyEvents] : [];
+        const daemonIds = (Array.isArray(coordinatorDaemonId) ? coordinatorDaemonId : coordinatorDaemonId ? [coordinatorDaemonId] : []).filter((id) => typeof id === "string" && id.length > 0);
+        const clauses = ["mesh_id = ?", "drained = 0"];
+        const params = [meshId];
+        if (daemonIds.length > 0) {
+          clauses.push(`(coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => "?").join(",")}))`);
+          params.push(...daemonIds);
+        }
+        if (eventList.length > 0) {
+          clauses.push(`event IN (${eventList.map(() => "?").join(",")})`);
+          params.push(...eventList);
+        }
+        const rows = self.db.prepare(
+          `SELECT id, event, payload FROM mesh_pending_events WHERE ${clauses.join(" AND ")} ORDER BY queued_at ASC LIMIT 100`
+        ).all(...params);
+        if (rows.length === 0) return [];
+        const ids = rows.map((r) => r.id);
+        const now = Date.now();
+        self.db.prepare(
+          `UPDATE mesh_pending_events SET drained = 1, drained_at = ?, drained_by = ? WHERE id IN (${ids.map(() => "?").join(",")})`
+        ).run(now, opts?.drainedBy ?? null, ...ids);
+        return rows.map((r) => ({
+          id: r.id,
+          event: r.event,
+          payload: (() => {
+            try {
+              return JSON.parse(r.payload);
+            } catch {
+              return {};
+            }
+          })()
+        }));
+      });
+    }
+    function peekPendingEvents(self, meshId, coordinatorDaemonId) {
+      const daemonIds = (Array.isArray(coordinatorDaemonId) ? coordinatorDaemonId : coordinatorDaemonId ? [coordinatorDaemonId] : []).filter((id) => typeof id === "string" && id.length > 0);
+      const whereClause = daemonIds.length > 0 ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => "?").join(",")}))` : `WHERE mesh_id = ? AND drained = 0`;
+      const params = daemonIds.length > 0 ? [meshId, ...daemonIds] : [meshId];
+      const rows = self.db.prepare(
+        `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
+      ).all(...params);
+      return rows.map((r) => ({
+        id: r.id,
+        event: r.event,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })()
+      }));
+    }
+    function recentDrainedPendingEvents(self, meshId, limit = 100) {
+      const rows = self.db.prepare(
+        `SELECT id, event, scope, intended_for, drained_by, drained, queued_at, drained_at
+         FROM mesh_pending_events WHERE mesh_id = ? ORDER BY queued_at DESC LIMIT ?`
+      ).all(meshId, Math.max(1, limit));
+      return rows.map((r) => ({
+        id: r.id,
+        event: r.event,
+        scope: r.scope ?? null,
+        intendedFor: r.intended_for ?? null,
+        drainedBy: r.drained_by ?? null,
+        drained: r.drained === 1,
+        queuedAt: r.queued_at,
+        drainedAt: r.drained_at ?? null
+      }));
+    }
+    function recentDrainedPendingEventPayloads(self, sinceEpochMs, limit = 200) {
+      const rows = self.db.prepare(
+        `SELECT id, mesh_id, event, payload, drained_at FROM mesh_pending_events
+         WHERE drained = 1 AND drained_at IS NOT NULL AND drained_at >= ?
+         ORDER BY drained_at DESC LIMIT ?`
+      ).all(sinceEpochMs, Math.max(1, limit));
+      return rows.map((r) => ({
+        id: r.id,
+        meshId: r.mesh_id,
+        event: r.event,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })(),
+        drainedAt: r.drained_at
+      }));
+    }
+    function hasPendingEventFingerprint(self, meshId, fingerprint) {
+      const row = self.db.prepare(
+        "SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1"
+      ).get(meshId, fingerprint);
+      return row !== void 0;
+    }
+    function hasDrainedEventId(self, meshId, eventId) {
+      if (!eventId) return false;
+      const row = self.db.prepare(
+        "SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND event_id = ? AND drained = 1 LIMIT 1"
+      ).get(meshId, eventId);
+      return row !== void 0;
+    }
+    function drainedEventIdsForMesh(self, meshId) {
+      const rows = self.db.prepare(
+        "SELECT DISTINCT event_id FROM mesh_pending_events WHERE mesh_id = ? AND drained = 1 AND event_id IS NOT NULL"
+      ).all(meshId);
+      return new Set(rows.map((r) => r.event_id));
+    }
+    function pendingEventCount(self, meshId) {
+      const row = self.db.prepare(
+        "SELECT COUNT(*) as cnt FROM mesh_pending_events WHERE mesh_id = ? AND drained = 0"
+      ).get(meshId);
+      return row?.cnt ?? 0;
+    }
+    function markPendingEventsDrainedById(self, ids) {
+      const idList = ids.filter((id) => typeof id === "string" && id.length > 0);
+      if (idList.length === 0) return 0;
+      const now = Date.now();
+      return self.db.prepare(
+        `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE drained = 0 AND id IN (${idList.map(() => "?").join(",")})`
+      ).run(now, ...idList).changes;
+    }
+    function requeueDrainedPendingEventByFingerprint(self, meshId, fingerprint) {
+      if (!fingerprint) return false;
+      const changes = self.db.prepare(
+        `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
+         WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
+      ).run(meshId, fingerprint).changes;
+      if (changes > 0) self.maybeCheckpointWal();
+      return changes > 0;
+    }
+    function updatePendingEventPayloadByFingerprint(self, meshId, fingerprint, payload) {
+      if (!fingerprint) return false;
+      const changes = self.db.prepare(
+        `UPDATE mesh_pending_events SET payload = ?
+         WHERE mesh_id = ? AND fingerprint = ? AND drained = 0`
+      ).run(JSON.stringify(payload), meshId, fingerprint).changes;
+      if (changes > 0) self.maybeCheckpointWal();
+      return changes > 0;
+    }
+    function requeueDrainedPendingEventById(self, rowId) {
+      if (!rowId) return false;
+      const changes = self.db.prepare(
+        `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
+         WHERE id = ? AND drained = 1`
+      ).run(rowId).changes;
+      if (changes > 0) self.maybeCheckpointWal();
+      return changes > 0;
+    }
+    function deletePendingEventsById(self, ids) {
+      const idList = ids.filter((id) => typeof id === "string" && id.length > 0);
+      if (idList.length === 0) return 0;
+      return self.db.prepare(
+        `DELETE FROM mesh_pending_events WHERE id IN (${idList.map(() => "?").join(",")})`
+      ).run(...idList).changes;
+    }
+    function prunePendingEvents(self, opts) {
+      const now = Date.now();
+      const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
+      const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
+      const neverExpire = opts.neverExpireEvents;
+      const undrainedSelectRows = self.db.prepare(
+        "SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?"
+      ).all(undrainedCutoff);
+      const expirableRows = [];
+      let terminalExempt = 0;
+      for (const r of undrainedSelectRows) {
+        if (neverExpire?.has(r.event)) terminalExempt++;
+        else expirableRows.push(r);
+      }
+      const undrainedRows = expirableRows.map((r) => ({
+        id: r.id,
+        meshId: r.mesh_id,
+        event: r.event,
+        payload: (() => {
+          try {
+            return JSON.parse(r.payload);
+          } catch {
+            return {};
+          }
+        })()
+      }));
+      const drainedExpired = self.db.prepare(
+        "DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?"
+      ).run(drainedCutoff).changes;
+      let undrainedExpired = 0;
+      for (let i = 0; i < undrainedRows.length; i += 500) {
+        const chunk = undrainedRows.slice(i, i + 500);
+        undrainedExpired += self.db.prepare(
+          `DELETE FROM mesh_pending_events WHERE id IN (${chunk.map(() => "?").join(",")})`
+        ).run(...chunk.map((r) => r.id)).changes;
+      }
+      return { drainedExpired, undrainedExpired, undrainedRows, terminalExempt };
+    }
+    var init_mesh_runtime_store_pending_events = __esm2({
+      "src/mesh/mesh-runtime-store-pending-events.ts"() {
+        "use strict";
+      }
+    });
     var mesh_runtime_store_exports = {};
     __export2(mesh_runtime_store_exports, {
       MESH_EVENT_LEDGER_RETENTION_MS: () => MESH_EVENT_LEDGER_RETENTION_MS,
@@ -70848,8 +71743,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           }
         }
       } catch (err) {
-        if (!loggedMigrationFailure) {
-          loggedMigrationFailure = true;
+        if (!hasLoggedMigrationFailure()) {
+          markLoggedMigrationFailure();
           LOG.warn(
             "MeshRuntimeStore",
             `Legacy beads.db\u2192mesh-runtime.db migration failed; using existing DB in-place to avoid data loss: ${err?.message || err}`
@@ -70862,7 +71757,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var import_fs10;
     var import_path9;
     var DatabaseCtor;
-    var loggedMigrationFailure;
     var loggedStrayCleanup;
     var MeshRuntimeStore;
     var init_mesh_runtime_store = __esm2({
@@ -70876,7 +71770,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_ledger();
         init_mesh_work_queue();
         init_mesh_task_parking();
-        init_mesh_graph_schema();
         init_mesh_graph_store();
         init_slot_model_enforcement();
         init_mesh_daemon_slot_axis();
@@ -70886,8 +71779,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_turn_event_queries();
         init_mesh_unsettled_terminal_queries();
         init_mesh_runtime_store_turn_attempts();
+        init_mesh_runtime_store_schema();
+        init_mesh_runtime_store_ledger();
+        init_mesh_runtime_store_pending_events();
         init_mesh_runtime_store_turn_rows();
-        loggedMigrationFailure = false;
         loggedStrayCleanup = false;
         MeshRuntimeStore = class _MeshRuntimeStore {
           static instance;
@@ -70980,450 +71875,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (!this.graphStoreInstance) this.graphStoreInstance = new MeshGraphStore(this.db);
             return this.graphStoreInstance;
           }
+          // ── Schema DDL + column migrations ───────────────────────────────────────
+          // Implementation lives in ./mesh-runtime-store-schema.ts (behavior-preserving
+          // code move, file-size gate). Kept here as thin delegators so the constructor
+          // call and every call site are unchanged; the extracted functions reach the db
+          // handle via `self` (same pattern as the turn-attempt delegators below).
           migrate() {
-            this.db.exec(`
-            CREATE TABLE IF NOT EXISTS mesh_queue (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                target_node_id TEXT,
-                target_session_id TEXT,
-                assigned_node_id TEXT,
-                assigned_session_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_queue_mesh_status_created
-                ON mesh_queue(mesh_id, status, created_at);
-            CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
-                ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
-
-            -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
-            -- also carries meshId as its first '::'-joined segment (see
-            -- buildMeshCompletionFingerprint) \u2014 that string-prefix defense is kept; this
-            -- column makes cross-mesh suppression impossible even if the string format
-            -- drifts or two meshes ever collide on a fingerprint body.
-            CREATE TABLE IF NOT EXISTS mesh_completion_fingerprints (
-                fingerprint TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL,
-                mesh_id TEXT NOT NULL DEFAULT ''
-            );
-            -- NOTE: the (mesh_id, fingerprint) index is created in migrateMeshIsolationColumns,
-            -- NOT here. A pre-isolation DB still has the legacy table (CREATE IF NOT EXISTS is a
-            -- no-op), so referencing mesh_id in an index before the ALTER ADD COLUMN runs would
-            -- fail with "no such column". The migration adds the column then the index.
-
-            CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
-                task_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                message TEXT NOT NULL,
-                -- MESH-IMAGE-DISPATCH: serialized multipart input envelope (JSON) that
-                -- accompanied the message, or NULL for an ordinary text-only dispatch.
-                -- Nullable and additive so pre-existing rows read back exactly as before.
-                input TEXT,
-                task_mode TEXT,
-                via TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'dispatched',
-                dispatched_to_idle_session INTEGER NOT NULL DEFAULT 0,
-                dispatched_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
-                ON mesh_direct_dispatches(mesh_id, session_id, status);
-
-            -- MESH-ISOLATION-LEAK: mesh_id is part of the PK so a nodeId shared across two
-            -- meshes (same machine in multiple repos) keeps a separate idle-session row per
-            -- mesh, and getRemoteIdleSessions(meshId) can never surface another mesh's
-            -- session for a queue claim.
-            CREATE TABLE IF NOT EXISTS remote_idle_sessions (
-                mesh_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                provider_type TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                metadata TEXT,
-                PRIMARY KEY (mesh_id, node_id, session_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS mesh_session_delivery (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                task_id TEXT,
-                kind TEXT NOT NULL,
-                priority INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL,
-                -- MESH-IMAGE-DISPATCH: see mesh_direct_dispatches.input \u2014 same nullable
-                -- serialized multipart envelope, so a queued delivery can carry an
-                -- attachment through to the moment the session goes idle.
-                input TEXT,
-                status TEXT NOT NULL DEFAULT 'queued',
-                deliver_after TEXT,
-                expires_at TEXT,
-                attempt_count INTEGER NOT NULL DEFAULT 0,
-                source_coordinator_session_id TEXT,
-                source_coordinator_daemon_id TEXT,
-                last_error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_mesh_status
-                ON mesh_session_delivery(mesh_id, status, created_at);
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_session
-                ON mesh_session_delivery(mesh_id, session_id, status);
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
-                ON mesh_session_delivery(mesh_id, task_id);
-
-            -- MESH-COMPLEXITY-AUDIT Part 8-2: mesh_completion_conflicts removed
-            -- (write-only fingerprint-collision diagnostic, no production reader,
-            -- no no-loss role). Dropped in migrateMeshIsolationColumns step 6.
-
-            CREATE TABLE IF NOT EXISTS mesh_tool_call_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mesh_id TEXT NOT NULL,
-                tool TEXT NOT NULL,
-                session_id TEXT,
-                caller_role TEXT,
-                called_at INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
-                ON mesh_tool_call_log(mesh_id, tool, called_at);
-
-            -- G2: Event ledger \u2014 runtime source of truth for task/session lifecycle events.
-            -- JSONL files are retained as export/import/debug/legacy artifacts only.
-            CREATE TABLE IF NOT EXISTS mesh_event_ledger (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                -- LEDGER-TASK-TRACEABILITY (B): the task a lifecycle entry pertains to,
-                -- promoted from payload.taskId so kind+task_id joins are index-backed
-                -- (legacy DBs get this column via migrateMeshIsolationColumns' ALTER).
-                task_id TEXT,
-                payload TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_time
-                ON mesh_event_ledger(mesh_id, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_kind
-                ON mesh_event_ledger(mesh_id, kind, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
-                ON mesh_event_ledger(mesh_id, session_id, timestamp);
-
-            -- G3: Pending coordinator event inbox \u2014 replaces <meshId>.pending-events.jsonl.
-            -- Coordinator drains this table on get_pending_mesh_events, then deletes drained rows.
-            CREATE TABLE IF NOT EXISTS mesh_pending_events (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                coordinator_daemon_id TEXT,
-                event TEXT NOT NULL,
-                payload TEXT NOT NULL DEFAULT '{}',
-                fingerprint TEXT,
-                queued_at INTEGER NOT NULL,
-                drained INTEGER NOT NULL DEFAULT 0,
-                drained_at INTEGER,
-                -- v2 protocol envelope (B2a). All nullable so pre-v2 rows and events
-                -- emitted before a coordinator identity is known coexist as v1. The
-                -- authoritative copy of each also rides inside the payload column; these
-                -- columns exist for queryable idempotency (event_id) and scope-based drain
-                -- filtering without JSON-parsing every row. dispatched_by / intended_for
-                -- hold the JSON-serialized CoordinatorIdentity.
-                protocol_version TEXT,
-                event_id TEXT,
-                scope TEXT,
-                dispatched_by TEXT,
-                intended_for TEXT,
-                -- REFINE-EVENT-SESSION-SCOPED-UNICAST: WHO consumed this row. The ledger
-                -- previously recorded only THAT an event was drained, never by which
-                -- coordinator identity \u2014 so a mis-delivered unicast (a sibling session
-                -- consuming another coordinator's event) left no evidence and had to be
-                -- inferred. Written at drain time as the JSON-serialized drainer
-                -- CoordinatorIdentity. NULL on rows drained before this column existed
-                -- and on any drain whose caller passed no identity (daemon-level drain).
-                drained_by TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
-                ON mesh_pending_events(mesh_id, drained, queued_at);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
-                ON mesh_pending_events(mesh_id, fingerprint)
-                WHERE fingerprint IS NOT NULL;
-
-            -- M3: persistent mission records. Plans live in the system, not in the
-            -- coordinator LLM's context. Progress is derived from task statuses at
-            -- query time (mission_id on queue tasks) \u2014 never stored here.
-            CREATE TABLE IF NOT EXISTS mesh_missions (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                goal TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'active',
-                source TEXT,
-                -- G3: idempotency marker for the mission_close_candidate coordinator
-                -- event. Set to the emit timestamp when all of a mission's tasks first
-                -- become terminal (so the "consider closing this" nudge fires exactly
-                -- once per all-terminal edge), and cleared back to NULL when the mission
-                -- returns to a non-terminal state (new/re-opened task) so a later
-                -- re-completion can nudge again. Never drives a status transition \u2014 the
-                -- coordinator/human still decides via mesh_mission_upsert.
-                close_candidate_emitted_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
-                ON mesh_missions(mesh_id, status, updated_at);
-
-            -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
-            -- the schedulingStrategy spreads work ('fitness' with no task in scope),
-            -- eligible nodes tied at the same (priority, load) are rotated by this
-            -- cursor so the tie-break winner cycles across scheduling passes instead
-            -- of always favouring the same array-order node. Persisted (not a module
-            -- Map) so rotation survives daemon restarts and stays a single source of
-            -- truth across scheduling entry points.
-            CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
-                mesh_id TEXT PRIMARY KEY,
-                cursor INTEGER NOT NULL DEFAULT 0
-            );
-
-            -- T2 (B2b): persistent acked-hold state for in-flight direct dispatches.
-            -- The reconcile loop's PHASE-4 acked-hold (death-consequence counter,
-            -- fast-track idle streak, live-confirmed flag) used to live only in a
-            -- process-local Map (mesh-reconcile-loop.ts inFlightAckedHoldState), so a
-            -- daemon restart lost it \u2014 re-opening the door to the duplicate-emit / drop
-            -- window that the PHASE-4 transcript synth backstop then had to correct after
-            -- the fact. Persisting it lets the state survive a restart: the loop
-            -- rehydrates the Map from this table on first touch and stays read-through /
-            -- write-through against it thereafter. Keyed by task_id (one hold per
-            -- in-flight dispatch); mesh_id is carried for per-mesh listing / prune.
-            --   hold_reason         \u2014 'live' once a conclusive read confirmed the session
-            --                         reachable since the ack, else 'unconfirmed' (drives
-            --                         the death-backstop's liveConfirmedSinceAck gate).
-            --   held_at             \u2014 ms epoch the hold row was first created.
-            --   first_idle_since_ack \u2014 ms epoch of the FIRST tick in the current continuous
-            --                         idle-with-final-assistant run (fast-track streak); NULL
-            --                         when the streak is broken / not yet started.
-            --   read_failure_count  \u2014 consecutive read_chat failures since the last
-            --                         conclusive read (death backstop (a)).
-            CREATE TABLE IF NOT EXISTS mesh_inflight_hold (
-                task_id TEXT PRIMARY KEY,
-                mesh_id TEXT,
-                hold_reason TEXT,
-                held_at INTEGER,
-                first_idle_since_ack INTEGER,
-                read_failure_count INTEGER,
-                updated_at INTEGER
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
-                ON mesh_inflight_hold(mesh_id);
-
-            -- TURN-LEDGER (Stage 5): the authoritative causal turn transaction per task
-            -- ATTEMPT. One row per (mesh_id, task_id, attempt_seq); attempt_seq is the
-            -- dispatch nonce the attempt was opened under (monotonic per task), so a
-            -- reclaim/re-dispatch opens a NEW attempt row while late events against the
-            -- old attempt are rejected by identity, never applied. The stage column is a
-            -- monotonic causal FSM (accepted \u2192 delivered \u2192 consumed \u2192 generating \u2192
-            -- [waiting_approval|waiting_choice] \u2192 finalizing \u2192 terminal); terminal_outcome
-            -- is committed at most once via a conditional UPDATE (exactly-once logical
-            -- completion). JSONL/ledger tables remain audit/export only \u2014 THIS table is
-            -- the single mutable source of truth for turn state.
-            CREATE TABLE IF NOT EXISTS mesh_turn_attempts (
-                attempt_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                attempt_seq INTEGER NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                coordinator_daemon_id TEXT,
-                coordinator_session_id TEXT,
-                dispatch_nonce INTEGER,
-                stage TEXT NOT NULL DEFAULT 'accepted',
-                redrive_count INTEGER NOT NULL DEFAULT 0,
-                lease_deadline_ms INTEGER,
-                accepted_at TEXT,
-                delivered_at TEXT,
-                consumed_at TEXT,
-                terminal_outcome TEXT,
-                terminal_reason TEXT,
-                terminal_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (mesh_id, task_id, attempt_seq)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_task
-                ON mesh_turn_attempts(mesh_id, task_id, attempt_seq);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_session
-                ON mesh_turn_attempts(mesh_id, session_id);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_stage
-                ON mesh_turn_attempts(mesh_id, stage);
-
-            -- TURN-LEDGER (Stage 5): append-only, idempotency-keyed causal event log per
-            -- attempt. UNIQUE(attempt_id, kind, dedupe_key) makes repeated/reordered ACKs
-            -- and duplicate completion proposals insert-once (INSERT OR IGNORE \u2192 the
-            -- reducer reads the existing row and treats the re-arrival as a duplicate).
-            CREATE TABLE IF NOT EXISTS mesh_turn_events (
-                event_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                dedupe_key TEXT NOT NULL DEFAULT '',
-                payload TEXT NOT NULL DEFAULT '{}',
-                occurred_at_ms INTEGER,
-                recorded_at TEXT NOT NULL,
-                UNIQUE (attempt_id, kind, dedupe_key)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
-                ON mesh_turn_events(mesh_id, task_id, kind);
-
-            -- WORKER-MCP (design \xA75): by-kind probes; see mesh-turn-event-queries.ts.
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
-                ON mesh_turn_events(mesh_id, kind, recorded_at);
-
-            -- \u2605 Stage 5c-1: mesh_turn_outbox was defined here. It is no longer
-            -- created; existing DBs have it dropped by migrateMeshIsolationColumns
-            -- step 9. The re-drive guarantee it carried is now the seqscribe
-            -- redrive consumer's durable cursor (mesh-terminal-redrive.ts).
-
-            -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
-            -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
-            -- (a fast picker fires ahead of the generating_started processing, whose
-            -- attempt-resolution preamble defers the consumed write). The causal FSM
-            -- rightly refuses accepted/delivered \u2192 waiting_*; instead of dropping the
-            -- edge, the reducer holds it here \u2014 attempt/session/epoch-scoped and
-            -- content-free \u2014 insert-once via hold_id (<attempt_id>:<stage>). The
-            -- consumed commit applies the hold through the SAME FSM in the same
-            -- transaction; the restart reconcile drain covers a crash between hold
-            -- and consumed; terminal commits resolve held rows as dropped so a held
-            -- picker can never resurrect a finished/reassigned attempt.
-            CREATE TABLE IF NOT EXISTS mesh_turn_held_suspensions (
-                hold_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                session_id TEXT,
-                dispatch_nonce INTEGER,
-                occurred_at_ms INTEGER,
-                recorded_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'held',
-                resolution TEXT,
-                resolved_at TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_mesh
-                ON mesh_turn_held_suspensions(mesh_id, status);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
-                ON mesh_turn_held_suspensions(attempt_id, status);
-        `);
-            this.migrateMeshIsolationColumns();
-            migrateMeshGraphSchema(this.db);
+            migrate(this);
           }
           tableColumns(table) {
-            const rows = this.db.prepare(`PRAGMA table_info(${table})`).all();
-            return new Set(rows.map((r) => r.name));
+            return tableColumns(this, table);
           }
-          /**
-           * MESH-ISOLATION-LEAK migration. Two tables historically lacked a `mesh_id` column,
-           * letting one machine that belongs to multiple meshes (multiple repos) leak rows
-           * across meshes. Both migrations are idempotent and run on every boot — the column
-           * check short-circuits once the new schema is in place.
-           */
+          // Only called by migrate() in production, but kept as a class member because a
+          // regression test re-invokes it through `(db as any)` to assert the migration is
+          // idempotent across boots (mesh-runtime-store.test.ts, Part 8-1).
           migrateMeshIsolationColumns() {
-            try {
-              const fpCols = this.tableColumns("mesh_completion_fingerprints");
-              if (!fpCols.has("mesh_id")) {
-                this.db.exec(`ALTER TABLE mesh_completion_fingerprints ADD COLUMN mesh_id TEXT NOT NULL DEFAULT ''`);
-                this.db.exec(`
-                    UPDATE mesh_completion_fingerprints
-                    SET mesh_id = substr(fingerprint, 1, instr(fingerprint, '::') - 1)
-                    WHERE instr(fingerprint, '::') > 0 AND mesh_id = ''
-                `);
-              }
-              this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_completion_fingerprints_mesh
-                    ON mesh_completion_fingerprints(mesh_id, fingerprint)
-            `);
-              const idleCols = this.tableColumns("remote_idle_sessions");
-              if (!idleCols.has("mesh_id")) {
-                this.db.exec(`
-                    DROP TABLE IF EXISTS remote_idle_sessions;
-                    CREATE TABLE remote_idle_sessions (
-                        mesh_id TEXT NOT NULL,
-                        node_id TEXT NOT NULL,
-                        session_id TEXT NOT NULL,
-                        provider_type TEXT NOT NULL,
-                        expires_at INTEGER NOT NULL,
-                        metadata TEXT,
-                        PRIMARY KEY (mesh_id, node_id, session_id)
-                    );
-                `);
-              }
-              const missionCols = this.tableColumns("mesh_missions");
-              if (!missionCols.has("source")) {
-                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
-              }
-              if (!missionCols.has("close_candidate_emitted_at")) {
-                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
-              }
-              const pendingCols = this.tableColumns("mesh_pending_events");
-              for (const col of ["protocol_version", "event_id", "scope", "dispatched_by", "intended_for", "drained_by"]) {
-                if (!pendingCols.has(col)) {
-                  this.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
-                }
-              }
-              const directDispatchCols = this.tableColumns("mesh_direct_dispatches");
-              if (!directDispatchCols.has("input")) {
-                this.db.exec(`ALTER TABLE mesh_direct_dispatches ADD COLUMN input TEXT`);
-              }
-              const sessionDeliveryCols = this.tableColumns("mesh_session_delivery");
-              if (!sessionDeliveryCols.has("input")) {
-                this.db.exec(`ALTER TABLE mesh_session_delivery ADD COLUMN input TEXT`);
-              }
-              this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_event_id
-                    ON mesh_pending_events(mesh_id, event_id)
-                    WHERE event_id IS NOT NULL
-            `);
-              this.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
-              this.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
-              const ledgerCols = this.tableColumns("mesh_event_ledger");
-              if (!ledgerCols.has("task_id")) {
-                this.db.exec(`ALTER TABLE mesh_event_ledger ADD COLUMN task_id TEXT`);
-              }
-              this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_task
-                    ON mesh_event_ledger(mesh_id, task_id, timestamp)
-                    WHERE task_id IS NOT NULL
-            `);
-              const toolCallCols = this.tableColumns("mesh_tool_call_log");
-              if (!toolCallCols.has("caller_role")) {
-                this.db.exec(`ALTER TABLE mesh_tool_call_log ADD COLUMN caller_role TEXT`);
-              }
-              this.db.exec(`DROP TABLE IF EXISTS mesh_turn_outbox`);
-            } catch (err) {
-              if (!loggedMigrationFailure) {
-                loggedMigrationFailure = true;
-                LOG.warn("MeshRuntimeStore", `mesh-isolation column migration failed: ${err?.message || err}`);
-              }
-            }
+            migrateMeshIsolationColumns(this);
           }
           hasCompletionFingerprint(meshId, fingerprint) {
             const now = Date.now();
@@ -72540,63 +73007,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return this.transaction(() => pruneTerminalTurnAttemptsWithCascade(this.db, olderThanMs));
           }
           // ── G2: Event Ledger ────────────────────────────────────────────────────
+          // Implementation lives in ./mesh-runtime-store-ledger.ts (behavior-preserving
+          // code move, file-size gate). Thin delegators keep the public surface and
+          // every call site unchanged.
           appendLedgerEntry(entry) {
-            if (!entry.kind || !String(entry.kind).trim()) {
-              LOG.warn("MeshRuntimeStore", `Refusing to append ledger entry with empty kind for mesh ${entry.meshId} (id ${entry.id})`);
-              return;
-            }
-            this.db.prepare(
-              `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run(
-              entry.id,
-              entry.meshId,
-              entry.timestamp,
-              entry.kind,
-              entry.nodeId ?? null,
-              entry.sessionId ?? null,
-              entry.providerType ?? null,
-              entry.taskId ?? null,
-              JSON.stringify(entry.payload ?? {})
-            );
-            this.maybeCheckpointWal();
+            appendLedgerEntry22(this, entry);
           }
           readLedgerEntries(meshId, opts) {
-            const limit = opts?.tail ?? opts?.limit ?? 200;
-            let query;
-            const params = [meshId];
-            if (opts?.kind && opts?.since) {
-              query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
-              params.push(opts.kind, opts.since, limit);
-            } else if (opts?.kind) {
-              query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? ORDER BY timestamp DESC LIMIT ?`;
-              params.push(opts.kind, limit);
-            } else if (opts?.since) {
-              query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
-              params.push(opts.since, limit);
-            } else {
-              query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? ORDER BY timestamp DESC LIMIT ?`;
-              params.push(limit);
-            }
-            const rows = this.db.prepare(query).all(...params);
-            return rows.map((r) => ({
-              id: r.id,
-              meshId: r.mesh_id,
-              timestamp: r.timestamp,
-              kind: r.kind,
-              nodeId: r.node_id,
-              sessionId: r.session_id,
-              providerType: r.provider_type,
-              taskId: r.task_id ?? null,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })()
-            }));
+            return readLedgerEntries22(this, meshId, opts);
           }
           /**
            * G2 read cutover: read ledger entries in append order (oldest first),
@@ -72605,99 +73023,24 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * guarantee that mesh-events relies on for same-millisecond entries.
            */
           readLedgerEntriesOrdered(meshId, opts) {
-            const params = [meshId];
-            let whereClause = "mesh_id = ?";
-            if (opts?.since) {
-              whereClause += " AND timestamp >= ?";
-              params.push(opts.since);
-            }
-            const kinds = Array.isArray(opts?.kinds) ? opts.kinds.filter((k) => typeof k === "string" && k.trim()) : [];
-            if (kinds.length > 0) {
-              whereClause += ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
-              params.push(...kinds);
-            }
-            let query;
-            if (opts?.tail && opts.tail > 0) {
-              query = `SELECT * FROM (
-                SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause}
-                ORDER BY timestamp DESC, rowid DESC LIMIT ?
-            ) ORDER BY timestamp ASC, rid ASC`;
-              params.push(Math.floor(opts.tail));
-            } else {
-              query = `SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, rowid ASC`;
-            }
-            const rows = this.db.prepare(query).all(...params);
-            return rows.map((r) => ({
-              id: r.id,
-              meshId: r.mesh_id,
-              timestamp: r.timestamp,
-              kind: r.kind,
-              nodeId: r.node_id,
-              sessionId: r.session_id,
-              providerType: r.provider_type,
-              taskId: r.task_id ?? null,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })()
-            }));
+            return readLedgerEntriesOrdered(this, meshId, opts);
           }
           /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
           clearLedgerForMesh(meshId) {
-            return this.db.prepare("DELETE FROM mesh_event_ledger WHERE mesh_id = ?").run(meshId).changes;
+            return clearLedgerForMesh(this, meshId);
           }
           /** G2: remove entries moved to the JSONL archive so the SQLite runtime set mirrors the active ledger. */
           deleteLedgerEntries(meshId, ids) {
-            if (!ids.length) return 0;
-            let deleted = 0;
-            const stmt = this.db.prepare("DELETE FROM mesh_event_ledger WHERE mesh_id = ? AND id = ?");
-            this.db.transaction(() => {
-              for (const id of ids) {
-                deleted += stmt.run(meshId, id).changes;
-              }
-            })();
-            return deleted;
+            return deleteLedgerEntries(this, meshId, ids);
           }
           hasLedgerEntry(meshId, id) {
-            const row = this.db.prepare(
-              "SELECT 1 FROM mesh_event_ledger WHERE mesh_id = ? AND id = ? LIMIT 1"
-            ).get(meshId, id);
-            return row !== void 0;
+            return hasLedgerEntry(this, meshId, id);
           }
           ledgerEntryCount(meshId) {
-            const row = this.db.prepare(
-              "SELECT COUNT(*) as cnt FROM mesh_event_ledger WHERE mesh_id = ?"
-            ).get(meshId);
-            return row?.cnt ?? 0;
+            return ledgerEntryCount(this, meshId);
           }
           importLedgerEntries(entries) {
-            let imported = 0;
-            const stmt = this.db.prepare(
-              `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            );
-            this.db.transaction(() => {
-              for (const e of entries) {
-                if (!e.kind || !String(e.kind).trim()) continue;
-                const result = stmt.run(
-                  e.id,
-                  e.meshId,
-                  e.timestamp,
-                  e.kind,
-                  e.nodeId ?? null,
-                  e.sessionId ?? null,
-                  e.providerType ?? null,
-                  e.taskId ?? null,
-                  JSON.stringify(e.payload ?? {})
-                );
-                if (result.changes > 0) imported++;
-              }
-            })();
-            return imported;
+            return importLedgerEntries(this, entries);
           }
           /**
            * G4: Read a bounded, cursor-addressable ledger slice directly from the SQLite
@@ -72708,86 +73051,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * in mesh-tools.ts can pass it directly to buildMeshLedgerReplicaEvidence.
            */
           readLedgerSlice(meshId, opts) {
-            const MAX_LIMIT = 500;
-            const DEFAULT_LIMIT = 100;
-            const limit = typeof opts?.limit === "number" && Number.isFinite(opts.limit) ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(opts.limit))) : DEFAULT_LIMIT;
-            const afterId = typeof opts?.afterId === "string" && opts.afterId.trim() ? opts.afterId.trim() : null;
-            const params = [meshId];
-            let whereClause = "mesh_id = ?";
-            if (opts?.kind) {
-              whereClause += " AND kind = ?";
-              params.push(opts.kind);
-            }
-            if (opts?.since) {
-              whereClause += " AND timestamp >= ?";
-              params.push(opts.since);
-            }
-            if (afterId) {
-              whereClause += ` AND (timestamp > (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) OR (timestamp = (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) AND id > ?))`;
-              params.push(afterId, meshId, afterId, meshId, afterId);
-            }
-            const query = `SELECT * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, id ASC LIMIT ?`;
-            params.push(limit + 1);
-            const rows = this.db.prepare(query).all(...params);
-            const hasMore = rows.length > limit;
-            const bounded = hasMore ? rows.slice(0, limit) : rows;
-            const entries = bounded.map((r) => ({
-              id: r.id,
-              meshId: r.mesh_id,
-              timestamp: r.timestamp,
-              kind: r.kind,
-              nodeId: r.node_id,
-              sessionId: r.session_id,
-              providerType: r.provider_type,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })()
-            }));
-            return {
-              protocol: "adhdev.mesh.ledger.slice.v1",
-              meshId,
-              entries,
-              cursor: {
-                afterId,
-                nextAfterId: entries.length ? entries[entries.length - 1].id : afterId,
-                limit,
-                hasMore
-              },
-              sourceOfTruth: {
-                kind: "local_sqlite",
-                table: "mesh_event_ledger",
-                bounded: true,
-                maxLimit: MAX_LIMIT
-              }
-            };
+            return readLedgerSlice4(this, meshId, opts);
           }
           // ── G3: Pending Coordinator Events ──────────────────────────────────────
+          // Implementation lives in ./mesh-runtime-store-pending-events.ts
+          // (behavior-preserving code move, file-size gate). Thin delegators keep the
+          // public surface and every call site unchanged.
           insertPendingEvent(event) {
-            const result = this.db.prepare(
-              `INSERT OR IGNORE INTO mesh_pending_events
-             (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at,
-              protocol_version, event_id, scope, dispatched_by, intended_for)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run(
-              event.id,
-              event.meshId,
-              event.coordinatorDaemonId ?? null,
-              event.event,
-              JSON.stringify(event.payload ?? {}),
-              event.fingerprint ?? null,
-              event.queuedAt,
-              event.protocolVersion ?? null,
-              event.eventId ?? null,
-              event.scope ?? null,
-              event.dispatchedBy ?? null,
-              event.intendedFor ?? null
-            );
-            this.maybeCheckpointWal();
-            return result.changes > 0;
+            return insertPendingEvent(this, event);
           }
           /**
            * Drain undrained pending events for a mesh, atomically marking them drained.
@@ -72800,62 +73071,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * consume the same row.
            */
           drainPendingEvents(meshId, coordinatorDaemonId, opts) {
-            return this.transaction(() => {
-              const onlyEvents = opts?.onlyEvents;
-              if (onlyEvents && onlyEvents.size === 0) return [];
-              const eventList = onlyEvents ? [...onlyEvents] : [];
-              const daemonIds = (Array.isArray(coordinatorDaemonId) ? coordinatorDaemonId : coordinatorDaemonId ? [coordinatorDaemonId] : []).filter((id) => typeof id === "string" && id.length > 0);
-              const clauses = ["mesh_id = ?", "drained = 0"];
-              const params = [meshId];
-              if (daemonIds.length > 0) {
-                clauses.push(`(coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => "?").join(",")}))`);
-                params.push(...daemonIds);
-              }
-              if (eventList.length > 0) {
-                clauses.push(`event IN (${eventList.map(() => "?").join(",")})`);
-                params.push(...eventList);
-              }
-              const rows = this.db.prepare(
-                `SELECT id, event, payload FROM mesh_pending_events WHERE ${clauses.join(" AND ")} ORDER BY queued_at ASC LIMIT 100`
-              ).all(...params);
-              if (rows.length === 0) return [];
-              const ids = rows.map((r) => r.id);
-              const now = Date.now();
-              this.db.prepare(
-                `UPDATE mesh_pending_events SET drained = 1, drained_at = ?, drained_by = ? WHERE id IN (${ids.map(() => "?").join(",")})`
-              ).run(now, opts?.drainedBy ?? null, ...ids);
-              return rows.map((r) => ({
-                id: r.id,
-                event: r.event,
-                payload: (() => {
-                  try {
-                    return JSON.parse(r.payload);
-                  } catch {
-                    return {};
-                  }
-                })()
-              }));
-            });
+            return drainPendingEvents(this, meshId, coordinatorDaemonId, opts);
           }
           /** Non-destructive peek — returns undrained events without marking them drained. */
           peekPendingEvents(meshId, coordinatorDaemonId) {
-            const daemonIds = (Array.isArray(coordinatorDaemonId) ? coordinatorDaemonId : coordinatorDaemonId ? [coordinatorDaemonId] : []).filter((id) => typeof id === "string" && id.length > 0);
-            const whereClause = daemonIds.length > 0 ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => "?").join(",")}))` : `WHERE mesh_id = ? AND drained = 0`;
-            const params = daemonIds.length > 0 ? [meshId, ...daemonIds] : [meshId];
-            const rows = this.db.prepare(
-              `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
-            ).all(...params);
-            return rows.map((r) => ({
-              id: r.id,
-              event: r.event,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })()
-            }));
+            return peekPendingEvents(this, meshId, coordinatorDaemonId);
           }
           /**
            * REFINE-EVENT-SESSION-SCOPED-UNICAST — drain attribution audit. Returns the most
@@ -72866,20 +73086,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * before this column existed, or was drained by a caller that passed no identity.
            */
           recentDrainedPendingEvents(meshId, limit = 100) {
-            const rows = this.db.prepare(
-              `SELECT id, event, scope, intended_for, drained_by, drained, queued_at, drained_at
-             FROM mesh_pending_events WHERE mesh_id = ? ORDER BY queued_at DESC LIMIT ?`
-            ).all(meshId, Math.max(1, limit));
-            return rows.map((r) => ({
-              id: r.id,
-              event: r.event,
-              scope: r.scope ?? null,
-              intendedFor: r.intended_for ?? null,
-              drainedBy: r.drained_by ?? null,
-              drained: r.drained === 1,
-              queuedAt: r.queued_at,
-              drainedAt: r.drained_at ?? null
-            }));
+            return recentDrainedPendingEvents(this, meshId, limit);
           }
           /**
            * ENTER-LOSS layer ③ (boot-time composer-residue sweep) — recently-DRAINED
@@ -72893,30 +73100,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * history, not live queue state.
            */
           recentDrainedPendingEventPayloads(sinceEpochMs, limit = 200) {
-            const rows = this.db.prepare(
-              `SELECT id, mesh_id, event, payload, drained_at FROM mesh_pending_events
-             WHERE drained = 1 AND drained_at IS NOT NULL AND drained_at >= ?
-             ORDER BY drained_at DESC LIMIT ?`
-            ).all(sinceEpochMs, Math.max(1, limit));
-            return rows.map((r) => ({
-              id: r.id,
-              meshId: r.mesh_id,
-              event: r.event,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })(),
-              drainedAt: r.drained_at
-            }));
+            return recentDrainedPendingEventPayloads(this, sinceEpochMs, limit);
           }
           hasPendingEventFingerprint(meshId, fingerprint) {
-            const row = this.db.prepare(
-              "SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1"
-            ).get(meshId, fingerprint);
-            return row !== void 0;
+            return hasPendingEventFingerprint(this, meshId, fingerprint);
           }
           /**
            * B3a — v2 eventId idempotency. Returns true when a row with this event_id has
@@ -72927,11 +73114,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * the partial event_id index (idx_mesh_pending_events_event_id).
            */
           hasDrainedEventId(meshId, eventId) {
-            if (!eventId) return false;
-            const row = this.db.prepare(
-              "SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND event_id = ? AND drained = 1 LIMIT 1"
-            ).get(meshId, eventId);
-            return row !== void 0;
+            return hasDrainedEventId(this, meshId, eventId);
           }
           /**
            * B3a — snapshot of the v2 event_ids ALREADY drained (drained = 1) for the mesh.
@@ -72941,10 +73124,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * have a NULL event_id and are excluded by the index/WHERE.
            */
           drainedEventIdsForMesh(meshId) {
-            const rows = this.db.prepare(
-              "SELECT DISTINCT event_id FROM mesh_pending_events WHERE mesh_id = ? AND drained = 1 AND event_id IS NOT NULL"
-            ).all(meshId);
-            return new Set(rows.map((r) => r.event_id));
+            return drainedEventIdsForMesh(this, meshId);
           }
           // ── M3: Mission Records ─────────────────────────────────────────────────
           upsertMission(mission) {
@@ -73033,10 +73213,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return changes;
           }
           pendingEventCount(meshId) {
-            const row = this.db.prepare(
-              "SELECT COUNT(*) as cnt FROM mesh_pending_events WHERE mesh_id = ? AND drained = 0"
-            ).get(meshId);
-            return row?.cnt ?? 0;
+            return pendingEventCount(this, meshId);
           }
           /**
            * Mark specific pending-event rows drained by id (ack). Used by the
@@ -73046,12 +73223,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * reconcile tick retries it. Returns the number of rows newly marked drained.
            */
           markPendingEventsDrainedById(ids) {
-            const idList = ids.filter((id) => typeof id === "string" && id.length > 0);
-            if (idList.length === 0) return 0;
-            const now = Date.now();
-            return this.db.prepare(
-              `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE drained = 0 AND id IN (${idList.map(() => "?").join(",")})`
-            ).run(now, ...idList).changes;
+            return markPendingEventsDrainedById(this, ids);
           }
           /**
            * STRICT-ROUTE-HOLD-DURABILITY: return an ALREADY-DRAINED row to the queue
@@ -73088,13 +73260,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * Returns true when a drained row was found and returned to the queue.
            */
           requeueDrainedPendingEventByFingerprint(meshId, fingerprint) {
-            if (!fingerprint) return false;
-            const changes = this.db.prepare(
-              `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
-             WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
-            ).run(meshId, fingerprint).changes;
-            if (changes > 0) this.maybeCheckpointWal();
-            return changes > 0;
+            return requeueDrainedPendingEventByFingerprint(this, meshId, fingerprint);
           }
           /**
            * COORD-GENERATION-HANDOFF (defect 3): rewrite a queued row's payload in place,
@@ -73116,13 +73282,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * Returns true when a queued row was found and rewritten.
            */
           updatePendingEventPayloadByFingerprint(meshId, fingerprint, payload) {
-            if (!fingerprint) return false;
-            const changes = this.db.prepare(
-              `UPDATE mesh_pending_events SET payload = ?
-             WHERE mesh_id = ? AND fingerprint = ? AND drained = 0`
-            ).run(JSON.stringify(payload), meshId, fingerprint).changes;
-            if (changes > 0) this.maybeCheckpointWal();
-            return changes > 0;
+            return updatePendingEventPayloadByFingerprint(this, meshId, fingerprint, payload);
           }
           /**
            * ENTER-LOSS layer ③ (composer-residue recovery) — the row-id twin of
@@ -73140,13 +73300,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * Returns true when a drained row was found and returned to the queue.
            */
           requeueDrainedPendingEventById(rowId) {
-            if (!rowId) return false;
-            const changes = this.db.prepare(
-              `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
-             WHERE id = ? AND drained = 1`
-            ).run(rowId).changes;
-            if (changes > 0) this.maybeCheckpointWal();
-            return changes > 0;
+            return requeueDrainedPendingEventById(this, rowId);
           }
           /**
            * Hard-delete pending-event rows by id (including the dedup fingerprint history).
@@ -73155,11 +73309,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * for the same task could be re-queued later. Returns the number of rows deleted.
            */
           deletePendingEventsById(ids) {
-            const idList = ids.filter((id) => typeof id === "string" && id.length > 0);
-            if (idList.length === 0) return 0;
-            return this.db.prepare(
-              `DELETE FROM mesh_pending_events WHERE id IN (${idList.map(() => "?").join(",")})`
-            ).run(...idList).changes;
+            return deletePendingEventsById(this, ids);
           }
           /**
            * Retention prune for mesh_pending_events. This table has no lifecycle GC of its
@@ -73194,42 +73344,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * repeatedly with nothing to prune is a cheap no-op.
            */
           prunePendingEvents(opts) {
-            const now = Date.now();
-            const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
-            const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
-            const neverExpire = opts.neverExpireEvents;
-            const undrainedSelectRows = this.db.prepare(
-              "SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?"
-            ).all(undrainedCutoff);
-            const expirableRows = [];
-            let terminalExempt = 0;
-            for (const r of undrainedSelectRows) {
-              if (neverExpire?.has(r.event)) terminalExempt++;
-              else expirableRows.push(r);
-            }
-            const undrainedRows = expirableRows.map((r) => ({
-              id: r.id,
-              meshId: r.mesh_id,
-              event: r.event,
-              payload: (() => {
-                try {
-                  return JSON.parse(r.payload);
-                } catch {
-                  return {};
-                }
-              })()
-            }));
-            const drainedExpired = this.db.prepare(
-              "DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?"
-            ).run(drainedCutoff).changes;
-            let undrainedExpired = 0;
-            for (let i = 0; i < undrainedRows.length; i += 500) {
-              const chunk = undrainedRows.slice(i, i + 500);
-              undrainedExpired += this.db.prepare(
-                `DELETE FROM mesh_pending_events WHERE id IN (${chunk.map(() => "?").join(",")})`
-              ).run(...chunk.map((r) => r.id)).changes;
-            }
-            return { drainedExpired, undrainedExpired, undrainedRows, terminalExempt };
+            return prunePendingEvents(this, opts);
           }
           // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
           // Implementation lives in ./mesh-runtime-store-turn-attempts.ts (behavior-
@@ -73624,7 +73739,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       readArchivedTerminalKeys: () => readArchivedTerminalKeys,
       readLedgerEntries: () => readLedgerEntries3,
       readLedgerEntriesByKind: () => readLedgerEntriesByKind,
-      readLedgerSlice: () => readLedgerSlice4,
+      readLedgerSlice: () => readLedgerSlice22,
       readLedgerSliceFromStore: () => readLedgerSliceFromStore3,
       readOperatingNotes: () => readOperatingNotes,
       resolveNoteExpiry: () => resolveNoteExpiry,
@@ -74269,7 +74384,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return summary;
     }
-    function readLedgerSlice4(meshId, opts) {
+    function readLedgerSlice22(meshId, opts) {
       const limit = clampLedgerSliceLimit(opts?.limit);
       const rawEntries = getCachedRawEntries(meshId);
       let entries = rawEntries;
@@ -77641,8 +77756,8 @@ ${rendered}`, "utf-8");
     async function appendFastForwardLedger(result, outcome) {
       if (!result.meshId) return;
       try {
-        const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        appendLedgerEntry22(result.meshId, {
+        const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        appendLedgerEntry32(result.meshId, {
           kind: "direct_fast_forward",
           ...result.nodeId ? { nodeId: result.nodeId } : {},
           payload: {
@@ -102398,11 +102513,11 @@ ${marker}`,
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             try {
-              const { readLedgerEntries: readLedgerEntries22, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { readLedgerEntries: readLedgerEntries32, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const tail = typeof args?.tail === "number" ? args.tail : 20;
               const since = typeof args?.since === "string" ? args.since : void 0;
               const kind = Array.isArray(args?.kind) ? args.kind.filter((k) => typeof k === "string") : void 0;
-              const entries = readLedgerEntries22(meshId, { tail, since, kind });
+              const entries = readLedgerEntries32(meshId, { tail, since, kind });
               const summary = getLedgerSummary22(meshId);
               return { success: true, entries, summary };
             } catch (e) {
@@ -102413,9 +102528,9 @@ ${marker}`,
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             try {
-              const { readLedgerSlice: readLedgerSlice22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { readLedgerSlice: readLedgerSlice32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const kind = Array.isArray(args?.kind) ? args.kind.filter((k) => typeof k === "string") : void 0;
-              const slice = readLedgerSlice22(meshId, {
+              const slice = readLedgerSlice32(meshId, {
                 afterId: typeof args?.afterId === "string" ? args.afterId : void 0,
                 since: typeof args?.since === "string" ? args.since : void 0,
                 kind,
@@ -102467,9 +102582,9 @@ ${marker}`,
             const text = typeof args?.text === "string" ? args.text.trim() : "";
             if (!text) return { success: false, error: "text required" };
             try {
-              const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const category = typeof args?.category === "string" ? args.category : void 0;
-              const entry = appendLedgerEntry22(meshId, {
+              const entry = appendLedgerEntry32(meshId, {
                 kind: "coordinator_operating_note",
                 payload: {
                   text,
@@ -131614,8 +131729,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               ctx.getCachedInlineMesh(meshId, applied.mesh);
               ctx.invalidateAggregateMeshStatus(meshId);
               try {
-                const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                appendLedgerEntry22(meshId, {
+                const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                appendLedgerEntry32(meshId, {
                   kind: "node_joined",
                   nodeId: applied.node.id,
                   payload: { role: "member", tokenId: applied.tokenId, workspace: applied.node.workspace }
@@ -135816,11 +135931,11 @@ ${mergeTreeErr?.stderr || ""}`;
               };
               const buildRecentActivityBestEffort = async (id) => {
                 try {
-                  const { getLedgerSummary: getLedgerSummary22, readLedgerEntries: readLedgerEntries22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                  const { getLedgerSummary: getLedgerSummary22, readLedgerEntries: readLedgerEntries32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
                   const { getMeshQueueStats: getMeshQueueStats2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
                   const summary = getLedgerSummary22(id);
                   const queue = getMeshQueueStats2(id);
-                  const failureEntries = readLedgerEntries22(id, { kind: ["task_failed"], tail: 5 });
+                  const failureEntries = readLedgerEntries32(id, { kind: ["task_failed"], tail: 5 });
                   const recentFailures = failureEntries.map((e) => {
                     const p = e.payload || {};
                     const raw = typeof p.taskSummary === "string" ? p.taskSummary : typeof p.message === "string" ? p.message : typeof p.error === "string" ? p.error : "";
@@ -136176,8 +136291,8 @@ ${ptyResult.output.slice(-2e3)}`);
                   });
                 }
                 try {
-                  const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                  appendLedgerEntry22(meshId, {
+                  const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                  appendLedgerEntry32(meshId, {
                     kind: "coordinator_started",
                     sessionId: cliCmdSessionId,
                     providerType: cliType,
@@ -136404,8 +136519,8 @@ ${ptyResult.output.slice(-2e3)}`);
                 });
               }
               try {
-                const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                appendLedgerEntry22(meshId, {
+                const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                appendLedgerEntry32(meshId, {
                   kind: "coordinator_started",
                   sessionId: launchSessionId,
                   providerType: cliType,
@@ -136911,8 +137026,8 @@ ${ptyResult.output.slice(-2e3)}`);
               const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime22 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
               const schedulingRuntime = buildMeshSchedulingRuntime22(mesh, queue);
               const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
-              const { readLedgerEntries: readLedgerEntries22, readLedgerEntriesByKind: readLedgerEntriesByKind2, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-              const ledgerEntries = readLedgerEntries22(meshId, { tail: 20 });
+              const { readLedgerEntries: readLedgerEntries32, readLedgerEntriesByKind: readLedgerEntriesByKind2, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const ledgerEntries = readLedgerEntries32(meshId, { tail: 20 });
               const asyncRefineLedgerEntries = readLedgerEntriesByKind2(meshId, ["task_dispatched", "task_completed", "task_failed"]);
               const ledgerSummary = getLedgerSummary22(meshId);
               const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
@@ -137275,7 +137390,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const { getMeshStatusMissionSummaries: getMeshStatusMissionSummaries22 } = await Promise.resolve().then(() => (init_mesh_missions(), mesh_missions_exports));
               const missions = getMeshStatusMissionSummaries22(meshId, { verbose: verboseMissions, withStats: true });
               const { buildMeshMagiActivity: buildMeshMagiActivity22, summarizeMeshMagiActivity: summarizeMeshMagiActivity22 } = await Promise.resolve().then(() => (init_mesh_magi_status(), mesh_magi_status_exports));
-              const magiLedgerEntries = readLedgerEntries22(meshId, { kind: ["magi_dispatched", "magi_synthesis"], tail: 200 });
+              const magiLedgerEntries = readLedgerEntries32(meshId, { kind: ["magi_dispatched", "magi_synthesis"], tail: 200 });
               const magiActivity = buildMeshMagiActivity22({ meshId, ledgerEntries: magiLedgerEntries });
               let magiActivityFold;
               if (magiActivity.length > 0 && !verboseMissions) {
@@ -137389,7 +137504,7 @@ ${ptyResult.output.slice(-2e3)}`);
             if (!meshId) return { success: false, error: "meshId required" };
             try {
               const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
-              const { readLedgerEntries: readLedgerEntries22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { readLedgerEntries: readLedgerEntries32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
               const { existsSync: existsSync77 } = await import("fs");
               const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -137406,7 +137521,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 cachedStatus = freshStatus?.success !== false ? freshStatus : null;
               }
               const nodeStatuses = inlineNodes ? inlineNodes : Array.isArray(cachedStatus?.nodes) ? cachedStatus.nodes : Array.isArray(mesh.nodes) ? mesh.nodes : [];
-              const ledgerEntries = readLedgerEntries22(meshId, { tail: 300 });
+              const ledgerEntries = readLedgerEntries32(meshId, { tail: 300 });
               const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
               for (const item of derivation.items) {
                 const workspace = item.workspace;
@@ -138335,9 +138450,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     }
     async function decideRefineTerminalWriteFromLedger(args) {
       try {
-        const { readLedgerEntries: readLedgerEntries22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const { readLedgerEntries: readLedgerEntries32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
         const existing = findExistingRefineTerminal(
-          readLedgerEntries22(args.meshId, { kind: ["task_completed", "task_failed"] }),
+          readLedgerEntries32(args.meshId, { kind: ["task_completed", "task_failed"] }),
           args.nodeId,
           args.jobId
         );
@@ -138699,10 +138814,10 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     }
     async function appendRefineJobLedger(self, kind, handle, result) {
       try {
-        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const { appendLedgerEntry: appendLedgerEntry32, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
         const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
         const executorStamp = kind === "task_dispatched" ? (await Promise.resolve().then(() => (init_mesh_refine_executor_liveness(), mesh_refine_executor_liveness_exports))).buildRefineExecutorStamp() : void 0;
-        appendLedgerEntry22(handle.meshId, {
+        appendLedgerEntry32(handle.meshId, {
           kind,
           nodeId: handle.targetNodeId,
           payload: {
@@ -138757,7 +138872,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
     async function resumePendingRefineJobsOnStartup(self) {
       try {
         const { listMeshes: listMeshes2, getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
-        const { readLedgerEntries: readLedgerEntries22, readArchivedTerminalKeys: readArchivedTerminalKeys2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const { readLedgerEntries: readLedgerEntries32, readArchivedTerminalKeys: readArchivedTerminalKeys2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
         const { selectOpenRefineDispatches: selectOpenRefineDispatches2, classifyRefineDispatch: classifyRefineDispatch2, shouldNotifyRefineCloseOut: shouldNotifyRefineCloseOut2 } = await Promise.resolve().then(() => (init_mesh_refine_zombie_sweep(), mesh_refine_zombie_sweep_exports));
         const meshIds = listMeshes2().map((m) => m.id).filter(Boolean);
         const nowMs = Date.now();
@@ -138765,7 +138880,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         const zombieCutoffMs = resolveRefineResumeZombieCutoffMs();
         const notifyHorizonMs = resolveRefineCloseOutNotifyHorizonMs();
         for (const meshId of meshIds) {
-          const entries = readLedgerEntries22(meshId, { kind: ["task_dispatched", "task_completed", "task_failed"] });
+          const entries = readLedgerEntries32(meshId, { kind: ["task_dispatched", "task_completed", "task_failed"] });
           const archivedTerminalKeys = readArchivedTerminalKeys2(meshId);
           const meshNodes = (() => {
             try {
@@ -138928,8 +139043,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
             error: removeResult?.error
           });
           try {
-            const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-            appendLedgerEntry22(meshId, {
+            const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+            appendLedgerEntry32(meshId, {
               kind: "node_removed",
               nodeId,
               payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence }
@@ -139437,9 +139552,9 @@ ${hintLines.join("\n")}` : "",
     }
     async function appendRefineBatchJobLedger(self, kind, handle, result) {
       try {
-        const { appendLedgerEntry: appendLedgerEntry22, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        const { appendLedgerEntry: appendLedgerEntry32, buildLedgerOriginatingCoordinatorStamp: buildLedgerOriginatingCoordinatorStamp2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
         const originatingStamp = kind === "task_dispatched" ? buildLedgerOriginatingCoordinatorStamp2({ coordinatorDaemonId: handle.targetCoordinatorDaemonId }) : void 0;
-        appendLedgerEntry22(handle.meshId, {
+        appendLedgerEntry32(handle.meshId, {
           kind,
           nodeId: handle.batchLabel,
           payload: {
@@ -140522,8 +140637,8 @@ ${e?.stderr || ""}`;
       let ledgerError;
       const ledgerStarted = Date.now();
       try {
-        const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        appendLedgerEntry22(meshId, {
+        const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        appendLedgerEntry32(meshId, {
           kind: "node_removed",
           nodeId,
           payload: { refined: true, mergedBranch: branch, into: baseBranch, pushed: true, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment }
@@ -141398,8 +141513,8 @@ ${e?.stderr || ""}`;
     }
     async function recordIntentionalMeshSessionStop(self, args) {
       try {
-        const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        appendLedgerEntry22(args.meshId, {
+        const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        appendLedgerEntry32(args.meshId, {
           kind: "session_stopped",
           nodeId: args.nodeId,
           sessionId: args.sessionId,
@@ -143649,8 +143764,8 @@ ${e?.stderr || ""}`;
               }
               if (worktreeCleanup && worktreeCleanup.success === true && worktreeCleanup.skipped !== true) {
                 try {
-                  const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                  appendLedgerEntry22(meshId, {
+                  const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                  appendLedgerEntry32(meshId, {
                     kind: "worktree_directory_removed",
                     nodeId,
                     payload: {
@@ -143673,8 +143788,8 @@ ${e?.stderr || ""}`;
               }
               if (removed) {
                 try {
-                  const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                  appendLedgerEntry22(meshId, {
+                  const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                  appendLedgerEntry32(meshId, {
                     kind: "node_removed",
                     nodeId,
                     payload: {
@@ -143841,8 +143956,8 @@ ${e?.stderr || ""}`;
               };
               const appendCloneLedger = async (initSubmodules2, bootstrapState2) => {
                 try {
-                  const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-                  appendLedgerEntry22(meshId, {
+                  const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                  appendLedgerEntry32(meshId, {
                     kind: "node_cloned",
                     nodeId: node.id,
                     payload: {
@@ -145812,7 +145927,7 @@ ${e?.stderr || ""}`;
       readKeyStaleAdvisory: () => readKeyStaleAdvisory,
       readLatestCodexRateLimits: () => readLatestCodexRateLimits,
       readLedgerEntries: () => readLedgerEntries3,
-      readLedgerSlice: () => readLedgerSlice4,
+      readLedgerSlice: () => readLedgerSlice22,
       readLedgerSliceFromStore: () => readLedgerSliceFromStore3,
       readMeshCompletionSummary: () => readMeshCompletionSummary,
       readOperatingNotes: () => readOperatingNotes,
@@ -163849,8 +163964,8 @@ data: ${JSON.stringify(msg.data)}
       if (input.meshId && input.sessionId) logMeshSessionTerminated(input);
       if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
       try {
-        const { appendLedgerEntry: appendLedgerEntry22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        appendLedgerEntry22(input.meshId, {
+        const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+        appendLedgerEntry32(input.meshId, {
           kind: "session_stopped",
           ...input.nodeId ? { nodeId: input.nodeId } : {},
           sessionId: input.sessionId,
