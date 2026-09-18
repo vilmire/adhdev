@@ -132447,6 +132447,33 @@ ${tail}`;
         REFINE_GATE_ENV_ALLOWLIST = /* @__PURE__ */ new Set([]);
       }
     });
+    function isRefineGeneratedVendorBundlePath(candidatePath) {
+      const normalized = candidatePath.replace(/\\/g, "/");
+      return REFINE_GENERATED_VENDOR_BUNDLE_PATHS.some(
+        (dir) => normalized === dir || normalized.startsWith(`${dir}/`)
+      );
+    }
+    function buildGeneratedBundleResolutionStageDetail(paths) {
+      return { paths, resolution: "branch_side", verifiedBy: "check:vendor (validation stage)" };
+    }
+    var REFINE_GENERATED_VENDOR_BUNDLE_PATHS;
+    var init_mesh_refine_generated_bundles = __esm2({
+      "src/mesh/mesh-refine-generated-bundles.ts"() {
+        "use strict";
+        REFINE_GENERATED_VENDOR_BUNDLE_PATHS = [
+          // Cloud monorepo root (packages/daemon-cloud) — verified by scripts/check-vendor-drift.mjs
+          "packages/daemon-cloud/vendor/mcp-server",
+          "packages/daemon-cloud/vendor/session-host-daemon",
+          "packages/daemon-cloud/vendor/terminal-mux-cli",
+          // oss submodule (packages/daemon-standalone) — verified by oss/scripts/check-vendor-drift.mjs
+          "packages/daemon-standalone/vendor/mcp-server",
+          "packages/daemon-standalone/vendor/session-host-daemon",
+          // ...as addressed from the cloud monorepo root, where the oss submodule is nested.
+          "oss/packages/daemon-standalone/vendor/mcp-server",
+          "oss/packages/daemon-standalone/vendor/session-host-daemon"
+        ];
+      }
+    });
     function classifySubmoduleDivergence(submoduleRepoPath, baseCommit, branchCommit) {
       if (!baseCommit || !branchCommit) return "undeterminable";
       if (baseCommit === branchCommit) return "not_diverged";
@@ -132756,6 +132783,15 @@ ${tail}`;
         }
         return { ok: false, reason, conflictPaths };
       };
+      const isRegularFileConflict = (p) => {
+        try {
+          const staged = (0, import_node_child_process8.execFileSync)(GIT2, ["ls-files", "--stage", "--", p], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+          return staged.trim() !== "" && !/^160000\s/m.test(staged);
+        } catch {
+          return false;
+        }
+      };
+      const resolvedGeneratedBundlePaths = [];
       let progress = runRebase(["rebase", baseHead]);
       let guard = 0;
       while (!progress.ok) {
@@ -132764,7 +132800,24 @@ ${tail}`;
         if (conflicts.length === 0) {
           return abort("rebase_error");
         }
-        const unresolvable = conflicts.filter((p) => !resolveByPath.has(p));
+        const generatedBundleConflicts = conflicts.filter(
+          (p) => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflict(p)
+        );
+        for (const p of generatedBundleConflicts) {
+          try {
+            (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "--theirs", "--", p], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+            (0, import_node_child_process8.execFileSync)(GIT2, ["add", "--", p], { cwd: worktreeRoot, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+            if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+          } catch {
+            return abort("rebase_error", conflicts);
+          }
+        }
+        const remaining = generatedBundleConflicts.length > 0 ? unmergedPaths() : conflicts;
+        if (remaining.length === 0) {
+          progress = runRebase(["rebase", "--continue"]);
+          continue;
+        }
+        const unresolvable = remaining.filter((p) => !resolveByPath.has(p));
         if (unresolvable.length > 0) {
           const unresolvableGitlink = unresolvable.some((p) => {
             try {
@@ -132784,7 +132837,7 @@ ${tail}`;
           });
           return abort(allGitlink && unresolvableGitlink ? "unexpected_gitlink" : "non_gitlink_conflict", conflicts);
         }
-        for (const p of conflicts) {
+        for (const p of remaining) {
           const commit = resolveByPath.get(p);
           try {
             (0, import_node_child_process8.execFileSync)(GIT2, ["checkout", "-q", "--detach", commit], { cwd: (0, import_path19.resolve)(worktreeRoot, p), stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
@@ -132803,7 +132856,11 @@ ${tail}`;
         branchHead = (0, import_node_child_process8.execFileSync)(GIT2, ["rev-parse", "HEAD"], { cwd: worktreeRoot, encoding: "utf8", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() }).trim();
       } catch {
       }
-      return { ok: true, branchHead };
+      return {
+        ok: true,
+        branchHead,
+        ...resolvedGeneratedBundlePaths.length > 0 ? { resolvedGeneratedBundlePaths } : {}
+      };
     }
     var fs52;
     var import_path19;
@@ -132820,6 +132877,7 @@ ${tail}`;
         import_node_child_process8 = require("child_process");
         init_git_locale();
         init_mesh_refine_gitlink_utils();
+        init_mesh_refine_generated_bundles();
         GIT_NETWORK_TIMEOUT_MS2 = 3e4;
         GIT_LOCAL_TIMEOUT_MS2 = 15e3;
         SUBMODULE_PUBLISH_REQUIRED_RECOMMENDED_ACTION = "Publish the branch-side submodule commit(s) to submodule origin main, then rerun mesh_refine_node. Do NOT retry the rebase: the branch was intentionally left unrewritten because a rebase here would mint a submodule commit the reachability gate must reject.";
@@ -133923,6 +133981,7 @@ ${mergeTreeErr?.stderr || ""}`;
         init_mesh_refine_env_sanitize();
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_submodule_converge();
+        init_mesh_refine_generated_bundles();
         init_mesh_refine_gitlink_utils();
         REFINE_VALIDATION_TIMEOUT_MS = 12e4;
         REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
@@ -139548,17 +139607,22 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       const rebaseStarted = Date.now();
       const rebaseExec = { cwd: node.workspace, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() };
       try {
-        if (gitlinkResolutions.length > 0) {
-          const gitlinkRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
-          if (!gitlinkRebase.ok) {
-            const err = new Error(`gitlink-aware rebase aborted: ${gitlinkRebase.reason || "unknown"}`);
-            err.gitlinkRebaseReason = gitlinkRebase.reason;
-            err.gitlinkRebaseConflicts = gitlinkRebase.conflictPaths;
-            err.alreadyAborted = true;
-            throw err;
-          }
-        } else {
-          (0, import_node_child_process15.execFileSync)("git", ["rebase", baseHead], rebaseExec);
+        const drivenRebase = rootRebaseResolvingGitlinks(node.workspace, baseHead, gitlinkResolutions);
+        if (!drivenRebase.ok) {
+          const err = new Error(`gitlink-aware rebase aborted: ${drivenRebase.reason || "unknown"}`);
+          err.gitlinkRebaseReason = drivenRebase.reason;
+          err.gitlinkRebaseConflicts = drivenRebase.conflictPaths;
+          err.alreadyAborted = true;
+          throw err;
+        }
+        if (drivenRebase.resolvedGeneratedBundlePaths?.length) {
+          recordMeshRefineStage(
+            refineStages,
+            "generated_bundle_conflict_resolved",
+            "passed",
+            rebaseStarted,
+            buildGeneratedBundleResolutionStageDetail(drivenRebase.resolvedGeneratedBundlePaths)
+          );
         }
       } catch (rebaseErr) {
         if (!rebaseErr?.alreadyAborted) {

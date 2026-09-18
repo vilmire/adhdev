@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { gitChildEnv } from '../git/git-locale.js';
 import type { GitAncestryProbe } from './mesh-refine-gitlink-utils.js';
 import { GIT, ensureSubmoduleCommitLocal, probeGitAncestry, readChangedGitlinkPaths, readTreeObject, submoduleCommitPresent } from './mesh-refine-gitlink-utils.js';
+import { isRefineGeneratedVendorBundlePath } from './mesh-refine-generated-bundles.js';
 
 /**
  * ★ Every `execFileSync` below is SYNCHRONOUS: it blocks the daemon's entire
@@ -816,6 +817,14 @@ export type RootRebaseGitlinkResolveResult = {
     reason?: string;
     /** The paths that conflicted at the point of abort (for diagnostics). */
     conflictPaths?: string[];
+    /**
+     * Generated vendor-bundle paths whose rebase conflict was resolved to the
+     * BRANCH side (see `mesh-refine-generated-bundles.ts`). Surfaced so the
+     * sync_base stage record names what was auto-resolved rather than resolving
+     * it invisibly — the resulting bundle may be STALE, and `check:vendor` in the
+     * following validation stage is what proves it is not.
+     */
+    resolvedGeneratedBundlePaths?: string[];
 };
 
 /**
@@ -872,6 +881,25 @@ export function rootRebaseResolvingGitlinks(
         return { ok: false, reason, conflictPaths };
     };
 
+    /**
+     * True when `p` is a REGULAR FILE at some conflict stage — i.e. not a gitlink.
+     * `ls-files --stage` reports mode 160000 for a gitlink at any stage, so this is
+     * the same probe the gitlink branch below uses, inverted. Guards the generated-
+     * bundle resolution so a submodule can never be "resolved" by taking a side,
+     * even if a future vendor path overlapped a gitlink.
+     */
+    const isRegularFileConflict = (p: string): boolean => {
+        try {
+            const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            return staged.trim() !== '' && !/^160000\s/m.test(staged);
+        } catch {
+            return false;
+        }
+    };
+
+    // Generated vendor bundles resolved to the branch side across all rebase stops.
+    const resolvedGeneratedBundlePaths: string[] = [];
+
     let progress = runRebase(['rebase', baseHead]);
     let guard = 0;
     while (!progress.ok) {
@@ -881,8 +909,42 @@ export function rootRebaseResolvingGitlinks(
             // Failed but no recorded conflicts — a non-conflict rebase error.
             return abort('rebase_error');
         }
-        // Every conflicting path must be a gitlink we have a converged commit for.
-        const unresolvable = conflicts.filter(p => !resolveByPath.has(p));
+        // ★GENERATED VENDOR BUNDLES: resolve to the BRANCH side before judging the
+        // rest. These are build outputs of `bundle:vendor:all`, not authored code;
+        // when a sibling branch lands a re-bundle first, git reports a content
+        // conflict inside the emitted file even though the authored source diff is
+        // byte-identical. Hand-merging two bundler outputs is meaningless — the
+        // correct resolution is "regenerate", and taking the branch side leaves a
+        // bundle that `check:vendor` (validation stage, right after sync_base, and
+        // registered in .adhdev/refine.json for BOTH repo roots) rebuilds and
+        // verifies. A stale bundle therefore still blocks the refine, but at a gate
+        // that can name it. See mesh-refine-generated-bundles.ts.
+        const generatedBundleConflicts = conflicts.filter(
+            p => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflict(p),
+        );
+        for (const p of generatedBundleConflicts) {
+            try {
+                // `--theirs` during a REBASE is the branch being replayed (our commit),
+                // not the upstream base: rebase checks the base out and replays the
+                // branch on top, so the stage-3 "theirs" side is the branch's bundle.
+                execFileSync(GIT, ['checkout', '--theirs', '--', p], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+                execFileSync(GIT, ['add', '--', p], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+                if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+            } catch {
+                // Could not resolve a bundle we claimed to own — fail safe rather than
+                // continue a rebase with a half-staged index.
+                return abort('rebase_error', conflicts);
+            }
+        }
+        // Re-read: the bundle resolutions above cleared some unmerged entries.
+        const remaining = generatedBundleConflicts.length > 0 ? unmergedPaths() : conflicts;
+        if (remaining.length === 0) {
+            // Every conflict at this stop was a generated bundle — continue the rebase.
+            progress = runRebase(['rebase', '--continue']);
+            continue;
+        }
+        // Every remaining conflicting path must be a gitlink we have a converged commit for.
+        const unresolvable = remaining.filter(p => !resolveByPath.has(p));
         if (unresolvable.length > 0) {
             // Distinguish a genuine (non-gitlink) content conflict from a gitlink we
             // simply have no converged commit for. `ls-files --stage` reports mode
@@ -908,8 +970,10 @@ export function rootRebaseResolvingGitlinks(
             // gitlink conflicted that STEP 1 did not converge.
             return abort(allGitlink && unresolvableGitlink ? 'unexpected_gitlink' : 'non_gitlink_conflict', conflicts);
         }
-        // Stage every conflicting gitlink to its converged commit, then continue.
-        for (const p of conflicts) {
+        // Stage every remaining conflicting gitlink to its converged commit, then
+        // continue. Iterates `remaining` (not `conflicts`) so an already-resolved
+        // generated bundle is not re-processed as if it were a gitlink.
+        for (const p of remaining) {
             const commit = resolveByPath.get(p)!;
             try {
                 execFileSync(GIT, ['checkout', '-q', '--detach', commit], { cwd: pathResolve(worktreeRoot, p), stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
@@ -927,5 +991,9 @@ export function rootRebaseResolvingGitlinks(
     try {
         branchHead = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
     } catch { /* leave undefined */ }
-    return { ok: true, branchHead };
+    return {
+        ok: true,
+        branchHead,
+        ...(resolvedGeneratedBundlePaths.length > 0 ? { resolvedGeneratedBundlePaths } : {}),
+    };
 }
