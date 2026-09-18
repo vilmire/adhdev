@@ -7,7 +7,6 @@ import { getLedgerDir } from './mesh-ledger.js';
 import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
-import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
 import { MeshGraphStore } from './mesh-graph-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
@@ -38,6 +37,27 @@ import {
     type MeshTurnAttemptInsert, type MeshTurnAttemptStageOpts,
     type MeshTurnEventInsert, type MeshHeldTurnSuspensionInsert,
 } from './mesh-runtime-store-turn-attempts.js';
+// Pure move (file-size gate): the schema DDL + column migrations, the G2 event
+// ledger and the G3 pending-coordinator-event persistence now live in
+// mesh-runtime-store-schema.ts / -ledger.ts / -pending-events.ts. The class keeps
+// thin delegating wrappers below so the public surface and every existing call
+// site are unchanged — same `self`-passing pattern as the turn-attempt extraction.
+import {
+    migrate as migrateSchema, tableColumns as schemaTableColumns,
+    migrateMeshIsolationColumns as schemaMigrateMeshIsolationColumns,
+    hasLoggedMigrationFailure, markLoggedMigrationFailure,
+} from './mesh-runtime-store-schema.js';
+import {
+    appendLedgerEntry, readLedgerEntries, readLedgerEntriesOrdered, clearLedgerForMesh,
+    deleteLedgerEntries, hasLedgerEntry, ledgerEntryCount, importLedgerEntries, readLedgerSlice,
+} from './mesh-runtime-store-ledger.js';
+import {
+    insertPendingEvent, drainPendingEvents, peekPendingEvents, recentDrainedPendingEvents,
+    recentDrainedPendingEventPayloads, hasPendingEventFingerprint, hasDrainedEventId,
+    drainedEventIdsForMesh, pendingEventCount, markPendingEventsDrainedById,
+    requeueDrainedPendingEventByFingerprint, updatePendingEventPayloadByFingerprint,
+    requeueDrainedPendingEventById, deletePendingEventsById, prunePendingEvents,
+} from './mesh-runtime-store-pending-events.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -68,7 +88,6 @@ function legacyQueuePath(meshId: string): string {
     return join(getLedgerDir(), `${safeMeshId(meshId)}.queue.json`);
 }
 
-let loggedMigrationFailure = false;
 let loggedStrayCleanup = false;
 
 /**
@@ -128,8 +147,8 @@ function meshRuntimeStorePath(): string {
         // boot retries the rename. If the main rename already landed (only a
         // companion file failed), the data is at nextPath; otherwise it is still
         // at legacyPath.
-        if (!loggedMigrationFailure) {
-            loggedMigrationFailure = true;
+        if (!hasLoggedMigrationFailure()) {
+            markLoggedMigrationFailure();
             LOG.warn(
                 'MeshRuntimeStore',
                 `Legacy beads.db→mesh-runtime.db migration failed; using existing DB in-place to avoid data loss: ${err?.message || err}`,
@@ -246,557 +265,25 @@ export class MeshRuntimeStore {
         return this.graphStoreInstance;
     }
 
+    // ── Schema DDL + column migrations ───────────────────────────────────────
+    // Implementation lives in ./mesh-runtime-store-schema.ts (behavior-preserving
+    // code move, file-size gate). Kept here as thin delegators so the constructor
+    // call and every call site are unchanged; the extracted functions reach the db
+    // handle via `self` (same pattern as the turn-attempt delegators below).
+
     private migrate(): void {
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS mesh_queue (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                target_node_id TEXT,
-                target_session_id TEXT,
-                assigned_node_id TEXT,
-                assigned_session_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_queue_mesh_status_created
-                ON mesh_queue(mesh_id, status, created_at);
-            CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
-                ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
-
-            -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
-            -- also carries meshId as its first '::'-joined segment (see
-            -- buildMeshCompletionFingerprint) — that string-prefix defense is kept; this
-            -- column makes cross-mesh suppression impossible even if the string format
-            -- drifts or two meshes ever collide on a fingerprint body.
-            CREATE TABLE IF NOT EXISTS mesh_completion_fingerprints (
-                fingerprint TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL,
-                mesh_id TEXT NOT NULL DEFAULT ''
-            );
-            -- NOTE: the (mesh_id, fingerprint) index is created in migrateMeshIsolationColumns,
-            -- NOT here. A pre-isolation DB still has the legacy table (CREATE IF NOT EXISTS is a
-            -- no-op), so referencing mesh_id in an index before the ALTER ADD COLUMN runs would
-            -- fail with "no such column". The migration adds the column then the index.
-
-            CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
-                task_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                message TEXT NOT NULL,
-                -- MESH-IMAGE-DISPATCH: serialized multipart input envelope (JSON) that
-                -- accompanied the message, or NULL for an ordinary text-only dispatch.
-                -- Nullable and additive so pre-existing rows read back exactly as before.
-                input TEXT,
-                task_mode TEXT,
-                via TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'dispatched',
-                dispatched_to_idle_session INTEGER NOT NULL DEFAULT 0,
-                dispatched_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
-                ON mesh_direct_dispatches(mesh_id, session_id, status);
-
-            -- MESH-ISOLATION-LEAK: mesh_id is part of the PK so a nodeId shared across two
-            -- meshes (same machine in multiple repos) keeps a separate idle-session row per
-            -- mesh, and getRemoteIdleSessions(meshId) can never surface another mesh's
-            -- session for a queue claim.
-            CREATE TABLE IF NOT EXISTS remote_idle_sessions (
-                mesh_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                provider_type TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                metadata TEXT,
-                PRIMARY KEY (mesh_id, node_id, session_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS mesh_session_delivery (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                task_id TEXT,
-                kind TEXT NOT NULL,
-                priority INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL,
-                -- MESH-IMAGE-DISPATCH: see mesh_direct_dispatches.input — same nullable
-                -- serialized multipart envelope, so a queued delivery can carry an
-                -- attachment through to the moment the session goes idle.
-                input TEXT,
-                status TEXT NOT NULL DEFAULT 'queued',
-                deliver_after TEXT,
-                expires_at TEXT,
-                attempt_count INTEGER NOT NULL DEFAULT 0,
-                source_coordinator_session_id TEXT,
-                source_coordinator_daemon_id TEXT,
-                last_error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_mesh_status
-                ON mesh_session_delivery(mesh_id, status, created_at);
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_session
-                ON mesh_session_delivery(mesh_id, session_id, status);
-            CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
-                ON mesh_session_delivery(mesh_id, task_id);
-
-            -- MESH-COMPLEXITY-AUDIT Part 8-2: mesh_completion_conflicts removed
-            -- (write-only fingerprint-collision diagnostic, no production reader,
-            -- no no-loss role). Dropped in migrateMeshIsolationColumns step 6.
-
-            CREATE TABLE IF NOT EXISTS mesh_tool_call_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mesh_id TEXT NOT NULL,
-                tool TEXT NOT NULL,
-                session_id TEXT,
-                caller_role TEXT,
-                called_at INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
-                ON mesh_tool_call_log(mesh_id, tool, called_at);
-
-            -- G2: Event ledger — runtime source of truth for task/session lifecycle events.
-            -- JSONL files are retained as export/import/debug/legacy artifacts only.
-            CREATE TABLE IF NOT EXISTS mesh_event_ledger (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                -- LEDGER-TASK-TRACEABILITY (B): the task a lifecycle entry pertains to,
-                -- promoted from payload.taskId so kind+task_id joins are index-backed
-                -- (legacy DBs get this column via migrateMeshIsolationColumns' ALTER).
-                task_id TEXT,
-                payload TEXT NOT NULL DEFAULT '{}'
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_time
-                ON mesh_event_ledger(mesh_id, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_kind
-                ON mesh_event_ledger(mesh_id, kind, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
-                ON mesh_event_ledger(mesh_id, session_id, timestamp);
-
-            -- G3: Pending coordinator event inbox — replaces <meshId>.pending-events.jsonl.
-            -- Coordinator drains this table on get_pending_mesh_events, then deletes drained rows.
-            CREATE TABLE IF NOT EXISTS mesh_pending_events (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                coordinator_daemon_id TEXT,
-                event TEXT NOT NULL,
-                payload TEXT NOT NULL DEFAULT '{}',
-                fingerprint TEXT,
-                queued_at INTEGER NOT NULL,
-                drained INTEGER NOT NULL DEFAULT 0,
-                drained_at INTEGER,
-                -- v2 protocol envelope (B2a). All nullable so pre-v2 rows and events
-                -- emitted before a coordinator identity is known coexist as v1. The
-                -- authoritative copy of each also rides inside the payload column; these
-                -- columns exist for queryable idempotency (event_id) and scope-based drain
-                -- filtering without JSON-parsing every row. dispatched_by / intended_for
-                -- hold the JSON-serialized CoordinatorIdentity.
-                protocol_version TEXT,
-                event_id TEXT,
-                scope TEXT,
-                dispatched_by TEXT,
-                intended_for TEXT,
-                -- REFINE-EVENT-SESSION-SCOPED-UNICAST: WHO consumed this row. The ledger
-                -- previously recorded only THAT an event was drained, never by which
-                -- coordinator identity — so a mis-delivered unicast (a sibling session
-                -- consuming another coordinator's event) left no evidence and had to be
-                -- inferred. Written at drain time as the JSON-serialized drainer
-                -- CoordinatorIdentity. NULL on rows drained before this column existed
-                -- and on any drain whose caller passed no identity (daemon-level drain).
-                drained_by TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
-                ON mesh_pending_events(mesh_id, drained, queued_at);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
-                ON mesh_pending_events(mesh_id, fingerprint)
-                WHERE fingerprint IS NOT NULL;
-
-            -- M3: persistent mission records. Plans live in the system, not in the
-            -- coordinator LLM's context. Progress is derived from task statuses at
-            -- query time (mission_id on queue tasks) — never stored here.
-            CREATE TABLE IF NOT EXISTS mesh_missions (
-                id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                goal TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'active',
-                source TEXT,
-                -- G3: idempotency marker for the mission_close_candidate coordinator
-                -- event. Set to the emit timestamp when all of a mission's tasks first
-                -- become terminal (so the "consider closing this" nudge fires exactly
-                -- once per all-terminal edge), and cleared back to NULL when the mission
-                -- returns to a non-terminal state (new/re-opened task) so a later
-                -- re-completion can nudge again. Never drives a status transition — the
-                -- coordinator/human still decides via mesh_mission_upsert.
-                close_candidate_emitted_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
-                ON mesh_missions(mesh_id, status, updated_at);
-
-            -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
-            -- the schedulingStrategy spreads work ('fitness' with no task in scope),
-            -- eligible nodes tied at the same (priority, load) are rotated by this
-            -- cursor so the tie-break winner cycles across scheduling passes instead
-            -- of always favouring the same array-order node. Persisted (not a module
-            -- Map) so rotation survives daemon restarts and stays a single source of
-            -- truth across scheduling entry points.
-            CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
-                mesh_id TEXT PRIMARY KEY,
-                cursor INTEGER NOT NULL DEFAULT 0
-            );
-
-            -- T2 (B2b): persistent acked-hold state for in-flight direct dispatches.
-            -- The reconcile loop's PHASE-4 acked-hold (death-consequence counter,
-            -- fast-track idle streak, live-confirmed flag) used to live only in a
-            -- process-local Map (mesh-reconcile-loop.ts inFlightAckedHoldState), so a
-            -- daemon restart lost it — re-opening the door to the duplicate-emit / drop
-            -- window that the PHASE-4 transcript synth backstop then had to correct after
-            -- the fact. Persisting it lets the state survive a restart: the loop
-            -- rehydrates the Map from this table on first touch and stays read-through /
-            -- write-through against it thereafter. Keyed by task_id (one hold per
-            -- in-flight dispatch); mesh_id is carried for per-mesh listing / prune.
-            --   hold_reason         — 'live' once a conclusive read confirmed the session
-            --                         reachable since the ack, else 'unconfirmed' (drives
-            --                         the death-backstop's liveConfirmedSinceAck gate).
-            --   held_at             — ms epoch the hold row was first created.
-            --   first_idle_since_ack — ms epoch of the FIRST tick in the current continuous
-            --                         idle-with-final-assistant run (fast-track streak); NULL
-            --                         when the streak is broken / not yet started.
-            --   read_failure_count  — consecutive read_chat failures since the last
-            --                         conclusive read (death backstop (a)).
-            CREATE TABLE IF NOT EXISTS mesh_inflight_hold (
-                task_id TEXT PRIMARY KEY,
-                mesh_id TEXT,
-                hold_reason TEXT,
-                held_at INTEGER,
-                first_idle_since_ack INTEGER,
-                read_failure_count INTEGER,
-                updated_at INTEGER
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
-                ON mesh_inflight_hold(mesh_id);
-
-            -- TURN-LEDGER (Stage 5): the authoritative causal turn transaction per task
-            -- ATTEMPT. One row per (mesh_id, task_id, attempt_seq); attempt_seq is the
-            -- dispatch nonce the attempt was opened under (monotonic per task), so a
-            -- reclaim/re-dispatch opens a NEW attempt row while late events against the
-            -- old attempt are rejected by identity, never applied. The stage column is a
-            -- monotonic causal FSM (accepted → delivered → consumed → generating →
-            -- [waiting_approval|waiting_choice] → finalizing → terminal); terminal_outcome
-            -- is committed at most once via a conditional UPDATE (exactly-once logical
-            -- completion). JSONL/ledger tables remain audit/export only — THIS table is
-            -- the single mutable source of truth for turn state.
-            CREATE TABLE IF NOT EXISTS mesh_turn_attempts (
-                attempt_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                attempt_seq INTEGER NOT NULL,
-                node_id TEXT,
-                session_id TEXT,
-                provider_type TEXT,
-                coordinator_daemon_id TEXT,
-                coordinator_session_id TEXT,
-                dispatch_nonce INTEGER,
-                stage TEXT NOT NULL DEFAULT 'accepted',
-                redrive_count INTEGER NOT NULL DEFAULT 0,
-                lease_deadline_ms INTEGER,
-                accepted_at TEXT,
-                delivered_at TEXT,
-                consumed_at TEXT,
-                terminal_outcome TEXT,
-                terminal_reason TEXT,
-                terminal_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (mesh_id, task_id, attempt_seq)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_task
-                ON mesh_turn_attempts(mesh_id, task_id, attempt_seq);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_session
-                ON mesh_turn_attempts(mesh_id, session_id);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_stage
-                ON mesh_turn_attempts(mesh_id, stage);
-
-            -- TURN-LEDGER (Stage 5): append-only, idempotency-keyed causal event log per
-            -- attempt. UNIQUE(attempt_id, kind, dedupe_key) makes repeated/reordered ACKs
-            -- and duplicate completion proposals insert-once (INSERT OR IGNORE → the
-            -- reducer reads the existing row and treats the re-arrival as a duplicate).
-            CREATE TABLE IF NOT EXISTS mesh_turn_events (
-                event_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                dedupe_key TEXT NOT NULL DEFAULT '',
-                payload TEXT NOT NULL DEFAULT '{}',
-                occurred_at_ms INTEGER,
-                recorded_at TEXT NOT NULL,
-                UNIQUE (attempt_id, kind, dedupe_key)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
-                ON mesh_turn_events(mesh_id, task_id, kind);
-
-            -- WORKER-MCP (design §5): by-kind probes; see mesh-turn-event-queries.ts.
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
-                ON mesh_turn_events(mesh_id, kind, recorded_at);
-
-            -- ★ Stage 5c-1: mesh_turn_outbox was defined here. It is no longer
-            -- created; existing DBs have it dropped by migrateMeshIsolationColumns
-            -- step 9. The re-drive guarantee it carried is now the seqscribe
-            -- redrive consumer's durable cursor (mesh-terminal-redrive.ts).
-
-            -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
-            -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
-            -- (a fast picker fires ahead of the generating_started processing, whose
-            -- attempt-resolution preamble defers the consumed write). The causal FSM
-            -- rightly refuses accepted/delivered → waiting_*; instead of dropping the
-            -- edge, the reducer holds it here — attempt/session/epoch-scoped and
-            -- content-free — insert-once via hold_id (<attempt_id>:<stage>). The
-            -- consumed commit applies the hold through the SAME FSM in the same
-            -- transaction; the restart reconcile drain covers a crash between hold
-            -- and consumed; terminal commits resolve held rows as dropped so a held
-            -- picker can never resurrect a finished/reassigned attempt.
-            CREATE TABLE IF NOT EXISTS mesh_turn_held_suspensions (
-                hold_id TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                attempt_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                session_id TEXT,
-                dispatch_nonce INTEGER,
-                occurred_at_ms INTEGER,
-                recorded_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'held',
-                resolution TEXT,
-                resolved_at TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_mesh
-                ON mesh_turn_held_suspensions(mesh_id, status);
-            CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
-                ON mesh_turn_held_suspensions(attempt_id, status);
-        `);
-        this.migrateMeshIsolationColumns();
-        // GRAPH-ORCHESTRATION Phase A: additive graph tables (CREATE IF NOT EXISTS only). See mesh-graph-schema.ts.
-        migrateMeshGraphSchema(this.db);
+        migrateSchema(this);
     }
 
     private tableColumns(table: string): Set<string> {
-        const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-        return new Set(rows.map(r => r.name));
+        return schemaTableColumns(this, table);
     }
 
-    /**
-     * MESH-ISOLATION-LEAK migration. Two tables historically lacked a `mesh_id` column,
-     * letting one machine that belongs to multiple meshes (multiple repos) leak rows
-     * across meshes. Both migrations are idempotent and run on every boot — the column
-     * check short-circuits once the new schema is in place.
-     */
+    // Only called by migrate() in production, but kept as a class member because a
+    // regression test re-invokes it through `(db as any)` to assert the migration is
+    // idempotent across boots (mesh-runtime-store.test.ts, Part 8-1).
     private migrateMeshIsolationColumns(): void {
-        try {
-            // 1. mesh_completion_fingerprints: ADD COLUMN + backfill mesh_id from the
-            //    fingerprint string's first '::'-joined segment (buildMeshCompletionFingerprint
-            //    prefixes meshId). A row whose fingerprint has no '::' (legacy/foreign format)
-            //    backfills to '' — still strictly tighter than the prior global query.
-            const fpCols = this.tableColumns('mesh_completion_fingerprints');
-            if (!fpCols.has('mesh_id')) {
-                this.db.exec(`ALTER TABLE mesh_completion_fingerprints ADD COLUMN mesh_id TEXT NOT NULL DEFAULT ''`);
-                this.db.exec(`
-                    UPDATE mesh_completion_fingerprints
-                    SET mesh_id = substr(fingerprint, 1, instr(fingerprint, '::') - 1)
-                    WHERE instr(fingerprint, '::') > 0 AND mesh_id = ''
-                `);
-            }
-            // The mesh_id column is now guaranteed to exist (fresh DB had it from CREATE TABLE,
-            // legacy DB just got it via ALTER). Create the index unconditionally — IF NOT EXISTS
-            // makes it a no-op once present.
-            this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_completion_fingerprints_mesh
-                    ON mesh_completion_fingerprints(mesh_id, fingerprint)
-            `);
-
-            // 2. remote_idle_sessions: the mesh_id is part of the PRIMARY KEY, which SQLite
-            //    cannot add via ALTER. The rows are ephemeral — sessions re-register on the
-            //    next agent:ready / agent:generating_completed — so a safe DROP+recreate is
-            //    acceptable (per fix spec) rather than a full table rebuild + un-backfillable
-            //    mesh_id. Only rebuild when the legacy (no mesh_id) schema is detected.
-            const idleCols = this.tableColumns('remote_idle_sessions');
-            if (!idleCols.has('mesh_id')) {
-                this.db.exec(`
-                    DROP TABLE IF EXISTS remote_idle_sessions;
-                    CREATE TABLE remote_idle_sessions (
-                        mesh_id TEXT NOT NULL,
-                        node_id TEXT NOT NULL,
-                        session_id TEXT NOT NULL,
-                        provider_type TEXT NOT NULL,
-                        expires_at INTEGER NOT NULL,
-                        metadata TEXT,
-                        PRIMARY KEY (mesh_id, node_id, session_id)
-                    );
-                `);
-            }
-
-            // 3. mesh_missions.source: nullable provenance tag ('magi' | 'coordinator').
-            //    Pre-existing rows keep source NULL — listMeshMissionSummaries treats a
-            //    NULL/absent source as a coordinator mission (never auto-hidden), so the
-            //    completed-MAGI bounding only ever affects rows explicitly stamped 'magi'.
-            const missionCols = this.tableColumns('mesh_missions');
-            if (!missionCols.has('source')) {
-                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN source TEXT`);
-            }
-            // 3b. mesh_missions.close_candidate_emitted_at (G3): nullable idempotency
-            //     marker for the mission_close_candidate coordinator nudge. Pre-existing
-            //     rows keep it NULL — treated as "not yet emitted", so the first
-            //     all-terminal detection after this migration emits once, then marks it.
-            if (!missionCols.has('close_candidate_emitted_at')) {
-                this.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
-            }
-
-            // 4. mesh_pending_events v2 envelope columns (B2a). A pre-v2 DB has the
-            //    table (CREATE IF NOT EXISTS is a no-op) without these columns, so add
-            //    each missing one. All nullable — legacy rows read back as v1 events
-            //    (protocol_version NULL) with no reader change. Idempotent: the column
-            //    check short-circuits once present, and every ADD COLUMN is guarded.
-            //    `drained_by` (REFINE-EVENT-SESSION-SCOPED-UNICAST) joins the same
-            //    additive-nullable set: existing rows read back NULL, meaning "drained
-            //    before drainer attribution existed / drained without an identity" — it is
-            //    never interpreted as an identity, only rendered as unknown.
-            const pendingCols = this.tableColumns('mesh_pending_events');
-            for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for', 'drained_by'] as const) {
-                if (!pendingCols.has(col)) {
-                    this.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
-                }
-            }
-            // 4b. MESH-IMAGE-DISPATCH: `input` on the two dispatch/delivery tables. An
-            //     existing DB already has both tables, so the CREATE TABLE IF NOT EXISTS
-            //     above is a no-op there and the new column must be ALTERed in — otherwise
-            //     every insert carrying an attachment fails with "no such column: input" on
-            //     precisely the installs that have been running longest. Nullable and
-            //     additive: legacy rows read back NULL, which means "text-only dispatch",
-            //     exactly what they were.
-            const directDispatchCols = this.tableColumns('mesh_direct_dispatches');
-            if (!directDispatchCols.has('input')) {
-                this.db.exec(`ALTER TABLE mesh_direct_dispatches ADD COLUMN input TEXT`);
-            }
-            const sessionDeliveryCols = this.tableColumns('mesh_session_delivery');
-            if (!sessionDeliveryCols.has('input')) {
-                this.db.exec(`ALTER TABLE mesh_session_delivery ADD COLUMN input TEXT`);
-            }
-
-            // Idempotency index on event_id (partial: only stamped v2 rows). Created
-            // unconditionally — IF NOT EXISTS makes it a no-op once present, and the
-            // event_id column is guaranteed to exist by the loop above.
-            this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_event_id
-                    ON mesh_pending_events(mesh_id, event_id)
-                    WHERE event_id IS NOT NULL
-            `);
-
-            // 5. MESH-COMPLEXITY-AUDIT Part 8-1: drop the legacy mesh_direct_delivered_events
-            //    table. It backed the retired R3 "direct-delivered" dedup marker
-            //    (markMeshCoordinatorEventDirectDelivered / wasDirectDeliveredToCoordinator,
-            //    removed when spontaneous PTY direct-inject was retired — see the NOTE in
-            //    mesh-events-pending.ts). No live code CREATEs, reads, or writes it anymore,
-            //    so this is a pure runtime-residue cleanup with no behavior change: a store
-            //    that never had the table just no-ops (IF EXISTS), an old install carrying
-            //    the dormant table has it removed once. Idempotent — DROP TABLE IF EXISTS is
-            //    a no-op on every subsequent boot.
-            this.db.exec(`DROP TABLE IF EXISTS mesh_direct_delivered_events`);
-
-            // 6. MESH-COMPLEXITY-AUDIT Part 8-2: drop the mesh_completion_conflicts
-            //    diagnostic table. It recorded which task lost a completion-fingerprint
-            //    dedup collision but had NO production reader (getRecentCompletionConflicts
-            //    was test-only) and played NO part in the no-loss delivery contract — the
-            //    dedup DECISION is the fingerprint match in mesh-event-forwarding.ts and is
-            //    unchanged. Pure runtime-residue cleanup with no behavior change: a fresh
-            //    store never creates it; an old install drops the dormant table once.
-            //    Idempotent — DROP TABLE IF EXISTS is a no-op on every subsequent boot.
-            this.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
-
-            // 7. LEDGER-TASK-TRACEABILITY (B): mesh_event_ledger.task_id. A pre-existing
-            //    DB has the ledger table (CREATE IF NOT EXISTS is a no-op) without this
-            //    column, so add it. Nullable — legacy rows read back with task_id NULL and
-            //    fall back to payload.taskId at the read layer (ledgerEntryTaskId), so no
-            //    backfill is needed. Idempotent: the column check short-circuits once present.
-            const ledgerCols = this.tableColumns('mesh_event_ledger');
-            if (!ledgerCols.has('task_id')) {
-                this.db.exec(`ALTER TABLE mesh_event_ledger ADD COLUMN task_id TEXT`);
-            }
-            // kind+task_id join index (task lifecycle timeline). Created unconditionally —
-            // IF NOT EXISTS is a no-op once present; the column is guaranteed above.
-            this.db.exec(`
-                CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_task
-                    ON mesh_event_ledger(mesh_id, task_id, timestamp)
-                    WHERE task_id IS NOT NULL
-            `);
-
-            // 8. MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): mesh_tool_call_log.caller_role.
-            //    Nullable provenance tag ('coordinator' | 'unknown') recording whether the
-            //    process that made this tool call carried ADHDEV_COORDINATOR_SESSION_ID at
-            //    launch. Pre-existing rows read back NULL — they predate this instrumentation
-            //    and are simply unclassified, not "unknown" in the observed sense. See
-            //    recordMeshToolCall for why this is a diagnostic signal, not an auth boundary.
-            const toolCallCols = this.tableColumns('mesh_tool_call_log');
-            if (!toolCallCols.has('caller_role')) {
-                this.db.exec(`ALTER TABLE mesh_tool_call_log ADD COLUMN caller_role TEXT`);
-            }
-
-            // 9. ★ Stage 5c-1: drop the retired `mesh_turn_outbox` table (design
-            //    docs/design/2026-08-29-seqscribe-outbox-migration.md §5 row 1).
-            //    Same shape as steps 5 and 6 above: nothing CREATEs, reads or
-            //    writes it any more, so a fresh store never has it and an existing
-            //    one sheds it once. Idempotent — DROP TABLE IF EXISTS no-ops on
-            //    every later boot, and dropping a table takes its indexes with it.
-            //
-            //    ★ Dropping rather than leaving it dormant is deliberate and is
-            //    the one genuinely irreversible step of 5c-1. It is safe because
-            //    5b established, on live evidence, that the table is EMPTY of work:
-            //    5b-1 blocked enqueue (new rows 0) and 5b-2 disarmed the drain
-            //    pumps only after the residue was observed empty across
-            //    REQUIRED_CLEAN_SWEEPS consecutive sweeps. What remains in an old
-            //    DB is `delivered` / `failed` history — rows this machine never
-            //    pruned (there was no DELETE path anywhere in the tree, which is
-            //    §11-4's defect ② and is resolved by this drop rather than by a
-            //    retention sweep that would exist only to be deleted).
-            //
-            //    ★ A pending row surviving here would be a completion notification
-            //    that never reached its coordinator. That cannot be recovered by a
-            //    flag revert after this point, which is why the drop is gated on
-            //    the 5b sweep evidence rather than run speculatively.
-            this.db.exec(`DROP TABLE IF EXISTS mesh_turn_outbox`);
-        } catch (err: any) {
-            // Best-effort: a failed isolation migration must not brick the store. The
-            // CREATE-TABLE definitions above already carry the new schema for fresh DBs;
-            // an existing DB that fails here keeps the old (leaky-but-functional) schema
-            // until the next boot retries. Surface one warn for diagnosability.
-            if (!loggedMigrationFailure) {
-                loggedMigrationFailure = true;
-                LOG.warn('MeshRuntimeStore', `mesh-isolation column migration failed: ${err?.message || err}`);
-            }
-        }
+        schemaMigrateMeshIsolationColumns(this);
     }
 
     hasCompletionFingerprint(meshId: string, fingerprint: string): boolean {
@@ -2326,6 +1813,9 @@ export class MeshRuntimeStore {
     }
 
     // ── G2: Event Ledger ────────────────────────────────────────────────────
+    // Implementation lives in ./mesh-runtime-store-ledger.ts (behavior-preserving
+    // code move, file-size gate). Thin delegators keep the public surface and
+    // every call site unchanged.
 
     appendLedgerEntry(entry: {
         id: string;
@@ -2338,34 +1828,7 @@ export class MeshRuntimeStore {
         taskId?: string | null;
         payload?: unknown;
     }): void {
-        // Ledger `kind` is a mandatory schema invariant (mesh_event_ledger.kind is
-        // NOT NULL; every MeshLedgerKind is a non-empty tag). A blank kind would be a
-        // structurally-broken entry — reject it here rather than write an unqueryable
-        // row. NOTE: pending-event JSONL files (`*.pending-events.jsonl`) are a
-        // SEPARATE shape that intentionally has NO `kind` field (they key off `.event`);
-        // a generic audit that scans the whole ledger DIRECTORY and reads `.kind` off
-        // those rows sees "kind=None", which is an artifact of mixing the two files, not
-        // a ledger defect. This guard makes the ledger-side invariant explicit.
-        if (!entry.kind || !String(entry.kind).trim()) {
-            LOG.warn('MeshRuntimeStore', `Refusing to append ledger entry with empty kind for mesh ${entry.meshId} (id ${entry.id})`);
-            return;
-        }
-        this.db.prepare(
-            `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(
-            entry.id,
-            entry.meshId,
-            entry.timestamp,
-            entry.kind,
-            entry.nodeId ?? null,
-            entry.sessionId ?? null,
-            entry.providerType ?? null,
-            entry.taskId ?? null,
-            JSON.stringify(entry.payload ?? {}),
-        );
-        this.maybeCheckpointWal();
+        appendLedgerEntry(this, entry);
     }
 
     readLedgerEntries(meshId: string, opts?: {
@@ -2374,34 +1837,7 @@ export class MeshRuntimeStore {
         kind?: string;
         limit?: number;
     }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
-        const limit = opts?.tail ?? opts?.limit ?? 200;
-        let query: string;
-        const params: unknown[] = [meshId];
-        if (opts?.kind && opts?.since) {
-            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
-            params.push(opts.kind, opts.since, limit);
-        } else if (opts?.kind) {
-            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind = ? ORDER BY timestamp DESC LIMIT ?`;
-            params.push(opts.kind, limit);
-        } else if (opts?.since) {
-            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?`;
-            params.push(opts.since, limit);
-        } else {
-            query = `SELECT * FROM mesh_event_ledger WHERE mesh_id = ? ORDER BY timestamp DESC LIMIT ?`;
-            params.push(limit);
-        }
-        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            timestamp: r.timestamp as string,
-            kind: r.kind as string,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            taskId: (r.task_id as string | null) ?? null,
-            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
-        }));
+        return readLedgerEntries(this, meshId, opts);
     }
 
     /**
@@ -2415,100 +1851,32 @@ export class MeshRuntimeStore {
         kinds?: string[];
         tail?: number;
     }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
-        const params: unknown[] = [meshId];
-        let whereClause = 'mesh_id = ?';
-        if (opts?.since) {
-            whereClause += ' AND timestamp >= ?';
-            params.push(opts.since);
-        }
-        const kinds = Array.isArray(opts?.kinds) ? opts.kinds.filter(k => typeof k === 'string' && k.trim()) : [];
-        if (kinds.length > 0) {
-            whereClause += ` AND kind IN (${kinds.map(() => '?').join(', ')})`;
-            params.push(...kinds);
-        }
-        let query: string;
-        if (opts?.tail && opts.tail > 0) {
-            // Tail: newest N in append order — inner DESC limit, outer re-sort ASC.
-            query = `SELECT * FROM (
-                SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause}
-                ORDER BY timestamp DESC, rowid DESC LIMIT ?
-            ) ORDER BY timestamp ASC, rid ASC`;
-            params.push(Math.floor(opts.tail));
-        } else {
-            query = `SELECT rowid AS rid, * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, rowid ASC`;
-        }
-        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            timestamp: r.timestamp as string,
-            kind: r.kind as string,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            taskId: (r.task_id as string | null) ?? null,
-            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
-        }));
+        return readLedgerEntriesOrdered(this, meshId, opts);
     }
 
     /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
     clearLedgerForMesh(meshId: string): number {
-        return this.db.prepare('DELETE FROM mesh_event_ledger WHERE mesh_id = ?').run(meshId).changes;
+        return clearLedgerForMesh(this, meshId);
     }
 
     /** G2: remove entries moved to the JSONL archive so the SQLite runtime set mirrors the active ledger. */
     deleteLedgerEntries(meshId: string, ids: string[]): number {
-        if (!ids.length) return 0;
-        let deleted = 0;
-        const stmt = this.db.prepare('DELETE FROM mesh_event_ledger WHERE mesh_id = ? AND id = ?');
-        this.db.transaction(() => {
-            for (const id of ids) {
-                deleted += stmt.run(meshId, id).changes;
-            }
-        })();
-        return deleted;
+        return deleteLedgerEntries(this, meshId, ids);
     }
 
     hasLedgerEntry(meshId: string, id: string): boolean {
-        const row = this.db.prepare(
-            'SELECT 1 FROM mesh_event_ledger WHERE mesh_id = ? AND id = ? LIMIT 1'
-        ).get(meshId, id);
-        return row !== undefined;
+        return hasLedgerEntry(this, meshId, id);
     }
 
     ledgerEntryCount(meshId: string): number {
-        const row = this.db.prepare(
-            'SELECT COUNT(*) as cnt FROM mesh_event_ledger WHERE mesh_id = ?'
-        ).get(meshId) as { cnt: number } | undefined;
-        return row?.cnt ?? 0;
+        return ledgerEntryCount(this, meshId);
     }
 
     importLedgerEntries(entries: Array<{
         id: string; meshId: string; timestamp: string; kind: string;
         nodeId?: string | null; sessionId?: string | null; providerType?: string | null; taskId?: string | null; payload?: unknown;
     }>): number {
-        let imported = 0;
-        const stmt = this.db.prepare(
-            `INSERT OR IGNORE INTO mesh_event_ledger
-             (id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        );
-        this.db.transaction(() => {
-            for (const e of entries) {
-                // Skip structurally-broken entries with a blank kind (see appendLedgerEntry):
-                // mesh_event_ledger.kind is NOT NULL and every kind is a non-empty tag, so an
-                // empty-kind row is unqueryable noise. Mirrors readLedgerFile's `entry.id && entry.kind`
-                // JSONL guard, keeping the import path from re-introducing what the read path filters.
-                if (!e.kind || !String(e.kind).trim()) continue;
-                const result = stmt.run(
-                    e.id, e.meshId, e.timestamp, e.kind,
-                    e.nodeId ?? null, e.sessionId ?? null, e.providerType ?? null, e.taskId ?? null,
-                    JSON.stringify(e.payload ?? {}),
-                );
-                if (result.changes > 0) imported++;
-            }
-        })();
-        return imported;
+        return importLedgerEntries(this, entries);
     }
 
     /**
@@ -2531,73 +1899,12 @@ export class MeshRuntimeStore {
         cursor: { afterId: string | null; nextAfterId: string | null; limit: number; hasMore: boolean };
         sourceOfTruth: { kind: 'local_sqlite'; table: 'mesh_event_ledger'; bounded: true; maxLimit: number };
     } {
-        // Protocol maximum of 500, default 100 — mirrors mesh-ledger.ts constants.
-        const MAX_LIMIT = 500;
-        const DEFAULT_LIMIT = 100;
-        const limit = (typeof opts?.limit === 'number' && Number.isFinite(opts.limit))
-            ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(opts.limit)))
-            : DEFAULT_LIMIT;
-
-        const afterId = typeof opts?.afterId === 'string' && opts.afterId.trim() ? opts.afterId.trim() : null;
-
-        // Build query: fetch limit+1 rows so we can detect hasMore without a COUNT(*).
-        const params: unknown[] = [meshId];
-        let whereClause = 'mesh_id = ?';
-
-        if (opts?.kind) {
-            whereClause += ' AND kind = ?';
-            params.push(opts.kind);
-        }
-        if (opts?.since) {
-            whereClause += ' AND timestamp >= ?';
-            params.push(opts.since);
-        }
-        if (afterId) {
-            // afterId: return entries with timestamp strictly after the referenced entry's timestamp,
-            // or with the same timestamp but id > afterId (stable pagination).
-            whereClause += ` AND (timestamp > (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) OR (timestamp = (SELECT timestamp FROM mesh_event_ledger WHERE id = ? AND mesh_id = ?) AND id > ?))`;
-            params.push(afterId, meshId, afterId, meshId, afterId);
-        }
-
-        // Fetch limit+1 to detect hasMore
-        const query = `SELECT * FROM mesh_event_ledger WHERE ${whereClause} ORDER BY timestamp ASC, id ASC LIMIT ?`;
-        params.push(limit + 1);
-
-        const rows = this.db.prepare(query).all(...params) as Array<Record<string, unknown>>;
-        const hasMore = rows.length > limit;
-        const bounded = hasMore ? rows.slice(0, limit) : rows;
-
-        const entries = bounded.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            timestamp: r.timestamp as string,
-            kind: r.kind as string,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            payload: (() => { try { return JSON.parse(r.payload as string); } catch { return {}; } })(),
-        }));
-
-        return {
-            protocol: 'adhdev.mesh.ledger.slice.v1',
-            meshId,
-            entries,
-            cursor: {
-                afterId,
-                nextAfterId: entries.length ? entries[entries.length - 1].id : afterId,
-                limit,
-                hasMore,
-            },
-            sourceOfTruth: {
-                kind: 'local_sqlite',
-                table: 'mesh_event_ledger',
-                bounded: true,
-                maxLimit: MAX_LIMIT,
-            },
-        };
+        return readLedgerSlice(this, meshId, opts);
     }
-
     // ── G3: Pending Coordinator Events ──────────────────────────────────────
+    // Implementation lives in ./mesh-runtime-store-pending-events.ts
+    // (behavior-preserving code move, file-size gate). Thin delegators keep the
+    // public surface and every call site unchanged.
 
     insertPendingEvent(event: {
         id: string;
@@ -2615,27 +1922,7 @@ export class MeshRuntimeStore {
         dispatchedBy?: string | null;
         intendedFor?: string | null;
     }): boolean {
-        const result = this.db.prepare(
-            `INSERT OR IGNORE INTO mesh_pending_events
-             (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at,
-              protocol_version, event_id, scope, dispatched_by, intended_for)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(
-            event.id,
-            event.meshId,
-            event.coordinatorDaemonId ?? null,
-            event.event,
-            JSON.stringify(event.payload ?? {}),
-            event.fingerprint ?? null,
-            event.queuedAt,
-            event.protocolVersion ?? null,
-            event.eventId ?? null,
-            event.scope ?? null,
-            event.dispatchedBy ?? null,
-            event.intendedFor ?? null,
-        );
-        this.maybeCheckpointWal();
-        return result.changes > 0;
+        return insertPendingEvent(this, event);
     }
 
     /**
@@ -2657,68 +1944,12 @@ export class MeshRuntimeStore {
         // Omitted → the column stays NULL, exactly as before (no behaviour change).
         opts?: { onlyEvents?: ReadonlySet<string>; drainedBy?: string | null },
     ): Array<{ id: string; event: string; payload: unknown }> {
-        return this.transaction(() => {
-            const onlyEvents = opts?.onlyEvents;
-            // An explicit-but-empty filter means "drain nothing" (no event name can match).
-            if (onlyEvents && onlyEvents.size === 0) return [];
-            const eventList = onlyEvents ? [...onlyEvents] : [];
-            // A coordinator daemon can answer to more than one id form: its canonical
-            // status id (e.g. `standalone_<machineId>` / `daemon_<machineId>`, which the
-            // MCP layer stamps via ctx.localDaemonId) AND the bare machineId (stamped by
-            // the local queue-assignment path). Accept ANY of them so a unicast event
-            // stamped with either id is drained here. Unscoped (NULL) rows always match.
-            const daemonIds = (Array.isArray(coordinatorDaemonId)
-                ? coordinatorDaemonId
-                : coordinatorDaemonId ? [coordinatorDaemonId] : [])
-                .filter((id): id is string => typeof id === 'string' && id.length > 0);
-            // Filter by event name IN-SQL when onlyEvents is set so the LIMIT applies to
-            // matching rows — a long run of non-force events ahead in the queue must not
-            // crowd a force event out of the 100-row window.
-            const clauses = ['mesh_id = ?', 'drained = 0'];
-            const params: unknown[] = [meshId];
-            if (daemonIds.length > 0) {
-                clauses.push(`(coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => '?').join(',')}))`);
-                params.push(...daemonIds);
-            }
-            if (eventList.length > 0) {
-                clauses.push(`event IN (${eventList.map(() => '?').join(',')})`);
-                params.push(...eventList);
-            }
-            const rows = this.db.prepare(
-                `SELECT id, event, payload FROM mesh_pending_events WHERE ${clauses.join(' AND ')} ORDER BY queued_at ASC LIMIT 100`
-            ).all(...params) as Array<{ id: string; event: string; payload: string }>;
-            if (rows.length === 0) return [];
-            const ids = rows.map(r => r.id);
-            const now = Date.now();
-            this.db.prepare(
-                `UPDATE mesh_pending_events SET drained = 1, drained_at = ?, drained_by = ? WHERE id IN (${ids.map(() => '?').join(',')})`
-            ).run(now, opts?.drainedBy ?? null, ...ids);
-            return rows.map(r => ({
-                id: r.id,
-                event: r.event,
-                payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
-            }));
-        });
+        return drainPendingEvents(this, meshId, coordinatorDaemonId, opts);
     }
 
     /** Non-destructive peek — returns undrained events without marking them drained. */
     peekPendingEvents(meshId: string, coordinatorDaemonId?: string | null | ReadonlyArray<string>): Array<{ id: string; event: string; payload: unknown }> {
-        const daemonIds = (Array.isArray(coordinatorDaemonId)
-            ? coordinatorDaemonId
-            : coordinatorDaemonId ? [coordinatorDaemonId] : [])
-            .filter((id): id is string => typeof id === 'string' && id.length > 0);
-        const whereClause = daemonIds.length > 0
-            ? `WHERE mesh_id = ? AND drained = 0 AND (coordinator_daemon_id IS NULL OR coordinator_daemon_id IN (${daemonIds.map(() => '?').join(',')}))`
-            : `WHERE mesh_id = ? AND drained = 0`;
-        const params: unknown[] = daemonIds.length > 0 ? [meshId, ...daemonIds] : [meshId];
-        const rows = this.db.prepare(
-            `SELECT id, event, payload FROM mesh_pending_events ${whereClause} ORDER BY queued_at ASC LIMIT 100`
-        ).all(...params) as Array<{ id: string; event: string; payload: string }>;
-        return rows.map(r => ({
-            id: r.id,
-            event: r.event,
-            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
-        }));
+        return peekPendingEvents(this, meshId, coordinatorDaemonId);
     }
 
     /**
@@ -2739,20 +1970,7 @@ export class MeshRuntimeStore {
         queuedAt: number;
         drainedAt: number | null;
     }> {
-        const rows = this.db.prepare(
-            `SELECT id, event, scope, intended_for, drained_by, drained, queued_at, drained_at
-             FROM mesh_pending_events WHERE mesh_id = ? ORDER BY queued_at DESC LIMIT ?`
-        ).all(meshId, Math.max(1, limit)) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            event: r.event as string,
-            scope: (r.scope as string | null) ?? null,
-            intendedFor: (r.intended_for as string | null) ?? null,
-            drainedBy: (r.drained_by as string | null) ?? null,
-            drained: r.drained === 1,
-            queuedAt: r.queued_at as number,
-            drainedAt: (r.drained_at as number | null) ?? null,
-        }));
+        return recentDrainedPendingEvents(this, meshId, limit);
     }
 
     /**
@@ -2773,25 +1991,11 @@ export class MeshRuntimeStore {
         payload: unknown;
         drainedAt: number;
     }> {
-        const rows = this.db.prepare(
-            `SELECT id, mesh_id, event, payload, drained_at FROM mesh_pending_events
-             WHERE drained = 1 AND drained_at IS NOT NULL AND drained_at >= ?
-             ORDER BY drained_at DESC LIMIT ?`
-        ).all(sinceEpochMs, Math.max(1, limit)) as Array<{ id: string; mesh_id: string; event: string; payload: string; drained_at: number }>;
-        return rows.map(r => ({
-            id: r.id,
-            meshId: r.mesh_id,
-            event: r.event,
-            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
-            drainedAt: r.drained_at,
-        }));
+        return recentDrainedPendingEventPayloads(this, sinceEpochMs, limit);
     }
 
     hasPendingEventFingerprint(meshId: string, fingerprint: string): boolean {
-        const row = this.db.prepare(
-            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND fingerprint = ? AND drained = 0 LIMIT 1'
-        ).get(meshId, fingerprint);
-        return row !== undefined;
+        return hasPendingEventFingerprint(this, meshId, fingerprint);
     }
 
     /**
@@ -2803,11 +2007,7 @@ export class MeshRuntimeStore {
      * the partial event_id index (idx_mesh_pending_events_event_id).
      */
     hasDrainedEventId(meshId: string, eventId: string): boolean {
-        if (!eventId) return false;
-        const row = this.db.prepare(
-            'SELECT 1 FROM mesh_pending_events WHERE mesh_id = ? AND event_id = ? AND drained = 1 LIMIT 1'
-        ).get(meshId, eventId);
-        return row !== undefined;
+        return hasDrainedEventId(this, meshId, eventId);
     }
 
     /**
@@ -2818,10 +2018,7 @@ export class MeshRuntimeStore {
      * have a NULL event_id and are excluded by the index/WHERE.
      */
     drainedEventIdsForMesh(meshId: string): Set<string> {
-        const rows = this.db.prepare(
-            'SELECT DISTINCT event_id FROM mesh_pending_events WHERE mesh_id = ? AND drained = 1 AND event_id IS NOT NULL'
-        ).all(meshId) as Array<{ event_id: string }>;
-        return new Set(rows.map(r => r.event_id));
+        return drainedEventIdsForMesh(this, meshId);
     }
 
     // ── M3: Mission Records ─────────────────────────────────────────────────
@@ -2943,10 +2140,7 @@ export class MeshRuntimeStore {
     }
 
     pendingEventCount(meshId: string): number {
-        const row = this.db.prepare(
-            'SELECT COUNT(*) as cnt FROM mesh_pending_events WHERE mesh_id = ? AND drained = 0'
-        ).get(meshId) as { cnt: number } | undefined;
-        return row?.cnt ?? 0;
+        return pendingEventCount(this, meshId);
     }
 
     /**
@@ -2957,12 +2151,7 @@ export class MeshRuntimeStore {
      * reconcile tick retries it. Returns the number of rows newly marked drained.
      */
     markPendingEventsDrainedById(ids: ReadonlyArray<string>): number {
-        const idList = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
-        if (idList.length === 0) return 0;
-        const now = Date.now();
-        return this.db.prepare(
-            `UPDATE mesh_pending_events SET drained = 1, drained_at = ? WHERE drained = 0 AND id IN (${idList.map(() => '?').join(',')})`
-        ).run(now, ...idList).changes;
+        return markPendingEventsDrainedById(this, ids);
     }
 
     /**
@@ -3000,16 +2189,7 @@ export class MeshRuntimeStore {
      * Returns true when a drained row was found and returned to the queue.
      */
     requeueDrainedPendingEventByFingerprint(meshId: string, fingerprint: string): boolean {
-        if (!fingerprint) return false;
-        // drained_by is cleared with drained_at: the row is queued again, so the
-        // previous drainer is no longer the consumer of record. Leaving it set would
-        // make the audit surface attribute the row to a coordinator that gave it back.
-        const changes = this.db.prepare(
-            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
-             WHERE mesh_id = ? AND fingerprint = ? AND drained = 1`
-        ).run(meshId, fingerprint).changes;
-        if (changes > 0) this.maybeCheckpointWal();
-        return changes > 0;
+        return requeueDrainedPendingEventByFingerprint(this, meshId, fingerprint);
     }
 
     /**
@@ -3032,13 +2212,7 @@ export class MeshRuntimeStore {
      * Returns true when a queued row was found and rewritten.
      */
     updatePendingEventPayloadByFingerprint(meshId: string, fingerprint: string, payload: unknown): boolean {
-        if (!fingerprint) return false;
-        const changes = this.db.prepare(
-            `UPDATE mesh_pending_events SET payload = ?
-             WHERE mesh_id = ? AND fingerprint = ? AND drained = 0`
-        ).run(JSON.stringify(payload), meshId, fingerprint).changes;
-        if (changes > 0) this.maybeCheckpointWal();
-        return changes > 0;
+        return updatePendingEventPayloadByFingerprint(this, meshId, fingerprint, payload);
     }
 
     /**
@@ -3057,13 +2231,7 @@ export class MeshRuntimeStore {
      * Returns true when a drained row was found and returned to the queue.
      */
     requeueDrainedPendingEventById(rowId: string): boolean {
-        if (!rowId) return false;
-        const changes = this.db.prepare(
-            `UPDATE mesh_pending_events SET drained = 0, drained_at = NULL, drained_by = NULL
-             WHERE id = ? AND drained = 1`
-        ).run(rowId).changes;
-        if (changes > 0) this.maybeCheckpointWal();
-        return changes > 0;
+        return requeueDrainedPendingEventById(this, rowId);
     }
 
     /**
@@ -3073,11 +2241,7 @@ export class MeshRuntimeStore {
      * for the same task could be re-queued later. Returns the number of rows deleted.
      */
     deletePendingEventsById(ids: ReadonlyArray<string>): number {
-        const idList = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
-        if (idList.length === 0) return 0;
-        return this.db.prepare(
-            `DELETE FROM mesh_pending_events WHERE id IN (${idList.map(() => '?').join(',')})`
-        ).run(...idList).changes;
+        return deletePendingEventsById(this, ids);
     }
 
     /**
@@ -3142,50 +2306,7 @@ export class MeshRuntimeStore {
          *  terminal exemption actively prevented a data-destroying expiry. */
         terminalExempt: number;
     } {
-        const now = Date.now();
-        const drainedCutoff = now - Math.max(0, opts.drainedOlderThanMs);
-        const undrainedCutoff = now - Math.max(0, opts.undrainedOlderThanMs);
-        const neverExpire = opts.neverExpireEvents;
-
-        // Capture the undrained-expired rows BEFORE deleting them — these never
-        // reached a coordinator, so deleting them is a silent drop unless the caller
-        // mirrors this snapshot to the ledger first.
-        const undrainedSelectRows = this.db.prepare(
-            'SELECT id, mesh_id, event, payload FROM mesh_pending_events WHERE drained = 0 AND queued_at < ?'
-        ).all(undrainedCutoff) as Array<{ id: string; mesh_id: string; event: string; payload: string }>;
-
-        // Split the window's rows into "may expire" and "terminal — exempt". The
-        // delete below is then driven by the explicit expirable id list rather than
-        // by the age predicate alone, so an exempt row cannot be deleted even if the
-        // two ever disagreed.
-        const expirableRows: typeof undrainedSelectRows = [];
-        let terminalExempt = 0;
-        for (const r of undrainedSelectRows) {
-            if (neverExpire?.has(r.event)) terminalExempt++;
-            else expirableRows.push(r);
-        }
-
-        const undrainedRows = expirableRows.map(r => ({
-            id: r.id,
-            meshId: r.mesh_id,
-            event: r.event,
-            payload: (() => { try { return JSON.parse(r.payload); } catch { return {}; } })(),
-        }));
-
-        const drainedExpired = this.db.prepare(
-            'DELETE FROM mesh_pending_events WHERE drained = 1 AND queued_at < ?'
-        ).run(drainedCutoff).changes;
-
-        // Delete by explicit id (chunked to stay under SQLite's variable limit) rather
-        // than by the age predicate, so the exempt rows are structurally unreachable.
-        let undrainedExpired = 0;
-        for (let i = 0; i < undrainedRows.length; i += 500) {
-            const chunk = undrainedRows.slice(i, i + 500);
-            undrainedExpired += this.db.prepare(
-                `DELETE FROM mesh_pending_events WHERE id IN (${chunk.map(() => '?').join(',')})`
-            ).run(...chunk.map(r => r.id)).changes;
-        }
-        return { drainedExpired, undrainedExpired, undrainedRows, terminalExempt };
+        return prunePendingEvents(this, opts);
     }
 
     // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
