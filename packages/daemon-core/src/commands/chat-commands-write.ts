@@ -989,8 +989,25 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         if (typeof adapter.resolveModalMatched === 'function') {
             const matched = adapter.resolveModalMatched(buttonIndex);
             if (!matched) {
-                LOG.warn('Command', `[resolveAction] CLI PTY → no button matched for buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? '?'}" (modal not resolved)`);
-                return { success: false, error: 'Approval button index did not map to a visible modal button', buttonIndex, button: buttons[buttonIndex] ?? button };
+                // MESHAPPROVE-STALE-MODAL: a miss here now has two distinct causes and the
+                // coordinator needs to tell them apart. Either the index did not map to a
+                // visible button (the original Fix C.3 case), or the driver refused because
+                // the button list it parsed is dead SCROLLBACK from an approval that was
+                // already answered — the modal box is still on screen, but the live picker
+                // is gone, so there is nothing left to press. Retrying is futile in the
+                // second case: the session is not actually waiting on us, and every earlier
+                // "success" was a bare CR submitting an empty message into the composer.
+                LOG.warn('Command', `[resolveAction] CLI PTY → no button matched for buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? '?'}" (modal not resolved — either a mis-mapped index or a stale scrollback modal whose picker is already gone)`);
+                return {
+                    success: false,
+                    error: 'Approval was not pressed: the modal on screen could not be actioned. '
+                        + 'Either the button index did not map to a visible button, or the parsed '
+                        + 'choice list is stale scrollback from an already-answered approval (the '
+                        + 'live picker is gone). Do NOT retry blindly — re-read the session to '
+                        + 'check whether it is actually still waiting.',
+                    buttonIndex,
+                    button: buttons[buttonIndex] ?? button,
+                };
             }
         } else if (typeof adapter.resolveModal === 'function') {
             adapter.resolveModal(buttonIndex);

@@ -151988,8 +151988,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (typeof adapter.resolveModalMatched === "function") {
           const matched = adapter.resolveModalMatched(buttonIndex);
           if (!matched) {
-            LOG.warn("Command", `[resolveAction] CLI PTY \u2192 no button matched for buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? "?"}" (modal not resolved)`);
-            return { success: false, error: "Approval button index did not map to a visible modal button", buttonIndex, button: buttons[buttonIndex] ?? button };
+            LOG.warn("Command", `[resolveAction] CLI PTY \u2192 no button matched for buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? "?"}" (modal not resolved \u2014 either a mis-mapped index or a stale scrollback modal whose picker is already gone)`);
+            return {
+              success: false,
+              error: "Approval was not pressed: the modal on screen could not be actioned. Either the button index did not map to a visible button, or the parsed choice list is stale scrollback from an already-answered approval (the live picker is gone). Do NOT retry blindly \u2014 re-read the session to check whether it is actually still waiting.",
+              buttonIndex,
+              button: buttons[buttonIndex] ?? button
+            };
           }
         } else if (typeof adapter.resolveModal === "function") {
           adapter.resolveModal(buttonIndex);
