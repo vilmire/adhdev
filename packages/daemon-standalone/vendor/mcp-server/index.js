@@ -164903,7 +164903,8 @@ data: ${JSON.stringify(msg.data)}
         const snap = opts.throughput;
         const routing = opts.readRouting;
         const tp = opts.transcriptParity;
-        const tpSince = tp?.since ?? Date.now();
+        const now = Date.now();
+        const tpSince = tp?.since ?? now;
         localDiagnostics = {
           applyRejects,
           stalledStreams,
@@ -164931,7 +164932,7 @@ data: ${JSON.stringify(msg.data)}
               pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
               pendingMissingOpen: tp.pendingMissingOpen ?? 0,
               since: tpSince,
-              uptimeMs: Math.max(0, Date.now() - tpSince)
+              uptimeMs: Math.max(0, now - tpSince)
             }
           } : {},
           // Deep-copied by the recorder's own `detail()`, so a caller holding
