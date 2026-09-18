@@ -83,8 +83,18 @@ function serializeEnvelope(envelope: SessionHostWireEnvelope): string {
  * finish it arrive, which is the only correct way to turn a byte stream into
  * text. String chunks bypass it: they are already decoded, and feeding them
  * through `Buffer.from` would re-encode text the caller never asked us to touch.
+ *
+ * The envelope type is a parameter (defaulting to this package's own wire type)
+ * purely so sibling newline-framed sockets can REUSE this decoder rather than
+ * re-deriving it. `@adhdev/terminal-mux-control`'s control socket carried a
+ * verbatim `chunk.toString()` copy of the pre-fix parser and inherited the same
+ * silent corruption; it now shares this implementation. Nothing about the
+ * framing is session-host-specific — only the payload type was, and that is now
+ * the caller's to name.
  */
-function createLineParser(onEnvelope: (envelope: SessionHostWireEnvelope) => void) {
+function createLineParser<TEnvelope = SessionHostWireEnvelope>(
+  onEnvelope: (envelope: TEnvelope) => void,
+) {
   let buffer = '';
   const decoder = new StringDecoder('utf8');
   const parser = (chunk: Buffer | string) => {
@@ -94,7 +104,7 @@ function createLineParser(onEnvelope: (envelope: SessionHostWireEnvelope) => voi
       const rawLine = buffer.slice(0, newlineIndex).trim();
       buffer = buffer.slice(newlineIndex + 1);
       if (rawLine) {
-        onEnvelope(JSON.parse(rawLine) as SessionHostWireEnvelope);
+        onEnvelope(JSON.parse(rawLine) as TEnvelope);
       }
       newlineIndex = buffer.indexOf('\n');
     }
