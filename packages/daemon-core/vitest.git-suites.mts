@@ -40,6 +40,12 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-worktree-bootstrap.test.ts',
   'test/commands/refine-base-cas-fetch-undeterminable.test.ts',
   'test/commands/refine-diverged-gitlink-converge.test.ts',
+  // Both spawn real git to build the two-sibling regenerated-bundle scenario (root
+  // level and submodule-internal level respectively). The root-level one was missed
+  // when it was added with oss 3c8ba90a — a missed entry only costs `test:fast`
+  // wall-clock, never coverage, so it is simply added here.
+  'test/commands/refine-generated-vendor-bundle-rebase.test.ts',
+  'test/commands/refine-submodule-rebase-generated-bundle.test.ts',
   'test/commands/refine-gitlink-ff-undeterminable.test.ts',
   'test/commands/refine-gitlink-trivial-ff.test.ts',
   'test/commands/refine-patch-equivalence-classification.test.ts',

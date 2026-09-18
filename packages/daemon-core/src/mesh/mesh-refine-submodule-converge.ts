@@ -281,6 +281,16 @@ export type SubmoduleGitlinkConvergeResult = {
          * network failure read as a publication verdict.
          */
         remoteFetched?: boolean;
+        /**
+         * ★Gap A observability: generated vendor-bundle paths whose conflict during
+         * the SUBMODULE-INTERNAL rebase was resolved to the branch side (submodule-
+         * relative spelling, e.g. `packages/daemon-standalone/vendor/mcp-server/…`).
+         * Only set with `rebased`. Reported for the same reason STEP 2 reports its
+         * own: taking the branch side may leave a STALE bundle, and the stage record
+         * must name what was auto-resolved rather than resolve it invisibly —
+         * `check:vendor` (validation stage) is what proves the bundle is current.
+         */
+        resolvedGeneratedBundlePaths?: string[];
     }>;
 };
 
@@ -354,6 +364,149 @@ function probeCommitReachableFromRemoteMain(
 ): GitAncestryProbe {
     if (!remoteMainRef) return 'undeterminable';
     return probeGitAncestry(submoduleRepoPath, commit, remoteMainRef);
+}
+
+/**
+ * List the unmerged (conflict-stage) paths in `repoPath`.
+ *
+ * Shared shape with STEP 2's inner helper; kept as a module-level function so the
+ * submodule-side driver below and the root-side driver use the SAME probe rather
+ * than two hand-rolled copies that can drift.
+ */
+function unmergedPathsIn(repoPath: string): string[] {
+    try {
+        return execFileSync(GIT, ['diff', '--name-only', '--diff-filter=U'], { cwd: repoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() })
+            .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * True when `p` is a REGULAR FILE at some conflict stage in `repoPath` — i.e. NOT
+ * a gitlink. `ls-files --stage` reports mode 160000 for a gitlink at any stage.
+ *
+ * ★This is the guard that makes resolving-by-taking-a-side safe: a submodule
+ * (mode 160000) must NEVER be resolved by picking a side — it has its own
+ * convergence machinery. `oss/vendor/seqscribe` is a NESTED submodule, so even
+ * though "vendor" appears in its path it can never be resolved here: the path
+ * list in `mesh-refine-generated-bundles.ts` excludes it AND this mode check
+ * rejects it independently. Two independent guards, deliberately.
+ */
+export function isRegularFileConflictIn(repoPath: string, p: string): boolean {
+    try {
+        const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: repoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        return staged.trim() !== '' && !/^160000\s/m.test(staged);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Run a git command in `repoPath` with the rebase-safe environment (no editor
+ * prompt, `gitChildEnv()` so an inherited `GIT_DIR` cannot redirect the rebase at
+ * a different repository). Returns ok/false rather than throwing.
+ */
+function runRebaseIn(repoPath: string, args: string[]): boolean {
+    try {
+        execFileSync(GIT, args, {
+            cwd: repoPath,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: { ...gitChildEnv(), GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Resolve every generated-vendor-bundle conflict at the CURRENT rebase stop to the
+ * BRANCH side, and report whether any unmerged path remains afterwards.
+ *
+ * Identical policy and identical `--theirs` reasoning as STEP 2 (see
+ * `mesh-refine-generated-bundles.ts` for why taking the branch side is both
+ * correct and verifiable): during a REBASE the stage-3 "theirs" side is the branch
+ * being replayed, not the upstream base.
+ *
+ * Returns `undefined` on a staging failure — the caller must treat that as a hard
+ * stop rather than continuing a rebase with a half-staged index.
+ */
+function resolveGeneratedBundleConflictsAtStop(
+    repoPath: string,
+    conflicts: string[],
+): { resolved: string[]; remaining: string[] } | undefined {
+    const bundleConflicts = conflicts.filter(
+        p => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflictIn(repoPath, p),
+    );
+    if (bundleConflicts.length === 0) return { resolved: [], remaining: conflicts };
+    for (const p of bundleConflicts) {
+        try {
+            execFileSync(GIT, ['checkout', '--theirs', '--', p], { cwd: repoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            execFileSync(GIT, ['add', '--', p], { cwd: repoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        } catch {
+            return undefined;
+        }
+    }
+    return { resolved: bundleConflicts, remaining: unmergedPathsIn(repoPath) };
+}
+
+/**
+ * Gap A: drive the SUBMODULE-INTERNAL rebase of STEP 1, resolving generated
+ * vendor-bundle conflicts exactly as STEP 2 does one level up.
+ *
+ * ## Why STEP 1 needs this at all
+ *
+ * The oss submodule emits its own vendored bundles
+ * (`packages/daemon-standalone/vendor/mcp-server`, `.../session-host-daemon`).
+ * Anything that touches `daemon-core` — which `mcp-server` INLINES — regenerates
+ * them, so the sibling-branch false-block described in
+ * `mesh-refine-generated-bundles.ts` occurs INSIDE the submodule too, not only at
+ * the root. The undriven `git rebase baseCommit` this replaces aborted there, and
+ * because a STEP 1 failure makes the caller return before STEP 2 runs, the
+ * already-existing root-side resolution never got a chance. Measured 2026-09-18:
+ * two sibling branches blocked in one day, each landed by hand.
+ *
+ * ## Safety — why this is not a blanket `-X theirs`
+ *
+ * It resolves a stop ONLY when EVERY unmerged path at that stop is a known
+ * generated bundle AND a regular file. One authored-source conflict in the set and
+ * the whole stop is refused, the caller aborts the rebase and restores the
+ * branch-side checkout, and the outcome stays `rebase_conflict` — unchanged from
+ * before. Staleness introduced by taking the branch side is caught downstream by
+ * `check:vendor`, registered in `.adhdev/refine.json` for BOTH repo roots.
+ */
+export function driveSubmoduleRebaseResolvingGeneratedBundles(
+    submoduleRepoPath: string,
+    baseCommit: string,
+): { ok: boolean; reason?: string; resolvedGeneratedBundlePaths: string[] } {
+    const resolvedGeneratedBundlePaths: string[] = [];
+    let ok = runRebaseIn(submoduleRepoPath, ['rebase', baseCommit]);
+    let guard = 0;
+    while (!ok) {
+        // Same bound as STEP 2: a replay cannot legitimately stop more times than
+        // this, so exceeding it means we are looping rather than progressing.
+        if (guard++ > 100) return { ok: false, reason: 'rebase_error', resolvedGeneratedBundlePaths };
+        const conflicts = unmergedPathsIn(submoduleRepoPath);
+        // Failed with nothing unmerged = a non-conflict rebase error (the rebase
+        // refused to start, a hook failed, …). Not ours to resolve.
+        if (conflicts.length === 0) return { ok: false, reason: 'rebase_error', resolvedGeneratedBundlePaths };
+        const stop = resolveGeneratedBundleConflictsAtStop(submoduleRepoPath, conflicts);
+        if (!stop) return { ok: false, reason: 'rebase_error', resolvedGeneratedBundlePaths };
+        if (stop.remaining.length > 0) {
+            // ★The narrowness guarantee: anything that is not a generated bundle —
+            // authored source, a nested gitlink — leaves the stop unresolved and the
+            // conflict is reported, never taken from a side.
+            return { ok: false, reason: 'non_generated_bundle_conflict', resolvedGeneratedBundlePaths };
+        }
+        for (const p of stop.resolved) {
+            if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+        }
+        ok = runRebaseIn(submoduleRepoPath, ['rebase', '--continue']);
+    }
+    return { ok: true, resolvedGeneratedBundlePaths };
 }
 
 /**
@@ -584,10 +737,24 @@ export function convergeDivergedSubmoduleGitlinks(
         // Rebase the branch-side submodule commit(s) onto the base-side commit in a
         // DETACHED HEAD (never move a submodule branch ref). A conflict aborts and
         // restores the submodule checkout to the branch-side commit.
+        //
+        // ★The rebase is DRIVEN (not a single blind call) for exactly the reason
+        // STEP 2 is: the oss submodule carries its own generated vendor bundles
+        // (`packages/daemon-standalone/vendor/*`, in the submodule's own spelling),
+        // so two sibling branches that both touch `mcp-server` conflict INSIDE the
+        // submodule as well — one level below where STEP 2 resolves it. An undriven
+        // rebase here aborts with `rebase_conflict`, STEP 1 returns
+        // `converged: false`, and the caller (`router-refine.ts` sync_base) returns
+        // early — so STEP 2, which already knows how to resolve both gitlinks and
+        // generated bundles, never runs at all. The blocked branch then had to be
+        // landed by hand. See {@link resolveSubmoduleRebaseGeneratedBundleConflicts}.
         let rebasedCommit: string | undefined;
+        const resolvedSubmoduleBundlePaths: string[] = [];
         try {
             execFileSync(GIT, ['checkout', '-q', '--detach', branchCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'ignore', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
-            execFileSync(GIT, ['rebase', baseCommit], { cwd: submoduleRepoPath, stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            const driven = driveSubmoduleRebaseResolvingGeneratedBundles(submoduleRepoPath, baseCommit);
+            if (!driven.ok) throw new Error(`submodule rebase conflict: ${driven.reason || 'unknown'}`);
+            resolvedSubmoduleBundlePaths.push(...driven.resolvedGeneratedBundlePaths);
             rebasedCommit = execFileSync(GIT, ['rev-parse', 'HEAD'], { cwd: submoduleRepoPath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }).trim();
         } catch {
             try { execFileSync(GIT, ['rebase', '--abort'], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
@@ -653,6 +820,12 @@ export function convergeDivergedSubmoduleGitlinks(
             rebasedCommit,
             action: 'rebased',
             ...(willMintUnpublishedCommit ? { mintedUnpublishedCommit: true, remoteMainRef } : {}),
+            // ★Never resolve a generated bundle invisibly: the resulting bundle may be
+            // STALE, and naming it here is what lets the stage record point at
+            // `check:vendor` as the gate that proves it is not.
+            ...(resolvedSubmoduleBundlePaths.length > 0
+                ? { resolvedGeneratedBundlePaths: resolvedSubmoduleBundlePaths }
+                : {}),
         });
         resolutions.push({ path, baseCommit, branchCommit, rebasedCommit: rebasedCommit! });
     }
@@ -849,52 +1022,16 @@ export function rootRebaseResolvingGitlinks(
 ): RootRebaseGitlinkResolveResult {
     const resolveByPath = new Map(resolutions.map(r => [r.path, r.rebasedCommit]));
 
-    const runRebase = (args: string[]): { ok: boolean } => {
-        try {
-            execFileSync(GIT, args, {
-                cwd: worktreeRoot,
-                stdio: ['ignore', 'pipe', 'pipe'],
-                timeout: GIT_LOCAL_TIMEOUT_MS,
-                windowsHide: true,
-                // A rebase editor prompt would hang; keep it non-interactive.
-                // Built on `gitChildEnv()` — not raw `process.env` — so an inherited
-                // `GIT_DIR` cannot redirect this REBASE at a different repository.
-                env: { ...gitChildEnv(), GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
-            });
-            return { ok: true };
-        } catch {
-            return { ok: false };
-        }
-    };
+    // A rebase editor prompt would hang; `runRebaseIn` keeps it non-interactive and
+    // builds on `gitChildEnv()` — not raw `process.env` — so an inherited `GIT_DIR`
+    // cannot redirect this REBASE at a different repository.
+    const runRebase = (args: string[]): { ok: boolean } => ({ ok: runRebaseIn(worktreeRoot, args) });
 
-    const unmergedPaths = (): string[] => {
-        try {
-            return execFileSync(GIT, ['diff', '--name-only', '--diff-filter=U'], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() })
-                .split('\n').map(s => s.trim()).filter(Boolean);
-        } catch {
-            return [];
-        }
-    };
+    const unmergedPaths = (): string[] => unmergedPathsIn(worktreeRoot);
 
     const abort = (reason: string, conflictPaths?: string[]): RootRebaseGitlinkResolveResult => {
         try { execFileSync(GIT, ['rebase', '--abort'], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() }); } catch { /* ignore */ }
         return { ok: false, reason, conflictPaths };
-    };
-
-    /**
-     * True when `p` is a REGULAR FILE at some conflict stage — i.e. not a gitlink.
-     * `ls-files --stage` reports mode 160000 for a gitlink at any stage, so this is
-     * the same probe the gitlink branch below uses, inverted. Guards the generated-
-     * bundle resolution so a submodule can never be "resolved" by taking a side,
-     * even if a future vendor path overlapped a gitlink.
-     */
-    const isRegularFileConflict = (p: string): boolean => {
-        try {
-            const staged = execFileSync(GIT, ['ls-files', '--stage', '--', p], { cwd: worktreeRoot, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
-            return staged.trim() !== '' && !/^160000\s/m.test(staged);
-        } catch {
-            return false;
-        }
     };
 
     // Generated vendor bundles resolved to the branch side across all rebase stops.
@@ -919,25 +1056,21 @@ export function rootRebaseResolvingGitlinks(
         // registered in .adhdev/refine.json for BOTH repo roots) rebuilds and
         // verifies. A stale bundle therefore still blocks the refine, but at a gate
         // that can name it. See mesh-refine-generated-bundles.ts.
-        const generatedBundleConflicts = conflicts.filter(
-            p => isRefineGeneratedVendorBundlePath(p) && isRegularFileConflict(p),
-        );
-        for (const p of generatedBundleConflicts) {
-            try {
-                // `--theirs` during a REBASE is the branch being replayed (our commit),
-                // not the upstream base: rebase checks the base out and replays the
-                // branch on top, so the stage-3 "theirs" side is the branch's bundle.
-                execFileSync(GIT, ['checkout', '--theirs', '--', p], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
-                execFileSync(GIT, ['add', '--', p], { cwd: worktreeRoot, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
-                if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
-            } catch {
-                // Could not resolve a bundle we claimed to own — fail safe rather than
-                // continue a rebase with a half-staged index.
-                return abort('rebase_error', conflicts);
-            }
+        // `--theirs` during a REBASE is the branch being replayed (our commit), not
+        // the upstream base: rebase checks the base out and replays the branch on
+        // top, so the stage-3 "theirs" side is the branch's bundle. Shared with the
+        // submodule-internal driver (Gap A) so both levels resolve identically.
+        const stop = resolveGeneratedBundleConflictsAtStop(worktreeRoot, conflicts);
+        if (!stop) {
+            // Could not resolve a bundle we claimed to own — fail safe rather than
+            // continue a rebase with a half-staged index.
+            return abort('rebase_error', conflicts);
         }
-        // Re-read: the bundle resolutions above cleared some unmerged entries.
-        const remaining = generatedBundleConflicts.length > 0 ? unmergedPaths() : conflicts;
+        for (const p of stop.resolved) {
+            if (!resolvedGeneratedBundlePaths.includes(p)) resolvedGeneratedBundlePaths.push(p);
+        }
+        // The bundle resolutions above cleared some unmerged entries.
+        const remaining = stop.remaining;
         if (remaining.length === 0) {
             // Every conflict at this stop was a generated bundle — continue the rebase.
             progress = runRebase(['rebase', '--continue']);
