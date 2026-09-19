@@ -62,6 +62,7 @@ import { configDirChannelMismatch } from '../config/config-dir.js';
 import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
 import {
   ProviderChannelRuntime,
+  describeFetchError,
   collectSyncTargetTypes,
   type ChannelSyncReport,
 } from './channel/runtime.js';
@@ -1099,7 +1100,9 @@ export class ProviderLoader {
         channel: this.channel,
         staleTypes: prev?.staleTypes ?? [],
         newTypes: prev?.newTypes ?? [],
-        error: e?.message || String(e),
+        // Expand AggregateError sub-errors: a bare "AggregateError" string
+        // here is unattributable (see describeFetchError).
+        error: describeFetchError(e),
       };
     }
     const pins = this.listVerifiedChannelPins();
