@@ -493,7 +493,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         .then(async (report) => {
             if (!report) return null;
             if (report.status === 'error') {
-                LOG.warn('Init', `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
+                LOG.warn('Init', `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => `${e.code}: ${e.message}`).join(' | ') || 'unknown'}`);
             } else if (report.activated.length > 0) {
                 LOG.info('Init', `Verified channel first-sync activated ${report.activated.length} providers (${providerLoader.channel})`);
                 // The sync's own loadAll() (provider-loader.ts) just cleared
@@ -519,7 +519,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             const report = await providerLoader.maybeSyncVerifiedChannelOnDaemonUpdate();
             if (!report) return;
             if (report.status === 'error') {
-                LOG.warn('Init', `Daemon-update channel sync failed (last-known-good preserved, retries next boot): ${report.errors.map((e) => e.code).join(', ') || 'unknown'}`);
+                // Log the full error MESSAGES, not just the codes: the codes
+                // are a closed enum that says nothing about why. The message
+                // now carries the expanded transport cause (address/family/
+                // errno) — dropping it here would re-create the exact blind
+                // spot this warning exists to close.
+                LOG.warn('Init', `Daemon-update channel sync failed — PROVIDER MANIFESTS ARE STALE on this daemon (last-known-good activations still loaded; published provider fixes will NOT take effect until a sync succeeds): ${report.errors.map((e) => `${e.code}: ${e.message}`).join(' | ') || 'unknown'}`);
             } else if (report.activated.length > 0) {
                 LOG.info('Init', `Daemon-update channel sync activated ${report.activated.length} providers (${providerLoader.channel})`);
                 providerLoader.registerToDetector();

@@ -153,9 +153,123 @@ describe('ProviderChannelRuntime.sync', () => {
     const report = await down.sync({ channel: 'stable', targetTypes: new Set(['x-cli']) });
 
     expect(report.status).toBe('error');
-    expect(metadata.requestedUrls).toHaveLength(1);
-    expect(metadata.requestedUrls[0]).toContain('channel=stable');
-    expect(metadata.requestedUrls[0]).not.toContain('channel=preview');
+    // The invariant under test is the CHANNEL, not the request count: a
+    // metadata failure is now retried a bounded number of times, and every
+    // one of those attempts must still read the requested channel. Asserting
+    // a single request would silently convert this fail-closed guard into an
+    // assertion about retry arity.
+    expect(metadata.requestedUrls.length).toBeGreaterThanOrEqual(1);
+    for (const url of metadata.requestedUrls) {
+      expect(url).toContain('channel=stable');
+      expect(url).not.toContain('channel=preview');
+    }
+  });
+
+  /**
+   * Boot-storm address-race regression (live RCA 2026-09-20).
+   *
+   * The daemon-update sync fires inside the daemon's own start-up storm, where
+   * Node's Happy Eyeballs races IPv4/IPv6 candidates; on a host with AAAA
+   * records but no usable IPv6 egress the losing candidates surface as an
+   * AggregateError. Measured live: the identical request succeeds seconds
+   * later. These tests assert the BEHAVIOR (a transient first failure still
+   * ends in a completed sync), never the mere existence of a retry helper.
+   */
+  describe('transient channel metadata failure', () => {
+    /**
+     * Metadata source that throws for the first `failTimes` calls and then
+     * serves rows normally — the shape of the live race.
+     */
+    function flakyRuntime(options: { failTimes: number; error: Error; digest: string; logs?: string[] }) {
+      const attempts = { count: 0 };
+      const runtime = makeRuntime({
+        store,
+        repoRoot,
+        metadata: metadataFor([makeRegistryRow(CLI_X, options.digest)]),
+        logFn: options.logs ? (msg) => options.logs!.push(msg) : undefined,
+      });
+      const realFetch = (runtime as any).fetchJson;
+      (runtime as any).fetchJson = async (url: string) => {
+        attempts.count += 1;
+        if (attempts.count <= options.failTimes) throw options.error;
+        return realFetch(url);
+      };
+      return { runtime, attempts };
+    }
+
+    it('retries and COMPLETES the sync when the first metadata attempt fails transiently', async () => {
+      const digest = digestFor(repoRoot, 'cli', 'x-cli');
+      const err: any = new AggregateError([
+        Object.assign(new Error('connect EHOSTUNREACH'), { code: 'EHOSTUNREACH', syscall: 'connect', address: '2606:4700:3030::ac43:abd3', port: 443 }),
+      ]);
+      const { runtime, attempts } = flakyRuntime({ failTimes: 1, error: err, digest });
+
+      const report = await runtime.sync({ channel: 'stable', targetTypes: new Set(['x-cli']) });
+
+      // The point of the fix: a transient first failure no longer strands the
+      // machine on stale manifests until the next daemon restart.
+      expect(report.status).toBe('activated');
+      expect(report.errors).toHaveLength(0);
+      expect(report.activated.map((a) => a.digest)).toEqual([digest]);
+      expect(attempts.count).toBe(2);
+      expect(store.getPointer('stable', 'x-cli')?.active.digest).toBe(digest);
+    });
+
+    it('still fails closed (last-known-good preserved) once the bounded attempts are exhausted', async () => {
+      const digest = digestFor(repoRoot, 'cli', 'x-cli');
+      const err: any = new AggregateError([
+        Object.assign(new Error('connect EHOSTUNREACH'), { code: 'EHOSTUNREACH', syscall: 'connect', address: '2606:4700:3030::ac43:abd3', port: 443 }),
+      ]);
+      // Never recovers — a genuine outage must NOT retry unboundedly.
+      const { runtime, attempts } = flakyRuntime({ failTimes: Number.MAX_SAFE_INTEGER, error: err, digest });
+
+      const report = await runtime.sync({ channel: 'stable', targetTypes: new Set(['x-cli']) });
+
+      expect(report.status).toBe('error');
+      expect(report.errors[0].code).toBe('CHANNEL_METADATA_UNAVAILABLE');
+      expect(attempts.count).toBe(3); // bounded: METADATA_FETCH_ATTEMPTS
+      expect(store.listActiveActivations('stable').activations).toHaveLength(0);
+    });
+
+    it('surfaces the AggregateError sub-errors (code + address) instead of the bare name', async () => {
+      const digest = digestFor(repoRoot, 'cli', 'x-cli');
+      const err: any = new AggregateError([
+        Object.assign(new Error('connect EHOSTUNREACH'), { code: 'EHOSTUNREACH', syscall: 'connect', address: '2606:4700:3030::ac43:abd3', port: 443 }),
+        Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT', syscall: 'connect', address: '172.67.171.211', port: 443 }),
+      ]);
+      const { runtime } = flakyRuntime({ failTimes: Number.MAX_SAFE_INTEGER, error: err, digest });
+
+      const report = await runtime.sync({ channel: 'stable', targetTypes: new Set(['x-cli']) });
+      const message = report.errors[0].message;
+
+      // The exact regression: this message used to be literally
+      // "…: AggregateError", which made the live failure unattributable.
+      expect(message).toContain('EHOSTUNREACH');
+      expect(message).toContain('2606:4700:3030::ac43:abd3:443');
+      expect(message).toContain('ETIMEDOUT');
+      expect(message).toContain('172.67.171.211:443');
+      // The failing URL is named, so the registry base is verifiable from logs.
+      expect(message).toContain('channel=stable');
+      expect(message).not.toMatch(/:\s*AggregateError\s*$/);
+    });
+
+    it('does NOT retry a deterministic channel-contract failure', async () => {
+      // A registry that ignores ?channel= returns the same wrong payload every
+      // time; retrying it is pure latency on the boot path.
+      const digest = digestFor(repoRoot, 'cli', 'x-cli');
+      const metadata: FakeMetadataSource = {
+        rows: [makeRegistryRow(CLI_X, digest)],
+        channelEcho: null, // legacy registry: omits the echo
+        requestedUrls: [],
+      };
+      const runtime = makeRuntime({ store, repoRoot, metadata });
+
+      const report = await runtime.sync({ channel: 'preview', targetTypes: new Set(['x-cli']) });
+
+      expect(report.status).toBe('error');
+      expect(report.errors[0].code).toBe('CHANNEL_METADATA_MISMATCH');
+      expect(metadata.requestedUrls).toHaveLength(1);
+    });
   });
 
   it('fails closed when the transport fails (no partial activations)', async () => {

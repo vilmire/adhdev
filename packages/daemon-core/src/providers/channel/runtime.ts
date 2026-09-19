@@ -89,6 +89,83 @@ export interface ProviderChannelRuntimeOptions {
 
 const REGISTRY_LIST_LIMIT = 100;
 
+/**
+ * Bounded retry for the channel metadata request.
+ *
+ * WHY THIS EXISTS (live RCA 2026-09-20). The daemon-update sync fires during
+ * the daemon's own start-up storm — IDE detection probing 8 CDP ports, the
+ * coordinator session spawning, node-datachannel loading, the P2P smoke test
+ * and the server WS connect all run in the same ~2s window. Node's Happy
+ * Eyeballs (`autoSelectFamily`, default ON since Node 20) races the IPv4 and
+ * IPv6 candidates with a 250ms head start for the first family; when the
+ * event loop is congested that head start elapses before the IPv4 socket
+ * completes, so the IPv6 candidates are attempted too. On a host that
+ * publishes AAAA records but has no usable IPv6 egress — e.g. a Mac whose
+ * only IPv6 default routes point at `utun*` VPN interfaces with no global
+ * IPv6 address — those attempts fail `EHOSTUNREACH` and Node collects every
+ * candidate's failure into an `AggregateError`.
+ *
+ * That failure is transient by construction: the very same request succeeds
+ * seconds later once the boot storm drains (measured live — the 10-minute
+ * staleness probe, which calls `fetchChannelEntries` with the identical URL,
+ * reports successfully on the same boots where this sync aborts). A single
+ * attempt that gives up until the next daemon restart therefore strands
+ * published provider manifests indefinitely on exactly the machines that
+ * update most often.
+ *
+ * The retry is deliberately small and finite: 3 attempts with a short
+ * exponential backoff. It is NOT a substitute for the fail-closed design —
+ * once the attempts are exhausted the sync still aborts with last-known-good
+ * activations intact, which is the correct end state for a genuinely
+ * unreachable registry. The bound is what keeps a real outage from turning
+ * boot into an unbounded retry loop.
+ */
+const METADATA_FETCH_ATTEMPTS = 3;
+
+/** Backoff before retry N (ms). Short: this rides the boot path. */
+const METADATA_RETRY_BACKOFF_MS = [250, 1000];
+
+/**
+ * Human-readable description of a failure, expanding `AggregateError`.
+ *
+ * `AggregateError` — what Happy Eyeballs throws when every address candidate
+ * fails — carries an EMPTY `.message`, so the previous `e?.message || e`
+ * rendered the entire diagnosis as the bare string "AggregateError": no
+ * error code, no address, no family. That erasure is itself a defect; it made
+ * the live failure impossible to attribute from logs for weeks, and drove an
+ * investigation toward the registry and the URL when neither was at fault.
+ *
+ * Each sub-error is rendered as `CODE syscall address:port` so the family
+ * (v4 vs v6) and the failure class are both readable at a glance. Duplicate
+ * renderings are collapsed with a count — four candidates commonly reduce to
+ * two distinct causes, and the collapsed form keeps the boot log short.
+ */
+export function describeFetchError(e: any): string {
+  const subErrors: any[] = Array.isArray(e?.errors) ? e.errors : [];
+  if (subErrors.length > 0) {
+    const counts = new Map<string, number>();
+    for (const sub of subErrors) {
+      const parts: string[] = [];
+      if (sub?.code) parts.push(String(sub.code));
+      if (sub?.syscall) parts.push(String(sub.syscall));
+      if (sub?.address) parts.push(`${sub.address}${sub.port ? `:${sub.port}` : ''}`);
+      const rendered = parts.length > 0 ? parts.join(' ') : (sub?.message || String(sub));
+      counts.set(rendered, (counts.get(rendered) ?? 0) + 1);
+    }
+    const rendered = [...counts.entries()]
+      .map(([text, n]) => (n > 1 ? `${text} (x${n})` : text))
+      .join('; ');
+    const name = e?.name || 'AggregateError';
+    return `${name}: ${rendered}`;
+  }
+  return e?.message || String(e);
+}
+
+/** Sleep helper for the metadata retry backoff. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class ProviderChannelRuntime {
   private readonly store: ProviderChannelStore;
   private readonly registryBaseUrl: string;
@@ -122,13 +199,31 @@ export class ProviderChannelRuntime {
   async fetchChannelEntries(channel: ProviderChannel): Promise<ChannelEntry[]> {
     const url = `${this.registryBaseUrl}/providers?channel=${channel}&limit=${REGISTRY_LIST_LIMIT}`;
     let body: any;
-    try {
-      body = await this.fetchJson(url);
-    } catch (e: any) {
-      throw new ProviderChannelError(
-        'CHANNEL_METADATA_UNAVAILABLE',
-        `channel metadata fetch failed for channel "${channel}": ${e?.message || e}`,
-      );
+    // Transport-level failures are retried a bounded number of times (see
+    // METADATA_FETCH_ATTEMPTS): the live failure mode is a boot-storm address
+    // race that clears within seconds. Everything below this loop — shape and
+    // channel-echo validation — is a DETERMINISTIC contract failure and is
+    // deliberately NOT retried: re-requesting a registry that ignores
+    // `?channel=` just returns the same wrong payload three times.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        body = await this.fetchJson(url);
+        if (attempt > 1) {
+          this.log(`channel metadata fetch succeeded for channel "${channel}" on attempt ${attempt}/${METADATA_FETCH_ATTEMPTS}`);
+        }
+        break;
+      } catch (e: any) {
+        const detail = describeFetchError(e);
+        if (attempt >= METADATA_FETCH_ATTEMPTS) {
+          throw new ProviderChannelError(
+            'CHANNEL_METADATA_UNAVAILABLE',
+            `channel metadata fetch failed for channel "${channel}" after ${attempt} attempt(s) (url=${url}): ${detail}`,
+          );
+        }
+        const backoff = METADATA_RETRY_BACKOFF_MS[attempt - 1] ?? METADATA_RETRY_BACKOFF_MS[METADATA_RETRY_BACKOFF_MS.length - 1];
+        this.log(`channel metadata fetch attempt ${attempt}/${METADATA_FETCH_ATTEMPTS} failed (${detail}) — retrying in ${backoff}ms`);
+        await delay(backoff);
+      }
     }
     if (!body || !Array.isArray(body.providers)) {
       throw new ProviderChannelError(
