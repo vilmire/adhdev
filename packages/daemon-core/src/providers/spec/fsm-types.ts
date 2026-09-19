@@ -229,8 +229,25 @@ export interface PreLaunchTrustSettingsArray {
  * repo-local config (.mcp.json / .grok/lsp.json / hooks). Selecting the scheme
  * from the spec is what reattaches it to the live path.
  */
+/**
+ * 'codex_toml_file' is the third such scheme. Like grok it is a shared TOML
+ * store keyed per folder, but the projection is NOT interchangeable: codex
+ * writes `[projects."<realpath>"]` / `trust_level = "trusted"` (grok writes
+ * `[folders."…"]` / `trusted = true` / `decided_at`), and it writes into
+ * `$CODEX_HOME/config.toml` — codex's MAIN config file, which also carries
+ * `[mcp_servers.*]`. The writer therefore appends one scoped table and never
+ * rewrites the file, so a worker's automatic grant can never disturb the MCP
+ * table that `delegatedWorkerIsolation` depends on. Exact projection lives in
+ * providers/codex-workspace-trust.ts (verified live against codex 0.154.0).
+ *
+ * ★Why codex needs it at all, given the FSM already detects its trust modal: a
+ * delegated worker's `CODEX_HOME` is per-session (the directory name carries a
+ * session hash), so the store is empty on every launch and the prompt fires on
+ * every launch. Without a pre-launch grant, every fresh codex worker parks in
+ * `trust` with its dispatched task queued until a human approves.
+ */
 export interface PreLaunchTrustScheme {
-    scheme: 'kimi_workspace_file' | 'grok_toml_file';
+    scheme: 'kimi_workspace_file' | 'grok_toml_file' | 'codex_toml_file';
 }
 
 export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;

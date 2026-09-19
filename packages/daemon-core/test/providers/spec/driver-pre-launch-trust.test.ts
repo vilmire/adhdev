@@ -396,8 +396,9 @@ describe('FsmDriver -- pre_launch_trust', () => {
         const { validateFsmSpec } = await import('../../../src/providers/spec/fsm-loader.js');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'grok_toml_file' } }))).toEqual([]);
+        expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'codex_toml_file' } }))).toEqual([]);
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'unknown_scheme' } })))
-            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file" or "grok_toml_file"');
+            .toContain('pre_launch_trust.scheme must be "kimi_workspace_file", "grok_toml_file" or "codex_toml_file"');
         expect(validateFsmSpec(baseSpec({ pre_launch_trust: { scheme: 'kimi_workspace_file', key: 'x' } })))
             .toContain('pre_launch_trust with scheme excludes settings_path/key');
     });

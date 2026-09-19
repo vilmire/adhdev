@@ -41,8 +41,8 @@ export function validateFsmSpec(raw: unknown): string[] {
         if (!t || typeof t !== 'object' || Array.isArray(t)) {
             errs.push('pre_launch_trust must be an object');
         } else if (t.scheme !== undefined) {
-            if (t.scheme !== 'kimi_workspace_file' && t.scheme !== 'grok_toml_file') {
-                errs.push('pre_launch_trust.scheme must be "kimi_workspace_file" or "grok_toml_file"');
+            if (t.scheme !== 'kimi_workspace_file' && t.scheme !== 'grok_toml_file' && t.scheme !== 'codex_toml_file') {
+                errs.push('pre_launch_trust.scheme must be "kimi_workspace_file", "grok_toml_file" or "codex_toml_file"');
             }
             if (t.settings_path !== undefined || t.key !== undefined) errs.push('pre_launch_trust with scheme excludes settings_path/key');
         } else {

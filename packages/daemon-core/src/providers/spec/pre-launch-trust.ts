@@ -28,6 +28,7 @@ import * as path from 'node:path';
 import type { PreLaunchTrust } from './fsm-types.js';
 import { serializeKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { serializeGrokWorkspaceTrust } from '../grok-workspace-trust.js';
+import { serializeCodexWorkspaceTrust } from '../codex-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import { LOG } from '../../logging/logger.js';
 
@@ -93,6 +94,42 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
                     { encoding: 'utf8', mode: 0o600 },
                 );
                 LOG.info('pre-launch-trust', `materialized ${plan.origin} grok folder trust in ${settingsPath}`);
+                return real;
+            }
+            if (trust.scheme === 'codex_toml_file') {
+                // ★Same shared-store shape as grok — append one scoped table,
+                // keyed on the header for idempotence — but codex's table is
+                // `[projects."<real>"]` with `trust_level = "trusted"`, and the
+                // store is `config.toml`, codex's MAIN config.
+                //
+                // That last point is why this MUST append and must never
+                // rewrite: `[mcp_servers.*]` lives in the same file, and the
+                // worker's private config root exists precisely to keep the
+                // owner's MCP table out of the worker. Rewriting the file — or
+                // seeding it from the owner's copy — would undo the isolation
+                // this grant is supposed to be orthogonal to.
+                //
+                // An existing entry is never rewritten, which preserves a
+                // user's explicit non-trusted decision.
+                let existing = '';
+                try {
+                    existing = fs.readFileSync(settingsPath, 'utf8');
+                } catch (err: any) {
+                    if (err?.code !== 'ENOENT') throw err;
+                }
+                const header = `[projects."${real.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+                if (existing.split(/\r?\n/).some((line) => line.trim() === header)) {
+                    LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
+                    return null;
+                }
+                const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+                fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+                fs.appendFileSync(
+                    settingsPath,
+                    `${separator}${serializeCodexWorkspaceTrust(real)}`,
+                    { encoding: 'utf8', mode: 0o600 },
+                );
+                LOG.info('pre-launch-trust', `materialized ${plan.origin} codex project trust in ${settingsPath}`);
                 return real;
             }
             return null;
