@@ -105,3 +105,66 @@ export function isDaemonToServerWsMsg(value: unknown): value is DaemonToServerWs
 export function isServerToDaemonWsMsg(value: unknown): value is ServerToDaemonWsMsg {
     return typeof value === 'string' && (SERVER_TO_DAEMON_WS_MSGS as readonly string[]).includes(value);
 }
+
+/**
+ * `auth_ok.payload.limits` — the plan-limit contract the server sends DOWN to
+ * the daemon for client-side enforcement.
+ *
+ * WHY THIS EXISTS: the wire spelling is `maxP2Pconnections` (lowercase `c`),
+ * inherited from `PlanLimits` in the proprietary server's plan-limits.ts. The
+ * daemon-cloud consumer independently declared the same field as
+ * `maxP2PConnections` (capital `C`) and assigned it from a `payload as any`
+ * cast — so the two spellings NEVER met under a type, TypeScript had nothing
+ * to compare, and the limit arrived as `undefined` at every comparison site.
+ * `undefined !== -1` passes the "is it unlimited?" guard, then every
+ * `count >= undefined` is false: enforcement silently degraded to unlimited on
+ * all plans, in production, for months.
+ *
+ * The lesson is NOT "pick a spelling" — it is that a cross-package wire
+ * contract asserted by hand on both ends with an `any` in between cannot fail
+ * loudly. Both producer (server) and consumer (daemon-cloud) must now import
+ * THIS symbol, so a rename breaks the build on both sides instead of silently
+ * disabling a paid-plan limit. Use `normalizeAuthOkLimits()` at the parse
+ * boundary; never re-spell these fields locally.
+ */
+export interface AuthOkPlanLimits {
+    /** P2P concurrent connection count (-1 = unlimited). WIRE SPELLING — lowercase `c`. */
+    maxP2Pconnections: number;
+    /** Screenshot send interval floor (seconds). 0 = real-time. */
+    screenshotIntervalSeconds: number;
+    /** Daily screenshot usage budget (minutes). -1 = unlimited. */
+    dailyScreenshotMinutes: number;
+    /** Max connectable machines/daemons (-1 = unlimited). */
+    maxMachines: number;
+}
+
+/**
+ * Parse-boundary normalizer for `auth_ok.payload.limits`.
+ *
+ * Returns `null` when the payload carries no usable limits object, so callers
+ * keep their existing "no limits known yet" branch. Individual non-numeric or
+ * missing fields fall back to the UNLIMITED sentinel (-1) for count-style
+ * limits and 0 for the interval floor, matching how each consumer already
+ * treats "no constraint" — a malformed field must never be coerced to a
+ * MORE restrictive value than the server intended, or a server-side schema
+ * change would start throttling paying users.
+ *
+ * Accepts the capital-`C` misspelling as an input alias ONLY so a daemon
+ * talking to a mixed-version fleet cannot regress; output is always the
+ * canonical wire spelling.
+ */
+export function normalizeAuthOkLimits(raw: unknown): AuthOkPlanLimits | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const src = raw as Record<string, unknown>;
+    const num = (value: unknown, fallback: number): number =>
+        typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    return {
+        maxP2Pconnections: num(
+            src.maxP2Pconnections !== undefined ? src.maxP2Pconnections : src.maxP2PConnections,
+            -1,
+        ),
+        screenshotIntervalSeconds: num(src.screenshotIntervalSeconds, 0),
+        dailyScreenshotMinutes: num(src.dailyScreenshotMinutes, -1),
+        maxMachines: num(src.maxMachines, -1),
+    };
+}
