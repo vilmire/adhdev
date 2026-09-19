@@ -1596,7 +1596,10 @@
         "busyGenerating": "Agent is generating.",
         "busyWaitingApproval": "Agent is waiting for approval. Approval controls will appear when available.",
         "activityToggleLabel": "Activity",
-        "activityToggleTitle": "Show tool, terminal and thinking activity rows"
+        "activityToggleTitle": "Show tool, terminal and thinking activity rows",
+        "reconnectMachine": "Reconnect",
+        "reconnectingMachine": "Reconnecting…",
+        "reconnectMachineTitle": "Automatic reconnection gave up on this machine — reconnect now"
     },
     "chatInput": {
         "attachImage": "Attach image",

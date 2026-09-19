@@ -4,15 +4,18 @@
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
 import SessionInfoButton from './SessionInfoButton';
 import ConversationMuteButton from './ConversationMuteButton';
+import ChatMachineReconnectButton from './ChatMachineReconnectButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { useTransport } from '../../context/TransportContext';
+import { useDaemons } from '../../compat';
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands';
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import { eventManager } from '../../managers/EventManager';
@@ -219,6 +222,28 @@ export default function ChatPane({
     const loadDaemonMetadata = useDaemonMetadataLoader();
     const { sendCommand } = useTransport();
     const { isVisible: areControlsVisible } = useControlsBarVisibility();
+    const daemonCtx = useDaemons();
+
+    // Inline manual reconnect for a machine that auto-reconnect has PARKED.
+    //
+    // `connectionRetryStatuses` is keyed by the machine-level daemon id — the same
+    // `daemon.id` (type 'adhdev-daemon') that `groupByMachine` uses as `machineId`
+    // and that P2PManager tracks via `syncDaemons`. `getConversationDaemonRouteId`
+    // resolves the open chat to that machine, so the two sides agree by construction.
+    //
+    // The equivalence fallback is the known multi-identifier hazard: the same machine
+    // can appear as `mach_…` / `daemon_mach_…` / `standalone_mach_…`, and a raw ===
+    // lookup is exactly the recurring-defect class `check:canon-identity` guards. An
+    // exact hit is preferred; the scan only runs when that misses.
+    const chatMachineId = getConversationDaemonRouteId(activeConv);
+    const machineRetryStatus = React.useMemo(() => {
+        const statuses = daemonCtx.connectionRetryStatuses;
+        if (!statuses || !chatMachineId) return undefined;
+        const exact = statuses[chatMachineId];
+        if (exact) return exact;
+        const equivalentKey = Object.keys(statuses).find(key => daemonIdsEquivalent(key, chatMachineId));
+        return equivalentKey ? statuses[equivalentKey] : undefined;
+    }, [daemonCtx.connectionRetryStatuses, chatMachineId]);
     useDevRenderTrace('ChatPane', {
         tabKey: activeConv.tabKey,
         messageCount: activeConv.messages.length,
@@ -733,6 +758,14 @@ export default function ChatPane({
                     )}
                 </button>
                 <div className="ml-auto flex items-center gap-1">
+                    {/* Only present while this machine is parked, so the steady-state
+                        header keeps its usual bell + ⓘ pair and gains nothing to
+                        crowd the narrow mobile row. */}
+                    <ChatMachineReconnectButton
+                        machineId={chatMachineId}
+                        blocked={!!machineRetryStatus?.blocked}
+                        retryConnection={daemonCtx.retryConnection}
+                    />
                     <ConversationMuteButton
                         sessionId={activeConv.sessionId}
                         daemonId={activeConv.daemonId}

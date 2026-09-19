@@ -1596,7 +1596,10 @@
         "busyGenerating": "エージェントが応答を生成中です。",
         "busyWaitingApproval": "エージェントが承認を待っています。承認コントロールは準備でき次第表示されます。",
         "activityToggleLabel": "アクティビティ",
-        "activityToggleTitle": "ツール・ターミナル・思考のアクティビティ行を表示"
+        "activityToggleTitle": "ツール・ターミナル・思考のアクティビティ行を表示",
+        "reconnectMachine": "再接続",
+        "reconnectingMachine": "再接続中…",
+        "reconnectMachineTitle": "このマシンへの自動再接続は停止しました — 今すぐ再接続"
     },
     "chatInput": {
         "attachImage": "画像を添付",
