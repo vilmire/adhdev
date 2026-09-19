@@ -50,6 +50,7 @@ import { SendSubmitEngine } from './send-submit-engine.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { applyGrokWorkspaceTrust } from '../grok-workspace-trust.js';
+import { applyCodexWorkspaceTrust } from '../codex-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
@@ -631,6 +632,26 @@ export class FsmDriver implements ISpecDriver {
                 // gates HOOK/PLUGIN execution, not the session — so this is a
                 // correctness/containment fix, not a stall fix.
                 applyGrokWorkspaceTrust(this.opts.workingDir, {
+                    ...process.env,
+                    ...(this.opts.extraEnv || {}),
+                });
+            } else if ('scheme' in this.spec.pre_launch_trust
+                && this.spec.pre_launch_trust.scheme === 'codex_toml_file') {
+                // ★Same env-following rationale as grok directly above, with one
+                // codex-specific twist: codex names its own config-root variable
+                // (`CODEX_HOME`), so a delegated launch does NOT repoint HOME —
+                // `cli-delegated-launch` deliberately skips the HOME export for
+                // config-root providers. `codexHome()` therefore resolves
+                // CODEX_HOME FIRST, which is the variable that actually points
+                // at the worker's private root. Passing the launch env is what
+                // makes a delegated worker's grant land in its own store and
+                // keeps it OUT of the owner's `~/.codex/config.toml`.
+                //
+                // The delegated path normally arrives with a resolved plan and
+                // is handled by applyPreLaunchTrust above; this branch is the
+                // non-delegated launch (user-run codex), where CODEX_HOME is
+                // absent and the grant correctly targets the user's own store.
+                applyCodexWorkspaceTrust(this.opts.workingDir, {
                     ...process.env,
                     ...(this.opts.extraEnv || {}),
                 });
