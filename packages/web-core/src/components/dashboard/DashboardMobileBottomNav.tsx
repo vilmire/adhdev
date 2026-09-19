@@ -24,16 +24,18 @@ export default function DashboardMobileBottomNav({
         { key: 'chats', label: t('nav.chats'), icon: IconChat },
     ]
 
-    // The bottom inset is a FLOOR, not an addend. `calc(10px + inset)` made a
-    // notched iPhone reserve 44px below the tab pill where a flat device reserves
-    // 10px; the 34px home-indicator inset is already more breathing room than the
-    // 10px design padding asked for, so stacking them read as an over-tall dead
-    // band under the nav — owner-reported on the Chats list, where this nav is the
-    // last element on screen. `max` keeps the whole inset reserved (the pill never
-    // reaches the indicator) while the design padding applies only where the inset
-    // does not already exceed it, making this a no-op on every flat form factor.
+    // `max(10px, inset)` (previous revision) kept the notched reservation pinned
+    // to the 34px home-indicator inset alone, with no design padding added on top.
+    // Owner-reported this read as too tight against the status-bar side: the
+    // standalone top total is inset-top (59px) + the header's own top padding
+    // (10px, `.dashboard-header` mobile rule) = 69px, and the bottom pill sat
+    // right on the indicator with none of that margin. `calc(20px + inset)`
+    // restores an additive design pad — chosen to bring the notched total (54px)
+    // closer to the 69px top reference — while the flat-device case
+    // (desktop, Android without a gesture bar, non-notched iPads, browser tabs)
+    // still gets exactly the 20px design padding and nothing more.
     return (
-        <div className="px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom,0px))] border-t border-border-subtle/70 bg-bg-secondary/88 backdrop-blur-md shrink-0">
+        <div className="px-3 py-2.5 pb-[calc(20px+env(safe-area-inset-bottom,0px))] border-t border-border-subtle/70 bg-bg-secondary/88 backdrop-blur-md shrink-0">
             <div
                 className="grid grid-cols-2 gap-1.5 rounded-[20px] border p-1 shadow-[0_10px_28px_rgba(15,23,42,0.08)]"
                 style={{
