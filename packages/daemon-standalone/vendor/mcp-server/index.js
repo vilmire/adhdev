@@ -129332,6 +129332,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         ...appConfig.updateChannel ? { updateChannel: appConfig.updateChannel } : {}
       };
     }
+    var init_provider_loader_config = __esm2({
+      "src/providers/provider-loader-config.ts"() {
+        "use strict";
+      }
+    });
     var fs53;
     var path57;
     var chokidar;
@@ -129356,6 +129361,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         init_provider_loader_support();
         init_provider_loader_manifest_scan();
         init_provider_loader_spec_wiring();
+        init_provider_loader_config();
         CHANNEL_ACTIVATION_RECHECK_MS = 5e3;
         ProviderLoader = class _ProviderLoader {
           providers = /* @__PURE__ */ new Map();
