@@ -58886,13 +58886,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                     return;
                   this.deps.store.cursorSet(c.name, c.topic, this.deps.store.cursorGet(c.name, c.topic), new Date(this.deps.clock()).toISOString());
                   c.failures++;
-                  const delay2 = Math.min(BACKOFF_BASE_MS * 2 ** (c.failures - 1), BACKOFF_MAX_MS);
+                  const delay3 = Math.min(BACKOFF_BASE_MS * 2 ** (c.failures - 1), BACKOFF_MAX_MS);
                   if (c.retryTimer !== null)
                     this.deps.timers.clearTimeout(c.retryTimer);
                   c.retryTimer = this.deps.timers.setTimeout(() => {
                     c.retryTimer = null;
                     this.pump(c);
-                  }, delay2);
+                  }, delay3);
                   return;
                 }
                 if (c.gone)
@@ -105660,11 +105660,11 @@ trust_level = "trusted"
               clearTimeout(this.spawnPrimeMaxWaitTimer);
               this.spawnPrimeMaxWaitTimer = null;
             }
-            const delay2 = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
+            const delay3 = Math.max(0, this.spec.send_on_spawn_delay_ms ?? 250);
             this.spawnPrimeTimer = setTimeout(() => {
               this.spawnPrimeTimer = null;
               this.fireSpawnPrimeOnce("first-output");
-            }, delay2);
+            }, delay3);
           }
           /** Consume the one-shot spawn-prime latch and cancel the competing timer
            *  before writing. JavaScript callbacks are serialized, so whichever path
@@ -106407,11 +106407,11 @@ trust_level = "trusted"
               const armed = this.delegateTimers.has(d.id);
               const shouldFire = d.when_state === currentStateId;
               if (shouldFire && !armed) {
-                const delay2 = d.after_duration_ms ?? 0;
+                const delay3 = d.after_duration_ms ?? 0;
                 const t = setTimeout(() => {
                   this.fireDelegate(d);
                   this.delegateTimers.delete(d.id);
-                }, delay2);
+                }, delay3);
                 this.delegateTimers.set(d.id, t);
               } else if (!shouldFire && armed) {
                 clearTimeout(this.delegateTimers.get(d.id));
@@ -126240,6 +126240,27 @@ ${effect.notification.body || ""}`.trim();
         MAX_HISTORY_CANDIDATES = 20;
       }
     });
+    function describeFetchError(e) {
+      const subErrors = Array.isArray(e?.errors) ? e.errors : [];
+      if (subErrors.length > 0) {
+        const counts = /* @__PURE__ */ new Map();
+        for (const sub of subErrors) {
+          const parts = [];
+          if (sub?.code) parts.push(String(sub.code));
+          if (sub?.syscall) parts.push(String(sub.syscall));
+          if (sub?.address) parts.push(`${sub.address}${sub.port ? `:${sub.port}` : ""}`);
+          const rendered2 = parts.length > 0 ? parts.join(" ") : sub?.message || String(sub);
+          counts.set(rendered2, (counts.get(rendered2) ?? 0) + 1);
+        }
+        const rendered = [...counts.entries()].map(([text, n]) => n > 1 ? `${text} (x${n})` : text).join("; ");
+        const name = e?.name || "AggregateError";
+        return `${name}: ${rendered}`;
+      }
+      return e?.message || String(e);
+    }
+    function delay2(ms) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms));
+    }
     function toSyncError(e, fallbackCode, providerType) {
       if (e instanceof ProviderChannelError) {
         return { code: e.code, message: e.message, providerType: providerType ?? e.providerType };
@@ -126385,6 +126406,8 @@ ${effect.notification.body || ""}`.trim();
     var fs51;
     var path54;
     var REGISTRY_LIST_LIMIT;
+    var METADATA_FETCH_ATTEMPTS;
+    var METADATA_RETRY_BACKOFF_MS;
     var ProviderChannelRuntime;
     var init_runtime = __esm2({
       "src/providers/channel/runtime.ts"() {
@@ -126396,6 +126419,8 @@ ${effect.notification.body || ""}`.trim();
         init_extract_tarball();
         init_pinned_transport();
         REGISTRY_LIST_LIMIT = 100;
+        METADATA_FETCH_ATTEMPTS = 3;
+        METADATA_RETRY_BACKOFF_MS = [250, 1e3];
         ProviderChannelRuntime = class {
           store;
           registryBaseUrl;
@@ -126427,13 +126452,25 @@ ${effect.notification.body || ""}`.trim();
           async fetchChannelEntries(channel) {
             const url2 = `${this.registryBaseUrl}/providers?channel=${channel}&limit=${REGISTRY_LIST_LIMIT}`;
             let body;
-            try {
-              body = await this.fetchJson(url2);
-            } catch (e) {
-              throw new ProviderChannelError(
-                "CHANNEL_METADATA_UNAVAILABLE",
-                `channel metadata fetch failed for channel "${channel}": ${e?.message || e}`
-              );
+            for (let attempt = 1; ; attempt += 1) {
+              try {
+                body = await this.fetchJson(url2);
+                if (attempt > 1) {
+                  this.log(`channel metadata fetch succeeded for channel "${channel}" on attempt ${attempt}/${METADATA_FETCH_ATTEMPTS}`);
+                }
+                break;
+              } catch (e) {
+                const detail = describeFetchError(e);
+                if (attempt >= METADATA_FETCH_ATTEMPTS) {
+                  throw new ProviderChannelError(
+                    "CHANNEL_METADATA_UNAVAILABLE",
+                    `channel metadata fetch failed for channel "${channel}" after ${attempt} attempt(s) (url=${url2}): ${detail}`
+                  );
+                }
+                const backoff = METADATA_RETRY_BACKOFF_MS[attempt - 1] ?? METADATA_RETRY_BACKOFF_MS[METADATA_RETRY_BACKOFF_MS.length - 1];
+                this.log(`channel metadata fetch attempt ${attempt}/${METADATA_FETCH_ATTEMPTS} failed (${detail}) \u2014 retrying in ${backoff}ms`);
+                await delay2(backoff);
+              }
             }
             if (!body || !Array.isArray(body.providers)) {
               throw new ProviderChannelError(
@@ -130535,7 +130572,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
                 channel: this.channel,
                 staleTypes: prev?.staleTypes ?? [],
                 newTypes: prev?.newTypes ?? [],
-                error: e?.message || String(e)
+                // Expand AggregateError sub-errors: a bare "AggregateError" string
+                // here is unattributable (see describeFetchError).
+                error: describeFetchError(e)
               };
             }
             const pins = this.listVerifiedChannelPins();
@@ -166621,7 +166660,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       void providerLoader.maybeFirstSyncVerifiedChannel().then(async (report) => {
         if (!report) return null;
         if (report.status === "error") {
-          LOG.warn("Init", `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => e.code).join(", ") || "unknown"}`);
+          LOG.warn("Init", `Verified channel first-sync failed (last-known-good preserved): ${report.errors.map((e) => `${e.code}: ${e.message}`).join(" | ") || "unknown"}`);
         } else if (report.activated.length > 0) {
           LOG.info("Init", `Verified channel first-sync activated ${report.activated.length} providers (${providerLoader.channel})`);
           providerLoader.registerToDetector();
@@ -166634,7 +166673,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         const report = await providerLoader.maybeSyncVerifiedChannelOnDaemonUpdate();
         if (!report) return;
         if (report.status === "error") {
-          LOG.warn("Init", `Daemon-update channel sync failed (last-known-good preserved, retries next boot): ${report.errors.map((e) => e.code).join(", ") || "unknown"}`);
+          LOG.warn("Init", `Daemon-update channel sync failed \u2014 PROVIDER MANIFESTS ARE STALE on this daemon (last-known-good activations still loaded; published provider fixes will NOT take effect until a sync succeeds): ${report.errors.map((e) => `${e.code}: ${e.message}`).join(" | ") || "unknown"}`);
         } else if (report.activated.length > 0) {
           LOG.info("Init", `Daemon-update channel sync activated ${report.activated.length} providers (${providerLoader.channel})`);
           providerLoader.registerToDetector();
