@@ -478,6 +478,60 @@ export interface WorkerWorkspaceLink {
 export interface WorkerPrivateHomeSpec {
     /** Provider type this spec applies to. */
     providerType: string;
+    /**
+     * ★Environment variable the CLI reads its CONFIG ROOT from, when that root
+     * is not `$HOME`.
+     *
+     * Absent (antigravity, cursor, grok) means the provider roots its config in
+     * `~`, so the launch seam redirects `HOME` itself and the private directory
+     * IS the worker's home.
+     *
+     * Present (codex, kimi, opencode, hermes) means the CLI exposes a dedicated
+     * config-root variable, and redirecting that variable is strictly cheaper
+     * and safer than redirecting `HOME`:
+     *
+     *  - `HOME` is read by everything the worker spawns — git, ssh, the shell,
+     *    every tool the agent invokes. Repointing it to isolate ONE CLI's MCP
+     *    table changes the behavior of the whole process tree, and each surface
+     *    that breaks has to be linked back one file at a time. That is the debt
+     *    the three `HOME`-rooted specs above carry, and it is only paid because
+     *    those CLIs offer no alternative.
+     *  - A dedicated variable moves exactly the config root and nothing else,
+     *    so surfaces the CLI keeps OUTSIDE that root (opencode's `auth.json`
+     *    under `XDG_DATA_HOME`) stay reachable with no import at all.
+     *
+     * ★Measured, not assumed — each value below was verified by running the
+     * installed CLI with the variable pointed at an empty directory and
+     * confirming the owner's MCP servers disappeared. See each spec's comment.
+     *
+     * When set, `~`-rooted `mcpConfig.path` values still resolve against the
+     * private directory (that is what makes the provider isolable), but the
+     * launch seam must NOT export `HOME` — see `cli-delegated-launch.ts`.
+     */
+    homeEnvVar?: string;
+    /**
+     * ★The HOME-relative directory that `homeEnvVar` STANDS IN FOR, when the two
+     * are not the same thing.
+     *
+     * Only meaningful alongside `homeEnvVar`, and only for a provider whose
+     * declared `mcpConfig.path` is written `~/<prefix>/…`. The declared path is
+     * shared with the COORDINATOR writer, which resolves it against the real
+     * home and must keep doing so — so it cannot be rewritten to suit the
+     * worker. This field is what lets the worker resolver reach the same file
+     * inside the private root.
+     *
+     * hermes is the case that needs it: `mcpConfig.path` is
+     * `~/.hermes/config.yaml`, but `HERMES_HOME` names the `.hermes` directory
+     * ITSELF — `HERMES_HOME=<dir> hermes config path` returns `<dir>/config.yaml`,
+     * not `<dir>/.hermes/config.yaml` (measured 2026-09-19). Declaring
+     * `configRootPrefix: '.hermes'` collapses that one segment so the worker
+     * writes where hermes actually reads.
+     *
+     * Absent means `homeEnvVar` names a root the declared path is already
+     * relative to (codex has no declared path at all; kimi and opencode use
+     * root-relative paths — see their specs).
+     */
+    configRootPrefix?: string;
     imports: WorkerHomeImport[];
     /**
      * Directories that must exist (empty) in the private HOME. These are the
@@ -824,6 +878,250 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
         // the `user_rule` that was observed in the worker prompt.
         ensureDirs: ['.cursor', '.claude'],
     },
+    /**
+     * ★codex-cli (measured live 2026-09-19, codex-cli 0.154.0).
+     *
+     * ─── The observation ────────────────────────────────────────────────────
+     *
+     * A codex worker was found RUNNING the owner's `node_repl` MCP server as a
+     * child process. Not inferred from config — the child process was observed.
+     *
+     * ─── Why the existing rule did not stop it ──────────────────────────────
+     *
+     * codex's `delegatedWorkerIsolation.args` declares ONE `config_override`:
+     * `-c mcp_servers.adhdev-mesh.enabled=false`. That disables the coordinator
+     * entry by NAME, which is the only entry it knows to name. Every OTHER
+     * server in `~/.codex/config.toml` is untouched — on this machine that is
+     * `node_repl` and `computer-use`.
+     *
+     * This is the structural flaw in name-based disabling: it enumerates what to
+     * remove, so it can only ever remove what was enumerated when it was written.
+     * A server the owner adds tomorrow is inherited by every worker, silently.
+     * An allow-list (isolate the root, then add back exactly one server) has the
+     * opposite failure mode, which is the correct one here.
+     *
+     * ─── ★The fix, and why it is NOT a private HOME ─────────────────────────
+     *
+     * codex reads its config root from `$CODEX_HOME` (the binary's own `--help`
+     * documents it under `--profile`: "Layer $CODEX_HOME/<name>.config.toml on
+     * top of the base user config"). Measured on the installed 0.154.0:
+     *
+     *   CODEX_HOME=<empty dir> codex mcp list
+     *     → "No MCP servers configured yet."      (owner's three are gone)
+     *   CODEX_HOME=<dir with auth.json linked> codex login status
+     *     → "Logged in using ChatGPT"             (auth survives)
+     *
+     * So one variable isolates the entire MCP table, and ONE symlink keeps the
+     * worker authenticated. `HOME` is left alone, so git/ssh/shell inside the
+     * worker behave exactly as before — see `homeEnvVar` above for why that
+     * matters.
+     *
+     * ★`auth.json` is SYMLINKED, never copied. codex refreshes the ChatGPT token
+     * in place; a copy would strand a long worker on a credential that expires
+     * mid-task while the real one rotates. It is 0600, so `requireOwnerOnly`
+     * holds and a loosened source is refused rather than laundered.
+     *
+     * ★`config.toml` is deliberately NOT imported, and that is the whole point:
+     * it is the file the MCP table lives in. Importing it in any mode would
+     * re-admit `node_repl`. The cost is that the worker loses the owner's
+     * non-MCP preferences (model, sandbox policy) and falls back to codex's
+     * built-in defaults — accepted, because the alternative is a filtered copy
+     * that re-derives the enumeration failure described above.
+     *
+     * The existing `-c` rules still apply and remain correct: the worker MCP
+     * server arrives via `workerMcpDelivery` (`config_override`), which injects
+     * it on argv and therefore does not depend on any file in the config root.
+     * The `adhdev-mesh.enabled=false` rule becomes redundant but harmless, and
+     * is kept so that a daemon running with `ADHDEV_WORKER_MCP` explicitly off
+     * retains exactly its prior behavior.
+     */
+    {
+        providerType: 'codex-cli',
+        homeEnvVar: 'CODEX_HOME',
+        imports: [
+            // ★NOT `required`. A failed required import aborts the private root
+            // and falls back to the owner's config — a fail-OPEN for a spec
+            // whose entire purpose is isolation, and the exact leak measured
+            // here. A host authenticating codex by API key has no `auth.json`
+            // and must still get an isolated worker.
+            { relativePath: 'auth.json', mode: 'symlink', requireOwnerOnly: true },
+        ],
+    },
+    /**
+     * ★kimi (measured live 2026-09-19, kimi 2.0.0).
+     *
+     * ─── The gap ────────────────────────────────────────────────────────────
+     *
+     * kimi merges THREE MCP sources: `$KIMI_CODE_HOME/mcp.json` (global), the
+     * repo-root `.mcp.json`, and `<cwd>/.kimi-code/mcp.json`. The daemon writes
+     * the worker config to the third, so the first two are inherited.
+     *
+     * On this machine `~/.kimi-code/mcp.json` does not currently exist, so the
+     * gap is DORMANT, not harmless: the day the owner adds a global server every
+     * kimi worker inherits it, with no signal. Closing it now costs one env var.
+     *
+     * ─── ★The fix, and the measurement that makes it cheap ──────────────────
+     *
+     * `$KIMI_CODE_HOME` relocates kimi's entire home. Pointed at an empty dir,
+     * kimi lost auth ("No model configured") — proving `config.toml` and
+     * `credentials/` are read from there, i.e. the redirect is real.
+     *
+     * ★The decisive measurement: `~/.kimi-code/config.toml` contains ZERO `mcp`
+     * declarations (verified by grep — the MCP table lives only in the separate
+     * `mcp.json`). So `config.toml` can be symlinked through WHOLE, carrying the
+     * owner's model/provider/auth settings, without carrying a single MCP entry.
+     * The isolated surface is simply the absence of `mcp.json` in the private
+     * root. Verified end-to-end: a private `KIMI_CODE_HOME` with the surfaces
+     * below linked ran a real prompt to completion ("OK") — auth intact.
+     *
+     * `config.toml` is SYMLINKED rather than copied because it carries OAuth
+     * storage keys that rotate; the same in-place-refresh argument as every
+     * other credential here. It is 0600, so `requireOwnerOnly` holds.
+     *
+     * ★Sessions/logs are linked through so the worker's transcripts stay where
+     * the daemon reads them — the same trap documented at length for antigravity
+     * and grok. `session_index.jsonl` is the index the CLI appends to.
+     */
+    {
+        providerType: 'kimi',
+        homeEnvVar: 'KIMI_CODE_HOME',
+        imports: [
+            // Auth + model config. Carries no MCP entries (measured), so linking
+            // it whole does not re-admit anything this spec exists to exclude.
+            //
+            // ★NOT `required`, deliberately. A failed required import aborts the
+            // whole private root and falls back to "worker shares the owner's
+            // config" — for an ISOLATION spec that is a fail-OPEN, and it would
+            // trigger on any host that has not yet run kimi interactively. An
+            // unauthenticated worker fails loudly and locally; a silently
+            // un-isolated one does not.
+            { relativePath: 'config.toml', mode: 'symlink', requireOwnerOnly: true },
+            { relativePath: 'credentials', mode: 'symlink', requireOwnerOnly: true },
+            // 0755 on disk — must NOT assert owner-only.
+            { relativePath: 'oauth', mode: 'symlink' },
+            // Install/region identity, so the worker does not re-onboard.
+            { relativePath: 'region', mode: 'symlink' },
+            { relativePath: 'device_id', mode: 'symlink', requireOwnerOnly: true },
+            // Transcript surfaces — linked THROUGH to the real home.
+            { relativePath: 'sessions', mode: 'symlink' },
+            { relativePath: 'session_index.jsonl', mode: 'symlink' },
+        ],
+    },
+    /**
+     * ★opencode (measured live 2026-09-19).
+     *
+     * ─── The gap, and the measurement that redirected the fix ───────────────
+     *
+     * opencode merges the global `~/.config/opencode/opencode.json` into every
+     * launch alongside the project config. Like kimi this is currently DORMANT
+     * (the owner's global file declares no `mcp` block — which is precisely why
+     * opencode "looked isolated" in the earlier cursor investigation) and would
+     * activate silently the day a global server is added.
+     *
+     * ★The obvious fix — `OPENCODE_CONFIG`, which names an explicit config file
+     * — was measured and REJECTED. It MERGES rather than replaces:
+     *
+     *   XDG_CONFIG_HOME=<dir with decoy-global>  OPENCODE_CONFIG=<worker file>
+     *     → `opencode mcp list` reported BOTH `decoy-global` and the worker
+     *       server. 2 servers, not 1.
+     *
+     * Pointing a config-FILE variable at the worker config therefore isolates
+     * nothing; it only adds. The config ROOT is what governs:
+     *
+     *   XDG_CONFIG_HOME=<dir containing only the worker server>
+     *     → exactly 1 server. The decoy is gone.
+     *
+     * ★This is the cheapest spec of the four, because opencode splits config
+     * from state: credentials live in `XDG_DATA_HOME`
+     * (`~/.local/share/opencode/auth.json`), NOT in the config root. Redirecting
+     * `XDG_CONFIG_HOME` therefore isolates the MCP table while leaving auth,
+     * sessions and the session DB completely untouched — no imports at all, and
+     * nothing to keep in sync.
+     *
+     * ★`XDG_CONFIG_HOME` is a SHARED variable, unlike the three provider-private
+     * ones above. Redirecting it moves the config root of any other XDG-aware
+     * tool the worker spawns. Accepted here because opencode offers no private
+     * equivalent that REPLACES (measured above), and because the blast radius is
+     * still far narrower than `HOME`: XDG_CONFIG_HOME addresses config only,
+     * while `HOME` additionally carries auth, caches, sessions and shell state.
+     */
+    {
+        providerType: 'opencode',
+        homeEnvVar: 'XDG_CONFIG_HOME',
+        imports: [],
+        // The ISOLATED surface. Empty means the owner's global
+        // `opencode.json` is absent and cannot be merged in.
+        ensureDirs: ['opencode'],
+    },
+    /**
+     * ★hermes-cli (measured live 2026-09-19, hermes-agent 0.14.0).
+     *
+     * ─── This spec fixes DELIVERY, not only isolation ───────────────────────
+     *
+     * hermes was the one provider receiving NO worker MCP server at all. Its
+     * `mcpConfig.path` is `~/.hermes/config.yaml` — the owner's real config —
+     * and `resolveWorkerMcpIsolation()` refuses to write a home-rooted path when
+     * there is no private home, because writing would clobber the coordinator's
+     * own config. That refusal is correct and stays; the owner's config is not
+     * something to overwrite.
+     *
+     * What changes is that the path no longer resolves INTO the owner's home.
+     * With a private root the `~` in `~/.hermes/config.yaml` resolves against
+     * it, so the write lands in the worker's own file and the refusal branch is
+     * never reached. Isolation and delivery are the same fix here: the worker
+     * gets its server precisely because it stopped sharing the owner's file.
+     *
+     * ─── ★The measurement ───────────────────────────────────────────────────
+     *
+     * `HERMES_HOME` is a first-class config-root override, read in
+     * `hermes_constants.py` (`get_hermes_home()` → `os.environ["HERMES_HOME"]`,
+     * falling back to `~/.hermes`). Both the config and the credential file are
+     * resolved from it — `get_env_path()` returns `<HERMES_HOME>/.env`. Verified
+     * against the installed CLI:
+     *
+     *   HERMES_HOME=<private>  hermes config path      → <private>/config.yaml
+     *   HERMES_HOME=<private>  hermes config env-path  → <private>/.env
+     *
+     * So `.env` is symlinked through (credentials, refreshed in place) and
+     * `config.yaml` is simply ABSENT from the private root — which is the
+     * isolated surface. The owner's config declares `adhdev` and `adhdev-mesh`
+     * under `mcp_servers`; neither reaches the worker.
+     *
+     * ★`--ignore-user-config` was considered and rejected as the mechanism. It
+     * does isolate (it ignores `~/.hermes/config.yaml` while still loading
+     * `.env`), but it discards ALL 72 top-level config keys including the model
+     * and provider selection, and it offers nowhere to WRITE the worker server —
+     * leaving delivery broken, which is half the defect. `HERMES_HOME` fixes
+     * both with one variable.
+     *
+     * ★Deliberately NOT imported: `config.yaml` (the leak itself — importing it
+     * in any mode re-admits the owner's `mcp_servers`) and the profile store.
+     * The cost is the same accepted trade as codex: the worker falls back to
+     * hermes's built-in defaults for non-MCP preferences rather than inheriting
+     * a filtered copy whose filter would need maintaining.
+     *
+     * ★Priority note: `hermes/` has been dormant since 2026-07-19 (CLAUDE.md),
+     * so this is the lowest-value of the four. It is included because the fix
+     * turned out to be one env var plus one symlink — the same shape as codex —
+     * rather than the structural redesign the deferral (§12-3) assumed.
+     */
+    {
+        providerType: 'hermes-cli',
+        homeEnvVar: 'HERMES_HOME',
+        // `HERMES_HOME` names the `.hermes` directory itself, so the declared
+        // `~/.hermes/config.yaml` collapses to `<root>/config.yaml` — which is
+        // exactly what `hermes config path` reports under the override.
+        configRootPrefix: '.hermes',
+        imports: [
+            // Credentials. Symlinked so a rotation stays shared. Not `required`:
+            // a host driving hermes purely through provider env vars may have no
+            // `.env`, and that must still launch.
+            { relativePath: '.env', mode: 'symlink', requireOwnerOnly: true },
+            // Transcript/session surfaces — linked THROUGH to the real home so
+            // the daemon keeps reading what the worker writes.
+            { relativePath: 'sessions', mode: 'symlink' },
+        ],
+    },
 ];
 
 export function findWorkerPrivateHomeSpec(providerType: string): WorkerPrivateHomeSpec | null {
@@ -1048,6 +1346,11 @@ export interface WriteWorkerMcpConfigInput {
     workspace: string;
     /** Worker-private HOME, when the provider has one. `~` resolves against this. */
     workerHome?: string;
+    /**
+     * HOME-relative prefix that `workerHome` stands in for, when it is a named
+     * config root rather than a home. See `WorkerPrivateHomeSpec.configRootPrefix`.
+     */
+    configRootPrefix?: string;
     /** Omit to write a config with NO servers at all (strongest isolation). */
     server?: WorkerMcpServerCommand;
     /** Minted worker token, carried in the server entry's env. */
@@ -1068,16 +1371,33 @@ export interface WriteWorkerMcpConfigInput {
  * That single substitution is what makes a home-rooted provider isolable at
  * all — the coordinator resolver has no such seam, which is why antigravity
  * and hermes workers currently share the coordinator's global file.
+ *
+ * ★`configRootPrefix` handles the case where the private root is a NAMED config
+ * root rather than a home: the declared path's leading `~/<prefix>` collapses to
+ * the root itself, because the env var already points AT that directory. See
+ * `WorkerPrivateHomeSpec.configRootPrefix` for the measurement behind it.
  */
 export function resolveWorkerMcpConfigPath(
     declaredPath: string,
     workspace: string,
     workerHome?: string,
+    configRootPrefix?: string,
 ): string {
     const trimmed = String(declaredPath || '').trim();
     const home = workerHome || os.homedir();
     if (trimmed === '~') return home;
-    if (trimmed.startsWith('~/')) return path.join(home, trimmed.slice(2));
+    if (trimmed.startsWith('~/')) {
+        let rest = trimmed.slice(2);
+        // Collapse the segment the env var already names. Only when a private
+        // root is actually in play — with no worker home this must stay the
+        // plain real-home resolution the coordinator would do.
+        const prefix = String(configRootPrefix || '').trim();
+        if (workerHome && prefix) {
+            if (rest === prefix) return home;
+            if (rest.startsWith(`${prefix}/`)) rest = rest.slice(prefix.length + 1);
+        }
+        return path.join(home, rest);
+    }
     if (path.isAbsolute(trimmed)) return trimmed;
     return path.join(workspace, trimmed);
 }
@@ -1100,7 +1420,12 @@ export function writeWorkerMcpConfig(input: WriteWorkerMcpConfigInput): string {
     if (!isSupportedMeshCoordinatorConfigFormat(input.format)) {
         throw new Error(`worker_mcp_unsupported_format: ${String(input.format)}`);
     }
-    const target = resolveWorkerMcpConfigPath(input.declaredPath, input.workspace, input.workerHome);
+    const target = resolveWorkerMcpConfigPath(
+        input.declaredPath,
+        input.workspace,
+        input.workerHome,
+        input.configRootPrefix,
+    );
 
     const declared = String(input.declaredPath || '').trim();
     if (declared.startsWith('~') && !input.workerHome) {
@@ -1214,6 +1539,18 @@ export interface WorkerMcpConfigOverrideDelivery extends WorkerMcpConfigOverride
 export interface WorkerMcpIsolation {
     /** Worker-private HOME, when this provider needs one. */
     workerHome?: string;
+    /**
+     * When set, `workerHome` is a provider-private CONFIG ROOT that must be
+     * exported through THIS variable — and `HOME` must be left alone.
+     *
+     * Mirrors `WorkerPrivateHomeSpec.homeEnvVar`; see that field for why a
+     * dedicated variable is preferred over redirecting `HOME` wherever the CLI
+     * offers one. A caller that exports `HOME` regardless would repoint the
+     * whole process tree's home for no benefit, and would strand every surface
+     * this spec deliberately left outside its imports (opencode's auth being
+     * the clearest case).
+     */
+    workerHomeEnvVar?: string;
     /** Config file actually written, if any. */
     configPath?: string;
     /**
@@ -1272,7 +1609,11 @@ export function resolveWorkerMcpIsolation(
                 baseDir: input.baseDir,
             });
             result.workerHome = prepared.home;
-            notes.push(`private HOME ${prepared.home} (imported: ${prepared.imported.join(', ') || 'none'})`);
+            if (spec.homeEnvVar) result.workerHomeEnvVar = spec.homeEnvVar;
+            notes.push(
+                `private ${spec.homeEnvVar || 'HOME'} ${prepared.home}`
+                + ` (imported: ${prepared.imported.join(', ') || 'none'})`,
+            );
             if (prepared.skipped.length) notes.push(`skipped missing imports: ${prepared.skipped.join(', ')}`);
         } catch (err: any) {
             // A private HOME we could not build must NOT silently downgrade to
@@ -1355,6 +1696,7 @@ export function resolveWorkerMcpIsolation(
             serverName,
             workspace: input.workspace,
             workerHome: result.workerHome,
+            ...(spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {}),
             server: input.server,
             token: input.token,
             ...(pendingBind ? { bind: pendingBind.bind } : {}),

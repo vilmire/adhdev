@@ -350,7 +350,15 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         // still resolves to the daemon's home, and the prompt reappears — the
         // fix would be silently inert. Same pairing the MCP axis asserts below;
         // applied here because with the gate off that branch never runs.
-        if (resolvedTrustPlan && storeHome && !envUnsets.has('HOME') && !env.HOME) {
+        //
+        // ★Skipped for a provider that names its own config-root variable (kimi
+        // declares `pre_launch_trust` AND `KIMI_CODE_HOME`). For those the
+        // private directory is a config root, not a home: exporting it as `HOME`
+        // here would undo the deliberate choice made below and repoint the whole
+        // process tree. The trust projection still lands correctly, because it is
+        // written to `storeHome` directly rather than resolved through `$HOME`.
+        const trustHomeIsConfigRoot = Boolean(workerIsolation?.workerHomeEnvVar);
+        if (resolvedTrustPlan && storeHome && !trustHomeIsConfigRoot && !envUnsets.has('HOME') && !env.HOME) {
             env.HOME = storeHome;
             if (process.platform === 'win32' && !env.USERPROFILE) env.USERPROFILE = storeHome;
         }
@@ -385,7 +393,21 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     // provider can still override the variable NAME via env.set (above) for a
     // CLI that uses something other than HOME; that declaration wins because it
     // is applied first and this only fills HOME when unset.
-    if (workerIsolation?.workerHome && !envUnsets.has('HOME') && !env.HOME) {
+    //
+    // ★Two shapes, and picking the wrong one is not a no-op. A provider that
+    // names its own config-root variable (`CODEX_HOME`, `KIMI_CODE_HOME`,
+    // `HERMES_HOME`, `XDG_CONFIG_HOME`) gets THAT variable and keeps the real
+    // `HOME`: the private directory holds only a config root, so exporting it
+    // as `HOME` would point git, ssh, the shell and every tool the agent spawns
+    // at a directory containing none of their state — and would strand the
+    // surfaces those specs deliberately leave outside their imports, such as
+    // opencode's auth under `XDG_DATA_HOME`. Only a provider with no such
+    // variable gets the `HOME` redirect, because for those the private
+    // directory genuinely IS the worker's home.
+    if (workerIsolation?.workerHome && workerIsolation.workerHomeEnvVar) {
+        const key = workerIsolation.workerHomeEnvVar;
+        if (!envUnsets.has(key) && !env[key]) env[key] = workerIsolation.workerHome;
+    } else if (workerIsolation?.workerHome && !envUnsets.has('HOME') && !env.HOME) {
         env.HOME = workerIsolation.workerHome;
         // win32 resolves the profile through USERPROFILE, not HOME.
         if (process.platform === 'win32' && !env.USERPROFILE) {
