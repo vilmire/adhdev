@@ -52957,13 +52957,15 @@ ${blocks.join("\n\n")}`;
       }
       const imported = [];
       const skipped = [];
+      const importPrefix = String(spec.configRootPrefix || "").trim();
+      const sourceBase = importPrefix ? path22.join(realHome, importPrefix) : realHome;
       for (const entry of spec.imports) {
-        const source = path22.join(realHome, entry.relativePath);
+        const source = path22.join(sourceBase, entry.relativePath);
         const target = path22.join(home, entry.relativePath);
         if (!(0, import_fs6.existsSync)(source)) {
           if (entry.required) {
             throw new Error(
-              `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${realHome}`
+              `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${sourceBase}`
             );
           }
           skipped.push(entry.relativePath);
@@ -53498,6 +53500,14 @@ ${blocks.join("\n\n")}`;
           {
             providerType: "codex-cli",
             homeEnvVar: "CODEX_HOME",
+            // `CODEX_HOME` names the `.codex` directory ITSELF, so `auth.json` sits
+            // at the ROOT of the private dir while its real counterpart is
+            // `~/.codex/auth.json`. Measured 2026-09-19: an `auth.json` linked at the
+            // root reports "Logged in using ChatGPT"; the same link nested at
+            // `<root>/.codex/auth.json` reports "Not logged in", exactly like an
+            // empty root. Without this the import source resolved to `~/auth.json`,
+            // which does not exist — see `WorkerHomeImport.relativePath`.
+            configRootPrefix: ".codex",
             imports: [
               // ★NOT `required`. A failed required import aborts the private root
               // and falls back to the owner's config — a fail-OPEN for a spec
@@ -53545,6 +53555,14 @@ ${blocks.join("\n\n")}`;
           {
             providerType: "kimi",
             homeEnvVar: "KIMI_CODE_HOME",
+            // `KIMI_CODE_HOME` names the `.kimi-code` directory ITSELF — the surfaces
+            // below sit at the ROOT of the private dir, while their real
+            // counterparts are `~/.kimi-code/…`. Measured 2026-09-19: the root
+            // layout ran `kimi --prompt "say OK"` to completion; the same links
+            // nested at `<root>/.kimi-code/…` failed with "No model configured",
+            // byte-identical to an EMPTY root — i.e. the nested layout imports
+            // nothing. That empty-root failure is the live rc.16 symptom.
+            configRootPrefix: ".kimi-code",
             imports: [
               // Auth + model config. Carries no MCP entries (measured), so linking
               // it whole does not re-admit anything this spec exists to exclude.
