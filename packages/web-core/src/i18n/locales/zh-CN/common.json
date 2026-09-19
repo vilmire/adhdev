@@ -14,7 +14,6 @@
         "disconnected": "已断开连接",
         "connected": "已连接",
         "connectedToDashboard": "已连接到仪表板",
-        "connectingToMachine": "正在连接到机器...",
         "networkOffline": "网络已离线",
         "reconnecting": "正在重新连接",
         "sessionExpired": "会话已过期。",
@@ -94,11 +93,6 @@
             "history": "历史记录"
         },
         "sourceTimeline": {
-            "colWhen": "时间",
-            "colEvent": "事件",
-            "colFrom": "从",
-            "colTo": "到",
-            "colCause": "原因"
         },
         "guide": {
             "title": "仪表板指南",
@@ -1738,9 +1732,6 @@
             "detectedIdesSection": "检测到的 IDE",
             "detectedIdesDescription": "本地守护进程在此机器上发现的编辑器。",
             "noIdesDetected": "未检测到 IDE。启动一个 IDE 即可在此处看到它。",
-            "machineSection": "机器",
-            "machineDescription": "你的独立守护进程公开的本地机器。",
-            "daemonNotConnected": "守护进程未连接。运行 'adhdev-standalone' 以启动。",
             "appearanceSection": "外观",
             "appearanceDescription": "通过一个统一的位置来管理模式、主题和独立专用字体覆盖，使其与仪表板的其余部分保持一致。",
             "themeDescription": "选择预设，或为独立 UI 创建自定义的表面、强调色和聊天配色。",
@@ -1748,10 +1739,6 @@
             "fontsLabel": "字体",
             "fontsDescription": "针对聊天文本、markdown 代码和终端输出的独立专用排版覆盖。",
             "fontsSaved": "已为此自托管仪表板保存独立聊天字体。",
-            "notificationsSection": "通知",
-            "notificationsDescription": "针对代理活动的浏览器提示和本地声音提示。",
-            "soundEffectsLabel": "音效",
-            "soundEffectsDescription": "在代理完成或需要批准时播放声音",
             "profileSection": "个人资料",
             "profileDescription": "你的名字在本地聊天会话和仪表板视图中的显示方式。",
             "displayNameLabel": "显示名称",
@@ -2026,7 +2013,6 @@
             "pricingTitle": "定价",
             "pricingDesc": "当前的云端套餐以及各级别的机器容量。",
             "planPopular": "热门",
-            "planPerMonth": "/月",
             "readyTitle": "准备连接一台机器",
             "readyDesc": "进入你的仪表盘，查看已连接的机器，或在仍处于配置阶段时继续查看文档。",
             "dashboard": "仪表盘",
@@ -2086,7 +2072,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "确定要退出登录吗？",
             "logout": "Logout",
-            "upgradeArrow": "升级 →",
             "machineLimitBadge": "机器已满",
             "machineLimitBadgeTitle": "已达到套餐 {{count}} 台机器{{plural}}的上限 — 打开账单页面升级",
             "pushBudget": "每日通知 {{used}}/{{limit}}"
@@ -2599,11 +2584,9 @@
             "clearHistory": "清除",
             "noDaemonsWarning": "没有已连接的守护进程。请先启动一个守护进程，或手动替换 {daemonId}。",
             "send": "▶ 发送",
-            "sending": "⏳",
-            "close": "关闭"
+            "sending": "⏳"
         },
         "announcementBanner": {
-            "eyebrow": "系统通知",
             "visibleUntil": "显示至 {{time}}",
             "dismiss": "关闭"
         },
@@ -2922,17 +2905,6 @@
             "activate": "激活"
         },
         "workspace": {
-            "noWorkspace": "（无工作区 — 在主目录中启动）",
-            "selectWorkspace": "选择工作区…",
-            "customPath": "✏️ 自定义路径…",
-            "noWorkspacesSaved": "（未保存工作区 — 在 Overview 选项卡中添加）",
-            "selectWorkspaceBtn": "选择工作区…",
-            "enterAbsolutePath": "输入绝对路径…",
-            "browseHint": "启动前请浏览到目标文件夹。",
-            "absolutePathHint": "输入要在其中启动的绝对路径。",
-            "defaultWorkspace": "默认工作区",
-            "selectedWorkspace": "已选工作区",
-            "noWorkspaceSelected": "未选择工作区。将在主目录中启动。"
         },
         "providers": {
             "filter": "筛选",
@@ -3066,27 +3038,6 @@
             "confirm": "启用提供方"
         },
         "connectedMachines": {
-            "noMachines": "没有已连接的机器",
-            "defaultDescription": "在机器上安装 ADHDev 并登录，即可在此连接。",
-            "startingUpgrade": "正在开始升级...",
-            "machineDisconnected": "机器已断开连接。",
-            "tokenRevoked": "令牌已吊销。请在该机器上重启 ADHDev 以重新连接。",
-            "failedToDisconnect": "断开连接失败",
-            "failedToRevokeToken": "吊销令牌失败",
-            "connectionLostUpgrade": "升级过程中连接丢失",
-            "disconnect": "断开连接",
-            "remove": "移除",
-            "disconnectTitle": "断开机器连接",
-            "removeTitle": "移除机器",
-            "cancel": "取消",
-            "noIdesConnected": "没有已连接的 IDE",
-            "upgrading": "正在升级...",
-            "updated": "✓ 已更新",
-            "updateNow": "↑ 立即更新",
-            "updateTo": "↑ 更新到 v{{version}}",
-            "cdpConnected": "CDP 已连接",
-            "cdpConnecting": "CDP 连接中...",
-            "connecting": "连接中..."
         },
         "card": {
             "sectionIDEs": "IDE",
@@ -3284,10 +3235,6 @@
     },
     "sessionHost": {
         "title": "托管运行时恢复",
-        "mobileDescription": "实时运行时状态、下一步操作，以及显式的恢复/重启控制。",
-        "noMachine": "未选择机器",
-        "refreshAria": "刷新托管运行时恢复",
-        "closeAria": "关闭托管运行时恢复",
         "stopConfirmTitle": "停止 {{name}}？",
         "stopConfirmDescription": "这将终止该托管运行时。",
         "pruneConfirmTitle": "清理重复的托管运行时？",
@@ -3295,7 +3242,6 @@
         "prune": "清理",
         "pruning": "清理中…",
         "pruneDuplicatesCount": "清理重复项（{{count}}）",
-        "pruneCount": "清理 {{count}}",
         "toastResumed": "会话主机已恢复：{{name}}",
         "toastRestarted": "会话主机已重启：{{name}}",
         "toastStopped": "会话主机已停止：{{name}}",
@@ -3314,14 +3260,12 @@
         "recovering": "恢复中…",
         "refresh": "刷新",
         "refreshing": "刷新中…",
-        "openChat": "打开聊天",
         "noWorkspace": "无工作区",
         "clientsCount_one": "{{count}} 个客户端",
         "clientsCount_other": "{{count}} 个客户端",
         "dashboardSessions_one": "{{count}} 个仪表盘会话",
         "dashboardSessions_other": "{{count}} 个仪表盘会话",
         "statLive": "实时运行时",
-        "statLiveShort": "实时",
         "statRecovery": "恢复",
         "statRequests": "请求",
         "statStarted": "启动时间",
@@ -3507,9 +3451,6 @@
                     "审查"
                 ]
             },
-            "selectOs": "选择操作系统",
-            "osUnix": "macOS / Linux",
-            "osWindows": "Windows",
             "copyInstall": "复制安装命令：{{cmd}}",
             "copied": "已复制",
             "copy": "复制",
@@ -3519,8 +3460,7 @@
             "joinDiscord": "加入 Discord",
             "selfHost": "支持自托管",
             "demoDesktop": "ADHDev 指挥中心跨多台机器驱动实时智能体会话",
-            "demoPush": "ADHDev 移动推送通知与一键批准",
-            "scenarioPill": "典型场景：分配任务 → 智能体分发到Mac + Windows工作树，互不冲突 → 通过校验的改动由Refinery合并。"
+            "demoPush": "ADHDev 移动推送通知与一键批准"
         },
         "mesh": {
             "sectionTitle": "互不干扰的并行智能体。",
@@ -3544,8 +3484,7 @@
             "tryMesh": "试用 Repo Mesh →",
             "seePlans": "查看方案",
             "availableOn": "连接机器后，在 <strong>Repo Mesh</strong> 页面即可开始使用。",
-            "readGuide": "阅读指南",
-            "graphAlt": "真实收敛工作流之后的网格可观测性:任务史、只追加账本活动、任务队列与 Refinery 作业 —— feat/get-todo-by-id 已 fast-forward 进 main"
+            "readGuide": "阅读指南"
         },
         "compare": {
             "sectionTitle": "如今并行智能体无处不在，让它们互不冲突才是难点。",
@@ -3723,7 +3662,6 @@
             "point1": "从剪贴板粘贴、拖放，或上传",
             "point2": "最多 5 张图片，每张 10MB",
             "point3": "送达你任意机器上的 PTY 终端智能体",
-            "demoCaption": "把截图粘贴到远程终端智能体",
             "step1Label": "粘贴图片,输入问题",
             "step2Label": "发送 —— 智能体立即处理",
             "step3Label": "看到图片并给出回答"
@@ -3789,12 +3727,9 @@
         "browserNotificationsDesc": "标签页处于非活动状态时的桌面提醒",
         "browserBackgroundInfo": "只有当此仪表盘标签页在后台保持打开时，浏览器提醒才会触发。",
         "browserBackgroundInfoWithPush": "只有当此仪表盘标签页在后台保持打开时，浏览器提醒才会触发。如果关闭标签页，请改用推送通知。",
-        "standaloneBackgroundInfo": "只有当此仪表盘标签页在后台保持打开时，浏览器提醒才会触发。如果关闭它，独立模式将无法为你投递托管的推送通知。",
         "permissionDefault": "此浏览器尚未授予通知权限。请允许以接收浏览器提醒。",
-        "standalonePermissionDefault": "此浏览器尚未授予通知权限。请允许以接收本地浏览器提醒。",
         "allowNotifications": "允许通知",
         "permissionDenied": "浏览器通知已在站点或浏览器设置中被屏蔽。请在那里重新启用以接收桌面提醒。",
-        "standalonePermissionUnsupported": "此浏览器无法在此处显示桌面通知。请让仪表盘保持可见，或在此设备上使用其他受支持的浏览器。",
         "permissionUnsupported": "此浏览器无法在此处显示桌面通知。请使用受支持的桌面浏览器，或在可用时依靠推送通知。",
         "completionAlertsLabel": "完成提醒",
         "completionAlertsDesc": "代理完成任务时通知",

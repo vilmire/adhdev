@@ -14,7 +14,6 @@
         "disconnected": "Desconectado",
         "connected": "Conectado",
         "connectedToDashboard": "Conectado al panel",
-        "connectingToMachine": "Conectando a la máquina...",
         "networkOffline": "Red sin conexión",
         "reconnecting": "Reconectando",
         "sessionExpired": "La sesión ha expirado.",
@@ -94,11 +93,6 @@
             "history": "Historial"
         },
         "sourceTimeline": {
-            "colWhen": "Cuándo",
-            "colEvent": "Evento",
-            "colFrom": "Desde",
-            "colTo": "Hasta",
-            "colCause": "Causa"
         },
         "guide": {
             "title": "Guía del panel",
@@ -1743,9 +1737,6 @@
             "detectedIdesSection": "IDE detectados",
             "detectedIdesDescription": "Editores descubiertos por el daemon local en esta máquina.",
             "noIdesDetected": "No se detectaron IDE. Inicia un IDE para verlo aquí.",
-            "machineSection": "Máquina",
-            "machineDescription": "La máquina local expuesta por tu daemon independiente.",
-            "daemonNotConnected": "Daemon no conectado. Ejecuta 'adhdev-standalone' para iniciar.",
             "appearanceSection": "Apariencia",
             "appearanceDescription": "Unifica el resto del panel con un único lugar para el modo, el tema y las anulaciones de fuente exclusivas del modo independiente.",
             "themeDescription": "Elige un preajuste o crea una paleta personalizada de superficie, acento y chat para la interfaz independiente.",
@@ -1753,10 +1744,6 @@
             "fontsLabel": "Fuentes",
             "fontsDescription": "Anulaciones tipográficas exclusivas del modo independiente para el texto del chat, el código markdown y la salida del terminal.",
             "fontsSaved": "Fuentes de chat independientes guardadas para este panel autoalojado.",
-            "notificationsSection": "Notificaciones",
-            "notificationsDescription": "Avisos del navegador y señales sonoras locales para la actividad del agente.",
-            "soundEffectsLabel": "Efectos de sonido",
-            "soundEffectsDescription": "Reproducir un sonido cuando el agente termina o necesita aprobación",
             "profileSection": "Perfil",
             "profileDescription": "Cómo aparece tu nombre en los hilos de chat locales y en las vistas del panel.",
             "displayNameLabel": "Nombre visible",
@@ -2031,7 +2018,6 @@
             "pricingTitle": "Precios",
             "pricingDesc": "Planes de nube actuales y capacidad de máquinas por nivel.",
             "planPopular": "Popular",
-            "planPerMonth": "/mes",
             "readyTitle": "Listo para conectar una máquina",
             "readyDesc": "Entra en tu panel, inspecciona tus máquinas conectadas o continúa en la documentación si aún estás con la configuración.",
             "dashboard": "Panel",
@@ -2091,7 +2077,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "¿Seguro que quieres cerrar sesión?",
             "logout": "Logout",
-            "upgradeArrow": "Mejorar →",
             "machineLimitBadge": "Máquinas llenas",
             "machineLimitBadgeTitle": "Has alcanzado el límite de {{count}} máquina{{plural}} de tu plan — abre facturación para mejorar",
             "pushBudget": "Notificaciones diarias {{used}}/{{limit}}"
@@ -2604,11 +2589,9 @@
             "clearHistory": "Borrar",
             "noDaemonsWarning": "No hay daemons conectados. Inicia un daemon primero o reemplaza {daemonId} manualmente.",
             "send": "▶ Enviar",
-            "sending": "⏳",
-            "close": "Cerrar"
+            "sending": "⏳"
         },
         "announcementBanner": {
-            "eyebrow": "Aviso del sistema",
             "visibleUntil": "Visible hasta {{time}}",
             "dismiss": "Descartar"
         },
@@ -2927,17 +2910,6 @@
             "activate": "Activar"
         },
         "workspace": {
-            "noWorkspace": "(sin espacio de trabajo — iniciar en home)",
-            "selectWorkspace": "Seleccionar espacio de trabajo…",
-            "customPath": "✏️ Ruta personalizada…",
-            "noWorkspacesSaved": "(no hay espacios de trabajo guardados — añade en la pestaña Overview)",
-            "selectWorkspaceBtn": "Seleccionar espacio de trabajo…",
-            "enterAbsolutePath": "Introduce una ruta absoluta…",
-            "browseHint": "Navega a una carpeta antes de iniciar allí.",
-            "absolutePathHint": "Introduce una ruta absoluta para iniciar allí.",
-            "defaultWorkspace": "Espacio de trabajo predeterminado",
-            "selectedWorkspace": "Espacio de trabajo seleccionado",
-            "noWorkspaceSelected": "No hay espacio de trabajo seleccionado. Esto se inicia en el directorio home."
         },
         "providers": {
             "filter": "Filtrar",
@@ -3071,27 +3043,6 @@
             "confirm": "Activar proveedor"
         },
         "connectedMachines": {
-            "noMachines": "No hay máquinas conectadas",
-            "defaultDescription": "Instala ADHDev en una máquina e inicia sesión para conectarla aquí.",
-            "startingUpgrade": "Iniciando actualización...",
-            "machineDisconnected": "La máquina se desconectó.",
-            "tokenRevoked": "Token revocado. Reinicia ADHDev en esa máquina para volver a conectar.",
-            "failedToDisconnect": "Error al desconectar",
-            "failedToRevokeToken": "Error al revocar el token",
-            "connectionLostUpgrade": "Conexión perdida durante la actualización",
-            "disconnect": "Desconectar",
-            "remove": "Eliminar",
-            "disconnectTitle": "Desconectar máquina",
-            "removeTitle": "Eliminar máquina",
-            "cancel": "Cancelar",
-            "noIdesConnected": "No hay IDE conectados",
-            "upgrading": "Actualizando...",
-            "updated": "✓ Actualizado",
-            "updateNow": "↑ Actualizar ahora",
-            "updateTo": "↑ Actualizar a v{{version}}",
-            "cdpConnected": "CDP conectado",
-            "cdpConnecting": "Conectando CDP...",
-            "connecting": "conectando..."
         },
         "card": {
             "sectionIDEs": "IDE",
@@ -3289,10 +3240,6 @@
     },
     "sessionHost": {
         "title": "Recuperación de runtimes alojados",
-        "mobileDescription": "Estado en vivo de los runtimes, próximas acciones y controles explícitos de recuperación y reinicio.",
-        "noMachine": "Ninguna máquina seleccionada",
-        "refreshAria": "Actualizar recuperación de runtimes alojados",
-        "closeAria": "Cerrar recuperación de runtimes alojados",
         "stopConfirmTitle": "¿Detener {{name}}?",
         "stopConfirmDescription": "Esto terminará el runtime alojado.",
         "pruneConfirmTitle": "¿Depurar runtimes alojados duplicados?",
@@ -3300,7 +3247,6 @@
         "prune": "Depurar",
         "pruning": "Depurando…",
         "pruneDuplicatesCount": "Depurar duplicados ({{count}})",
-        "pruneCount": "Depurar {{count}}",
         "toastResumed": "Session host reanudado: {{name}}",
         "toastRestarted": "Session host reiniciado: {{name}}",
         "toastStopped": "Session host detenido: {{name}}",
@@ -3319,14 +3265,12 @@
         "recovering": "Recuperando…",
         "refresh": "Actualizar",
         "refreshing": "Actualizando…",
-        "openChat": "Abrir chat",
         "noWorkspace": "Sin workspace",
         "clientsCount_one": "{{count}} cliente",
         "clientsCount_other": "{{count}} clientes",
         "dashboardSessions_one": "{{count}} sesión del panel",
         "dashboardSessions_other": "{{count}} sesiones del panel",
         "statLive": "Runtimes activos",
-        "statLiveShort": "Activos",
         "statRecovery": "Recuperación",
         "statRequests": "Solicitudes",
         "statStarted": "Inicio",
@@ -3512,9 +3456,6 @@
                     "revisar"
                 ]
             },
-            "selectOs": "Seleccionar SO",
-            "osUnix": "macOS / Linux",
-            "osWindows": "Windows",
             "copyInstall": "Copiar comando de instalación: {{cmd}}",
             "copied": "Copiado",
             "copy": "Copiar",
@@ -3524,8 +3465,7 @@
             "joinDiscord": "Unirse a Discord",
             "selfHost": "Autoaloja si quieres",
             "demoDesktop": "Centro de mando de ADHDev controlando sesiones de agentes en vivo en varias máquinas",
-            "demoPush": "Notificación push móvil de ADHDev y aprobación con un toque",
-            "scenarioPill": "Sesión típica: asignar misión → agentes desplegados en worktrees de Mac + Windows, sin colisiones → la Refinery fusiona lo que pasa las verificaciones."
+            "demoPush": "Notificación push móvil de ADHDev y aprobación con un toque"
         },
         "mesh": {
             "sectionTitle": "Agentes en paralelo que no se pisan entre sí.",
@@ -3549,8 +3489,7 @@
             "tryMesh": "Probar Repo Mesh →",
             "seePlans": "Ver planes",
             "availableOn": "Conecta una máquina y abre la página de <strong>Repo Mesh</strong> para empezar.",
-            "readGuide": "Leer la guía",
-            "graphAlt": "Observabilidad del mesh tras un workstream convergido real: historial de misiones, actividad del ledger append-only, la cola de tareas y los trabajos del Refinery — feat/get-todo-by-id integrado en main por fast-forward"
+            "readGuide": "Leer la guía"
         },
         "compare": {
             "sectionTitle": "Los agentes en paralelo están por todas partes. Evitar que se pisen es otra historia.",
@@ -3728,7 +3667,6 @@
             "point1": "Pega desde el portapapeles, arrastra y suelta, o sube",
             "point2": "Hasta 5 imágenes, 10 MB cada una",
             "point3": "Llega a un agente de terminal PTY en cualquiera de tus máquinas",
-            "demoCaption": "Pegando una captura en un agente de terminal remoto",
             "step1Label": "Pega la imagen y escribe una pregunta",
             "step2Label": "Enviado — el agente lo procesa",
             "step3Label": "Vio la imagen y respondió"
@@ -3794,12 +3732,9 @@
         "browserNotificationsDesc": "Alertas de escritorio cuando la pestaña está inactiva",
         "browserBackgroundInfo": "Las alertas del navegador solo se activan mientras esta pestaña del panel permanece abierta en segundo plano.",
         "browserBackgroundInfoWithPush": "Las alertas del navegador solo se activan mientras esta pestaña del panel permanece abierta en segundo plano. Si cierras la pestaña, usa las notificaciones push en su lugar.",
-        "standaloneBackgroundInfo": "Las alertas del navegador solo se activan mientras esta pestaña del panel permanece abierta en segundo plano. Si la cierras, el modo autónomo no puede entregarte notificaciones push alojadas.",
         "permissionDefault": "Este navegador aún no ha concedido permiso de notificaciones. Permítelo para recibir alertas del navegador.",
-        "standalonePermissionDefault": "Este navegador aún no ha concedido permiso de notificaciones. Permítelo para recibir alertas locales del navegador.",
         "allowNotifications": "Permitir notificaciones",
         "permissionDenied": "Las notificaciones del navegador están bloqueadas en los ajustes del sitio o del navegador. Vuelve a habilitarlas allí para recibir alertas de escritorio.",
-        "standalonePermissionUnsupported": "Este navegador no puede mostrar notificaciones de escritorio aquí. Mantén el panel visible o usa otro navegador compatible en este dispositivo.",
         "permissionUnsupported": "Este navegador no puede mostrar notificaciones de escritorio aquí. Usa un navegador de escritorio compatible o recurre a las notificaciones push donde estén disponibles.",
         "completionAlertsLabel": "Alertas de finalización",
         "completionAlertsDesc": "Notificar cuando el agente termina una tarea",

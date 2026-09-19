@@ -14,7 +14,6 @@
         "disconnected": "Disconnected",
         "connected": "Connected",
         "connectedToDashboard": "Connected to dashboard",
-        "connectingToMachine": "Connecting to machine...",
         "networkOffline": "Network offline",
         "reconnecting": "Reconnecting",
         "sessionExpired": "Session expired.",
@@ -94,11 +93,6 @@
             "history": "History"
         },
         "sourceTimeline": {
-            "colWhen": "When",
-            "colEvent": "Event",
-            "colFrom": "From",
-            "colTo": "To",
-            "colCause": "Cause"
         },
         "guide": {
             "title": "Dashboard guide",
@@ -1738,9 +1732,6 @@
             "detectedIdesSection": "Detected IDEs",
             "detectedIdesDescription": "Editors discovered by the local daemon on this machine.",
             "noIdesDetected": "No IDEs detected. Start an IDE to see it here.",
-            "machineSection": "Machine",
-            "machineDescription": "The local machine exposed by your standalone daemon.",
-            "daemonNotConnected": "Daemon not connected. Run 'adhdev-standalone' to start.",
             "appearanceSection": "Appearance",
             "appearanceDescription": "Match the rest of the dashboard with a single place for mode, theme, and standalone-only font overrides.",
             "themeDescription": "Choose a preset or create a custom surface, accent, and chat palette for the standalone UI.",
@@ -1748,10 +1739,6 @@
             "fontsLabel": "Fonts",
             "fontsDescription": "Standalone-only typography overrides for chat text, markdown code, and terminal output.",
             "fontsSaved": "Standalone chat fonts saved for this self-hosted dashboard.",
-            "notificationsSection": "Notifications",
-            "notificationsDescription": "Browser prompts and local sound cues for agent activity.",
-            "soundEffectsLabel": "Sound Effects",
-            "soundEffectsDescription": "Play a sound when agent completes or needs approval",
             "profileSection": "Profile",
             "profileDescription": "How your name appears in local chat threads and dashboard views.",
             "displayNameLabel": "Display Name",
@@ -2026,7 +2013,6 @@
             "pricingTitle": "Pricing",
             "pricingDesc": "Current cloud plans and machine capacity by tier.",
             "planPopular": "Popular",
-            "planPerMonth": "/mo",
             "readyTitle": "Ready to connect a machine",
             "readyDesc": "Jump into your dashboard, inspect your connected machines, or continue in the docs if you are still setting up.",
             "dashboard": "Dashboard",
@@ -2086,7 +2072,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "Are you sure you want to logout?",
             "logout": "Logout",
-            "upgradeArrow": "Upgrade →",
             "machineLimitBadge": "Machines full",
             "machineLimitBadgeTitle": "You've reached your plan limit of {{count}} machine{{plural}} — open billing to upgrade",
             "pushBudget": "Daily notifications {{used}}/{{limit}}"
@@ -2599,11 +2584,9 @@
             "clearHistory": "Clear",
             "noDaemonsWarning": "No daemons connected. Start a daemon first or replace {daemonId} manually.",
             "send": "▶ Send",
-            "sending": "⏳",
-            "close": "Close"
+            "sending": "⏳"
         },
         "announcementBanner": {
-            "eyebrow": "System Notice",
             "visibleUntil": "Visible until {{time}}",
             "dismiss": "Dismiss"
         },
@@ -2922,17 +2905,6 @@
             "activate": "Activate"
         },
         "workspace": {
-            "noWorkspace": "(no workspace — launch in home)",
-            "selectWorkspace": "Select workspace…",
-            "customPath": "✏️ Custom path…",
-            "noWorkspacesSaved": "(no workspaces saved — add in Overview tab)",
-            "selectWorkspaceBtn": "Select workspace…",
-            "enterAbsolutePath": "Enter absolute path…",
-            "browseHint": "Browse to a folder before launching there.",
-            "absolutePathHint": "Enter an absolute path to launch there.",
-            "defaultWorkspace": "Default workspace",
-            "selectedWorkspace": "Selected workspace",
-            "noWorkspaceSelected": "No workspace selected. This launches in the home directory."
         },
         "providers": {
             "filter": "Filter",
@@ -3066,27 +3038,6 @@
             "confirm": "Enable provider"
         },
         "connectedMachines": {
-            "noMachines": "No machines connected",
-            "defaultDescription": "Install ADHDev on a machine and sign in to connect it here.",
-            "startingUpgrade": "Starting upgrade...",
-            "machineDisconnected": "Machine disconnected.",
-            "tokenRevoked": "Token revoked. Restart ADHDev on that machine to reconnect.",
-            "failedToDisconnect": "Failed to disconnect",
-            "failedToRevokeToken": "Failed to revoke token",
-            "connectionLostUpgrade": "Connection lost during upgrade",
-            "disconnect": "Disconnect",
-            "remove": "Remove",
-            "disconnectTitle": "Disconnect Machine",
-            "removeTitle": "Remove Machine",
-            "cancel": "Cancel",
-            "noIdesConnected": "No IDEs connected",
-            "upgrading": "Upgrading...",
-            "updated": "✓ Updated",
-            "updateNow": "↑ Update now",
-            "updateTo": "↑ Update to v{{version}}",
-            "cdpConnected": "CDP connected",
-            "cdpConnecting": "CDP connecting...",
-            "connecting": "connecting..."
         },
         "card": {
             "sectionIDEs": "IDEs",
@@ -3284,10 +3235,6 @@
     },
     "sessionHost": {
         "title": "Hosted Runtime Recovery",
-        "mobileDescription": "Live runtime status, next actions, and explicit recover/restart controls.",
-        "noMachine": "No machine selected",
-        "refreshAria": "Refresh hosted runtime recovery",
-        "closeAria": "Close hosted runtime recovery",
         "stopConfirmTitle": "Stop {{name}}?",
         "stopConfirmDescription": "This will terminate the hosted runtime.",
         "pruneConfirmTitle": "Prune duplicate hosted runtimes?",
@@ -3295,7 +3242,6 @@
         "prune": "Prune",
         "pruning": "Pruning…",
         "pruneDuplicatesCount": "Prune duplicates ({{count}})",
-        "pruneCount": "Prune {{count}}",
         "toastResumed": "Session host resumed: {{name}}",
         "toastRestarted": "Session host restarted: {{name}}",
         "toastStopped": "Session host stopped: {{name}}",
@@ -3314,14 +3260,12 @@
         "recovering": "Recovering…",
         "refresh": "Refresh",
         "refreshing": "Refreshing…",
-        "openChat": "Open chat",
         "noWorkspace": "No workspace",
         "clientsCount_one": "{{count}} client",
         "clientsCount_other": "{{count}} clients",
         "dashboardSessions_one": "{{count}} dashboard session",
         "dashboardSessions_other": "{{count}} dashboard sessions",
         "statLive": "Live runtimes",
-        "statLiveShort": "Live",
         "statRecovery": "Recovery",
         "statRequests": "Requests",
         "statStarted": "Started",
@@ -3507,9 +3451,6 @@
                     "review"
                 ]
             },
-            "selectOs": "Select OS",
-            "osUnix": "macOS / Linux",
-            "osWindows": "Windows",
             "copyInstall": "Copy install command: {{cmd}}",
             "copied": "Copied",
             "copy": "Copy",
@@ -3519,8 +3460,7 @@
             "joinDiscord": "Join Discord",
             "selfHost": "Self-host it",
             "demoDesktop": "ADHDev command center driving live agent sessions across multiple machines",
-            "demoPush": "ADHDev mobile push notification and one-tap approval",
-            "scenarioPill": "Typical session: assign a mission → agents fan out across Mac + Windows worktrees, no collisions → the Refinery merges what passes."
+            "demoPush": "ADHDev mobile push notification and one-tap approval"
         },
         "mesh": {
             "sectionTitle": "Parallel agents that don't step on each other.",
@@ -3544,8 +3484,7 @@
             "tryMesh": "Try Repo Mesh →",
             "seePlans": "See plans",
             "availableOn": "Connect a machine and open the <strong>Repo Mesh</strong> page to get started.",
-            "readGuide": "Read the guide",
-            "graphAlt": "Mesh observability after a real converged workstream: mission history, append-only ledger activity, the task queue, and Refinery jobs — feat/get-todo-by-id fast-forwarded into main"
+            "readGuide": "Read the guide"
         },
         "compare": {
             "sectionTitle": "Everyone runs agents in parallel. Not everyone keeps them out of each other's way.",
@@ -3723,7 +3662,6 @@
             "point1": "Paste from clipboard, drag & drop, or upload",
             "point2": "Up to 5 images, 10MB each",
             "point3": "Lands in a PTY terminal agent on any of your machines",
-            "demoCaption": "Pasting a screenshot into a remote terminal agent",
             "step1Label": "Paste the image, type a question",
             "step2Label": "Sent — the agent picks it up",
             "step3Label": "It saw the image and answered"
@@ -3789,12 +3727,9 @@
         "browserNotificationsDesc": "Desktop alerts when tab is inactive",
         "browserBackgroundInfo": "Browser alerts only fire while this dashboard tab stays open in the background.",
         "browserBackgroundInfoWithPush": "Browser alerts only fire while this dashboard tab stays open in the background. If you close the tab, use Push Notifications instead.",
-        "standaloneBackgroundInfo": "Browser alerts only fire while this dashboard tab stays open in the background. If you close it, standalone cannot deliver hosted push notifications for you.",
         "permissionDefault": "This browser has not granted notification permission yet. Allow it to receive browser alerts.",
-        "standalonePermissionDefault": "This browser has not granted notification permission yet. Allow it to receive local browser alerts.",
         "allowNotifications": "Allow notifications",
         "permissionDenied": "Browser notifications are blocked in site or browser settings. Re-enable them there to receive desktop alerts.",
-        "standalonePermissionUnsupported": "This browser cannot show desktop notifications here. Keep the dashboard visible, or use another supported browser on this device.",
         "permissionUnsupported": "This browser cannot show desktop notifications here. Use a supported desktop browser, or rely on Push Notifications where available.",
         "completionAlertsLabel": "Completion Alerts",
         "completionAlertsDesc": "Notify when agent finishes a task",
