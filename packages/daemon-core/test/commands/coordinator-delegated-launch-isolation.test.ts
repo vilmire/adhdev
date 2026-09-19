@@ -305,20 +305,59 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
   })
 
   it('leaves a repo-local provider on the real HOME', () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-kimi-'))
+    // ★claude-cli is the standing example of a provider that needs no private
+    // root: `--strict-mcp-config` makes the CLI read ONLY the file the daemon
+    // names, so nothing global is merged and there is nothing to hide. kimi
+    // filled this role until 2026-09-19, when it gained a `KIMI_CODE_HOME`
+    // config root — see the config-root cases below.
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-claude-'))
     __tmpDirsToClean.push(workspace)
     const result = buildCoordinatorDelegatedCliLaunchOptions({
-      cliType: 'kimi',
+      cliType: 'claude-cli',
       workspace,
-      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json' },
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json' },
       sessionKey: 'task_1',
     })
 
     expect(result.workerIsolation?.workerHome).toBeUndefined()
     expect(result.env.HOME).toBeUndefined()
-    // But it DOES get an isolated config — that is the 6-provider win.
-    expect(existsSync(join(workspace, '.kimi-code', 'mcp.json'))).toBe(true)
-    expect(JSON.parse(readFileSync(join(workspace, '.kimi-code', 'mcp.json'), 'utf-8'))).toEqual({ mcpServers: {} })
+    // But it DOES get an isolated config — that is the win.
+    expect(existsSync(join(workspace, '.mcp.json'))).toBe(true)
+    expect(JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8'))).toEqual({ mcpServers: {} })
+  })
+
+  it('★exports the provider\'s OWN config-root variable and leaves HOME alone', () => {
+    // ★The pairing that makes codex/kimi/opencode/hermes cheap. The private
+    // directory holds a CONFIG ROOT, not a home: exporting it as HOME would
+    // repoint git, ssh, the shell and every tool the agent spawns at a
+    // directory containing none of their state, and would strand the surfaces
+    // these specs deliberately leave outside their imports (opencode keeps auth
+    // under XDG_DATA_HOME). Measured: `CODEX_HOME=<empty dir> codex mcp list`
+    // reports no servers, while `codex login status` still reports logged in.
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-gateon-codexroot-home-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-codexroot-'))
+    __tmpDirsToClean.push(realHome, workspace)
+    writeFileSync(join(realHome, 'auth.json'), '{"tokens":{"access_token":"x"}}', { mode: 0o600 })
+    writeFileSync(join(realHome, 'config.toml'), '[mcp_servers.node_repl]\ncommand = "node"\n', { mode: 0o600 })
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'codex-cli',
+      workspace,
+      mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_codex_root',
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-gateon-codexroot-base-')),
+    })
+
+    const workerHome = result.workerIsolation?.workerHome
+    expect(workerHome).toBeTruthy()
+    // The config root IS redirected...
+    expect(result.env.CODEX_HOME).toBe(workerHome)
+    // ...and HOME is NOT touched. This is the assertion that fails if the seam
+    // ever falls back to the generic HOME branch for these providers.
+    expect(result.env.HOME).toBeUndefined()
+    // The owner's table is absent from the root codex will read.
+    expect(existsSync(join(workerHome!, 'config.toml'))).toBe(false)
   })
 
   it('delivers Codex worker MCP via config overrides while keeping the bind out of argv', () => {
@@ -465,11 +504,12 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     __tmpDirsToClean.push(workspace)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
-      // A provider with no private-HOME spec, carrying cursor's rule.
-      cliType: 'kimi',
+      // A provider with no private-root spec, carrying cursor's rule. (kimi
+      // filled this role until it gained KIMI_CODE_HOME on 2026-09-19.)
+      cliType: 'claude-cli',
       workspace,
       isolation: cursorIsolation,
-      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
       sessionKey: 'sess_cursor_nohome',
     })
 
@@ -713,10 +753,12 @@ describe('★delegated worker pre-launch trust is decoupled from the worker-MCP 
     __tmpDirsToClean.push(workerBase)
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
-      cliType: 'kimi',
+      // claude-cli has no worker-scoped HOME spec, so the trust plan must fail
+      // closed rather than resolving `~` against the daemon's own home.
+      cliType: 'claude-cli',
       workspace,
       sessionKey: 'sess_noscope',
-      preLaunchTrust: { settings_path: '~/.kimi-code/settings.json', key: 'trustedFolders' },
+      preLaunchTrust: { settings_path: '~/.claude/settings.json', key: 'trustedFolders' },
       workerHomeBaseDir: workerBase,
     })
 
@@ -839,11 +881,11 @@ describe('★absent delegatedWorkerIsolation is observable, not silent', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-withheld-rule-'))
     __tmpDirsToClean.push(workspace)
     const withheld = buildCoordinatorDelegatedCliLaunchOptions({
-      cliType: 'kimi', // no private-HOME spec ⇒ fail-closed path
+      cliType: 'claude-cli', // no private-root spec ⇒ fail-closed path
       workspace,
       isolation: cursorIsolation,
       providerVersion: '1.0.11',
-      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
       sessionKey: 'sess_withheld_rule',
     })
 
