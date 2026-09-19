@@ -56,8 +56,6 @@ export const MESH_GRAPH_EDGE_LABEL = {
 
 export type MeshGraphDirection = 'LR' | 'TB'
 
-export const MESH_GRAPH_LAYOUT_DIRECTION: MeshGraphDirection = 'LR'
-
 function elkDirection(dir: MeshGraphDirection): 'RIGHT' | 'DOWN' {
     return dir === 'TB' ? 'DOWN' : 'RIGHT'
 }

@@ -168,17 +168,6 @@ export type CoverageHintV2 =
 
 export type CanonicalHistoryModeV2 = 'native-source' | 'disabled' | 'materialized-mirror';
 
-export interface CanonicalHistoryDeclarationV2 {
-  contractVersion: ChatContractVersion;
-  format: string;
-  mode: CanonicalHistoryModeV2;
-  watchPath?: string;
-  scripts: {
-    readSession: string;
-    listSessions: string;
-  };
-}
-
 // ─── ReadChat result ─────────────────────────────────────────────────────
 
 export type ReadChatStatusV2 =
@@ -544,24 +533,3 @@ export function isSupportedChatContractVersion(value: unknown): value is ChatCon
     && (SUPPORTED_CHAT_CONTRACT_VERSIONS as readonly string[]).includes(value);
 }
 
-/**
- * Read a provider's declared chat contract version from its parsed
- * provider.json `canonicalHistory.contractVersion` field.
- *
- * - Absent or unrecognized → treated as v1 (legacy behaviour preserved during
- *   the A1 transition). A2 will tighten this to reject unsupported versions
- *   at provider load time.
- * - Present and supported → returned as-is.
- *
- * The returned version drives which validator (assertReadChatResultV2Payload
- * vs the legacy validateReadChatResultPayload) processes the provider's
- * read_chat output.
- */
-export function readDeclaredChatContractVersion(
-  canonicalHistory: unknown,
-): ChatContractVersion {
-  if (!isPlainObject(canonicalHistory)) return CHAT_CONTRACT_VERSION_V1;
-  const declared = canonicalHistory['contractVersion'];
-  if (isSupportedChatContractVersion(declared)) return declared;
-  return CHAT_CONTRACT_VERSION_V1;
-}

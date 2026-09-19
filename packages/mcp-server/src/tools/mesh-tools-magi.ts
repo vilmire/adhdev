@@ -1341,15 +1341,6 @@ export function findMagiReplicaTasks(queue: any[], consensusGroupId: string): an
 // session — the marker gate filters reused ones out; an auto-launched-then-claimed session
 // has assignedSessionId === autoLaunch.sessionId and IS the one we want gone.
 
-/** One candidate cleanup target: a session a replica may have auto-launched, with the
- *  replica's task id that the session-host record marker must match for it to be cleaned. */
-export interface MagiCleanupCandidate {
-    nodeId: string;
-    sessionId: string;
-    /** The replica task id this session must have been auto-launched FOR (marker check). */
-    expectedTaskId: string;
-}
-
 /**
  * Pure: derive the per-node cleanup target set from the replica queue tasks. Returns a map
  * keyed by nodeId → { sessionIds, requireAutoLaunchedForTaskIds }. Session ids are pulled

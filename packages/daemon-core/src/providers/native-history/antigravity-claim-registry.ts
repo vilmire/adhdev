@@ -39,7 +39,6 @@ import {
   claimTranscript,
   isTranscriptClaimedByOther,
   transcriptClaimOwner,
-  releaseTranscript,
   releaseTranscriptOwner,
   transcriptClaimOwnerToken,
   __resetTranscriptClaimRegistry,
@@ -99,11 +98,6 @@ export function isAntigravityConversationClaimedByOther(uuid: string, owner: str
 /** The live owner of `uuid`, or undefined when unclaimed or stale. */
 export function antigravityConversationOwner(uuid: string, now: number = Date.now()): string | undefined {
   return transcriptClaimOwner(normalizeUuid(uuid), now);
-}
-
-/** Release a single conversation, only if held by `owner` (or `owner` empty). */
-export function releaseAntigravityConversation(uuid: string, owner?: string): void {
-  releaseTranscript(normalizeUuid(uuid), owner);
 }
 
 /** Release every conversation held by `owner` (called on session shutdown). */
