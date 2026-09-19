@@ -4047,17 +4047,44 @@
             user-select: none;
         }
 
-        /* Keep safe-area offset on app surfaces instead of shifting the whole body.
-           This avoids iPad standalone/PWA touch hit-testing drift on the fixed sidebar. */
-        .landing {
+        /* iOS standalone + `black-translucent` + `viewport-fit=cover` shortens the
+           *layout viewport* by the top inset: the window covers the whole screen,
+           but the document iOS hands us is only (screen - safe-area-inset-top)
+           tall. Every `height: 100%` below — html, body, #root, .app-layout —
+           therefore resolves short, and the last ~inset-top pixels of the screen
+           are simply outside the document. Nothing paints there, so the browser's
+           default white shows through as a band along the bottom edge.
+
+           Three properties of the symptom identify this as the cause, and rule
+           out the composer (which reserves inset-*bottom*, a different edge):
+             - the band appears on screens with no composer at all (the Chats
+               list, below the Machines/Chats tab bar);
+             - it measures inset-*top* (~47-59px on notched iPhones), not the
+               34px home-indicator inset;
+             - it disappears while the keyboard is up, because the keyboard
+               occupies that region of the screen.
+
+           Growing the document by exactly the shortfall makes it span the real
+           screen again, and reserving the same amount as padding keeps content
+           out from under the status bar. Both live on `html` so the fill colour
+           below is `body`'s own background rather than browser white.
+
+           Scoped to `display-mode: standalone` — browser tabs get a correctly
+           sized viewport and must not be grown, or they would scroll by the
+           inset. Zero insets (iPad without a notch, Android, desktop PWAs) make
+           both values 0 and the rule a no-op. */
+        html {
+            min-height: calc(100% + env(safe-area-inset-top, 0px));
             padding-top: env(safe-area-inset-top, 0px);
             box-sizing: border-box;
         }
 
-        .main-content {
-            padding-top: env(safe-area-inset-top, 0px);
-            box-sizing: border-box;
-        }
+        /* `.landing` and `.main-content` used to carry `padding-top: inset-top`
+           themselves. The root now reserves it once for the whole in-flow tree,
+           so repeating it here would indent those surfaces by two status bars.
+           The fixed elements below are exempt: they position against the
+           viewport, not the root's padding box, so the root's padding does not
+           move them and they still need their own offset. */
 
         /* Fixed elements need their own safe-area offset */
         .sidebar {
