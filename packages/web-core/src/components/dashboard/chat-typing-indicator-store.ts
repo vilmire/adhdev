@@ -37,9 +37,3 @@ export function subscribeChatTyping(listener: Listener): () => void {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
 }
-
-/** Test helper: wipe the store between tests. */
-export function clearChatTypingForTests(): void {
-    typingState.clear();
-    listeners.clear();
-}

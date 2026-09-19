@@ -16,11 +16,6 @@ export async function deleteWorkspace(name: string): Promise<void> {
   storage.deleteWorkspace(name);
 }
 
-export async function hasWorkspace(name: string): Promise<boolean> {
-  const storage = new TerminalMuxStorage();
-  return storage.loadWorkspace(name) !== null;
-}
-
 export async function hasSession(name: string): Promise<boolean> {
   const storage = new TerminalMuxStorage();
   return storage.listSessionWindows(name).length > 0;

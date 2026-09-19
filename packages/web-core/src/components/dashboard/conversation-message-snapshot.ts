@@ -1,14 +1,7 @@
 import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
-import { getConversationDaemonRouteId } from './conversation-selectors'
 import { getMessageTimestamp } from './message-utils'
 import { PENDING_QUEUED_MESSAGE_STALE_AFTER_MS } from '../../utils/pendingQueuedMessages'
-
-export function getConversationMessageAuthorityKey(conversation: ActiveConversation): string {
-    const daemonId = getConversationDaemonRouteId(conversation)
-    const sessionId = conversation.sessionId || ''
-    return daemonId && sessionId ? `${daemonId}::${sessionId}` : ''
-}
 
 export function getConversationLiveMessages(
     conversation: ActiveConversation,

@@ -1083,11 +1083,10 @@ function mapTerminalEvidencePayload(
 }
 
 /**
- * Purpose-tagged coordinator-side evidence query — the remote half of the
- * transcript-authority choke point (P1). Existing callers keep the original
- * poll* shells below; new consumers (the reconcile loop's early-arm / redrive
- * sites in P3) should enter here so the purpose vocabulary — not another
- * ad-hoc gate — expresses what is being asked of the worker transcript.
+ * Purpose vocabulary for coordinator-side evidence queries — the remote half of
+ * the transcript-authority choke point (P1). Callers use the poll* shells below;
+ * the purpose tag — not another ad-hoc gate — expresses what is being asked of
+ * the worker transcript.
  */
 export type AssignedTaskEvidencePurpose = 'turn-progress' | 'terminal-evidence';
 
@@ -1097,21 +1096,6 @@ export interface AssignedTaskCompletionEvidence {
     inTurnProgress: boolean;
     /** "Did the worker FINISH this task's turn" — populated for 'terminal-evidence'. */
     terminal: AssignedTaskTerminalEvidence | null;
-}
-
-export async function resolveAssignedTaskCompletionEvidence(
-    components: DaemonComponents,
-    mesh: { id: string; nodes?: Array<{ id: string; daemonId?: string; workspace?: string }> },
-    row: { id: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string; dispatchTimestamp?: string },
-    purpose: AssignedTaskEvidencePurpose,
-): Promise<AssignedTaskCompletionEvidence> {
-    if (purpose === 'turn-progress') {
-        const inTurnProgress = await pollAssignedTaskInTurnProgress(components, mesh, row);
-        return { purpose, inTurnProgress, terminal: null };
-    }
-    const terminal = await pollAssignedTaskTerminalEvidence(components, mesh, row);
-    // A proven turn-end implies the turn also started.
-    return { purpose, inTurnProgress: terminal != null, terminal };
 }
 
 export async function pollAssignedTaskInTurnProgress(

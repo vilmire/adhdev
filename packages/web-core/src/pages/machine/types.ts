@@ -92,14 +92,6 @@ export interface MachineRecentLaunch {
     lastLaunchedAt?: number
 }
 
-export interface MachineLaunchTarget {
-    id: string
-    kind: WorkspaceLaunchKind
-    label: string
-    providerType?: string
-    subtitle: string
-}
-
 export interface LaunchWorkspaceOption {
     key: string
     label: string
@@ -111,15 +103,3 @@ export interface LaunchWorkspaceOption {
 // ─── Utils ───────────────────────────────────────────
 export { formatRelativeAgo } from '../../utils/time'
 
-/** Shared context passed from MachineDetail to each tab component. */
-export interface MachineTabContext {
-    machineId: string
-    machine: MachineData
-    ideSessions: IdeSessionEntry[]
-    cliSessions: CliSessionEntry[]
-    acpSessions: AcpSessionEntry[]
-    providers: ProviderInfo[]
-    getIcon: (type: string) => string
-    addLog: (level: LogEntry['level'], message: string) => void
-    sendDaemonCommand: (daemonId: string, type: string, data?: Record<string, unknown>) => Promise<any>
-}

@@ -369,8 +369,8 @@ function validateNativeHistory(raw: unknown, errors: string[]): void {
   }
 
   // Chat transcript contract version (transcript-v2.ts). Absent → treated as
-  // v1 by readDeclaredChatContractVersion(). A2 will reject unrecognised
-  // values at load time; A1 only validates the field shape.
+  // v1 by the consumer. A2 will reject unrecognised values at load time; A1
+  // only validates the field shape.
   const chatContractVersion = nativeHistory.contractVersion
   if (chatContractVersion !== undefined
       && chatContractVersion !== '1.0'
