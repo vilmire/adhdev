@@ -3961,9 +3961,37 @@
             font-size: 13px;
         }
 
+        /* The composer must still reach the physical screen edge — otherwise the
+           page background shows through below it — and its content must clear the
+           iOS home indicator. Stacking the whole inset as *content* padding did
+           both, but painted the inset as a flat slab of the composer's own opaque
+           --surface-primary (#ffffff in light theme, against a #f4f6f8 page), so a
+           ~34px band under the input row read as unused empty space. Owner-reported
+           on an installed iOS PWA.
+
+           Instead the inset stays reserved as padding — the box still spans to the
+           screen edge and the row still sits above the indicator — but the band is
+           overpainted in the page background, so it reads as page rather than as
+           composer. This mirrors how Dialog.tsx keeps the inset on the transparent
+           overlay instead of on the dialog surface.
+
+           The repaint uses a background gradient rather than a border or an extra
+           element: ChatInputBar collapses this bar with `max-height: 0`, and borders
+           are not shrunk by max-height (the bar would keep a stuck ~34px strip while
+           hidden), whereas a background is clipped along with the box. ChatInputBar's
+           `bg-[var(--surface-primary)]` utility remains the base colour beneath this
+           layer, so only the inset band changes.
+
+           Zero inset (desktop, Android without a gesture bar, all browser tabs)
+           makes the gradient stop at 0 and this is a visual no-op. */
         .dashboard-input-area {
             padding-top: 6px !important;
             padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+            background-image: linear-gradient(
+                to top,
+                var(--bg-primary) 0 env(safe-area-inset-bottom, 0px),
+                transparent env(safe-area-inset-bottom, 0px)
+            ) !important;
         }
 
         .status-bar {
