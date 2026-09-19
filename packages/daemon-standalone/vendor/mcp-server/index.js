@@ -47067,6 +47067,7 @@ child.on('exit', () => process.exit(0));
       meshNodeIdMatches: () => meshNodeIdMatches5,
       meshUtf8ByteLength: () => meshUtf8ByteLength,
       meshWorkspacesEquivalent: () => meshWorkspacesEquivalent,
+      normalizeAuthOkLimits: () => normalizeAuthOkLimits,
       normalizeBrainSlot: () => normalizeBrainSlot,
       normalizeDifficultyBrainMap: () => normalizeDifficultyBrainMap,
       normalizeGitStatus: () => normalizeGitStatus,
@@ -47764,6 +47765,20 @@ child.on('exit', () => process.exit(0));
     }
     function isServerToDaemonWsMsg(value) {
       return typeof value === "string" && SERVER_TO_DAEMON_WS_MSGS.includes(value);
+    }
+    function normalizeAuthOkLimits(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const src = raw;
+      const num2 = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+      return {
+        maxP2Pconnections: num2(
+          src.maxP2Pconnections !== void 0 ? src.maxP2Pconnections : src.maxP2PConnections,
+          -1
+        ),
+        screenshotIntervalSeconds: num2(src.screenshotIntervalSeconds, 0),
+        dailyScreenshotMinutes: num2(src.dailyScreenshotMinutes, -1),
+        maxMachines: num2(src.maxMachines, -1)
+      };
     }
     var QUOTA_SUPPORTED_PROVIDERS;
     var DAEMON_ID_PREFIXES;
