@@ -1596,7 +1596,10 @@
         "busyGenerating": "에이전트가 응답을 생성 중입니다.",
         "busyWaitingApproval": "에이전트가 승인을 기다리고 있습니다. 승인 컨트롤이 준비되면 표시됩니다.",
         "activityToggleLabel": "활동",
-        "activityToggleTitle": "도구·터미널·생각 활동 행 표시"
+        "activityToggleTitle": "도구·터미널·생각 활동 행 표시",
+        "reconnectMachine": "재연결",
+        "reconnectingMachine": "재연결 중…",
+        "reconnectMachineTitle": "이 머신의 자동 재연결이 중단됨 — 지금 재연결"
     },
     "chatInput": {
         "attachImage": "이미지 첨부",

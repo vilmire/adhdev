@@ -1596,7 +1596,10 @@
         "busyGenerating": "代理正在生成回复。",
         "busyWaitingApproval": "代理正在等待批准。批准控件将在可用时显示。",
         "activityToggleLabel": "活动",
-        "activityToggleTitle": "显示工具、终端和思考活动行"
+        "activityToggleTitle": "显示工具、终端和思考活动行",
+        "reconnectMachine": "重新连接",
+        "reconnectingMachine": "正在重新连接…",
+        "reconnectMachineTitle": "该机器的自动重连已停止 — 立即重新连接"
     },
     "chatInput": {
         "attachImage": "附加图片",

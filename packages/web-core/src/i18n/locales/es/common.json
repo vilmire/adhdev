@@ -1601,7 +1601,10 @@
         "busyGenerating": "El agente está generando una respuesta.",
         "busyWaitingApproval": "El agente está esperando aprobación. Los controles de aprobación aparecerán cuando estén disponibles.",
         "activityToggleLabel": "Actividad",
-        "activityToggleTitle": "Mostrar filas de actividad de herramientas, terminal y razonamiento"
+        "activityToggleTitle": "Mostrar filas de actividad de herramientas, terminal y razonamiento",
+        "reconnectMachine": "Reconectar",
+        "reconnectingMachine": "Reconectando…",
+        "reconnectMachineTitle": "La reconexión automática se detuvo para esta máquina: reconecta ahora"
     },
     "chatInput": {
         "attachImage": "Adjuntar imagen",
