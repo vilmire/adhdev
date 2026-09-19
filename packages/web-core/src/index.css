@@ -3983,10 +3983,21 @@
            layer, so only the inset band changes.
 
            Zero inset (desktop, Android without a gesture bar, all browser tabs)
-           makes the gradient stop at 0 and this is a visual no-op. */
+           makes the gradient stop at 0 and this is a visual no-op.
+
+           The inset is a FLOOR (`max`), not an addend (`calc(6px + …)`). Adding
+           the design padding on top of the inset made a notched iPhone reserve
+           40px where a flat device reserves 6px — the extra 6px is pure surplus,
+           because the 34px indicator inset is already far more breathing room
+           than the design asked for. Owner-reported after the app-shell fix
+           closed the white band: right colour, still too tall. `max` keeps the
+           full inset reserved (the home indicator is never covered) while the
+           design padding only applies where the inset does not already exceed
+           it, so flat form factors are bit-identical. Same formula `.login-page`
+           uses. */
         .dashboard-input-area {
             padding-top: 6px !important;
-            padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+            padding-bottom: max(6px, env(safe-area-inset-bottom, 0px)) !important;
             background-image: linear-gradient(
                 to top,
                 var(--bg-primary) 0 env(safe-area-inset-bottom, 0px),
