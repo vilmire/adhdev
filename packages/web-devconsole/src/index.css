@@ -392,13 +392,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.analyze-count {
-  color: var(--text-dim);
-  font-size: 10px;
-  white-space: nowrap;
-}
-.analyze-sample {
+}.analyze-sample {
   color: #98c379;
   font-size: 10px;
   padding-left: 8px;
@@ -497,15 +491,6 @@ body {
   align-items: center;
   gap: 6px;
 }
-
-.ft-hint {
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  font-size: 9px;
-  opacity: 0.6;
-}
-
 .ft-new-btn {
   margin-left: auto;
   background: none;
@@ -618,18 +603,6 @@ body {
 details[open] > .ft-folder { color: var(--text); }
 details > .ft-folder::before { content: '▸ '; font-size: 10px; }
 details[open] > .ft-folder::before { content: '▾ '; }
-
-/* ─── DOM Inspector ─── */
-.inspector-breadcrumb {
-  padding: 6px 10px;
-  background: var(--bg-input);
-  border-radius: 6px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
 .inspector-breadcrumb .node {
   cursor: pointer;
   color: var(--text-dim);
@@ -637,31 +610,6 @@ details[open] > .ft-folder::before { content: '▾ '; }
 }
 
 .inspector-breadcrumb .node:hover { color: var(--accent); }
-
-.inspector-detail {
-  padding: 10px;
-  background: var(--bg-input);
-  border-radius: 6px;
-  margin-bottom: 8px;
-  font-size: 12px;
-}
-
-.inspector-children {
-  font-size: 12px;
-}
-
-.inspector-child {
-  padding: 4px 8px;
-  border-left: 2px solid var(--border);
-  margin-left: 8px;
-  margin-bottom: 2px;
-  cursor: pointer;
-  border-radius: 0 4px 4px 0;
-  transition: background 0.15s;
-}
-
-.inspector-child:hover { background: rgba(255,255,255,0.05); }
-
 /* ─── Scaffold Modal ─── */
 .modal-overlay {
   position: fixed;
