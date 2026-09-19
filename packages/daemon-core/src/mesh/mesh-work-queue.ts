@@ -440,184 +440,26 @@ export interface MeshQueueMutationOptions {
     ownerRole?: RepoMeshDaemonRole;
 }
 
-export function normalizeMeshCapabilityTags(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    const seen = new Set<string>();
-    return value
-        .map(tag => typeof tag === 'string' ? tag.trim() : '')
-        .filter(Boolean)
-        .filter(tag => {
-            if (seen.has(tag)) return false;
-            seen.add(tag);
-            return true;
-        });
-}
+// ── Node capability tags ──────────────────────────────────────────────────────
+// Moved to ./mesh-node-capability-tags.ts (FILE-SIZE-HEADROOM); imported for the
+// call sites below and re-exported so external importers are unchanged.
+import {
+    buildMeshNodeCapabilityTags,
+    normalizeMeshCapabilityTags,
+    nodeSatisfiesRequiredTags,
+    resolveConvergeRequiredTags,
+} from './mesh-node-capability-tags.js';
+export {
+    buildMeshNodeCapabilityTags,
+    normalizeMeshCapabilityTags,
+    nodeSatisfiesRequiredTags,
+    resolveConvergeRequiredTags,
+};
 
-function firstProviderPriority(policy: unknown): string | undefined {
-    const raw = policy && typeof policy === 'object' && !Array.isArray(policy)
-        ? (policy as Record<string, unknown>).providerPriority
-        : undefined;
-    if (!Array.isArray(raw)) return undefined;
-    return raw.find(type => typeof type === 'string' && type.trim())?.trim();
-}
-
-/**
- * Ordered, de-duplicated provider types a node can launch, resolved from
- * `policy.slots` (the single source of truth — ORCHESTRATION_NODE_SLOTS.md) with a
- * fallback to the legacy `policy.providerPriority`. Used to advertise a
- * `provider=<type>` capability tag for EVERY provider the node supports, not just
- * providerPriority[0], so required_tags: ["provider=cursor-cli"] is satisfiable on a
- * node whose slots include cursor-cli even when it is not the first priority entry.
- *
- * Only provider NAMES are needed here, so slots are read via the dependency-light
- * normalizeNodeCapabilitySlots rather than resolveNodeCapabilitySlots (which pulls in
- * difficultyBrains) — keeping tag derivation free of scheduling-config imports.
- */
-function readNodeProviderTypes(policy: unknown): string[] {
-    const record = policy && typeof policy === 'object' && !Array.isArray(policy)
-        ? policy as Record<string, unknown>
-        : {};
-    const seen = new Set<string>();
-    const out: string[] = [];
-    const push = (type: unknown) => {
-        const trimmed = typeof type === 'string' ? type.trim() : '';
-        if (!trimmed || seen.has(trimmed)) return;
-        seen.add(trimmed);
-        out.push(trimmed);
-    };
-    for (const slot of normalizeNodeCapabilitySlots(record.slots)) push(slot.provider);
-    if (Array.isArray(record.providerPriority)) {
-        for (const type of record.providerPriority) push(type);
-    }
-    return out;
-}
-
-function readNodeOverride(node: { userOverrides?: unknown } | undefined, key: 'platform' | 'arch'): string | null {
-    const overrides = node?.userOverrides;
-    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return null;
-    const value = (overrides as Record<string, unknown>)[key];
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-/**
- * Live, self-reported platform/arch the owning daemon stamped onto the node from
- * its own process.platform/process.arch via the git_status envelope. Kept on a
- * field DISTINCT from userOverrides so capability-tag derivation can prefer an
- * explicit operator override while still self-healing auto-detected nodes — and
- * so the value reflects the node's real OS rather than the coordinator's.
- */
-function readNodeReporter(node: { reportedPlatform?: unknown; reportedArch?: unknown } | undefined, key: 'platform' | 'arch'): string | null {
-    const value = key === 'platform' ? node?.reportedPlatform : node?.reportedArch;
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-export function buildMeshNodeCapabilityTags(
-    node: { capabilities?: unknown; policy?: unknown; isLocalWorktree?: unknown; worktreeBranch?: unknown; userOverrides?: unknown; reportedPlatform?: unknown; reportedArch?: unknown } | undefined,
-    providerType?: string,
-): string[] {
-    // When an explicit providerType is pinned (per-provider tag set used by the
-    // queue slot matcher), advertise ONLY that provider's tag — so
-    // provider=codex-cli matches only when codex-cli is the launched provider.
-    // When no provider is pinned (the representative tag set consulted by
-    // nodeSatisfiesRequiredTags), advertise a provider= tag for EVERY provider the
-    // node can launch (all policy.slots, else providerPriority), so
-    // required_tags: ["provider=cursor-cli"] is satisfiable on a node whose slots
-    // include cursor-cli even when it is not the first priority entry.
-    const pinnedProvider = typeof providerType === 'string' && providerType.trim()
-        ? providerType.trim()
-        : undefined;
-    const providerTags = pinnedProvider
-        ? [pinnedProvider]
-        : readNodeProviderTypes(node?.policy);
-    const worktreeBranch = typeof node?.worktreeBranch === 'string' && node.worktreeBranch.trim()
-        ? node.worktreeBranch.trim()
-        : null;
-    // Per-node platform/arch precedence (highest → lowest):
-    //   1. userOverrides.platform/arch — an EXPLICIT operator override always wins.
-    //   2. reportedPlatform/reportedArch — the live OS the owning daemon
-    //      self-reported (its own process.platform/process.arch via the git_status
-    //      envelope), persisted to the node record on each direct probe. This is
-    //      why a Windows member advertises os=win32 even though the COORDINATOR
-    //      computing these tags runs on darwin — without it the consumer reads the
-    //      persistent node (operator userOverrides empty) and would fall straight
-    //      through to the coordinator's own process.platform, mislabeling every
-    //      node os=darwin. We prefer this LIVE value over any stale auto-stamp.
-    //   3. process.platform/process.arch — last-resort fallback, correct only for
-    //      the local coordinator node / local worktree nodes that have not yet
-    //      been probed (their workspace lives on THIS machine anyway).
-    // Vocabulary is raw process.platform/process.arch ("darwin"/"win32"/"linux",
-    // "arm64"/"x64") on both the advertiser and the required_tags matcher, which
-    // compares with plain string equality (nodeSatisfiesRequiredTags) — so this
-    // keeps the win32/darwin/linux vocabulary the matcher already expects.
-    const os = readNodeOverride(node, 'platform') ?? readNodeReporter(node, 'platform') ?? process.platform;
-    const arch = readNodeOverride(node, 'arch') ?? readNodeReporter(node, 'arch') ?? process.arch;
-    return normalizeMeshCapabilityTags([
-        ...(Array.isArray(node?.capabilities) ? node.capabilities : []),
-        `os=${os}`,
-        `arch=${arch}`,
-        ...providerTags.map(p => `provider=${p}`),
-        // Worktree nodes automatically expose a "worktree=<branch>" tag so that
-        // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
-        // only to the matching worktree node.
-        ...(node?.isLocalWorktree === true && worktreeBranch ? [`worktree=${worktreeBranch}`] : []),
-        // Convergence routing: advertise how this node can land its work onto base.
-        //   - converge=refine: local worktree nodes (on ANY machine — refine_mesh_node
-        //     now forwards to the owning daemon) can run the Refinery merge → push →
-        //     cleanup against their own checkout, so they accept code_change tasks.
-        //   - converge=fast_forward: non-worktree nodes (the machine itself) can only
-        //     ff/push an already-converged branch; they are NOT a destination for
-        //     code_change work (a worktree is created first, and that worktree node
-        //     receives the task instead). Reuses the ordinary required-tags filter —
-        //     the load-balancing scheduler auto-injects converge=refine for code_change
-        //     so such work is hard-filtered onto refine-capable nodes.
-        ...(node?.isLocalWorktree === true ? ['converge=refine'] : ['converge=fast_forward']),
-    ]);
-}
-
-export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags: unknown): boolean {
-    const required = normalizeMeshCapabilityTags(requiredTags);
-    if (required.length === 0) return true;
-    const available = new Set(normalizeMeshCapabilityTags(capabilityTags));
-    return required.every(tag => available.has(tag));
-}
-
-/**
- * Convergence-aware required-tags resolution (load-balancing scheduler, opt-in).
- *
- * When the mesh enables policy.autoConvergeCodeChange, a `converge=refine` required
- * tag is merged into a code_change task's required tags at enqueue time, so the
- * scheduler hard-filters the task onto refine-capable worktree nodes only (on any
- * machine — refine_mesh_node forwards to the owning daemon). Because the tag is
- * persisted on the queue entry, BOTH the eligibility scan (maybeAutoLaunchOneQueueSession)
- * and the claim transaction (claimNextQueueTask → nodeSatisfiesRequiredTags) enforce
- * it consistently.
- *
- * Strict backward compatibility — the injection is skipped (returns the explicit tags
- * unchanged) when ANY of:
- *   - the mesh does not opt in (autoConvergeCodeChange !== true), or
- *   - the task is not code_change (validation / live_debug_readonly / launch_app /
- *     convergence carry no merge cost and may run anywhere), or
- *   - the task is explicitly targeted (targetNodeId): the operator chose the node, so
- *     we do not second-guess it by filtering on convergence capability.
- * Idempotent: normalizeMeshCapabilityTags dedupes, so re-injection is a no-op.
- */
-export function resolveConvergeRequiredTags(
-    meshId: string,
-    taskMode: MeshTaskMode | undefined,
-    explicitRequiredTags: string[],
-    opts?: { targetNodeId?: string },
-): string[] {
-    if (taskMode !== 'code_change') return explicitRequiredTags;
-    if (typeof opts?.targetNodeId === 'string' && opts.targetNodeId.trim()) return explicitRequiredTags;
-    let optedIn = false;
-    try {
-        optedIn = resolveAutoConvergeCodeChange(getMesh(meshId)?.policy as any);
-    } catch {
-        optedIn = false;
-    }
-    if (!optedIn) return explicitRequiredTags;
-    return normalizeMeshCapabilityTags([...explicitRequiredTags, MESH_CONVERGE_REFINE_TAG]);
-}
+// Used by the cancel / requeue / stranded-reclaim paths below, and re-exported
+// with the rest of the direct-dispatch surface at the bottom of this file.
+import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
+export { terminalizeSiblingDispatch };
 
 function withQueueLock<T>(_meshId: string, fn: () => T): T {
     return MeshRuntimeStore.getInstance().transaction(fn);
@@ -2185,197 +2027,19 @@ export function __resetMeshRuntimeStoreForTests(): void {
     MeshRuntimeStore.resetForTests();
 }
 
-// ── Direct Dispatch Tracking ─────────────────────────────────────────────────
-// Persists direct (non-queue) task dispatches so buildMeshActiveWork can read
-// active work from MeshRuntimeStore instead of scanning ledger JSONL entries.
-
-export type DirectDispatchRecord = ReturnType<MeshRuntimeStore['getActiveDirectDispatches']>[number];
-
-export function insertDirectDispatch(
-    meshId: string,
-    data: {
-        taskId: string;
-        nodeId?: string;
-        sessionId?: string;
-        providerType?: string;
-        message: string;
-        taskMode?: string;
-        via: string;
-        dispatchedToIdleSession?: boolean;
-        dispatchedAt: string;
-    },
-): void {
-    try {
-        MeshRuntimeStore.getInstance().insertDirectDispatch({ ...data, meshId });
-    } catch (e: any) {
-        process.stderr.write(`[adhdev-mesh] insertDirectDispatch failed for task ${data.taskId}: ${e?.message || e}\n`);
-    }
-}
-
-export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[] {
-    try {
-        return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
-    } catch {
-        return [];
-    }
-}
-
-export function updateDirectDispatchStatus(
-    meshId: string,
-    sessionId: string,
-    status: 'acked' | 'completed' | 'failed' | 'stale',
-    taskId?: string,
-): void {
-    try {
-        // CANON-B: prefer the exact task_id row; fall back to the session_id match only when
-        // the firing event carried no taskId (a legacy/relayed event). Warn on the fallback so
-        // the residual PK-substitute path is observable when it strands a sibling dispatch.
-        if (!taskId) {
-            LOG.warn('MeshQueue', `updateDirectDispatchStatus(${status}) for mesh ${meshId} session ${sessionId} has no taskId — falling back to session_id match (may flip a sibling dispatch row)`);
-        }
-        MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status, taskId);
-    } catch { /* best-effort */ }
-}
-
-/**
- * SIBLING-DISPATCH-ORPHAN: the reason a task's queue row was abandoned while a sibling
- * direct-dispatch row was still live. Recorded verbatim in the audit ledger entry.
- */
-// DISPATCH-FAILURE-DEATH-SIGNAL: re-exported from the acked-hold leaf so the dispatch path
-// (mesh-queue-assignment) can feed the signal through the queue module it already imports.
-// Safe direction: mesh-reconcile-acked-hold is a leaf (logger + store + utils only) and does
-// not import this module, so this cannot form the dependency cycle that keeps
-// terminalizeSiblingDispatch from calling terminalizeAckedHold directly.
+// ── Direct dispatch tracking ──────────────────────────────────────────────────
+// Moved to ./mesh-direct-dispatch.ts (FILE-SIZE-HEADROOM). Re-exported so every
+// existing `from './mesh-work-queue.js'` import keeps resolving.
+export {
+    insertDirectDispatch,
+    getActiveDirectDispatches,
+    updateDirectDispatchStatus,
+    cleanupTerminalDirectDispatches,
+    markStaleDirectDispatches,
+    deleteDirectDispatchesByTaskId,
+    recordMeshToolCall,
+} from './mesh-direct-dispatch.js';
+export type { DirectDispatchRecord, SiblingDispatchTerminalizeReason, MeshToolCallRateResult } from './mesh-direct-dispatch.js';
+// Pass-through that lived inside the moved block; mesh-queue-assignment.ts
+// imports it from here, so the re-export stays on this module.
 export { recordAckedHoldDispatchOutcome } from './mesh-reconcile-acked-hold.js';
-
-export type SiblingDispatchTerminalizeReason =
-    | 'queue_task_cancelled'
-    | 'queue_task_requeued'
-    | 'queue_task_dispatch_failed'
-    | 'queue_task_stranded_reclaimed';
-
-/**
- * SIBLING-DISPATCH-ORPHAN: terminalize the `mesh_direct_dispatches` row that shares this
- * task id, whenever the QUEUE row is abandoned out from under it.
- *
- * WHY THIS EXISTS. `recordDirectDispatchTask` materialises TWO rows per direct dispatch —
- * a queue entry and a `mesh_direct_dispatches` entry — but every abandonment path
- * (cancelTask, requeueTask incl. its dispatch-failure branch, reclaimStrandedAssignedTask)
- * only ever touched the queue row and `endTaskDispatchInFlight`. The dispatch row was left
- * behind, and nothing else would ever collect it:
- *
- *   - `markStaleDirectDispatches` sweeps ONLY `status='dispatched'`, so a row that reached
- *     `acked` (the worker confirmed it started) has NO timeout sweeper whatsoever;
- *   - the orphan-prune path is age-gated and node/session-liveness-gated, so a row whose
- *     session is still alive is never pruned.
- *
- * The consequence is not cosmetic. `buildMeshActiveWork` skips CANCELLED queue rows when
- * building its dedupe set, so the orphan is NOT deduped against its queue sibling, and the
- * `dbStatus === 'acked' ? 'generating' : 'assigned'` fallback then renders a cancelled task
- * as actively generating — feeding generatingCount, sessionHasActiveAssignment, routing
- * fitness, idle reminders and the completion-synthesis loop. Measured live: one such row
- * survived 12 days. (Both halves are load-bearing: cancelling BEFORE dispatch leaves no
- * dispatch row at all, which is why this only ever bit already-dispatched tasks.)
- *
- * 'stale' — never 'completed'/'failed' — for the same reason `terminalizeAckedHold` chose
- * it: the abandonment says nothing about whether the worker finished, and a cancel is not
- * completion evidence (mesh-terminal-admission.ts). 'stale' is exactly "this dispatch will
- * never resolve itself": it leaves the active set without asserting an outcome.
- *
- * Deliberately NOT `terminalizeAckedHold` (mesh-completion-synthesis.ts) even though the
- * two do a similar flip: that helper is bound to synth-hold state and its own ledger kind,
- * and this module is upstream of it — importing it here would invert the dependency
- * (mesh-completion-synthesis already imports mesh-work-queue). The acked-hold state itself
- * needs no explicit cleanup on this path: reconcileUnterminatedDirectDispatches prunes hold
- * rows whose task has left the active dispatch set, which this flip is what causes.
- *
- * Best-effort and self-contained: a store/ledger failure must never fail the cancel/requeue
- * that already committed.
- */
-export function terminalizeSiblingDispatch(
-    meshId: string,
-    taskId: string,
-    reason: SiblingDispatchTerminalizeReason,
-): void {
-    try {
-        const store = MeshRuntimeStore.getInstance();
-        // Only act on a row that is actually still live; a dispatch that already reached a
-        // terminal status by its own path needs neither the flip nor an audit entry (this
-        // keeps the ledger free of a no-op record on the common well-behaved case).
-        const sibling = store.getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
-        if (!sibling) return;
-        // Keyed by the exact task id — never the session_id fallback, which would flip a
-        // sibling task's row (CANON-B, see updateDirectDispatchStatus).
-        store.updateDirectDispatchStatus(meshId, sibling.sessionId ?? '', 'stale', taskId);
-        LOG.info('MeshQueue', `SIBLING-DISPATCH-ORPHAN: task ${taskId} (mesh ${meshId}) was abandoned (${reason}) while its direct-dispatch row was still '${sibling.status}'; marked that row stale so it stops rendering as active work.`);
-        try {
-            appendLedgerEntry(meshId, {
-                kind: 'sibling_dispatch_terminalized',
-                taskId,
-                ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
-                ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
-                ...(sibling.providerType ? { providerType: sibling.providerType } : {}),
-                payload: {
-                    taskId,
-                    reason,
-                    dispatchStatus: sibling.status,
-                    ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
-                    ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
-                },
-            });
-        } catch { /* best-effort audit — the terminalization above still stands */ }
-    } catch { /* best-effort — never fail the queue mutation that already committed */ }
-}
-
-export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_000): void {
-    try {
-        MeshRuntimeStore.getInstance().cleanupTerminalDirectDispatches(olderThanMs);
-    } catch { /* best-effort */ }
-}
-
-export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_000): void {
-    try {
-        MeshRuntimeStore.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
-    } catch { /* best-effort */ }
-}
-
-/**
- * Delete specific direct dispatch rows by taskId. Returns the number of rows deleted.
- * Used by the staleDirect prune path to evict orphaned/terminal dispatch records from the
- * active staleDirect surface while leaving the append-only mesh ledger (audit history) intact.
- */
-export function deleteDirectDispatchesByTaskId(meshId: string, taskIds: string[]): number {
-    try {
-        return MeshRuntimeStore.getInstance().deleteDirectDispatchesByTaskId(meshId, taskIds);
-    } catch {
-        return 0;
-    }
-}
-
-export type MeshToolCallRateResult = { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null };
-
-/**
- * Record a coordinator tool call and return a rate-limit advisory when the
- * call rate for that tool exceeds the allowed threshold.
- *
- * Defaults: 10-second sliding window, max 5 calls before advisory is raised.
- * Returns { rateLimitExceeded: false } on any store error so callers are not blocked.
- *
- * `callerRole` is diagnostic only (see MeshRuntimeStore.recordMeshToolCall) —
- * a process can set ADHDEV_COORDINATOR_SESSION_ID on itself, so this must
- * never become an authorization gate.
- */
-export function recordMeshToolCall(opts: {
-    meshId: string;
-    tool: string;
-    sessionId?: string | null;
-    callerRole?: 'coordinator' | 'unknown' | null;
-    windowMs?: number;
-    maxCalls?: number;
-}): MeshToolCallRateResult {
-    try {
-        return MeshRuntimeStore.getInstance().recordMeshToolCall(opts);
-    } catch {
-        return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
-    }
-}
