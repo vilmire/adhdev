@@ -536,8 +536,11 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(
             errors.push(`${prefix}.${key} must be a non-empty string when provided`)
           }
         }
-        if (item.requiresPrivateHome !== undefined && typeof item.requiresPrivateHome !== 'boolean') {
-          errors.push(`${prefix}.requiresPrivateHome must be a boolean when provided`)
+        for (const key of ['requiresPrivateHome', 'withholdWithPrivateHome']) {
+          const value = item[key]
+          if (value !== undefined && typeof value !== 'boolean') {
+            errors.push(`${prefix}.${key} must be a boolean when provided`)
+          }
         }
       }
     }

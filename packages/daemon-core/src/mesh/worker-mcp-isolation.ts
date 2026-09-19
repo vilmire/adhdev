@@ -974,12 +974,27 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
      * built-in defaults — accepted, because the alternative is a filtered copy
      * that re-derives the enumeration failure described above.
      *
-     * The existing `-c` rules still apply and remain correct: the worker MCP
-     * server arrives via `workerMcpDelivery` (`config_override`), which injects
-     * it on argv and therefore does not depend on any file in the config root.
-     * The `adhdev-mesh.enabled=false` rule becomes redundant but harmless, and
-     * is kept so that a daemon running with `ADHDEV_WORKER_MCP` explicitly off
-     * retains exactly its prior behavior.
+     * The worker MCP server arrives via `workerMcpDelivery`
+     * (`config_override`), which injects it on argv and therefore does not
+     * depend on any file in the config root. That part is unaffected by the
+     * private root and remains correct.
+     *
+     * ★The `adhdev-mesh.enabled=false` rule, however, is NOT "redundant but
+     * harmless" alongside this private root — an earlier revision of this
+     * comment said so, and that was wrong. Measured 2026-09-19: because
+     * `config.toml` is not imported, the entry does not exist in the private
+     * root, so the override CREATES one carrying only `enabled=false`. codex
+     * requires a transport (`command`/`url`) on every `mcp_servers` entry and
+     * rejects the entire config —
+     *
+     *   Error loading config.toml: invalid transport
+     *   in `mcp_servers.adhdev-mesh`
+     *
+     * — so the CLI exits before the session starts. The rule is therefore
+     * declared `withholdWithPrivateHome: true` (provider manifest 1.1.23) and
+     * applies only when there is no private root, which is exactly the
+     * `ADHDEV_WORKER_MCP`-off case it was kept for. See the launch-seam
+     * comment in `commands/cli-delegated-launch.ts`.
      */
     {
         providerType: 'codex-cli',

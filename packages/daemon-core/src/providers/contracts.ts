@@ -489,6 +489,16 @@ export type MeshCoordinatorDelegatedWorkerArgRule =
       value: string;
       /** Optional broader key prefix used for duplicate detection. */
       dedupeKey?: string;
+      /**
+       * Withhold this override when the launch has a worker-private config
+       * root. For a disable-by-name rule the private root has already removed
+       * the entry, so the override would CREATE an incomplete one instead of
+       * disabling anything — and a CLI that validates config entries (codex
+       * requires a transport) rejects the whole file and fails to start.
+       * See the launch-seam comment in `cli-delegated-launch.ts` for the
+       * measurement.
+       */
+      withholdWithPrivateHome?: boolean;
     }
   | {
       /**

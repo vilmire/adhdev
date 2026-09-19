@@ -799,6 +799,10 @@
                       "dedupeKey": {
                         "type": "string",
                         "minLength": 1
+                      },
+                      "withholdWithPrivateHome": {
+                        "type": "boolean",
+                        "description": "Withhold this override when the launch has a worker-private config root. Use for disable-by-name rules: the private root already removed the entry, so applying the override would create an incomplete entry (no transport) that a validating CLI such as codex rejects, failing the whole config load."
                       }
                     }
                   },

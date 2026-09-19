@@ -52,6 +52,9 @@ const codexIsolation = {
       key: 'mcp_servers.adhdev-mesh.enabled',
       value: 'false',
       dedupeKey: 'mcp_servers.adhdev-mesh',
+      // Mirrors adhdev-providers/cli/codex-cli/provider.v1.json @ 1.1.23.
+      // See the withhold tests at the bottom of this file for why.
+      withholdWithPrivateHome: true,
     },
   ],
 }
@@ -75,7 +78,12 @@ describe('coordinator delegated CLI launch isolation', () => {
       isolation: codexIsolation,
     })
 
-    expect(result.cliArgs).toEqual(['-c', 'mcp_servers.adhdev-mesh.enabled=false', '--model', 'test'])
+    // This launch has a worker-private CODEX_HOME (the trunk flag defaults ON
+    // since 2026-09-18 and `realHome` falls back to os.homedir()), so the
+    // `adhdev-mesh` disable override is withheld — naming an entry that the
+    // private root does not contain makes codex reject the whole config. The
+    // subject of THIS test is the env scrubbing below, which is unchanged.
+    expect(result.cliArgs).toEqual(['--model', 'test'])
     expect(result.env).toMatchObject({
       ADHDEV_INLINE_MESH: '',
       ADHDEV_MCP_TRANSPORT: '',
@@ -138,7 +146,7 @@ describe('coordinator delegated CLI launch isolation', () => {
     expect(result.cliArgs.slice(mcpConfigIndex + 2)).toEqual(['--model', 'test'])
   })
 
-  it('starts delegated Codex agents with provider-declared mesh MCP disabled so workers cannot act as coordinators', () => {
+  it('keeps delegated Codex workers from acting as coordinators via a private config root rather than a disable override', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-codex-'))
     __tmpDirsToClean.push(workspace)
 
@@ -149,7 +157,25 @@ describe('coordinator delegated CLI launch isolation', () => {
       isolation: codexIsolation,
     })
 
-    expect(result.cliArgs).toEqual(['-c', 'mcp_servers.adhdev-mesh.enabled=false', '--model', 'test'])
+    // ★This test's NAME is the invariant; the mechanism behind it changed.
+    // It used to assert the `-c mcp_servers.adhdev-mesh.enabled=false` argv,
+    // which was measured on 2026-09-19 to kill codex 0.154.0 outright once the
+    // worker-MCP gate (default ON since 2026-09-18) started giving every worker
+    // a private CODEX_HOME: the override names an entry the private root does
+    // not contain, so codex builds a transport-less entry and refuses the whole
+    // config. The worker then never started at all.
+    //
+    // The coordinator server is now kept away from the worker by the private
+    // config root itself — strictly stronger than disabling one known name,
+    // because it also excludes servers the owner adds later.
+    const workerHome = result.workerIsolation?.workerHome
+    expect(workerHome).toBeTruthy()
+    expect(result.env.CODEX_HOME).toBe(workerHome)
+    // The owner's MCP table is simply not there to inherit.
+    expect(existsSync(join(workerHome!, 'config.toml'))).toBe(false)
+    // ...and no override re-introduces the name.
+    expect(result.cliArgs.join(' ')).not.toContain('mcp_servers.adhdev-mesh')
+    expect(result.cliArgs).toEqual(['--model', 'test'])
   })
 
   it('does not duplicate an explicit Codex adhdev-mesh MCP override for delegated agents', () => {
@@ -380,7 +406,15 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
       overrides.set(override.slice(0, separator), override.slice(separator + 1))
     }
 
-    expect(overrides.get('mcp_servers.adhdev-mesh.enabled')).toBe('false')
+    // ★The disable override is NOT emitted here, and that is the fix rather
+    // than a regression. This launch gets a worker-private CODEX_HOME, and the
+    // codex spec does not import `config.toml` into it — so `adhdev-mesh` does
+    // not exist in the config root, and an override naming it would CREATE a
+    // transport-less entry that codex rejects outright
+    // (`invalid transport in mcp_servers.adhdev-mesh`, measured on 0.154.0).
+    // The isolation this assertion was protecting is still total: with no
+    // `config.toml` imported there is no coordinator entry to disable.
+    expect(overrides.has('mcp_servers.adhdev-mesh.enabled')).toBe(false)
     expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.command')!)).toBeTruthy()
     expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.args')!)).toContain('--worker')
     expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.env_vars')!)).toEqual(['ADHDEV_WORKER_SESSION_BIND'])
@@ -937,5 +971,152 @@ describe('★absent delegatedWorkerIsolation is observable, not silent', () => {
   it('falls back to an explicit unknown-version label rather than omitting the bundle identity', () => {
     const result = buildWithIsolation(undefined)
     expect((result.isolationNotes || []).join(' ')).toContain('cursor-cli@unknown-version')
+  })
+})
+
+/**
+ * ★Regression: a disable-by-name config override must never reach a CLI whose
+ * config root does not contain the entry being disabled.
+ *
+ * These assert the PROPERTY the CLI actually validates — "no `mcp_servers.<x>`
+ * entry is described without a transport" — rather than a literal argv string.
+ * An argv-equality test would have passed happily while codex refused to boot,
+ * because the bug was never a malformed argument: every `-c` was well-formed on
+ * its own. The defect was the RESULTING CONFIG, and that is what is asserted.
+ *
+ * Measured 2026-09-19, codex-cli 0.154.0:
+ *   CODEX_HOME=<root without the entry> codex -c mcp_servers.adhdev-mesh.enabled=false ...
+ *     → Error loading config.toml: invalid transport in `mcp_servers.adhdev-mesh`
+ *       (and the process exits before the session starts)
+ */
+describe('config_override isolation rules vs. a worker-private config root', () => {
+  /**
+   * Collect every `mcp_servers.<name>` key argv describes, split into the ones
+   * given a transport (`command`/`url`) and the ones merely configured. codex
+   * rejects the whole config file when the second set is not a subset of the
+   * first — unless the entry already exists on disk, which is exactly what a
+   * private root guarantees it does not.
+   */
+  function mcpServerEntries(cliArgs: string[]) {
+    const withTransport = new Set<string>()
+    const mentioned = new Set<string>()
+    for (let i = 0; i < cliArgs.length - 1; i += 1) {
+      if (cliArgs[i] !== '-c') continue
+      const match = /^mcp_servers\.([^.=]+)\.([^=]+)=/.exec(cliArgs[i + 1])
+      if (!match) continue
+      const [, name, field] = match
+      mentioned.add(name)
+      if (field === 'command' || field === 'url') withTransport.add(name)
+    }
+    return {
+      mentioned,
+      withTransport,
+      transportless: [...mentioned].filter((name) => !withTransport.has(name)),
+    }
+  }
+
+  function codexWorkerLaunch(opts: { withPrivateRoot: boolean }) {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-codex-withhold-ws-'))
+    __tmpDirsToClean.push(workspace)
+    const base: Parameters<typeof buildCoordinatorDelegatedCliLaunchOptions>[0] = {
+      cliType: 'codex-cli',
+      workspace,
+      isolation: codexIsolation,
+      providerVersion: '1.1.23',
+      mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh' },
+      sessionKey: 'task_codex_withhold',
+      bindContext: {
+        meshId: 'mesh_codex',
+        sessionId: 'sess_codex',
+        spawnedForTaskId: 'task_codex_withhold',
+      },
+    }
+    if (!opts.withPrivateRoot) {
+      // The only way to genuinely have no private config root is with the
+      // worker-MCP trunk flag off — it defaults ON, and `realHome` otherwise
+      // falls back to os.homedir(), so simply omitting `realHome` still
+      // produces one. This is the ADHDEV_WORKER_MCP=0 path.
+      const prior = process.env.ADHDEV_WORKER_MCP
+      process.env.ADHDEV_WORKER_MCP = '0'
+      try {
+        return buildCoordinatorDelegatedCliLaunchOptions(base)
+      } finally {
+        if (prior === undefined) delete process.env.ADHDEV_WORKER_MCP
+        else process.env.ADHDEV_WORKER_MCP = prior
+      }
+    }
+
+    // A private config root, built the way the codex spec builds one: auth is
+    // imported, `config.toml` deliberately is NOT — so the owner's MCP table
+    // (and with it the `adhdev-mesh` entry) is absent from what codex reads.
+    const realHome = mkdtempSync(join(tmpdir(), 'adhdev-codex-withhold-home-'))
+    __tmpDirsToClean.push(realHome)
+    writeFileSync(join(realHome, 'auth.json'), '{"tokens":{"access_token":"x"}}', { mode: 0o600 })
+    writeFileSync(join(realHome, 'config.toml'), '[mcp_servers.adhdev-mesh]\ncommand = "x"\n', { mode: 0o600 })
+    return buildCoordinatorDelegatedCliLaunchOptions({
+      ...base,
+      realHome,
+      workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-codex-withhold-base-')),
+    })
+  }
+
+  it('describes no transport-less mcp_servers entry when the worker has a private config root', () => {
+    const result = codexWorkerLaunch({ withPrivateRoot: true })
+
+    // Precondition: this launch really is the private-root path, and the entry
+    // the rule wants to disable really is absent from what codex will read.
+    const workerHome = result.workerIsolation?.workerHome
+    expect(workerHome).toBeTruthy()
+    expect(existsSync(join(workerHome!, 'config.toml'))).toBe(false)
+
+    // ★The property codex enforces. Before the fix this listed 'adhdev-mesh'
+    // and the CLI exited with `invalid transport` instead of starting.
+    const entries = mcpServerEntries(result.cliArgs)
+    expect(entries.transportless).toEqual([])
+
+    // The worker's own server is still delivered — withholding the disable rule
+    // must not be confused with dropping the toolset the worker needs.
+    expect(entries.withTransport.has('adhdev-worker')) .toBe(true)
+
+    // And the withholding is explained rather than silent.
+    expect((result.workerIsolation?.notes || []).join(' ')).toContain('withheld')
+  })
+
+  it('still applies the disable override when there is no private root, since the entry exists there', () => {
+    const result = codexWorkerLaunch({ withPrivateRoot: false })
+
+    // Without a private root codex reads the owner's ~/.codex/config.toml,
+    // where `adhdev-mesh` is a complete entry — so the override merges onto it
+    // and genuinely disables it. This is the ADHDEV_WORKER_MCP-off behaviour
+    // the rule exists for, and it must not regress into a no-op.
+    expect(result.workerIsolation?.workerHome).toBeFalsy()
+    expect(result.cliArgs).toContain('mcp_servers.adhdev-mesh.enabled=false')
+  })
+
+  it('keeps the shipped codex manifest declaring the withhold, so the daemon rule and the bundle agree', () => {
+    // The daemon-side behaviour above is inert unless the provider bundle
+    // actually declares it. Read the manifest this repo ships rather than
+    // trusting the inline fixture to stay in sync with it.
+    //
+    // ★`adhdev-providers` is a SIBLING submodule of `oss`, so it is absent when
+    // this package is checked out standalone. Skip rather than fail there: an
+    // OSS-only clone cannot be asked to prove a claim about a repo it does not
+    // have, and hard-failing would make the public suite red for a reason that
+    // has nothing to do with the code under test.
+    const manifestPath = join(
+      __dirname,
+      '../../../../../adhdev-providers/cli/codex-cli/provider.v1.json',
+    )
+    if (!existsSync(manifestPath)) {
+      expect(manifestPath).toContain('adhdev-providers')
+      return
+    }
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const rules = manifest.meshCoordinator.delegatedWorkerIsolation.args
+    const disableRule = rules.find(
+      (rule: any) => rule?.key === 'mcp_servers.adhdev-mesh.enabled',
+    )
+    expect(disableRule).toBeTruthy()
+    expect(disableRule.withholdWithPrivateHome).toBe(true)
   })
 })

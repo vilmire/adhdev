@@ -209,7 +209,20 @@ export interface MeshCoordinatorWorkerMcpDeliveryDef {
 
 export type MeshCoordinatorDelegatedWorkerArgRuleDef =
   | { mode: 'empty_mcp_config'; flag: string; strictFlag?: string }
-  | { mode: 'config_override'; flag: string; key: string; value: string; dedupeKey?: string }
+  /**
+   * Set one config key at launch. `withholdWithPrivateHome` suppresses the
+   * override when the launch has a worker-private config root — for a
+   * disable-by-name rule the entry is already absent there, so applying it
+   * would create a transport-less entry a validating CLI rejects outright.
+   */
+  | {
+      mode: 'config_override';
+      flag: string;
+      key: string;
+      value: string;
+      dedupeKey?: string;
+      withholdWithPrivateHome?: boolean;
+    }
   /**
    * Pre-approve the launch's MCP servers for a CLI whose MCP startup is gated
    * behind a per-workspace approval allowlist (cursor). Only applied when the
