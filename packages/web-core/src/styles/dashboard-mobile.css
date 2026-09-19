@@ -62,50 +62,17 @@
             margin-top: 6px;
             padding-bottom: 2px;
         }
-
-        .machine-page-shell {
-            gap: 12px;
-        }
-
-        .machine-command-center,
-        .machine-tab-panel {
-            border-radius: 14px;
-            padding: 14px;
-        }
-
         .machine-card {
             border-radius: 10px;
         }
-
-        .section-panel {
-            padding: 12px 14px;
-        }
-
         .machine-tabs {
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
         }
-
-        .machine-quick-actions {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-            margin-top: 10px;
-        }
-
-        .machine-quick-action-btn {
-            min-height: 68px;
-            padding: 10px 12px;
-            border-radius: 10px;
-        }
-
         .machine-tab {
             padding: 6px 12px;
             font-size: 12px;
             white-space: nowrap;
-        }
-
-        .machine-empty {
-            padding: 40px 20px;
         }
     }
 }

@@ -338,13 +338,6 @@
     :root[data-theme="light"] .sidebar-overlay {
         background: rgba(0, 0, 0, 0.15);
     }
-
-    /* Session tabs — stronger distinction in light mode */
-    :root[data-theme="light"] .dashboard-agent-tabs {
-        background: var(--surface-primary);
-        border-bottom-color: var(--border-default);
-    }
-
     /* Dashboard header — clearer in light mode */
     :root[data-theme="light"] .dashboard-header {
         background: var(--bg-secondary);
@@ -477,8 +470,7 @@
     }
 
     .adhdev-dockview .dv-tab,
-    .adhdev-dockview-tab,
-    .dashboard-agent-tabs>div {
+    .adhdev-dockview-tab {
         -webkit-user-select: none;
         user-select: none;
         -webkit-touch-callout: none;
@@ -486,8 +478,7 @@
         touch-action: manipulation;
     }
 
-    .adhdev-dockview-tab *,
-    .dashboard-agent-tabs>div * {
+    .adhdev-dockview-tab * {
         -webkit-user-select: none;
         user-select: none;
         -webkit-touch-callout: none;
@@ -3051,25 +3042,6 @@
         font-size: 12px;
     }
 
-    .dashboard-mobile-chat-section-title-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-    }
-
-    .dashboard-mobile-chat-inline-action {
-        border: none;
-        background: transparent;
-        padding: 0;
-        color: var(--accent-primary);
-        font-size: 12px;
-        font-weight: 700;
-        cursor: pointer;
-        white-space: nowrap;
-    }
-
-
     /* Page content area with consistent padding */
     .page-content {
         flex: 1;
@@ -3101,24 +3073,6 @@
         flex-direction: column;
         overflow: auto;
     }
-
-    /* ── Page Header ───────────────────────────────── */
-    .page-header {
-        margin-bottom: 32px;
-    }
-
-    .page-header h1 {
-        font-size: 28px;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        margin-bottom: 6px;
-    }
-
-    .page-header p {
-        color: var(--text-secondary);
-        font-size: 15px;
-    }
-
     /* ── Cards ─────────────────────────────────────── */
     .card {
         background: var(--bg-card);
@@ -3597,37 +3551,7 @@
         .page-content {
             padding: 16px 12px 16px 12px;
         }
-
-        .page-header {
-            margin-bottom: 16px;
-            padding-left: 44px;
-        }
-
-        .page-header h1 {
-            font-size: 20px;
-        }
-
-        .page-header p {
-            font-size: 13px;
-        }
-
     }
-
-    /* ── Dashboard V2 & IDE Page Enhancements ─────── */
-    .dashboard-agent-tabs {
-        flex-shrink: 0;
-        min-height: 72px;
-    }
-
-    .dashboard-agent-tabs::-webkit-scrollbar {
-        height: 4px;
-    }
-
-    .dashboard-agent-tabs::-webkit-scrollbar-thumb {
-        background: var(--scrollbar-thumb);
-        border-radius: 4px;
-    }
-
     * {
         scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
         scrollbar-width: thin;
@@ -3885,47 +3809,6 @@
             overflow: hidden;
             background: var(--bg-primary);
         }
-
-        .dashboard-mobile-chat-inbox {
-            flex: 1;
-            min-height: 0;
-            overflow-y: auto;
-            overflow-x: hidden;
-            padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .dashboard-mobile-chat-section {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .dashboard-mobile-chat-nav {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 8px;
-            padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-            border-top: 1px solid var(--border-subtle);
-            background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
-            backdrop-filter: blur(16px);
-            flex-shrink: 0;
-        }
-
-        .dashboard-mobile-chat-nav-tab {
-            min-height: 38px;
-            border-radius: 12px;
-            border: 1px solid var(--border-subtle);
-            background: var(--bg-glass);
-            color: var(--text-secondary);
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: -0.01em;
-        }
-
         .dashboard-mobile-chat-nav-tab.is-active {
             background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-glass));
             border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-accent));
@@ -3941,22 +3824,6 @@
             padding: 6px 12px 6px 56px;
             min-height: 40px;
         }
-
-        .dashboard-agent-tabs {
-            padding: 6px;
-            gap: 4px;
-            min-height: 48px;
-            scroll-snap-type: x mandatory;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .dashboard-agent-tabs>div {
-            scroll-snap-align: start;
-            min-width: 140px;
-            max-width: 180px;
-            padding: 8px 10px;
-        }
-
         .page-dashboard .chat-markdown {
             font-size: 13px;
         }
@@ -4040,11 +3907,6 @@
         .page-dashboard .dashboard-header {
             padding: 8px 8px 8px 52px;
         }
-
-        .dashboard-agent-tabs>div {
-            min-width: 120px;
-            max-width: 150px;
-        }
     }
 
     /* PWA standalone */
@@ -4108,8 +3970,7 @@
         }
 
         .chat-markdown,
-        .agent-chat-bubble,
-        .chat-msg-tool {
+.chat-msg-tool {
             -webkit-user-select: text;
             user-select: text;
         }
@@ -4125,18 +3986,10 @@
             transform: none !important;
             box-shadow: none !important;
         }
-
-        .agent-chat-bubble:hover {
-            transform: none !important;
-        }
     }
 
     /* Landscape mobile: reduce vertical space */
     @media (max-height: 500px) and (max-width: 900px) {
-        .dashboard-agent-tabs {
-            min-height: 52px !important;
-        }
-
         .status-bar {
             padding: 2px 12px !important;
         }
@@ -4164,13 +4017,6 @@
     .machine-card:hover {
         border-color: var(--border-accent);
     }
-
-    /* Accent line at top of machine card */
-    .machine-accent {
-        height: 2px;
-        background: var(--accent-gradient, var(--accent-primary));
-    }
-
     .machine-accent.offline {
         background: var(--border-subtle);
     }
