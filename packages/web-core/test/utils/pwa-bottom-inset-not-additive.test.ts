@@ -139,15 +139,14 @@ describe('PWA bottom inset is additive, sized against the top reference', () => 
     expect(css).toContain('padding-top: env(safe-area-inset-top, 0px);')
   })
 
-  it('keeps the composer band painted in the page colour', () => {
-    // The composer's reserved inset is overpainted in --bg-primary so the
-    // home-indicator slice reads as page rather than as a slab of the bar's own
-    // --surface-primary. Enlarging the design pad above it must not have
-    // dropped that gradient — the extra pad is genuine composer surface, only
-    // the bare inset slice gets overpainted.
+  it('leaves the composer band unpainted so it matches the bar surface (round 4)', () => {
+    // Round 4 (2026-09-19, owner-reported): the --bg-primary overpaint from
+    // round 3 created a visible colour seam between the composer and its own
+    // safe-area band. The gradient repaint layer is gone; ChatInputBar's own
+    // `bg-[var(--surface-primary)]` now fills the inset band too, matching
+    // DashboardMobileBottomNav's tabbar, which never had a repaint layer.
+    // Enlarging the design pad in this round must not reintroduce that layer.
     const rule = composerRule()
-    expect(rule).toContain('background-image')
-    expect(rule).toContain('var(--bg-primary)')
-    expect(rule).not.toContain('var(--surface-primary)')
+    expect(rule).not.toContain('background')
   })
 })
