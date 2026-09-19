@@ -1130,6 +1130,27 @@ describe('{{workerHome}} placeholder expansion', () => {
  * points at the wrong directory satisfies the second and fails the first, and
  * that is exactly the silent failure these providers are exposed to.
  */
+/**
+ * ★These four config-root providers are called with the REAL home — the one
+ * `os.homedir()` returns — and the spec's `configRootPrefix` is what reaches
+ * their `~/<prefix>/…` sources. So every case below passes `realHome` UNprefixed.
+ *
+ * ★That is not a cosmetic detail; it is the rc.16 regression in one line. These
+ * tests used to hand `join(realHome, '.codex')` in as `realHome`, pre-applying
+ * the prefix by hand. That made them green against a `prepareWorkerPrivateHome`
+ * which joined the import source straight off `realHome` — while the live daemon,
+ * passing an unprefixed home, looked for `~/auth.json` and found nothing. The
+ * imports are deliberately optional, so the miss was a SILENT skip: an empty
+ * private root, and a CLI launched with no credentials at all.
+ *
+ * Measured on disk at the time: of 34 `codex-cli-*` private roots, 33 were
+ * completely empty and ZERO held an `auth.json`.
+ *
+ * ★So the assertions here deliberately check the TARGET inside the root, never
+ * `existsSync(source)` and never `prepared.skipped` — a skip is indistinguishable
+ * from a legitimately absent optional file, which is precisely why a fully green
+ * suite shipped a defect that killed every codex and kimi worker on launch.
+ */
 describe('codex worker config root', () => {
   function fakeCodexHome(): string {
     const home = tmp('adhdev-worker-codexhome-')
@@ -1158,7 +1179,7 @@ describe('codex worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('codex-cli')!
     const prepared = prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-codex-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-'),
+      realHome, baseDir: tmp('adhdev-whbase-codex-'),
     })
 
     // Present in the owner's root...
@@ -1175,7 +1196,7 @@ describe('codex worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('codex-cli')!
     const prepared = prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-codex-auth-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-auth-'),
+      realHome, baseDir: tmp('adhdev-whbase-codex-auth-'),
     })
 
     const workerAuth = join(prepared.home, 'auth.json')
@@ -1192,7 +1213,7 @@ describe('codex worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('codex-cli')!
     expect(() => prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-codex-perm-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-perm-'),
+      realHome, baseDir: tmp('adhdev-whbase-codex-perm-'),
     })).toThrow(/insecure_source/)
   })
 })
@@ -1224,7 +1245,7 @@ describe('kimi worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('kimi')!
     const prepared = prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-kimi-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.kimi-code'), baseDir: tmp('adhdev-whbase-kimi-'),
+      realHome, baseDir: tmp('adhdev-whbase-kimi-'),
     })
 
     expect(existsSync(join(realHome, '.kimi-code', 'mcp.json'))).toBe(true)
@@ -1239,7 +1260,7 @@ describe('kimi worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('kimi')!
     const prepared = prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-kimi-auth-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.kimi-code'), baseDir: tmp('adhdev-whbase-kimi-auth-'),
+      realHome, baseDir: tmp('adhdev-whbase-kimi-auth-'),
     })
 
     expect(lstatSync(join(prepared.home, 'config.toml')).isSymbolicLink()).toBe(true)
@@ -1299,7 +1320,7 @@ describe('hermes worker config root', () => {
     const spec = findWorkerPrivateHomeSpec('hermes-cli')!
     const prepared = prepareWorkerPrivateHome(spec, {
       workspace: tmp('adhdev-ws-hermes-'), sessionKey: 'task_1',
-      realHome: join(realHome, '.hermes'), baseDir: tmp('adhdev-whbase-hermes-'),
+      realHome, baseDir: tmp('adhdev-whbase-hermes-'),
     })
 
     expect(existsSync(join(realHome, '.hermes', 'config.yaml'))).toBe(true)
@@ -1324,7 +1345,7 @@ describe('hermes worker config root', () => {
       providerType: 'hermes-cli',
       workspace,
       sessionKey: 'task_1',
-      realHome: join(realHome, '.hermes'),
+      realHome,
       baseDir: tmp('adhdev-whbase-hermes-deliver-'),
       mcpConfig: { mode: 'auto_import', format: 'hermes_config_yaml', path: '~/.hermes/config.yaml' },
       server: { command: 'adhdev', args: ['mcp', '--mode', 'worker'] },
@@ -1347,10 +1368,13 @@ describe('config-root providers keep the real HOME', () => {
     // the seam would repoint the whole worker process tree's home — breaking
     // git/ssh/shell state and stranding opencode's auth, which deliberately
     // lives outside the config root.
+    // Laid out as a REAL home: codex's surfaces live under `~/.codex`, and the
+    // spec's `configRootPrefix` is what bridges to them. Writing them flat here
+    // would re-encode the very mistake that shipped rc.16.
     const realHome = tmp('adhdev-worker-codexroot-')
-    mkdirSync(realHome, { recursive: true })
-    writeFileSync(join(realHome, 'auth.json'), '{"t":1}', { mode: 0o600 })
-    writeFileSync(join(realHome, 'config.toml'), '[mcp_servers.node_repl]\n', { mode: 0o600 })
+    mkdirSync(join(realHome, '.codex'), { recursive: true })
+    writeFileSync(join(realHome, '.codex', 'auth.json'), '{"t":1}', { mode: 0o600 })
+    writeFileSync(join(realHome, '.codex', 'config.toml'), '[mcp_servers.node_repl]\n', { mode: 0o600 })
 
     const result = resolveWorkerMcpIsolation({
       providerType: 'codex-cli',
@@ -1373,5 +1397,164 @@ describe('config-root providers keep the real HOME', () => {
       baseDir: tmp('adhdev-whbase-agyroot-'),
       mcpConfig: { mode: 'auto_import', format: 'gemini_mcp_json', path: '~/.gemini/config/mcp_config.json' },
     }, ON)!.workerHomeEnvVar).toBeUndefined()
+  })
+})
+
+/**
+ * ★rc.16 regression: the private root must come out POPULATED, from a real home.
+ *
+ * ─── What shipped, and why nothing caught it ────────────────────────────────
+ *
+ * `prepareWorkerPrivateHome` joined the import SOURCE and the import TARGET from
+ * the same `relativePath`. For the three prefixed specs the two ends are not the
+ * same path: the root stands in for `~/<prefix>`, so `auth.json` sits at the root
+ * of the private dir but at `~/.codex/auth.json` in the real home. Joining both
+ * ends off `realHome` sent codex looking for `~/auth.json`, kimi for
+ * `~/config.toml`, hermes for `~/.env` — none of which exist.
+ *
+ * Those imports are deliberately optional (fail-OPEN: a required import that
+ * throws would drop the worker back onto the owner's config, re-opening the leak
+ * this whole mechanism closes). So the misses were silent skips. Every worker got
+ * an EMPTY root and a CLI launched with no credentials:
+ *
+ *   codex-cli → exit 1 after 3s, `unexpected_exit`
+ *   kimi      → `Model "kimi-code/k3" is not configured in config.toml`
+ *
+ * The suite stayed green because the per-provider cases above pre-applied the
+ * prefix when constructing `realHome` — they asserted the mechanism against a
+ * call shape the daemon never makes.
+ *
+ * ─── The shape of the guard ─────────────────────────────────────────────────
+ *
+ * ★Assert the TARGET exists inside the root, reached from an UNPREFIXED home.
+ * Not `existsSync(source)`, not `prepared.skipped` — for an optional entry a skip
+ * is indistinguishable from a file the host legitimately lacks, so either proxy
+ * re-admits the exact defect while reading as coverage.
+ *
+ * ★Both workspace shapes are exercised. `realHome` is `os.homedir()` on both
+ * paths and `workspace` only seasons the root's name hash, so a base checkout and
+ * a cloned worktree cannot diverge here — that is asserted rather than assumed,
+ * because it is the question a reviewer will actually ask.
+ */
+describe('★config-root imports resolve from the real home (rc.16 regression)', () => {
+  // A base checkout and a cloned worktree — the two live launch shapes.
+  const BASE_WS = '/Users/dev/Work/adhdev'
+  const TREE_WS = '/Users/dev/.adhdev-preview/worktrees/adhdev-cloud-mesh/fix-branch'
+
+  interface Case {
+    providerType: string
+    prefix: string
+    /** Root-relative targets that MUST materialize inside the private root. */
+    expect: string[]
+    seed: (realHome: string) => void
+  }
+
+  const CASES: Case[] = [
+    {
+      providerType: 'codex-cli',
+      prefix: '.codex',
+      expect: ['auth.json'],
+      seed: (h) => {
+        mkdirSync(join(h, '.codex'), { recursive: true })
+        writeFileSync(join(h, '.codex', 'auth.json'), '{"tokens":{"access_token":"x"}}', { mode: 0o600 })
+      },
+    },
+    {
+      providerType: 'kimi',
+      prefix: '.kimi-code',
+      expect: ['config.toml', 'credentials'],
+      seed: (h) => {
+        mkdirSync(join(h, '.kimi-code', 'credentials'), { recursive: true, mode: 0o700 })
+        chmodSync(join(h, '.kimi-code', 'credentials'), 0o700)
+        writeFileSync(join(h, '.kimi-code', 'config.toml'), 'default_model = "k3"\n', { mode: 0o600 })
+      },
+    },
+    {
+      providerType: 'hermes-cli',
+      prefix: '.hermes',
+      expect: ['.env'],
+      seed: (h) => {
+        mkdirSync(join(h, '.hermes'), { recursive: true })
+        writeFileSync(join(h, '.hermes', '.env'), 'PROVIDER_KEY=secret\n', { mode: 0o600 })
+      },
+    },
+  ]
+
+  for (const c of CASES) {
+    for (const [wsLabel, workspace] of [['base checkout', BASE_WS], ['cloned worktree', TREE_WS]] as const) {
+      it(`${c.providerType}: private root is populated from ~/${c.prefix} (${wsLabel})`, () => {
+        const realHome = tmp(`adhdev-rc16-${c.providerType}-`)
+        c.seed(realHome)
+
+        const spec = findWorkerPrivateHomeSpec(c.providerType)!
+        // ★The prefix is the spec's job, not the caller's.
+        expect(spec.configRootPrefix).toBe(c.prefix)
+
+        const prepared = prepareWorkerPrivateHome(spec, {
+          workspace,
+          sessionKey: 'task_1',
+          realHome, // ★unprefixed — exactly what the daemon passes
+          baseDir: tmp(`adhdev-rc16-base-${c.providerType}-`),
+        })
+
+        // ★The assertion the old code failed: the root is not empty.
+        for (const target of c.expect) {
+          expect(
+            existsSync(join(prepared.home, target)),
+            `${c.providerType}: expected ${target} inside the private root (${wsLabel})`,
+          ).toBe(true)
+          expect(prepared.imported).toContain(target)
+        }
+
+        // ...and the credential really resolves to the owner's file, so a
+        // rotation reaches a long-running worker.
+        if (c.providerType === 'codex-cli') {
+          writeFileSync(join(realHome, '.codex', 'auth.json'), '{"tokens":{"access_token":"rotated"}}', { mode: 0o600 })
+          expect(readFileSync(join(prepared.home, 'auth.json'), 'utf-8')).toContain('rotated')
+        }
+
+        // The isolated surface is still absent — the fix must not re-admit it.
+        expect(existsSync(join(prepared.home, c.prefix))).toBe(false)
+      })
+    }
+
+    it(`${c.providerType}: base and worktree get distinct roots, both populated`, () => {
+      const realHome = tmp(`adhdev-rc16-split-${c.providerType}-`)
+      c.seed(realHome)
+      const spec = findWorkerPrivateHomeSpec(c.providerType)!
+      const baseDir = tmp(`adhdev-rc16-splitbase-${c.providerType}-`)
+
+      const base = prepareWorkerPrivateHome(spec, { workspace: BASE_WS, sessionKey: 'task_1', realHome, baseDir })
+      const tree = prepareWorkerPrivateHome(spec, { workspace: TREE_WS, sessionKey: 'task_1', realHome, baseDir })
+
+      // ★Isolation stays per-workspace — the two must not share a root.
+      expect(base.home).not.toBe(tree.home)
+      // ★...and neither may be the empty root that shipped.
+      for (const target of c.expect) {
+        expect(existsSync(join(base.home, target))).toBe(true)
+        expect(existsSync(join(tree.home, target))).toBe(true)
+      }
+    })
+  }
+
+  it('★opencode is deliberately exempt: XDG_CONFIG_HOME is already the declared root', () => {
+    // Not an oversight. opencode declares no imports at all — its credentials
+    // live under XDG_DATA_HOME, outside the config root — so there is no source
+    // path to bridge and no prefix to declare.
+    const spec = findWorkerPrivateHomeSpec('opencode')!
+    expect(spec.homeEnvVar).toBe('XDG_CONFIG_HOME')
+    expect(spec.configRootPrefix).toBeUndefined()
+    expect(spec.imports).toEqual([])
+  })
+
+  it('★the three HOME-rooted specs declare no prefix — real and private paths coincide', () => {
+    // antigravity/cursor/grok redirect HOME itself, so an import source and its
+    // target are the same relative path. A prefix here would BREAK them, which
+    // is why the fix is scoped to specs that declare one.
+    for (const providerType of ['antigravity-cli', 'cursor-cli', 'grok-cli']) {
+      const spec = findWorkerPrivateHomeSpec(providerType)!
+      expect(spec.homeEnvVar).toBeUndefined()
+      expect(spec.configRootPrefix).toBeUndefined()
+    }
   })
 })
