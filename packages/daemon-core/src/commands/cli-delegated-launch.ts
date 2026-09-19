@@ -507,6 +507,51 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
             const key = String(rule.dedupeKey || rule.key || '').trim();
             const flag = String(rule.flag || '').trim();
             if (!key || !flag || hasConfigOverride(cliArgs, key)) continue;
+            // ★A disable-by-name override and a private config root are
+            // MUTUALLY EXCLUSIVE, and applying the former on top of the latter
+            // does not merely waste an argument — it kills the CLI.
+            //
+            // Measured live 2026-09-19 (codex-cli 0.154.0). codex treats a
+            // `mcp_servers.<name>` entry as valid only if it carries a TRANSPORT
+            // (`command` or `url`). An `-c` override merges onto the config
+            // file, so the outcome depends on whether the entry already exists
+            // there:
+            //
+            //   entry present (no private root — the owner's ~/.codex):
+            //     `-c mcp_servers.adhdev-mesh.enabled=false` → Status `disabled`
+            //     ✔ the rule does exactly what it was written to do.
+            //
+            //   entry absent (private root — `config.toml` is deliberately NOT
+            //   imported, see WorkerPrivateHomeSpec for codex-cli):
+            //     the same override CREATES a new entry holding only
+            //     `enabled=false`, with no transport, and codex rejects the
+            //     WHOLE config:
+            //       Error loading config.toml: invalid transport
+            //       in `mcp_servers.adhdev-mesh`
+            //     → the CLI exits before the session starts. Symptom is
+            //     exitCode 1 / unexpected_exit / silentForMs < 5 plus
+            //     `[FsmDriver] DISCARDING 1 queued send(s) on shutdown` —
+            //     indistinguishable at a glance from the empty-root failure
+            //     that `configRootPrefix` fixed, but a different cause.
+            //
+            // So the rule is withheld precisely when it has nothing to disable.
+            // This is NOT "delete the arg to work around a crash": with a
+            // private root the server is structurally absent (`codex mcp list`
+            // → "No MCP servers configured yet."), so the isolation the rule
+            // exists to provide is already total. Withholding it removes a
+            // redundant argument, and the redundancy is what was fatal.
+            //
+            // Exact mirror of `approve_mcp_servers` above, which is withheld in
+            // the OPPOSITE case for the same reason: each flag is only coherent
+            // alongside the config root state it was written for.
+            if (rule.withholdWithPrivateHome && workerIsolation?.workerHome) {
+                workerIsolation.notes.push(
+                    `${flag} ${rule.key} withheld — worker config root is private,`
+                    + ' so the entry does not exist there and the override would create a'
+                    + ' transport-less entry the CLI rejects',
+                );
+                continue;
+            }
             cliArgs.unshift(flag, `${rule.key}=${rule.value}`);
         }
     }
