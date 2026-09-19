@@ -103,12 +103,6 @@ export function isWithinCloneBootstrapGraceDurable(
     return false;
 }
 
-/** Drop a node's grace entry (e.g. once it has fully resolved into the mesh view). */
-export function clearCloneBootstrapGrace(nodeId: string | undefined | null): void {
-    const key = normalizeNodeIdKey(nodeId);
-    if (key) recentlyClonedNodeExpiry.delete(key);
-}
-
 export function __resetCloneBootstrapGraceForTests(): void {
     recentlyClonedNodeExpiry.clear();
 }

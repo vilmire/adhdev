@@ -104,16 +104,6 @@ export function buildDaemonUpgradePayload(daemon: DaemonData | null | undefined)
 }
 
 /**
- * The node's own current channel, as reported by the daemon itself
- * (`updateChannel` is its saved config, `releaseChannel` its build channel).
- * Distinct from `updatePolicy.channel`, which is the server-pushed TARGET
- * channel — getDaemonUpdateChannel() merges the two and can't tell them apart.
- */
-export function getDaemonCurrentChannel(daemon: DaemonData): WebReleaseChannel | null {
-    return normalizeChannel(daemon.updateChannel) || normalizeChannel(daemon.releaseChannel)
-}
-
-/**
  * Label for the one-click upgrade action. Since Phase 3 the release channel
  * is a build-time identity of the installed binary, an upgrade can NEVER
  * switch channels — so this is always a plain version-update label; the

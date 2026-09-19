@@ -40,10 +40,6 @@ export function rememberVisibleLiveCount(tabKey: string, count: number): void {
     visibleLiveCountByTabKey.set(tabKey, count)
 }
 
-export function forgetVisibleLiveCount(tabKey: string): void {
-    visibleLiveCountByTabKey.delete(tabKey)
-}
-
 export function resetVisibleLiveCountMemoryForTest(): void {
     visibleLiveCountByTabKey.clear()
 }

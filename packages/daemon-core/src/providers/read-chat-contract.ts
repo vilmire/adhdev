@@ -4,7 +4,6 @@ import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
 import {
   CHAT_CONTRACT_VERSION_V1,
-  CHAT_CONTRACT_VERSION_V2,
   assertReadChatResultV2Payload,
   isSupportedChatContractVersion,
   type ChatContractVersion,
@@ -216,27 +215,6 @@ export function validateReadChatResultV2Payload(raw: unknown, source = 'read_cha
     }
     throw err
   }
-}
-
-/**
- * Versioned entry point. Routes on the producer-declared contractVersion:
- *   - v2 → strict v2 validation (transcript-v2.ts invariants)
- *   - v1 (or absent) → legacy permissive validation
- *
- * Callers that have not yet been audited to handle v2 outputs should use
- * validateReadChatResultPayload directly; that path stays bound to v1 shape
- * during the A1 transition.
- */
-export function validateReadChatResultPayloadVersioned(
-  raw: unknown,
-  source = 'read_chat',
-): { version: typeof CHAT_CONTRACT_VERSION_V1; payload: ReadChatResult & Record<string, unknown> }
-  | { version: typeof CHAT_CONTRACT_VERSION_V2; payload: ReadChatResultV2 } {
-  const version = readPayloadContractVersion(raw)
-  if (version === CHAT_CONTRACT_VERSION_V2) {
-    return { version, payload: validateReadChatResultV2Payload(raw, source) }
-  }
-  return { version: CHAT_CONTRACT_VERSION_V1, payload: validateReadChatResultPayload(raw, source) }
 }
 
 export function validateReadChatResultPayload(raw: unknown, source = 'read_chat'): ReadChatResult & Record<string, unknown> {
