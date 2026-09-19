@@ -45274,6 +45274,25 @@ child.on('exit', () => process.exit(0));
       if (hardLimit > 0) return { kind: "fixed", usedDollars, limitDollars: hardLimit };
       return { kind: "disabled", usedDollars };
     }
+    function includedPlanWindow(planUsage, resetAt) {
+      const limit = toNumber(field(planUsage, "limit", "limit"));
+      const spend = toNumber(field(planUsage, "total_spend", "totalSpend"));
+      const fromSpend = windowFromUsage(spend, limit, MONTHLY_WINDOW_MINUTES, resetAt);
+      if (fromSpend) return fromSpend;
+      const remaining = toNumber(field(planUsage, "remaining", "remaining"));
+      const fromRemaining = windowFromUsage(
+        remaining !== null && limit !== null ? Math.max(0, limit - remaining) : null,
+        limit,
+        MONTHLY_WINDOW_MINUTES,
+        resetAt
+      );
+      if (fromRemaining) return fromRemaining;
+      return windowFromPercent(
+        toNumber(field(planUsage, "total_percent_used", "totalPercentUsed")),
+        MONTHLY_WINDOW_MINUTES,
+        resetAt
+      );
+    }
     function mapUsageResponse(data, hardLimitData, nowMs) {
       const current = asRecord2(data);
       if (!current) {
@@ -45308,12 +45327,7 @@ child.on('exit', () => process.exit(0));
         cursorUsage.limitDollars ?? null,
         MONTHLY_WINDOW_MINUTES,
         resetAt
-      ) : null) ?? windowFromUsage(
-        toNumber(field(planUsage, "total_spend", "totalSpend")),
-        toNumber(field(planUsage, "limit", "limit")),
-        MONTHLY_WINDOW_MINUTES,
-        resetAt
-      );
+      ) : null) ?? includedPlanWindow(planUsage, resetAt);
       return {
         provider: "cursor-cli",
         session: null,

@@ -289,6 +289,76 @@ describe('fetchCursorQuota', () => {
         expect(quota.metadata?.cursorUsage).toMatchObject({ kind: 'disabled', displayMessage: "You've used 0% of your included usage" })
     })
 
+    it('charts the included-plan axis from remaining/limit when total_spend is gone (live shape 2026-09-19)', async () => {
+        // The current live response no longer carries planUsage.totalSpend at
+        // all — only remaining/limit and rounded vendor percents. The owner
+        // account reads limit 2000 / remaining 2000 / totalPercentUsed 0;
+        // without this fallback monthly came out null and the UI showed the
+        // raw vendor displayMessage instead of a 30d chip.
+        const config = makeConfig({ accessToken: 'cursor-access-token' })
+        const stub = stubFetch([
+            jsonResponse({
+                billingCycleStart: String(Date.UTC(2026, 7, 1)),
+                billingCycleEnd: String(RESET_AT),
+                planUsage: { remaining: 1993, limit: 2000, totalPercentUsed: 0 },
+                spendLimitUsage: { limitType: 'user' },
+                enabled: true,
+                displayMessage: "You've used 0% of your included usage",
+            }),
+            jsonResponse({ noUsageBasedAllowed: true }),
+        ])
+
+        const quota = await fetchCursorQuota(deps(config, stub.fetch))
+
+        expect(quota.status).toBe('ok')
+        expect(quota.monthly?.usedPercent).toBeCloseTo(0.35) // (2000 − 1993) / 2000
+        expect(quota.monthly?.windowMinutes).toBe(MONTHLY_WINDOW_MINUTES)
+        expect(quota.monthly?.resetsAt).toBe(RESET_AT)
+    })
+
+    it('falls back to the vendor total_percent_used when neither spend nor remaining is sent', async () => {
+        const config = makeConfig({ accessToken: 'cursor-access-token' })
+        const stub = stubFetch([
+            jsonResponse({
+                billingCycleEnd: String(RESET_AT),
+                planUsage: { limit: 2000, totalPercentUsed: 42.5 },
+                spendLimitUsage: { limitType: 'user' },
+                enabled: true,
+            }),
+            jsonResponse({ noUsageBasedAllowed: true }),
+        ])
+
+        const quota = await fetchCursorQuota(deps(config, stub.fetch))
+
+        expect(quota.status).toBe('ok')
+        expect(quota.monthly?.usedPercent).toBeCloseTo(42.5)
+        expect(quota.monthly?.resetsAt).toBe(RESET_AT)
+    })
+
+    it('reports ok with no monthly window when plan_usage carries no usable axis at all', async () => {
+        // The genuine okNoWindows corner: the reading succeeded but none of
+        // total_spend / remaining / total_percent_used is present. monthly
+        // must stay null so the UI renders its intentional fallback line —
+        // never a fabricated chip and never a failure line (2026-08-24).
+        const config = makeConfig({ accessToken: 'cursor-access-token' })
+        const stub = stubFetch([
+            jsonResponse({
+                billingCycleEnd: String(RESET_AT),
+                planUsage: { remainingBonus: false },
+                spendLimitUsage: { limitType: 'user' },
+                enabled: true,
+                displayMessage: "You've used 0% of your included usage",
+            }),
+            jsonResponse({ noUsageBasedAllowed: true }),
+        ])
+
+        const quota = await fetchCursorQuota(deps(config, stub.fetch))
+
+        expect(quota.status).toBe('ok')
+        expect(quota.monthly).toBeNull()
+        expect(quota.metadata?.cursorUsage).toMatchObject({ kind: 'disabled', displayMessage: "You've used 0% of your included usage" })
+    })
+
     it('probes keychain service names newest-first and stops at the first hit', async () => {
         // 2026-08 cursor-agent builds store the token under
         // 'cursor-access-token' (found by live keychain metadata inspection
