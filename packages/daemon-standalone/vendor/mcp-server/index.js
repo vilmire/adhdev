@@ -53490,12 +53490,27 @@ ${blocks.join("\n\n")}`;
            * built-in defaults — accepted, because the alternative is a filtered copy
            * that re-derives the enumeration failure described above.
            *
-           * The existing `-c` rules still apply and remain correct: the worker MCP
-           * server arrives via `workerMcpDelivery` (`config_override`), which injects
-           * it on argv and therefore does not depend on any file in the config root.
-           * The `adhdev-mesh.enabled=false` rule becomes redundant but harmless, and
-           * is kept so that a daemon running with `ADHDEV_WORKER_MCP` explicitly off
-           * retains exactly its prior behavior.
+           * The worker MCP server arrives via `workerMcpDelivery`
+           * (`config_override`), which injects it on argv and therefore does not
+           * depend on any file in the config root. That part is unaffected by the
+           * private root and remains correct.
+           *
+           * ★The `adhdev-mesh.enabled=false` rule, however, is NOT "redundant but
+           * harmless" alongside this private root — an earlier revision of this
+           * comment said so, and that was wrong. Measured 2026-09-19: because
+           * `config.toml` is not imported, the entry does not exist in the private
+           * root, so the override CREATES one carrying only `enabled=false`. codex
+           * requires a transport (`command`/`url`) on every `mcp_servers` entry and
+           * rejects the entire config —
+           *
+           *   Error loading config.toml: invalid transport
+           *   in `mcp_servers.adhdev-mesh`
+           *
+           * — so the CLI exits before the session starts. The rule is therefore
+           * declared `withholdWithPrivateHome: true` (provider manifest 1.1.23) and
+           * applies only when there is no private root, which is exactly the
+           * `ADHDEV_WORKER_MCP`-off case it was kept for. See the launch-seam
+           * comment in `commands/cli-delegated-launch.ts`.
            */
           {
             providerType: "codex-cli",
@@ -121206,6 +121221,12 @@ ${rawInput}` : rawInput;
           const key2 = String(rule.dedupeKey || rule.key || "").trim();
           const flag = String(rule.flag || "").trim();
           if (!key2 || !flag || hasConfigOverride(cliArgs, key2)) continue;
+          if (rule.withholdWithPrivateHome && workerIsolation?.workerHome) {
+            workerIsolation.notes.push(
+              `${flag} ${rule.key} withheld \u2014 worker config root is private, so the entry does not exist there and the override would create a transport-less entry the CLI rejects`
+            );
+            continue;
+          }
           cliArgs.unshift(flag, `${rule.key}=${rule.value}`);
         }
       }
@@ -127442,8 +127463,11 @@ ${effect.notification.body || ""}`.trim();
                 errors.push(`${prefix}.${key2} must be a non-empty string when provided`);
               }
             }
-            if (item.requiresPrivateHome !== void 0 && typeof item.requiresPrivateHome !== "boolean") {
-              errors.push(`${prefix}.requiresPrivateHome must be a boolean when provided`);
+            for (const key2 of ["requiresPrivateHome", "withholdWithPrivateHome"]) {
+              const value = item[key2];
+              if (value !== void 0 && typeof value !== "boolean") {
+                errors.push(`${prefix}.${key2} must be a boolean when provided`);
+              }
             }
           }
         }
@@ -128418,6 +128442,10 @@ ${effect.notification.body || ""}`.trim();
                               dedupeKey: {
                                 type: "string",
                                 minLength: 1
+                              },
+                              withholdWithPrivateHome: {
+                                type: "boolean",
+                                description: "Withhold this override when the launch has a worker-private config root. Use for disable-by-name rules: the private root already removed the entry, so applying the override would create an incomplete entry (no transport) that a validating CLI such as codex rejects, failing the whole config load."
                               }
                             }
                           },
