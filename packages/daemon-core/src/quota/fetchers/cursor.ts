@@ -19,9 +19,11 @@ import * as path from 'node:path';
 import {
     MONTHLY_WINDOW_MINUTES,
     quotaFailure,
+    windowFromPercent,
     windowFromUsage,
     type ProviderQuota,
     type QuotaMetadata,
+    type QuotaWindow,
 } from '../types.js';
 import { toNumber } from './coerce.js';
 import type { QuotaChildProcess, QuotaFetchDeps, QuotaFetchResponse } from './deps.js';
@@ -301,6 +303,39 @@ function mapCursorUsage(current: Record<string, unknown>, hard: Record<string, u
     return { kind: 'disabled', usedDollars };
 }
 
+/**
+ * The INCLUDED-plan monthly window from plan_usage. Field precedence, most
+ * precise first (live shapes verified 2026-08-24 and 2026-09-19):
+ *   1. total_spend / limit — the 2026-08-24 shape.
+ *   2. (limit − remaining) / limit — the 2026-09-19 shape: total_spend is no
+ *      longer sent; the response carries remaining/limit instead. Without
+ *      this the monthly axis silently vanished and the UI fell back to the
+ *      raw vendor displayMessage.
+ *   3. total_percent_used — vendor-computed, kept last because it is rounded
+ *      (a live 7/2000 spend arrived as 0.02 while remaining/limit said 0.35%).
+ */
+function includedPlanWindow(planUsage: Record<string, unknown>, resetAt: number | null): QuotaWindow | null {
+    const limit = toNumber(field(planUsage, 'limit', 'limit'));
+    const spend = toNumber(field(planUsage, 'total_spend', 'totalSpend'));
+    const fromSpend = windowFromUsage(spend, limit, MONTHLY_WINDOW_MINUTES, resetAt);
+    if (fromSpend) return fromSpend;
+
+    const remaining = toNumber(field(planUsage, 'remaining', 'remaining'));
+    const fromRemaining = windowFromUsage(
+        remaining !== null && limit !== null ? Math.max(0, limit - remaining) : null,
+        limit,
+        MONTHLY_WINDOW_MINUTES,
+        resetAt,
+    );
+    if (fromRemaining) return fromRemaining;
+
+    return windowFromPercent(
+        toNumber(field(planUsage, 'total_percent_used', 'totalPercentUsed')),
+        MONTHLY_WINDOW_MINUTES,
+        resetAt,
+    );
+}
+
 function mapUsageResponse(
     data: unknown,
     hardLimitData: unknown,
@@ -341,10 +376,10 @@ function mapUsageResponse(
     // Two distinct spend axes (live shape verified 2026-08-24):
     //   1. ON-DEMAND (spend_limit_usage / hard limit) — cursorUsage above,
     //      charted only for kind 'fixed'.
-    //   2. INCLUDED PLAN (plan_usage.total_spend / .limit) — what "You've
-    //      used N% of your included usage" is about. Accounts with on-demand
-    //      disabled (limitType 'user', noUsageBasedAllowed) still have THIS
-    //      axis, and dropping it rendered a real reading as no-usage-at-all.
+    //   2. INCLUDED PLAN (plan_usage) — what "You've used N% of your included
+    //      usage" is about. Accounts with on-demand disabled (limitType
+    //      'user', noUsageBasedAllowed) still have THIS axis, and dropping it
+    //      rendered a real reading as no-usage-at-all.
     const monthly = (cursorUsage.kind === 'fixed'
         ? windowFromUsage(
             cursorUsage.usedDollars,
@@ -353,12 +388,7 @@ function mapUsageResponse(
             resetAt,
         )
         : null)
-        ?? windowFromUsage(
-            toNumber(field(planUsage, 'total_spend', 'totalSpend')),
-            toNumber(field(planUsage, 'limit', 'limit')),
-            MONTHLY_WINDOW_MINUTES,
-            resetAt,
-        );
+        ?? includedPlanWindow(planUsage, resetAt);
 
     return {
         provider: 'cursor-cli',
