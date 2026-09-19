@@ -422,7 +422,38 @@ export function liveWorkerSessionBindCount(): number {
  *    and whose rewrite must not leak back into the user's real config.
  */
 export interface WorkerHomeImport {
-    /** Path relative to HOME, e.g. `.gemini/antigravity-cli/antigravity-oauth-token`. */
+    /**
+     * Path relative to the PRIVATE ROOT — i.e. the path as the CLI sees it under
+     * the override, e.g. `.gemini/antigravity-cli/antigravity-oauth-token` for a
+     * `HOME`-rooted spec, or plain `auth.json` for codex under `CODEX_HOME`.
+     *
+     * ★The real-home SOURCE is not always this same path. When the spec declares
+     * `configRootPrefix`, the private root stands in for `~/<prefix>`, so the
+     * source is `~/<prefix>/<relativePath>` while the target stays
+     * `<root>/<relativePath>`. `prepareWorkerPrivateHome` applies that.
+     *
+     * ★Why this is spelled out (live regression, rc.16, fixed 2026-09-19).
+     *
+     * The four env-var specs were written with root-relative paths — correct for
+     * the target — but `prepareWorkerPrivateHome` joined BOTH source and target
+     * from the one string. So codex looked for `~/auth.json` and kimi for
+     * `~/config.toml`; neither exists (they live under `~/.codex` and
+     * `~/.kimi-code`). The entries are deliberately NOT `required` — see each
+     * spec for the fail-OPEN argument, which remains right — so every source
+     * missed the `existsSync` check and was SKIPPED SILENTLY. The private root
+     * was created empty and the CLI launched with no credentials at all:
+     *
+     *   codex-cli → exit 1 after 3s, `unexpected_exit`
+     *   kimi      → "Model 'kimi-code/k3' is not configured in config.toml"
+     *
+     * Measured on disk at the time: of 34 `codex-cli-*` private roots, 33 were
+     * completely empty and ZERO contained `auth.json`. The `HOME`-rooted specs
+     * (antigravity) were unaffected, which is why the class went unnoticed.
+     *
+     * ★A test asserting `existsSync(source)` or inspecting `skipped` cannot catch
+     * this — a skip is indistinguishable from a legitimately absent optional
+     * file. The regression test asserts the TARGET exists inside the root.
+     */
     relativePath: string;
     mode: 'symlink' | 'copy';
     /** When true, a missing source is an error rather than a skip. */
@@ -510,26 +541,41 @@ export interface WorkerPrivateHomeSpec {
      */
     homeEnvVar?: string;
     /**
-     * ★The HOME-relative directory that `homeEnvVar` STANDS IN FOR, when the two
-     * are not the same thing.
+     * ★The HOME-relative directory that the private root STANDS IN FOR.
      *
-     * Only meaningful alongside `homeEnvVar`, and only for a provider whose
-     * declared `mcpConfig.path` is written `~/<prefix>/…`. The declared path is
-     * shared with the COORDINATOR writer, which resolves it against the real
-     * home and must keep doing so — so it cannot be rewritten to suit the
-     * worker. This field is what lets the worker resolver reach the same file
-     * inside the private root.
+     * Only meaningful alongside `homeEnvVar`. When the env var names a config
+     * directory rather than a home, the private root IS that directory — so the
+     * real-home counterpart of anything inside it lives one segment deeper, at
+     * `~/<prefix>/…`, while inside the root it sits at the top level.
      *
-     * hermes is the case that needs it: `mcpConfig.path` is
-     * `~/.hermes/config.yaml`, but `HERMES_HOME` names the `.hermes` directory
-     * ITSELF — `HERMES_HOME=<dir> hermes config path` returns `<dir>/config.yaml`,
-     * not `<dir>/.hermes/config.yaml` (measured 2026-09-19). Declaring
-     * `configRootPrefix: '.hermes'` collapses that one segment so the worker
-     * writes where hermes actually reads.
+     * ★This asymmetry governs TWO axes, and both must honour it:
      *
-     * Absent means `homeEnvVar` names a root the declared path is already
-     * relative to (codex has no declared path at all; kimi and opencode use
-     * root-relative paths — see their specs).
+     *  1. **Config write** (`resolveWorkerMcpConfigPath`). The declared
+     *     `mcpConfig.path` is shared with the COORDINATOR writer, which resolves
+     *     it against the real home and must keep doing so — so it cannot be
+     *     rewritten to suit the worker. The prefix is collapsed off the declared
+     *     `~/<prefix>/…` path so the worker writes where the CLI actually reads.
+     *
+     *  2. **Imports** (`prepareWorkerPrivateHome`). `WorkerHomeImport.relativePath`
+     *     is declared ROOT-relative — the path as the CLI sees it under the
+     *     override. The prefix is therefore PREPENDED to reach the real-home
+     *     source. See `WorkerHomeImport.relativePath` for the measurements, and
+     *     for the live regression that established this field must span both.
+     *
+     * Measured 2026-09-19 (all three under an override pointed at a scratch dir):
+     *
+     *   HERMES_HOME=<dir> hermes config path     → <dir>/config.yaml
+     *   HERMES_HOME=<dir> hermes config env-path → <dir>/.env
+     *   CODEX_HOME=<dir with auth.json AT ROOT>  codex login status
+     *     → "Logged in using ChatGPT";  nested <dir>/.codex/auth.json → "Not logged in"
+     *   KIMI_CODE_HOME=<dir with config.toml AT ROOT> kimi --prompt "say OK"
+     *     → ran to completion;  nested <dir>/.kimi-code/… → "No model configured",
+     *       identical to an EMPTY root (so the nested layout imports nothing)
+     *
+     * Absent means the private root is a HOME (antigravity, cursor, grok — they
+     * redirect `HOME` itself, so real and private paths coincide) or a root the
+     * declared paths are already relative to (opencode: `XDG_CONFIG_HOME`, whose
+     * `opencode/` subdirectory is named explicitly in `ensureDirs`).
      */
     configRootPrefix?: string;
     imports: WorkerHomeImport[];
@@ -938,6 +984,14 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
     {
         providerType: 'codex-cli',
         homeEnvVar: 'CODEX_HOME',
+        // `CODEX_HOME` names the `.codex` directory ITSELF, so `auth.json` sits
+        // at the ROOT of the private dir while its real counterpart is
+        // `~/.codex/auth.json`. Measured 2026-09-19: an `auth.json` linked at the
+        // root reports "Logged in using ChatGPT"; the same link nested at
+        // `<root>/.codex/auth.json` reports "Not logged in", exactly like an
+        // empty root. Without this the import source resolved to `~/auth.json`,
+        // which does not exist — see `WorkerHomeImport.relativePath`.
+        configRootPrefix: '.codex',
         imports: [
             // ★NOT `required`. A failed required import aborts the private root
             // and falls back to the owner's config — a fail-OPEN for a spec
@@ -985,6 +1039,14 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
     {
         providerType: 'kimi',
         homeEnvVar: 'KIMI_CODE_HOME',
+        // `KIMI_CODE_HOME` names the `.kimi-code` directory ITSELF — the surfaces
+        // below sit at the ROOT of the private dir, while their real
+        // counterparts are `~/.kimi-code/…`. Measured 2026-09-19: the root
+        // layout ran `kimi --prompt "say OK"` to completion; the same links
+        // nested at `<root>/.kimi-code/…` failed with "No model configured",
+        // byte-identical to an EMPTY root — i.e. the nested layout imports
+        // nothing. That empty-root failure is the live rc.16 symptom.
+        configRootPrefix: '.kimi-code',
         imports: [
             // Auth + model config. Carries no MCP entries (measured), so linking
             // it whole does not re-admit anything this spec exists to exclude.
@@ -1167,13 +1229,22 @@ export function prepareWorkerPrivateHome(
 
     const imported: string[] = [];
     const skipped: string[] = [];
+    // ★The real-home base for SOURCES is not always `realHome` itself. When the
+    // private root stands in for `~/<prefix>` (codex, kimi, hermes), imports are
+    // declared root-relative, so the source lives one segment deeper. Joining
+    // both ends from the same string — as this loop did until 2026-09-19 —
+    // makes every such source miss, and because these entries are deliberately
+    // optional the miss is a SILENT skip that yields an empty root and a CLI
+    // launched with no credentials. See `WorkerHomeImport.relativePath`.
+    const importPrefix = String(spec.configRootPrefix || '').trim();
+    const sourceBase = importPrefix ? path.join(realHome, importPrefix) : realHome;
     for (const entry of spec.imports) {
-        const source = path.join(realHome, entry.relativePath);
+        const source = path.join(sourceBase, entry.relativePath);
         const target = path.join(home, entry.relativePath);
         if (!existsSync(source)) {
             if (entry.required) {
                 throw new Error(
-                    `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${realHome}`,
+                    `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${sourceBase}`,
                 );
             }
             skipped.push(entry.relativePath);
