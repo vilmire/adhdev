@@ -305,7 +305,7 @@ describe('writeWorkerMcpConfig', () => {
 })
 
 describe('antigravity worker-private HOME', () => {
-  it('declares a spec for antigravity, cursor and grok only', () => {
+  it('declares a spec for every provider that inherits an owner-global MCP surface', () => {
     expect(findWorkerPrivateHomeSpec('antigravity-cli')).not.toBeNull()
     // cursor joined in 2026-09-17 (its global ~/.cursor/mcp.json is merged into
     // every launch, so a workspace-scoped config alone isolates nothing).
@@ -315,9 +315,35 @@ describe('antigravity worker-private HOME', () => {
     // config, so the owner's `~/.cursor/mcp.json` reached grok workers even
     // though grok's own store was empty. Same remedy, different read path.
     expect(findWorkerPrivateHomeSpec('grok-cli')).not.toBeNull()
-    // hermes is deferred by owner decision §12-3; the rest are repo-local.
-    for (const other of ['hermes-cli', 'claude-cli', 'codex-cli', 'kimi', 'opencode']) {
-      expect(findWorkerPrivateHomeSpec(other)).toBeNull()
+
+    // ★2026-09-19: the remaining four. codex was the LIVE one — a codex worker
+    // was observed running the owner's `node_repl` MCP server as a child
+    // process, because the isolation rule disabled `adhdev-mesh` BY NAME and
+    // left every other entry in `~/.codex/config.toml` intact.
+    for (const joined of ['codex-cli', 'kimi', 'opencode', 'hermes-cli']) {
+      expect(findWorkerPrivateHomeSpec(joined)).not.toBeNull()
+    }
+
+    // claude-cli remains the one provider needing no private root: it isolates
+    // through `--strict-mcp-config`, which makes the CLI read ONLY the file the
+    // daemon names. Nothing global is merged, so there is nothing to hide.
+    expect(findWorkerPrivateHomeSpec('claude-cli')).toBeNull()
+  })
+
+  it('★routes each new provider through its OWN config-root variable, not HOME', () => {
+    // The distinction that keeps these four cheap. Redirecting `HOME` would
+    // repoint git/ssh/shell for the whole worker process tree and strand every
+    // surface left outside the imports; a dedicated variable moves the config
+    // root and nothing else. Each value was verified against the installed CLI.
+    expect(findWorkerPrivateHomeSpec('codex-cli')!.homeEnvVar).toBe('CODEX_HOME')
+    expect(findWorkerPrivateHomeSpec('kimi')!.homeEnvVar).toBe('KIMI_CODE_HOME')
+    expect(findWorkerPrivateHomeSpec('opencode')!.homeEnvVar).toBe('XDG_CONFIG_HOME')
+    expect(findWorkerPrivateHomeSpec('hermes-cli')!.homeEnvVar).toBe('HERMES_HOME')
+
+    // The three HOME-rooted providers must NOT acquire one — they have no such
+    // variable, which is exactly why they pay the full HOME-redirect cost.
+    for (const homeRooted of ['antigravity-cli', 'cursor-cli', 'grok-cli']) {
+      expect(findWorkerPrivateHomeSpec(homeRooted)!.homeEnvVar).toBeUndefined()
     }
   })
 
@@ -883,14 +909,24 @@ describe('grok worker-private HOME', () => {
 describe('resolveWorkerMcpIsolation (gate ON)', () => {
   it('covers a repo-local provider by writing a worker config', () => {
     const workspace = tmp('adhdev-ws-on-kimi-')
+    // ★`realHome` is supplied so this never reads the developer's actual home.
+    // kimi gained a private CONFIG ROOT on 2026-09-19; its declared path stays
+    // workspace-relative, so the worker config still lands in the workspace —
+    // what the root changes is that the owner's GLOBAL mcp.json is no longer
+    // merged alongside it.
+    const realHome = tmp('adhdev-worker-kimi-cover-')
     const result = resolveWorkerMcpIsolation({
       providerType: 'kimi',
       workspace,
       sessionKey: 'task_1',
+      realHome,
+      baseDir: tmp('adhdev-whbase-kimi-cover-'),
       mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json' },
     }, ON)
 
     expect(result).not.toBeNull()
+    expect(result!.workerHome).toBeTruthy()
+    expect(result!.workerHomeEnvVar).toBe('KIMI_CODE_HOME')
     expect(result!.configPath).toBe(join(workspace, '.kimi-code', 'mcp.json'))
     expect(JSON.parse(readFileSync(result!.configPath!, 'utf-8'))).toEqual({ mcpServers: {} })
   })
@@ -916,14 +952,20 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
     expect(coordinator.mcpServers['adhdev-mesh']).toBeTruthy()
   })
 
-  it('refuses to write hermes (home-rooted, no private HOME in Phase A)', () => {
+  it('★still refuses a home-rooted write when the provider has NO private root', () => {
+    // hermes acquired a private root on 2026-09-19, so it no longer exercises
+    // this branch — but the branch itself is load-bearing and must keep failing
+    // closed: without a private root, resolving `~` would target the
+    // COORDINATOR's own config and clobber it. Asserted through a synthetic
+    // provider so the guarantee survives every provider gaining a root.
     const result = resolveWorkerMcpIsolation({
-      providerType: 'hermes-cli',
-      workspace: tmp('adhdev-ws-on-hermes-'),
+      providerType: 'no-such-provider-cli',
+      workspace: tmp('adhdev-ws-on-homerooted-'),
       sessionKey: 'task_1',
       mcpConfig: { mode: 'auto_import', format: 'hermes_config_yaml', path: '~/.hermes/config.yaml' },
     }, ON)
 
+    expect(result!.workerHome).toBeUndefined()
     expect(result!.configPath).toBeUndefined()
     expect(result!.notes.join(' ')).toMatch(/home-rooted/)
   })
@@ -1077,5 +1119,259 @@ describe('{{workerHome}} placeholder expansion', () => {
     // The caller must SKIP the variable — exporting a literal `{{workerHome}}`
     // would point the CLI at a directory that does not exist.
     expect(expandWorkerIsolationPlaceholders('{{workerHome}}/x', {})).toBeNull()
+  })
+})
+
+/**
+ * ★Config-root-variable providers (codex, kimi, opencode, hermes) — 2026-09-19.
+ *
+ * Every assertion here is a PROPERTY of the prepared root ("the owner's servers
+ * are not reachable from it"), never "a spec entry exists". A spec entry that
+ * points at the wrong directory satisfies the second and fails the first, and
+ * that is exactly the silent failure these providers are exposed to.
+ */
+describe('codex worker config root', () => {
+  function fakeCodexHome(): string {
+    const home = tmp('adhdev-worker-codexhome-')
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    // The owner's real table: the coordinator entry PLUS two personal servers.
+    // `node_repl` is the one measured running as a codex worker's child process.
+    writeFileSync(
+      join(home, '.codex', 'config.toml'),
+      [
+        '[mcp_servers.node_repl]', 'command = "node"',
+        '[mcp_servers.computer-use]', 'command = "cu"',
+        '[mcp_servers.adhdev-mesh]', 'command = "adhdev"',
+      ].join('\n'),
+      { mode: 0o600 },
+    )
+    writeFileSync(join(home, '.codex', 'auth.json'), '{"tokens":{"access_token":"x"}}', { mode: 0o600 })
+    return home
+  }
+
+  it('★the owner\'s config.toml — and every server in it — is unreachable from the worker root', () => {
+    // The defect in one assertion. The old `-c mcp_servers.adhdev-mesh.enabled=false`
+    // rule removed ONE entry by name; `node_repl` and `computer-use` survived it.
+    // An absent config root removes the whole table, including servers added
+    // after this code was written.
+    const realHome = fakeCodexHome()
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-'),
+    })
+
+    // Present in the owner's root...
+    expect(existsSync(join(realHome, '.codex', 'config.toml'))).toBe(true)
+    // ...and absent from the worker's, which is what CODEX_HOME will name.
+    expect(existsSync(join(prepared.home, 'config.toml'))).toBe(false)
+  })
+
+  it('★keeps the worker logged in — auth.json is linked, and a refresh stays visible', () => {
+    // Isolation that breaks login is worse than no isolation: the worker cannot
+    // run at all. Measured live — `CODEX_HOME=<root with auth.json linked>
+    // codex login status` reported "Logged in using ChatGPT".
+    const realHome = fakeCodexHome()
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-auth-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-auth-'),
+    })
+
+    const workerAuth = join(prepared.home, 'auth.json')
+    expect(lstatSync(workerAuth).isSymbolicLink()).toBe(true)
+    // A token the CLI refreshes in place must reach the worker — a COPY would
+    // strand a long worker on a credential that expires mid-task.
+    writeFileSync(join(realHome, '.codex', 'auth.json'), '{"tokens":{"access_token":"rotated"}}', { mode: 0o600 })
+    expect(readFileSync(workerAuth, 'utf-8')).toContain('rotated')
+  })
+
+  it('refuses to launder a world-readable credential', () => {
+    const realHome = fakeCodexHome()
+    chmodSync(join(realHome, '.codex', 'auth.json'), 0o644)
+    const spec = findWorkerPrivateHomeSpec('codex-cli')!
+    expect(() => prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-codex-perm-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.codex'), baseDir: tmp('adhdev-whbase-codex-perm-'),
+    })).toThrow(/insecure_source/)
+  })
+})
+
+describe('kimi worker config root', () => {
+  function fakeKimiHome(opts: { globalMcp?: boolean } = {}): string {
+    const home = tmp('adhdev-worker-kimihome-')
+    // 0700 to match the real store — prepareWorkerPrivateHome asserts
+    // owner-only on credential material and must refuse a loosened source.
+    mkdirSync(join(home, '.kimi-code', 'credentials'), { recursive: true, mode: 0o700 })
+    chmodSync(join(home, '.kimi-code', 'credentials'), 0o700)
+    writeFileSync(join(home, '.kimi-code', 'config.toml'), 'default_model = "k3"\n', { mode: 0o600 })
+    writeFileSync(join(home, '.kimi-code', 'credentials', 'kimi-code.json'), '{"t":1}', { mode: 0o600 })
+    if (opts.globalMcp) {
+      writeFileSync(
+        join(home, '.kimi-code', 'mcp.json'),
+        JSON.stringify({ mcpServers: { 'owner-global': { command: 'leak' } } }),
+      )
+    }
+    return home
+  }
+
+  it('★the global mcp.json is unreachable from the worker root', () => {
+    // Measured live 2026-09-19 in BOTH directions: with `$KIMI_CODE_HOME/mcp.json`
+    // present, kimi spawned the server declared in it (a marker file proved the
+    // child ran); with the same root minus that file, it did not — and a real
+    // prompt still completed, so auth survived the redirect.
+    const realHome = fakeKimiHome({ globalMcp: true })
+    const spec = findWorkerPrivateHomeSpec('kimi')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-kimi-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.kimi-code'), baseDir: tmp('adhdev-whbase-kimi-'),
+    })
+
+    expect(existsSync(join(realHome, '.kimi-code', 'mcp.json'))).toBe(true)
+    expect(existsSync(join(prepared.home, 'mcp.json'))).toBe(false)
+  })
+
+  it('★still carries auth — config.toml holds no MCP entries, so linking it whole is safe', () => {
+    // The measurement that makes this spec cheap: kimi's MCP table lives ONLY in
+    // the separate mcp.json, so config.toml can be linked through with the
+    // owner's model/provider/oauth settings and zero MCP entries.
+    const realHome = fakeKimiHome({ globalMcp: true })
+    const spec = findWorkerPrivateHomeSpec('kimi')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-kimi-auth-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.kimi-code'), baseDir: tmp('adhdev-whbase-kimi-auth-'),
+    })
+
+    expect(lstatSync(join(prepared.home, 'config.toml')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(prepared.home, 'config.toml'), 'utf-8')).toContain('default_model')
+    expect(readFileSync(join(prepared.home, 'config.toml'), 'utf-8')).not.toContain('mcp')
+    expect(existsSync(join(prepared.home, 'credentials', 'kimi-code.json'))).toBe(true)
+  })
+})
+
+describe('opencode worker config root', () => {
+  it('★the owner\'s global opencode.json is unreachable, and auth is untouched', () => {
+    // ★opencode splits config from state: credentials live under XDG_DATA_HOME,
+    // NOT the config root. So redirecting XDG_CONFIG_HOME isolates the MCP table
+    // while leaving auth/sessions completely alone — this spec imports nothing.
+    //
+    // ★OPENCODE_CONFIG was measured and REJECTED as the mechanism: it MERGES.
+    // Pointed at a worker file alongside a decoy global, `opencode mcp list`
+    // reported BOTH servers. The config ROOT is what governs.
+    const realConfig = tmp('adhdev-worker-ocxdg-')
+    mkdirSync(join(realConfig, 'opencode'), { recursive: true })
+    writeFileSync(
+      join(realConfig, 'opencode', 'opencode.json'),
+      JSON.stringify({ mcp: { 'owner-global': { type: 'local', command: ['leak'] } } }),
+    )
+
+    const spec = findWorkerPrivateHomeSpec('opencode')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-oc-'), sessionKey: 'task_1',
+      realHome: realConfig, baseDir: tmp('adhdev-whbase-oc-'),
+    })
+
+    expect(existsSync(join(realConfig, 'opencode', 'opencode.json'))).toBe(true)
+    expect(existsSync(join(prepared.home, 'opencode', 'opencode.json'))).toBe(false)
+    // The directory exists (so the CLI has somewhere to read) but is a real
+    // empty directory, not a link back to the owner's.
+    expect(existsSync(join(prepared.home, 'opencode'))).toBe(true)
+    expect(lstatSync(join(prepared.home, 'opencode')).isSymbolicLink()).toBe(false)
+    // Nothing imported: auth lives outside the config root entirely.
+    expect(prepared.imported).toEqual([])
+  })
+})
+
+describe('hermes worker config root', () => {
+  function fakeHermesHome(): string {
+    const home = tmp('adhdev-worker-hermeshome-')
+    mkdirSync(join(home, '.hermes'), { recursive: true })
+    writeFileSync(
+      join(home, '.hermes', 'config.yaml'),
+      'mcp_servers:\n  adhdev:\n    command: adhdev\n  adhdev-mesh:\n    command: adhdev\n',
+    )
+    writeFileSync(join(home, '.hermes', '.env'), 'PROVIDER_KEY=secret\n', { mode: 0o600 })
+    return home
+  }
+
+  it('★the owner\'s config.yaml is unreachable, and .env still reaches the worker', () => {
+    const realHome = fakeHermesHome()
+    const spec = findWorkerPrivateHomeSpec('hermes-cli')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-hermes-'), sessionKey: 'task_1',
+      realHome: join(realHome, '.hermes'), baseDir: tmp('adhdev-whbase-hermes-'),
+    })
+
+    expect(existsSync(join(realHome, '.hermes', 'config.yaml'))).toBe(true)
+    expect(existsSync(join(prepared.home, 'config.yaml'))).toBe(false)
+    // Credentials survive — `get_env_path()` returns `<HERMES_HOME>/.env`.
+    expect(readFileSync(join(prepared.home, '.env'), 'utf-8')).toContain('PROVIDER_KEY')
+  })
+
+  it('★DELIVERY: the worker config lands where hermes reads it, not in the owner\'s file', () => {
+    // hermes was the one provider receiving NO worker server at all: its
+    // declared `~/.hermes/config.yaml` is the owner's real file, and the writer
+    // rightly refuses to clobber it without a private root. With one, the write
+    // lands in the worker's own file — isolation and delivery are the same fix.
+    //
+    // ★`HERMES_HOME` names the `.hermes` directory ITSELF, so the declared
+    // `~/.hermes/config.yaml` must collapse to `<root>/config.yaml`. Measured:
+    // `HERMES_HOME=<dir> hermes config path` → `<dir>/config.yaml`. Writing to
+    // `<root>/.hermes/config.yaml` instead would be silently inert.
+    const realHome = fakeHermesHome()
+    const workspace = tmp('adhdev-ws-hermes-deliver-')
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'hermes-cli',
+      workspace,
+      sessionKey: 'task_1',
+      realHome: join(realHome, '.hermes'),
+      baseDir: tmp('adhdev-whbase-hermes-deliver-'),
+      mcpConfig: { mode: 'auto_import', format: 'hermes_config_yaml', path: '~/.hermes/config.yaml' },
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'worker'] },
+    }, ON)
+
+    expect(result!.configPath).toBe(join(result!.workerHome!, 'config.yaml'))
+    expect(result!.configHasServer).toBe(true)
+    // The owner's file is untouched — still exactly its two servers.
+    const ownerConfig = readFileSync(join(realHome, '.hermes', 'config.yaml'), 'utf-8')
+    expect(ownerConfig).toContain('adhdev-mesh')
+    // ...and the worker's carries the worker server instead.
+    expect(readFileSync(result!.configPath!, 'utf-8')).toContain('--mode')
+  })
+})
+
+describe('config-root providers keep the real HOME', () => {
+  it('★surfaces the variable name so the launch seam does not redirect HOME', () => {
+    // The pairing that makes these four safe. `workerHomeEnvVar` is what tells
+    // cli-delegated-launch to export CODEX_HOME/etc. INSTEAD of HOME; without it
+    // the seam would repoint the whole worker process tree's home — breaking
+    // git/ssh/shell state and stranding opencode's auth, which deliberately
+    // lives outside the config root.
+    const realHome = tmp('adhdev-worker-codexroot-')
+    mkdirSync(realHome, { recursive: true })
+    writeFileSync(join(realHome, 'auth.json'), '{"t":1}', { mode: 0o600 })
+    writeFileSync(join(realHome, 'config.toml'), '[mcp_servers.node_repl]\n', { mode: 0o600 })
+
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'codex-cli',
+      workspace: tmp('adhdev-ws-codexroot-'),
+      sessionKey: 'task_1',
+      realHome,
+      baseDir: tmp('adhdev-whbase-codexroot-'),
+      mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh' },
+    }, ON)
+
+    expect(result!.workerHome).toBeTruthy()
+    expect(result!.workerHomeEnvVar).toBe('CODEX_HOME')
+    // The three HOME-rooted providers must leave it unset, so the seam keeps
+    // taking the HOME branch for them.
+    expect(resolveWorkerMcpIsolation({
+      providerType: 'antigravity-cli',
+      workspace: tmp('adhdev-ws-agyroot-'),
+      sessionKey: 'task_1',
+      realHome: fakeGeminiHome(),
+      baseDir: tmp('adhdev-whbase-agyroot-'),
+      mcpConfig: { mode: 'auto_import', format: 'gemini_mcp_json', path: '~/.gemini/config/mcp_config.json' },
+    }, ON)!.workerHomeEnvVar).toBeUndefined()
   })
 })
