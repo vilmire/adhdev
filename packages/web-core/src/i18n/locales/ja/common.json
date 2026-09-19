@@ -14,7 +14,6 @@
         "disconnected": "切断されました",
         "connected": "接続済み",
         "connectedToDashboard": "ダッシュボードに接続しました",
-        "connectingToMachine": "マシンに接続しています...",
         "networkOffline": "ネットワークがオフラインです",
         "reconnecting": "再接続しています",
         "sessionExpired": "セッションの有効期限が切れました。",
@@ -94,11 +93,6 @@
             "history": "履歴"
         },
         "sourceTimeline": {
-            "colWhen": "日時",
-            "colEvent": "イベント",
-            "colFrom": "変更前",
-            "colTo": "変更後",
-            "colCause": "原因"
         },
         "guide": {
             "title": "ダッシュボードガイド",
@@ -1738,9 +1732,6 @@
             "detectedIdesSection": "検出された IDE",
             "detectedIdesDescription": "このマシン上でローカルデーモンが検出したエディター。",
             "noIdesDetected": "IDE が検出されませんでした。IDE を起動するとここに表示されます。",
-            "machineSection": "マシン",
-            "machineDescription": "スタンドアロンデーモンが公開しているローカルマシン。",
-            "daemonNotConnected": "デーモンが接続されていません。開始するには 'adhdev-standalone' を実行してください。",
             "appearanceSection": "外観",
             "appearanceDescription": "モード、テーマ、スタンドアロン限定のフォント上書きを一か所にまとめ、ダッシュボードの他の部分と統一します。",
             "themeDescription": "プリセットを選択するか、スタンドアロン UI 用のサーフェス、アクセント、チャットのカラーパレットをカスタム作成します。",
@@ -1748,10 +1739,6 @@
             "fontsLabel": "フォント",
             "fontsDescription": "チャットテキスト、マークダウンコード、ターミナル出力向けのスタンドアロン限定の書体上書き。",
             "fontsSaved": "このセルフホストダッシュボードのスタンドアロンチャットフォントを保存しました。",
-            "notificationsSection": "通知",
-            "notificationsDescription": "エージェントの動作に対するブラウザーのプロンプトとローカルのサウンドキュー。",
-            "soundEffectsLabel": "サウンド効果",
-            "soundEffectsDescription": "エージェントが完了したとき、または承認が必要なときにサウンドを再生します",
             "profileSection": "プロフィール",
             "profileDescription": "ローカルのチャットスレッドやダッシュボード表示で名前がどのように表示されるか。",
             "displayNameLabel": "表示名",
@@ -2026,7 +2013,6 @@
             "pricingTitle": "料金",
             "pricingDesc": "現在のクラウドプランとティアごとのマシン容量。",
             "planPopular": "人気",
-            "planPerMonth": "/月",
             "readyTitle": "マシンを接続する準備ができました",
             "readyDesc": "ダッシュボードに移動して接続済みのマシンを確認するか、まだ設定中の場合はドキュメントを続けてご覧ください。",
             "dashboard": "ダッシュボード",
@@ -2086,7 +2072,6 @@
             "collapse": "Collapse",
             "logoutConfirm": "ログアウトしてもよろしいですか？",
             "logout": "Logout",
-            "upgradeArrow": "アップグレード →",
             "machineLimitBadge": "マシン上限",
             "machineLimitBadgeTitle": "プランのマシン上限（{{count}} 台{{plural}}）に達しました — 請求ページでアップグレード",
             "pushBudget": "1日の通知 {{used}}/{{limit}}"
@@ -2599,11 +2584,9 @@
             "clearHistory": "クリア",
             "noDaemonsWarning": "デーモンが接続されていません。まずデーモンを起動するか、{daemonId} を手動で置き換えてください。",
             "send": "▶ 送信",
-            "sending": "⏳",
-            "close": "閉じる"
+            "sending": "⏳"
         },
         "announcementBanner": {
-            "eyebrow": "システム通知",
             "visibleUntil": "{{time}} まで表示",
             "dismiss": "閉じる"
         },
@@ -2922,17 +2905,6 @@
             "activate": "有効化"
         },
         "workspace": {
-            "noWorkspace": "（ワークスペースなし — ホームで起動）",
-            "selectWorkspace": "ワークスペースを選択…",
-            "customPath": "✏️ カスタムパス…",
-            "noWorkspacesSaved": "（保存されたワークスペースなし — Overview タブで追加）",
-            "selectWorkspaceBtn": "ワークスペースを選択…",
-            "enterAbsolutePath": "絶対パスを入力…",
-            "browseHint": "起動先のフォルダーを参照してください。",
-            "absolutePathHint": "起動先の絶対パスを入力してください。",
-            "defaultWorkspace": "デフォルトのワークスペース",
-            "selectedWorkspace": "選択したワークスペース",
-            "noWorkspaceSelected": "ワークスペースが選択されていません。ホームディレクトリで起動します。"
         },
         "providers": {
             "filter": "フィルター",
@@ -3066,27 +3038,6 @@
             "confirm": "プロバイダーを有効化"
         },
         "connectedMachines": {
-            "noMachines": "接続中のマシンがありません",
-            "defaultDescription": "マシンに ADHDev をインストールしてサインインすると、ここに接続できます。",
-            "startingUpgrade": "アップグレードを開始しています...",
-            "machineDisconnected": "マシンが切断されました。",
-            "tokenRevoked": "トークンが取り消されました。再接続するには、そのマシンで ADHDev を再起動してください。",
-            "failedToDisconnect": "切断に失敗しました",
-            "failedToRevokeToken": "トークンの取り消しに失敗しました",
-            "connectionLostUpgrade": "アップグレード中に接続が切断されました",
-            "disconnect": "切断",
-            "remove": "削除",
-            "disconnectTitle": "マシンを切断",
-            "removeTitle": "マシンを削除",
-            "cancel": "キャンセル",
-            "noIdesConnected": "接続中の IDE はありません",
-            "upgrading": "アップグレード中...",
-            "updated": "✓ 更新済み",
-            "updateNow": "↑ 今すぐ更新",
-            "updateTo": "↑ v{{version}} に更新",
-            "cdpConnected": "CDP 接続済み",
-            "cdpConnecting": "CDP 接続中...",
-            "connecting": "接続中..."
         },
         "card": {
             "sectionIDEs": "IDE",
@@ -3284,10 +3235,6 @@
     },
     "sessionHost": {
         "title": "ホスト型ランタイムの復旧",
-        "mobileDescription": "ランタイムの現在状態、次のアクション、明示的な復旧・再起動コントロール。",
-        "noMachine": "マシンが選択されていません",
-        "refreshAria": "ホスト型ランタイム復旧を更新",
-        "closeAria": "ホスト型ランタイム復旧を閉じる",
         "stopConfirmTitle": "{{name}} を停止しますか？",
         "stopConfirmDescription": "ホスト型ランタイムが終了します。",
         "pruneConfirmTitle": "重複したホスト型ランタイムを整理しますか？",
@@ -3295,7 +3242,6 @@
         "prune": "整理",
         "pruning": "整理中…",
         "pruneDuplicatesCount": "重複を整理 ({{count}})",
-        "pruneCount": "整理 {{count}}",
         "toastResumed": "セッションホストを再開しました: {{name}}",
         "toastRestarted": "セッションホストを再起動しました: {{name}}",
         "toastStopped": "セッションホストを停止しました: {{name}}",
@@ -3314,14 +3260,12 @@
         "recovering": "復旧中…",
         "refresh": "更新",
         "refreshing": "更新中…",
-        "openChat": "チャットを開く",
         "noWorkspace": "ワークスペースなし",
         "clientsCount_one": "クライアント {{count}} 件",
         "clientsCount_other": "クライアント {{count}} 件",
         "dashboardSessions_one": "ダッシュボードセッション {{count}} 件",
         "dashboardSessions_other": "ダッシュボードセッション {{count}} 件",
         "statLive": "稼働中ランタイム",
-        "statLiveShort": "稼働中",
         "statRecovery": "復旧",
         "statRequests": "リクエスト",
         "statStarted": "開始",
@@ -3507,9 +3451,6 @@
                     "レビュー"
                 ]
             },
-            "selectOs": "OS を選択",
-            "osUnix": "macOS / Linux",
-            "osWindows": "Windows",
             "copyInstall": "インストールコマンドをコピー: {{cmd}}",
             "copied": "コピーしました",
             "copy": "コピー",
@@ -3519,8 +3460,7 @@
             "joinDiscord": "Discord に参加",
             "selfHost": "セルフホスト可能",
             "demoDesktop": "複数のマシンにまたがるライブエージェントセッションを操作する ADHDev コマンドセンター",
-            "demoPush": "ADHDev モバイルプッシュ通知とワンタップ承認",
-            "scenarioPill": "典型的なセッション: ミッション割り当て → エージェントがMac + Windowsワークツリーに展開、衝突なし → 検証を通ったものだけRefineryがマージ。"
+            "demoPush": "ADHDev モバイルプッシュ通知とワンタップ承認"
         },
         "mesh": {
             "sectionTitle": "互いに踏み合わない並列エージェント。",
@@ -3544,8 +3484,7 @@
             "tryMesh": "Repo Mesh を試す →",
             "seePlans": "プランを見る",
             "availableOn": "マシンを接続したら、<strong>Repo Mesh</strong> ページからすぐに始められます。",
-            "readGuide": "ガイドを読む",
-            "graphAlt": "実際に収束したワークストリーム直後のメッシュ可観測性: ミッション履歴、追記専用の台帳アクティビティ、タスクキュー、Refinery ジョブ — feat/get-todo-by-id が main に fast-forward 済み"
+            "readGuide": "ガイドを読む"
         },
         "compare": {
             "sectionTitle": "並列エージェントはもう当たり前。衝突させないのは別の話です。",
@@ -3723,7 +3662,6 @@
             "point1": "クリップボードから貼り付け、ドラッグ＆ドロップ、またはアップロード",
             "point2": "最大 5 枚、1 枚あたり 10MB",
             "point3": "あなたのどのマシンの PTY ターミナルエージェントにも届く",
-            "demoCaption": "リモートのターミナルエージェントにスクリーンショットを貼り付ける",
             "step1Label": "画像を貼り付けて質問を入力",
             "step2Label": "送信 — エージェントがすぐ処理",
             "step3Label": "画像を見て回答"
@@ -3789,12 +3727,9 @@
         "browserNotificationsDesc": "タブが非アクティブなときのデスクトップアラート",
         "browserBackgroundInfo": "ブラウザアラートは、このダッシュボードタブがバックグラウンドで開いている間のみ発生します。",
         "browserBackgroundInfoWithPush": "ブラウザアラートは、このダッシュボードタブがバックグラウンドで開いている間のみ発生します。タブを閉じる場合は、代わりにプッシュ通知をご利用ください。",
-        "standaloneBackgroundInfo": "ブラウザアラートは、このダッシュボードタブがバックグラウンドで開いている間のみ発生します。閉じると、スタンドアロンではホスト型プッシュ通知を配信できません。",
         "permissionDefault": "このブラウザはまだ通知の許可を付与していません。ブラウザアラートを受け取るには許可してください。",
-        "standalonePermissionDefault": "このブラウザはまだ通知の許可を付与していません。ローカルのブラウザアラートを受け取るには許可してください。",
         "allowNotifications": "通知を許可",
         "permissionDenied": "ブラウザ通知はサイトまたはブラウザの設定でブロックされています。デスクトップアラートを受け取るには、そこで再度有効にしてください。",
-        "standalonePermissionUnsupported": "このブラウザではここでデスクトップ通知を表示できません。ダッシュボードを表示したままにするか、このデバイスで対応している別のブラウザをご利用ください。",
         "permissionUnsupported": "このブラウザではここでデスクトップ通知を表示できません。対応しているデスクトップブラウザをご利用いただくか、利用可能な場合はプッシュ通知をご利用ください。",
         "completionAlertsLabel": "完了アラート",
         "completionAlertsDesc": "エージェントがタスクを完了したときに通知",
