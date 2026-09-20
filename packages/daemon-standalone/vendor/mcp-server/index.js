@@ -96566,7 +96566,7 @@ ${statusLine}`;
               }, `held suspension recovered \u2192 ${gate.stage} (verdict GENERATING)`);
             }
           } else {
-            const redriveProfile = evidenceSessionId ? resolveAssignedTranscriptProfile(components, evidenceRow) : void 0;
+            const redriveProfile = resolveAssignedTranscriptProfile(components, evidenceRow);
             if (redriveProfile?.emitsPtyTurnEvents === false && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, evidenceRow)) {
               deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
               try {
@@ -96597,6 +96597,70 @@ ${statusLine}`;
                 meshId,
                 event: "agent:generating_started"
               }, `${redriveProfile.class}_in_turn_progress (verdict ${verdict})`);
+              continue;
+            }
+            if (redriveProfile?.emitsPtyTurnEvents === false && evidenceSessionId) {
+              let shortAdapterTurnLive = false;
+              try {
+                shortAdapterTurnLive = resolveLiveTurnPendingEvidence(components, evidenceSessionId)?.() === true;
+              } catch {
+                shortAdapterTurnLive = false;
+              }
+              if (shortAdapterTurnLive && !queueHoldHardDeadlineExceeded(
+                meshId,
+                row,
+                "native_source_adapter_live",
+                dispatchedAtMs,
+                nowMs,
+                `short_redrive; profile ${redriveProfile.class}/${redriveProfile.timing}`
+              )) {
+                deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                try {
+                  recordTurnAck({
+                    meshId,
+                    taskId: row.id,
+                    kind: "consumed",
+                    sessionId: evidenceSessionId,
+                    legacy: {
+                      ...typeof row.dispatchNonce === "number" ? { dispatchNonce: row.dispatchNonce } : {},
+                      ...row.assignedNodeId ? { nodeId: row.assignedNodeId } : {},
+                      ...row.assignedProviderType ? { providerType: row.assignedProviderType } : {}
+                    },
+                    evidence: {
+                      source: "native_source_adapter_live",
+                      profileClass: redriveProfile.class,
+                      profileTiming: redriveProfile.timing
+                    }
+                  });
+                } catch {
+                }
+                noteRedriveBlocked("native_source_adapter_live");
+                traceMeshEventDrop("short_redrive_blocked_native_source_adapter_live", {
+                  taskId: row.id,
+                  sessionId: row.assignedSessionId,
+                  nodeId: row.assignedNodeId,
+                  meshId,
+                  event: "agent:generating_started"
+                }, `${redriveProfile.class} transcript quiet but adapter turn OPEN \u2014 consumed promoted, short redrive suppressed`);
+                continue;
+              }
+            }
+            if (redriveProfile?.emitsPtyTurnEvents === false && !evidenceSessionId && !queueHoldHardDeadlineExceeded(
+              meshId,
+              row,
+              "native_source_unbound_session",
+              dispatchedAtMs,
+              nowMs,
+              `short_redrive; profile ${redriveProfile.class}/${redriveProfile.timing}`
+            )) {
+              noteRedriveBlocked("native_source_unbound_session");
+              traceMeshEventDrop("short_redrive_blocked_native_source_unbound_session", {
+                taskId: row.id,
+                sessionId: row.assignedSessionId,
+                nodeId: row.assignedNodeId,
+                meshId,
+                event: "agent:generating_started"
+              }, `${redriveProfile.class} row has no bound session \u2014 liveness unprobeable, short redrive suppressed`);
               continue;
             }
             if (verdict === "IDLE_CONFIRMED") {
@@ -96829,7 +96893,7 @@ ${statusLine}`;
             }, `attempt stage ${attemptStage} \u2014 live turn, ${reclaimReason} suppressed`);
             continue;
           }
-          const noTurnProfile = evidenceSessionId ? resolveAssignedTranscriptProfile(components, evidenceRow) : void 0;
+          const noTurnProfile = resolveAssignedTranscriptProfile(components, evidenceRow);
           if (noTurnProfile?.emitsPtyTurnEvents === false) {
             const activity = await pollAssignedTaskActivity(components, { id: meshId, nodes: mesh.nodes }, evidenceRow);
             if (activity.inTurnProgress && activity.lastAgentActivityMs !== null && nowMs - activity.lastAgentActivityMs <= NATIVE_SOURCE_ACTIVITY_STALE_MS) {
@@ -96872,7 +96936,69 @@ ${statusLine}`;
                 nodeId: row.assignedNodeId,
                 meshId,
                 event: "agent:generating_completed"
-              }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1e3)}s \u2192 ${reclaimReason} proceeds`);
+              }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1e3)}s \u2014 adapter-live check decides ${reclaimReason}`);
+            }
+            let adapterTurnLive = false;
+            try {
+              adapterTurnLive = (evidenceSessionId ? resolveLiveTurnPendingEvidence(components, evidenceSessionId) : void 0)?.() === true;
+            } catch {
+              adapterTurnLive = false;
+            }
+            if (adapterTurnLive && !queueHoldHardDeadlineExceeded(
+              meshId,
+              row,
+              "native_source_adapter_live",
+              dispatchedAtMs,
+              nowMs,
+              `${reclaimReason}; profile ${noTurnProfile.class}/${noTurnProfile.timing}`
+            )) {
+              deliveredNoTurnUnknownStreak.delete(streakKey);
+              try {
+                recordTurnAck({
+                  meshId,
+                  taskId: row.id,
+                  kind: "consumed",
+                  sessionId: evidenceSessionId,
+                  legacy: {
+                    ...typeof row.dispatchNonce === "number" ? { dispatchNonce: row.dispatchNonce } : {},
+                    ...row.assignedNodeId ? { nodeId: row.assignedNodeId } : {},
+                    ...row.assignedProviderType ? { providerType: row.assignedProviderType } : {}
+                  },
+                  evidence: {
+                    source: "native_source_adapter_live",
+                    profileClass: noTurnProfile.class,
+                    profileTiming: noTurnProfile.timing
+                  }
+                });
+              } catch {
+              }
+              noteRedriveBlocked("native_source_adapter_live");
+              traceMeshEventDrop("redrive_blocked_native_source_adapter_live", {
+                taskId: row.id,
+                sessionId: row.assignedSessionId,
+                nodeId: row.assignedNodeId,
+                meshId,
+                event: "agent:generating_completed"
+              }, `${noTurnProfile.class} transcript quiet but adapter turn OPEN \u2014 consumed promoted, ${reclaimReason} suppressed`);
+              continue;
+            }
+            if (!evidenceSessionId && !queueHoldHardDeadlineExceeded(
+              meshId,
+              row,
+              "native_source_unbound_session",
+              dispatchedAtMs,
+              nowMs,
+              `${reclaimReason}; profile ${noTurnProfile.class}/${noTurnProfile.timing}`
+            )) {
+              noteRedriveBlocked("native_source_unbound_session");
+              traceMeshEventDrop("redrive_blocked_native_source_unbound_session", {
+                taskId: row.id,
+                sessionId: row.assignedSessionId,
+                nodeId: row.assignedNodeId,
+                meshId,
+                event: "agent:generating_completed"
+              }, `${noTurnProfile.class} row has no bound session \u2014 liveness unprobeable, ${reclaimReason} suppressed`);
+              continue;
             }
           }
           const terminalEvidence = await pollAssignedTaskTerminalEvidence(components, mesh, evidenceRow, {
