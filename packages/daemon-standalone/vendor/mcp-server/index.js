@@ -116033,15 +116033,18 @@ ${buttons.join("\n")}`;
       }
       let finalSummary;
       const signalSnapshot = transcriptSignals?.snapshot;
-      const wedgeMarker = wedgedGeneratingProven ? (() => {
+      const nativeTurnEndMarker = (() => {
         try {
           return host.nativeTurnTerminalMarker?.(turnStartedAt) ?? null;
         } catch {
           return null;
         }
-      })() : null;
-      if (wedgeMarker) {
-        finalSummary = wedgeMarker.summary || extractFinalSummaryFromMessagesAfter(
+      })();
+      const wedgeMarker = wedgedGeneratingProven ? nativeTurnEndMarker : null;
+      const idleMarker = !wedgedGeneratingProven && observedStatus === "idle" ? nativeTurnEndMarker : null;
+      const provenMarker = wedgeMarker ?? idleMarker;
+      if (provenMarker) {
+        finalSummary = provenMarker.summary || extractFinalSummaryFromMessagesAfter(
           Array.isArray(transcriptSignals?.messages) ? transcriptSignals.messages : [],
           turnStartedAt
         ) || void 0;
@@ -116058,9 +116061,9 @@ ${buttons.join("\n")}`;
           finalSummary = void 0;
         }
       }
-      if (!finalSummary && !wedgeMarker) return false;
-      const diagnosticSource = wedgeMarker ? "stall_wedged_generating_native_turn_end" : profile.class === "pure-pty" ? "stall_pure_pty_transcript_completion" : "stall_native_source_transcript_completion";
-      LOG.warn("CLI", wedgeMarker ? `[${host.type}] reconciling WEDGED ${profile.timing}-timing completion from the stall path for session ${host.instanceId} task=${taskId ?? "(none)"} \u2014 session was stuck in 'generating' (the transcript-finish defer chain never resolved) but the provider's own turn-terminal record (outcome=${wedgeMarker.outcome}) proves this turn ended; emitting the missing completion instead of leaving the session wedged.` : `[${host.type}] reconciling ${profile.class} mesh completion from the stall path for session ${host.instanceId} task=${taskId ?? "(none)"} \u2014 PTY is idle-quiet with an in-turn final assistant message but the completion event never fired; emitting it instead of a false monitor:no_progress.`);
+      if (!finalSummary && !provenMarker) return false;
+      const diagnosticSource = wedgeMarker ? "stall_wedged_generating_native_turn_end" : idleMarker ? "stall_idle_native_turn_end" : profile.class === "pure-pty" ? "stall_pure_pty_transcript_completion" : "stall_native_source_transcript_completion";
+      LOG.warn("CLI", wedgeMarker ? `[${host.type}] reconciling WEDGED ${profile.timing}-timing completion from the stall path for session ${host.instanceId} task=${taskId ?? "(none)"} \u2014 session was stuck in 'generating' (the transcript-finish defer chain never resolved) but the provider's own turn-terminal record (outcome=${wedgeMarker.outcome}) proves this turn ended; emitting the missing completion instead of leaving the session wedged.` : idleMarker ? `[${host.type}] reconciling IDLE ${profile.timing}-timing completion from the stall path for session ${host.instanceId} task=${taskId ?? "(none)"} \u2014 PTY is idle-quiet with no in-turn final assistant (a tool-terminated or empty-reply turn), but the provider's own turn-terminal record (outcome=${idleMarker.outcome}) proves this turn ended; emitting the missing completion instead of a false monitor:no_progress.` : `[${host.type}] reconciling ${profile.class} mesh completion from the stall path for session ${host.instanceId} task=${taskId ?? "(none)"} \u2014 PTY is idle-quiet with an in-turn final assistant message but the completion event never fired; emitting it instead of a false monitor:no_progress.`);
       if (host.isMeshWorkerSession()) {
         traceMeshEventStage("fired", host.meshTraceCtx(), diagnosticSource);
       }
@@ -116077,6 +116080,10 @@ ${buttons.join("\n")}`;
             wedgedObservedStatus: observedStatus,
             nativeTurnOutcome: wedgeMarker.outcome,
             ...wedgeMarker.turnId ? { nativeTurnId: wedgeMarker.turnId } : {}
+          } : {},
+          ...idleMarker ? {
+            nativeTurnOutcome: idleMarker.outcome,
+            ...idleMarker.turnId ? { nativeTurnId: idleMarker.turnId } : {}
           } : {}
         }
       });
