@@ -175,7 +175,9 @@ export function flushMeshCompletionBeforeCleanup(host: StallRescueHost): boolean
  *
  * Called from checkMeshWorkerStall just before the fire. Returns true when
  * the session is a finished turn — idle, nothing pending, the injected
- * task's turn genuinely started, and an in-turn final assistant summary —
+ * task's turn genuinely started, and EITHER an in-turn final assistant summary
+ * OR the provider's own turn-terminal record (IDLE-NATIVE-MARKER, below:
+ * a tool-terminated / empty-reply turn has no assistant text to show) —
  * in which case it emits the missing generating_completed (idempotent: a
  * real/late emit writes the terminal ledger and the coordinator's reconcile
  * makes any duplicate a no-op) and the caller SUPPRESSES the stall. Returns
@@ -335,11 +337,59 @@ export function tryReconcileTranscriptCompletionForStall(
     // the extraction returns '' — routing such a turn through the branches below would
     // hit the `!finalSummary` bail and re-wedge precisely the sessions the marker
     // exists to release. An empty marker summary is legitimate and stays empty.
-    const wedgeMarker = wedgedGeneratingProven
-        ? (() => { try { return host.nativeTurnTerminalMarker?.(turnStartedAt) ?? null; } catch { return null; } })()
+    // IDLE-NATIVE-MARKER (2026-09-20): the marker is consulted on BOTH admission
+    // paths, not only the wedged-generating one.
+    //
+    // The incident: a codex-cli worker finished its turn and went IDLE, but the
+    // coordinator never received a completion — 63s later the stall watchdog fired
+    // monitor:no_progress and the reconcile committed a terminal FAILED for a task
+    // that had actually succeeded (daemon-19223-2026-09-20.log, session 89b94ed3 /
+    // task 07cfa78a).
+    //
+    // The cause was an ASYMMETRY, not a missing guard. `generating` consulted the
+    // provider's own turn-terminal record and released summary-less turns;
+    // `idle` did not, so for a native-source provider the verdict came solely from
+    // `final_assistant_present` and a turn that ended on a tool call or with an
+    // empty reply (19.5% of measured codex turns — see the comment below) fell
+    // through to a FALSE stall. The harder case was rescued while the easy one was
+    // not, which is backwards: idle is strictly WEAKER evidence of a live turn than
+    // a stuck generating flag, so any turn the marker releases while generating
+    // must also be released while idle.
+    //
+    // Why this was a PERMANENT loss rather than a deferral: this rescue is the last
+    // net before the watchdog fires. Once monitor:no_progress produces a
+    // `task_stalled` ledger entry, reconcile takes the
+    // `assigned_stranded_terminal_ledger` branch — "terminal evidence already
+    // exists" — and never re-reads the transcript. There is no later path the
+    // completion can arrive by.
+    //
+    // Safety is unchanged and rests on the marker's own properties, which this
+    // reuses verbatim rather than re-deriving: it is capability-gated (markers
+    // exist only for a provider that declares a completionSignal or has a built-in
+    // reader), TURN-SCOPED by selectTurnTerminalMarker (a prior turn's marker
+    // resolves to null, preserving ANTIGRAVITY-PREMATURE-COMPLETION), and fails
+    // CLOSED on any read error. Every veto above still runs first — most
+    // importantly the MID-TURN-LIVE-STATE parity check, so a parked modal or
+    // trailing tool activity still refuses even with a marker present.
+    const nativeTurnEndMarker = (() => {
+        try { return host.nativeTurnTerminalMarker?.(turnStartedAt) ?? null; } catch { return null; }
+    })();
+    const wedgeMarker = wedgedGeneratingProven ? nativeTurnEndMarker : null;
+    // The idle-path marker: same evidence, same payload rules, distinct diagnostic
+    // source so the two admissions stay tellable apart in traces.
+    const idleMarker = !wedgedGeneratingProven && observedStatus === 'idle'
+        ? nativeTurnEndMarker
         : null;
-    if (wedgeMarker) {
-        finalSummary = wedgeMarker.summary
+    // A marker-proven turn end — from EITHER admission path — supplies its own
+    // payload. This must NOT be re-derived from message shape: a turn that ended
+    // on a tool call or with an empty reply carries no assistant bubble at all, so
+    // `final_assistant_present` is false and the extraction returns '' — routing
+    // such a turn through the shape branch would hit the `!finalSummary` bail and
+    // re-lose precisely the completions the marker exists to release. An empty
+    // marker summary is legitimate and stays empty.
+    const provenMarker = wedgeMarker ?? idleMarker;
+    if (provenMarker) {
+        finalSummary = provenMarker.summary
             || extractFinalSummaryFromMessagesAfter(
                 (Array.isArray(transcriptSignals?.messages) ? transcriptSignals.messages : []) as any,
                 turnStartedAt,
@@ -362,23 +412,33 @@ export function tryReconcileTranscriptCompletionForStall(
     // stall fire so a genuinely-wedged worker is still surfaced. The marker-proven
     // wedge is exempt: its verdict came from the provider's terminal record, not from
     // the presence of text, so a summary-less turn end is still a proven turn end.
-    if (!finalSummary && !wedgeMarker) return false;
+    if (!finalSummary && !provenMarker) return false;
 
     // Telemetry keeps the historical per-class source strings so traces and
-    // dashboards stay comparable across the unification.
+    // dashboards stay comparable across the unification. The idle marker path gets
+    // its OWN source rather than reusing the wedge's: the two admissions answer
+    // different questions ("the turn was stuck" vs "the turn ended quietly"), and
+    // collapsing them would make the incident class above invisible in traces.
     const diagnosticSource = wedgeMarker
         ? 'stall_wedged_generating_native_turn_end'
-        : profile.class === 'pure-pty'
-            ? 'stall_pure_pty_transcript_completion'
-            : 'stall_native_source_transcript_completion';
+        : idleMarker
+            ? 'stall_idle_native_turn_end'
+            : profile.class === 'pure-pty'
+                ? 'stall_pure_pty_transcript_completion'
+                : 'stall_native_source_transcript_completion';
     LOG.warn('CLI', wedgeMarker
         ? `[${host.type}] reconciling WEDGED ${profile.timing}-timing completion from the stall path for session ${host.instanceId} `
             + `task=${taskId ?? '(none)'} — session was stuck in 'generating' (the transcript-finish defer chain never resolved) `
             + `but the provider's own turn-terminal record (outcome=${wedgeMarker.outcome}) proves this turn ended; `
             + `emitting the missing completion instead of leaving the session wedged.`
-        : `[${host.type}] reconciling ${profile.class} mesh completion from the stall path for session ${host.instanceId} `
-            + `task=${taskId ?? '(none)'} — PTY is idle-quiet with an in-turn final assistant message but the completion `
-            + `event never fired; emitting it instead of a false monitor:no_progress.`);
+        : idleMarker
+            ? `[${host.type}] reconciling IDLE ${profile.timing}-timing completion from the stall path for session ${host.instanceId} `
+                + `task=${taskId ?? '(none)'} — PTY is idle-quiet with no in-turn final assistant (a tool-terminated or `
+                + `empty-reply turn), but the provider's own turn-terminal record (outcome=${idleMarker.outcome}) proves `
+                + `this turn ended; emitting the missing completion instead of a false monitor:no_progress.`
+            : `[${host.type}] reconciling ${profile.class} mesh completion from the stall path for session ${host.instanceId} `
+                + `task=${taskId ?? '(none)'} — PTY is idle-quiet with an in-turn final assistant message but the completion `
+                + `event never fired; emitting it instead of a false monitor:no_progress.`);
     if (host.isMeshWorkerSession()) {
         traceMeshEventStage('fired', host.meshTraceCtx(), diagnosticSource);
     }
@@ -395,6 +455,10 @@ export function tryReconcileTranscriptCompletionForStall(
                 wedgedObservedStatus: observedStatus,
                 nativeTurnOutcome: wedgeMarker.outcome,
                 ...(wedgeMarker.turnId ? { nativeTurnId: wedgeMarker.turnId } : {}),
+            } : {}),
+            ...(idleMarker ? {
+                nativeTurnOutcome: idleMarker.outcome,
+                ...(idleMarker.turnId ? { nativeTurnId: idleMarker.turnId } : {}),
             } : {}),
         },
     });
