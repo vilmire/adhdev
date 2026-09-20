@@ -46,12 +46,23 @@
 //      the completion passes through UNCHANGED. Absence of evidence never
 //      manufactures a veto.
 //   2. BOUNDED HOLD, NEVER A DROP. A decline arms the SAME bounded content-free
-//      hold the live-state gate already uses (holdCompletionForLiveStateRetry,
-//      5s TTL / 250ms re-check). When the hold's TTL expires the completion is
-//      released to the normal pipeline — the transcript-growing window is 8s
-//      against a 5s TTL by design, so a genuinely-finished worker whose tail
-//      merely looked fresh is delayed by at most one hold, never lost. The turn
-//      reducer and terminal outbox remain the exactly-once authorities.
+//      hold the live-state gate already uses (holdCompletionForLiveStateRetry),
+//      with waitingOn='transcript_quiet': the drain re-checks THIS gate's own
+//      condition — the tail aging past the quiet window — and releases as soon as
+//      it clears. If the bound expires first, the completion is released ANYWAY,
+//      stamped holdExpired, and the suppression gate admits it once rather than
+//      re-declining it. So a genuinely-finished worker is delayed by at most one
+//      hold and never lost. The turn reducer and terminal outbox remain the
+//      exactly-once authorities.
+//
+//      ★This paragraph previously described behavior that did not exist. It
+//      claimed "when the hold's TTL expires the completion is released to the
+//      normal pipeline" and that "the transcript-growing window is 8s against a
+//      5s TTL BY DESIGN". In fact expiry deleted the hold and delivered nothing,
+//      and the 8s-window/5s-TTL relation guaranteed expiry was the only reachable
+//      outcome — 6 completions were permanently lost in one day. The hold now
+//      waits longer than the window it waits ON, and expiry releases. Do not
+//      reintroduce a TTL below TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS.
 //
 // A decline here is therefore a DELAY, in exactly the sense the admission
 // module's header describes: it can never wedge a row and never manufacture one.

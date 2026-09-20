@@ -291,9 +291,76 @@ export function completionEligibleForLiveStateRetry(args: {
 // or modal content: only the dispatch identity needed to re-evaluate the
 // live-state disagreement. The provider's transcript remains the content
 // authority.
+//
+// ★ THE PERMANENT-LOSS DEFECT THIS SHAPE EXISTS TO PREVENT (2026-09-20)
+// ---------------------------------------------------------------------
+// Measured live: 6 `terminal admission declined (transcript_growing)`
+// suppressions in one day, every one logging "bounded content-free retry
+// armed", and ZERO retries ever delivering. Two independent bugs, both of which
+// the arm/fire split below now fixes:
+//
+//   1. TTL EXPIRY WAS A SILENT DROP. The drain's expiry branch deleted the hold
+//      and `continue`d — no delivery, no log, no ledger mark. The coordinator
+//      was never told the worker finished, so it waited forever on a task whose
+//      queue row already said `completed`. The module headers claimed "when the
+//      hold's TTL expires the completion is released to the normal pipeline";
+//      that release did not exist. RELEASE_ON_EXPIRY below makes the claim true.
+//
+//   2. THE TTL COULD NOT OUTLAST THE THING IT WAITED FOR. A transcript_growing
+//      decline waits for an 8s quiet window, against a 5s TTL — so expiry was
+//      not an edge case, it was the GUARANTEED outcome for exactly the shape
+//      that armed it. Both observed sessions declined at a bubble age of ~5.8s.
+//      Holds now derive their TTL from the window they are actually waiting on.
+//
+//   3. THE RE-CHECK WAS BLIND TO THE DECLINE REASON. The drain only re-read
+//      `live.pending`, which is FALSE for a transcript_growing decline by
+//      construction (that rule fires precisely when there is no modal, no
+//      adapter-pending and no trailing tool — a tail that is merely moving). So
+//      the hold fired at the first 250ms tick straight back into the same veto.
+//      Holds now carry the `waitingOn` reason and re-check THAT.
 // ---------------------------------------------------------------------------
 const MID_TURN_COMPLETION_HOLD_RETRY_MS = 250;
 const MID_TURN_COMPLETION_HOLD_TTL_MS = 5_000;
+
+/**
+ * Ceiling for a hold whose release condition is the transcript quiet window.
+ *
+ * MUST stay strictly greater than TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS (8s, in
+ * mesh-terminal-admission.ts): a hold that expires before the window it waits
+ * on can never observe the condition it was armed for, which is defect (2)
+ * above. The margin covers the drain's 250ms granularity plus the observation
+ * lag between the provider's newest-bubble timestamp and our read of it.
+ *
+ * Duplicated as a local constant rather than imported so this module stays free
+ * of an import cycle with the admission module; `assertHoldTtlOutlastsQuietWindow`
+ * in the test suite pins the two together.
+ */
+const TRANSCRIPT_QUIET_HOLD_TTL_MS = 12_000;
+
+/**
+ * The quiet window a 'transcript_quiet' hold waits for before releasing early.
+ *
+ * Mirrors TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS (8s). Kept as a local constant to
+ * avoid an import cycle; `mesh-completion-hold-release.test.ts` asserts the two
+ * stay equal and that TRANSCRIPT_QUIET_HOLD_TTL_MS remains strictly greater, so a
+ * future change to the admission window cannot silently re-create defect (2).
+ */
+const TRANSCRIPT_QUIET_RELEASE_MS = 8_000;
+
+/** Test/assertion accessor for the hold timing contract. Content-free constants only. */
+export function __completionHoldTimingContract(): {
+    retryMs: number;
+    liveStateTtlMs: number;
+    transcriptQuietTtlMs: number;
+    transcriptQuietReleaseMs: number;
+} {
+    return {
+        retryMs: MID_TURN_COMPLETION_HOLD_RETRY_MS,
+        liveStateTtlMs: MID_TURN_COMPLETION_HOLD_TTL_MS,
+        transcriptQuietTtlMs: TRANSCRIPT_QUIET_HOLD_TTL_MS,
+        transcriptQuietReleaseMs: TRANSCRIPT_QUIET_RELEASE_MS,
+    };
+}
 
 /** Minimal structural slice of DaemonComponents the hold needs to re-read live state. */
 export type LiveStateHoldComponents = {
@@ -310,6 +377,30 @@ export type HeldCompletionInjectArgs = {
     metadataEvent: Record<string, unknown>;
 };
 
+/**
+ * What the hold is actually waiting for. The drain re-checks THIS, not a fixed
+ * predicate — see defect (3) in the header: re-checking live-pending for a hold
+ * armed by the transcript_growing veto fires straight back into that veto.
+ *
+ *   'live_pending'       — MID-TURN-LIVE-STATE-GATE: a modal/adapter/trailing-tool
+ *                          observation vetoed the completion. Clears when the
+ *                          provider instance stops reporting pending evidence.
+ *   'transcript_quiet'   — terminal-admission rule 6: the tail was still moving.
+ *                          Clears when the newest bubble ages past the quiet window.
+ */
+export type CompletionHoldWaitReason = 'live_pending' | 'transcript_quiet';
+
+/** Why a held completion left the map — the drain reports every exit. */
+export type CompletionHoldOutcome =
+    /** The wait condition cleared; the completion was re-injected normally. */
+    | 'released_condition_cleared'
+    /** The bound was reached; released anyway, marked so the gate admits it once. */
+    | 'released_hold_expired'
+    /** Identity moved on (terminal, reassignment, new attempt/nonce) — nothing to deliver. */
+    | 'abandoned_identity_changed'
+    /** The session is gone — no local instance to observe or deliver against. */
+    | 'abandoned_session_gone';
+
 type HeldLiveStateCompletion = {
     components: LiveStateHoldComponents;
     inject: (components: LiveStateHoldComponents, args: HeldCompletionInjectArgs) => unknown;
@@ -323,9 +414,50 @@ type HeldLiveStateCompletion = {
     dispatchNonce: number;
     providerType?: string;
     eventTimestamp: number;
+    waitingOn: CompletionHoldWaitReason;
+    armedAt: number;
     expiresAt: number;
     nextCheckAt: number;
 };
+
+/**
+ * Observer for hold lifecycle transitions. The forwarder installs one so every
+ * arm/fire/give-up is logged and traced — defect (1) was invisible in production
+ * precisely because the drop path emitted nothing at all, leaving a log that said
+ * "retry armed" and then went silent forever.
+ *
+ * Content-free by construction: identity plus an enum outcome, never transcript,
+ * summary, or modal text.
+ */
+export type CompletionHoldObserver = (report: {
+    outcome: CompletionHoldOutcome;
+    meshId: string;
+    sessionId: string;
+    taskId: string;
+    attemptId: string;
+    waitingOn: CompletionHoldWaitReason;
+    heldForMs: number;
+}) => void;
+
+let completionHoldObserver: CompletionHoldObserver | null = null;
+
+export function setCompletionHoldObserver(observer: CompletionHoldObserver | null): void {
+    completionHoldObserver = observer;
+}
+
+function reportHoldOutcome(held: HeldLiveStateCompletion, outcome: CompletionHoldOutcome, nowMs: number): void {
+    try {
+        completionHoldObserver?.({
+            outcome,
+            meshId: held.meshId,
+            sessionId: held.sessionId,
+            taskId: held.taskId,
+            attemptId: held.attemptId,
+            waitingOn: held.waitingOn,
+            heldForMs: nowMs - held.armedAt,
+        });
+    } catch { /* observation must never wedge a completion */ }
+}
 
 const heldLiveStateCompletions = new Map<string, HeldLiveStateCompletion>();
 let heldLiveStateCompletionTimer: NodeJS.Timeout | null = null;
@@ -343,13 +475,89 @@ function scheduleHeldLiveStateCompletionDrain(): void {
     heldLiveStateCompletionTimer.unref?.();
 }
 
+/**
+ * Read the newest transcript-tail timestamp off a provider instance, using the
+ * same duck-typed accessor the provider_event admission gate reads. Returns
+ * undefined when the tail cannot be observed — the caller treats that as "cannot
+ * prove still-growing", i.e. it releases rather than holding forever. Absence of
+ * evidence must never manufacture a hold, exactly as it never manufactures a veto.
+ */
+function readNewestTailActivityAtMs(instance: unknown): number | undefined {
+    const source = instance as {
+        getTerminalAdmissionObservations?: (nowMs?: number) => { newestActivityAtMs?: number } | undefined;
+    } | null | undefined;
+    if (typeof source?.getTerminalAdmissionObservations !== 'function') return undefined;
+    try {
+        const newest = source.getTerminalAdmissionObservations()?.newestActivityAtMs;
+        return typeof newest === 'number' && Number.isFinite(newest) ? newest : undefined;
+    } catch { return undefined; }
+}
+
+/**
+ * Has the condition this hold is waiting on cleared?
+ *
+ * Re-checks the reason the completion was ACTUALLY declined. Checking a fixed
+ * predicate here was defect (3): a transcript_growing hold whose re-check asked
+ * "is live evidence pending?" always got "no" and fired straight back into the
+ * veto that armed it, burning the whole TTL in 250ms bounces.
+ */
+function heldCompletionConditionCleared(
+    held: HeldLiveStateCompletion,
+    liveInstance: unknown,
+    nowMs: number,
+): boolean {
+    if (held.waitingOn === 'live_pending') {
+        return !readLiveTurnPendingEvidence(liveInstance).pending;
+    }
+    // 'transcript_quiet' — the tail must age past the same quiet window the
+    // admission rule enforces. An unobservable tail cannot prove growth, so it
+    // clears (fail-open, consistent with the gate's own liveness contract).
+    const newest = readNewestTailActivityAtMs(liveInstance);
+    if (newest === undefined) return true;
+    return nowMs - newest >= TRANSCRIPT_QUIET_RELEASE_MS;
+}
+
+function deliverHeldCompletion(held: HeldLiveStateCompletion, expired: boolean): void {
+    held.inject(held.components, {
+        meshId: held.meshId,
+        sourceInstanceId: held.sourceInstanceId,
+        nodeId: held.nodeId,
+        nodeLabel: held.nodeLabel,
+        event: 'agent:generating_completed',
+        metadataEvent: {
+            event: 'agent:generating_completed',
+            instanceId: held.sessionId,
+            targetSessionId: held.sessionId,
+            taskId: held.taskId,
+            attemptId: held.attemptId,
+            dispatchNonce: held.dispatchNonce,
+            timestamp: held.eventTimestamp,
+            ...(held.providerType ? { providerType: held.providerType } : {}),
+            completionDiagnostic: {
+                source: 'mid_turn_live_state_retry',
+                contentFreeRetry: true,
+                // ★BOUNDED-HOLD-EXHAUSTED. The hold reached its ceiling without the
+                // wait condition clearing, and we are releasing anyway rather than
+                // dropping — a completion the worker already committed to its ledger
+                // must reach the coordinator even if our local tail read disagrees.
+                // The suppression gate honors this as a ONE-TIME admission bypass
+                // (see mesh-event-suppression): without it the release re-enters the
+                // same veto and the loss is merely relocated, which is what the
+                // original "released to the normal pipeline" comment wrongly assumed
+                // would not happen. Delivering a completion slightly early is
+                // recoverable; never delivering it is not.
+                ...(expired ? { holdExpired: true, holdWaitedOn: held.waitingOn } : {}),
+            },
+        },
+    });
+}
+
 function drainHeldLiveStateCompletions(nowMs: number = Date.now()): void {
     for (const [key, held] of heldLiveStateCompletions) {
         if (nowMs < held.nextCheckAt) continue;
-        if (nowMs >= held.expiresAt) {
-            heldLiveStateCompletions.delete(key);
-            continue;
-        }
+
+        const expired = nowMs >= held.expiresAt;
+
         const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(held.meshId, held.taskId);
         const identityStillCurrent = !!attempt
             && !attempt.terminalOutcome
@@ -357,44 +565,31 @@ function drainHeldLiveStateCompletions(nowMs: number = Date.now()): void {
             && sessionIdsEquivalent(attempt.sessionId, held.sessionId)
             && attempt.dispatchNonce === held.dispatchNonce;
         if (!identityStillCurrent) {
+            // Nothing to deliver: the turn already reached a terminal by another
+            // route, or the identity moved on. This is the one exit where dropping
+            // is correct, because the coordinator is not waiting on THIS event.
             heldLiveStateCompletions.delete(key);
+            reportHoldOutcome(held, 'abandoned_identity_changed', nowMs);
             continue;
         }
         const liveInstance = held.components.instanceManager?.getInstance?.(held.sessionId);
         if (!liveInstance) {
             heldLiveStateCompletions.delete(key);
+            reportHoldOutcome(held, 'abandoned_session_gone', nowMs);
             continue;
         }
-        const live = readLiveTurnPendingEvidence(liveInstance);
-        if (live.pending) {
+
+        if (!expired && !heldCompletionConditionCleared(held, liveInstance, nowMs)) {
             held.nextCheckAt = nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS;
             continue;
         }
+
         // Delete BEFORE delivery. A duplicate provider event or re-entrant retry
         // sees no armed hold, and the turn reducer/outbox remain the final exactly-
         // once authority.
         heldLiveStateCompletions.delete(key);
-        held.inject(held.components, {
-            meshId: held.meshId,
-            sourceInstanceId: held.sourceInstanceId,
-            nodeId: held.nodeId,
-            nodeLabel: held.nodeLabel,
-            event: 'agent:generating_completed',
-            metadataEvent: {
-                event: 'agent:generating_completed',
-                instanceId: held.sessionId,
-                targetSessionId: held.sessionId,
-                taskId: held.taskId,
-                attemptId: held.attemptId,
-                dispatchNonce: held.dispatchNonce,
-                timestamp: held.eventTimestamp,
-                ...(held.providerType ? { providerType: held.providerType } : {}),
-                completionDiagnostic: {
-                    source: 'mid_turn_live_state_retry',
-                    contentFreeRetry: true,
-                },
-            },
-        });
+        reportHoldOutcome(held, expired ? 'released_hold_expired' : 'released_condition_cleared', nowMs);
+        deliverHeldCompletion(held, expired);
     }
     scheduleHeldLiveStateCompletionDrain();
 }
@@ -411,6 +606,12 @@ export function holdCompletionForLiveStateRetry<C extends LiveStateHoldComponent
     eventSessionId: string,
     nowMs: number,
     inject: (components: C, args: HeldCompletionInjectArgs) => unknown,
+    /**
+     * Which veto armed this hold, hence what the drain must re-check and how long
+     * it may wait. Defaults to the live-state gate's own reason so existing callers
+     * keep their prior behavior.
+     */
+    waitingOn: CompletionHoldWaitReason = 'live_pending',
 ): boolean {
     const taskId = readNonEmptyString(args.metadataEvent.taskId);
     const attemptId = readNonEmptyString(args.metadataEvent.attemptId);
@@ -419,6 +620,20 @@ export function holdCompletionForLiveStateRetry<C extends LiveStateHoldComponent
     const eventTimestamp = typeof args.metadataEvent.timestamp === 'number'
         ? args.metadataEvent.timestamp : NaN;
     if (!taskId || !attemptId || !Number.isFinite(dispatchNonce) || !Number.isFinite(eventTimestamp)) return false;
+    // ★A RELEASED-ON-EXPIRY completion must never re-arm a hold. Without this the
+    // bound is per-hold rather than per-completion: each expiry release re-enters
+    // the gate, gets declined again, and arms a FRESH hold with a fresh TTL — an
+    // unbounded loop that still never notifies. The one-time bypass the gate grants
+    // to `holdExpired` also closes this, but the invariant belongs here too, where
+    // the bound is defined.
+    const priorDiagnostic = args.metadataEvent.completionDiagnostic;
+    if (priorDiagnostic && typeof priorDiagnostic === 'object'
+        && (priorDiagnostic as Record<string, unknown>).holdExpired === true) {
+        return false;
+    }
+    const ttlMs = waitingOn === 'transcript_quiet'
+        ? TRANSCRIPT_QUIET_HOLD_TTL_MS
+        : MID_TURN_COMPLETION_HOLD_TTL_MS;
     const key = heldCompletionKey(args.meshId, taskId, attemptId, eventSessionId, dispatchNonce);
     if (!heldLiveStateCompletions.has(key)) {
         heldLiveStateCompletions.set(key, {
@@ -437,7 +652,9 @@ export function holdCompletionForLiveStateRetry<C extends LiveStateHoldComponent
             dispatchNonce,
             providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
             eventTimestamp,
-            expiresAt: nowMs + MID_TURN_COMPLETION_HOLD_TTL_MS,
+            waitingOn,
+            armedAt: nowMs,
+            expiresAt: nowMs + ttlMs,
             nextCheckAt: nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS,
         });
     }

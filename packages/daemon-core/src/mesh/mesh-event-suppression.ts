@@ -46,9 +46,34 @@ import {
     evaluateAuthoritativeTranscriptCompletion,
     holdCompletionForLiveStateRetry,
     readLiveTurnPendingEvidence,
+    setCompletionHoldObserver,
     type LiveTurnEvidenceSource,
 } from './mesh-completion-live-gate.js';
 import { evaluateProviderEventAdmission } from './mesh-provider-event-admission.js';
+
+// ★HOLD-LIFECYCLE OBSERVABILITY. Every armed hold reports how it ended, so a log
+// line saying "bounded content-free retry armed" is always followed by the arm's
+// actual fate. The absence of this pairing is what let 6 permanently-lost
+// completions in a single day read as normal operation: the arm was logged, the
+// silent expiry was not, and the coordinator simply waited forever on a worker
+// that had already finished. Content-free — identity plus an enum outcome.
+setCompletionHoldObserver((report) => {
+    const detail = `task=${report.taskId} attempt=${report.attemptId}`
+        + ` waitingOn=${report.waitingOn} heldFor=${report.heldForMs}ms`;
+    if (report.outcome === 'released_hold_expired') {
+        LOG.warn('MeshEvents', `Held completion for session ${report.sessionId} (mesh ${report.meshId}) RELEASED after its bound expired without ${report.waitingOn} clearing — ${detail}`);
+    } else if (report.outcome === 'released_condition_cleared') {
+        LOG.info('MeshEvents', `Held completion for session ${report.sessionId} (mesh ${report.meshId}) released — ${report.waitingOn} cleared — ${detail}`);
+    } else {
+        LOG.info('MeshEvents', `Held completion for session ${report.sessionId} (mesh ${report.meshId}) dropped (${report.outcome}) — ${detail}`);
+    }
+    traceMeshEventStage(`completion_hold_${report.outcome}`, {
+        taskId: report.taskId,
+        sessionId: report.sessionId,
+        meshId: report.meshId,
+        event: 'agent:generating_completed',
+    }, detail);
+});
 
 // Throttle the pending-event retention DELETE so it runs at most hourly — the
 // remote-idle sweep below fires on every completion/idle transition, but a table
@@ -647,7 +672,10 @@ export function evaluateMeshEventSuppression(
         // choke point. See mesh-provider-event-admission.ts for the incident, the narrow rule
         // it enforces (transcript_growing only), and the liveness contract that keeps genuine
         // completions flowing. A decline arms the SAME bounded content-free hold the live-state
-        // gate above uses, so it delays by at most the hold TTL and never drops.
+        // gate above uses — but with waitingOn='transcript_quiet', so the drain re-checks the
+        // tail rather than live-pending evidence (which is already false here by construction).
+        // The hold releases when the tail goes quiet, or unconditionally when its bound expires;
+        // an expired release is admitted once by the bypass below. It delays, and never drops.
         {
             const admission = evaluateProviderEventAdmission({
                 instance: components.instanceManager?.getInstance?.(eventSessionId),
@@ -665,10 +693,36 @@ export function evaluateMeshEventSuppression(
                     } catch { return undefined; }
                 })(),
             });
-            if (admission.kind === 'decline') {
+            // ★BOUNDED-HOLD-EXHAUSTED BYPASS. A completion released by an EXPIRED hold
+            // has already served its full bound waiting for this exact veto to clear.
+            // Declining it again would re-arm nothing (the hold refuses to re-arm an
+            // expired release) and simply drop it — relocating the permanent loss the
+            // hold exists to prevent. Admit it once, loudly. This is the escape hatch
+            // that makes "suppressed completions ALWAYS resume" true rather than
+            // aspirational; the turn reducer and terminal outbox remain the
+            // exactly-once authorities, so an early admit is still deduped downstream.
+            const releasedByExpiredHold = (() => {
+                const diagnostic = args.metadataEvent.completionDiagnostic;
+                return !!diagnostic && typeof diagnostic === 'object'
+                    && (diagnostic as Record<string, unknown>).holdExpired === true;
+            })();
+            if (admission.kind === 'decline' && releasedByExpiredHold) {
+                LOG.warn('MeshEvents', `Admitting agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}) DESPITE terminal admission decline (${admission.reason}): the bounded content-free hold expired without the veto clearing — releasing rather than losing the completion`);
+                traceMeshEventStage('terminal_admission_hold_exhausted_admit', traceCtx, admission.reason);
+            } else if (admission.kind === 'decline') {
                 const heldForRetry = holdCompletionForLiveStateRetry(
-                    components, args, eventSessionId, Date.now(), injectMeshSystemMessage);
-                LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): terminal admission declined (${admission.reason}) — ${admission.detail}${heldForRetry ? ' — bounded content-free retry armed' : ''}`);
+                    components, args, eventSessionId, Date.now(), injectMeshSystemMessage,
+                    // This decline is rule 6 (transcript_growing): the drain must wait for
+                    // the TAIL to go quiet, not for live-pending evidence to clear — the
+                    // latter is already false here by construction, which is why the retry
+                    // used to fire instantly back into this same veto.
+                    'transcript_quiet');
+                // The log must not claim more than the code does. "retry armed" alone is
+                // what made this defect invisible for a full day of live losses: it read
+                // as a promise of delivery while the hold was in fact expiring silently.
+                // Every armed hold now reports its own exit (released / abandoned) through
+                // the hold observer below, so "armed" is a claim the logs can be held to.
+                LOG.info('MeshEvents', `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): terminal admission declined (${admission.reason}) — ${admission.detail}${heldForRetry ? ' — bounded content-free retry armed (awaiting transcript quiet; releases either way)' : ' — NOT held, this completion is dropped'}`);
                 traceMeshEventDrop(
                     'provider_event_terminal_admission_declined',
                     traceCtx,
