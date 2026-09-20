@@ -3924,7 +3924,7 @@ describe('runMeshReconcileTick', () => {
       nodeId: string,
       sessionId: string,
       buildMessages: (dispatchedAtMs: number) => any[],
-      opts?: { instance?: 'idle' | 'absent' },
+      opts?: { instance?: 'idle' | 'absent'; adapterLiveTurn?: boolean },
     ) => {
       const dispatchAt = Date.now()
       enqueueTask(meshId, 'orchestrate the canary probes', { targetNodeId: nodeId,
@@ -3951,6 +3951,14 @@ describe('runMeshReconcileTick', () => {
         category: 'cli',
         provider: kimiProvider,
         getState: () => ({ instanceId: sessionId, status: 'idle', type: 'kimi', settings: { meshNodeFor: meshId, meshNodeId: nodeId } }),
+        // RECLAIM-ADAPTER-LIVE-TURN: when set, the adapter affirmatively reports a
+        // turn still open (a request outstanding to the provider process) even
+        // though the FSM label reads idle — the mid-turn shape of a floor-class
+        // worker in a long silent reasoning stretch. Omitted entirely when the
+        // option is undefined (the fail-open "older surface / no probe" shape).
+        ...(opts?.adapterLiveTurn !== undefined
+          ? { hasLiveTurnPendingEvidence: () => opts.adapterLiveTurn === true }
+          : {}),
       }
       const withInstance = (opts?.instance ?? 'idle') === 'idle'
       const readChat = vi.fn(async (cmd: string) => {
@@ -4070,6 +4078,76 @@ describe('runMeshReconcileTick', () => {
         expect(reclaimed).toHaveLength(1)
         expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
         expect(getTurnLedgerMetrics().redriveBlockedByReason['native_source_activity'] ?? 0).toBe(0)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    // ── RECLAIM-ADAPTER-LIVE-TURN (delivered-no-turn twin of the stall
+    // watchdog's GENERATING-LIVE-TURN veto) ─────────────────────────────────
+    // A floor-class native-source worker can sit transcript-quiet far past the
+    // 10-min stale window while genuinely working: long model reasoning writes
+    // nothing (codex-cli measured silent ~6min on 2026-09-20), and a single
+    // long tool call writes nothing until it returns. "Transcript quiet" is a
+    // CLOCK proxy for progress, not progress itself — the same false premise
+    // the rc.22/rc.23 stall fixes removed. The reclaim must instead ask the
+    // ADAPTER whether a turn is still open before tearing the task off.
+    it('RECLAIM-ADAPTER-LIVE-TURN: a transcript-quiet native-source worker whose ADAPTER turn is still open is NEVER reclaimed at the delivered-no-turn deadline', async () => {
+      const meshId = `mesh_adapter_live_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-silent-thinking'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        // Transcript quiet past the stale window (last activity ~14.5 min old,
+        // with a trailing tool bubble so the terminal-evidence poll DECLINES —
+        // the exact shape the BOUNDED-recovery test above reclaims on tick one)
+        // — but the adapter affirmatively reports a live pending turn. That is
+        // positive evidence of work the clock cannot see.
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Starting the probes…', timestamp: dispatchedAt + 60_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: dispatchedAt + 90_000 },
+        ], { adapterLiveTurn: true })
+        const nonceBefore = getQueue(meshId).find(t => t.id === claimed.id)!.dispatchNonce
+
+        await runMeshReconcileTick(components)
+        await runMeshReconcileTick(components)
+
+        const row = getQueue(meshId).find(t => t.id === claimed.id)!
+        expect(row.status).toBe('assigned')
+        expect(row.assignedSessionId).toBe(sessionId)
+        expect(readLedgerEntries(meshId).some(e => e.kind === 'task_reclaimed')).toBe(false)
+        expect(row.dispatchNonce).toBe(nonceBefore)
+        // The live adapter turn IS consumption evidence — the consumed link is
+        // promoted durably, so the attempt is injection-ineligible across restarts.
+        expect(MeshRuntimeStore.getInstance().getCurrentTurnAttempt(meshId, claimed.id)?.stage).toBe('consumed')
+        expect(getTurnLedgerMetrics().redriveBlockedByReason['native_source_adapter_live']).toBeGreaterThanOrEqual(2)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('RECLAIM-ADAPTER-LIVE-TURN (negative): a CLOSED adapter turn does NOT hold — the bounded reclaim still fires on a stale transcript', async () => {
+      const meshId = `mesh_adapter_closed_${Date.now()}`
+      const nodeId = 'node_w'
+      const sessionId = 'sess-kimi-truly-done'
+      __resetTurnLedgerMetricsForTests()
+      try {
+        // Same stale-transcript shape, but the probe is present and reports NO
+        // live turn — the worker genuinely stopped. The veto must fail open:
+        // the delivered-no-turn reclaim fires exactly as before the veto existed.
+        const { claimed, components } = makeRc20NoTurnCase(meshId, nodeId, sessionId, dispatchedAt => [
+          { role: 'user', content: 'orchestrate the canary probes', timestamp: dispatchedAt + 300 },
+          { role: 'assistant', content: 'Starting the probes…', timestamp: dispatchedAt + 60_000 },
+          { role: 'assistant', content: '', kind: 'tool', timestamp: dispatchedAt + 90_000 },
+        ], { adapterLiveTurn: false })
+
+        await runMeshReconcileTick(components)
+
+        const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
+        expect(reclaimed).toHaveLength(1)
+        expect((reclaimed[0].payload as any).reason).toBe('delivered_no_turn_deadline')
+        expect(getTurnLedgerMetrics().redriveBlockedByReason['native_source_adapter_live'] ?? 0).toBe(0)
       } finally {
         cleanup(meshId)
       }

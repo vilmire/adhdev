@@ -261,7 +261,8 @@ function assignedRowLiveStatusIsAwaitingApproval(
 function queueHoldHardDeadlineExceeded(
     meshId: string,
     row: { id: string; assignedNodeId?: string; assignedSessionId?: string; assignedProviderType?: string },
-    gate: 'live_awaiting_approval' | 'held_suspension' | 'active_attempt_stage' | 'live_generating',
+    gate: 'live_awaiting_approval' | 'held_suspension' | 'active_attempt_stage' | 'live_generating'
+        | 'native_source_adapter_live' | 'native_source_unbound_session',
     dispatchedAtMs: number,
     nowMs: number,
     detail?: string,
@@ -1103,9 +1104,11 @@ export async function recoverStrandedAssignedDispatches(
                 // row stamp FIRST so a REMOTE worker of this class is finally covered too (the
                 // original fix was local-only). Reliable-PTY-event providers never enter this
                 // branch, so their behaviour is untouched.
-                const redriveProfile = evidenceSessionId
-                    ? resolveAssignedTranscriptProfile(components, evidenceRow)
-                    : undefined;
+                // PROFILE-WITHOUT-SESSION: same correction as the long path below — the
+                // claim-time row stamp needs no session id to read, so gating it on
+                // evidenceSessionId silently un-classed every session-unbound row and
+                // re-drove it as if it were a reliable-PTY provider.
+                const redriveProfile = resolveAssignedTranscriptProfile(components, evidenceRow);
                 if (redriveProfile?.emitsPtyTurnEvents === false
                     && await pollAssignedTaskInTurnProgress(components, { id: meshId, nodes: mesh.nodes }, evidenceRow)) {
                     deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
@@ -1140,6 +1143,85 @@ export async function recoverStrandedAssignedDispatches(
                         meshId,
                         event: 'agent:generating_started',
                     }, `${redriveProfile.class}_in_turn_progress (verdict ${verdict})`);
+                    continue;
+                }
+                // SHORT-REDRIVE-ADAPTER-LIVE-TURN (2026-09-20): the twin of the long path's
+                // RECLAIM-ADAPTER-LIVE-TURN veto, and of the stall watchdog's
+                // GENERATING-LIVE-TURN veto landed in rc.23. Until now this path's ONLY
+                // profile-aware hold was the TRANSCRIPT read above — and that carries the
+                // same false premise the rc.22/rc.23 fixes removed: "the transcript is quiet"
+                // is a clock proxy for progress, not progress. A codex-cli turn was measured
+                // silent for ~6 minutes on 2026-09-20 (long model reasoning between tool calls
+                // writes nothing, and a single long tool call writes nothing until it returns),
+                // which lands a genuinely-working worker in this branch with NO post-dispatch
+                // activity — indistinguishable, to a transcript read, from one that never
+                // consumed the prompt. Ask the ADAPTER instead: hasLiveTurnPendingEvidence is a
+                // request outstanding to the provider process, the one signal that tracks
+                // whether THIS turn is open rather than how long it has been quiet.
+                //
+                // Fail-open by construction, exactly like the long path: no probe (remote /
+                // gone session, older instance surface, no session bound) or a throw → no veto,
+                // and the redrive below is byte-for-byte unchanged. Bounded above by the SAME
+                // queue-hold ceiling, so a stuck adapter flag cannot pin the row forever.
+                // Scope is the emitsPtyTurnEvents=false class only — a reliable-PTY provider
+                // never enters this branch, so its behaviour is untouched.
+                if (redriveProfile?.emitsPtyTurnEvents === false && evidenceSessionId) {
+                    let shortAdapterTurnLive = false;
+                    try {
+                        shortAdapterTurnLive = resolveLiveTurnPendingEvidence(components, evidenceSessionId)?.() === true;
+                    } catch { shortAdapterTurnLive = false; }
+                    if (shortAdapterTurnLive
+                        && !queueHoldHardDeadlineExceeded(meshId, row, 'native_source_adapter_live', dispatchedAtMs, nowMs,
+                            `short_redrive; profile ${redriveProfile.class}/${redriveProfile.timing}`)) {
+                        deliveredUnconsumedUnknownStreak.delete(shortStreakKey);
+                        // The open adapter turn IS consumption evidence — promote the consumed
+                        // link durably (idempotent) so the attempt is injection-ineligible even
+                        // across a restart, matching the long path's identical branch.
+                        try {
+                            recordTurnAck({
+                                meshId,
+                                taskId: row.id,
+                                kind: 'consumed',
+                                sessionId: evidenceSessionId,
+                                legacy: {
+                                    ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
+                                    ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),
+                                    ...(row.assignedProviderType ? { providerType: row.assignedProviderType } : {}),
+                                },
+                                evidence: {
+                                    source: 'native_source_adapter_live',
+                                    profileClass: redriveProfile.class,
+                                    profileTiming: redriveProfile.timing,
+                                },
+                            });
+                        } catch { /* best-effort durable consumed link — the hold above still applies */ }
+                        noteRedriveBlocked('native_source_adapter_live');
+                        traceMeshEventDrop('short_redrive_blocked_native_source_adapter_live', {
+                            taskId: row.id,
+                            sessionId: row.assignedSessionId,
+                            nodeId: row.assignedNodeId,
+                            meshId,
+                            event: 'agent:generating_started',
+                        }, `${redriveProfile.class} transcript quiet but adapter turn OPEN — consumed promoted, short redrive suppressed`);
+                        continue;
+                    }
+                }
+                // PROFILE-WITHOUT-SESSION, fail-CLOSED arm (twin of the long path's): an
+                // emitsPtyTurnEvents=false row with NO bound session could not run either probe
+                // above. Its silence proves nothing, and the verdict that reaches here is
+                // IDLE_CONFIRMED only because no session was bound. HOLD, bounded by the same
+                // ceiling, rather than re-inject a prompt into a worker we simply cannot see.
+                if (redriveProfile?.emitsPtyTurnEvents === false && !evidenceSessionId
+                    && !queueHoldHardDeadlineExceeded(meshId, row, 'native_source_unbound_session', dispatchedAtMs, nowMs,
+                        `short_redrive; profile ${redriveProfile.class}/${redriveProfile.timing}`)) {
+                    noteRedriveBlocked('native_source_unbound_session');
+                    traceMeshEventDrop('short_redrive_blocked_native_source_unbound_session', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_started',
+                    }, `${redriveProfile.class} row has no bound session — liveness unprobeable, short redrive suppressed`);
                     continue;
                 }
                 if (verdict === 'IDLE_CONFIRMED') {
@@ -1540,9 +1622,20 @@ export async function recoverStrandedAssignedDispatches(
             // restarts, and hold the row. STALE activity (transcript quiet beyond
             // NATIVE_SOURCE_ACTIVITY_STALE_MS) means the worker went silent mid-turn → fall
             // through to the bounded reclaim below; no infinite hold.
-            const noTurnProfile = evidenceSessionId
-                ? resolveAssignedTranscriptProfile(components, evidenceRow)
-                : undefined;
+            // PROFILE-WITHOUT-SESSION (2026-09-20, task c6e393ea): the profile read must
+            // NOT be gated on evidenceSessionId. `assignedTranscriptProfile` is a CLAIM-TIME
+            // ROW STAMP written by the daemon that owned the session — reading it needs no
+            // session id at all (resolveAssignedTranscriptProfile returns the stamp before it
+            // ever looks at assignedSessionId). Gating the whole block on evidenceSessionId
+            // meant a row that LOST its session binding (a rebind that cleared it, a restart,
+            // a refused claim) skipped the native-source activity gate AND the adapter-live
+            // veto entirely — and with no session bound the verdict above is hard-coded
+            // IDLE_CONFIRMED, so such a row fell straight through to the reclaim. That is the
+            // observed live shape: a codex-cli worker that had ALREADY PRODUCED ITS ANSWER was
+            // reclaimed `delivered_no_turn_deadline` while its own row stamp said
+            // emitsPtyTurnEvents:false. Read the profile unconditionally; the gates INSIDE the
+            // block still need a session for their probes and degrade individually.
+            const noTurnProfile = resolveAssignedTranscriptProfile(components, evidenceRow);
             if (noTurnProfile?.emitsPtyTurnEvents === false) {
                 const activity = await pollAssignedTaskActivity(components, { id: meshId, nodes: mesh.nodes }, evidenceRow);
                 if (activity.inTurnProgress && activity.lastAgentActivityMs !== null
@@ -1583,15 +1676,95 @@ export async function recoverStrandedAssignedDispatches(
                 }
                 if (activity.inTurnProgress) {
                     // Post-dispatch activity exists but is STALE — the worker went quiet
-                    // mid-turn. Content-free observation only; the bounded reclaim below
-                    // proceeds (bounded recovery for a truly dead session).
+                    // mid-turn. Content-free observation only; whether the bounded
+                    // reclaim proceeds is decided by the adapter-live-turn veto below
+                    // (bounded recovery for a truly dead session).
                     traceMeshEventStage('native_source_activity_stale', {
                         taskId: row.id,
                         sessionId: row.assignedSessionId,
                         nodeId: row.assignedNodeId,
                         meshId,
                         event: 'agent:generating_completed',
-                    }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1000)}s → ${reclaimReason} proceeds`);
+                    }, `${noTurnProfile.class} quiet >${Math.round(NATIVE_SOURCE_ACTIVITY_STALE_MS / 1000)}s — adapter-live check decides ${reclaimReason}`);
+                }
+                // RECLAIM-ADAPTER-LIVE-TURN (the delivered-no-turn twin of the stall
+                // watchdog's GENERATING-LIVE-TURN veto): the fall-through above reads
+                // "transcript quiet past the stale window" (or "transcript unreadable /
+                // nothing post-dispatch") as license to reclaim. For this class that
+                // premise is false in exactly the way the stall watchdog's was: a
+                // floor/hold worker can sit transcript-quiet FAR past 10 minutes while a
+                // request is still outstanding to the provider process — long model
+                // reasoning writes nothing (a codex-cli turn was measured silent for ~6
+                // min on 2026-09-20), and a single long tool call writes nothing until it
+                // returns. Before reclaiming, ask the ADAPTER whether a turn is still
+                // open — the same hasLiveTurnPendingEvidence discriminator the stall veto
+                // and localGeneratingLabelIsContradicted use. Pending → the turn is
+                // demonstrably live: promote the consumed link (the same idempotent ACK
+                // as the fresh-activity branch, so the attempt stays injection-ineligible
+                // across restarts) and hold. Fail-open by construction: no probe (remote
+                // / gone session, older instance surface) or a throw → no veto, and the
+                // bounded reclaim below is byte-for-byte unchanged. Bounded above by the
+                // SAME queue-hold hard deadline as every other hold in this phase, so a
+                // stuck adapter flag cannot pin the row forever.
+                let adapterTurnLive = false;
+                try {
+                    adapterTurnLive = (evidenceSessionId
+                        ? resolveLiveTurnPendingEvidence(components, evidenceSessionId)
+                        : undefined)?.() === true;
+                } catch { adapterTurnLive = false; }
+                if (adapterTurnLive
+                    && !queueHoldHardDeadlineExceeded(meshId, row, 'native_source_adapter_live', dispatchedAtMs, nowMs,
+                        `${reclaimReason}; profile ${noTurnProfile.class}/${noTurnProfile.timing}`)) {
+                    deliveredNoTurnUnknownStreak.delete(streakKey);
+                    try {
+                        recordTurnAck({
+                            meshId,
+                            taskId: row.id,
+                            kind: 'consumed',
+                            sessionId: evidenceSessionId,
+                            legacy: {
+                                ...(typeof row.dispatchNonce === 'number' ? { dispatchNonce: row.dispatchNonce } : {}),
+                                ...(row.assignedNodeId ? { nodeId: row.assignedNodeId } : {}),
+                                ...(row.assignedProviderType ? { providerType: row.assignedProviderType } : {}),
+                            },
+                            evidence: {
+                                source: 'native_source_adapter_live',
+                                profileClass: noTurnProfile.class,
+                                profileTiming: noTurnProfile.timing,
+                            },
+                        });
+                    } catch { /* best-effort durable consumed link — the hold above still applies */ }
+                    noteRedriveBlocked('native_source_adapter_live');
+                    traceMeshEventDrop('redrive_blocked_native_source_adapter_live', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `${noTurnProfile.class} transcript quiet but adapter turn OPEN — consumed promoted, ${reclaimReason} suppressed`);
+                    continue;
+                }
+                // PROFILE-WITHOUT-SESSION, fail-CLOSED arm: no session id at all means every
+                // probe above was structurally unable to run — the activity poll has nothing to
+                // read and the adapter has nothing to ask. For this class an unprobeable row is
+                // NOT evidence of a finished worker: emitsPtyTurnEvents=false is exactly the
+                // class whose silence proves nothing (the rc.22/rc.23 root cause). The verdict
+                // that brought us here was hard-coded IDLE_CONFIRMED purely because no session
+                // was bound, so reclaiming on it would tear off a worker on the strength of a
+                // missing id. HOLD instead — bounded by the SAME queue-hold ceiling as every
+                // other hold in this phase, so a permanently-unbindable row still recovers.
+                if (!evidenceSessionId
+                    && !queueHoldHardDeadlineExceeded(meshId, row, 'native_source_unbound_session', dispatchedAtMs, nowMs,
+                        `${reclaimReason}; profile ${noTurnProfile.class}/${noTurnProfile.timing}`)) {
+                    noteRedriveBlocked('native_source_unbound_session');
+                    traceMeshEventDrop('redrive_blocked_native_source_unbound_session', {
+                        taskId: row.id,
+                        sessionId: row.assignedSessionId,
+                        nodeId: row.assignedNodeId,
+                        meshId,
+                        event: 'agent:generating_completed',
+                    }, `${noTurnProfile.class} row has no bound session — liveness unprobeable, ${reclaimReason} suppressed`);
+                    continue;
                 }
             }
             // TASK-PROMPT-REDRIVE-AFTER-COMPLETE (Fix A-i): before re-driving, poll the worker
