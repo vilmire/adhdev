@@ -200,10 +200,34 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
             host.meshStallEmittedForAnchor = false;
             return;
         }
+        // CLOCK-LOWER-BOUND (2026-09-21): the freshness exemption below requires a
+        // NON-NEGATIVE age. `updatedAt` is a foreign timestamp — an ISO string written
+        // into `mesh_turn_attempts` by whichever process/machine owned the turn — so it
+        // is not guaranteed to precede this daemon's `now` (clock skew between nodes, an
+        // NTP step, a hand-edited/replicated row). Without a lower bound, a FUTURE
+        // `updatedAt` makes `now - causalEvidenceMs` negative, the `< threshold`
+        // comparison unconditionally true, and the stall suppressed FOREVER: every tick
+        // re-takes this branch, so a genuinely wedged worker is never reported.
+        //
+        // ★The lower bound must REJECT, not clamp. `Math.max(0, age)` would read a
+        // future stamp as age 0 — i.e. "evidence created this very instant", the
+        // freshest possible — which is the strongest possible pass of the exemption and
+        // leaves the defect exactly where it was. A negative age is not fresh evidence;
+        // it is an UNTRUSTWORTHY CLOCK SIGNAL, and the safe reading of untrustworthy
+        // liveness evidence is to decline the exemption and let the remaining axes
+        // (transcript-advancing, completion-rescue) or the stall itself decide. Note the
+        // `generating && turnActive` veto above already protects the live-turn case on
+        // adapter evidence, which needs no clock at all.
+        //
+        // This mirrors the house shape already used for untrusted completion evidence:
+        // mesh-completion-live-gate.ts rejects `observedAt > nowMs + 2_000` outright as
+        // `stale_evidence_timestamp` rather than clamping it into range.
         const causalEvidenceMs = Date.parse(turnPresentation.updatedAt || '');
+        const causalEvidenceAgeMs = now - causalEvidenceMs;
         if ((stage === 'consumed' || stage === 'generating')
             && Number.isFinite(causalEvidenceMs)
-            && now - causalEvidenceMs < threshold) {
+            && causalEvidenceAgeMs >= 0
+            && causalEvidenceAgeMs < threshold) {
             host.meshStallAnchorAt = Math.max(host.meshStallAnchorAt, causalEvidenceMs);
             return;
         }
