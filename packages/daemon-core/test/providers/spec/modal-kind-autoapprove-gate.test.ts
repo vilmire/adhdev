@@ -55,7 +55,7 @@ function loadLiveSpec(provider: string): CliSpecV4 {
 
 describe('shipped CLI specs — every modal state carries a modal_kind', () => {
   for (const provider of CLI_PROVIDERS) {
-    it(`${provider}: picker→'picker', approval/trust→'approval', no modal state unclassified`, () => {
+    it(`${provider}: picker→'picker', approval→'approval', trust consent-bearing, no modal state unclassified`, () => {
       const spec = loadLiveSpec(provider);
       const modalStates = spec.states.filter(s => s.modal);
       expect(modalStates.length).toBeGreaterThan(0);
@@ -63,7 +63,17 @@ describe('shipped CLI specs — every modal state carries a modal_kind', () => {
         const kind = modalKindForState(state);
         expect(kind, `${provider} state '${state.id}' must declare a modal_kind`).not.toBeNull();
         if (state.id === 'picker') expect(kind, `${provider} '${state.id}'`).toBe('picker');
-        if (state.id === 'approval' || state.id === 'trust') expect(kind, `${provider} '${state.id}'`).toBe('approval');
+        if (state.id === 'approval') expect(kind, `${provider} '${state.id}'`).toBe('approval');
+        // A `trust` state is a workspace/folder-trust decision. It may be
+        // declared 'approval' (auto-approvable) or 'confirm' (always left to
+        // the user) — never 'picker', which would route a consent prompt to the
+        // selection-picker path. antigravity-cli and grok-cli both declare
+        // 'confirm' as of 2026-09-20: trusting a directory grants the agent
+        // read/edit/execute there, which is the user's call, not the daemon's
+        // (see approval-gate.ts TRUST-NEVER-AUTO-APPROVES).
+        if (state.id === 'trust') {
+          expect(['approval', 'confirm'], `${provider} '${state.id}'`).toContain(kind);
+        }
       }
     });
   }
@@ -238,6 +248,29 @@ describe('auto-approve gate — picker excluded, approval preserved (real evalua
     gate.call(status, 1_000);
     gate.call(status, 1_000 + SETTLE_MS + 50);
     expect(gate.resolves).toEqual([]);
+  });
+
+  it("TRUST-NEVER-AUTO-APPROVES: a 'confirm' workspace-trust modal is not auto-approved", () => {
+    // grok-cli's live trust prompt (2026-09-20). The bare ['Yes','No'] case
+    // above passes for an incidental reason — those labels carry no consent
+    // structure. These do: "Yes, proceed" is a reliable affirmative and
+    // "No, quit" a negative anchor, and the prompt text is not a /model-style
+    // SELECTION picker. So before the kind-'confirm' bail, this modal cleared
+    // every heuristic and would have been auto-approved — the daemon trusting a
+    // directory on the user's behalf.
+    //
+    // This case could not arise until 2026-09-20 only because grok's `trust`
+    // state parsed NO buttons at all, which is the same gap that made the modal
+    // unanswerable (APPROVAL-DEADLOCK). Making it answerable must not make it
+    // auto-approvable.
+    const gate = makeGate();
+    const status = modalStatus('confirm', ['Yes, proceed', 'No, quit'],
+      'Do you trust the contents of this directory?');
+    gate.call(status, 1_000);
+    gate.call(status, 1_000 + SETTLE_MS + 50);
+    gate.call(status, 1_000 + SETTLE_MS * 3);
+    expect(gate.resolves).toEqual([]);
+    expect(gate.fires).toBe(0);
   });
 
   // ── P1a: tall-diff off-frame decline fallback (#137) ────────────────────────

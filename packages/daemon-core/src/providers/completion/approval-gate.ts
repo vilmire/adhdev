@@ -301,6 +301,28 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     // a mis-routed consent modal alive by requiring a genuine SELECTION picker
     // with no consent structure before bailing on the kind label alone.
     const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
+    // TRUST-NEVER-AUTO-APPROVES: a `confirm` modal is a non-consent yes/no the
+    // spec author explicitly reserved for the user (fsm-types.ts modal_kind
+    // docs) — grok-cli's "Do you trust the contents of this directory?" is the
+    // motivating case. Whether a directory is trusted is a security decision for
+    // the human, never the daemon, so `confirm` bails unconditionally instead of
+    // going through the selection-picker heuristic below. That heuristic bails
+    // only for modals that look like a /model-style SELECTION picker, and a
+    // trust prompt does not: it reads as consent ("Yes, proceed" is a reliable
+    // affirmative, "No, quit" a negative anchor), so it would otherwise fall
+    // straight through to auto-approval.
+    //
+    // Until 2026-09-20 nothing exercised this path, because grok's `trust` state
+    // declared no extract.buttons at all and the empty-buttons check above
+    // returned early. That silence was also the approval deadlock: with no
+    // parsed buttons, mesh_approve could not press anything while send_keys
+    // refused on `actionable_modal`. Giving trust real buttons fixes the
+    // deadlock, and this gate keeps the auto-approve exclusion that the missing
+    // buttons had been providing by accident — see
+    // test/providers/spec/fsm-evaluator-grok.test.ts.
+    if (modalKind === 'confirm') {
+        return autoApproveActive;
+    }
     if (modalKind !== 'approval') {
         const modalText = `${String(modal?.title || '')}\n${String(modal?.message || '')}\n${buttons.join('\n')}`;
         const looksLikeSelectionPicker = /Select (?:a |an )?(?:model|mode|option)\b|Switch between/i.test(modalText);

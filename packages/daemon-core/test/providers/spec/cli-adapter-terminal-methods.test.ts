@@ -25,9 +25,21 @@ function makeAdapter(opts: {
     state?: 'idle' | 'generating' | 'approval';
     spawned?: boolean;
     exited?: boolean;
+    /**
+     * Parsed modal buttons, as the driver's `state_changed` would have supplied
+     * them. APPROVAL-DEADLOCK: the send_keys modal guard arms on an ACTIONABLE
+     * modal — a modal state whose buttons actually parsed — because that is
+     * exactly when mesh_approve has something to press. An `approval` state
+     * therefore defaults to a parsed 2-button modal here (the normal case);
+     * pass `modalButtons: []` to model the unparseable modal that used to wedge
+     * a session with no way to answer it.
+     */
+    modalButtons?: { index: number; label: string }[];
 }): { adapter: any; dispatches: Dispatch[] } {
     const dispatches: Dispatch[] = [];
     const adapter = Object.create(SpecCliAdapter.prototype);
+    const buttons = opts.modalButtons
+        ?? (opts.state === 'approval' ? [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }] : []);
     Object.assign(adapter, {
         cliType: 'claude-cli',
         cliName: 'Claude Code',
@@ -36,6 +48,7 @@ function makeAdapter(opts: {
         latestState: opts.state
             ? { id: opts.state, label: opts.state, title: null, status: opts.state }
             : null,
+        latestModal: buttons.length > 0 ? { title: null, buttons, kind: 'approval' } : null,
         driver: {
             snapshot: () => opts.screen,
             getCursorPosition: () => opts.cursor ?? { row: 0, col: 0 },
@@ -166,6 +179,32 @@ describe('SpecCliAdapter — injectKeys (MESH-SEND-KEYS)', () => {
         expect(res.refused).toBe('actionable_modal');
         // Nothing was written — the modal choice must go through mesh_approve.
         expect(pty(dispatches)).toEqual([]);
+    });
+
+    it('APPROVAL-DEADLOCK: allows a non-destructive key when the modal parsed NO buttons', async () => {
+        // Live defect (2026-09-20, grok-cli trust + antigravity-cli permission
+        // prompt): the guard armed on `status === 'approval'` alone, which
+        // statusForState() reports for ANY modal state regardless of whether
+        // buttons parsed — while mesh_approve can only press a button that DID
+        // parse. An unparseable modal therefore armed the guard and disarmed
+        // approve simultaneously, leaving the session with zero ways to answer
+        // the prompt on screen:
+        //     mesh_approve   → "the modal could not be actioned"
+        //     mesh_send_keys → "refused: actionable_modal"
+        // The guard now arms only on an ACTIONABLE modal, so send_keys stays
+        // available as the escape hatch precisely when approve cannot act.
+        const { adapter, dispatches } = makeAdapter({
+            screen: 'Do you trust the contents of this directory?\n  Yes, proceed   y',
+            state: 'approval',
+            modalButtons: [],
+        });
+
+        const res = await adapter.injectKeys([{ text: 'y' }]);
+
+        expect(res.ok).toBe(true);
+        // The keystroke must actually reach the PTY — an "allowed" result that
+        // wrote nothing would leave the same deadlock in place.
+        expect(pty(dispatches).join('')).toBe('y');
     });
 
     it('allows a DESTRUCTIVE key (CTRL_C) past the modal gate — it dismisses, not confirms', async () => {

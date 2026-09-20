@@ -498,6 +498,8 @@ export class FsmDriver implements ISpecDriver {
     private win32ModalConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 
     private currentEval: CurrentEval | null = null;
+    /** Dedup latch for warnModalParseMiss — see that method. */
+    private lastModalParseMissKey: string | null = null;
     private stateHistory: HistoryEntry[] = [];
     private prevStateAt = 0;
 
@@ -1199,6 +1201,9 @@ export class FsmDriver implements ISpecDriver {
         this.pushFsmSnapshot(from, fired, now, ev);
         this.currentStateId = fired.to;
         this.stateEnteredAt = now;
+        // A new state gets a fresh modal-parse-miss verdict: leaving and
+        // re-entering an unparseable modal should report again.
+        this.lastModalParseMissKey = null;
         // Region change timestamps are relative to the previous state's
         // activity; reset so stable_ms in the new state measures from entry.
         this.regionLastChangedAt.clear();
@@ -1306,7 +1311,18 @@ export class FsmDriver implements ISpecDriver {
 
     private deriveModal(state: FsmState, sections: ResolvedSection[], fullScreen: string): ModalSnapshot | null {
         const rule = state.extract?.buttons;
-        if (!rule) return null;
+        if (!rule) {
+            // APPROVAL-DEADLOCK diagnosability: a modal state with no button rule
+            // can never be approved (mesh_approve has nothing to press), so this
+            // silent null used to surface only as a bare `parsedModal=no` with no
+            // way to tell "spec has no rule" from "rule matched nothing". Name the
+            // cause once per state entry. Measured case: grok-cli spec 1.0 `trust`
+            // declared extract.title but no extract.buttons.
+            if (state.modal) {
+                this.warnModalParseMiss(state.id, `state '${state.id}' is modal but its spec declares NO extract.buttons rule, so no button can ever be parsed or pressed`);
+            }
+            return null;
+        }
         const hay = sectionText(sections, rule.section, fullScreen);
         const minCount = rule.min_count ?? 2;
         let buttons = extractButtonsFromRule(rule, hay);
@@ -1327,9 +1343,65 @@ export class FsmDriver implements ISpecDriver {
             const whole = extractButtonsFromRule(rule, fullScreen);
             if (whole.length >= minCount) buttons = whole;
         }
-        if (buttons.length < minCount) return null;
+        // APPROVAL-DEADLOCK cursor fallback. A spec narrows `cursor_marker` to
+        // keep an assistant blockquote (`> 1. quoted item`) from stealing the
+        // cursor flag from the real `❯` row — antigravity-cli 4.0 declares
+        // `"❯›"` for exactly that reason, and that guard must hold.
+        //
+        // But antigravity ALSO paints its focus marker as a plain `>` when no
+        // `❯` is on screen (measured live 2026-09-20:
+        // `> 1. Yes, run command`). With the narrowed class, no row then reads
+        // as current, `select_mode: 'arrow_keys'` concludes the list is stale
+        // scrollback, and the press is refused — a modal the user is staring at
+        // becomes unanswerable.
+        //
+        // Both requirements hold under PRECEDENCE rather than a wider class: the
+        // narrowed marker WINS whenever it matches any row (blockquote case
+        // unchanged, byte for byte), and the engine default is consulted only
+        // when the strict pass found no cursor at all. A blockquote-polluted
+        // screen always contains the real `❯`, so it never reaches the fallback;
+        // a genuinely stale scrollback list has neither marker on a choice row,
+        // so it still parses as cursor-less and stays refused.
+        if (rule.cursor_marker && buttons.length > 0 && !buttons.some(b => b.current)) {
+            const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: undefined }, hay);
+            const relaxedCurrent = relaxed.filter(b => b.current);
+            // Exactly one fallback cursor, or the ambiguity this guard exists to
+            // prevent comes back in through the fallback itself.
+            if (relaxedCurrent.length === 1) {
+                const cursorIndex = relaxedCurrent[0].index;
+                if (buttons.some(b => b.index === cursorIndex)) {
+                    buttons = buttons.map(b => (b.index === cursorIndex ? { ...b, current: true } : b));
+                }
+            }
+        }
+        if (buttons.length < minCount) {
+            // Same diagnosability contract as the no-rule branch above: report
+            // WHAT failed (how many rows the pattern matched vs. the minimum)
+            // without ever logging screen text. Measured case: grok-cli's
+            // approval pattern expects `N (●) label` radio rows, but the live
+            // trust screen paints `Yes, proceed   y` → 0 matches.
+            if (state.modal) {
+                this.warnModalParseMiss(state.id, `state '${state.id}' is modal but its extract.buttons pattern matched ${buttons.length} row(s), below min_count=${minCount} — the on-screen modal cannot be approved until the rule covers this screen`);
+            }
+            return null;
+        }
         const title = this.deriveTitle(state, sections, fullScreen);
         return { title, buttons };
+    }
+
+    /**
+     * Emit a modal-parse-miss warning at most once per (state, reason) pair.
+     *
+     * emitStateChanged runs on EVERY frame, so an unparseable modal would
+     * otherwise log on every repaint for as long as the session sits on it. The
+     * latch resets whenever the reason changes or the FSM leaves the state, so a
+     * second visit to a genuinely still-broken screen reports again.
+     */
+    private warnModalParseMiss(stateId: string, reason: string): void {
+        const key = `${stateId}${reason}`;
+        if (this.lastModalParseMissKey === key) return;
+        this.lastModalParseMissKey = key;
+        LOG.warn('FsmDriver', `[${this.spec.id}] modal not parseable — ${reason}. mesh_approve cannot act on this screen; mesh_send_keys is allowed through as the escape hatch (see SpecCliAdapter.injectKeys).`);
     }
 
     private deriveTitle(state: FsmState, sections: ResolvedSection[], fullScreen: string): string | null {
