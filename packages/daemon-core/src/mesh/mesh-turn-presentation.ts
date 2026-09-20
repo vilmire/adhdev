@@ -130,10 +130,33 @@ export function turnStageToSurfaceStatus(stage: TurnStage): ManagedStatus {
     }
 }
 
+/**
+ * DISPLAY age — clamped at 0 so a slightly-ahead row never surfaces a negative
+ * duration on a badge. Safe here precisely because these values are REPORTING
+ * only (projectionAgeMs / approvalAgeMs / …); they gate nothing.
+ * Decisions must use {@link rawAgeMs} — see the lower-bound note there.
+ */
 function ageMs(nowMs: number, iso: string | null): number | null {
+    const raw = rawAgeMs(nowMs, iso);
+    return raw === null ? null : Math.max(0, raw);
+}
+
+/**
+ * DECISION age — unclamped, so a FUTURE timestamp stays negative and remains
+ * visible to the caller as the untrustworthy clock signal it is.
+ *
+ * CLOCK-LOWER-BOUND (2026-09-21): `updated_at` is foreign (written by whichever
+ * process/machine owned the turn), so it can legitimately land ahead of this
+ * daemon's clock via node skew, an NTP step, or a replicated row. Clamping such
+ * a stamp to 0 tells every staleness gate "this row was written this instant" —
+ * the freshest possible reading — which is the exact inversion of what a
+ * distrusted clock should produce. Keep the raw value and let each gate state
+ * its own lower bound explicitly.
+ */
+function rawAgeMs(nowMs: number, iso: string | null): number | null {
     if (!iso) return null;
     const ts = Date.parse(iso);
-    return Number.isFinite(ts) ? Math.max(0, nowMs - ts) : null;
+    return Number.isFinite(ts) ? nowMs - ts : null;
 }
 
 /**
@@ -176,14 +199,32 @@ export const STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1000;
 const STALE_GATED_STAGES: ReadonlySet<string> = new Set(['generating', 'consumed']);
 
 /**
+ * How far a row's `updated_at` may sit AHEAD of our clock before the row is read
+ * as clock-untrustworthy rather than merely fresh. Sized to absorb ordinary
+ * same-machine write/read jitter (the row is stamped a moment before we read it)
+ * without admitting genuine skew. Matches the ±2s future tolerance
+ * mesh-completion-live-gate.ts already applies to untrusted completion evidence.
+ */
+const FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2_000;
+
+/**
  * True when an attempt row sits in an in-flight stage but has not been written
  * to for longer than {@link STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS}, i.e. it is
  * an unreachable/stranded anchor rather than a live turn.
  */
 export function isStaleTurnAttemptAuthority(row: MeshTurnAttemptRow, nowMs: number): boolean {
     if (!STALE_GATED_STAGES.has(row.stage)) return false;
-    const age = ageMs(nowMs, row.updatedAt ?? null);
-    return age !== null && age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+    const age = rawAgeMs(nowMs, row.updatedAt ?? null);
+    if (age === null) return false;
+    // CLOCK-LOWER-BOUND (2026-09-21): a NEGATIVE age means `updated_at` is in the
+    // future, i.e. the row's clock cannot be reconciled with ours. Read it as
+    // stale, not as fresh. Under the previous clamped age this row scored 0 —
+    // maximally fresh — so it held `turn_reducer` authority indefinitely and could
+    // never be demoted, which in turn fed the stall watchdog a permanently "live"
+    // in-flight stage for a session the provider FSM already reads as idle.
+    // Tolerate sub-second skew so ordinary same-machine jitter is not a demotion.
+    if (age < -FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS) return true;
+    return age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
 }
 
 /** Build the presentation from an attempt row (the reducer-authoritative branch). */
