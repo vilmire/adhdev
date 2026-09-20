@@ -307,8 +307,20 @@ function noteDroppedSuspension(reason: HeldSuspensionDropReason): void {
  *                                  waiting_approval / waiting_choice / finalizing.
  *   - `native_source_activity`   — an emitsPtyTurnEvents=false worker's transcript
  *                                  shows FRESH post-dispatch agent activity.
+ *   - `native_source_adapter_live` — an emitsPtyTurnEvents=false worker's transcript
+ *                                  is quiet past the stale window, but the session's
+ *                                  ADAPTER still reports a live pending turn (a request
+ *                                  outstanding to the provider process) — the turn is
+ *                                  running even though it is writing nothing.
+ *   - `native_source_unbound_session` — an emitsPtyTurnEvents=false row carries NO
+ *                                  bound session, so neither the transcript poll nor
+ *                                  the adapter probe can run. For this class an
+ *                                  unprobeable row is not evidence of a finished
+ *                                  worker, so the redrive is held (bounded by the
+ *                                  queue-hold hard deadline) rather than fired.
  */
-export function noteRedriveBlocked(reason: 'active_attempt_stage' | 'native_source_activity'): void {
+export function noteRedriveBlocked(reason: 'active_attempt_stage' | 'native_source_activity'
+    | 'native_source_adapter_live' | 'native_source_unbound_session'): void {
     metrics.redriveBlockedByReason[reason] = (metrics.redriveBlockedByReason[reason] ?? 0) + 1;
 }
 
