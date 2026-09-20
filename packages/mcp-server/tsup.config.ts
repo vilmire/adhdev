@@ -1,22 +1,33 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { defineConfig } from 'tsup';
+import { PINNED_SEQSCRIBE_DEPS, resolvePinnedDepBase } from '../../scripts/pinned-dep-base.mjs';
 
 const OSS_ROOT = path.resolve(__dirname, '../..');
 const REPO_ROOT = path.resolve(OSS_ROOT, '..');
 
 /**
- * Locate a package in a FIXED preference order — oss/node_modules, then the repo
- * root — ignoring wherever else npm may also have installed it. Returns the
- * package dir, or undefined if absent from both (in which case resolution is
- * left to esbuild's default). See the `pin-seqscribe-deps` plugin for why.
+ * Locate the ONE canonical base whose `node_modules` a pinned dep is taken from,
+ * ignoring wherever else npm may also have installed it. See the
+ * `pin-seqscribe-deps` plugin for why pinning is needed at all.
+ *
+ * ★ This deliberately does NOT fall back silently. The old version walked
+ * [OSS_ROOT, REPO_ROOT] and took the first hit, so a missing oss install quietly
+ * produced repo-root-relative module paths (`../../../node_modules/...`) where
+ * the committed vendor bundles encode oss-relative ones (`../../`). The build
+ * reported success and the damage surfaced much later as an unexplained vendor
+ * gate failure (2026-09-20). resolvePinnedDepBase throws on the layouts that
+ * cannot yield correct bytes and still permits a genuine root-only build — see
+ * oss/scripts/pinned-dep-base.mjs for the three-state rule.
+ *
+ * ★ Fixing this here is necessary but NOT sufficient on its own: daemon-core's
+ * config carries the same rule, and it is the one that actually bakes these paths
+ * (this bundle aliases @adhdev/daemon-core onto daemon-core's prebuilt dist,
+ * where the paths are already frozen literals). Both sites share this module so
+ * they cannot enforce different conditions.
  */
 function pinnedPackageDir(spec: string): { dir: string; base: string } | undefined {
-  for (const base of [OSS_ROOT, REPO_ROOT]) {
-    const dir = path.join(base, 'node_modules', spec);
-    if (fs.existsSync(dir)) return { dir, base };
-  }
-  return undefined;
+  return resolvePinnedDepBase(spec, { ossRoot: OSS_ROOT, repoRoot: REPO_ROOT });
 }
 
 export default defineConfig({
@@ -238,7 +249,7 @@ export default defineConfig({
       // onResolve that rewrites the package root and lets esbuild handle the rest.
       name: 'pin-seqscribe-deps',
       setup(build) {
-        for (const spec of ['@noble/hashes', 'canonicalize']) {
+        for (const spec of PINNED_SEQSCRIBE_DEPS) {
           const pinned = pinnedPackageDir(spec);
           if (!pinned) continue;
           const { dir, base } = pinned;

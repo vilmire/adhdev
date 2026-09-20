@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vendorBuildChainFor } from './vendor-build-chain.mjs';
+import { VENDOR_COMMIT_BUILD_ENV } from './pinned-dep-base.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Every TRACKED vendor directory under packages/daemon-standalone/vendor. This guard
@@ -35,13 +36,22 @@ const VENDOR_PATHS = [
 const isWin = process.platform === 'win32';
 const npm = isWin ? 'npm.cmd' : 'npm';
 
+// This gate rebuilds in order to REPRODUCE the committed bytes, so it is bound by
+// the same layout requirement as the code that produced them: the seqscribe dep
+// pin must resolve from oss/node_modules, never silently from the repo root. Mark
+// the builds commit-bound so a missing oss install fails here with a precise
+// message instead of "regenerating" a bundle with repo-root-relative module paths
+// and reporting it as drift against the correct committed copy (2026-09-20).
+// See ./pinned-dep-base.mjs.
+const ENV = { ...process.env, [VENDOR_COMMIT_BUILD_ENV]: '1' };
+
 function run(cmd, args) {
   console.log(`$ ${cmd} ${args.join(' ')}`);
   // Node 24 on Windows refuses to spawn .cmd/.bat shims (npm.cmd) via execFile
   // without a shell — it throws `spawnSync npm.cmd EINVAL`. Run npm through the
   // shell on win32 only; POSIX behavior is unchanged. Args here are fixed and
   // space-free, so shell word-splitting is not a concern.
-  execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: isWin });
+  execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: isWin, env: ENV });
 }
 
 // Rebuild the packages that feed the vendored bundles, in dependency order.
