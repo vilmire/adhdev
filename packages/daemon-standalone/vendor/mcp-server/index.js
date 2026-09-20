@@ -90145,6 +90145,23 @@ ${statusLine}`;
       if (Number.isFinite(acceptedAt) && eventTimestamp < acceptedAt - 2e3) return false;
       return true;
     }
+    function setCompletionHoldObserver(observer3) {
+      completionHoldObserver = observer3;
+    }
+    function reportHoldOutcome(held, outcome, nowMs) {
+      try {
+        completionHoldObserver?.({
+          outcome,
+          meshId: held.meshId,
+          sessionId: held.sessionId,
+          taskId: held.taskId,
+          attemptId: held.attemptId,
+          waitingOn: held.waitingOn,
+          heldForMs: nowMs - held.armedAt
+        });
+      } catch {
+      }
+    }
     function heldCompletionKey(meshId, taskId, attemptId, sessionId, nonce) {
       return `${meshId}${taskId}${attemptId}${sessionId}${nonce}`;
     }
@@ -90156,60 +90173,96 @@ ${statusLine}`;
       }, MID_TURN_COMPLETION_HOLD_RETRY_MS);
       heldLiveStateCompletionTimer.unref?.();
     }
+    function readNewestTailActivityAtMs(instance) {
+      const source = instance;
+      if (typeof source?.getTerminalAdmissionObservations !== "function") return void 0;
+      try {
+        const newest = source.getTerminalAdmissionObservations()?.newestActivityAtMs;
+        return typeof newest === "number" && Number.isFinite(newest) ? newest : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    function heldCompletionConditionCleared(held, liveInstance, nowMs) {
+      if (held.waitingOn === "live_pending") {
+        return !readLiveTurnPendingEvidence(liveInstance).pending;
+      }
+      const newest = readNewestTailActivityAtMs(liveInstance);
+      if (newest === void 0) return true;
+      return nowMs - newest >= TRANSCRIPT_QUIET_RELEASE_MS;
+    }
+    function deliverHeldCompletion(held, expired) {
+      held.inject(held.components, {
+        meshId: held.meshId,
+        sourceInstanceId: held.sourceInstanceId,
+        nodeId: held.nodeId,
+        nodeLabel: held.nodeLabel,
+        event: "agent:generating_completed",
+        metadataEvent: {
+          event: "agent:generating_completed",
+          instanceId: held.sessionId,
+          targetSessionId: held.sessionId,
+          taskId: held.taskId,
+          attemptId: held.attemptId,
+          dispatchNonce: held.dispatchNonce,
+          timestamp: held.eventTimestamp,
+          ...held.providerType ? { providerType: held.providerType } : {},
+          completionDiagnostic: {
+            source: "mid_turn_live_state_retry",
+            contentFreeRetry: true,
+            // ★BOUNDED-HOLD-EXHAUSTED. The hold reached its ceiling without the
+            // wait condition clearing, and we are releasing anyway rather than
+            // dropping — a completion the worker already committed to its ledger
+            // must reach the coordinator even if our local tail read disagrees.
+            // The suppression gate honors this as a ONE-TIME admission bypass
+            // (see mesh-event-suppression): without it the release re-enters the
+            // same veto and the loss is merely relocated, which is what the
+            // original "released to the normal pipeline" comment wrongly assumed
+            // would not happen. Delivering a completion slightly early is
+            // recoverable; never delivering it is not.
+            ...expired ? { holdExpired: true, holdWaitedOn: held.waitingOn } : {}
+          }
+        }
+      });
+    }
     function drainHeldLiveStateCompletions(nowMs = Date.now()) {
       for (const [key2, held] of heldLiveStateCompletions) {
         if (nowMs < held.nextCheckAt) continue;
-        if (nowMs >= held.expiresAt) {
-          heldLiveStateCompletions.delete(key2);
-          continue;
-        }
+        const expired = nowMs >= held.expiresAt;
         const attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(held.meshId, held.taskId);
         const identityStillCurrent = !!attempt && !attempt.terminalOutcome && attempt.attemptId === held.attemptId && sessionIdsEquivalent(attempt.sessionId, held.sessionId) && attempt.dispatchNonce === held.dispatchNonce;
         if (!identityStillCurrent) {
           heldLiveStateCompletions.delete(key2);
+          reportHoldOutcome(held, "abandoned_identity_changed", nowMs);
           continue;
         }
         const liveInstance = held.components.instanceManager?.getInstance?.(held.sessionId);
         if (!liveInstance) {
           heldLiveStateCompletions.delete(key2);
+          reportHoldOutcome(held, "abandoned_session_gone", nowMs);
           continue;
         }
-        const live = readLiveTurnPendingEvidence(liveInstance);
-        if (live.pending) {
+        if (!expired && !heldCompletionConditionCleared(held, liveInstance, nowMs)) {
           held.nextCheckAt = nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS;
           continue;
         }
         heldLiveStateCompletions.delete(key2);
-        held.inject(held.components, {
-          meshId: held.meshId,
-          sourceInstanceId: held.sourceInstanceId,
-          nodeId: held.nodeId,
-          nodeLabel: held.nodeLabel,
-          event: "agent:generating_completed",
-          metadataEvent: {
-            event: "agent:generating_completed",
-            instanceId: held.sessionId,
-            targetSessionId: held.sessionId,
-            taskId: held.taskId,
-            attemptId: held.attemptId,
-            dispatchNonce: held.dispatchNonce,
-            timestamp: held.eventTimestamp,
-            ...held.providerType ? { providerType: held.providerType } : {},
-            completionDiagnostic: {
-              source: "mid_turn_live_state_retry",
-              contentFreeRetry: true
-            }
-          }
-        });
+        reportHoldOutcome(held, expired ? "released_hold_expired" : "released_condition_cleared", nowMs);
+        deliverHeldCompletion(held, expired);
       }
       scheduleHeldLiveStateCompletionDrain();
     }
-    function holdCompletionForLiveStateRetry(components, args, eventSessionId, nowMs, inject) {
+    function holdCompletionForLiveStateRetry(components, args, eventSessionId, nowMs, inject, waitingOn = "live_pending") {
       const taskId = readNonEmptyString(args.metadataEvent.taskId);
       const attemptId = readNonEmptyString(args.metadataEvent.attemptId);
       const dispatchNonce = typeof args.metadataEvent.dispatchNonce === "number" ? args.metadataEvent.dispatchNonce : NaN;
       const eventTimestamp = typeof args.metadataEvent.timestamp === "number" ? args.metadataEvent.timestamp : NaN;
       if (!taskId || !attemptId || !Number.isFinite(dispatchNonce) || !Number.isFinite(eventTimestamp)) return false;
+      const priorDiagnostic = args.metadataEvent.completionDiagnostic;
+      if (priorDiagnostic && typeof priorDiagnostic === "object" && priorDiagnostic.holdExpired === true) {
+        return false;
+      }
+      const ttlMs = waitingOn === "transcript_quiet" ? TRANSCRIPT_QUIET_HOLD_TTL_MS : MID_TURN_COMPLETION_HOLD_TTL_MS;
       const key2 = heldCompletionKey(args.meshId, taskId, attemptId, eventSessionId, dispatchNonce);
       if (!heldLiveStateCompletions.has(key2)) {
         heldLiveStateCompletions.set(key2, {
@@ -90228,7 +90281,9 @@ ${statusLine}`;
           dispatchNonce,
           providerType: readNonEmptyString(args.metadataEvent.providerType) || void 0,
           eventTimestamp,
-          expiresAt: nowMs + MID_TURN_COMPLETION_HOLD_TTL_MS,
+          waitingOn,
+          armedAt: nowMs,
+          expiresAt: nowMs + ttlMs,
           nextCheckAt: nowMs + MID_TURN_COMPLETION_HOLD_RETRY_MS
         });
       }
@@ -90238,6 +90293,9 @@ ${statusLine}`;
     var AUTHORITATIVE_COMPLETION_MAX_AGE_MS;
     var MID_TURN_COMPLETION_HOLD_RETRY_MS;
     var MID_TURN_COMPLETION_HOLD_TTL_MS;
+    var TRANSCRIPT_QUIET_HOLD_TTL_MS;
+    var TRANSCRIPT_QUIET_RELEASE_MS;
+    var completionHoldObserver;
     var heldLiveStateCompletions;
     var heldLiveStateCompletionTimer;
     var init_mesh_completion_live_gate = __esm2({
@@ -90250,6 +90308,9 @@ ${statusLine}`;
         AUTHORITATIVE_COMPLETION_MAX_AGE_MS = 6e4;
         MID_TURN_COMPLETION_HOLD_RETRY_MS = 250;
         MID_TURN_COMPLETION_HOLD_TTL_MS = 5e3;
+        TRANSCRIPT_QUIET_HOLD_TTL_MS = 12e3;
+        TRANSCRIPT_QUIET_RELEASE_MS = 8e3;
+        completionHoldObserver = null;
         heldLiveStateCompletions = /* @__PURE__ */ new Map();
         heldLiveStateCompletionTimer = null;
       }
@@ -90702,15 +90763,27 @@ ${statusLine}`;
               }
             })()
           });
-          if (admission.kind === "decline") {
+          const releasedByExpiredHold = (() => {
+            const diagnostic = args.metadataEvent.completionDiagnostic;
+            return !!diagnostic && typeof diagnostic === "object" && diagnostic.holdExpired === true;
+          })();
+          if (admission.kind === "decline" && releasedByExpiredHold) {
+            LOG.warn("MeshEvents", `Admitting agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}) DESPITE terminal admission decline (${admission.reason}): the bounded content-free hold expired without the veto clearing \u2014 releasing rather than losing the completion`);
+            traceMeshEventStage("terminal_admission_hold_exhausted_admit", traceCtx, admission.reason);
+          } else if (admission.kind === "decline") {
             const heldForRetry = holdCompletionForLiveStateRetry(
               components,
               args,
               eventSessionId,
               Date.now(),
-              injectMeshSystemMessage2
+              injectMeshSystemMessage2,
+              // This decline is rule 6 (transcript_growing): the drain must wait for
+              // the TAIL to go quiet, not for live-pending evidence to clear — the
+              // latter is already false here by construction, which is why the retry
+              // used to fire instantly back into this same veto.
+              "transcript_quiet"
             );
-            LOG.info("MeshEvents", `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): terminal admission declined (${admission.reason}) \u2014 ${admission.detail}${heldForRetry ? " \u2014 bounded content-free retry armed" : ""}`);
+            LOG.info("MeshEvents", `Suppressed agent:generating_completed for session ${eventSessionId} (mesh ${args.meshId}): terminal admission declined (${admission.reason}) \u2014 ${admission.detail}${heldForRetry ? " \u2014 bounded content-free retry armed (awaiting transcript quiet; releases either way)" : " \u2014 NOT held, this completion is dropped"}`);
             traceMeshEventDrop(
               "provider_event_terminal_admission_declined",
               traceCtx,
@@ -90990,6 +91063,22 @@ ${statusLine}`;
         init_mesh_queue_assignment();
         init_mesh_completion_live_gate();
         init_mesh_provider_event_admission();
+        setCompletionHoldObserver((report) => {
+          const detail = `task=${report.taskId} attempt=${report.attemptId} waitingOn=${report.waitingOn} heldFor=${report.heldForMs}ms`;
+          if (report.outcome === "released_hold_expired") {
+            LOG.warn("MeshEvents", `Held completion for session ${report.sessionId} (mesh ${report.meshId}) RELEASED after its bound expired without ${report.waitingOn} clearing \u2014 ${detail}`);
+          } else if (report.outcome === "released_condition_cleared") {
+            LOG.info("MeshEvents", `Held completion for session ${report.sessionId} (mesh ${report.meshId}) released \u2014 ${report.waitingOn} cleared \u2014 ${detail}`);
+          } else {
+            LOG.info("MeshEvents", `Held completion for session ${report.sessionId} (mesh ${report.meshId}) dropped (${report.outcome}) \u2014 ${detail}`);
+          }
+          traceMeshEventStage(`completion_hold_${report.outcome}`, {
+            taskId: report.taskId,
+            sessionId: report.sessionId,
+            meshId: report.meshId,
+            event: "agent:generating_completed"
+          }, detail);
+        });
         lastPendingEventsPruneAt = 0;
         PENDING_EVENTS_PRUNE_INTERVAL_MS = 60 * 60 * 1e3;
         INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS = 30 * 60 * 1e3;
