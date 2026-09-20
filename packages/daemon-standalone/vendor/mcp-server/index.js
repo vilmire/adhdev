@@ -55367,14 +55367,20 @@ ${lines.join("\n")}
       }
     }
     function ageMs(nowMs, iso) {
+      const raw = rawAgeMs(nowMs, iso);
+      return raw === null ? null : Math.max(0, raw);
+    }
+    function rawAgeMs(nowMs, iso) {
       if (!iso) return null;
       const ts2 = Date.parse(iso);
-      return Number.isFinite(ts2) ? Math.max(0, nowMs - ts2) : null;
+      return Number.isFinite(ts2) ? nowMs - ts2 : null;
     }
     function isStaleTurnAttemptAuthority(row, nowMs) {
       if (!STALE_GATED_STAGES.has(row.stage)) return false;
-      const age = ageMs(nowMs, row.updatedAt ?? null);
-      return age !== null && age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
+      const age = rawAgeMs(nowMs, row.updatedAt ?? null);
+      if (age === null) return false;
+      if (age < -FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS) return true;
+      return age > STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
     }
     function presentationFromAttemptRow(row, nowMs = Date.now()) {
       const stage = row.stage;
@@ -55520,6 +55526,7 @@ ${lines.join("\n")}
     }
     var STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS;
     var STALE_GATED_STAGES;
+    var FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS;
     var MAX_DIVERGENCE_KEYS;
     var OVERFLOW_KEY;
     var presentationMetrics;
@@ -55533,6 +55540,7 @@ ${lines.join("\n")}
         init_normalize();
         STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
         STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
+        FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2e3;
         MAX_DIVERGENCE_KEYS = 200;
         OVERFLOW_KEY = "overflow|__overflow__|__overflow__";
         presentationMetrics = {
@@ -115648,7 +115656,8 @@ ${buttons.join("\n")}`;
           return;
         }
         const causalEvidenceMs = Date.parse(turnPresentation.updatedAt || "");
-        if ((stage === "consumed" || stage === "generating") && Number.isFinite(causalEvidenceMs) && now - causalEvidenceMs < threshold) {
+        const causalEvidenceAgeMs = now - causalEvidenceMs;
+        if ((stage === "consumed" || stage === "generating") && Number.isFinite(causalEvidenceMs) && causalEvidenceAgeMs >= 0 && causalEvidenceAgeMs < threshold) {
           host.meshStallAnchorAt = Math.max(host.meshStallAnchorAt, causalEvidenceMs);
           return;
         }
