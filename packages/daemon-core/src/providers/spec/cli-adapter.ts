@@ -826,12 +826,44 @@ export class SpecCliAdapter implements CliAdapter {
         const encoded = encodeMeshSendKeys(items);
 
         // Modal fail-closed — a NON-destructive injection while parked on an
-        // actionable approval modal is refused so a modal choice can't be
+        // ACTIONABLE approval modal is refused so a modal choice can't be
         // confirmed via send_keys and bypass the approval policy.
+        //
+        // APPROVAL-DEADLOCK (live 2026-09-20, grok-cli trust + antigravity-cli
+        // permission prompt): the guard used to arm on `status === 'approval'`
+        // alone. That status comes from statusForState(), which reports
+        // 'approval' for ANY `modal: true` state — INDEPENDENT of whether the
+        // spec's button rule actually parsed any buttons. mesh_approve, on the
+        // other hand, can only press a button that parsed (deriveModal returns
+        // null when the rule is missing or matches nothing). So a modal the spec
+        // could not parse armed the send_keys guard while disarming approve, and
+        // the session had ZERO ways to answer the prompt on screen:
+        //     mesh_approve   → "the modal could not be actioned"
+        //     mesh_send_keys → "refused: actionable_modal"
+        // Both observed cases were spec-side (grok's `trust` state declared no
+        // extract.buttons at all; antigravity's cursor_marker omitted the `>` the
+        // screen paints), and both specs are fixed alongside this change — but a
+        // spec gap must never again be able to wedge a session with no way out.
+        //
+        // So the guard now arms on what its own name claims: an actionable modal
+        // = a modal state WITH parsed buttons, which is exactly the condition
+        // under which mesh_approve has something to press. When no buttons
+        // parsed, approve cannot act, so send_keys is the only remaining path
+        // and is allowed through (the caller still owns its own audit trail).
+        // This narrows the guard ONLY in the case where the path it redirects to
+        // is provably unavailable, so the approval-policy bypass it exists to
+        // prevent stays closed for every modal that can actually be approved.
         const modalActive = this.latestState?.status === 'approval';
-        if (modalActive && !encoded.hasDestructive && !opts.allowModalOverride) {
-            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} — use mesh_approve`);
+        const parsedButtonCount = this.latestModal?.buttons?.length ?? 0;
+        if (modalActive && parsedButtonCount > 0 && !encoded.hasDestructive && !opts.allowModalOverride) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} buttons=${parsedButtonCount} — use mesh_approve`);
             return { ok: false, refused: 'actionable_modal', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+        }
+        if (modalActive && parsedButtonCount === 0) {
+            // Loud on purpose: this is the escape hatch firing, and it means the
+            // loaded spec could not parse the modal on screen. Surfacing it here
+            // is what turns a silent deadlock into a diagnosable spec bug.
+            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys ALLOWED past the modal guard — state '${this.latestState?.id ?? '?'}' is modal but the loaded spec parsed 0 buttons, so mesh_approve cannot act on it. Fix the spec's extract.buttons rule for this screen; send_keys is the only path until then.`);
         }
 
         // Fail closed while an active turn owns the PTY. Blindly writing here can

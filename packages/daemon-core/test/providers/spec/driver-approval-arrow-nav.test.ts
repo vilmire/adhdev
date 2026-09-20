@@ -359,12 +359,26 @@ describe('antigravity-cli 4.0 spec opts into cursor_marker', () => {
     const raw = () => JSON.parse(fs.readFileSync(
         path.join(REPO_ROOT, 'adhdev-providers/cli/antigravity-cli/specs/4.0.json'), 'utf8'));
 
-    it('every arrow_keys buttons rule declares cursor_marker "❯›"', () => {
-        const rules = (raw().states ?? [])
-            .map((s: any) => s?.extract?.buttons)
-            .filter((b: any) => b?.select_mode === 'arrow_keys');
-        expect(rules.length).toBe(2); // approval + trust
-        for (const r of rules) expect(r.cursor_marker).toBe('❯›');
+    // The narrowed marker exists to stop an assistant BLOCKQUOTE (`> 1. quoted
+    // item`) from stealing the cursor flag from the real `❯` row. That risk is
+    // specific to the `approval` modal, which renders directly below assistant
+    // prose. The `trust` screen is a standalone first-run box with no
+    // conversation above it, and since 2026-09-20 it uses ordinal extraction
+    // with a plain `>` cursor — the live marker on that screen
+    // (APPROVAL-DEADLOCK). Pinning `❯›` there would make the real cursor
+    // invisible and re-wedge the modal, so the assertion is scoped to the rule
+    // that actually needs it rather than to every arrow_keys rule.
+    it('the approval modal rule declares cursor_marker "❯›" (blockquote guard)', () => {
+        const approval = (raw().states ?? []).find((s: any) => s?.id === 'approval');
+        expect(approval?.extract?.buttons?.select_mode).toBe('arrow_keys');
+        expect(approval?.extract?.buttons?.cursor_marker).toBe('❯›');
+    });
+
+    it('the trust modal rule leaves cursor_marker at the engine default', () => {
+        // Its live screen paints `> Yes, I trust this folder`, so the default
+        // class `[❯›>→]` is exactly what must apply.
+        const trust = (raw().states ?? []).find((s: any) => s?.id === 'trust');
+        expect(trust?.extract?.buttons?.cursor_marker).toBeUndefined();
     });
 
     it('still validates with the new field', () => {

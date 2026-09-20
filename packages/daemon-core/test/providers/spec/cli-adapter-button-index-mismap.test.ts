@@ -111,9 +111,27 @@ describe('antigravity-cli spec declares arrow-nav + continuation for its approva
         expect(state?.extract?.buttons?.select_mode).toBe('arrow_keys');
     });
 
-    it.each(['approval', 'trust'])('%s modal buttons enable continuation_lines for wrapped labels', (stateId) => {
-        const state = (raw.states ?? []).find((s: any) => s.id === stateId);
+    // Only the `approval` modal is a NUMBERED list whose long labels wrap
+    // ("2. Yes, and always allow … for commands that start with\n'pwd …'"), so
+    // only it needs continuation_lines.
+    //
+    // `trust` was migrated to ordinal mode (label_group) on 2026-09-20: the live
+    // folder-trust screen renders UNNUMBERED rows ("> Yes, I trust this
+    // folder"), which the old `N. label` pattern matched 0 of — leaving the
+    // modal unparseable and therefore unanswerable by any path
+    // (APPROVAL-DEADLOCK; see driver-approval-deadlock-unactionable-modal.test.ts).
+    // extractButtonsFromRule returns from the ordinal branch BEFORE reading
+    // continuation_lines, so asserting it on trust would pin a field the engine
+    // never consults there.
+    it('approval modal buttons enable continuation_lines for wrapped labels', () => {
+        const state = (raw.states ?? []).find((s: any) => s.id === 'approval');
         expect(state?.extract?.buttons?.continuation_lines).toBe(true);
+    });
+
+    it('trust modal buttons use ordinal extraction (its rows carry no numbers)', () => {
+        const rule = (raw.states ?? []).find((s: any) => s.id === 'trust')?.extract?.buttons;
+        expect(rule?.label_group).toBe(1);
+        expect(rule?.continuation_lines).toBeUndefined();
     });
 
     it('the antigravity 4.0 spec still validates with the new button fields', () => {

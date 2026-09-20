@@ -227,15 +227,38 @@ describe('grok-cli FSM — modal button extraction', () => {
         expect(buttons.map((b) => b.key)).toEqual(['1', '2', '3']);
     });
 
-    it('exposes trust as a button-less confirm, never an auto-approvable modal', () => {
-        // Grok renders the trust rows WITHOUT on-screen numbers ("Yes, proceed  y"),
-        // and extractButtonsFromRule requires a numeric index — so trust cannot be
-        // a button list. It must also never be auto-approved: whether a directory
-        // is trusted is a security decision for the user, not the daemon.
+    it('exposes trust as an ANSWERABLE confirm that is never auto-approved', () => {
+        // Grok renders the trust rows WITHOUT on-screen numbers
+        // ("Yes, proceed  y"). This test used to assert that trust therefore had
+        // NO buttons at all, on the premise that extractButtonsFromRule requires
+        // a numeric index. That premise is obsolete — ordinal mode
+        // (label_group/key_group) extracts exactly this unnumbered
+        // label + key-hint shape, as cursor-cli already does.
+        //
+        // The button-less shape was not merely redundant, it was the
+        // APPROVAL-DEADLOCK (live 2026-09-20): with nothing parsed, mesh_approve
+        // had no button to press while mesh_send_keys refused with
+        // `actionable_modal`, so a trust prompt on screen could not be answered
+        // by ANY path.
+        //
+        // The second half of the old assertion is the part that genuinely
+        // matters and is preserved — trust must never be auto-approved, because
+        // whether a directory is trusted is a security decision for the user,
+        // not the daemon. That is now enforced where it belongs, by modal_kind
+        // 'confirm' in maybeAutoApproveStatus (see approval-gate.ts
+        // TRUST-NEVER-AUTO-APPROVES), rather than by the side effect of having
+        // no buttons to press.
         const spec = loadSpec();
         const trust = spec.states.find((s) => s.id === 'trust')!;
         expect(trust.modal_kind).toBe('confirm');
-        expect((trust as { extract?: { buttons?: unknown } }).extract?.buttons).toBeUndefined();
+
+        const rule = (trust as { extract?: { buttons?: unknown } }).extract?.buttons as never;
+        expect(rule, 'trust must be answerable — see APPROVAL-DEADLOCK').toBeTruthy();
+        const buttons = extractButtonsFromRule(rule, trustModal.join('\n'));
+        expect(buttons.map((b) => b.label)).toEqual(['Yes, proceed', 'No, quit']);
+        // The key hints the screen advertises — pressing these is what actually
+        // answers the prompt.
+        expect(buttons.map((b) => b.key)).toEqual(['y', 'n']);
     });
 });
 
