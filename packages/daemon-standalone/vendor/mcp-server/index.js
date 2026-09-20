@@ -90173,11 +90173,11 @@ ${statusLine}`;
       }, MID_TURN_COMPLETION_HOLD_RETRY_MS);
       heldLiveStateCompletionTimer.unref?.();
     }
-    function readNewestTailActivityAtMs(instance) {
+    function readNewestTailActivityAtMs(instance, nowMs) {
       const source = instance;
       if (typeof source?.getTerminalAdmissionObservations !== "function") return void 0;
       try {
-        const newest = source.getTerminalAdmissionObservations()?.newestActivityAtMs;
+        const newest = source.getTerminalAdmissionObservations(nowMs)?.newestActivityAtMs;
         return typeof newest === "number" && Number.isFinite(newest) ? newest : void 0;
       } catch {
         return void 0;
@@ -90187,7 +90187,7 @@ ${statusLine}`;
       if (held.waitingOn === "live_pending") {
         return !readLiveTurnPendingEvidence(liveInstance).pending;
       }
-      const newest = readNewestTailActivityAtMs(liveInstance);
+      const newest = readNewestTailActivityAtMs(liveInstance, nowMs);
       if (newest === void 0) return true;
       return nowMs - newest >= TRANSCRIPT_QUIET_RELEASE_MS;
     }

@@ -482,13 +482,16 @@ function scheduleHeldLiveStateCompletionDrain(): void {
  * prove still-growing", i.e. it releases rather than holding forever. Absence of
  * evidence must never manufacture a hold, exactly as it never manufactures a veto.
  */
-function readNewestTailActivityAtMs(instance: unknown): number | undefined {
+function readNewestTailActivityAtMs(instance: unknown, nowMs: number): number | undefined {
     const source = instance as {
         getTerminalAdmissionObservations?: (nowMs?: number) => { newestActivityAtMs?: number } | undefined;
     } | null | undefined;
     if (typeof source?.getTerminalAdmissionObservations !== 'function') return undefined;
     try {
-        const newest = source.getTerminalAdmissionObservations()?.newestActivityAtMs;
+        // Pass OUR clock. The accessor takes nowMs and some implementations fold it
+        // into the snapshot they return; letting it default to wall-clock would make
+        // the freshness comparison below mix two different clocks.
+        const newest = source.getTerminalAdmissionObservations(nowMs)?.newestActivityAtMs;
         return typeof newest === 'number' && Number.isFinite(newest) ? newest : undefined;
     } catch { return undefined; }
 }
@@ -512,7 +515,7 @@ function heldCompletionConditionCleared(
     // 'transcript_quiet' — the tail must age past the same quiet window the
     // admission rule enforces. An unobservable tail cannot prove growth, so it
     // clears (fail-open, consistent with the gate's own liveness contract).
-    const newest = readNewestTailActivityAtMs(liveInstance);
+    const newest = readNewestTailActivityAtMs(liveInstance, nowMs);
     if (newest === undefined) return true;
     return nowMs - newest >= TRANSCRIPT_QUIET_RELEASE_MS;
 }
