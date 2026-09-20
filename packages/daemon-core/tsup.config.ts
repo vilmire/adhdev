@@ -1,7 +1,8 @@
 import { defineConfig } from 'tsup';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { daemonBuildDefine } from './build-stamp.mjs';
+import { PINNED_SEQSCRIBE_DEPS, resolvePinnedDepBase } from '../../scripts/pinned-dep-base.mjs';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
@@ -9,23 +10,27 @@ const OSS_ROOT = path.resolve(__dirname, '../..');
 const REPO_ROOT = path.resolve(OSS_ROOT, '..');
 
 /**
- * Deps of the bundled `seqscribe` leaf that must resolve from ONE fixed place,
- * regardless of how npm happened to lay out this checkout. See `pin-seqscribe-deps`.
- */
-const PINNED_SEQSCRIBE_DEPS = ['@noble/hashes', 'canonicalize'];
-
-/**
- * Locate a package in a FIXED preference order — oss/node_modules, then the repo
- * root — ignoring wherever else npm may also have installed it (in particular
- * `oss/vendor/seqscribe/node_modules`). Returns the base whose `node_modules`
- * holds it, or undefined if absent from both, in which case resolution is left
- * to esbuild's default.
+ * Locate the ONE canonical base whose `node_modules` a pinned dep is taken from,
+ * ignoring wherever else npm may also have installed it (in particular
+ * `oss/vendor/seqscribe/node_modules`).
+ *
+ * ★ This deliberately does NOT fall back silently. The old version walked
+ * [OSS_ROOT, REPO_ROOT] and took the first hit, so a missing oss install quietly
+ * produced repo-root-relative module paths (`../../../node_modules/...`) where
+ * the committed vendor bundles encode oss-relative ones (`../../`). The build
+ * reported success and the damage surfaced much later as an unexplained vendor
+ * gate failure (2026-09-20). resolvePinnedDepBase throws on the layouts that
+ * cannot yield correct bytes and still permits a genuine root-only build — see
+ * oss/scripts/pinned-dep-base.mjs for the three-state rule and the empirical
+ * basis for the signal it keys on.
+ *
+ * ★ daemon-core is where this matters MOST: mcp-server aliases @adhdev/daemon-core
+ * onto this package's prebuilt dist, in which these module paths are already
+ * frozen string literals. A wrong path baked here flows downstream into both
+ * committed vendor copies no matter what mcp-server's own config does.
  */
 function pinnedResolveBase(spec: string): string | undefined {
-  for (const base of [OSS_ROOT, REPO_ROOT]) {
-    if (existsSync(path.join(base, 'node_modules', spec))) return base;
-  }
-  return undefined;
+  return resolvePinnedDepBase(spec, { ossRoot: OSS_ROOT, repoRoot: REPO_ROOT })?.base;
 }
 
 export default defineConfig({

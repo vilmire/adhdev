@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { VENDOR_COMMIT_BUILD_ENV } from '../../../scripts/pinned-dep-base.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
@@ -101,6 +102,14 @@ if (fs.existsSync(path.join(mcpPackageDir, 'package.json')) && mcpServerDistIsSt
       cwd: mcpPackageDir,
       stdio: 'inherit',
       shell: process.platform === 'win32',
+      // Mark commit-bound: whatever this rebuild emits is copied into the COMMITTED
+      // vendor/mcp-server below. Without the flag, a checkout with no oss/node_modules
+      // resolves the pinned seqscribe deps from the repo root and bakes
+      // `../../../node_modules/...` where the committed bytes encode `../../` —
+      // silently, exactly like the stale-dist regression this block already guards
+      // against. The build-first callers set the flag themselves, but this in-script
+      // rebuild is reachable from a bare `npm run bundle:vendor`.
+      env: { ...process.env, [VENDOR_COMMIT_BUILD_ENV]: '1' },
     });
   } catch (err) {
     // Fail loudly. Copying a known-stale dist is exactly the silent regression this
