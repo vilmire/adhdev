@@ -105554,6 +105554,8 @@ trust_level = "trusted"
            *  must be resent until the modal actually resolves (status leaves 'approval'). */
           win32ModalConfirmTimer = null;
           currentEval = null;
+          /** Dedup latch for warnModalParseMiss — see that method. */
+          lastModalParseMissKey = null;
           stateHistory = [];
           prevStateAt = 0;
           // ── send_message queueing until the machine first reaches a non-initial,
@@ -106081,6 +106083,7 @@ trust_level = "trusted"
             this.pushFsmSnapshot(from, fired, now, ev);
             this.currentStateId = fired.to;
             this.stateEnteredAt = now;
+            this.lastModalParseMissKey = null;
             this.regionLastChangedAt.clear();
             this.stableVerdictCache.clear();
             this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, {
@@ -106152,7 +106155,12 @@ trust_level = "trusted"
           }
           deriveModal(state2, sections, fullScreen) {
             const rule = state2.extract?.buttons;
-            if (!rule) return null;
+            if (!rule) {
+              if (state2.modal) {
+                this.warnModalParseMiss(state2.id, `state '${state2.id}' is modal but its spec declares NO extract.buttons rule, so no button can ever be parsed or pressed`);
+              }
+              return null;
+            }
             const hay = sectionText(sections, rule.section, fullScreen);
             const minCount = rule.min_count ?? 2;
             let buttons = extractButtonsFromRule(rule, hay);
@@ -106160,9 +106168,38 @@ trust_level = "trusted"
               const whole = extractButtonsFromRule(rule, fullScreen);
               if (whole.length >= minCount) buttons = whole;
             }
-            if (buttons.length < minCount) return null;
+            if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
+              const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);
+              const relaxedCurrent = relaxed.filter((b) => b.current);
+              if (relaxedCurrent.length === 1) {
+                const cursorIndex = relaxedCurrent[0].index;
+                if (buttons.some((b) => b.index === cursorIndex)) {
+                  buttons = buttons.map((b) => b.index === cursorIndex ? { ...b, current: true } : b);
+                }
+              }
+            }
+            if (buttons.length < minCount) {
+              if (state2.modal) {
+                this.warnModalParseMiss(state2.id, `state '${state2.id}' is modal but its extract.buttons pattern matched ${buttons.length} row(s), below min_count=${minCount} \u2014 the on-screen modal cannot be approved until the rule covers this screen`);
+              }
+              return null;
+            }
             const title = this.deriveTitle(state2, sections, fullScreen);
             return { title, buttons };
+          }
+          /**
+           * Emit a modal-parse-miss warning at most once per (state, reason) pair.
+           *
+           * emitStateChanged runs on EVERY frame, so an unparseable modal would
+           * otherwise log on every repaint for as long as the session sits on it. The
+           * latch resets whenever the reason changes or the FSM leaves the state, so a
+           * second visit to a genuinely still-broken screen reports again.
+           */
+          warnModalParseMiss(stateId, reason) {
+            const key2 = `${stateId}${reason}`;
+            if (this.lastModalParseMissKey === key2) return;
+            this.lastModalParseMissKey = key2;
+            LOG.warn("FsmDriver", `[${this.spec.id}] modal not parseable \u2014 ${reason}. mesh_approve cannot act on this screen; mesh_send_keys is allowed through as the escape hatch (see SpecCliAdapter.injectKeys).`);
           }
           deriveTitle(state2, sections, fullScreen) {
             const rule = state2.extract?.title;
@@ -112588,9 +112625,13 @@ ${text}` : text;
             if (!this.spawned || this.exited) throw new Error(`${this.cliName} is not running`);
             const encoded = encodeMeshSendKeys(items);
             const modalActive = this.latestState?.status === "approval";
-            if (modalActive && !encoded.hasDestructive && !opts.allowModalOverride) {
-              LOG.warn("SpecAdapter", `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(",")} \u2014 use mesh_approve`);
+            const parsedButtonCount = this.latestModal?.buttons?.length ?? 0;
+            if (modalActive && parsedButtonCount > 0 && !encoded.hasDestructive && !opts.allowModalOverride) {
+              LOG.warn("SpecAdapter", `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(",")} buttons=${parsedButtonCount} \u2014 use mesh_approve`);
               return { ok: false, refused: "actionable_modal", keys: encoded.keys, hasDestructive: encoded.hasDestructive };
+            }
+            if (modalActive && parsedButtonCount === 0) {
+              LOG.warn("SpecAdapter", `[${this.cliType}] send_keys ALLOWED past the modal guard \u2014 state '${this.latestState?.id ?? "?"}' is modal but the loaded spec parsed 0 buttons, so mesh_approve cannot act on it. Fix the spec's extract.buttons rule for this screen; send_keys is the only path until then.`);
             }
             if (this.latestState?.status === "generating" && !encoded.hasDestructive) {
               const message = "session is generating; mesh_send_keys cannot write during an active turn. Use mesh_send_task with delivery_mode: 'interrupt' to interrupt it.";
@@ -114245,6 +114286,9 @@ ${text}` : text;
       }
       host.autoApproveLastModalSeenAt = now;
       const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
+      if (modalKind === "confirm") {
+        return autoApproveActive;
+      }
       if (modalKind !== "approval") {
         const modalText = `${String(modal?.title || "")}
 ${String(modal?.message || "")}
