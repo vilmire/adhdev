@@ -148,6 +148,58 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
             host.meshStallEmittedForAnchor = false;
             return;
         }
+        // GENERATING-LIVE-TURN (2026-09-20): a reducer-authoritative `generating`
+        // whose ADAPTER TURN IS STILL OPEN is affirmative proof the turn is running.
+        // It must veto the stall outright — NOT via a clock comparison.
+        //
+        // The incident: a codex-cli worker reasoned silently for ~6 minutes (PTY and
+        // transcript both quiet — long model thinking between tool calls emits
+        // nothing). monitor:no_progress fired, the reconcile committed a terminal
+        // FAILED (`source=stall_reconcile, stage was generating`), and the worker
+        // then went busy→idle 74s later having completed the work. The result was
+        // discarded: totalMessages=1, assistant output 0.
+        //
+        // Why the `updatedAt` comparison below could never have saved it — this is
+        // the actual defect, and it is structural, not a tuning miss:
+        // `mesh_turn_attempts.updated_at` is a STAGE-TRANSITION timestamp, not a
+        // liveness timestamp. `generating` is written exactly once, edge-triggered
+        // from agent:generating_started (mesh-event-forwarding.ts:1107); nothing
+        // re-asserts it while the agent works, and there is no heartbeat column on
+        // the row. So `now - updatedAt` is just the TURN'S OWN AGE, and
+        // `now - updatedAt < threshold` holds only while the turn is YOUNGER than
+        // the threshold — exactly the window in which the stall cannot fire anyway
+        // (`stalledMs < threshold` already returned above). The moment the turn gets
+        // old enough for the watchdog to act, the guard meant to protect it inverts
+        // into no protection at all. The premise stated at
+        // mesh-turn-presentation.ts:162-163 ("a reducer-authoritative turn refreshes
+        // updated_at on every stage write, so a live turn is not silently quiet for
+        // this long") is false for a single long `generating` stage with no
+        // intervening suspension.
+        //
+        // Why `turnActive` is the right evidence and not merely a longer timeout:
+        // it is sampled from the ADAPTER (hasAdapterPendingResponse — a request is
+        // outstanding to the provider process), so it tracks whether THIS turn is
+        // still open rather than how long it has been running. Raising the timeout
+        // would only move the cliff (a 6-minute reasoning turn becomes a 10-minute
+        // one); this asks the question the watchdog actually means to ask.
+        //
+        // Scope is deliberately narrow — this does NOT disable stall detection:
+        //   - `consumed` keeps the old clock-based treatment (no turn is open yet,
+        //     so there is no adapter liveness to appeal to).
+        //   - A `generating` row whose adapter turn has CLOSED (turnActive false) is
+        //     a genuinely wedged session — it falls through and still fires. That is
+        //     the real stall this watchdog exists for.
+        //   - The attempt-row staleness gate still applies upstream: a stranded row
+        //     is demoted out of `turn_reducer` authority before we get here, so a
+        //     dead row cannot claim liveness through this branch.
+        if (stage === 'generating' && turnActive) {
+            traceMeshEventDrop('mesh_worker_stall_generating_live_turn', host.meshTraceCtx('monitor:no_progress'),
+                `PTY quiet ${Math.round(stalledMs / 1000)}s but the attempt is 'generating' with an open adapter turn `
+                + `(updatedAt=${turnPresentation.updatedAt ?? 'none'} is the turn-start stamp, not a liveness clock)`);
+            host.meshStallAnchorAt = now;
+            host.meshStallEmittedForAnchor = false;
+            return;
+        }
         const causalEvidenceMs = Date.parse(turnPresentation.updatedAt || '');
         if ((stage === 'consumed' || stage === 'generating')
             && Number.isFinite(causalEvidenceMs)
