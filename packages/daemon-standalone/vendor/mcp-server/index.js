@@ -51737,6 +51737,35 @@ Next step: ${nextStep}`;
         nowMs: args.nowMs
       });
     }
+    function recordDuplicateDispatchConsumption(args) {
+      const holder = typeof args.holderSessionId === "string" ? args.holderSessionId.trim() : "";
+      if (!holder) return { promoted: false, reason: "no_holder" };
+      let attempt;
+      try {
+        attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(args.meshId, args.taskId);
+      } catch {
+        return { promoted: false, reason: "store_unavailable" };
+      }
+      if (!attempt) return { promoted: false, reason: "no_attempt" };
+      if (attempt.terminalOutcome || isTerminalTurnStage(attempt.stage)) {
+        return { promoted: false, reason: "attempt_terminal", attemptId: attempt.attemptId };
+      }
+      if (STAGE_RANK[attempt.stage] >= STAGE_RANK.consumed) {
+        return { promoted: false, reason: "already_consumed", attemptId: attempt.attemptId };
+      }
+      const ack = recordTurnAck({
+        meshId: args.meshId,
+        taskId: args.taskId,
+        kind: "consumed",
+        ...args.attemptId ? { attemptId: args.attemptId } : {},
+        sessionId: holder,
+        ...typeof args.nowMs === "number" ? { nowMs: args.nowMs } : {},
+        evidence: { source: "duplicate_dispatch_refusal", holderSessionId: holder }
+      });
+      if (!ack) return { promoted: false, reason: "no_attempt" };
+      LOG.info("TurnLedger", `Promoted consumed evidence for task ${args.taskId} attempt ${ack.attemptId} from a duplicate-dispatch refusal: the worker daemon reports live session ${holder} is already WORKING this task (audit source duplicate_dispatch_refusal) \u2014 the redrive paths, which infer "never consumed" from a missing generating_started, may no longer re-inject this prompt`);
+      return { promoted: true, attemptId: ack.attemptId, stage: ack.stage };
+    }
     function rebindAttemptToLiveHolder(args) {
       const holder = typeof args.holderSessionId === "string" ? args.holderSessionId.trim() : "";
       if (!holder) return { rebound: false, reason: "no_holder" };
@@ -86337,7 +86366,16 @@ ${block2.text}`,
           });
           if (rebind.rebound || rebind.reason === "same_session") {
             LOG.info("MeshQueue", `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned; turn attempt ${rebind.attemptId ?? "n/a"} ${rebind.rebound ? "rebound to that session" : "was already bound to it"}.`);
-            updateSessionDeliveryStatus(delivery.id, "delivered");
+            updateSessionDeliveryStatus(delivery.id, "acked");
+            try {
+              recordDuplicateDispatchConsumption({
+                meshId: ctx.meshId,
+                taskId: ctx.task.id,
+                holderSessionId: duplicate.holderSessionId,
+                ...rebind.attemptId ? { attemptId: rebind.attemptId } : {}
+              });
+            } catch {
+            }
             try {
               appendLedgerEntry3(ctx.meshId, {
                 kind: "dispatch_duplicate_rebound",
