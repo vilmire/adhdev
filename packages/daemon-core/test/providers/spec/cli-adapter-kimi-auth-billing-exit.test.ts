@@ -99,7 +99,10 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       status: 'error',
       errorReason: 'auth_failed',
     })
-    expect(adapter.getStatus().errorMessage).toMatch(/Kimi authentication failed/i)
+    // D4: the auth message is provider-neutral now that the AUTH axis serves every
+    // spec-backed CLI (billing/quota stay Kimi-scoped and keep their branded copy).
+    expect(adapter.getStatus().errorMessage).toMatch(/authentication failed/i)
+    expect(adapter.getStatus().errorMessage).not.toMatch(/kimi/i)
     expect(adapter.statusCallback).toHaveBeenCalledTimes(1)
   })
 
