@@ -477,6 +477,36 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(result.workerIsolation?.configHasServer).toBe(true)
   })
 
+  /**
+   * SHARED-WORKSPACE CLOBBER (2026-09-22). A base-node worker launches in the
+   * coordinator's own workspace; the worker writer REPLACES its target. Measured
+   * live: repo-root `.mcp.json` held the worker entry at 22:57 and the coordinator
+   * entry at 23:06. Because this launch forces `--mcp-config <file>`, the worker
+   * config has no reason to live in the workspace at all.
+   */
+  it('★a base-node worker launch never touches the coordinator .mcp.json in the shared workspace', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-claude-shared-ws-'))
+    const workerBase = mkdtempSync(join(tmpdir(), 'adhdev-gateon-claude-shared-base-'))
+    __tmpDirsToClean.push(workspace, workerBase)
+    const coordinatorFile = JSON.stringify({ mcpServers: { 'adhdev-mesh': { command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_claude'] }, owners: { command: 'owner-server' } } })
+    writeFileSync(join(workspace, '.mcp.json'), coordinatorFile)
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'claude-cli',
+      workspace,
+      isolation: claudeIsolation,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+      sessionKey: 'sess_claude_base_worker',
+      workerHomeBaseDir: workerBase,
+      bindContext: { meshId: 'mesh_claude', sessionId: 'sess_claude_base_worker', spawnedForTaskId: 'task_claude' },
+    })
+
+    expect(readFileSync(join(workspace, '.mcp.json'), 'utf-8')).toBe(coordinatorFile)
+    const forced = result.cliArgs[result.cliArgs.indexOf('--mcp-config') + 1]
+    expect(realpathSync(forced).startsWith(realpathSync(workspace))).toBe(false)
+    expect(JSON.parse(readFileSync(forced, 'utf-8')).mcpServers['adhdev-mesh'].args).toContain('--worker')
+  })
+
   it('★keeps pointing at an EMPTY config when no worker server was written (Phase A shape)', () => {
     // No bindContext ⇒ no server entry ⇒ the strict flag must still aim at a
     // zero-server file. This is the branch that makes the fix above narrow:

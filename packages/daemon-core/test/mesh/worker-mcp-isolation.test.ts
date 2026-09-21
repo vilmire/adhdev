@@ -13,6 +13,7 @@ import {
   liveWorkerTaskTokenCount,
   mintWorkerTaskToken,
   prepareWorkerPrivateHome,
+  resolvePrivateWorkerMcpConfigPath,
   resolveWorkerMcpConfigPath,
   resolveWorkerMcpIsolation,
   revokeWorkerTaskToken,
@@ -229,6 +230,61 @@ describe('worker task token expiry', () => {
     const minted = mintWorkerTaskToken({ meshId: 'm', taskId: 't' })
     expect(revokeWorkerTaskToken(minted.token)).toBe(true)
     expect(revokeWorkerTaskToken(minted.token)).toBe(false)
+  })
+})
+
+// SHARED-WORKSPACE CLOBBER (2026-09-22). A base-node worker runs in the
+// coordinator's own workspace, and the worker writer REPLACES the file. Measured
+// on the preview coordinator machine: repo-root `.mcp.json` held the worker entry
+// at 22:57 and the coordinator entry at 23:06 — each writer erased the other, and
+// the replace would also discard servers the owner keeps in that file.
+describe('worker MCP config stays out of a shared workspace when the launch forces a config file', () => {
+  const CLAUDE = { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json' }
+  const OWNER_FILE = JSON.stringify({ mcpServers: { 'adhdev-mesh': { command: 'adhdev', args: ['mcp', '--repo-mesh', 'mesh_x'] }, mine: { command: 'my-server' } } })
+
+  it('writes to a per-session private file and leaves the workspace .mcp.json byte-identical', () => {
+    const workspace = tmp('adhdev-ws-shared-')
+    const baseDir = tmp('adhdev-worker-base-')
+    writeFileSync(join(workspace, '.mcp.json'), OWNER_FILE)
+
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'claude-cli', workspace, sessionKey: 'sess_worker_1', mcpConfig: CLAUDE,
+      forcedConfigFile: true, baseDir,
+      server: { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--worker'] },
+    }, ON)
+
+    expect(readFileSync(join(workspace, '.mcp.json'), 'utf-8')).toBe(OWNER_FILE)
+    expect(result?.configPath).toBeTruthy()
+    expect(result!.configPath!.startsWith(baseDir)).toBe(true)
+    expect(result!.configPath!.startsWith(workspace)).toBe(false)
+    expect(result!.configHasServer).toBe(true)
+    const written = JSON.parse(readFileSync(result!.configPath!, 'utf-8'))
+    expect(Object.keys(written.mcpServers)).toEqual(['adhdev-mesh'])
+    expect(written.mcpServers['adhdev-mesh'].args).toContain('--worker')
+  })
+
+  it('gives two sessions in the same workspace different files', () => {
+    const workspace = tmp('adhdev-ws-shared-')
+    const baseDir = tmp('adhdev-worker-base-')
+    const launch = (sessionKey: string) => resolveWorkerMcpIsolation({
+      providerType: 'claude-cli', workspace, sessionKey, mcpConfig: CLAUDE, forcedConfigFile: true, baseDir,
+    }, ON)!.configPath
+    expect(launch('sess_a')).not.toBe(launch('sess_b'))
+    expect(launch('sess_a')).toBe(launch('sess_a'))
+  })
+
+  it('an auto-importing launch (no forced file) still writes where the CLI looks', () => {
+    const workspace = tmp('adhdev-ws-autoimport-')
+    const result = resolveWorkerMcpIsolation({
+      providerType: 'claude-cli', workspace, sessionKey: 'sess_auto', mcpConfig: CLAUDE,
+    }, ON)
+    expect(result?.configPath).toBe(join(workspace, '.mcp.json'))
+  })
+
+  it('never redirects a home-rooted or absolute declared path', () => {
+    expect(resolvePrivateWorkerMcpConfigPath({ declaredPath: '~/.gemini/config/mcp_config.json', sessionKey: 's', forcedConfigFile: true })).toBeNull()
+    expect(resolvePrivateWorkerMcpConfigPath({ declaredPath: '/etc/x/mcp.json', sessionKey: 's', forcedConfigFile: true })).toBeNull()
+    expect(resolvePrivateWorkerMcpConfigPath({ declaredPath: '.mcp.json', sessionKey: 's' })).toBeNull()
   })
 })
 

@@ -240,11 +240,21 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     // off, and every use below is guarded on that null — so gate-off output is
     // byte-identical to the pre-feature behavior. This is the ONE place the
     // config/HOME axis consults the flag.
+    // True when an `empty_mcp_config` rule below WILL force `--mcp-config <file>`
+    // on this launch (declared, and the caller did not already pass the flag).
+    // The worker config can then live in a per-session private file instead of
+    // the workspace's auto-import path, which a base-node worker shares with the
+    // coordinator — see resolvePrivateWorkerMcpConfigPath.
+    const forcedConfigFile = (Array.isArray(input.isolation?.args) ? input.isolation.args : []).some(
+        (rule) => !!rule && typeof rule === 'object' && rule.mode === 'empty_mcp_config'
+            && !!rule.flag && !hasCliArg(cliArgs, rule.flag),
+    );
     const workerIsolation = resolveWorkerMcpIsolation({
         providerType: input.cliType,
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
+        forcedConfigFile,
         workerMcpDelivery: input.isolation?.workerMcpDelivery,
         realHome: input.realHome,
         baseDir: input.workerHomeBaseDir,
