@@ -111,6 +111,56 @@ describe('D4: adapter admits AUTH for any provider, BILLING/QUOTA for kimi only'
     expect(kimi.getStatus()).toMatchObject({ status: 'error', errorReason: 'billing_failed' })
   })
 
+  // EXIT-CONTEXT GATE. The retained tail is CONVERSATION content as much as CLI
+  // chrome, so "the process is dead, classify the tail" is only sound when the
+  // death itself is unexplained. A host-requested stop or a clean exit 0 already
+  // HAS an explanation; classifying a tail that merely quoted auth wording then
+  // reported auth_failed, suppressed mesh recovery as non-retryable, and told the
+  // coordinator the wrong reason (follow-up to the 2026-09-21 live-path incident).
+  describe('exit-context classification is gated on an unexplained death', () => {
+    const QUOTED = 'The dead worker printed "Authentication failed: unauthorized (HTTP 401)" and was not logged in. Summary done.'
+    const termination = (requestedStop?: 'stop' | 'delete' | 'restart' | 'prune') => ({
+      exitCode: 129, signal: null, reason: 'failed', lifecycle: 'stopped', terminatedAt: 1,
+      ...(requestedStop ? { requestedStop } : {}),
+    })
+
+    it('(a) quoted auth wording + host-requested stop is a plain stop, never auth_failed', () => {
+      for (const requested of ['stop', 'delete', 'restart', 'prune'] as const) {
+        const claude = make('claude-cli', QUOTED)
+        claude.handleEvent({ kind: 'exit', exit_code: 129, termination: termination(requested) })
+        expect({ requested, status: claude.getStatus().status }).toEqual({ requested, status: 'stopped' })
+        expect(claude.getStatus().errorReason).toBeUndefined()
+      }
+    })
+
+    it('(b) quoted auth wording + clean exit 0 is a plain stop', () => {
+      const claude = make('claude-cli', QUOTED)
+      claude.handleEvent({ kind: 'exit', exit_code: 0 })
+      expect(claude.getStatus()).toMatchObject({ status: 'stopped' })
+      expect(claude.getStatus().errorReason).toBeUndefined()
+    })
+
+    it('(c) the incident shape still classifies: real banner + unexpected non-zero exit, and an unknown (signal) exit', () => {
+      const crashed = make('claude-cli', 'Login expired · Please run /login')
+      crashed.handleEvent({ kind: 'exit', exit_code: 1, termination: termination() })
+      expect(crashed.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+
+      const signalled = make('claude-cli', 'Login expired · Please run /login')
+      signalled.handleEvent({ kind: 'exit', exit_code: null })
+      expect(signalled.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+    })
+
+    it('(d) kimi billing + non-zero exit stays billing_failed, but a requested stop is still just a stop', () => {
+      const kimi = make('kimi', 'Your membership is inactive. Payment required.')
+      kimi.handleEvent({ kind: 'exit', exit_code: 1 })
+      expect(kimi.getStatus()).toMatchObject({ status: 'error', errorReason: 'billing_failed' })
+
+      const stopped = make('kimi', 'Your membership is inactive. Payment required.')
+      stopped.handleEvent({ kind: 'exit', exit_code: 129, termination: termination('stop') })
+      expect(stopped.getStatus()).toMatchObject({ status: 'stopped' })
+    })
+  })
+
   // OVERCORRECTION GUARD: a healthy provider is untouched. This is the "normal
   // session stays dispatchable" control — a session that never printed an auth
   // banner must not acquire an error status.

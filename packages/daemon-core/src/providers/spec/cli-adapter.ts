@@ -88,7 +88,7 @@ import {
 } from '@adhdev/mesh-shared';
 
 import { detectKimiAuthBillingFailure, stripAnsi, type KimiAuthBillingFailure } from './kimi-auth-billing.js';
-import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
+import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 
 export { detectKimiAuthBillingFailure, type KimiAuthBillingFailure };
 
@@ -1349,7 +1349,7 @@ export class SpecCliAdapter implements CliAdapter {
                 // classifier against the retained tail at the exit seam. The observer
                 // invokes statusCallback only when it discovers a new typed failure;
                 // otherwise this branch publishes the ordinary stopped transition.
-                if (!this.observeKimiAuthBillingOutput('', ev.exit_code ?? undefined)) this.statusCallback?.();
+                if (!this.observeKimiAuthBillingOutput('', ev.exit_code ?? undefined, ev)) this.statusCallback?.();
                 return;
             case 'signal_detected':
                 this.publishSignalObservation(ev.signal);
@@ -1417,8 +1417,8 @@ export class SpecCliAdapter implements CliAdapter {
 
     /** Auth/billing classification of PTY output. WHAT the daemon may do about a
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-    private observeKimiAuthBillingOutput(chunk: string, exitCode?: number): boolean {
-        if (this.kimiAuthBillingFailure) return false;
+    private observeKimiAuthBillingOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
+        if (this.kimiAuthBillingFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination))) return false;
         if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
         const failure = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
         if (!failure) return false;
