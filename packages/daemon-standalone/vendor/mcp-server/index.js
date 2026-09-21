@@ -78604,7 +78604,8 @@ ${rendered}`, "utf-8");
       if (!args.preValidatedTranscriptEvidence && Number.isFinite(dispatchTime) && workerResult.source !== "final_summary_json") {
         const dispatchedToIdleSession = dispatch?.payload?.dispatchedToIdleSession === true;
         const graceMs = dispatchedToIdleSession ? DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS : DIRECT_DISPATCH_RECONCILE_GRACE_MS;
-        if (Date.now() - dispatchTime < graceMs) {
+        const dispatchAgeMs = Date.now() - dispatchTime;
+        if (dispatchAgeMs >= -DIRECT_DISPATCH_FUTURE_SKEW_TOLERANCE_MS && dispatchAgeMs < graceMs) {
           return { reconciled: false, reason: "direct_dispatch_grace_period" };
         }
       }
@@ -78768,6 +78769,7 @@ ${rendered}`, "utf-8");
     }
     var TERMINAL_LEDGER_KINDS;
     var DIRECT_DISPATCH_RECONCILE_GRACE_MS;
+    var DIRECT_DISPATCH_FUTURE_SKEW_TOLERANCE_MS;
     var DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS;
     var init_mesh_events_stale = __esm2({
       "src/mesh/mesh-events-stale.ts"() {
@@ -78783,6 +78785,7 @@ ${rendered}`, "utf-8");
         init_dist();
         TERMINAL_LEDGER_KINDS = ["task_completed", "task_failed", "task_stalled"];
         DIRECT_DISPATCH_RECONCILE_GRACE_MS = 6e4;
+        DIRECT_DISPATCH_FUTURE_SKEW_TOLERANCE_MS = 2e3;
         DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS = 12e4;
       }
     });
@@ -82973,6 +82976,15 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         };
       }
     });
+    function isWithinForeignFreshnessWindow(foreignAtMs, nowMs, windowMs) {
+      if (!Number.isFinite(foreignAtMs)) return false;
+      const ageMs2 = nowMs - foreignAtMs;
+      if (ageMs2 < -FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS) return false;
+      return ageMs2 < windowMs;
+    }
+    function isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs = Date.now(), windowMs = AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+      return isWithinForeignFreshnessWindow(launchedAtMs, nowMs, windowMs);
+    }
     function localCoordinatorDaemonId() {
       return canonicalDaemonId2(readNonEmptyString(getMachineId()));
     }
@@ -83079,7 +83091,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const heldSessionId = existing ? readNonEmptyString(existing.sessionId) : "";
       if (!existing || existing.status !== "completed" || !heldSessionId) return false;
       const heldAtMs = Date.parse(existing.updatedAt);
-      if (!Number.isFinite(heldAtMs) || Date.now() - heldAtMs >= awaitClaimWindowMs2) return false;
+      if (!isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs2)) return false;
       if (sessionIdsEquivalent(readNonEmptyString(args.sessionId), heldSessionId)) return false;
       LOG.info("MeshQueue", `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
       return true;
@@ -83104,7 +83116,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         if (!al || al.status !== "started" && al.status !== "completed" || !sid) continue;
         if (!daemonIdsEquivalent4(al.nodeId, nodeId)) continue;
         const launchedAtMs = Date.parse(al.updatedAt);
-        const inBaseWindow = Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
         const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${task.id}`);
         if (inBaseWindow || inBackoff) out.push(sid);
       }
@@ -83190,6 +83202,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     }
     var AUTO_LAUNCH_AWAIT_CLAIM_MS;
     var AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+    var FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS;
     var AUTO_LAUNCH_REMOTE_IDLE_TTL_MS;
     var TERMINAL_SESSION_STATUSES;
     var autoLaunchOrphanNotified;
@@ -83211,6 +83224,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_mesh_runtime_store();
         AUTO_LAUNCH_AWAIT_CLAIM_MS = 9e4;
         AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
+        FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS = 2e3;
         AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1e3;
         TERMINAL_SESSION_STATUSES = ["stopped", "failed", "terminated", "exited", "closed"];
         autoLaunchOrphanNotified = /* @__PURE__ */ new Set();
@@ -83900,7 +83914,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           if (normalizeNodeIdKey(entry.nodeId) !== key2) continue;
           const clonedAtMs = Date.parse(entry.timestamp);
           if (!Number.isFinite(clonedAtMs)) continue;
-          if (nowMs - clonedAtMs <= CLONE_BOOTSTRAP_GRACE_MS) return true;
+          const ageMs2 = nowMs - clonedAtMs;
+          if (ageMs2 < -CLONE_LEDGER_FUTURE_SKEW_TOLERANCE_MS) continue;
+          if (ageMs2 <= CLONE_BOOTSTRAP_GRACE_MS) return true;
         }
       } catch {
       }
@@ -83910,6 +83926,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     var recentlyClonedNodeExpiry;
     var MAX_TRACKED_CLONED_NODES;
     var CLONE_LEDGER_LOOKBACK_CAP;
+    var CLONE_LEDGER_FUTURE_SKEW_TOLERANCE_MS;
     var init_mesh_clone_grace = __esm2({
       "src/mesh/mesh-clone-grace.ts"() {
         "use strict";
@@ -83919,6 +83936,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         recentlyClonedNodeExpiry = /* @__PURE__ */ new Map();
         MAX_TRACKED_CLONED_NODES = 512;
         CLONE_LEDGER_LOOKBACK_CAP = 200;
+        CLONE_LEDGER_FUTURE_SKEW_TOLERANCE_MS = 2e3;
       }
     });
     function isActionableSkipReason(reason) {
@@ -83941,6 +83959,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function resolveTargetPinTtlVerdict(components, task, nowMs = Date.now()) {
       const wallAgeMs = targetPinAgeMs(task, nowMs);
       if (wallAgeMs === null) return { expired: false, ageMs: null, suspended: false };
+      const clockUnreconcilable = wallAgeMs < -FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS;
       const targetSessionId = readNonEmptyString(task.targetSessionId);
       const key2 = `${task.meshId}::${task.id}`;
       const prior = targetPinGeneratingCreditMs.get(key2);
@@ -83970,8 +83989,11 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         // optimisation that stops intermittent work from silently burning the budget.
         // It cannot make a pin immortal — the verdict is re-evaluated every tick from
         // live state and only a LOCAL, observably-generating session can produce it.
-        expired: !generating && unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS,
-        ageMs: unproductiveAgeMs,
+        //
+        // CLOCK-LOWER-BOUND: an unreconcilable (future-dated) anchor expires on the same
+        // `!generating` terms rather than surviving as an age-0, immortal pin.
+        expired: !generating && (clockUnreconcilable || unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS),
+        ageMs: clockUnreconcilable ? wallAgeMs : unproductiveAgeMs,
         suspended: generating
       };
     }
@@ -83981,7 +84003,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const targetNodeId = readNonEmptyString(task.targetNodeId);
       if (!targetSessionId && !targetNodeId) return NOT_DEAD;
       const lastUpdateMs = Date.parse(task.updatedAt || task.createdAt || "");
-      if (Number.isFinite(lastUpdateMs) && Date.now() - lastUpdateMs < DEAD_TARGET_GRACE_MS) return NOT_DEAD;
+      if (isWithinForeignFreshnessWindow(lastUpdateMs, Date.now(), DEAD_TARGET_GRACE_MS)) return NOT_DEAD;
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
       if (targetNodeId) {
         const nodePresent = nodes.some((n) => meshNodeIdMatches5(n, targetNodeId));
@@ -84186,6 +84208,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_mesh_queue_observability();
         init_mesh_task_parking();
         init_mesh_autolaunch_spawn_cap();
+        init_mesh_autolaunch_integrity();
         ACTIONABLE_SKIP_REASON_PREFIXES = [
           "target_node_id_unmatched",
           "no_node_satisfies_required_tags",
@@ -85632,7 +85655,7 @@ ${block2.text}`,
             const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
             const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
             const alProvider = readNonEmptyString(task.autoLaunch.providerType);
-            if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+            if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
               if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
                 (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches5(n, alNodeId)) : void 0)?.workspace
               )))) {
@@ -86863,7 +86886,7 @@ ${block2.text}`,
         const al = task.autoLaunch;
         if (!al || al.status !== "started" && al.status !== "completed") return false;
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs);
       });
       return {
         success: true,
@@ -89796,7 +89819,7 @@ ${statusLine}`;
       if (!al) return true;
       if (al.status === "started" || al.status === "completed") {
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
       }
       return true;
     }
@@ -90010,7 +90033,7 @@ ${statusLine}`;
         init_mesh_events_pending();
         init_mesh_events_utils();
         init_mesh_event_classify();
-        init_mesh_queue_assignment();
+        init_mesh_autolaunch_integrity();
         init_mesh_reconcile_coordinator_drain();
         init_dist();
         MID_GENERATION_MAX_BODY_CHARS = 512;
@@ -90638,7 +90661,7 @@ ${statusLine}`;
         if (!al || al.status !== "completed" || !al.sessionId) return false;
         if (!sessionIdsEquivalent(al.sessionId, sessionId)) return false;
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
       });
     }
     function hasMatchingTaskDispatchedLedgerEntry(meshId, taskId, sessionId) {
@@ -90962,8 +90985,7 @@ ${statusLine}`;
       if (!row.requeueReason || !REDRIVE_RECLAIM_REASONS.has(row.requeueReason)) return false;
       if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") return false;
       const requeuedAtMs = Date.parse(row.requeuedAt ?? "");
-      if (!Number.isFinite(requeuedAtMs)) return false;
-      if (Date.now() - requeuedAtMs > REDRIVE_SUPERSEDE_WINDOW_MS) return false;
+      if (!isWithinForeignFreshnessWindow(requeuedAtMs, Date.now(), REDRIVE_SUPERSEDE_WINDOW_MS)) return false;
       const reDispatchedSessionId = row.assignedSessionId;
       if (row.status === "assigned" && reDispatchedSessionId && !sessionIdsEquivalent(reDispatchedSessionId, completingSessionId)) {
         stopStaleMeshWorker(components, {
@@ -91069,6 +91091,7 @@ ${statusLine}`;
         init_mesh_turn_ledger();
         init_mesh_turn_presentation();
         init_mesh_queue_assignment();
+        init_mesh_autolaunch_integrity();
         init_mesh_completion_live_gate();
         init_mesh_provider_event_admission();
         setCompletionHoldObserver((report) => {
