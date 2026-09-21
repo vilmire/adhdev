@@ -60,8 +60,22 @@
  * on status 'error'), now behind the same on-screen confirmation.
  *
  * Exit-context classification (the process is already dead) latches immediately
- * for every provider, exactly as before: there is no session left to falsely
- * kill, only a death to explain.
+ * for every provider: there is no session left to falsely kill, only a death to
+ * explain.
+ *
+ * ── EXIT-CONTEXT GATE ────────────────────────────────────────────────────────
+ * "Only a death to explain" holds only when the death is UNEXPLAINED. The tail
+ * classified at exit is the same conversation-polluted 16KB buffer, and the
+ * classifier ignores the exit code, so a session that merely quoted auth wording
+ * and was then stopped by the host (requestedStop, exit 129) or exited cleanly
+ * (exit 0) was latched auth_failed: status 'error', MeshRecovery "Suppressing
+ * automatic recovery after non-retryable provider failure", and the wrong reason
+ * sent to the coordinator. A requested stop or a clean exit already has its
+ * explanation, so the tail is not consulted at all. An unexpected non-zero exit
+ * and an unknown/signal exit (exit code null — never collapsed to 0) still
+ * classify, which keeps the b23d10ee-class and kimi billing exits intact. The
+ * tail is deliberately still preferred over a final screen snapshot there: some
+ * CLIs repaint the failure off-screen before exiting.
  */
 
 import { LOG } from '../../logging/logger.js';
@@ -107,6 +121,15 @@ export function classifyAuthBillingOutput(cliType: string, text: string, exitCod
     if (!failure) return null;
     if (cliType !== 'kimi' && failure.failureKind !== 'auth') return null;
     return failure;
+}
+
+/** EXIT-CONTEXT GATE: consult the tail only for an unexplained death (see above). */
+export function exitClassificationAllowed(
+    exitCode: number | null | undefined,
+    termination?: { requestedStop?: string | null } | null,
+): boolean {
+    if (termination?.requestedStop) return false;
+    return exitCode !== 0;
 }
 
 export function authBillingLatchLogLine(cliType: string, failure: KimiAuthBillingFailure, context: string): string {

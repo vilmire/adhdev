@@ -112405,6 +112405,10 @@ ${text}` : text;
       if (cliType !== "kimi" && failure3.failureKind !== "auth") return null;
       return failure3;
     }
+    function exitClassificationAllowed(exitCode, termination) {
+      if (termination?.requestedStop) return false;
+      return exitCode !== 0;
+    }
     function authBillingLatchLogLine(cliType, failure3, context) {
       const suppressionNote = failure3.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
       return `[${cliType}] ${failure3.failureKind} failure detected from live PTY/exit (${context}); ${suppressionNote}`;
@@ -113433,7 +113437,7 @@ ${text}` : text;
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
                 this.publishTerminationObservation(ev.termination);
-                if (!this.observeKimiAuthBillingOutput("", ev.exit_code ?? void 0)) this.statusCallback?.();
+                if (!this.observeKimiAuthBillingOutput("", ev.exit_code ?? void 0, ev)) this.statusCallback?.();
                 return;
               case "signal_detected":
                 this.publishSignalObservation(ev.signal);
@@ -113498,8 +113502,8 @@ ${text}` : text;
           }
           /** Auth/billing classification of PTY output. WHAT the daemon may do about a
            *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-          observeKimiAuthBillingOutput(chunk, exitCode) {
-            if (this.kimiAuthBillingFailure) return false;
+          observeKimiAuthBillingOutput(chunk, exitCode, exit) {
+            if (this.kimiAuthBillingFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination)) return false;
             if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
             const failure3 = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
             if (!failure3) return false;
