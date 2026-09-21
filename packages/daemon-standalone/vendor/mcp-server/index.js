@@ -51787,6 +51787,22 @@ Next step: ${nextStep}`;
         return rowSessionId;
       }
     }
+    function recoverCompletionTaskIdForSession(args) {
+      const sessionId = typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+      if (!sessionId) return { recovered: false, reason: "no_attempt_for_session" };
+      let attempt;
+      try {
+        attempt = MeshRuntimeStore.getInstance().getLatestTurnAttemptForSession(sessionId);
+      } catch {
+        return { recovered: false, reason: "store_unavailable" };
+      }
+      if (!attempt) return { recovered: false, reason: "no_attempt_for_session" };
+      if (attempt.meshId !== args.meshId) return { recovered: false, reason: "attempt_mesh_mismatch" };
+      if (attempt.terminalOutcome) return { recovered: false, reason: "attempt_terminal" };
+      const taskId = typeof attempt.taskId === "string" ? attempt.taskId.trim() : "";
+      if (!taskId) return { recovered: false, reason: "no_attempt_for_session" };
+      return { recovered: true, taskId, attemptId: attempt.attemptId, reason: "attempt_bound_to_session" };
+    }
     function evaluateRedrive(meshId, taskId, nowMs = Date.now()) {
       const store = MeshRuntimeStore.getInstance();
       const attempt = store.getCurrentTurnAttempt(meshId, taskId);
@@ -91295,7 +91311,19 @@ ${statusLine}`;
         }
       }
       function markSessionTerminal(sessionId, outcome, occurredAtMs, opts) {
-        const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || void 0;
+        const echoedTaskId = readNonEmptyString(args.metadataEvent.taskId) || void 0;
+        const recoveredTaskId = echoedTaskId ? void 0 : (() => {
+          const recovery = recoverCompletionTaskIdForSession({ meshId: args.meshId, sessionId });
+          if (!recovery.recovered) {
+            traceMeshEventStage("completion_attribution_not_recovered", traceCtx, recovery.reason);
+            return void 0;
+          }
+          LOG.info("MeshQueue", `Completion for session ${sessionId} (mesh ${args.meshId}) carried no taskId \u2014 recovered task ${recovery.taskId} from its live turn attempt ${recovery.attemptId}. The worker's in-memory mesh envelope was detached before the completion armed (a terminal mesh event \u2014 typically the redrive's stale-worker stop \u2014 landed mid-turn); the coordinator's attempt binding is the durable authority.`);
+          traceMeshEventStage("completion_attribution_recovered", { ...traceCtx, taskId: recovery.taskId }, recovery.attemptId);
+          return recovery.taskId;
+        })();
+        const eventTaskId = echoedTaskId || recoveredTaskId;
+        if (recoveredTaskId) args.metadataEvent.taskId = recoveredTaskId;
         const preFlipAssignedAt = eventTaskId ? (() => {
           try {
             return MeshRuntimeStore.getInstance().findQueueEntryById(args.meshId, eventTaskId)?.updatedAt;
@@ -91828,7 +91856,13 @@ ${statusLine}`;
           if (ledgerKind === "task_completed") {
             scheduleTaskCompletionSideEffectEvidence(components, {
               meshId: args.meshId,
-              taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || void 0,
+              // COMPLETION-ATTRIBUTION-RECOVERY: same precedence as the ledger payload
+              // above. `directDispatchTaskIdForLedger` is resolved BEFORE
+              // markSessionTerminal runs, so it cannot see a recovered id; reading the
+              // metadataEvent first keeps the side-effect evidence check pointed at the
+              // same task the ledger entry was just attributed to instead of falling
+              // through to `undefined` and silently skipping the check.
+              taskId: readNonEmptyString(args.metadataEvent.taskId) || completedTaskForLedger?.id || directDispatchTaskIdForLedger || void 0,
               taskMode: completedTaskForLedger?.taskMode,
               sessionId: ledgerSessionId,
               nodeId: ledgerNodeId
