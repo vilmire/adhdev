@@ -66,6 +66,7 @@ import {
     proposeTurnCompletion,
     recordTurnAck,
     recordTurnStage,
+    recoverCompletionTaskIdForSession,
 } from './mesh-turn-ledger.js';
 import {
     getMeshWithCache,
@@ -470,7 +471,50 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     function markSessionTerminal(sessionId: string, outcome: 'completed' | 'failed', occurredAtMs?: number | null, opts?: { tentativeIfDirect?: boolean }): { id?: string; taskMode?: string } | null {
         // C2: prefer an exact taskId match when the completion event carries one —
         // it's immune to coordinator↔worker clock skew that can hide the assigned row.
-        const eventTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
+        //
+        // COMPLETION-ATTRIBUTION-RECOVERY: when the event carries NO taskId, recover it
+        // from the coordinator's own durable attempt table before anything downstream runs.
+        // The worker's taskId is entirely in-memory (pending.taskId / currentTurnTaskId /
+        // settings.meshActiveTaskId) and `detachMeshAssignment` erases all three after ANY
+        // terminal mesh event — so a worker that is stopped mid-turn (the redrive's
+        // stopStaleMeshWorker, which fires for every emitsPtyTurnEvents:false provider)
+        // arms and flushes its genuine completion with the envelope already gone. That
+        // completion then matched no assigned row and skipped EVERY taskId-gated repair
+        // below — including supersedeRedriveReclaimForLateCompletion, which exists for
+        // exactly this "genuine completion raced a redrive" case — so finished work was
+        // dropped and the task redrove forever (live: task 307f7b4e, 2026-09-21 07:50:09Z).
+        //
+        // Recovering HERE rather than at each consumer is deliberate: eventTaskId is the
+        // single value the reducer proposal, the queue flip, the direct-dispatch flip, the
+        // flip-miss safety net, the supersede branch and the ledger payload all read, so
+        // one recovery repairs the whole chain instead of six partial ones.
+        //
+        // Never invents attribution: the recovery demands a LIVE, non-terminal attempt of
+        // THIS mesh bound to THIS session, so a coordinator's own turn, an ad-hoc chat, and
+        // a pre-dispatch boot artifact all stay task-less (see the full case analysis on
+        // recoverCompletionTaskIdForSession). The reducer still arbitrates the terminal.
+        const echoedTaskId = readNonEmptyString(args.metadataEvent.taskId) || undefined;
+        const recoveredTaskId = echoedTaskId
+            ? undefined
+            : (() => {
+                const recovery = recoverCompletionTaskIdForSession({ meshId: args.meshId, sessionId });
+                if (!recovery.recovered) {
+                    traceMeshEventStage('completion_attribution_not_recovered', traceCtx, recovery.reason);
+                    return undefined;
+                }
+                LOG.info('MeshQueue', `Completion for session ${sessionId} (mesh ${args.meshId}) carried no taskId — recovered task ${recovery.taskId} from its live turn attempt ${recovery.attemptId}. The worker's in-memory mesh envelope was detached before the completion armed (a terminal mesh event — typically the redrive's stale-worker stop — landed mid-turn); the coordinator's attempt binding is the durable authority.`);
+                traceMeshEventStage('completion_attribution_recovered', { ...traceCtx, taskId: recovery.taskId }, recovery.attemptId);
+                return recovery.taskId;
+            })();
+        const eventTaskId = echoedTaskId || recoveredTaskId;
+        // Make the recovered id visible to every LATER reader of the event — the ledger
+        // payload's `readNonEmptyString(args.metadataEvent.taskId)` (which is FIRST in its
+        // fallback chain), the outbox fingerprint, and the coordinator message all read the
+        // metadataEvent, not this local. Without the stamp the ledger entry would still land
+        // with no taskId even though the flip above was correctly attributed — the exact
+        // unattributed `task_completed` this fix exists to remove. Only ever written when
+        // the field was genuinely absent, so an echoed id is never overwritten.
+        if (recoveredTaskId) args.metadataEvent.taskId = recoveredTaskId;
         // FALSE-COMPLETION-GIT-EVIDENCE (gap 2 fix): snapshot the row's `updatedAt` BEFORE
         // any flip below overwrites it — this is the assign/dispatch timestamp (last time
         // the row transitioned INTO 'assigned', stamped by claimNextQueueTask/updateQueueEntry),
@@ -1333,7 +1377,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             if (ledgerKind === 'task_completed') {
                 scheduleTaskCompletionSideEffectEvidence(components, {
                     meshId: args.meshId,
-                    taskId: completedTaskForLedger?.id || directDispatchTaskIdForLedger || undefined,
+                    // COMPLETION-ATTRIBUTION-RECOVERY: same precedence as the ledger payload
+                    // above. `directDispatchTaskIdForLedger` is resolved BEFORE
+                    // markSessionTerminal runs, so it cannot see a recovered id; reading the
+                    // metadataEvent first keeps the side-effect evidence check pointed at the
+                    // same task the ledger entry was just attributed to instead of falling
+                    // through to `undefined` and silently skipping the check.
+                    taskId: readNonEmptyString(args.metadataEvent.taskId)
+                        || completedTaskForLedger?.id
+                        || directDispatchTaskIdForLedger
+                        || undefined,
                     taskMode: completedTaskForLedger?.taskMode,
                     sessionId: ledgerSessionId,
                     nodeId: ledgerNodeId,
