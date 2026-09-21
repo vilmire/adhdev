@@ -1416,18 +1416,42 @@ export class SpecCliAdapter implements CliAdapter {
         });
     }
 
+    /**
+     * AUTH-EXPIRY-GENERALIZATION (D4): this observer used to return early for
+     * every non-kimi provider, so a spec CLI that printed an expired-credential
+     * banner produced NO classification at all — no completionDiagnostic.reason,
+     * and (because the session stayed alive and idle rather than emitting
+     * agent:stopped) no nonRetryableProviderFailureReason either. The mesh then
+     * saw a perfectly healthy idle session and kept dispatching into it. Live:
+     * claude-cli session b23d10ee answered "Login expired · Please run /login" in
+     * 34s with zero content on 2026-09-20 and swallowed another task on 09-21.
+     *
+     * The AUTH axis is now evaluated for every spec-backed CLI, because an
+     * expired credential is a universal condition and its wording ("login
+     * expired", "not logged in", "401") is provider-neutral.
+     *
+     * BILLING and QUOTA stay kimi-scoped deliberately. Their vocabulary
+     * ("membership inactive", "billing cycle", "5-hour usage limit") is Kimi's
+     * entitlement model, the quota bucket is additionally gated on an HTTP
+     * failure envelope that only Kimi emits, and the quota axis is ALREADY
+     * covered for every provider by the routing gate (mesh-quota-routing.ts).
+     * Widening those here would re-risk the 2026-08-29 misclassification without
+     * covering anything the mesh does not already handle.
+     */
     private observeKimiAuthBillingOutput(chunk: string, exitCode?: number): boolean {
-        if (this.cliType !== 'kimi' || this.kimiAuthBillingFailure) return false;
+        if (this.kimiAuthBillingFailure) return false;
         if (chunk) {
             this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
         }
         const failure = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
         if (!failure) return false;
+        // Non-kimi providers admit the auth verdict only; see the note above.
+        if (this.cliType !== 'kimi' && failure.failureKind !== 'auth') return false;
         this.kimiAuthBillingFailure = failure;
         const suppressionNote = failure.failureKind === 'quota'
             ? 'this PTY session will not be blindly restarted; the mesh may retry once quota resets'
             : 'automatic provider retry must be suppressed';
-        LOG.warn('SpecAdapter', `[kimi] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); ${suppressionNote}`);
+        LOG.warn('SpecAdapter', `[${this.cliType}] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); ${suppressionNote}`);
         this.statusCallback?.();
         return true;
     }
