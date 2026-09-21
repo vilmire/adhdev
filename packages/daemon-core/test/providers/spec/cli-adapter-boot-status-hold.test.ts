@@ -20,7 +20,7 @@ function makeAdapter(opts: {
         cliName: 'Antigravity CLI',
         spawned: true,
         exited: false,
-        kimiAuthBillingFailure: null,
+        providerFailure: null,
         activeInteractivePrompt: null,
         latestState: { id: opts.stateId, label: opts.stateId, title: null, status: opts.stateStatus },
         latestModal: null,

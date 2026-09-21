@@ -424,7 +424,7 @@ export function buildMeshSystemMessage(args: {
             const kind = providerFailureReason === 'billing_failed' ? 'billing/subscription' : 'authentication';
             const detail = readNonEmptyString(failureDiagnostic?.errorMessage)
                 || readNonEmptyString(args.metadataEvent.finalSummary);
-            return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same unavailable Kimi entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
+            return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
         }
         // Quota/usage-window exhaustion is DISTINCT from billing: the account is
         // fine, the window is spent. Recovery is deliberately NOT suppressed

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { detectKimiAuthBillingFailure } from '../../../src/providers/spec/kimi-auth-billing.js'
+import { detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js'
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
 
 // D4 — AUTH-EXPIRY-GENERALIZATION.
@@ -10,7 +10,7 @@ import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
 // 2026-09-20, then stayed dispatch-eligible and swallowed task 1c225a59 on
 // 09-21 with the identical empty fingerprint.
 //
-// Root cause was NOT the dispatch filter's criteria. `observeKimiAuthBillingOutput`
+// Root cause was NOT the dispatch filter's criteria. `observeProviderFailureOutput`
 // returned early for every non-kimi provider, so no classification was produced at
 // all: completionDiagnostic.reason was never set, and because the session stayed
 // alive and idle (no agent:stopped) nonRetryableProviderFailureReason never ran
@@ -21,22 +21,22 @@ import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
 describe('D4: auth-expiry fingerprints are classified for every spec-backed CLI', () => {
   // The two live claude-cli banners. Both previously produced NO classification.
   it('classifies the live "Login expired · Please run /login" banner as auth_failed', () => {
-    const failure = detectKimiAuthBillingFailure('Login expired · Please run /login')
+    const failure = detectProviderFailure('Login expired · Please run /login')
     expect(failure).toMatchObject({ errorReason: 'auth_failed', failureKind: 'auth' })
   })
 
   it('classifies a bare "credentials expired" statement as auth_failed', () => {
-    expect(detectKimiAuthBillingFailure('Error: credentials expired'))
+    expect(detectProviderFailure('Error: credentials expired'))
       .toMatchObject({ errorReason: 'auth_failed' })
   })
 
   it('keeps the pre-existing Kimi auth wording working (no regression)', () => {
-    expect(detectKimiAuthBillingFailure('Authentication failed: access token has expired.'))
+    expect(detectProviderFailure('Authentication failed: access token has expired.'))
       .toMatchObject({ errorReason: 'auth_failed' })
   })
 
   it('emits provider-neutral auth copy so a non-kimi operator is not misdirected', () => {
-    const failure = detectKimiAuthBillingFailure('Login expired · Please run /login')
+    const failure = detectProviderFailure('Login expired · Please run /login')
     expect(failure?.message).not.toMatch(/kimi/i)
   })
 
@@ -56,20 +56,20 @@ describe('D4: auth-expiry fingerprints are classified for every spec-backed CLI'
       'handling the login expired case in the parser',
     ]
     for (const line of prose) {
-      expect(detectKimiAuthBillingFailure(line), line).toBeNull()
+      expect(detectProviderFailure(line), line).toBeNull()
     }
   })
 
   it('still classifies a real banner that follows sentence punctuation', () => {
     // The anchor must not be so strict that it only matches at offset 0 — a PTY
     // tail routinely carries preceding output.
-    expect(detectKimiAuthBillingFailure('Done. Your session has expired.'))
+    expect(detectProviderFailure('Done. Your session has expired.'))
       .toMatchObject({ errorReason: 'auth_failed' })
   })
 
   it('returns null for ordinary output', () => {
-    expect(detectKimiAuthBillingFailure('Running tests... 42 passed')).toBeNull()
-    expect(detectKimiAuthBillingFailure('')).toBeNull()
+    expect(detectProviderFailure('Running tests... 42 passed')).toBeNull()
+    expect(detectProviderFailure('')).toBeNull()
   })
 })
 
@@ -83,8 +83,8 @@ describe('D4: adapter admits AUTH for any provider, BILLING/QUOTA for kimi only'
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: cliType, name: cliType }
-    adapter.kimiFailureOutputTail = tail
-    adapter.kimiAuthBillingFailure = null
+    adapter.failureOutputTail = tail
+    adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     return adapter
   }

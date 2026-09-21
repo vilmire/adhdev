@@ -104,7 +104,7 @@ function makeAntigravityAdapter(screenText: string): any {
     activeInteractivePrompt: null,
     interactivePromptTransport: null,
     claudeTuiPromptCaptureInFlight: false,
-    kimiAuthBillingFailure: null,
+    providerFailure: null,
     exited: false,
     spawned: true,
     spawnedAtMs: Date.now(),

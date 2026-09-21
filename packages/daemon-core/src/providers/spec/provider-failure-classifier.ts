@@ -20,14 +20,25 @@ export function stripAnsi(text: string): string {
     return s.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
 }
 
-export interface KimiAuthBillingFailure {
+export interface ProviderFailure {
     errorReason: 'auth_failed' | 'billing_failed' | 'quota_exceeded';
     failureKind: 'auth' | 'billing' | 'quota';
     message: string;
 }
 
 /**
- * KIMI-AUTH-BILLING-LIVE: classify only strong Kimi CLI failure markers.
+ * Provider failure classifier (formerly `kimi-auth-billing.ts` /
+ * `detectKimiAuthBillingFailure`, renamed 2026-09-22 — the kimi-only name had
+ * been false since AUTH-EXPIRY-GENERALIZATION made the AUTH axis serve every
+ * spec CLI, and the misnomer hid that blast radius in review).
+ *
+ * Scope per axis: AUTH wording is provider-neutral and admitted for every spec
+ * CLI; BILLING and QUOTA wording is Kimi's entitlement vocabulary and is
+ * admitted for kimi only. That admission rule, and what the daemon may DO about
+ * a match (live = suspicion/advisory, exit = verdict), is live-auth-advisory.ts;
+ * this file only answers "does this text look like a provider failure?".
+ *
+ * KIMI-AUTH-BILLING-LIVE: classify only strong failure markers.
  *
  * Spec-backed CLIs run inside one PTY, so stdout and stderr are intentionally
  * merged by node-pty. The live adapter therefore retains a small output tail
@@ -63,7 +74,7 @@ function hasProviderFailureEnvelope(text: string): boolean {
         || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
 }
 
-export function detectKimiAuthBillingFailure(output: string, _exitCode?: number): KimiAuthBillingFailure | null {
+export function detectProviderFailure(output: string, _exitCode?: number): ProviderFailure | null {
     const text = stripAnsi(output).replace(/\s+/g, ' ').trim().toLowerCase();
     if (!text) return null;
 
@@ -146,13 +157,13 @@ export function detectKimiAuthBillingFailure(output: string, _exitCode?: number)
             errorReason: 'auth_failed',
             failureKind: 'auth',
             // Provider-neutral wording: the AUTH axis now serves every spec-backed
-            // CLI (see observeKimiAuthBillingOutput), so naming Kimi here would send
+            // CLI (see observeProviderFailureOutput), so naming Kimi here would send
             // a claude-cli operator to re-login against the wrong tool. The billing
             // and quota messages above stay Kimi-specific because those axes remain
             // kimi-scoped.
             //
             // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
-            // (assert: detectKimiAuthBillingFailure(message) === null). It travels
+            // (assert: detectProviderFailure(message) === null). It travels
             // into mesh failure events that the daemon INJECTS into coordinator and
             // worker PTYs — the previous wording ("Provider authentication failed…")
             // matched the bare `authentication failed` rule above, so every delivery
