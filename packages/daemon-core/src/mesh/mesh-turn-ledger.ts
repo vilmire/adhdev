@@ -1350,6 +1350,119 @@ export type AttemptRebindResult =
     | { rebound: true; attemptId: string; fromSessionId?: string; toSessionId: string }
     | { rebound: false; reason: 'no_attempt' | 'attempt_terminal' | 'same_session' | 'no_holder' | 'store_rejected'; attemptId?: string };
 
+export type DuplicateDispatchConsumptionResult =
+    | { promoted: true; attemptId: string; stage: string }
+    | { promoted: false; reason: 'no_attempt' | 'attempt_terminal' | 'already_consumed' | 'no_holder' | 'store_unavailable'; attemptId?: string };
+
+/**
+ * DUP-REFUSAL-IS-CONSUMPTION: promote the durable `consumed` link that a
+ * duplicate-dispatch refusal proves.
+ *
+ * THE DEFECT THIS CLOSES. Every redrive path infers "the worker never consumed
+ * the prompt" from the ABSENCE of the `generating_started` consumed ACK. For an
+ * `emitsPtyTurnEvents === false` provider that event never exists, so the
+ * inference is structurally always-true and the surrounding guards
+ * (transcript-progress poll, adapter live-turn probe, UNKNOWN streak) are the
+ * ONLY things standing between a healthy worker and `stopStaleMeshWorker`. Each
+ * of those is a point-sample that can legitimately read negative mid-turn: a
+ * native-source transcript is quiet between tool calls, and the adapter probe
+ * resolves to nothing at all for a REMOTE session — which is exactly the
+ * configuration of the live incident below.
+ *
+ * {@link rebindAttemptToLiveHolder} (rc.35) already recognised this refusal as
+ * an application-level answer and corrected the attempt's SESSION binding. But
+ * it left the attempt at its pre-consumed stage, so `evaluateRedrive` still
+ * returned `allowed`, `taskDeliveryConsumed()` still read false, and the redrive
+ * fired anyway — against the very session the rebind had just identified as the
+ * live holder. Correcting *who* holds the task without recording *that it was
+ * taken up* is half the answer.
+ *
+ * WHY THE REFUSAL IS CONSUMPTION EVIDENCE, and not merely liveness. The worker
+ * daemon refuses only via `findLiveWorkingTaskHolder`, which requires another
+ * instance on that daemon to be (a) stamped with this exact `(meshId, taskId)` —
+ * a stamp applied at dispatch, so the prompt demonstrably reached a session —
+ * and (b) in a working status (generating / waiting_approval / waiting_choice /
+ * starting / streaming / working / no_progress / long_generating). That is a
+ * DIRECT observation made by the daemon that owns the session, not an inference
+ * from a clock or from PTY silence. It is strictly stronger evidence than the
+ * missing `generating_started` ACK is evidence of the negative — and it is
+ * available for remote workers, where the adapter probe is not.
+ *
+ * LIVE INCIDENT (task 307f7b4e, node MoltBook, antigravity-cli, 2026-09-21).
+ * 07:46:25 dispatch → session 3f3a7a16. 07:48:13 `dispatch_duplicate_rebound`:
+ * the node refused a second dispatch and named the live holder, proving the
+ * worker held the task and was working it. 07:49:54 `delivered_not_consumed_redrive`
+ * fired regardless — the rebind had recorded no consumption — and stopped the
+ * worker. 15s later that worker produced a complete `workerResult`, which landed
+ * with no taskId because the stop had detached its envelope (the attribution half
+ * of this is recovered by {@link recoverCompletionTaskIdForSession}; this function
+ * prevents the stop from happening at all).
+ *
+ * OVERCORRECTION GUARD — this must NOT make redrive unreachable. It promotes on
+ * one specific, positively-observed event, never on a clock, a silence, or a
+ * provider class:
+ *  - A task whose prompt genuinely never reached a worker produces NO refusal —
+ *    nothing calls this, and its redrive path is byte-for-byte unchanged.
+ *  - `emitsPtyTurnEvents === true` providers reach this identically (the refusal
+ *    is provider-agnostic); their judgement is unchanged because in their normal
+ *    path the real `generating_started` ACK already promotes the same link.
+ *  - A refusal with no named holder (`no_holder`) promotes nothing: without a
+ *    holder session id we cannot bind the evidence, and an unbound promotion
+ *    would suppress redrive on an unverifiable claim.
+ *  - A TERMINAL attempt is never rewritten, and an already-consumed attempt is a
+ *    no-op — the monotonic stage guard, not a special case here.
+ * Consumption is not completion: the promoted attempt still owes a terminal, and
+ * every stall/no-turn deadline above this layer continues to govern a worker
+ * that takes the prompt and then dies. What it can no longer do is have the same
+ * prompt re-injected while it is demonstrably working.
+ *
+ * Callers must rebind FIRST (so the attempt is bound to the holder) — the ack's
+ * session-binding guard rejects evidence from a session the attempt does not name.
+ */
+export function recordDuplicateDispatchConsumption(args: {
+    meshId: string;
+    taskId: string;
+    holderSessionId?: string;
+    attemptId?: string;
+    nowMs?: number;
+}): DuplicateDispatchConsumptionResult {
+    const holder = typeof args.holderSessionId === 'string' ? args.holderSessionId.trim() : '';
+    if (!holder) return { promoted: false, reason: 'no_holder' };
+
+    let attempt: MeshTurnAttemptRow | null;
+    try {
+        attempt = MeshRuntimeStore.getInstance().getCurrentTurnAttempt(args.meshId, args.taskId);
+    } catch {
+        return { promoted: false, reason: 'store_unavailable' };
+    }
+    if (!attempt) return { promoted: false, reason: 'no_attempt' };
+    if (attempt.terminalOutcome || isTerminalTurnStage(attempt.stage)) {
+        return { promoted: false, reason: 'attempt_terminal', attemptId: attempt.attemptId };
+    }
+    if (STAGE_RANK[attempt.stage as TurnStage] >= STAGE_RANK.consumed) {
+        // Already at/past consumed — the link exists; nothing to promote.
+        return { promoted: false, reason: 'already_consumed', attemptId: attempt.attemptId };
+    }
+
+    // Reuse the ordinary consumed ACK: insert-once idempotent, monotonic, and it
+    // drains any suspension held pre-consumed in the SAME transaction — exactly
+    // what a real generating_started ACK would have done for a provider that
+    // emits one. No new signal, no new state machine.
+    const ack = recordTurnAck({
+        meshId: args.meshId,
+        taskId: args.taskId,
+        kind: 'consumed',
+        ...(args.attemptId ? { attemptId: args.attemptId } : {}),
+        sessionId: holder,
+        ...(typeof args.nowMs === 'number' ? { nowMs: args.nowMs } : {}),
+        evidence: { source: 'duplicate_dispatch_refusal', holderSessionId: holder },
+    });
+    if (!ack) return { promoted: false, reason: 'no_attempt' };
+
+    LOG.info('TurnLedger', `Promoted consumed evidence for task ${args.taskId} attempt ${ack.attemptId} from a duplicate-dispatch refusal: the worker daemon reports live session ${holder} is already WORKING this task (audit source duplicate_dispatch_refusal) — the redrive paths, which infer "never consumed" from a missing generating_started, may no longer re-inject this prompt`);
+    return { promoted: true, attemptId: ack.attemptId, stage: ack.stage };
+}
+
 /**
  * DUP-CLAIM-REBIND: re-point the CURRENT attempt at the session that is genuinely
  * working the task.
