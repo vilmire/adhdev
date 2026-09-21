@@ -1437,6 +1437,12 @@ export interface WriteWorkerMcpConfigInput {
      * config root rather than a home. See `WorkerPrivateHomeSpec.configRootPrefix`.
      */
     configRootPrefix?: string;
+    /**
+     * Absolute path to write instead of the declared one. Set only for a
+     * forced-config-file launch whose declared path is workspace-relative — see
+     * `resolvePrivateWorkerMcpConfigPath`.
+     */
+    privateConfigPath?: string;
     /** Omit to write a config with NO servers at all (strongest isolation). */
     server?: WorkerMcpServerCommand;
     /** Minted worker token, carried in the server entry's env. */
@@ -1489,6 +1495,39 @@ export function resolveWorkerMcpConfigPath(
 }
 
 /**
+ * SHARED-WORKSPACE CLOBBER (2026-09-22). A workspace-relative declared path
+ * (`.mcp.json`) resolves to `<workspace>/.mcp.json`, and a worker on the BASE
+ * node runs in the coordinator's own workspace. `writeWorkerMcpConfig` REPLACES
+ * rather than merges, on the stated premise that the target is "a worker-private
+ * HOME or a temp path the worker alone reads" — which a shared workspace file is
+ * not. Measured on the preview coordinator machine: the repo-root `.mcp.json`
+ * held the WORKER entry (`adhdev mcp --mode ipc --worker`) at 22:57 and the
+ * coordinator entry at 23:06. Each writer erased the other, and the replace also
+ * discards any servers the owner keeps in that file.
+ *
+ * When the launch forces an explicit config file, the CLI reads ONLY that file
+ * (strict mode), so nothing requires the worker config to live at the auto-import
+ * path at all. It goes to a per-session private file instead and the workspace
+ * file is never touched. Returns null when the declared path is home-rooted or
+ * absolute (those are already private or deliberately pinned) or when the launch
+ * does not force a file — an auto-importing CLI must still find its config where
+ * it looks.
+ */
+export function resolvePrivateWorkerMcpConfigPath(input: {
+    declaredPath: string;
+    sessionKey: string;
+    forcedConfigFile?: boolean;
+    baseDir?: string;
+}): string | null {
+    if (!input.forcedConfigFile) return null;
+    const declared = String(input.declaredPath || '').trim();
+    if (!declared || declared.startsWith('~') || path.isAbsolute(declared)) return null;
+    const root = path.join(input.baseDir || os.tmpdir(), 'adhdev-worker-mcp-config');
+    const sessionDir = crypto.createHash('sha256').update(String(input.sessionKey || '')).digest('hex').slice(0, 16);
+    return path.join(root, sessionDir, path.basename(declared));
+}
+
+/**
  * Write the worker's MCP config to the provider-declared path.
  *
  * ★This REPLACES rather than merges. The coordinator writer merges because it
@@ -1506,7 +1545,7 @@ export function writeWorkerMcpConfig(input: WriteWorkerMcpConfigInput): string {
     if (!isSupportedMeshCoordinatorConfigFormat(input.format)) {
         throw new Error(`worker_mcp_unsupported_format: ${String(input.format)}`);
     }
-    const target = resolveWorkerMcpConfigPath(
+    const target = input.privateConfigPath || resolveWorkerMcpConfigPath(
         input.declaredPath,
         input.workspace,
         input.workerHome,
@@ -1584,6 +1623,13 @@ export interface WorkerMcpIsolationInput {
     };
     /** Provider-declared non-file delivery for the worker MCP server. */
     workerMcpDelivery?: WorkerMcpConfigOverrideDeliveryInput;
+    /**
+     * True when this launch FORCES the CLI to read one explicit config file
+     * (claude's `empty_mcp_config` rule: `--mcp-config <file>` +
+     * `--strict-mcp-config`), so the worker config does not have to sit at the
+     * provider's auto-import path. See `resolvePrivateWorkerMcpConfigPath`.
+     */
+    forcedConfigFile?: boolean;
     /** Minted worker token for the task this worker is being spawned for. */
     token?: string;
     /** Worker MCP server entry. Omit for a servers-{} config. */
@@ -1775,11 +1821,22 @@ export function resolveWorkerMcpIsolation(
         }
     }
 
+    const privateConfigPath = resolvePrivateWorkerMcpConfigPath({
+        declaredPath,
+        sessionKey: input.sessionKey,
+        forcedConfigFile: input.forcedConfigFile,
+        baseDir: input.baseDir,
+    });
+    if (privateConfigPath) {
+        notes.push(`launch forces an explicit config file — worker config kept out of the shared workspace (${declaredPath} untouched)`);
+    }
+
     try {
         result.configPath = writeWorkerMcpConfig({
             declaredPath,
             format,
             serverName,
+            ...(privateConfigPath ? { privateConfigPath } : {}),
             workspace: input.workspace,
             workerHome: result.workerHome,
             ...(spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {}),
