@@ -38,7 +38,7 @@ import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAss
 import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent, recordClaimRefusal } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
-import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
+import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
 import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
 import { normalizeProviderPriority, isLaunchableNode, isLocalAutoLaunchNode, liveSessionCountForNode, nodeHasLiveSessionPendingClaim } from './mesh-candidacy-predicates.js';
@@ -540,7 +540,9 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                 const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
                 const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
                 const alProvider = readNonEmptyString(task.autoLaunch.providerType);
-                if (Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS) {
+                // CLOCK-LOWER-BOUND: `autoLaunch.updatedAt` is foreign; a future stamp must not
+                // suppress the re-launch forever — see isWithinForeignFreshnessWindow.
+                if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
                     // AUTOLAUNCH-DEFERRED-CLAIM: this guard's premise — "a claim is already in
                     // flight, just wait" — is FALSE when the launch's single inline claim was
                     // refused by the ff lease. Re-drive it instead of waiting out the window

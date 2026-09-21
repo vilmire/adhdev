@@ -43,6 +43,13 @@ function recordSynthCompletionGateTrace(stage: string, payload: Record<string, u
 // is the exact race above, so it gets a LONGER grace than a dispatch to a session that was
 // already generating (where a transcript reconcile is far less likely to be premature).
 const DIRECT_DISPATCH_RECONCILE_GRACE_MS = 60_000;
+
+/**
+ * How far the foreign dispatch stamp may sit AHEAD of our clock before it reads as
+ * clock-untrustworthy rather than merely fresh. Local copy of the ±2s tolerance used by
+ * mesh-autolaunch-integrity / mesh-completion-live-gate.
+ */
+const DIRECT_DISPATCH_FUTURE_SKEW_TOLERANCE_MS = 2_000;
 const DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS = 120_000;
 
 // ---------------------------------------------------------------------------
@@ -555,7 +562,18 @@ export function reconcileDirectDispatchCompletionFromTranscript(args: {
         const graceMs = dispatchedToIdleSession
             ? DIRECT_DISPATCH_IDLE_SESSION_RECONCILE_GRACE_MS
             : DIRECT_DISPATCH_RECONCILE_GRACE_MS;
-        if (Date.now() - dispatchTime < graceMs) {
+        // CLOCK-LOWER-BOUND (2026-09-21): `dispatch.timestamp` is a FOREIGN ledger stamp
+        // (written by whichever node recorded the dispatch), so skew / an NTP step can put it
+        // ahead of our clock. This is an EXEMPTION-form gate — `age < grace` REFUSES to
+        // reconcile — so a negative age is unconditionally true and the task's terminal is
+        // blocked FOREVER: every later tick re-takes this branch and the coordinator never
+        // learns the task finished. Reject the untrustworthy stamp rather than clamping it
+        // (`Math.max(0, age)` would read a future stamp as "dispatched this instant", the
+        // strongest possible pass). Declining the grace hands the case to the stale-summary
+        // timestamp guard + FIX 2 supersession, the same backstops used when the dispatch
+        // entry is missing entirely.
+        const dispatchAgeMs = Date.now() - dispatchTime;
+        if (dispatchAgeMs >= -DIRECT_DISPATCH_FUTURE_SKEW_TOLERANCE_MS && dispatchAgeMs < graceMs) {
             return { reconciled: false, reason: 'direct_dispatch_grace_period' };
         }
     }

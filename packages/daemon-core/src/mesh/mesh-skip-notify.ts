@@ -15,6 +15,7 @@ import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-a
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-observability.js';
 import { PARKED_SKIP_REASON, PARKED_TASK_RETENTION_MS } from './mesh-task-parking.js';
 import { AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP, SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
+import { isWithinForeignFreshnessWindow, FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS } from './mesh-autolaunch-integrity.js';
 
 // Fix (1): actionable dispatch-skip notification.
 //
@@ -233,6 +234,28 @@ export function resolveTargetPinTtlVerdict(
     const wallAgeMs = targetPinAgeMs(task, nowMs);
     if (wallAgeMs === null) return { expired: false, ageMs: null, suspended: false };
 
+    // CLOCK-LOWER-BOUND (2026-09-21): the pin anchor (`requeuedAt`/`createdAt`) is FOREIGN —
+    // stamped by whichever node wrote the queue row — so node skew / an NTP step / a
+    // replicated row can put it in our future, making wallAgeMs negative.
+    //
+    // ★That is NOT an exemption we may grant by clamping. The `Math.max(0, …)` below is a
+    // subtraction floor for the CREDIT ledger (credit must never exceed wall age), and it
+    // would silently absorb a negative wall age into 0 — pinning unproductiveAgeMs at 0 so
+    // `unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS` can NEVER be true. The pin becomes
+    // immortal, which is precisely the RC.20 mesh_queue_requeue wedge this TTL was written to
+    // bound (a task left 'pending' FOREVER behind target_session_constraint).
+    //
+    // Treat an unreconcilable clock as a pin we cannot date: it becomes ELIGIBLE to expire,
+    // matching the module's stated safe direction ("erring toward expiry is the safe
+    // direction — parking is recoverable, an immortal pin is not"). Ordinary sub-second
+    // jitter is tolerated.
+    //
+    // ★The TTL-WHILE-WORKING invariant is preserved: this only decides the AGE BASIS. The
+    // `!generating` conjunct below still gates expiry, so a target this daemon can watch
+    // GENERATING suspends the clock on a skewed row exactly as it does on a well-dated one.
+    // Only an addressee with no positive evidence of work expires here.
+    const clockUnreconcilable = wallAgeMs < -FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS;
+
     const targetSessionId = readNonEmptyString(task.targetSessionId);
     const key = `${task.meshId}::${task.id}`;
     const prior = targetPinGeneratingCreditMs.get(key);
@@ -269,8 +292,11 @@ export function resolveTargetPinTtlVerdict(
         // optimisation that stops intermittent work from silently burning the budget.
         // It cannot make a pin immortal — the verdict is re-evaluated every tick from
         // live state and only a LOCAL, observably-generating session can produce it.
-        expired: !generating && unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS,
-        ageMs: unproductiveAgeMs,
+        //
+        // CLOCK-LOWER-BOUND: an unreconcilable (future-dated) anchor expires on the same
+        // `!generating` terms rather than surviving as an age-0, immortal pin.
+        expired: !generating && (clockUnreconcilable || unproductiveAgeMs >= TARGET_SESSION_PIN_TTL_MS),
+        ageMs: clockUnreconcilable ? wallAgeMs : unproductiveAgeMs,
         suspended: generating,
     };
 }
@@ -322,8 +348,17 @@ export function resolveDeadTargetVerdict(components: DaemonComponents, meshId: s
 
     // Age gate: never reclaim a pin younger than the grace window (guards against a target
     // that has only just dropped out of view for a momentary reconnect).
+    //
+    // CLOCK-LOWER-BOUND (2026-09-21): `updatedAt`/`createdAt` are FOREIGN — stamped by
+    // whichever node last wrote the queue row — so they can land ahead of our clock via node
+    // skew, an NTP step, or a replicated row. This is an EXEMPTION-form gate (`age < grace`
+    // → return NOT_DEAD), so a negative age makes it unconditionally true and the dead-target
+    // self-heal never runs: a task pinned to a session/node that is provably gone stays
+    // skipped forever behind target_session_constraint. Reject the untrustworthy stamp rather
+    // than clamping it — `Math.max(0, age)` would read a future stamp as age 0, the youngest
+    // possible pin, which is the strongest possible pass of this very gate.
     const lastUpdateMs = Date.parse(task.updatedAt || task.createdAt || '');
-    if (Number.isFinite(lastUpdateMs) && Date.now() - lastUpdateMs < DEAD_TARGET_GRACE_MS) return NOT_DEAD;
+    if (isWithinForeignFreshnessWindow(lastUpdateMs, Date.now(), DEAD_TARGET_GRACE_MS)) return NOT_DEAD;
 
     const nodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
 

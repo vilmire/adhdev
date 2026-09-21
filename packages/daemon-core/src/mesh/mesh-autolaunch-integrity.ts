@@ -49,6 +49,71 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 // mesh-queue-assignment re-exports it, which is the name the rest of the codebase uses.
 export const AUTO_LAUNCH_AWAIT_CLAIM_MS = 90_000;
 const AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
+
+/**
+ * How far a foreign timestamp may sit AHEAD of this daemon's clock before it is
+ * read as clock-untrustworthy rather than merely fresh. Sized to absorb ordinary
+ * write/read jitter without admitting genuine skew. Matches the ±2s future
+ * tolerance mesh-completion-live-gate.ts applies to untrusted completion
+ * evidence, and the bound mesh-turn-presentation.ts uses for `updated_at`.
+ */
+export const FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS = 2_000;
+
+/**
+ * CLOCK-LOWER-BOUND (2026-09-21): is `foreignAtMs` inside a freshness window that
+ * GRANTS AN EXEMPTION, given a clock we do not control?
+ *
+ * `autoLaunch.updatedAt` is a foreign timestamp — an ISO string stamped by
+ * whichever node ran the launch — so it is not guaranteed to precede this
+ * daemon's `now`. Node skew, an NTP step, or a replicated row can put it in the
+ * future, which makes a bare `now - t < window` age NEGATIVE and the comparison
+ * UNCONDITIONALLY TRUE. Every one of this predicate's call sites reads `true` as
+ * "a claim is already in flight, hold off" — so a future stamp does not merely
+ * blur a heuristic, it suppresses the corrective action PERMANENTLY: the window
+ * never closes, the auto-launch is never retried, the duplicate-launch guard
+ * never releases, and the task sits `pending` forever.
+ *
+ * ★The lower bound must REJECT, not clamp. `Math.max(0, age)` would score a
+ * future stamp as age 0 — "stamped this very instant", the freshest possible
+ * reading — which is the STRONGEST possible pass of the exemption and leaves the
+ * defect exactly where it was. A negative age is not fresh evidence; it is an
+ * untrustworthy-clock signal, and the safe reading of untrustworthy liveness
+ * evidence is to DECLINE the exemption and let the normal retry/timeout path
+ * decide.
+ *
+ * Mirrors the house shape already used for untrusted evidence elsewhere:
+ * mesh-completion-live-gate.ts rejects `observedAt > nowMs + 2_000` outright as
+ * `stale_evidence_timestamp`; mesh-stall-watchdog.ts requires a non-negative
+ * `causalEvidenceAgeMs` conjunct; mesh-refine-zombie-sweep.ts gates its grace
+ * window on `ageMs >= 0`.
+ */
+export function isWithinForeignFreshnessWindow(
+    foreignAtMs: number,
+    nowMs: number,
+    windowMs: number,
+): boolean {
+    if (!Number.isFinite(foreignAtMs)) return false;
+    const ageMs = nowMs - foreignAtMs;
+    // Future-dated beyond ordinary jitter → the clock cannot be reconciled with
+    // ours; decline the exemption rather than granting it forever.
+    if (ageMs < -FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS) return false;
+    return ageMs < windowMs;
+}
+
+/**
+ * The await-claim specialisation of {@link isWithinForeignFreshnessWindow} —
+ * "was this auto-launch record stamped recently enough that its session is still
+ * plausibly on its way to claim?". Shared by every call site that reads
+ * `autoLaunch.updatedAt` against {@link AUTO_LAUNCH_AWAIT_CLAIM_MS} so the four
+ * of them cannot drift apart on the clock question.
+ */
+export function isAutoLaunchWithinAwaitClaimWindow(
+    launchedAtMs: number,
+    nowMs: number = Date.now(),
+    windowMs: number = AUTO_LAUNCH_AWAIT_CLAIM_MS,
+): boolean {
+    return isWithinForeignFreshnessWindow(launchedAtMs, nowMs, windowMs);
+}
 // Local mirror of REMOTE_IDLE_SESSION_TTL_MS (mesh-event-forwarding) — kept as a copy to avoid
 // a cross-module import cycle. Used when (re)registering a launched remote session as an idle
 // claim candidate during the await-claim re-drive.
@@ -252,8 +317,10 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     // Only protect the record while its await-claim window is open. Past that the launch is no
     // longer authoritative (driveExpiredAwaitClaim owns it) and normal recording must resume,
     // otherwise a stale winner would freeze the field forever.
+    // CLOCK-LOWER-BOUND: a future-dated `updatedAt` must not freeze the winner field
+    // forever — see isWithinForeignFreshnessWindow.
     const heldAtMs = Date.parse(existing.updatedAt);
-    if (!Number.isFinite(heldAtMs) || Date.now() - heldAtMs >= awaitClaimWindowMs) return false;
+    if (!isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs)) return false;
     // A started/completed for the SAME session is that session's own progression — allow it.
     if (sessionIdsEquivalent(readNonEmptyString(args.sessionId), heldSessionId)) return false;
     LOG.info('MeshQueue', `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
@@ -319,7 +386,7 @@ export function inWindowAutoLaunchSessionIdsForNode(meshId: string, nodeId: stri
         if (!al || (al.status !== 'started' && al.status !== 'completed') || !sid) continue;
         if (!daemonIdsEquivalent(al.nodeId, nodeId)) continue;
         const launchedAtMs = Date.parse(al.updatedAt);
-        const inBaseWindow = Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
         const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${task.id}`);
         if (inBaseWindow || inBackoff) out.push(sid);
     }

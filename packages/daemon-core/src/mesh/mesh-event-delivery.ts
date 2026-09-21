@@ -27,6 +27,7 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readNonEmptyString, readWorkerResultMetadata } from './mesh-events-utils.js';
 import { shouldForceInjectMeshEvent } from './mesh-event-classify.js';
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from './mesh-queue-assignment.js';
+import { isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
 import { injectPendingIntoCoordinator } from './mesh-reconcile-coordinator-drain.js';
 import { meshNodeIdMatches, expandDaemonIdForms, sessionIdsEquivalent, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 
@@ -106,8 +107,10 @@ export function bootstrapQueueTaskCountsAsHandled(
     const al = task.autoLaunch;
     if (!al) return true;
     if (al.status === 'started' || al.status === 'completed') {
+        // CLOCK-LOWER-BOUND: `al.updatedAt` is foreign; a future stamp must not read as
+        // "handled" forever — see isWithinForeignFreshnessWindow.
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
     }
     return true;
 }

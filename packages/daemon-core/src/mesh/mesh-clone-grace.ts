@@ -76,6 +76,14 @@ export function isWithinCloneBootstrapGrace(nodeId: string | undefined | null, n
 // rare miss this fix exists to cover.
 const CLONE_LEDGER_LOOKBACK_CAP = 200;
 
+/**
+ * How far a foreign ledger stamp may sit AHEAD of our clock before it is read as
+ * clock-untrustworthy rather than merely fresh. Local copy of the ±2s tolerance
+ * used by mesh-autolaunch-integrity / mesh-completion-live-gate — kept as a
+ * constant here so this leaf module gains no import edge.
+ */
+const CLONE_LEDGER_FUTURE_SKEW_TOLERANCE_MS = 2_000;
+
 /** Durable-fallback counterpart of {@link isWithinCloneBootstrapGrace} — see the block comment
  *  above. Falls back to a mesh's ledger `node_cloned` entries when the in-memory registry has
  *  no (or an expired) entry for this node id, so a restart or a slow-but-live clone is not
@@ -93,9 +101,20 @@ export function isWithinCloneBootstrapGraceDurable(
         const entries = readLedgerEntriesByKind(meshId, ['node_cloned'], CLONE_LEDGER_LOOKBACK_CAP);
         for (const entry of entries) {
             if (normalizeNodeIdKey(entry.nodeId) !== key) continue;
+            // CLOCK-LOWER-BOUND (2026-09-21): the ledger `timestamp` is FOREIGN (stamped by
+            // whichever node appended the `node_cloned` entry), so skew / an NTP step can put
+            // it in our future. This grants a GRACE exemption (`age <= window` → the node is
+            // "still bootstrapping"), so a negative age would be unconditionally true and the
+            // permanent `target_node_id_unmatched` routing miss would be suppressed FOREVER —
+            // the node would look eternally transient and never be reported. Reject the
+            // untrustworthy stamp instead of clamping it: `Math.max(0, age)` would read a
+            // future stamp as "cloned this instant", the strongest possible pass of this gate.
+            // Fails closed (no grace), the same conservative default as the rest of this fn.
             const clonedAtMs = Date.parse(entry.timestamp);
             if (!Number.isFinite(clonedAtMs)) continue;
-            if (nowMs - clonedAtMs <= CLONE_BOOTSTRAP_GRACE_MS) return true;
+            const ageMs = nowMs - clonedAtMs;
+            if (ageMs < -CLONE_LEDGER_FUTURE_SKEW_TOLERANCE_MS) continue;
+            if (ageMs <= CLONE_BOOTSTRAP_GRACE_MS) return true;
         }
     } catch {
         // Ledger unavailable — fail closed (no durable evidence).

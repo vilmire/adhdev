@@ -40,6 +40,7 @@ import {
     sessionHasActiveAssignment,
     AUTO_LAUNCH_AWAIT_CLAIM_MS,
 } from './mesh-queue-assignment.js';
+import { isAutoLaunchWithinAwaitClaimWindow, isWithinForeignFreshnessWindow } from './mesh-autolaunch-integrity.js';
 import {
     authoritativeEvidenceOutranksLivePending,
     completionEligibleForLiveStateRetry,
@@ -455,8 +456,10 @@ function findInWindowUnclaimedAutoLaunchTask(meshId: string, sessionId: string, 
         const al = task.autoLaunch;
         if (!al || al.status !== 'completed' || !al.sessionId) return false;
         if (!sessionIdsEquivalent(al.sessionId, sessionId)) return false;
+        // CLOCK-LOWER-BOUND: `al.updatedAt` is foreign; a future stamp must not hold this
+        // match open forever — see isWithinForeignFreshnessWindow.
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && nowMs - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs, nowMs);
     });
 }
 
@@ -1063,9 +1066,14 @@ export function supersedeRedriveReclaimForLateCompletion(
     // late race — leave it to the normal path. A row already terminal is a no-op.
     if (!row.requeueReason || !REDRIVE_RECLAIM_REASONS.has(row.requeueReason)) return false;
     if (row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') return false;
+    // CLOCK-LOWER-BOUND (2026-09-21): `requeuedAt` is FOREIGN (stamped by whichever node
+    // reclaimed the row), so skew / an NTP step can put it ahead of our clock. This is a
+    // WINDOW-MEMBERSHIP admission — a bare `age > window → return false` treats a negative age
+    // as inside the window, admitting a supersession for a row the bound was meant to exclude.
+    // Use the shared foreign-freshness predicate so an unreconcilable stamp DECLINES (falls
+    // through to normal handling) instead of being clamped to "requeued this instant".
     const requeuedAtMs = Date.parse(row.requeuedAt ?? '');
-    if (!Number.isFinite(requeuedAtMs)) return false;
-    if (Date.now() - requeuedAtMs > REDRIVE_SUPERSEDE_WINDOW_MS) return false;
+    if (!isWithinForeignFreshnessWindow(requeuedAtMs, Date.now(), REDRIVE_SUPERSEDE_WINDOW_MS)) return false;
 
     // The re-drive may have already re-dispatched the SAME prompt onto a FRESH session (row is
     // 'assigned' again to a different session). That duplicate is executing work the original
