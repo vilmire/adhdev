@@ -938,7 +938,23 @@ export class CliProviderInstance implements ProviderInstance {
         return antigravityOwnerToken(this.workingDir, this.startedAt, this.instanceId);
     }
 
+    /**
+     * DISPOSED-INSTANCE SILENCE. dispose() does not stop the world: the adapter's
+     * driver keeps emitting state while the PTY tears down (seconds), the status
+     * callback keeps calling detectStatusTransition, and pushEvent's direct path
+     * (context.emitProviderEvent) delivers whatever that produces. Standalone live
+     * check 2026-09-22: a session stopped MID-TURN logged `status: generating →
+     * idle` and "waiting to emit completed until transcript finalizes" 12s AFTER
+     * stop_cli — it was one transcript condition away from reporting a killed turn
+     * as `agent:generating_completed`. A removed instance may report exactly one
+     * thing: its own death. (flushMeshCompletionBeforeCleanup runs BEFORE
+     * removeInstance, so the legitimate pre-cleanup completion is unaffected.)
+     */
+    private disposed = false;
+
     dispose(): void {
+        this.disposed = true;
+        if (this.completedDebounceTimer) { clearTimeout(this.completedDebounceTimer); this.completedDebounceTimer = null; }
         // Release this session's antigravity conversation claims so the store
         // becomes available again (e.g. a later resume) and the registry doesn't
         // leak entries for dead sessions.
@@ -2036,6 +2052,10 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private pushEvent(event: ProviderEvent): void {
+        if (this.disposed && event.event !== 'agent:stopped') {
+            LOG.info('CLI', `[${this.type}] dropped ${event.event} from disposed instance ${this.instanceId} — a removed session may only report its own stop`);
+            return;
+        }
         providerEvents.pushEvent(this as unknown as providerEvents.ProviderEventsHost, event);
     }
 
