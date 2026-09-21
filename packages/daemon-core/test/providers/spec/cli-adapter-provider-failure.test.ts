@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureProviderSignalObserver } from '../../../src/shared/provider-signal-sink.js'
-import { SpecCliAdapter, detectKimiAuthBillingFailure } from '../../../src/providers/spec/cli-adapter.js'
+import { SpecCliAdapter, detectProviderFailure } from '../../../src/providers/spec/cli-adapter.js'
 
 describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
   it('classifies strong authentication and billing markers but not an ambiguous bare 403', () => {
-    expect(detectKimiAuthBillingFailure('Authentication failed: access token has expired. Please run kimi login.'))
+    expect(detectProviderFailure('Authentication failed: access token has expired. Please run kimi login.'))
       .toMatchObject({ errorReason: 'auth_failed', failureKind: 'auth' })
-    expect(detectKimiAuthBillingFailure('\u001b[31mYour Kimi Code subscription has expired. Renew in Billing.\u001b[0m', 1))
+    expect(detectProviderFailure('\u001b[31mYour Kimi Code subscription has expired. Renew in Billing.\u001b[0m', 1))
       .toMatchObject({ errorReason: 'billing_failed', failureKind: 'billing' })
-    expect(detectKimiAuthBillingFailure('Request failed: HTTP 403 Forbidden', 1)).toBeNull()
-    expect(detectKimiAuthBillingFailure('Process exited before the response was rendered', 1)).toBeNull()
+    expect(detectProviderFailure('Request failed: HTTP 403 Forbidden', 1)).toBeNull()
+    expect(detectProviderFailure('Process exited before the response was rendered', 1)).toBeNull()
   })
 
   // The literal line observed on the live incident night (2026-08-29 quota-vs-
@@ -22,35 +22,35 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
   // its own once the window resets.
   it('classifies the live "[provider.auth_error] 403 ... 5-hour usage limit" line as quota exhaustion, not billing', () => {
     const live = "[provider.auth_error] 403 You've reached your 5-hour usage limit"
-    expect(detectKimiAuthBillingFailure(live)).toMatchObject({
+    expect(detectProviderFailure(live)).toMatchObject({
       errorReason: 'quota_exceeded',
       failureKind: 'quota',
     })
     // The per-cycle variant of the same verdict, as Kimi words it — carried by a
     // 403 envelope, which is what makes the limit wording trustworthy here.
-    expect(detectKimiAuthBillingFailure("403: You've reached your usage limit for this billing cycle."))
+    expect(detectProviderFailure("403: You've reached your usage limit for this billing cycle."))
       .toMatchObject({ errorReason: 'quota_exceeded', failureKind: 'quota' })
-    expect(detectKimiAuthBillingFailure('Error: HTTP 403 - weekly usage limit reached'))
+    expect(detectProviderFailure('Error: HTTP 403 - weekly usage limit reached'))
       .toMatchObject({ errorReason: 'quota_exceeded', failureKind: 'quota' })
     // Same sentence with no failure envelope: not a verdict, because this is the
     // shape an agent produces when it is merely quoting the provider's docs.
-    expect(detectKimiAuthBillingFailure("You've reached your usage limit for this billing cycle."))
+    expect(detectProviderFailure("You've reached your usage limit for this billing cycle."))
       .toBeNull()
     // provider.auth_error must not become a blanket auth marker: a 403 carrying
     // no entitlement wording stays unclassified, matching the fetcher's rule that
     // an unrelated 403 (region block, allowlist) is never a billing verdict.
-    expect(detectKimiAuthBillingFailure('[provider.auth_error] 403 request rejected')).toBeNull()
+    expect(detectProviderFailure('[provider.auth_error] 403 request rejected')).toBeNull()
   })
 
   // Genuine billing/subscription wording — the account itself is the problem,
   // not a spent usage window — must stay in the non-retryable 'billing_failed'
   // bucket even when it arrives inside a strong failure envelope.
   it('still classifies genuine account-entitlement wording as non-retryable billing, never quota', () => {
-    expect(detectKimiAuthBillingFailure('[provider.auth_error] 402 Payment required to continue'))
+    expect(detectProviderFailure('[provider.auth_error] 402 Payment required to continue'))
       .toMatchObject({ errorReason: 'billing_failed', failureKind: 'billing' })
-    expect(detectKimiAuthBillingFailure('HTTP 403 - Your Kimi Code subscription has expired.'))
+    expect(detectProviderFailure('HTTP 403 - Your Kimi Code subscription has expired.'))
       .toMatchObject({ errorReason: 'billing_failed', failureKind: 'billing' })
-    expect(detectKimiAuthBillingFailure('status: 403 insufficient credits on this account'))
+    expect(detectProviderFailure('status: 403 insufficient credits on this account'))
       .toMatchObject({ errorReason: 'billing_failed', failureKind: 'billing' })
   })
 
@@ -69,7 +69,7 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       'Applied patch to mesh-work-queue.ts; all tests pass',
     ]
     for (const line of benign) {
-      expect({ line, verdict: detectKimiAuthBillingFailure(line) })
+      expect({ line, verdict: detectProviderFailure(line) })
         .toEqual({ line, verdict: null })
     }
   })
@@ -83,8 +83,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: 'kimi', name: 'Kimi Code' }
-    adapter.kimiFailureOutputTail = ''
-    adapter.kimiAuthBillingFailure = null
+    adapter.failureOutputTail = ''
+    adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     adapter.ptyDataCallback = null
     adapter.detectInteractivePromptFromPtyChunk = vi.fn()
@@ -123,8 +123,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       adapter.activeInteractivePrompt = null
       adapter.providerSessionId = undefined
       adapter.spec = { id: 'claude-cli', name: 'Claude Code' }
-      adapter.kimiFailureOutputTail = ''
-      adapter.kimiAuthBillingFailure = null
+      adapter.failureOutputTail = ''
+      adapter.providerFailure = null
       adapter.liveAuth = undefined
       adapter.owningSessionId = 'sess_live'
       adapter.workingDir = '/repo'
@@ -146,9 +146,9 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
         'Your Kimi Code subscription has expired.',
       ]
       for (const sample of samples) {
-        const verdict = detectKimiAuthBillingFailure(sample)
+        const verdict = detectProviderFailure(sample)
         expect(verdict).not.toBeNull()
-        expect({ sample, echoed: detectKimiAuthBillingFailure(verdict!.message) })
+        expect({ sample, echoed: detectProviderFailure(verdict!.message) })
           .toEqual({ sample, echoed: null })
       }
     })
@@ -203,7 +203,7 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       const status = adapter.getStatus()
       expect(status.status).not.toBe('error')
       expect(status.errorReason).toBeUndefined()
-      expect(adapter.kimiAuthBillingFailure).toBeNull()
+      expect(adapter.providerFailure).toBeNull()
       expect(adapter.statusCallback).not.toHaveBeenCalled()
       expect(signals).toHaveLength(1)
       expect(signals[0]).toMatchObject({
@@ -215,12 +215,37 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       })
       // The page is injected into a coordinator PTY — it must carry no screen
       // text and must not itself classify.
-      expect(detectKimiAuthBillingFailure(JSON.stringify(signals[0].params))).toBeNull()
+      expect(detectProviderFailure(JSON.stringify(signals[0].params))).toBeNull()
 
       // A TUI repaints its banner: no second page inside the cooldown.
       adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
       adapter.getStatus()
       expect(signals).toHaveLength(1)
+    })
+
+    // Standalone live check 2026-09-22: the advisory fired 12s AFTER stop_cli —
+    // teardown takes seconds and the status poll keeps running, so the coordinator
+    // would be told a session it just stopped is "left running".
+    it('after the daemon requests shutdown nothing is paged or classified, even without a requestedStop tombstone', () => {
+      const signals: any[] = []
+      configureProviderSignalObserver((o) => { signals.push(o) })
+      const adapter = make({
+        driver: { snapshot: () => 'Login expired · Please run /login\n', dispatch: vi.fn() },
+        latestState: { id: 'idle', label: 'Ready', title: null, status: 'idle' },
+      })
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
+      adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
+
+      adapter.shutdown()
+      adapter.getStatus()
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER }) // teardown repaint
+      adapter.getStatus()
+      expect(signals).toHaveLength(0)
+
+      // The session host delivered no tombstone: the exit is still explained.
+      adapter.handleEvent({ kind: 'exit', exit_code: 129 })
+      expect(adapter.getStatus()).toMatchObject({ status: 'stopped' })
+      expect(adapter.getStatus().errorReason).toBeUndefined()
     })
 
     it('kimi keeps its latch, now behind on-screen confirmation (stuck-busy escape included)', () => {
@@ -246,8 +271,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: 'kimi', name: 'Kimi Code' }
-    adapter.kimiFailureOutputTail = ''
-    adapter.kimiAuthBillingFailure = null
+    adapter.failureOutputTail = ''
+    adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     adapter.ptyDataCallback = null
     adapter.detectInteractivePromptFromPtyChunk = vi.fn()
@@ -278,8 +303,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       adapter.activeInteractivePrompt = null
       adapter.providerSessionId = undefined
       adapter.spec = { id: cliType, name: cliType }
-      adapter.kimiFailureOutputTail = 'Your membership is inactive. Payment required.'
-      adapter.kimiAuthBillingFailure = null
+      adapter.failureOutputTail = 'Your membership is inactive. Payment required.'
+      adapter.providerFailure = null
       adapter.statusCallback = vi.fn()
       return adapter
     }

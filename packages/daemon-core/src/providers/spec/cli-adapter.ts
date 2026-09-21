@@ -87,10 +87,10 @@ import {
     CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
 } from '@adhdev/mesh-shared';
 
-import { detectKimiAuthBillingFailure, stripAnsi, type KimiAuthBillingFailure } from './kimi-auth-billing.js';
+import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provider-failure-classifier.js';
 import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 
-export { detectKimiAuthBillingFailure, type KimiAuthBillingFailure };
+export { detectProviderFailure, type ProviderFailure };
 
 export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
@@ -189,9 +189,9 @@ export class SpecCliAdapter implements CliAdapter {
     private jsonLineTail = '';
     private exited = false;
     private spawned = false;
-    /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
-    private kimiFailureOutputTail = '';
-    private kimiAuthBillingFailure: KimiAuthBillingFailure | null = null;
+    /** Bounded merged PTY output tail used only for provider-failure classification. */
+    private failureOutputTail = '';
+    private providerFailure: ProviderFailure | null = null;
     /** Live-match suspicion state — policy in live-auth-advisory.ts. Lazy: tests build adapters without the constructor. */
     private liveAuth?: LiveAuthState;
     private lastExitCode: number | null = null;
@@ -480,18 +480,18 @@ export class SpecCliAdapter implements CliAdapter {
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
         this.maybeConfirmLiveAuthBillingSuspect();
-        // A strong live Kimi auth/billing marker outranks generic process liveness.
+        // A latched provider failure (auth/billing/quota) outranks generic process liveness.
         // Returning `error` makes CliProviderInstance emit agent:stopped with the
         // typed reason, rather than allowing an idle/exit edge to masquerade as a
         // zero-byte completion or a generic crash eligible for blind recovery.
-        if (this.kimiAuthBillingFailure) {
+        if (this.providerFailure) {
             return {
                 status: 'error',
                 messages: [],
                 activeModal: null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
-                errorMessage: this.kimiAuthBillingFailure.message,
-                errorReason: this.kimiAuthBillingFailure.errorReason,
+                errorMessage: this.providerFailure.message,
+                errorReason: this.providerFailure.errorReason,
                 ...sessionFields,
             };
         }
@@ -653,6 +653,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     shutdown(): void {
+        (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
         try { this.driver.dispatch({ kind: 'shutdown' }); } catch { /* ignore */ }
     }
 
@@ -1223,7 +1224,7 @@ export class SpecCliAdapter implements CliAdapter {
             activeInteractivePrompt: this.activeInteractivePrompt,
             exited: this.exited,
             exitCode: this.lastExitCode,
-            kimiFailureKind: this.kimiAuthBillingFailure?.failureKind ?? null,
+            providerFailureKind: this.providerFailure?.failureKind ?? null,
             screen,
             sections,
             stateHistory: this.driver.getStateHistory(),
@@ -1330,7 +1331,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.statusCallback?.();
                 return;
             case 'pty_data':
-                this.observeKimiAuthBillingOutput(ev.chunk);
+                this.observeProviderFailureOutput(ev.chunk);
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
@@ -1349,7 +1350,7 @@ export class SpecCliAdapter implements CliAdapter {
                 // classifier against the retained tail at the exit seam. The observer
                 // invokes statusCallback only when it discovers a new typed failure;
                 // otherwise this branch publishes the ordinary stopped transition.
-                if (!this.observeKimiAuthBillingOutput('', ev.exit_code ?? undefined, ev)) this.statusCallback?.();
+                if (!this.observeProviderFailureOutput('', ev.exit_code ?? undefined, ev)) this.statusCallback?.();
                 return;
             case 'signal_detected':
                 this.publishSignalObservation(ev.signal);
@@ -1417,10 +1418,10 @@ export class SpecCliAdapter implements CliAdapter {
 
     /** Auth/billing classification of PTY output. WHAT the daemon may do about a
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-    private observeKimiAuthBillingOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
-        if (this.kimiAuthBillingFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination))) return false;
-        if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
-        const failure = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
+    private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
+        if (this.providerFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth))) return false;
+        if (chunk) this.failureOutputTail = appendAuthTail(this.failureOutputTail, chunk);
+        const failure = classifyAuthBillingOutput(this.cliType, this.failureOutputTail, exitCode);
         if (!failure) return false;
         if (exitCode === undefined && !this.exited) {
             noteLiveAuthMatch((this.liveAuth ??= createLiveAuthState()), this.liveAuthContext(), failure);
@@ -1436,22 +1437,22 @@ export class SpecCliAdapter implements CliAdapter {
         return { cliType: this.cliType, sessionLabel: this.owningSessionId || 'unknown', isCoordinator };
     }
 
-    private latchAuthBillingFailure(failure: KimiAuthBillingFailure, context: string): void {
-        this.kimiAuthBillingFailure = failure;
+    private latchAuthBillingFailure(failure: ProviderFailure, context: string): void {
+        this.providerFailure = failure;
         LOG.warn('SpecAdapter', authBillingLatchLogLine(this.cliType, failure, context));
         this.statusCallback?.();
     }
 
     /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
     private maybeConfirmLiveAuthBillingSuspect(): void {
-        if (!this.liveAuth?.suspect || this.kimiAuthBillingFailure || this.exited) return;
+        if (!this.liveAuth?.suspect || this.providerFailure || this.exited) return;
         const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
             // FSM status is idle | generating | approval — anything but idle is mid-turn.
             midTurn: !!this.latestState && this.latestState.status !== 'idle',
             readScreen: () => (typeof this.driver?.snapshot === 'function' ? this.driver.snapshot() : ''),
-            tail: this.kimiFailureOutputTail,
+            tail: this.failureOutputTail,
         });
-        if (outcome.clearTail) this.kimiFailureOutputTail = '';
+        if (outcome.clearTail) this.failureOutputTail = '';
         if (outcome.advisory) this.publishSignalObservation(outcome.advisory);
         if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, 'exitCode=pending; confirmed on-screen at turn boundary');
     }

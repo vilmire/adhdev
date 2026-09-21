@@ -1,7 +1,7 @@
 /**
  * Auth/billing classification POLICY for a spec-backed CLI's PTY output.
  *
- * `kimi-auth-billing.ts` answers "does this text look like a provider failure?".
+ * `provider-failure-classifier.ts` answers "does this text look like a provider failure?".
  * This module answers "what is the daemon allowed to DO about it?", which
  * depends on whether the process is still alive. SpecCliAdapter owns the state
  * fields and the side effects; everything here is a pure decision so the policy
@@ -79,7 +79,7 @@
  */
 
 import { LOG } from '../../logging/logger.js';
-import { detectKimiAuthBillingFailure, stripAnsi, type KimiAuthBillingFailure } from './kimi-auth-billing.js';
+import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provider-failure-classifier.js';
 import type { SignalDetection } from './signal-rules.js';
 
 const TAIL_BYTES = 16 * 1024;
@@ -95,14 +95,22 @@ const ADVISORY_COOLDOWN_MS = 10 * 60_000;
 export const LIVE_AUTH_ADVISORY_RULE_ID = 'builtin.live_auth_marker';
 
 export interface LiveAuthState {
-    suspect: { failure: KimiAuthBillingFailure; suspectedAtMs: number } | null;
+    suspect: { failure: ProviderFailure; suspectedAtMs: number } | null;
     advisoryNotifiedAtMs: number;
     /** One log line per coordinator session — the tail re-matches every chunk. */
     coordinatorMarkerLogged: boolean;
+    /** The daemon itself asked this session to stop (adapter.shutdown()). From
+     *  here on nothing about it is news: teardown takes seconds, the driver keeps
+     *  emitting state, and the status poll keeps running — standalone live check
+     *  2026-09-22 paged "session left running" 12s AFTER stop_cli, i.e. the
+     *  coordinator would be told a session it just stopped is still running. The
+     *  eventual exit is equally explained, even when the session host delivers no
+     *  `termination.requestedStop` tombstone. */
+    stopRequested: boolean;
 }
 
 export function createLiveAuthState(): LiveAuthState {
-    return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false };
+    return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
 }
 
 export interface LiveAuthContext {
@@ -116,8 +124,8 @@ export function appendAuthTail(tail: string, chunk: string): string {
 }
 
 /** Classify, admitting only the AUTH axis for non-kimi providers (see D4 above). */
-export function classifyAuthBillingOutput(cliType: string, text: string, exitCode?: number): KimiAuthBillingFailure | null {
-    const failure = detectKimiAuthBillingFailure(text, exitCode);
+export function classifyAuthBillingOutput(cliType: string, text: string, exitCode?: number): ProviderFailure | null {
+    const failure = detectProviderFailure(text, exitCode);
     if (!failure) return null;
     if (cliType !== 'kimi' && failure.failureKind !== 'auth') return null;
     return failure;
@@ -127,12 +135,13 @@ export function classifyAuthBillingOutput(cliType: string, text: string, exitCod
 export function exitClassificationAllowed(
     exitCode: number | null | undefined,
     termination?: { requestedStop?: string | null } | null,
+    state?: LiveAuthState,
 ): boolean {
-    if (termination?.requestedStop) return false;
+    if (termination?.requestedStop || state?.stopRequested) return false;
     return exitCode !== 0;
 }
 
-export function authBillingLatchLogLine(cliType: string, failure: KimiAuthBillingFailure, context: string): string {
+export function authBillingLatchLogLine(cliType: string, failure: ProviderFailure, context: string): string {
     const suppressionNote = failure.failureKind === 'quota'
         ? 'this PTY session will not be blindly restarted; the mesh may retry once quota resets'
         : 'automatic provider retry must be suppressed';
@@ -140,7 +149,8 @@ export function authBillingLatchLogLine(cliType: string, failure: KimiAuthBillin
 }
 
 /** Record a live (process-alive) match as a suspicion. Never changes status. */
-export function noteLiveAuthMatch(state: LiveAuthState, ctx: LiveAuthContext, failure: KimiAuthBillingFailure): void {
+export function noteLiveAuthMatch(state: LiveAuthState, ctx: LiveAuthContext, failure: ProviderFailure): void {
+    if (state.stopRequested) return;
     if (ctx.isCoordinator) {
         if (!state.coordinatorMarkerLogged) {
             state.coordinatorMarkerLogged = true;
@@ -159,7 +169,7 @@ export interface LiveAuthResolution {
     /** Page the coordinator (non-kimi). The session is left running. */
     advisory?: SignalDetection;
     /** Latch status 'error' (kimi only). */
-    latch?: KimiAuthBillingFailure;
+    latch?: ProviderFailure;
 }
 
 /** Resolve a pending suspicion at a turn boundary. Runs on the routine status poll. */
@@ -170,6 +180,7 @@ export function resolveLiveAuthSuspect(
 ): LiveAuthResolution {
     const suspect = state.suspect;
     if (!suspect) return {};
+    if (state.stopRequested) { state.suspect = null; return {}; }
     const now = input.now ?? Date.now();
     const ageMs = now - suspect.suspectedAtMs;
     if (ageMs < MIN_SUSPECT_AGE_MS) return {};

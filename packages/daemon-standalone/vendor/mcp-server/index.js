@@ -50652,7 +50652,7 @@ Answer with mesh_answer_question(node_id, session_id${promptId ? `, promptId: "$
         if (providerFailureReason === "auth_failed" || providerFailureReason === "billing_failed") {
           const kind = providerFailureReason === "billing_failed" ? "billing/subscription" : "authentication";
           const detail = readNonEmptyString(failureDiagnostic?.errorMessage) || readNonEmptyString(args.metadataEvent.finalSummary);
-          return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same unavailable Kimi entitlement does not waste retries.${detail ? ` ${detail}` : ""}`;
+          return `[System] ${args.nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ""}`;
         }
         if (providerFailureReason === "quota_exceeded") {
           const detail = readNonEmptyString(failureDiagnostic?.errorMessage) || readNonEmptyString(args.metadataEvent.finalSummary);
@@ -52839,6 +52839,7 @@ ${blocks.join("\n\n")}`;
       mintWorkerSessionBind: () => mintWorkerSessionBind,
       mintWorkerTaskToken: () => mintWorkerTaskToken,
       prepareWorkerPrivateHome: () => prepareWorkerPrivateHome,
+      resolvePrivateWorkerMcpConfigPath: () => resolvePrivateWorkerMcpConfigPath,
       resolveWorkerMcpConfigPath: () => resolveWorkerMcpConfigPath,
       resolveWorkerMcpIsolation: () => resolveWorkerMcpIsolation,
       resolveWorkerTrustHome: () => resolveWorkerTrustHome,
@@ -53109,11 +53110,19 @@ ${blocks.join("\n\n")}`;
       if (path22.isAbsolute(trimmed)) return trimmed;
       return path22.join(workspace, trimmed);
     }
+    function resolvePrivateWorkerMcpConfigPath(input) {
+      if (!input.forcedConfigFile) return null;
+      const declared = String(input.declaredPath || "").trim();
+      if (!declared || declared.startsWith("~") || path22.isAbsolute(declared)) return null;
+      const root = path22.join(input.baseDir || os13.tmpdir(), "adhdev-worker-mcp-config");
+      const sessionDir = crypto2.createHash("sha256").update(String(input.sessionKey || "")).digest("hex").slice(0, 16);
+      return path22.join(root, sessionDir, path22.basename(declared));
+    }
     function writeWorkerMcpConfig(input) {
       if (!isSupportedMeshCoordinatorConfigFormat(input.format)) {
         throw new Error(`worker_mcp_unsupported_format: ${String(input.format)}`);
       }
-      const target = resolveWorkerMcpConfigPath(
+      const target = input.privateConfigPath || resolveWorkerMcpConfigPath(
         input.declaredPath,
         input.workspace,
         input.workerHome,
@@ -53216,11 +53225,21 @@ ${blocks.join("\n\n")}`;
           notes.push(`worker session bind mint failed (${err?.message || err})`);
         }
       }
+      const privateConfigPath = resolvePrivateWorkerMcpConfigPath({
+        declaredPath,
+        sessionKey: input.sessionKey,
+        forcedConfigFile: input.forcedConfigFile,
+        baseDir: input.baseDir
+      });
+      if (privateConfigPath) {
+        notes.push(`launch forces an explicit config file \u2014 worker config kept out of the shared workspace (${declaredPath} untouched)`);
+      }
       try {
         result.configPath = writeWorkerMcpConfig({
           declaredPath,
           format,
           serverName,
+          ...privateConfigPath ? { privateConfigPath } : {},
           workspace: input.workspace,
           workerHome: result.workerHome,
           ...spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {},
@@ -69096,8 +69115,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename22 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename22 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename23 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename23 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -109100,17 +109119,17 @@ trust_level = "trusted"
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path36.isAbsolute(sessionPath)) return null;
-      const basename22 = path36.basename(sessionPath, ".jsonl");
-      if (!isSafeSessionId(basename22)) return null;
+      const basename23 = path36.basename(sessionPath, ".jsonl");
+      if (!isSafeSessionId(basename23)) return null;
       if (!fs34.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename22, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename23, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename22,
+        providerSessionId: basename23,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -109119,7 +109138,7 @@ trust_level = "trusted"
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename22,
+          providerSessionId: basename23,
           agent: "claude-cli"
         });
       }
@@ -109492,8 +109511,8 @@ trust_level = "trusted"
       if (!fs35.existsSync(sessionPath)) return null;
       const meta3 = readSessionMeta(sessionPath);
       const metaId = String(meta3?.id ?? "").trim();
-      const basename22 = path37.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename22.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename23 = path37.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename23.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -112304,7 +112323,7 @@ ${text}` : text;
     function hasProviderFailureEnvelope(text) {
       return /\bprovider\.[a-z_]*error\b/.test(text) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
     }
-    function detectKimiAuthBillingFailure(output, _exitCode) {
+    function detectProviderFailure(output, _exitCode) {
       const text = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
       if (!text) return null;
       const quota = hasProviderFailureEnvelope(text) && [
@@ -112366,13 +112385,13 @@ ${text}` : text;
           errorReason: "auth_failed",
           failureKind: "auth",
           // Provider-neutral wording: the AUTH axis now serves every spec-backed
-          // CLI (see observeKimiAuthBillingOutput), so naming Kimi here would send
+          // CLI (see observeProviderFailureOutput), so naming Kimi here would send
           // a claude-cli operator to re-login against the wrong tool. The billing
           // and quota messages above stay Kimi-specific because those axes remain
           // kimi-scoped.
           //
           // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
-          // (assert: detectKimiAuthBillingFailure(message) === null). It travels
+          // (assert: detectProviderFailure(message) === null). It travels
           // into mesh failure events that the daemon INJECTS into coordinator and
           // worker PTYs — the previous wording ("Provider authentication failed…")
           // matched the bare `authentication failed` rule above, so every delivery
@@ -112386,27 +112405,27 @@ ${text}` : text;
     }
     var ANSI_OSC_DCS_RE;
     var ANSI_CSI_RE;
-    var init_kimi_auth_billing = __esm2({
-      "src/providers/spec/kimi-auth-billing.ts"() {
+    var init_provider_failure_classifier = __esm2({
+      "src/providers/spec/provider-failure-classifier.ts"() {
         "use strict";
         ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
         ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
       }
     });
     function createLiveAuthState() {
-      return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false };
+      return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
     function appendAuthTail(tail, chunk) {
       return `${tail}${stripAnsi(chunk)}`.slice(-TAIL_BYTES4);
     }
     function classifyAuthBillingOutput(cliType, text, exitCode) {
-      const failure3 = detectKimiAuthBillingFailure(text, exitCode);
+      const failure3 = detectProviderFailure(text, exitCode);
       if (!failure3) return null;
       if (cliType !== "kimi" && failure3.failureKind !== "auth") return null;
       return failure3;
     }
-    function exitClassificationAllowed(exitCode, termination) {
-      if (termination?.requestedStop) return false;
+    function exitClassificationAllowed(exitCode, termination, state2) {
+      if (termination?.requestedStop || state2?.stopRequested) return false;
       return exitCode !== 0;
     }
     function authBillingLatchLogLine(cliType, failure3, context) {
@@ -112414,6 +112433,7 @@ ${text}` : text;
       return `[${cliType}] ${failure3.failureKind} failure detected from live PTY/exit (${context}); ${suppressionNote}`;
     }
     function noteLiveAuthMatch(state2, ctx, failure3) {
+      if (state2.stopRequested) return;
       if (ctx.isCoordinator) {
         if (!state2.coordinatorMarkerLogged) {
           state2.coordinatorMarkerLogged = true;
@@ -112428,6 +112448,10 @@ ${text}` : text;
     function resolveLiveAuthSuspect(state2, ctx, input) {
       const suspect = state2.suspect;
       if (!suspect) return {};
+      if (state2.stopRequested) {
+        state2.suspect = null;
+        return {};
+      }
       const now = input.now ?? Date.now();
       const ageMs2 = now - suspect.suspectedAtMs;
       if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
@@ -112468,7 +112492,7 @@ ${text}` : text;
       "src/providers/spec/live-auth-advisory.ts"() {
         "use strict";
         init_logger();
-        init_kimi_auth_billing();
+        init_provider_failure_classifier();
         TAIL_BYTES4 = 16 * 1024;
         STUCK_BUSY_ESCAPE_MS = 6e4;
         MIN_SUSPECT_AGE_MS = 5e3;
@@ -112502,7 +112526,7 @@ ${text}` : text;
         init_kimi_pending_question();
         init_claude_pending_question();
         init_dist();
-        init_kimi_auth_billing();
+        init_provider_failure_classifier();
         init_live_auth_advisory();
         SpecCliAdapter = class _SpecCliAdapter {
           cliType;
@@ -112594,9 +112618,9 @@ ${text}` : text;
           jsonLineTail = "";
           exited = false;
           spawned = false;
-          /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
-          kimiFailureOutputTail = "";
-          kimiAuthBillingFailure = null;
+          /** Bounded merged PTY output tail used only for provider-failure classification. */
+          failureOutputTail = "";
+          providerFailure = null;
           /** Live-match suspicion state — policy in live-auth-advisory.ts. Lazy: tests build adapters without the constructor. */
           liveAuth;
           lastExitCode = null;
@@ -112816,14 +112840,14 @@ ${text}` : text;
           getStatus(_options) {
             const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
             this.maybeConfirmLiveAuthBillingSuspect();
-            if (this.kimiAuthBillingFailure) {
+            if (this.providerFailure) {
               return {
                 status: "error",
                 messages: [],
                 activeModal: null,
                 activeInteractivePrompt: this.activeInteractivePrompt,
-                errorMessage: this.kimiAuthBillingFailure.message,
-                errorReason: this.kimiAuthBillingFailure.errorReason,
+                errorMessage: this.providerFailure.message,
+                errorReason: this.providerFailure.errorReason,
                 ...sessionFields
               };
             }
@@ -112925,6 +112949,7 @@ ${text}` : text;
             return this.partialResponse;
           }
           shutdown() {
+            (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
             try {
               this.driver.dispatch({ kind: "shutdown" });
             } catch {
@@ -113322,7 +113347,7 @@ ${text}` : text;
               activeInteractivePrompt: this.activeInteractivePrompt,
               exited: this.exited,
               exitCode: this.lastExitCode,
-              kimiFailureKind: this.kimiAuthBillingFailure?.failureKind ?? null,
+              providerFailureKind: this.providerFailure?.failureKind ?? null,
               screen,
               sections,
               stateHistory: this.driver.getStateHistory(),
@@ -113423,7 +113448,7 @@ ${text}` : text;
                 this.statusCallback?.();
                 return;
               case "pty_data":
-                this.observeKimiAuthBillingOutput(ev.chunk);
+                this.observeProviderFailureOutput(ev.chunk);
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
@@ -113437,7 +113462,7 @@ ${text}` : text;
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
                 this.publishTerminationObservation(ev.termination);
-                if (!this.observeKimiAuthBillingOutput("", ev.exit_code ?? void 0, ev)) this.statusCallback?.();
+                if (!this.observeProviderFailureOutput("", ev.exit_code ?? void 0, ev)) this.statusCallback?.();
                 return;
               case "signal_detected":
                 this.publishSignalObservation(ev.signal);
@@ -113502,10 +113527,10 @@ ${text}` : text;
           }
           /** Auth/billing classification of PTY output. WHAT the daemon may do about a
            *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-          observeKimiAuthBillingOutput(chunk, exitCode, exit) {
-            if (this.kimiAuthBillingFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination)) return false;
-            if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
-            const failure3 = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
+          observeProviderFailureOutput(chunk, exitCode, exit) {
+            if (this.providerFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth)) return false;
+            if (chunk) this.failureOutputTail = appendAuthTail(this.failureOutputTail, chunk);
+            const failure3 = classifyAuthBillingOutput(this.cliType, this.failureOutputTail, exitCode);
             if (!failure3) return false;
             if (exitCode === void 0 && !this.exited) {
               noteLiveAuthMatch(this.liveAuth ??= createLiveAuthState(), this.liveAuthContext(), failure3);
@@ -113520,20 +113545,20 @@ ${text}` : text;
             return { cliType: this.cliType, sessionLabel: this.owningSessionId || "unknown", isCoordinator };
           }
           latchAuthBillingFailure(failure3, context) {
-            this.kimiAuthBillingFailure = failure3;
+            this.providerFailure = failure3;
             LOG.warn("SpecAdapter", authBillingLatchLogLine(this.cliType, failure3, context));
             this.statusCallback?.();
           }
           /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
           maybeConfirmLiveAuthBillingSuspect() {
-            if (!this.liveAuth?.suspect || this.kimiAuthBillingFailure || this.exited) return;
+            if (!this.liveAuth?.suspect || this.providerFailure || this.exited) return;
             const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
               // FSM status is idle | generating | approval — anything but idle is mid-turn.
               midTurn: !!this.latestState && this.latestState.status !== "idle",
               readScreen: () => typeof this.driver?.snapshot === "function" ? this.driver.snapshot() : "",
-              tail: this.kimiFailureOutputTail
+              tail: this.failureOutputTail
             });
-            if (outcome.clearTail) this.kimiFailureOutputTail = "";
+            if (outcome.clearTail) this.failureOutputTail = "";
             if (outcome.advisory) this.publishSignalObservation(outcome.advisory);
             if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, "exitCode=pending; confirmed on-screen at turn boundary");
           }
@@ -121746,11 +121771,15 @@ ${rawInput}` : rawInput;
       for (const key2 of input.isolation?.env?.unset || []) {
         if (typeof key2 === "string" && key2.trim()) envUnsets.add(key2.trim());
       }
+      const forcedConfigFile = (Array.isArray(input.isolation?.args) ? input.isolation.args : []).some(
+        (rule) => !!rule && typeof rule === "object" && rule.mode === "empty_mcp_config" && !!rule.flag && !hasCliArg(cliArgs, rule.flag)
+      );
       const workerIsolation = resolveWorkerMcpIsolation({
         providerType: input.cliType,
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
+        forcedConfigFile,
         workerMcpDelivery: input.isolation?.workerMcpDelivery,
         realHome: input.realHome,
         baseDir: input.workerHomeBaseDir,
@@ -122248,6 +122277,7 @@ ${rawInput}` : rawInput;
     var chalkModule;
     var chalkApi;
     var MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS;
+    var AUTO_CLEAN_DELAY_MS;
     var DaemonCliManager;
     var init_cli_manager = __esm2({
       "src/commands/cli-manager.ts"() {
@@ -122288,6 +122318,7 @@ ${rawInput}` : rawInput;
         chalkModule = import_chalk.default;
         chalkApi = typeof chalkModule.yellow === "function" ? chalkModule : chalkModule.default || null;
         MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS = 3e5;
+        AUTO_CLEAN_DELAY_MS = 5e3;
         DaemonCliManager = class {
           adapters = /* @__PURE__ */ new Map();
           deps;
@@ -122396,9 +122427,48 @@ ${rawInput}` : rawInput;
             }
             throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);
           }
-          startCliExitMonitor(key2, cliType) {
-            const sessionRegistry = this.deps.getSessionRegistry?.() || null;
-            const instanceManager = this.deps.getInstanceManager();
+          /**
+           * AUTO-CLEAN — the ONE place a session that reports `stopped` or `error` is
+           * reclaimed. It used to exist twice (exit monitor: 5s, full teardown,
+           * `adapters.has(key)`; InstanceManager-less fallback: 3s, partial teardown,
+           * identity check), which is how the two drifted.
+           *
+           * SEMANTICS, stated once because a wrong belief about them caused the
+           * 2026-09-21 coordinator kill loop: for the daemon, `error` IS TERMINAL.
+           * A session reporting it is reclaimed here within AUTO_CLEAN_DELAY_MS — it
+           * does not linger and "become idle again". An adapter must therefore only
+           * report `error` for a session it is prepared to lose (a dead process, or a
+           * provider failure that makes the session useless), never as a soft health
+           * hint about a live, working session. Soft hints go through the
+           * provider-signal seam (see providers/spec/live-auth-advisory.ts).
+           *
+           * The IDENTITY check is load-bearing: a session relaunched under the same key
+           * inside the delay window must not be reclaimed by its predecessor's timer
+           * (the old `has(key)` form would have removed the new session).
+           */
+          scheduleAutoClean(key2, adapter, terminalStatus) {
+            setTimeout(() => {
+              if (this.adapters.get(key2) !== adapter) return;
+              const instanceManager = this.deps.getInstanceManager();
+              try {
+                const inst = instanceManager?.getInstance(key2);
+                if (typeof inst?.flushMeshCompletionBeforeCleanup === "function") {
+                  const emitted = inst.flushMeshCompletionBeforeCleanup();
+                  if (emitted) LOG.info("CLI", `Emitted pre-cleanup mesh completion for ${adapter.cliType} session ${key2} before auto-clean`);
+                }
+              } catch (e) {
+                LOG.warn("CLI", `pre-cleanup mesh completion flush failed for ${key2}: ${e?.message || e}`);
+              }
+              this.adapters.delete(key2);
+              this.deps.removeAgentTracking(key2);
+              this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key2);
+              instanceManager?.removeInstance(key2);
+              unregisterMeshCoordinator(key2);
+              LOG.info("CLI", `\u{1F9F9} Auto-cleaned ${terminalStatus} CLI: ${adapter.cliType} (session=${key2})`);
+              this.deps.onStatusChange();
+            }, AUTO_CLEAN_DELAY_MS);
+          }
+          startCliExitMonitor(key2) {
             const checkStopped = setInterval(() => {
               try {
                 const adapter = this.adapters.get(key2);
@@ -122409,26 +122479,7 @@ ${rawInput}` : rawInput;
                 const status = adapter.getStatus?.();
                 if (status?.status === "stopped" || status?.status === "error") {
                   clearInterval(checkStopped);
-                  setTimeout(() => {
-                    if (this.adapters.has(key2)) {
-                      try {
-                        const inst = instanceManager?.getInstance(key2);
-                        if (typeof inst?.flushMeshCompletionBeforeCleanup === "function") {
-                          const emitted = inst.flushMeshCompletionBeforeCleanup();
-                          if (emitted) LOG.info("CLI", `Emitted pre-cleanup mesh completion for ${cliType} session ${key2} before auto-clean`);
-                        }
-                      } catch (e) {
-                        LOG.warn("CLI", `pre-cleanup mesh completion flush failed for ${key2}: ${e?.message || e}`);
-                      }
-                      this.adapters.delete(key2);
-                      this.deps.removeAgentTracking(key2);
-                      sessionRegistry?.unregisterByInstanceKey(key2);
-                      instanceManager?.removeInstance(key2);
-                      unregisterMeshCoordinator(key2);
-                      LOG.info("CLI", `\u{1F9F9} Auto-cleaned ${status.status} CLI: ${cliType}`);
-                      this.deps.onStatusChange();
-                    }
-                  }, 5e3);
+                  this.scheduleAutoClean(key2, adapter, status.status);
                 }
               } catch {
               }
@@ -122514,7 +122565,7 @@ ${rawInput}` : rawInput;
               } catch {
               }
             }
-            this.startCliExitMonitor(key2, cliType);
+            this.startCliExitMonitor(key2);
           }
           // ─── Session start/management ──────────────────────────────
           async startSession(cliType, workingDir, cliArgs, initialModel, options) {
@@ -122754,14 +122805,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 this.deps.onStatusChange();
                 const status = adapter.getStatus?.();
                 if (status?.status === "stopped" || status?.status === "error") {
-                  setTimeout(() => {
-                    if (this.adapters.get(key2) === adapter) {
-                      this.adapters.delete(key2);
-                      this.deps.removeAgentTracking(key2);
-                      LOG.info("CLI", `\u{1F9F9} Auto-cleaned ${status.status} CLI: ${adapter.cliType}`);
-                      this.deps.onStatusChange();
-                    }
-                  }, 3e3);
+                  this.scheduleAutoClean(key2, adapter, status.status);
                 }
               });
               if (typeof adapter.setOnPtyData === "function") {
