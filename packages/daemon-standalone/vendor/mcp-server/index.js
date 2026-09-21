@@ -112300,13 +112300,39 @@ ${text}` : text;
         /\b(?:token_expired|invalid_token)\b/,
         /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
         /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/
+        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
+        // AUTH-EXPIRY-GENERALIZATION (D4). The two rules above that could plausibly
+        // have matched claude-cli's live banner both miss it:
+        //   "Login expired · Please run /login"
+        // `login\s*(?:error|failed|required)` wants a failure NOUN after "login"
+        // ("expired" is not in that set), and the `please run login` rule wants the
+        // bare word — the banner says the slash command `/login`. So the session
+        // produced no classification at all and stayed dispatch-eligible for a day
+        // (incident session b23d10ee, 2026-09-20 → 09-21).
+        //
+        // These two rules are STATEMENT-ANCHORED rather than bare presence matches.
+        // The anchor (start of tail, or immediately after sentence punctuation such
+        // as `.` `!` `?` `·` `:` `;`) is what separates a banner the CLI printed from
+        // an agent narrating the same words mid-sentence. That distinction is not
+        // theoretical: the unanchored form classified
+        //   "I will add a test for the login expired banner rendering"
+        // as auth_failed, which would have stranded the very session doing that work
+        // — the overcorrection this gate must not commit. It is the structural
+        // equivalent of the quota bucket's failure-envelope precondition above,
+        // adapted to wording that carries no HTTP status.
+        /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/
       ].some((pattern) => pattern.test(text));
       if (auth) {
         return {
           errorReason: "auth_failed",
           failureKind: "auth",
-          message: 'Kimi authentication failed (the access token is expired or rejected). Run "kimi login" in this environment before retrying.'
+          // Provider-neutral wording: the AUTH axis now serves every spec-backed
+          // CLI (see observeKimiAuthBillingOutput), so naming Kimi here would send
+          // a claude-cli operator to re-login against the wrong tool. The billing
+          // and quota messages above stay Kimi-specific because those axes remain
+          // kimi-scoped.
+          message: "Provider authentication failed (the credential is expired or rejected). Re-authenticate this CLI in this environment before retrying."
         };
       }
       return null;
@@ -113340,16 +113366,39 @@ ${text}` : text;
               runtimeSettings: this.runtimeSettings
             });
           }
+          /**
+           * AUTH-EXPIRY-GENERALIZATION (D4): this observer used to return early for
+           * every non-kimi provider, so a spec CLI that printed an expired-credential
+           * banner produced NO classification at all — no completionDiagnostic.reason,
+           * and (because the session stayed alive and idle rather than emitting
+           * agent:stopped) no nonRetryableProviderFailureReason either. The mesh then
+           * saw a perfectly healthy idle session and kept dispatching into it. Live:
+           * claude-cli session b23d10ee answered "Login expired · Please run /login" in
+           * 34s with zero content on 2026-09-20 and swallowed another task on 09-21.
+           *
+           * The AUTH axis is now evaluated for every spec-backed CLI, because an
+           * expired credential is a universal condition and its wording ("login
+           * expired", "not logged in", "401") is provider-neutral.
+           *
+           * BILLING and QUOTA stay kimi-scoped deliberately. Their vocabulary
+           * ("membership inactive", "billing cycle", "5-hour usage limit") is Kimi's
+           * entitlement model, the quota bucket is additionally gated on an HTTP
+           * failure envelope that only Kimi emits, and the quota axis is ALREADY
+           * covered for every provider by the routing gate (mesh-quota-routing.ts).
+           * Widening those here would re-risk the 2026-08-29 misclassification without
+           * covering anything the mesh does not already handle.
+           */
           observeKimiAuthBillingOutput(chunk, exitCode) {
-            if (this.cliType !== "kimi" || this.kimiAuthBillingFailure) return false;
+            if (this.kimiAuthBillingFailure) return false;
             if (chunk) {
               this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
             }
             const failure3 = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
             if (!failure3) return false;
+            if (this.cliType !== "kimi" && failure3.failureKind !== "auth") return false;
             this.kimiAuthBillingFailure = failure3;
             const suppressionNote = failure3.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
-            LOG.warn("SpecAdapter", `[kimi] ${failure3.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? "pending"}); ${suppressionNote}`);
+            LOG.warn("SpecAdapter", `[${this.cliType}] ${failure3.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? "pending"}); ${suppressionNote}`);
             this.statusCallback?.();
             return true;
           }
