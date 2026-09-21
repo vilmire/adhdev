@@ -27,7 +27,7 @@ import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { beginTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
-import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, rebindAttemptToLiveHolder } from './mesh-turn-ledger.js';
+import { openTurnAttempt, recordTurnAck, closeAttemptForReassignment, assertPromptInjectionAllowed, rebindAttemptToLiveHolder, recordDuplicateDispatchConsumption } from './mesh-turn-ledger.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
 import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
 import { retractActionableSkipIfPreviouslyNotified } from './mesh-skip-notify.js';
@@ -654,7 +654,52 @@ function deliverTaskToSession(
             });
             if (rebind.rebound || rebind.reason === 'same_session') {
                 LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned; turn attempt ${rebind.attemptId ?? 'n/a'} ${rebind.rebound ? 'rebound to that session' : 'was already bound to it'}.`);
-                updateSessionDeliveryStatus(delivery.id, 'delivered');
+                // DUP-REFUSAL-IS-CONSUMPTION (delivery-row half): 'acked', not
+                // 'delivered'. These are the two CONSUMED statuses the redrive gate
+                // reads (`taskDeliveryConsumed` = status IN ('acked','completed')), and
+                // writing 'delivered' here is precisely what left the row one rank short
+                // of proving consumption while the refusal had already proved it.
+                //
+                // Advance THIS row by id rather than via consumeSessionDelivery(): the
+                // row belongs to the REFUSED session (ctx.sessionId), and that helper
+                // filters on session equivalence, so keying it on the holder would match
+                // zero rows. The row is nonetheless the right one to advance — it is the
+                // delivery record for this task's dispatch, and what the refusal settles
+                // is the fate of that dispatch: its prompt is being worked. The store's
+                // monotonic guard keeps this safe (it may advance or rewrite the same
+                // rank, never regress), so a later transport confirm cannot pull it back
+                // to 'delivered'.
+                updateSessionDeliveryStatus(delivery.id, 'acked');
+                // DUP-REFUSAL-IS-CONSUMPTION (attempt half): the refusal proves the
+                // prompt was taken up — the worker daemon observed a live session on its
+                // own machine already WORKING this exact (meshId, taskId). Record that as
+                // the durable consumed link, which the rebind alone did not do.
+                //
+                // Without it the attempt stayed pre-consumed, so every redrive path —
+                // all of which infer "never consumed" from the ABSENCE of
+                // agent:generating_started, an event an emitsPtyTurnEvents=false
+                // provider never emits — still read this healthy worker as unconsumed
+                // and tore it off its turn (live task 307f7b4e, antigravity-cli:
+                // rebind 07:48:13, redrive 07:49:54, the worker's genuine result
+                // 07:50:09). The two gates are INDEPENDENT authorities and both must be
+                // satisfied: the delivery-row gate (taskDeliveryConsumed) is the write
+                // just above; this is the durable attempt gate (evaluateRedrive →
+                // already_consumed), which survives the daemon restart that resets the
+                // in-memory redrive streaks.
+                //
+                // Ordering matters: this runs AFTER the rebind so the ack is recorded
+                // against a session the attempt names — recordTurnAck's session-binding
+                // guard ignores evidence from any other session. Best-effort, exactly
+                // like the rebind's own audit write: a failure here restores the
+                // previous behaviour, it never blocks the refusal handling.
+                try {
+                    recordDuplicateDispatchConsumption({
+                        meshId: ctx.meshId,
+                        taskId: ctx.task.id,
+                        holderSessionId: duplicate.holderSessionId,
+                        ...(rebind.attemptId ? { attemptId: rebind.attemptId } : {}),
+                    });
+                } catch { /* best-effort durable consumed link */ }
                 try {
                     appendLedgerEntry(ctx.meshId, {
                         kind: 'dispatch_duplicate_rebound',
