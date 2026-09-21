@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { configureProviderSignalObserver } from '../../../src/shared/provider-signal-sink.js'
 import { SpecCliAdapter, detectKimiAuthBillingFailure } from '../../../src/providers/spec/cli-adapter.js'
 
 describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
@@ -94,6 +95,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.handleEvent({ kind: 'pty_data', chunk: 'Authentica' })
     expect(adapter.getStatus().status).not.toBe('error')
     adapter.handleEvent({ kind: 'pty_data', chunk: 'tion failed: access token has expired. Please run kimi login.\r\n' })
+    // AUTH-LIVE-CONFIRM: a live match settles for 5s before the screen is trusted.
+    adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
 
     expect(adapter.getStatus()).toMatchObject({
       status: 'error',
@@ -101,9 +104,137 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     })
     // D4: the auth message is provider-neutral now that the AUTH axis serves every
     // spec-backed CLI (billing/quota stay Kimi-scoped and keep their branded copy).
-    expect(adapter.getStatus().errorMessage).toMatch(/authentication failed/i)
+    expect(adapter.getStatus().errorMessage).toMatch(/re-authenticate/i)
     expect(adapter.getStatus().errorMessage).not.toMatch(/kimi/i)
     expect(adapter.statusCallback).toHaveBeenCalledTimes(1)
+  })
+
+  // AUTH-LIVE-CONFIRM regression suite — 2026-09-21 preview incident: the
+  // chunk-latched live verdict killed every coordinator (and plain sessions
+  // discussing the incident) because the 16KB tail is conversation content.
+  describe('AUTH-LIVE-CONFIRM — live matches are suspicions until confirmed on screen', () => {
+    const BANNER = 'Login expired · Please run /login\r\n'
+    const make = (overrides: Record<string, unknown> = {}) => {
+      const adapter = Object.create(SpecCliAdapter.prototype) as any
+      adapter.cliType = 'claude-cli'
+      adapter.cliName = 'Claude Code'
+      adapter.spawned = true
+      adapter.exited = false
+      adapter.activeInteractivePrompt = null
+      adapter.providerSessionId = undefined
+      adapter.spec = { id: 'claude-cli', name: 'Claude Code' }
+      adapter.kimiFailureOutputTail = ''
+      adapter.kimiAuthBillingFailure = null
+      adapter.liveAuth = undefined
+      adapter.owningSessionId = 'sess_live'
+      adapter.workingDir = '/repo'
+      adapter.runtimeSettings = {}
+      adapter.statusCallback = vi.fn()
+      adapter.ptyDataCallback = null
+      adapter.detectInteractivePromptFromPtyChunk = vi.fn()
+      adapter.maybeClearResolvedClaudeTuiPrompt = vi.fn()
+      adapter.maybeCaptureClaudeTuiPrompt = vi.fn()
+      adapter.maybeUpgradeClaudeTuiMultiSelect = vi.fn()
+      Object.assign(adapter, overrides)
+      return adapter
+    }
+
+    it('every canonical failure message is itself unclassifiable (self-poisoning guard)', () => {
+      const samples = [
+        'Login expired · Please run /login',
+        "[provider.auth_error] 403 You've reached your 5-hour usage limit",
+        'Your Kimi Code subscription has expired.',
+      ]
+      for (const sample of samples) {
+        const verdict = detectKimiAuthBillingFailure(sample)
+        expect(verdict).not.toBeNull()
+        expect({ sample, echoed: detectKimiAuthBillingFailure(verdict!.message) })
+          .toEqual({ sample, echoed: null })
+      }
+    })
+
+    it('never takes a live-text verdict on a coordinator session, but still classifies its exit', () => {
+      const adapter = make({ runtimeSettings: { meshCoordinatorFor: 'mesh_x' } })
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
+      expect(adapter.getStatus().status).not.toBe('error')
+      expect(adapter.liveAuth?.suspect ?? null).toBeNull()
+      expect(adapter.statusCallback).not.toHaveBeenCalled()
+
+      adapter.handleEvent({ kind: 'exit', exit_code: 1 })
+      expect(adapter.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+    })
+
+    it('dismisses a marker that is no longer on the visible screen at the turn boundary (quoted content)', () => {
+      const adapter = make({
+        driver: { snapshot: () => '> summarize the dead worker\n\nDone. The worker was restarted.\n' },
+        latestState: { id: 'idle', label: 'Ready', title: null, status: 'idle' },
+      })
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
+      expect(adapter.liveAuth.suspect).not.toBeNull()
+      // Fresh suspicion: the just-submitted prompt may still sit in the composer.
+      adapter.getStatus()
+      expect(adapter.liveAuth.suspect).not.toBeNull()
+      adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
+      expect(adapter.getStatus().status).not.toBe('error')
+      expect(adapter.liveAuth?.suspect ?? null).toBeNull()
+      expect(adapter.statusCallback).not.toHaveBeenCalled()
+    })
+
+    afterEach(() => configureProviderSignalObserver(null))
+
+    // Owner decision 2026-09-21: a live match NEVER terminates a non-kimi
+    // session — status 'error' is auto-cleaned by cli-manager within seconds.
+    // The daemon logs and pages the coordinator; stopping is the coordinator's call.
+    it('non-kimi: an on-screen banner at the turn boundary pages the coordinator and leaves the session running', () => {
+      const signals: any[] = []
+      configureProviderSignalObserver((o) => { signals.push(o) })
+      const adapter = make({
+        driver: { snapshot: () => 'Login expired · Please run /login\n\n> \n' },
+        latestState: { id: 'busy', label: 'Generating', title: null, status: 'generating' },
+      })
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
+      adapter.getStatus()
+      expect(signals).toHaveLength(0) // mid-turn: deferred
+
+      adapter.latestState = { id: 'idle', label: 'Ready', title: null, status: 'idle' }
+      adapter.getStatus()
+      expect(signals).toHaveLength(0) // idle but younger than the settle window
+      adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
+      const status = adapter.getStatus()
+      expect(status.status).not.toBe('error')
+      expect(status.errorReason).toBeUndefined()
+      expect(adapter.kimiAuthBillingFailure).toBeNull()
+      expect(adapter.statusCallback).not.toHaveBeenCalled()
+      expect(signals).toHaveLength(1)
+      expect(signals[0]).toMatchObject({
+        sessionId: 'sess_live',
+        providerType: 'claude-cli',
+        ruleId: 'builtin.live_auth_marker',
+        kind: 'auth_error',
+        params: { reason: 'auth_failed', action: 'advisory_session_not_stopped' },
+      })
+      // The page is injected into a coordinator PTY — it must carry no screen
+      // text and must not itself classify.
+      expect(detectKimiAuthBillingFailure(JSON.stringify(signals[0].params))).toBeNull()
+
+      // A TUI repaints its banner: no second page inside the cooldown.
+      adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
+      adapter.getStatus()
+      expect(signals).toHaveLength(1)
+    })
+
+    it('kimi keeps its latch, now behind on-screen confirmation (stuck-busy escape included)', () => {
+      const adapter = make({
+        cliType: 'kimi',
+        driver: { snapshot: () => 'Authentication failed: access token has expired.\n' },
+        latestState: { id: 'busy', label: 'Generating', title: null, status: 'generating' },
+      })
+      adapter.handleEvent({ kind: 'pty_data', chunk: 'Authentication failed: access token has expired.\r\n' })
+      expect(adapter.getStatus().status).not.toBe('error')
+      adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 61_000
+      expect(adapter.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+      expect(adapter.statusCallback).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('promotes the live incident quota-exhaustion line to adapter error with a retryable reason, not a billing stop', () => {
@@ -125,6 +256,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.maybeUpgradeClaudeTuiMultiSelect = vi.fn()
 
     adapter.handleEvent({ kind: 'pty_data', chunk: "[provider.auth_error] 403 You've reached your 5-hour usage limit\r\n" })
+    // AUTH-LIVE-CONFIRM: a live match settles for 5s before the screen is trusted.
+    adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
 
     expect(adapter.getStatus()).toMatchObject({
       status: 'error',

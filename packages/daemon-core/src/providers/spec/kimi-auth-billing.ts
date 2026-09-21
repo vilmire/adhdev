@@ -150,7 +150,16 @@ export function detectKimiAuthBillingFailure(output: string, _exitCode?: number)
             // a claude-cli operator to re-login against the wrong tool. The billing
             // and quota messages above stay Kimi-specific because those axes remain
             // kimi-scoped.
-            message: 'Provider authentication failed (the credential is expired or rejected). Re-authenticate this CLI in this environment before retrying.',
+            //
+            // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
+            // (assert: detectKimiAuthBillingFailure(message) === null). It travels
+            // into mesh failure events that the daemon INJECTS into coordinator and
+            // worker PTYs — the previous wording ("Provider authentication failed…")
+            // matched the bare `authentication failed` rule above, so every delivery
+            // of an auth-failure event poisoned the receiving session's own tail and
+            // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
+            // wording out of every pattern in this file when editing it.
+            message: 'Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.',
         };
     }
     return null;
