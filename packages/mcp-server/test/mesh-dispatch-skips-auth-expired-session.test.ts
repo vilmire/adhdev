@@ -9,16 +9,23 @@ import { chooseDispatchableSession } from '../src/tools/mesh-tools.js';
 // /login" in 34s with zero content (2026-09-20), stayed dispatch-eligible, and
 // swallowed task 1c225a59 the next day with the identical empty fingerprint.
 //
-// The FIX is upstream, in the provider layer: SpecCliAdapter now classifies the
-// auth banner for every spec-backed CLI (not just kimi), and getStatus() then
-// reports `status: 'error'` instead of `idle`. These tests pin the CONSEQUENCE at
-// the selection layer — that an auth-failed session is not dispatchable, and,
-// just as importantly, that healthy sessions still are.
+// These tests pin the selection layer — that a session reporting `error` is not
+// dispatchable, and, just as importantly, that healthy sessions still are.
 //
-// Note `error` is deliberately NOT in isTerminalSessionRecord's set: the session
-// is not dead, it is blocked on a credential. It becomes dispatchable again the
-// moment the adapter reports idle (re-auth / relaunch), with no durable stigma —
-// there is no "unhealthy" flag to clear, which is what makes recovery automatic.
+// CORRECTION (2026-09-22). This header originally claimed an `error` session "is
+// not dead … it becomes dispatchable again the moment the adapter reports idle".
+// That is false in the daemon: cli-manager's scheduleAutoClean reclaims any
+// session reporting `error` within seconds, so `error` is TERMINAL there. Acting
+// on the false belief (reporting `error` for a LIVE session on a text match) is
+// what killed three coordinators in a row on 2026-09-21. Today an adapter only
+// reports `error` for an unexplained death or a kimi provider failure; a live
+// non-kimi auth marker is an advisory page and never changes status (see
+// daemon-core providers/spec/live-auth-advisory.ts).
+//
+// What these tests still pin is the selector's side of the contract, which is
+// correct and independent of that: a record whose status is `error` is never
+// dispatched into, and no durable stigma outlives the record (a relaunched
+// session under the same id is eligible immediately).
 
 const MESH = 'mesh_auth';
 const NODE = 'node_worker';

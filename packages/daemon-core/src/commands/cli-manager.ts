@@ -229,6 +229,9 @@ type CliStartOptions = {
 // includes the taskId, a deliberate resend (a handoff/retry mints a NEW task row,
 // hence a new taskId) is unaffected by the window at any length.
 const MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS = 300_000;
+/** Grace between a session reporting stopped/error and its reclamation — long
+ *  enough for the final status/mesh events to flush, see scheduleAutoClean. */
+const AUTO_CLEAN_DELAY_MS = 5_000;
 
 // ─── DaemonCliManager ────────────────────────────
 
@@ -384,9 +387,58 @@ export class DaemonCliManager {
         throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);
     }
 
-    private startCliExitMonitor(key: string, cliType: string): void {
-        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
-        const instanceManager = this.deps.getInstanceManager();
+    /**
+     * AUTO-CLEAN — the ONE place a session that reports `stopped` or `error` is
+     * reclaimed. It used to exist twice (exit monitor: 5s, full teardown,
+     * `adapters.has(key)`; InstanceManager-less fallback: 3s, partial teardown,
+     * identity check), which is how the two drifted.
+     *
+     * SEMANTICS, stated once because a wrong belief about them caused the
+     * 2026-09-21 coordinator kill loop: for the daemon, `error` IS TERMINAL.
+     * A session reporting it is reclaimed here within AUTO_CLEAN_DELAY_MS — it
+     * does not linger and "become idle again". An adapter must therefore only
+     * report `error` for a session it is prepared to lose (a dead process, or a
+     * provider failure that makes the session useless), never as a soft health
+     * hint about a live, working session. Soft hints go through the
+     * provider-signal seam (see providers/spec/live-auth-advisory.ts).
+     *
+     * The IDENTITY check is load-bearing: a session relaunched under the same key
+     * inside the delay window must not be reclaimed by its predecessor's timer
+     * (the old `has(key)` form would have removed the new session).
+     */
+    private scheduleAutoClean(key: string, adapter: CliAdapter, terminalStatus: string): void {
+        setTimeout(() => {
+            if (this.adapters.get(key) !== adapter) return;
+            const instanceManager = this.deps.getInstanceManager();
+            // KIMI-MESH-COMPLETION-EMIT (axis 2): before removeInstance closes the
+            // event-emit window, give a mesh DELEGATED worker one last chance to emit
+            // its completion. A native-source worker (e.g. kimi) can have its PTY
+            // killed by a false stall AFTER it finished the task (transcript written)
+            // but BEFORE the FSM's idle→completed event fired — the instance is the
+            // only thing that can emit that event, and it is about to be removed. The
+            // instance-side method is a no-op for a non-mesh session or when the
+            // turn's completion already fired (double-emit guard) or when there is no
+            // transcript evidence of a finished turn. Best-effort — never blocks cleanup.
+            try {
+                const inst = instanceManager?.getInstance(key) as (ProviderInstance & { flushMeshCompletionBeforeCleanup?: () => boolean }) | undefined;
+                if (typeof inst?.flushMeshCompletionBeforeCleanup === 'function') {
+                    const emitted = inst.flushMeshCompletionBeforeCleanup();
+                    if (emitted) LOG.info('CLI', `Emitted pre-cleanup mesh completion for ${adapter.cliType} session ${key} before auto-clean`);
+                }
+            } catch (e) {
+                LOG.warn('CLI', `pre-cleanup mesh completion flush failed for ${key}: ${(e as Error)?.message || e}`);
+            }
+            this.adapters.delete(key);
+            this.deps.removeAgentTracking(key);
+            this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key);
+            instanceManager?.removeInstance(key);
+            unregisterMeshCoordinator(key);
+            LOG.info('CLI', `🧹 Auto-cleaned ${terminalStatus} CLI: ${adapter.cliType} (session=${key})`);
+            this.deps.onStatusChange();
+        }, AUTO_CLEAN_DELAY_MS);
+    }
+
+    private startCliExitMonitor(key: string): void {
         const checkStopped = setInterval(() => {
             try {
                 const adapter = this.adapters.get(key);
@@ -394,35 +446,7 @@ export class DaemonCliManager {
                 const status = adapter.getStatus?.();
                 if (status?.status === 'stopped' || status?.status === 'error') {
                     clearInterval(checkStopped);
-                    setTimeout(() => {
-                        if (this.adapters.has(key)) {
-                            // KIMI-MESH-COMPLETION-EMIT (axis 2): before removeInstance closes the
-                            // event-emit window, give a mesh DELEGATED worker one last chance to emit
-                            // its completion. A native-source worker (e.g. kimi) can have its PTY
-                            // killed by a false stall AFTER it finished the task (transcript written)
-                            // but BEFORE the FSM's idle→completed event fired — the instance is the
-                            // only thing that can emit that event, and it is about to be removed. The
-                            // instance-side method is a no-op for a non-mesh session or when the
-                            // turn's completion already fired (double-emit guard) or when there is no
-                            // transcript evidence of a finished turn. Best-effort — never blocks cleanup.
-                            try {
-                                const inst = instanceManager?.getInstance(key) as (ProviderInstance & { flushMeshCompletionBeforeCleanup?: () => boolean }) | undefined;
-                                if (typeof inst?.flushMeshCompletionBeforeCleanup === 'function') {
-                                    const emitted = inst.flushMeshCompletionBeforeCleanup();
-                                    if (emitted) LOG.info('CLI', `Emitted pre-cleanup mesh completion for ${cliType} session ${key} before auto-clean`);
-                                }
-                            } catch (e) {
-                                LOG.warn('CLI', `pre-cleanup mesh completion flush failed for ${key}: ${(e as Error)?.message || e}`);
-                            }
-                            this.adapters.delete(key);
-                            this.deps.removeAgentTracking(key);
-                            sessionRegistry?.unregisterByInstanceKey(key);
-                            instanceManager?.removeInstance(key);
-                            unregisterMeshCoordinator(key);
-                            LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${cliType}`);
-                            this.deps.onStatusChange();
-                        }
-                    }, 5000);
+                    this.scheduleAutoClean(key, adapter, status.status);
                 }
             } catch { /* ignore */ }
         }, 3000);
@@ -571,7 +595,7 @@ export class DaemonCliManager {
             } catch { /* best-effort — record-meta stamp is cleanup hygiene, not on the dispatch path */ }
         }
 
-        this.startCliExitMonitor(key, cliType);
+        this.startCliExitMonitor(key);
     }
 
  // ─── Session start/management ──────────────────────────────
@@ -882,14 +906,7 @@ export class DaemonCliManager {
                 this.deps.onStatusChange();
                 const status = adapter.getStatus?.();
                 if (status?.status === 'stopped' || status?.status === 'error') {
-                    setTimeout(() => {
-                        if (this.adapters.get(key) === adapter) {
-                            this.adapters.delete(key);
-                            this.deps.removeAgentTracking(key);
-                            LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${adapter.cliType}`);
-                            this.deps.onStatusChange();
-                        }
-                    }, 3000);
+                    this.scheduleAutoClean(key, adapter, status.status);
                 }
             });
 
