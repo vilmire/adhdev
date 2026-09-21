@@ -52,6 +52,7 @@ import {
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
+    providerPinsFromRequiredTags,
     normalizeQueueViewMode,
     notifyCoordinatorOfOrphanedPins,
     buildOrphanedPinNotice,
@@ -345,8 +346,45 @@ function normalizeEnqueueTaskArgs(
  * chosen as the single receiver while an online peer is skipped — with a fan-out that
  * could not happen, since every eligible node got a copy.
  *
+ * ★PROVIDER-PIN-BYPASS SCOPE NOTE (D2). The requiredTags test here is deliberately the
+ * NODE-level one (`buildMeshNodeCapabilityTags(node)` with no provider pinned), which
+ * asks "could some provider on this node satisfy the pin?". That is the correct
+ * question for choosing a RECEIVER, and it must stay this shape — narrowing it here
+ * would make the accelerator refuse nodes the queue-claim path would happily use.
+ * What was missing is that the answer is NOT a guarantee the dispatch will run on the
+ * pinned provider: a node declaring [claude-cli, antigravity-cli] passes a
+ * provider=antigravity-cli pin on the strength of a slot the dispatch may never
+ * select. Honoring the pin is therefore ipcDispatchToRemoteAgent's job (it is the code
+ * that picks the concrete provider), and the caller now hands it requiredTags so it
+ * can. Do not "fix" the bypass by tightening this predicate instead.
+ *
  * Returns null when no node is eligible; the task then simply waits for the queue.
  */
+/**
+ * ★PIN-OBSERVABILITY (D2) — tell the coordinator that `requiredTags` in this response
+ * is its own REQUEST echoed back, not a confirmation.
+ *
+ * ★WHY THIS EXISTS. The enqueue response has always echoed `requiredTags: task.requiredTags`.
+ * A coordinator reading it naturally concludes the pin is in force — but the response is
+ * written BEFORE any dispatch happens (the eager push is fire-and-forget, and an untargeted
+ * task may be claimed minutes later by a different node entirely). When a provider pin was
+ * silently bypassed downstream, this echo is what made it invisible: the request said
+ * antigravity-cli, the response said antigravity-cli, and only `task_dispatched.providerType`
+ * in the ledger — which nobody had reason to check — said claude-cli.
+ *
+ * So the echo is not removed (it is a useful confirmation that the tags PARSED, and that a
+ * misspelled `provider=` name was not silently dropped); it is labelled, and the response
+ * names where the honored value actually lands. Advisory only — never blocks, never re-routes.
+ */
+function buildProviderPinAdvisory(requiredTags: string[]): Record<string, unknown> {
+    const pins = providerPinsFromRequiredTags(requiredTags);
+    if (!pins.length) return {};
+    return {
+        providerPin: pins,
+        providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation — the provider is chosen later, when a node claims or the eager push lands. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran, and it now carries requiredTags alongside. A refused eager push records p2p_dispatch_failed with reason 'mesh_provider_pin_unsatisfiable' and leaves the task pending for the claim path.`,
+    };
+}
+
 function selectEagerPushReceiver(
     ctx: MeshContext,
     targetNodeId: string | undefined,
@@ -406,6 +444,14 @@ function eagerPushTaskToRemoteNodes(
         dispatchPromises.push(
             ipcDispatchToRemoteAgent(ctx, node, {
                 message,
+                // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
+                // selectEagerPushReceiver above only answered "could some provider on
+                // this node satisfy the pin?" — a node-level question. Without the tags
+                // here, ipcDispatchToRemoteAgent then re-derived the provider from
+                // providerPriority[0] and could land the task on an unpinned provider
+                // while the ledger recorded the pin as honored (live: an
+                // antigravity-cli-pinned task ran on claude-cli).
+                ...(requiredTags.length ? { requiredTags } : {}),
                 meshContext: {
                     meshId: ctx.mesh.id,
                     nodeId: node.id,
@@ -433,6 +479,36 @@ function eagerPushTaskToRemoteNodes(
                                     ...(task.taskMode ? { taskMode: task.taskMode } : {}),
                                     ...(providerType ? { providerType } : {}),
                                     targetSessionId: result.sessionId,
+                                    // ★PIN-OBSERVABILITY: record the pin ALONGSIDE the provider
+                                    // actually dispatched to, so "was the pin honored?" is answerable
+                                    // from one entry. Previously the only trace of a pin was the
+                                    // enqueue response echoing back the REQUESTED tags, which says
+                                    // nothing about what happened — the live bypass was invisible
+                                    // until someone compared providerType against the request by eye.
+                                    ...(requiredTags.length ? { requiredTags } : {}),
+                                },
+                            });
+                        } catch { /* best-effort */ }
+                    } else if ((result as any)?.code === 'mesh_provider_pin_unsatisfiable') {
+                        // ★PIN-OBSERVABILITY: a REFUSED eager push is a routing fact, not a
+                        // transport error. Record it as its own ledger kind so the task sitting
+                        // `pending` has a stated cause — silence here would reproduce the original
+                        // defect's worst property (a routing decision with no trace).
+                        try {
+                            appendLedgerEntry(ctx.mesh.id, {
+                                kind: 'p2p_dispatch_failed',
+                                nodeId: node.id,
+                                payload: {
+                                    source: 'queue',
+                                    via: 'p2p_direct',
+                                    taskId: task.id,
+                                    reason: 'mesh_provider_pin_unsatisfiable',
+                                    requiredTags,
+                                    ...((result as any).resolvedProviderType
+                                        ? { resolvedProviderType: (result as any).resolvedProviderType } : {}),
+                                    error: (result as any).error,
+                                    eagerPushDeclined: true,
+                                    dispatchFailedAt: new Date().toISOString(),
                                 },
                             });
                         } catch { /* best-effort */ }
@@ -587,6 +663,7 @@ export async function meshEnqueueTask(
                 status: task.status,
                 taskMode: task.taskMode,
                 requiredTags: task.requiredTags,
+                ...buildProviderPinAdvisory(requiredTags),
                 ...enqueueEcho,
                 ...(targetNodeId ? { targetNodeId } : {}),
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
@@ -636,6 +713,7 @@ export async function meshEnqueueTask(
                 status: task.status,
                 taskMode: task.taskMode,
                 requiredTags: task.requiredTags,
+                ...buildProviderPinAdvisory(requiredTags),
                 ...enqueueEcho,
                 ...(targetNodeId ? { targetNodeId } : {}),
                 ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),

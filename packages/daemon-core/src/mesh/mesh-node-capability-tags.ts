@@ -155,6 +155,61 @@ export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags:
 }
 
 /**
+ * ★PROVIDER-PIN-BYPASS — the provider types a task's required_tags PIN it to.
+ *
+ * `nodeSatisfiesRequiredTags(tags, buildMeshNodeCapabilityTags(node))` — the
+ * one-argument, representative form — answers "could SOME provider on this node
+ * satisfy the pin?". That is the right question for a NODE filter, and it is what
+ * the auto-launch candidate scan and the MAGI availability scan ask. It is the
+ * WRONG question for a path that then has to pick a concrete provider, because the
+ * representative tag set advertises `provider=<type>` for EVERY slot the node
+ * declares (see buildMeshNodeCapabilityTags above). A node whose slots are
+ * [claude-cli, antigravity-cli] satisfies `provider=antigravity-cli` — and a caller
+ * that reads that as "yes" and then resolves the provider independently (e.g. from
+ * providerPriority[0]) lands the task on claude-cli while believing the pin held.
+ *
+ * ★That is not hypothetical. Live (2026-09-21, task 1c225a59, node Jupiter):
+ * required_tags ["provider=antigravity-cli"] → auto_launch correctly SKIPPED
+ * (`task_difficulty_floor_unavailable:medium`, the antigravity slot being easy-only)
+ * → the enqueue-and-push accelerator then dispatched to `claude-cli`, the node's
+ * providerPriority[0], and the ledger recorded the pin as honored.
+ *
+ * So: any path that selects a provider must intersect its candidates with THIS set
+ * rather than re-deriving one and trusting the node-level predicate. Returns the
+ * pinned types in tag order; an EMPTY array means "no provider pin" — every other
+ * tag axis (os=/arch=/worktree=/converge=) is a node property, not a provider
+ * choice, and leaves provider selection unconstrained.
+ */
+export function providerPinsFromRequiredTags(requiredTags: unknown): string[] {
+    const out: string[] = [];
+    for (const tag of normalizeMeshCapabilityTags(requiredTags)) {
+        if (!tag.startsWith('provider=')) continue;
+        const type = tag.slice('provider='.length).trim();
+        if (type && !out.includes(type)) out.push(type);
+    }
+    return out;
+}
+
+/**
+ * ★PROVIDER-PIN-BYPASS — narrow a provider-selection candidate list to what the
+ * task's required_tags allow, preserving the caller's own preference order.
+ *
+ * No pin → the list is returned unchanged, so an UNPINNED task keeps exactly its
+ * previous routing (the over-correction guard: pinning must never become a filter
+ * that unpinned work has to pass). A pin that nothing in `candidates` satisfies
+ * returns an EMPTY array — the caller must treat that as "I cannot honor this pin"
+ * and decline, never as "no constraint".
+ */
+export function filterProvidersByRequiredTags(candidates: unknown, requiredTags: unknown): string[] {
+    const list = Array.isArray(candidates)
+        ? candidates.map(c => typeof c === 'string' ? c.trim() : '').filter(Boolean)
+        : [];
+    const pins = providerPinsFromRequiredTags(requiredTags);
+    if (pins.length === 0) return list;
+    return list.filter(type => pins.includes(type));
+}
+
+/**
  * Convergence-aware required-tags resolution (load-balancing scheduler, opt-in).
  *
  * When the mesh enables policy.autoConvergeCodeChange, a `converge=refine` required
