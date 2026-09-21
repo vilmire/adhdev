@@ -56901,6 +56901,21 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const available = new Set(normalizeMeshCapabilityTags3(capabilityTags));
       return required2.every((tag) => available.has(tag));
     }
+    function providerPinsFromRequiredTags3(requiredTags) {
+      const out = [];
+      for (const tag of normalizeMeshCapabilityTags3(requiredTags)) {
+        if (!tag.startsWith("provider=")) continue;
+        const type2 = tag.slice("provider=".length).trim();
+        if (type2 && !out.includes(type2)) out.push(type2);
+      }
+      return out;
+    }
+    function filterProvidersByRequiredTags3(candidates, requiredTags) {
+      const list = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
+      const pins = providerPinsFromRequiredTags3(requiredTags);
+      if (pins.length === 0) return list;
+      return list.filter((type2) => pins.includes(type2));
+    }
     function resolveConvergeRequiredTags(meshId, taskMode, explicitRequiredTags, opts) {
       if (taskMode !== "code_change") return explicitRequiredTags;
       if (typeof opts?.targetNodeId === "string" && opts.targetNodeId.trim()) return explicitRequiredTags;
@@ -65972,6 +65987,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       enqueueTask: () => enqueueTask3,
       enqueueTaskGraph: () => enqueueTaskGraph3,
       failRetentionExpiredParkedTask: () => failRetentionExpiredParkedTask,
+      filterProvidersByRequiredTags: () => filterProvidersByRequiredTags3,
       formatMeshTaskModeViolations: () => formatMeshTaskModeViolations,
       getActiveDirectDispatches: () => getActiveDirectDispatches3,
       getMeshQueueRevision: () => getMeshQueueRevision,
@@ -65989,6 +66005,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       normalizeMeshTaskMode: () => normalizeMeshTaskMode,
       normalizeMeshTaskPriority: () => normalizeMeshTaskPriority2,
       parkTaskTargetPin: () => parkTaskTargetPin,
+      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
       reclaimStrandedAssignedTask: () => reclaimStrandedAssignedTask,
       recordAckedHoldDispatchOutcome: () => recordAckedHoldDispatchOutcome,
       recordDirectDispatchTask: () => recordDirectDispatchTask3,
@@ -146602,6 +146619,7 @@ ${e?.stderr || ""}`;
       filterActivityChatMessages: () => filterActivityChatMessages,
       filterChatMessagesByVisibility: () => filterChatMessagesByVisibility,
       filterInternalChatMessages: () => filterInternalChatMessages,
+      filterProvidersByRequiredTags: () => filterProvidersByRequiredTags3,
       filterUserFacingChatMessages: () => filterUserFacingChatMessages,
       findCdpManager: () => findCdpManager,
       findTasksOrphanedBySessionStop: () => findTasksOrphanedBySessionStop2,
@@ -146841,6 +146859,7 @@ ${e?.stderr || ""}`;
       projectFleetStatusEntry: () => projectFleetStatusEntry,
       projectGraphPublicPolicy: () => projectGraphPublicPolicy,
       projectMeshLedgerEntry: () => projectMeshLedgerEntry,
+      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
       pruneDeadMeshCoordinators: () => pruneDeadMeshCoordinators,
       pruneOperatingNotes: () => pruneOperatingNotes,
       pruneStaleDirectDispatches: () => pruneStaleDirectDispatches3,
@@ -173179,13 +173198,42 @@ function buildCoordinatorP2pRelayFailure(error48, context) {
     retryHint: payload.retryRecommended ? payload.nextAction : "Do not retry as a P2P transport recovery; inspect the command/provider error first."
   };
 }
+function buildProviderPinUnsatisfiableFailure(node, providerPins, nodeProviders, resolvedProviderType) {
+  const pinList = providerPins.join(", ");
+  return {
+    success: false,
+    recoverable: true,
+    code: "mesh_provider_pin_unsatisfiable",
+    reason: "mesh_provider_pin_unsatisfiable",
+    nodeId: node.id,
+    requiredProviders: providerPins,
+    nodeProviders,
+    ...resolvedProviderType ? { resolvedProviderType } : {},
+    error: `Node '${node.id}' cannot honor the task's provider pin [${pinList}]` + (resolvedProviderType ? `: dispatch resolved to '${resolvedProviderType}', which is not pinned.` : `: the node declares [${nodeProviders.join(", ") || "none"}].`) + " Refusing to dispatch onto a different provider \u2014 the task stays pending for the queue-claim path.",
+    nextAction: `Leave the task queued (the claim path enforces the pin per session), or launch a '${providerPins[0]}' session on this node with mesh_launch_session, or re-enqueue without the provider pin if any provider is acceptable.`
+  };
+}
 async function ipcDispatchToRemoteAgent(ctx, node, args) {
   const transport = ctx.transport;
   const daemonId = node.daemonId;
   const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || "";
   let sessionId = args.session_id?.trim() || "";
-  const providerPriorityList = readProviderPriority(node.policy);
-  let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || "";
+  const providerPins = (0, import_daemon_core8.providerPinsFromRequiredTags)(args.requiredTags);
+  const providerPriorityList = (0, import_daemon_core8.filterProvidersByRequiredTags)(
+    readProviderPriority(node.policy),
+    args.requiredTags
+  );
+  const callerProviderType = args.providerType?.trim() || "";
+  const callerProviderAllowed = !callerProviderType || providerPins.length === 0 || providerPins.includes(callerProviderType);
+  if (providerPins.length && !callerProviderAllowed && !providerPriorityList.length) {
+    return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy));
+  }
+  let resolvedProviderType = (callerProviderAllowed ? callerProviderType : "") || providerPriorityList[0] || "";
+  const adoptSessionProviderType = (session) => {
+    const type2 = resolveSessionProviderType(session);
+    if (!type2) return "";
+    return providerPins.length === 0 || providerPins.includes(type2) ? type2 : "";
+  };
   if (sessionId && args.verifiedSession) {
     const explicitSession = args.verifiedSession;
     const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
@@ -173205,7 +173253,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       );
     }
     if (!resolvedProviderType) {
-      resolvedProviderType = resolveSessionProviderType(explicitSession);
+      resolvedProviderType = adoptSessionProviderType(explicitSession);
     }
   } else if (!sessionId || args.session_id) {
     try {
@@ -173248,14 +173296,15 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
           );
         }
         if (!resolvedProviderType) {
-          resolvedProviderType = resolveSessionProviderType(explicitSession);
+          resolvedProviderType = adoptSessionProviderType(explicitSession);
         }
       } else {
-        const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+        const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : "");
+        const targetSession = chooseDispatchableSession(sessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
         if (targetSession?.id || targetSession?.sessionId) {
           sessionId = targetSession.id || targetSession.sessionId;
           if (!resolvedProviderType) {
-            resolvedProviderType = resolveSessionProviderType(targetSession);
+            resolvedProviderType = adoptSessionProviderType(targetSession);
           }
         }
       }
@@ -173276,6 +173325,9 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
   }
   if (!resolvedProviderType) {
     return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
+  }
+  if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
+    return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
   }
   try {
     const dispatchResult = await transport.meshCommand(daemonId, "agent_command", {
@@ -174837,6 +174889,14 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
     }
   };
 }
+function buildProviderPinAdvisory(requiredTags) {
+  const pins = (0, import_daemon_core9.providerPinsFromRequiredTags)(requiredTags);
+  if (!pins.length) return {};
+  return {
+    providerPin: pins,
+    providerPinHint: `requiredTags above is the REQUEST as parsed, not a dispatch confirmation \u2014 the provider is chosen later, when a node claims or the eager push lands. To verify the pin was honored, read the task's task_dispatched ledger entry: its providerType is the provider that actually ran, and it now carries requiredTags alongside. A refused eager push records p2p_dispatch_failed with reason 'mesh_provider_pin_unsatisfiable' and leaves the task pending for the claim path.`
+  };
+}
 function selectEagerPushReceiver(ctx, targetNodeId, requiredTags) {
   const eligible = ctx.mesh.nodes.filter((node) => {
     if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) return false;
@@ -174855,6 +174915,14 @@ function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTa
     dispatchPromises.push(
       ipcDispatchToRemoteAgent(ctx, node, {
         message,
+        // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
+        // selectEagerPushReceiver above only answered "could some provider on
+        // this node satisfy the pin?" — a node-level question. Without the tags
+        // here, ipcDispatchToRemoteAgent then re-derived the provider from
+        // providerPriority[0] and could land the task on an unpinned provider
+        // while the ledger recorded the pin as honored (live: an
+        // antigravity-cli-pinned task ran on claude-cli).
+        ...requiredTags.length ? { requiredTags } : {},
         meshContext: {
           meshId: ctx.mesh.id,
           nodeId: node.id,
@@ -174880,7 +174948,33 @@ function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTa
                 taskSummary: descriptor.taskSummary,
                 ...task.taskMode ? { taskMode: task.taskMode } : {},
                 ...providerType ? { providerType } : {},
-                targetSessionId: result.sessionId
+                targetSessionId: result.sessionId,
+                // ★PIN-OBSERVABILITY: record the pin ALONGSIDE the provider
+                // actually dispatched to, so "was the pin honored?" is answerable
+                // from one entry. Previously the only trace of a pin was the
+                // enqueue response echoing back the REQUESTED tags, which says
+                // nothing about what happened — the live bypass was invisible
+                // until someone compared providerType against the request by eye.
+                ...requiredTags.length ? { requiredTags } : {}
+              }
+            });
+          } catch {
+          }
+        } else if (result?.code === "mesh_provider_pin_unsatisfiable") {
+          try {
+            (0, import_daemon_core9.appendLedgerEntry)(ctx.mesh.id, {
+              kind: "p2p_dispatch_failed",
+              nodeId: node.id,
+              payload: {
+                source: "queue",
+                via: "p2p_direct",
+                taskId: task.id,
+                reason: "mesh_provider_pin_unsatisfiable",
+                requiredTags,
+                ...result.resolvedProviderType ? { resolvedProviderType: result.resolvedProviderType } : {},
+                error: result.error,
+                eagerPushDeclined: true,
+                dispatchFailedAt: (/* @__PURE__ */ new Date()).toISOString()
               }
             });
           } catch {
@@ -174999,6 +175093,7 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...buildProviderPinAdvisory(requiredTags),
         ...enqueueEcho,
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
@@ -175027,6 +175122,7 @@ async function meshEnqueueTask(ctx, args) {
         status: task.status,
         taskMode: task.taskMode,
         requiredTags: task.requiredTags,
+        ...buildProviderPinAdvisory(requiredTags),
         ...enqueueEcho,
         ...targetNodeId ? { targetNodeId } : {},
         ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},

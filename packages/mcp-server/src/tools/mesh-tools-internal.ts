@@ -100,6 +100,8 @@ import {
     markStaleDirectDispatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
+    filterProvidersByRequiredTags,
+    providerPinsFromRequiredTags,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
     readLedgerEntries,
@@ -387,6 +389,8 @@ export {
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
+    providerPinsFromRequiredTags,
+    filterProvidersByRequiredTags,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
     normalizeMeshTaskPriority,
@@ -1310,6 +1314,52 @@ export function buildCoordinatorP2pRelayFailure(
 
 
 /**
+ * ★PROVIDER-PIN-BYPASS — refusal returned when a dispatch cannot honor the task's
+ * `required_tags: ["provider=X"]` pin on this node.
+ *
+ * ★WHY THIS REFUSES RATHER THAN FALLING BACK. The alternative — dispatch to some
+ * other provider and note it somewhere — is the exact defect this closes: the work
+ * silently ran on the wrong agent while both the ledger and the enqueue response
+ * reported the pin as satisfied. A pin is a hard constraint (the claim path has
+ * always treated it as one), so the accelerator must decline when it cannot meet it.
+ *
+ * ★WHY DECLINING DOES NOT STRAND THE TASK. This is the enqueue-and-push
+ * ACCELERATOR, not the scheduler — its own contract (selectEagerPushReceiver) is
+ * "if the chosen node cannot take the task, the row stays `pending` and the
+ * queue-claim path hands it to whichever node claims it". The row is already
+ * inserted before any push is attempted, and the claim path enforces the pin
+ * per-session via buildMeshNodeCapabilityTags(node, providerType). So a refusal
+ * here costs a delay and returns the task to the path that routes it correctly —
+ * it is `recoverable: true` for exactly that reason. This is why the design choice
+ * is "stay pending", not "fail the task": a pinned task whose provider is merely
+ * BUSY must wait, and only a coordinator can tell a busy pin from an impossible one.
+ */
+function buildProviderPinUnsatisfiableFailure(
+    node: LocalMeshNodeEntry,
+    providerPins: string[],
+    nodeProviders: string[],
+    resolvedProviderType?: string,
+): { success: false; error: string } & Record<string, unknown> {
+    const pinList = providerPins.join(', ');
+    return {
+        success: false,
+        recoverable: true,
+        code: 'mesh_provider_pin_unsatisfiable',
+        reason: 'mesh_provider_pin_unsatisfiable',
+        nodeId: node.id,
+        requiredProviders: providerPins,
+        nodeProviders,
+        ...(resolvedProviderType ? { resolvedProviderType } : {}),
+        error: `Node '${node.id}' cannot honor the task's provider pin [${pinList}]`
+            + (resolvedProviderType
+                ? `: dispatch resolved to '${resolvedProviderType}', which is not pinned.`
+                : `: the node declares [${nodeProviders.join(', ') || 'none'}].`)
+            + ' Refusing to dispatch onto a different provider — the task stays pending for the queue-claim path.',
+        nextAction: `Leave the task queued (the claim path enforces the pin per session), or launch a '${providerPins[0]}' session on this node with mesh_launch_session, or re-enqueue without the provider pin if any provider is acceptable.`,
+    };
+}
+
+/**
  * For IpcTransport + remote node: resolve an active session on the node and
  * dispatch an agent_command directly via P2P relay (mesh_relay_command).
  *
@@ -1328,6 +1378,14 @@ export async function ipcDispatchToRemoteAgent(
         input?: { parts: Array<Record<string, unknown>> };
         providerType?: string;
         verifiedSession?: any;
+        /**
+         * ★PROVIDER-PIN-BYPASS — the task's required_tags, when this dispatch carries a
+         * queue task. Only the `provider=` axis is consumed here (see the pin block
+         * below); the other axes are node properties already enforced by the caller's
+         * node filter. Absent/empty → no provider constraint, i.e. exactly the previous
+         * behavior for every unpinned dispatch.
+         */
+        requiredTags?: string[];
         meshContext?: { meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string };
     },
 ): Promise<RemoteAgentDispatchResult> {
@@ -1341,10 +1399,48 @@ export async function ipcDispatchToRemoteAgent(
     const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || '';
 
     let sessionId = args.session_id?.trim() || '';
+    // ── ★PROVIDER-PIN-BYPASS (D2) — the pin must survive provider resolution ──────
+    //
     // Resolve provider type: caller arg > node policy providerPriority (slots-derived
-    // when unset — readProviderPriority applies the fallback) > empty (fuzzy fallback)
-    const providerPriorityList: string[] = readProviderPriority(node.policy);
-    let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || '';
+    // when unset — readProviderPriority applies the fallback) > empty (fuzzy fallback).
+    //
+    // ★The providerPriority[0] fallback is what silently broke required_tags. The
+    // caller's node filter asks "could SOME provider here satisfy the pin?" and a node
+    // declaring several slots answers yes — then this line picked priority[0] with no
+    // idea a pin existed. Live: required_tags ["provider=antigravity-cli"] resolved to
+    // `claude-cli` (Jupiter's priority[0]) and the ledger recorded the pin as honored.
+    // Whichever provider names reach `resolvedProviderType`, they are now intersected
+    // with the pin first, so an unpinnable candidate can never be selected.
+    const providerPins = providerPinsFromRequiredTags(args.requiredTags);
+    const providerPriorityList: string[] = filterProvidersByRequiredTags(
+        readProviderPriority(node.policy),
+        args.requiredTags,
+    );
+    // An explicit caller-supplied providerType is honored ONLY when it satisfies the
+    // pin. It normally comes from a cached session record, so a stale cache must not
+    // become a second bypass of the same constraint.
+    const callerProviderType = args.providerType?.trim() || '';
+    const callerProviderAllowed = !callerProviderType
+        || providerPins.length === 0
+        || providerPins.includes(callerProviderType);
+    if (providerPins.length && !callerProviderAllowed && !providerPriorityList.length) {
+        // The node advertises no provider satisfying the pin (and the caller's hint does
+        // not either). Fail-closed rather than dispatch onto some other provider — the
+        // task stays pending for the claim path, which enforces the pin per-session.
+        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy));
+    }
+    let resolvedProviderType = (callerProviderAllowed ? callerProviderType : '') || providerPriorityList[0] || '';
+    // ★PROVIDER-PIN-BYPASS — the three `resolvedProviderType ||= <session's provider>`
+    // fills below are the other way a non-pinned provider used to enter: when the
+    // priority list gave nothing, the provider was adopted from whatever session was
+    // found. Route every such adoption through this predicate so a session running the
+    // wrong provider leaves resolvedProviderType empty (→ the explicit
+    // `providerType unknown` refusal) instead of silently becoming the dispatch target.
+    const adoptSessionProviderType = (session: any): string => {
+        const type = resolveSessionProviderType(session);
+        if (!type) return '';
+        return providerPins.length === 0 || providerPins.includes(type) ? type : '';
+    };
 
     // Ask the remote daemon for live session truth when we need to auto-pick a
     // delegate session, or when an explicit session_id must be verified as a
@@ -1370,7 +1466,7 @@ export async function ipcDispatchToRemoteAgent(
         // 'safe' or 'self_heal' → dispatch; the remote router stamps the relay
         // anchor from meshContext.coordinatorDaemonId when self-healing.
         if (!resolvedProviderType) {
-            resolvedProviderType = resolveSessionProviderType(explicitSession);
+            resolvedProviderType = adoptSessionProviderType(explicitSession);
         }
     } else if (!sessionId || args.session_id) {
         try {
@@ -1416,18 +1512,26 @@ export async function ipcDispatchToRemoteAgent(
                 // 'safe' or 'self_heal' → dispatch; the remote router stamps the
                 // relay anchor from meshContext.coordinatorDaemonId when self-healing.
                 if (!resolvedProviderType) {
-                    resolvedProviderType = resolveSessionProviderType(explicitSession);
+                    resolvedProviderType = adoptSessionProviderType(explicitSession);
                 }
             } else {
                 // Prefer live idle sessions launched for this mesh node. Never route
                 // a new task into restored/stopped session records; that produces the
                 // coordinator-visible "pending only, chat never received it" failure.
-                const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
+                //
+                // ★PROVIDER-PIN-BYPASS — chooseDispatchableSession treats an EMPTY
+                // providerType as "any provider will do" (its matchingProvider is
+                // `!providerType || ...`). With a pin in play that is precisely the
+                // wrong default, so pass the single pinned provider as the filter when
+                // the node resolution left the type blank. Unpinned dispatches still
+                // pass '' and keep the any-session behavior.
+                const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
+                const targetSession = chooseDispatchableSession(sessions, sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
 
                 if (targetSession?.id || targetSession?.sessionId) {
                     sessionId = targetSession.id || targetSession.sessionId;
                     if (!resolvedProviderType) {
-                        resolvedProviderType = resolveSessionProviderType(targetSession);
+                        resolvedProviderType = adoptSessionProviderType(targetSession);
                     }
                 }
             }
@@ -1451,6 +1555,16 @@ export async function ipcDispatchToRemoteAgent(
     // agent_command requires agentType — fail if we cannot determine provider type
     if (!resolvedProviderType) {
         return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
+    }
+    // ★PROVIDER-PIN-BYPASS — single fail-closed assert over EVERY route that can reach
+    // here (caller hint / priority list / any of the three session adoptions / the
+    // catch-block fall-through). The individual guards above each narrow one route;
+    // this one makes it structurally impossible for a future edit to open a new one,
+    // because the pin is re-checked on the value actually about to be sent as
+    // agentType. Deliberately placed BELOW the unknown-provider refusal so the more
+    // specific message wins when nothing resolved at all.
+    if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
+        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
     }
 
     try {

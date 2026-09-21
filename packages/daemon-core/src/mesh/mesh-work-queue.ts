@@ -448,12 +448,16 @@ import {
     normalizeMeshCapabilityTags,
     nodeSatisfiesRequiredTags,
     resolveConvergeRequiredTags,
+    providerPinsFromRequiredTags,
+    filterProvidersByRequiredTags,
 } from './mesh-node-capability-tags.js';
 export {
     buildMeshNodeCapabilityTags,
     normalizeMeshCapabilityTags,
     nodeSatisfiesRequiredTags,
     resolveConvergeRequiredTags,
+    providerPinsFromRequiredTags,
+    filterProvidersByRequiredTags,
 };
 
 // Used by the cancel / requeue / stranded-reclaim paths below, and re-exported
