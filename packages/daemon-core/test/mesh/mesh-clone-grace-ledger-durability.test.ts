@@ -74,6 +74,31 @@ describe("M-MESH-INFRA-0829 [B] — isWithinCloneBootstrapGraceDurable ledger fa
     expect(isWithinCloneBootstrapGraceDurable(meshId, nodeId, pastGrace)).toBe(false)
   })
 
+  // CLOCK-LOWER-BOUND (2026-09-21) — the foreign-timestamp age class. The ledger
+  // `timestamp` is stamped by whichever node appended the entry, so skew / an NTP step can
+  // put it in OUR future. This gate is exemption-form (`age <= grace` → "still
+  // bootstrapping"), so a negative age would be unconditionally true and the permanent
+  // `target_node_id_unmatched` routing miss would be suppressed FOREVER — the node would look
+  // eternally transient. Reject, do not clamp: `Math.max(0, age)` reads a future stamp as
+  // "cloned this instant", the strongest possible pass of this very gate.
+  it('rejects a FUTURE-dated ledger entry instead of granting the grace forever', async () => {
+    const nodeId = 'node_ghost_future'
+    const nowMs = Date.now()
+    await appendClonedEntryAt(nodeId, nowMs + 3_600_000)
+
+    expect(isWithinCloneBootstrapGrace(nodeId)).toBe(false)
+    expect(isWithinCloneBootstrapGraceDurable(meshId, nodeId, nowMs)).toBe(false)
+  })
+
+  // Control group — the bound must not reject ordinary sub-second write/read jitter.
+  it('still grants grace for a stamp only marginally ahead of our clock (control)', async () => {
+    const nodeId = 'node_ghost_jitter'
+    const nowMs = Date.now()
+    await appendClonedEntryAt(nodeId, nowMs + 500)
+
+    expect(isWithinCloneBootstrapGraceDurable(meshId, nodeId, nowMs)).toBe(true)
+  })
+
   it('returns false for a node id with no ledger evidence at all (genuinely dead node stays actionable)', async () => {
     await appendClonedEntryAt('node_ghost_other', Date.now())
     expect(isWithinCloneBootstrapGraceDurable(meshId, 'node_never_cloned', Date.now())).toBe(false)

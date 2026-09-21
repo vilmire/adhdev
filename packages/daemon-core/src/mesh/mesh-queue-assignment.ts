@@ -35,7 +35,7 @@ import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, sessionHasActiveAssignment, resolveSchedulingStrategy, buildSchedulingPool, orderEligibleNodes, nodeActiveLoad, type IdleCandidate } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearAllQuotaClaimCandidatesBlockedState, clearClaimRefusalState, clearWorktreeBootstrapStaleBypassState, logAllQuotaClaimCandidatesBlocked, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
 import { type MeshTaskRoutingDecision } from './mesh-routing-decision.js';
-import { sweepAutoLaunchOrphanSessions, AUTO_LAUNCH_AWAIT_CLAIM_MS } from './mesh-autolaunch-integrity.js';
+import { sweepAutoLaunchOrphanSessions, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloorRefusal, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
@@ -1787,8 +1787,10 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         if (task.status !== 'pending') return false;
         const al = task.autoLaunch;
         if (!al || (al.status !== 'started' && al.status !== 'completed')) return false;
+        // CLOCK-LOWER-BOUND: `al.updatedAt` is foreign; a future stamp must not report
+        // autoLaunchPending forever — see isWithinForeignFreshnessWindow.
         const launchedAtMs = Date.parse(al.updatedAt);
-        return Number.isFinite(launchedAtMs) && Date.now() - launchedAtMs < AUTO_LAUNCH_AWAIT_CLAIM_MS;
+        return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs);
     });
 
     return {
