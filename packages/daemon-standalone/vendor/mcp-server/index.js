@@ -112370,7 +112370,16 @@ ${text}` : text;
           // a claude-cli operator to re-login against the wrong tool. The billing
           // and quota messages above stay Kimi-specific because those axes remain
           // kimi-scoped.
-          message: "Provider authentication failed (the credential is expired or rejected). Re-authenticate this CLI in this environment before retrying."
+          //
+          // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
+          // (assert: detectKimiAuthBillingFailure(message) === null). It travels
+          // into mesh failure events that the daemon INJECTS into coordinator and
+          // worker PTYs — the previous wording ("Provider authentication failed…")
+          // matched the bare `authentication failed` rule above, so every delivery
+          // of an auth-failure event poisoned the receiving session's own tail and
+          // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
+          // wording out of every pattern in this file when editing it.
+          message: "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying."
         };
       }
       return null;
@@ -112382,6 +112391,85 @@ ${text}` : text;
         "use strict";
         ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
         ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+      }
+    });
+    function createLiveAuthState() {
+      return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false };
+    }
+    function appendAuthTail(tail, chunk) {
+      return `${tail}${stripAnsi(chunk)}`.slice(-TAIL_BYTES4);
+    }
+    function classifyAuthBillingOutput(cliType, text, exitCode) {
+      const failure3 = detectKimiAuthBillingFailure(text, exitCode);
+      if (!failure3) return null;
+      if (cliType !== "kimi" && failure3.failureKind !== "auth") return null;
+      return failure3;
+    }
+    function authBillingLatchLogLine(cliType, failure3, context) {
+      const suppressionNote = failure3.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
+      return `[${cliType}] ${failure3.failureKind} failure detected from live PTY/exit (${context}); ${suppressionNote}`;
+    }
+    function noteLiveAuthMatch(state2, ctx, failure3) {
+      if (ctx.isCoordinator) {
+        if (!state2.coordinatorMarkerLogged) {
+          state2.coordinatorMarkerLogged = true;
+          LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure3.failureKind} marker in COORDINATOR PTY tail (session=${ctx.sessionLabel}) \u2014 ignored: a coordinator's screen quotes other sessions' failures; only its exit is classified`);
+        }
+        return;
+      }
+      if (state2.suspect) return;
+      state2.suspect = { failure: failure3, suspectedAtMs: Date.now() };
+      LOG.info("SpecAdapter", `[${ctx.cliType}] live ${failure3.failureKind} marker in PTY tail (session=${ctx.sessionLabel}) \u2014 suspicion only, session untouched; checking the visible screen at the next turn boundary`);
+    }
+    function resolveLiveAuthSuspect(state2, ctx, input) {
+      const suspect = state2.suspect;
+      if (!suspect) return {};
+      const now = input.now ?? Date.now();
+      const ageMs2 = now - suspect.suspectedAtMs;
+      if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
+      if (input.midTurn && ageMs2 < STUCK_BUSY_ESCAPE_MS) return {};
+      state2.suspect = null;
+      if (ctx.isCoordinator) return {};
+      let screen = "";
+      try {
+        screen = input.readScreen() || "";
+      } catch {
+        screen = "";
+      }
+      const confirmed = classifyAuthBillingOutput(ctx.cliType, screen || input.tail);
+      if (!confirmed) {
+        LOG.info("SpecAdapter", `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) \u2014 dismissed as quoted content`);
+        return { clearTail: true };
+      }
+      if (ctx.cliType === "kimi") return { latch: confirmed };
+      if (now - state2.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
+      state2.advisoryNotifiedAtMs = now;
+      LOG.warn("SpecAdapter", `[${ctx.cliType}] possible ${confirmed.failureKind} failure ON SCREEN at turn boundary (session=${ctx.sessionLabel}) \u2014 ADVISORY ONLY: session left running and dispatchable, coordinator notified; stopping it is the coordinator's decision`);
+      return {
+        clearTail: true,
+        advisory: {
+          ruleId: LIVE_AUTH_ADVISORY_RULE_ID,
+          kind: "auth_error",
+          params: { reason: confirmed.errorReason, action: "advisory_session_not_stopped" },
+          detectedAt: now
+        }
+      };
+    }
+    var TAIL_BYTES4;
+    var STUCK_BUSY_ESCAPE_MS;
+    var MIN_SUSPECT_AGE_MS;
+    var ADVISORY_COOLDOWN_MS;
+    var LIVE_AUTH_ADVISORY_RULE_ID;
+    var init_live_auth_advisory = __esm2({
+      "src/providers/spec/live-auth-advisory.ts"() {
+        "use strict";
+        init_logger();
+        init_kimi_auth_billing();
+        TAIL_BYTES4 = 16 * 1024;
+        STUCK_BUSY_ESCAPE_MS = 6e4;
+        MIN_SUSPECT_AGE_MS = 5e3;
+        ADVISORY_COOLDOWN_MS = 10 * 6e4;
+        LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
       }
     });
     var fs41;
@@ -112411,6 +112499,7 @@ ${text}` : text;
         init_claude_pending_question();
         init_dist();
         init_kimi_auth_billing();
+        init_live_auth_advisory();
         SpecCliAdapter = class _SpecCliAdapter {
           cliType;
           cliName;
@@ -112504,6 +112593,8 @@ ${text}` : text;
           /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
           kimiFailureOutputTail = "";
           kimiAuthBillingFailure = null;
+          /** Live-match suspicion state — policy in live-auth-advisory.ts. Lazy: tests build adapters without the constructor. */
+          liveAuth;
           lastExitCode = null;
           providerSessionId;
           /** Wall clock at the moment spawn() ran. Used as the cutoff for
@@ -112720,6 +112811,7 @@ ${text}` : text;
           }
           getStatus(_options) {
             const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
+            this.maybeConfirmLiveAuthBillingSuspect();
             if (this.kimiAuthBillingFailure) {
               return {
                 status: "error",
@@ -113404,41 +113496,42 @@ ${text}` : text;
               runtimeSettings: this.runtimeSettings
             });
           }
-          /**
-           * AUTH-EXPIRY-GENERALIZATION (D4): this observer used to return early for
-           * every non-kimi provider, so a spec CLI that printed an expired-credential
-           * banner produced NO classification at all — no completionDiagnostic.reason,
-           * and (because the session stayed alive and idle rather than emitting
-           * agent:stopped) no nonRetryableProviderFailureReason either. The mesh then
-           * saw a perfectly healthy idle session and kept dispatching into it. Live:
-           * claude-cli session b23d10ee answered "Login expired · Please run /login" in
-           * 34s with zero content on 2026-09-20 and swallowed another task on 09-21.
-           *
-           * The AUTH axis is now evaluated for every spec-backed CLI, because an
-           * expired credential is a universal condition and its wording ("login
-           * expired", "not logged in", "401") is provider-neutral.
-           *
-           * BILLING and QUOTA stay kimi-scoped deliberately. Their vocabulary
-           * ("membership inactive", "billing cycle", "5-hour usage limit") is Kimi's
-           * entitlement model, the quota bucket is additionally gated on an HTTP
-           * failure envelope that only Kimi emits, and the quota axis is ALREADY
-           * covered for every provider by the routing gate (mesh-quota-routing.ts).
-           * Widening those here would re-risk the 2026-08-29 misclassification without
-           * covering anything the mesh does not already handle.
-           */
+          /** Auth/billing classification of PTY output. WHAT the daemon may do about a
+           *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
           observeKimiAuthBillingOutput(chunk, exitCode) {
             if (this.kimiAuthBillingFailure) return false;
-            if (chunk) {
-              this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
-            }
-            const failure3 = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
+            if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
+            const failure3 = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
             if (!failure3) return false;
-            if (this.cliType !== "kimi" && failure3.failureKind !== "auth") return false;
-            this.kimiAuthBillingFailure = failure3;
-            const suppressionNote = failure3.failureKind === "quota" ? "this PTY session will not be blindly restarted; the mesh may retry once quota resets" : "automatic provider retry must be suppressed";
-            LOG.warn("SpecAdapter", `[${this.cliType}] ${failure3.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? "pending"}); ${suppressionNote}`);
-            this.statusCallback?.();
+            if (exitCode === void 0 && !this.exited) {
+              noteLiveAuthMatch(this.liveAuth ??= createLiveAuthState(), this.liveAuthContext(), failure3);
+              return false;
+            }
+            this.latchAuthBillingFailure(failure3, `exitCode=${exitCode ?? "pending"}`);
             return true;
+          }
+          liveAuthContext() {
+            const coordinatorFor = this.runtimeSettings?.meshCoordinatorFor;
+            const isCoordinator = typeof coordinatorFor === "string" && !!coordinatorFor.trim();
+            return { cliType: this.cliType, sessionLabel: this.owningSessionId || "unknown", isCoordinator };
+          }
+          latchAuthBillingFailure(failure3, context) {
+            this.kimiAuthBillingFailure = failure3;
+            LOG.warn("SpecAdapter", authBillingLatchLogLine(this.cliType, failure3, context));
+            this.statusCallback?.();
+          }
+          /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
+          maybeConfirmLiveAuthBillingSuspect() {
+            if (!this.liveAuth?.suspect || this.kimiAuthBillingFailure || this.exited) return;
+            const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
+              // FSM status is idle | generating | approval — anything but idle is mid-turn.
+              midTurn: !!this.latestState && this.latestState.status !== "idle",
+              readScreen: () => typeof this.driver?.snapshot === "function" ? this.driver.snapshot() : "",
+              tail: this.kimiFailureOutputTail
+            });
+            if (outcome.clearTail) this.kimiFailureOutputTail = "";
+            if (outcome.advisory) this.publishSignalObservation(outcome.advisory);
+            if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, "exitCode=pending; confirmed on-screen at turn boundary");
           }
           /**
            * Resolve the interactive-prompt protocol for this session — the spec's

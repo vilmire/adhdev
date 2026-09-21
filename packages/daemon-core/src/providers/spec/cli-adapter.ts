@@ -87,12 +87,8 @@ import {
     CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
 } from '@adhdev/mesh-shared';
 
-
-import {
-    detectKimiAuthBillingFailure,
-    stripAnsi,
-    type KimiAuthBillingFailure,
-} from './kimi-auth-billing.js';
+import { detectKimiAuthBillingFailure, stripAnsi, type KimiAuthBillingFailure } from './kimi-auth-billing.js';
+import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 
 export { detectKimiAuthBillingFailure, type KimiAuthBillingFailure };
 
@@ -196,6 +192,8 @@ export class SpecCliAdapter implements CliAdapter {
     /** Bounded merged PTY output tail used only for Kimi auth/billing classification. */
     private kimiFailureOutputTail = '';
     private kimiAuthBillingFailure: KimiAuthBillingFailure | null = null;
+    /** Live-match suspicion state — policy in live-auth-advisory.ts. Lazy: tests build adapters without the constructor. */
+    private liveAuth?: LiveAuthState;
     private lastExitCode: number | null = null;
     private providerSessionId: string | undefined;
     /** Wall clock at the moment spawn() ran. Used as the cutoff for
@@ -481,6 +479,7 @@ export class SpecCliAdapter implements CliAdapter {
 
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
+        this.maybeConfirmLiveAuthBillingSuspect();
         // A strong live Kimi auth/billing marker outranks generic process liveness.
         // Returning `error` makes CliProviderInstance emit agent:stopped with the
         // typed reason, rather than allowing an idle/exit edge to masquerade as a
@@ -1416,44 +1415,45 @@ export class SpecCliAdapter implements CliAdapter {
         });
     }
 
-    /**
-     * AUTH-EXPIRY-GENERALIZATION (D4): this observer used to return early for
-     * every non-kimi provider, so a spec CLI that printed an expired-credential
-     * banner produced NO classification at all — no completionDiagnostic.reason,
-     * and (because the session stayed alive and idle rather than emitting
-     * agent:stopped) no nonRetryableProviderFailureReason either. The mesh then
-     * saw a perfectly healthy idle session and kept dispatching into it. Live:
-     * claude-cli session b23d10ee answered "Login expired · Please run /login" in
-     * 34s with zero content on 2026-09-20 and swallowed another task on 09-21.
-     *
-     * The AUTH axis is now evaluated for every spec-backed CLI, because an
-     * expired credential is a universal condition and its wording ("login
-     * expired", "not logged in", "401") is provider-neutral.
-     *
-     * BILLING and QUOTA stay kimi-scoped deliberately. Their vocabulary
-     * ("membership inactive", "billing cycle", "5-hour usage limit") is Kimi's
-     * entitlement model, the quota bucket is additionally gated on an HTTP
-     * failure envelope that only Kimi emits, and the quota axis is ALREADY
-     * covered for every provider by the routing gate (mesh-quota-routing.ts).
-     * Widening those here would re-risk the 2026-08-29 misclassification without
-     * covering anything the mesh does not already handle.
-     */
+    /** Auth/billing classification of PTY output. WHAT the daemon may do about a
+     *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
     private observeKimiAuthBillingOutput(chunk: string, exitCode?: number): boolean {
         if (this.kimiAuthBillingFailure) return false;
-        if (chunk) {
-            this.kimiFailureOutputTail = `${this.kimiFailureOutputTail}${stripAnsi(chunk)}`.slice(-16 * 1024);
-        }
-        const failure = detectKimiAuthBillingFailure(this.kimiFailureOutputTail, exitCode);
+        if (chunk) this.kimiFailureOutputTail = appendAuthTail(this.kimiFailureOutputTail, chunk);
+        const failure = classifyAuthBillingOutput(this.cliType, this.kimiFailureOutputTail, exitCode);
         if (!failure) return false;
-        // Non-kimi providers admit the auth verdict only; see the note above.
-        if (this.cliType !== 'kimi' && failure.failureKind !== 'auth') return false;
-        this.kimiAuthBillingFailure = failure;
-        const suppressionNote = failure.failureKind === 'quota'
-            ? 'this PTY session will not be blindly restarted; the mesh may retry once quota resets'
-            : 'automatic provider retry must be suppressed';
-        LOG.warn('SpecAdapter', `[${this.cliType}] ${failure.failureKind} failure detected from live PTY/exit (exitCode=${exitCode ?? 'pending'}); ${suppressionNote}`);
-        this.statusCallback?.();
+        if (exitCode === undefined && !this.exited) {
+            noteLiveAuthMatch((this.liveAuth ??= createLiveAuthState()), this.liveAuthContext(), failure);
+            return false;
+        }
+        this.latchAuthBillingFailure(failure, `exitCode=${exitCode ?? 'pending'}`);
         return true;
+    }
+
+    private liveAuthContext(): LiveAuthContext {
+        const coordinatorFor = this.runtimeSettings?.meshCoordinatorFor;
+        const isCoordinator = typeof coordinatorFor === 'string' && !!coordinatorFor.trim();
+        return { cliType: this.cliType, sessionLabel: this.owningSessionId || 'unknown', isCoordinator };
+    }
+
+    private latchAuthBillingFailure(failure: KimiAuthBillingFailure, context: string): void {
+        this.kimiAuthBillingFailure = failure;
+        LOG.warn('SpecAdapter', authBillingLatchLogLine(this.cliType, failure, context));
+        this.statusCallback?.();
+    }
+
+    /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
+    private maybeConfirmLiveAuthBillingSuspect(): void {
+        if (!this.liveAuth?.suspect || this.kimiAuthBillingFailure || this.exited) return;
+        const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
+            // FSM status is idle | generating | approval — anything but idle is mid-turn.
+            midTurn: !!this.latestState && this.latestState.status !== 'idle',
+            readScreen: () => (typeof this.driver?.snapshot === 'function' ? this.driver.snapshot() : ''),
+            tail: this.kimiFailureOutputTail,
+        });
+        if (outcome.clearTail) this.kimiFailureOutputTail = '';
+        if (outcome.advisory) this.publishSignalObservation(outcome.advisory);
+        if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, 'exitCode=pending; confirmed on-screen at turn boundary');
     }
 
     /**
