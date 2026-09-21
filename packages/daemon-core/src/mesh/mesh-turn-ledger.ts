@@ -1468,6 +1468,102 @@ export function resolveTaskEvidenceSessionId(
     }
 }
 
+export type CompletionTaskAttributionRecovery =
+    | { recovered: true; taskId: string; attemptId: string; reason: 'attempt_bound_to_session' }
+    | {
+        recovered: false;
+        reason: 'no_attempt_for_session'
+        | 'attempt_mesh_mismatch'
+        | 'attempt_terminal'
+        | 'store_unavailable';
+    };
+
+/**
+ * COMPLETION-ATTRIBUTION-RECOVERY: the taskId a no-taskId completion belongs to,
+ * recovered from the COORDINATOR's own durable attempt table.
+ *
+ * WHY A RECOVERY IS NEEDED AT ALL. The taskId on a completion event is produced
+ * ENTIRELY from worker-side IN-MEMORY state: `pending.taskId` (snapshotted by the
+ * ARCH-REFACTOR R1 arm in status-transition.ts) with `completingTurnTaskId()`
+ * (adapter.currentTurnTaskId → settings.meshActiveTaskId) as the pushEvent
+ * fallback. Every one of those is erased by `detachMeshAssignment`, which
+ * `pushEvent` runs after ANY terminal mesh event (generating_completed / stopped /
+ * ready). So a worker that emits a terminal event and only LATER arms + flushes the
+ * genuine completion of the turn it was still running emits that completion with no
+ * taskId at all — the envelope is simply gone by arm time. Nothing on the worker can
+ * repair this, because the worker no longer holds the binding.
+ *
+ * The coordinator does. `mesh_turn_attempts` records (taskId, attemptId) → sessionId
+ * durably, and `rebindAttemptToLiveHolder` keeps that binding pointed at the session
+ * genuinely doing the work. That row is unaffected by anything the worker forgets,
+ * which is exactly what makes it the right authority here.
+ *
+ * LIVE INCIDENT (task 307f7b4e, node MoltBook, 2026-09-21 07:50:09Z). antigravity-cli
+ * is a native-source `hold` provider ⇒ `emitsPtyTurnEvents === false`, so it never
+ * emits agent:generating_started and the delivered-no-turn watchdog's verdict is
+ * structurally reachable for it. At 07:49:54 `delivered_not_consumed_redrive` fired
+ * and — because emitsPtyTurnEvents is false — called `stopStaleMeshWorker` on the
+ * attempt-bound session 3f3a7a16. The worker was genuinely mid-turn: 15s later it
+ * produced a complete, structured `workerResult`. But by then its envelope had been
+ * detached, so the completion landed with NO taskId. `markSessionTerminal` found no
+ * `assigned` row (the reclaim had flipped it `pending`), and every late-completion
+ * repair downstream — including `supersedeRedriveReclaimForLateCompletion`, which
+ * exists precisely for "a genuine completion raced a redrive" — is gated on a
+ * non-empty eventTaskId. So the finished work was dropped and the task redrove into
+ * a 4th session.
+ *
+ * WHY IT IS INTERMITTENT. The sibling task 4cc93159 on the same node completed
+ * cleanly 6 minutes earlier with its taskId intact. The difference is not the
+ * provider and not the node: it is whether a terminal mesh event (here, the redrive's
+ * stop) landed on the session BETWEEN its dispatch and its completion arm. Without
+ * that interleaving the envelope is still present at arm time and R1's snapshot
+ * carries the id, which is the overwhelmingly common path.
+ *
+ * OVERCORRECTION GUARD — a completion may legitimately carry no taskId, and those
+ * MUST stay unattributed. A coordinator session's own turn, an ad-hoc dashboard chat
+ * on a session whose membership survives detach, and a pre-dispatch boot/greeting
+ * artifact all emit task-less completions by design (see the WARMUPGAP note in
+ * mesh-event-forwarding.ts and the NO-DISPATCH-NATIVE-COMPLETION-GATE in
+ * mesh-event-suppression.ts). Attributing those would invent a completion for a task
+ * nobody ran. The discriminator is therefore NOT "is a taskId findable" but "does the
+ * coordinator hold a LIVE, non-terminal attempt bound to THIS session in THIS mesh" —
+ * i.e. a dispatch it is still waiting on. Each rejection below is one of those cases:
+ *
+ *  - `no_attempt_for_session` — the session was never dispatched a task. This is the
+ *    coordinator-own-turn / ad-hoc-chat / boot-artifact case; it is the guard that
+ *    keeps every legitimately task-less completion task-less.
+ *  - `attempt_mesh_mismatch` — the attempt belongs to a different mesh. Never
+ *    attribute across a mesh boundary.
+ *  - `attempt_terminal` — the attempt already settled. The task has an outcome; a
+ *    later task-less completion from the same session is a NEW, untracked turn, not
+ *    a late arrival for the settled one. Attributing it would let one session's
+ *    follow-up chat re-complete (or contradict) a finished task.
+ *
+ * Read-only and side-effect free: it resolves an id, it does not commit anything.
+ * The reducer (`proposeTurnCompletion`) still arbitrates the terminal, so a recovered
+ * id buys the completion a fair hearing — never an exemption from causality.
+ */
+export function recoverCompletionTaskIdForSession(args: {
+    meshId: string;
+    sessionId: string;
+}): CompletionTaskAttributionRecovery {
+    const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
+    if (!sessionId) return { recovered: false, reason: 'no_attempt_for_session' };
+    let attempt: MeshTurnAttemptRow | null;
+    try {
+        attempt = MeshRuntimeStore.getInstance().getLatestTurnAttemptForSession(sessionId);
+    } catch {
+        // Store unavailable — fall back to the pre-fix behaviour (stay unattributed).
+        return { recovered: false, reason: 'store_unavailable' };
+    }
+    if (!attempt) return { recovered: false, reason: 'no_attempt_for_session' };
+    if (attempt.meshId !== args.meshId) return { recovered: false, reason: 'attempt_mesh_mismatch' };
+    if (attempt.terminalOutcome) return { recovered: false, reason: 'attempt_terminal' };
+    const taskId = typeof attempt.taskId === 'string' ? attempt.taskId.trim() : '';
+    if (!taskId) return { recovered: false, reason: 'no_attempt_for_session' };
+    return { recovered: true, taskId, attemptId: attempt.attemptId, reason: 'attempt_bound_to_session' };
+}
+
 // ─── Redrive rules (durable lease) ─────────────────────────────────────────
 
 /** Max same-attempt prompt re-drives. One re-drive per attempt, ever. */
