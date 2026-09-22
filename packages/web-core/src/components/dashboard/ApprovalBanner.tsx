@@ -79,7 +79,10 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     }, [pendingButton]);
 
     const viewStates = getConversationViewStates(activeConv);
-    if (!viewStates.isWaiting || !activeConv.modalButtons) return null;
+    // waiting_choice (structured question parked) must ALSO open the banner —
+    // gating on isWaiting alone excluded it, so the structured-question
+    // branches below were unreachable for exactly the sessions they exist for.
+    if ((!viewStates.isWaiting && !viewStates.isWaitingChoice) || !activeConv.modalButtons) return null;
 
     const handleClick = (btnText: string) => {
         if (pendingButton) return; // Already processing
@@ -87,32 +90,35 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
         onModalButton(btnText);
     };
 
-    // PICKER-PARSE-DEADLOCK-ESCAPE: a structured question is tracked
-    // (hasActivePrompt) but the modal surface has nothing to render for it
-    // right now (promptSession null — e.g. the daemon-side parse of the TUI
-    // frame hasn't produced a usable prompt yet, or the prompt was dismissed
-    // and reopen() has not resolved a session). The raw modal buttons below
-    // must still not be offered here — same MULTISELECT-REMOTE-DEADLOCK
-    // reasoning as the structured-question branch, a raw press can silently
-    // corrupt a checkbox picker — so this is a dead end for the button-based
-    // banner. Point the owner at the terminal view instead of showing a CTA
-    // that (per the answerQuestion button below) can open nothing.
-    if (hasActivePrompt && !promptSession) {
-        return (
-            <div
-                className="text-white py-2.5 px-4 shrink-0 z-[5]"
-                style={{ background: 'linear-gradient(135deg, var(--status-warning), color-mix(in srgb, var(--status-warning) 85%, #000))' }}
-            >
-                <div className="flex items-center gap-2">
-                    <div className="font-black text-xs flex items-center gap-2">
-                        <IconWarning size={14} />
-                        {t('approval.questionUnavailable', {
-                            defaultValue: 'Question waiting — could not load it here. Answer it in the terminal view.',
-                        })}
-                    </div>
+    // PICKER-PARSE-DEADLOCK-ESCAPE / waiting_choice-without-prompt: a structured
+    // question owns this session but there is nothing answerable to render here
+    // (the daemon-side parse hasn't produced a usable prompt, the prompt was
+    // dismissed and reopen() has not resolved a session, or — for waiting_choice —
+    // neither the P2P event hydration nor the rich status sync delivered the
+    // prompt). The raw modal buttons below must still not be offered in any of
+    // these cases — same MULTISELECT-REMOTE-DEADLOCK reasoning as the
+    // structured-question branch, a raw press can silently corrupt a checkbox
+    // picker — so this is a dead end for the button-based banner. Point the
+    // owner at the terminal view instead of showing a CTA that (per the
+    // answerQuestion button below) can open nothing.
+    const renderQuestionUnavailable = () => (
+        <div
+            className="text-white py-2.5 px-4 shrink-0 z-[5]"
+            style={{ background: 'linear-gradient(135deg, var(--status-warning), color-mix(in srgb, var(--status-warning) 85%, #000))' }}
+        >
+            <div className="flex items-center gap-2">
+                <div className="font-black text-xs flex items-center gap-2">
+                    <IconWarning size={14} />
+                    {t('approval.questionUnavailable', {
+                        defaultValue: 'Question waiting — could not load it here. Answer it in the terminal view.',
+                    })}
                 </div>
             </div>
-        );
+        </div>
+    );
+
+    if (hasActivePrompt && !promptSession) {
+        return renderQuestionUnavailable();
     }
 
     // MULTISELECT-REMOTE-DEADLOCK: a structured question owns this session — show
@@ -151,6 +157,17 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                 </div>
             </div>
         );
+    }
+
+    // MULTISELECT-REMOTE-DEADLOCK: a waiting_choice conversation is owned by a
+    // STRUCTURED question even when nothing is tracked locally (hasActivePrompt
+    // false — the P2P event hydration and the rich status sync both missed it,
+    // e.g. WS-only delivery where the server relay strips the prompt fields).
+    // The raw buttons below must NEVER render for it: their only verb is a
+    // single-select `'{index}\r'` injection, which silently corrupts a checkbox
+    // picker one tap at a time. Same dead-end treatment as the branch above.
+    if (viewStates.isWaitingChoice) {
+        return renderQuestionUnavailable();
     }
 
     return (

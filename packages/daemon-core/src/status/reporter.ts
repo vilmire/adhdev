@@ -13,7 +13,7 @@ import {
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
-import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { recordFleetStatusShadow, isFleetStatusShadowActive } from '../seqscribe/fleet-status-shadow.js';
@@ -686,6 +686,33 @@ export class DaemonStatusReporter {
         return payload;
     }
 
+    /**
+     * Enrich the P2P copy of a status event with the structured AskUserQuestion
+     * payload. The dashboard hydrates `activeInteractivePrompt` from these
+     * fields (web-core EventManager.hydrateInteractivePromptFromEvent) so the
+     * STRUCTURED picker renders even when the P2P rich status sync — previously
+     * the only carrier of that field — is degraded.
+     *
+     * P2P-only by design: `interactivePrompt` is agent-authored free text, so
+     * it must NOT join the server-bound payload built above (see
+     * P2PStatusEventPayload in shared-types — the server spreads the event into
+     * external webhook dispatch, and its dashboard relay strips unlisted fields
+     * anyway). Guards mirror buildRelayMetadataEvent (mesh-event-delivery.ts).
+     */
+    private buildP2PStatusEvent(rawEvent: Record<string, unknown>, serverEvent: DaemonStatusEventPayload): P2PStatusEventPayload {
+        const payload: P2PStatusEventPayload = { ...serverEvent };
+        if (rawEvent.interactivePrompt && typeof rawEvent.interactivePrompt === 'object' && !Array.isArray(rawEvent.interactivePrompt)) {
+            payload.interactivePrompt = rawEvent.interactivePrompt as P2PStatusEventPayload['interactivePrompt'];
+        }
+        if (typeof rawEvent.promptId === 'string' && rawEvent.promptId.trim()) {
+            payload.promptId = rawEvent.promptId.trim();
+        }
+        if (rawEvent.multiSelect === true) {
+            payload.multiSelect = true;
+        }
+        return payload;
+    }
+
     emitStatusEvent(event: Record<string, unknown>): void {
         LOG.info('StatusEvent', `${event.event} (${event.providerType || event.ideType || ''})`);
         const serverEvent = this.buildServerStatusEvent(event);
@@ -700,8 +727,10 @@ export class DaemonStatusReporter {
         // Safe no-op until configureTranscriptProjection is armed.
         if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId, 'status_event');
         // Dashboard delivery is P2P-only, but the server still receives the event
-        // for push notifications, webhook dispatch, and audit-side effects.
-        this.deps.p2p?.sendStatusEvent(serverEvent);
+        // for push notifications, webhook dispatch, and audit-side effects. The
+        // P2P copy additionally carries the structured question payload; the
+        // server-bound copy must NOT (content boundary — see buildP2PStatusEvent).
+        this.deps.p2p?.sendStatusEvent(this.buildP2PStatusEvent(event, serverEvent));
         this.deps.serverConn?.sendMessage('status_event', serverEvent);
     }
 

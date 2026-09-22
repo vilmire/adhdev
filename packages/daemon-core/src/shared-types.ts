@@ -850,6 +850,35 @@ export interface DaemonStatusEventPayload {
     muted?: boolean;
 }
 
+/**
+ * P2P-plane enrichment of DaemonStatusEventPayload for `agent:waiting_choice`.
+ *
+ * Carries the FULL structured AskUserQuestion payload so the dashboard can
+ * hydrate `activeInteractivePrompt` from the event itself
+ * (web-core EventManager.hydrateInteractivePromptFromEvent) instead of relying
+ * solely on the P2P rich status sync — when that sync is degraded the session
+ * otherwise falls back to the raw approval banner, which cannot submit a
+ * checkbox picker (MULTISELECT-REMOTE-DEADLOCK).
+ *
+ * P2P DataChannel ONLY. `interactivePrompt` is agent-authored free text
+ * (question text, option labels/descriptions), so it must NEVER join the
+ * server-bound DaemonStatusEventPayload above: emitStatusEvent also hands that
+ * object to the cloud server, which spreads it into webhook dispatch to
+ * EXTERNAL endpoints (server DaemonConnection.handleStatusEvent) — and the
+ * server's own dashboard relay re-projects through its own allow-list
+ * (UserSession.buildDashboardStatusEvent) that strips unlisted fields anyway,
+ * so server-side carriage would leak without ever reaching a dashboard. The
+ * type-narrowing guards that populate these fields mirror
+ * buildRelayMetadataEvent (mesh/mesh-event-delivery.ts).
+ */
+export interface P2PStatusEventPayload extends DaemonStatusEventPayload {
+    interactivePrompt?: InteractivePrompt;
+    /** Prompt id of `interactivePrompt`, surfaced flat for dedup/routing. */
+    promptId?: string;
+    /** Whether the FIRST question of `interactivePrompt` is multi-select. */
+    multiSelect?: boolean;
+}
+
 export type DashboardStatusEventName =
     | DaemonStatusEventName
     | 'daemon:disconnect'
