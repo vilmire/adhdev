@@ -39710,7 +39710,14 @@ var require_dist3 = __commonJS({
       return headers;
     }
     function isClaudeTuiSelectFooter(text) {
-      return /Enter to select/i.test(text);
+      if (/Enter to select/i.test(text)) return true;
+      return claudeTuiChecklistOptionPattern().test(text);
+    }
+    function claudeTuiChecklistOptionPattern() {
+      const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
+      return new RegExp(
+        `(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S|(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`
+      );
     }
     function detectClaudeTuiMultiSelect(screenText) {
       if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
@@ -39745,12 +39752,24 @@ var require_dist3 = __commonJS({
           break;
         }
       }
-      if (footerIndex < 0) return null;
-      let optionBlockEnd = footerIndex - 1;
-      for (let i = footerIndex - 1; i >= 0; i -= 1) {
-        if (/^─+$/.test(lines[i].text.trim())) {
-          optionBlockEnd = i - 1;
-          break;
+      let optionBlockEnd;
+      if (footerIndex < 0) {
+        let lastOptionIndex = -1;
+        for (let i = lines.length - 1; i >= 0; i -= 1) {
+          if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
+            lastOptionIndex = i;
+            break;
+          }
+        }
+        if (lastOptionIndex < 0) return null;
+        optionBlockEnd = lastOptionIndex;
+      } else {
+        optionBlockEnd = footerIndex - 1;
+        for (let i = footerIndex - 1; i >= 0; i -= 1) {
+          if (/^─+$/.test(lines[i].text.trim())) {
+            optionBlockEnd = i - 1;
+            break;
+          }
         }
       }
       const optionLineIndexes = [];
@@ -39826,7 +39845,7 @@ var require_dist3 = __commonJS({
         }
       }
       if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
-      if (!page.screenText.includes("Enter to select")) return null;
+      if (!isClaudeTuiSelectFooter(page.screenText)) return null;
       for (let i = navIndex + 1; i < lines.length; i += 1) {
         const candidate = lines[i].text.trim();
         if (!candidate || /^─+$/.test(candidate)) continue;
