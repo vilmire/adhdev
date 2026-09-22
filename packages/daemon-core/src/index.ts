@@ -667,6 +667,8 @@ export {
     getLogInstanceTag,
     MAX_SIZE_ROTATION_GENERATIONS,
     rotateCaptureLogIfNeeded,
+    openCaptureLogFd,
+    DAEMON_CAPTURE_LOG_NAME,
     MAX_CAPTURE_LOG_SIZE,
     MAX_CAPTURE_LOG_GENERATIONS,
 } from './logging/logger.js';

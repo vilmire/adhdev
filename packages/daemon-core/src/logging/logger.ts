@@ -273,6 +273,59 @@ export function rotateCaptureLogIfNeeded(
     }
 }
 
+/** Standard name of the raw stdout/stderr capture file for the daemon. */
+export const DAEMON_CAPTURE_LOG_NAME = 'daemon-service.log';
+
+/**
+ * Open the daemon's raw stdio-capture log as an append fd, ready to hand to a
+ * detached child through `stdio: ['ignore', fd, fd]`.
+ *
+ * ★This exists because the wiring was open-coded at each spawn site and two of
+ * the four sites were missed. The wizard start and `daemon:restart` opened an
+ * append fd; the post-upgrade respawn (`spawnDetachedDaemonRestart`) and the
+ * post-update restart in the CLI were left on `stdio: 'ignore'`, which silently
+ * discarded the new daemon's stdout/stderr. The symptom is nasty precisely
+ * because the daemon is healthy: `daemon-service.log` simply stops growing at
+ * the "[Upgrade] Exiting daemon..." line while the structured
+ * `daemon-<date>.log` keeps filling, so nothing looks broken.
+ *
+ * Doing it in ONE place means a future spawn site gets the behaviour by calling
+ * this rather than by a reviewer noticing a missing option — the same reasoning
+ * behind the hiddenSpawn wrappers.
+ *
+ * Rotation happens here, at the moment of opening: that is the one point every
+ * producer passes through, and no writer holds the file yet, so the rename is
+ * clean (see rotateCaptureLogIfNeeded).
+ *
+ * Never throws. On any failure it degrades to `'ignore'` — losing the capture
+ * log is strictly better than failing to start the daemon.
+ */
+export function openCaptureLogFd(
+    logPath: string = path.join(getDaemonLogDir(), DAEMON_CAPTURE_LOG_NAME),
+): { fd: number | 'ignore'; close: () => void } {
+    try {
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    } catch { /* best effort — openSync below decides the outcome */ }
+
+    rotateCaptureLogIfNeeded(logPath);
+
+    let fd: number | 'ignore' = 'ignore';
+    try {
+        fd = fs.openSync(logPath, 'a');
+    } catch {
+        fd = 'ignore';
+    }
+
+    return {
+        fd,
+        close: () => {
+            if (typeof fd === 'number') {
+                try { fs.closeSync(fd); } catch { /* already closed */ }
+            }
+        },
+    };
+}
+
 /** Roll through a bounded .1-.3 history when the size limit is reached. */
 function rotateSizeIfNeeded(): void {
     try {

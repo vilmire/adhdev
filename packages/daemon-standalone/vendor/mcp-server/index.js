@@ -42537,6 +42537,30 @@ var require_dist3 = __commonJS({
         return false;
       }
     }
+    function openCaptureLogFd(logPath = path3.join(getDaemonLogDir(), DAEMON_CAPTURE_LOG_NAME)) {
+      try {
+        fs2.mkdirSync(path3.dirname(logPath), { recursive: true });
+      } catch {
+      }
+      rotateCaptureLogIfNeeded(logPath);
+      let fd = "ignore";
+      try {
+        fd = fs2.openSync(logPath, "a");
+      } catch {
+        fd = "ignore";
+      }
+      return {
+        fd,
+        close: () => {
+          if (typeof fd === "number") {
+            try {
+              fs2.closeSync(fd);
+            } catch {
+            }
+          }
+        }
+      };
+    }
     function rotateSizeIfNeeded() {
       try {
         const stat2 = fs2.statSync(currentLogFile);
@@ -42677,6 +42701,7 @@ var require_dist3 = __commonJS({
     var currentLogFile;
     var MAX_CAPTURE_LOG_SIZE;
     var MAX_CAPTURE_LOG_GENERATIONS;
+    var DAEMON_CAPTURE_LOG_NAME;
     var preparedLogDirs;
     var writeCount;
     var currentLogDirEnv;
@@ -42707,6 +42732,7 @@ var require_dist3 = __commonJS({
         currentLogFile = path3.join(currentLogDir, daemonLogFileName(currentDate));
         MAX_CAPTURE_LOG_SIZE = 10 * 1024 * 1024;
         MAX_CAPTURE_LOG_GENERATIONS = 2;
+        DAEMON_CAPTURE_LOG_NAME = "daemon-service.log";
         preparedLogDirs = /* @__PURE__ */ new Set();
         writeCount = 0;
         currentLogDirEnv = process.env.ADHDEV_CONFIG_DIR;
@@ -102565,14 +102591,19 @@ ${marker}`,
         const env2 = { ...process.env };
         delete env2[UPGRADE_HELPER_ENV];
         appendUpgradeLog(`Restarting daemon with args: ${restartArgv.join(" ")}`);
-        const child = (0, import_child_process8.spawn)(process.execPath, restartArgv, {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-          cwd: cwd || process.cwd(),
-          env: env2
-        });
-        child.unref();
+        const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
+        try {
+          const child = (0, import_child_process8.spawn)(process.execPath, restartArgv, {
+            detached: true,
+            stdio: ["ignore", outFd, outFd],
+            windowsHide: true,
+            cwd: cwd || process.cwd(),
+            env: env2
+          });
+          child.unref();
+        } finally {
+          closeOutFd();
+        }
       } else {
         appendUpgradeLog("No restart argv provided; upgrade completed without restart");
       }
@@ -102624,6 +102655,7 @@ ${marker}`,
         import_session_host_core6 = require_dist();
         init_app_name();
         init_config();
+        init_logger();
         init_track_identity();
         init_process_utils();
         UPGRADE_HELPER_ENV = "ADHDEV_DAEMON_UPGRADE_HELPER";
@@ -126646,8 +126678,8 @@ ${effect.notification.body || ""}`.trim();
           if ((0, import_fs23.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os39 === "win32") {
-          const { dirname: dirname31 } = await import("path");
-          const appDir = dirname31(appPath);
+          const { dirname: dirname32 } = await import("path");
+          const appDir = dirname32(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -134925,13 +134957,13 @@ ${asText(streams.stderr)}
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path72) => `:(exclude)${path72}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync10, closeSync: closeSync10 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync11, closeSync: closeSync11 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join80 } = await import("path");
       const scratch = mkdtempSync3(join80(tmpdir8(), "adhdev-patchid-"));
       const patchFile = join80(scratch, "patch.diff");
       try {
-        const out = openSync10(patchFile, "w");
+        const out = openSync11(patchFile, "w");
         let diffRun;
         try {
           diffRun = hiddenSpawnSync2(GIT2, diffArgs, {
@@ -134940,7 +134972,7 @@ ${asText(streams.stderr)}
             encoding: "utf8"
           });
         } finally {
-          closeSync10(out);
+          closeSync11(out);
         }
         if (diffRun.error) throw diffRun.error;
         if (diffRun.status !== 0) {
@@ -134948,7 +134980,7 @@ ${asText(streams.stderr)}
             `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
           );
         }
-        const patchIn = openSync10(patchFile, "r");
+        const patchIn = openSync11(patchFile, "r");
         let patchIdRun;
         try {
           patchIdRun = hiddenSpawnSync2(GIT2, ["patch-id", "--stable"], {
@@ -134958,7 +134990,7 @@ ${asText(streams.stderr)}
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
           });
         } finally {
-          closeSync10(patchIn);
+          closeSync11(patchIn);
         }
         if (patchIdRun.error) throw patchIdRun.error;
         if (patchIdRun.status !== 0) {
@@ -138161,7 +138193,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 };
               }
               const { existsSync: existsSync79, readFileSync: readFileSync65, writeFileSync: writeFileSync34, copyFileSync: copyFileSync4, mkdirSync: mkdirSync38 } = await import("fs");
-              const { dirname: dirname31 } = await import("path");
+              const { dirname: dirname32 } = await import("path");
               const mcpConfigPath = coordinatorSetup.configPath;
               const hermesManualFallback = cliType === "hermes-cli" && configFormat === "hermes_config_yaml" ? createHermesManualMeshCoordinatorSetup(meshId, workspace) : null;
               let hermesBaseConfig = null;
@@ -138198,7 +138230,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 ...mcpServerEnv ? { env: mcpServerEnv } : {}
               });
               try {
-                mkdirSync38(dirname31(mcpConfigPath), { recursive: true });
+                mkdirSync38(dirname32(mcpConfigPath), { recursive: true });
               } catch (error48) {
                 const message = `Could not prepare MCP config path for automatic setup: ${error48?.message || error48}`;
                 LOG.error("MeshCoordinator", message);
@@ -138208,7 +138240,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const hadExistingMcpConfig = existsSync79(mcpConfigPath);
               let existingMcpConfig = hermesBaseConfig?.config || {};
               if (hermesBaseConfig) {
-                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname31(mcpConfigPath));
+                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname32(mcpConfigPath));
               }
               if (hadExistingMcpConfig) {
                 try {
@@ -138246,7 +138278,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const cliArgs = [];
               const launchEnv = {};
               if (configFormat === "hermes_config_yaml") {
-                launchEnv.HERMES_HOME = dirname31(mcpConfigPath);
+                launchEnv.HERMES_HOME = dirname32(mcpConfigPath);
                 launchEnv.HERMES_IGNORE_USER_CONFIG = "";
               }
               let autoImportContextFilePath;
@@ -145476,7 +145508,7 @@ ${e?.stderr || ""}`;
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
               const { mkdirSync: mkdirSync38, writeFileSync: writeFileSync34 } = await import("fs");
-              const { dirname: dirname31, join: join80 } = await import("path");
+              const { dirname: dirname32, join: join80 } = await import("path");
               const scaffold = buildMeshJsonConfigScaffold2(mesh);
               const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -145516,7 +145548,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
                 };
               }
-              mkdirSync38(dirname31(absolutePath), { recursive: true });
+              mkdirSync38(dirname32(absolutePath), { recursive: true });
               writeFileSync34(absolutePath, `${scaffoldJson}
 `, "utf-8");
               return {
@@ -145587,7 +145619,7 @@ ${e?.stderr || ""}`;
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
               const { existsSync: existsSync79, readFileSync: readFileSync65, mkdirSync: mkdirSync38, writeFileSync: writeFileSync34 } = await import("fs");
-              const { dirname: dirname31, join: join80 } = await import("path");
+              const { dirname: dirname32, join: join80 } = await import("path");
               const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
               let baseDoc = { version: 1 };
@@ -145651,7 +145683,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
                 };
               }
-              mkdirSync38(dirname31(absolutePath), { recursive: true });
+              mkdirSync38(dirname32(absolutePath), { recursive: true });
               writeFileSync34(absolutePath, serialized, "utf-8");
               return {
                 success: true,
@@ -147677,6 +147709,7 @@ ${e?.stderr || ""}`;
       CTRL_C: () => CTRL_C,
       CdpDomHandlers: () => CdpDomHandlers,
       CliProviderInstance: () => CliProviderInstance,
+      DAEMON_CAPTURE_LOG_NAME: () => DAEMON_CAPTURE_LOG_NAME,
       DAEMON_WS_PATH: () => DAEMON_WS_PATH,
       DEFAULT_ACTIVE_CHAT_POLL_STATUSES: () => DEFAULT_ACTIVE_CHAT_POLL_STATUSES,
       DEFAULT_CDP_DISCOVERY_INTERVAL_MS: () => DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
@@ -148242,6 +148275,7 @@ ${e?.stderr || ""}`;
       notifyCoordinatorOfParkedTaskDropped: () => notifyCoordinatorOfParkedTaskDropped,
       observeFleetStatusWsProjection: () => observeFleetStatusWsProjection,
       onTopicActivated: () => onTopicActivated,
+      openCaptureLogFd: () => openCaptureLogFd,
       openSeqscribeNode: () => openSeqscribeNode,
       otherTrackConfigDir: () => otherTrackConfigDir,
       parkTaskTargetPin: () => parkTaskTargetPin,
