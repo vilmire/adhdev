@@ -157,7 +157,7 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
         // remaining site here is the `rebase --abort` in the failure handler.
         // The invariant is unchanged and is the second assertion, not the count:
         // every sync rebase call site in THIS file goes through `rebaseExec`.
-        const rebaseCalls = src.match(/execFileSync\('git', \['rebase'[^;]*?\);/g) ?? [];
+        const rebaseCalls = src.match(/(?:hidden)?[eE]xecFileSync\('git', \['rebase'[^;]*?\);/g) ?? [];
         expect(rebaseCalls).toHaveLength(1);
         expect(rebaseCalls.filter(call => !/rebaseExec/.test(call))).toEqual([]);
 
