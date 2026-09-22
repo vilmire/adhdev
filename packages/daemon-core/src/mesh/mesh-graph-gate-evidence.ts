@@ -21,7 +21,7 @@
  *     envelopes, git errors, timeouts → partial or null evidence, never a
  *     throw into the caller.
  */
-import { execFileSync } from 'node:child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 import type { MeshGraphGateRow } from './mesh-graph-types.js';
@@ -55,7 +55,7 @@ const SHA_PATTERN = /^[0-9a-f]{7,40}$/i;
 
 function isCommitReachable(workspace: string, sha: string, defaultBranch: string): boolean | 'unknown' {
     try {
-        execFileSync('git', ['merge-base', '--is-ancestor', sha, `origin/${defaultBranch}`], {
+        hiddenExecFileSync('git', ['merge-base', '--is-ancestor', sha, `origin/${defaultBranch}`], {
             cwd: workspace,
             timeout: GIT_PROBE_TIMEOUT_MS,
             stdio: ['ignore', 'ignore', 'ignore'],

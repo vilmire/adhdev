@@ -21,7 +21,7 @@ import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMes
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
 import * as fs from 'fs';
-import { execFileSync } from 'node:child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
@@ -489,7 +489,7 @@ async function computeGitPatchId(
     toRef: string,
     excludePaths: string[] = [],
 ): Promise<string> {
-    const { spawnSync } = await import('node:child_process');
+    const { hiddenSpawnSync } = await import('../process/hidden-spawn.js');
     // When excludePaths is non-empty we drop those paths from the diff via
     // `:(exclude)` pathspecs. This is used to omit gitlink paths that have
     // already been proven a safe fast-forward: their patch hunks legitimately
@@ -523,7 +523,7 @@ async function computeGitPatchId(
         const out = openSync(patchFile, 'w');
         let diffRun;
         try {
-            diffRun = spawnSync(GIT, diffArgs, {
+            diffRun = hiddenSpawnSync(GIT, diffArgs, {
                 cwd,
                 stdio: ['ignore', out, 'pipe'],
                 encoding: 'utf8',
@@ -540,7 +540,7 @@ async function computeGitPatchId(
         const patchIn = openSync(patchFile, 'r');
         let patchIdRun;
         try {
-            patchIdRun = spawnSync(GIT, ['patch-id', '--stable'], {
+            patchIdRun = hiddenSpawnSync(GIT, ['patch-id', '--stable'], {
                 cwd,
                 stdio: [patchIn, 'pipe', 'pipe'],
                 encoding: 'utf8',
@@ -569,8 +569,8 @@ export async function runMeshRefinePatchEquivalenceGate(
 ): Promise<MeshRefinePatchEquivalenceSummary> {
     const startedAt = Date.now();
     try {
-        const { execFileSync } = await import('node:child_process');
-        const git = (args: string[]) => execFileSync(GIT, args, {
+        const { hiddenExecFileSync } = await import('../process/hidden-spawn.js');
+        const git = (args: string[]) => hiddenExecFileSync(GIT, args, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -865,7 +865,7 @@ export async function classifyPatchEquivalenceFailure(
         ...(autoPublish !== undefined ? { autoPublishSubmoduleMainCommits: autoPublish } : {}),
     };
     try {
-        const git = (args: string[]): string => execFileSync(GIT, args, {
+        const git = (args: string[]): string => hiddenExecFileSync(GIT, args, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -1106,8 +1106,8 @@ export async function checkWorktreeChangesPatchEquivalentInRef(
 ): Promise<MeshWorktreePatchContainmentSummary> {
     const startedAt = Date.now();
     try {
-        const { execFileSync } = await import('node:child_process');
-        const git = (gitArgs: string[]) => execFileSync(GIT, gitArgs, {
+        const { hiddenExecFileSync } = await import('../process/hidden-spawn.js');
+        const git = (gitArgs: string[]) => hiddenExecFileSync(GIT, gitArgs, {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -1204,8 +1204,8 @@ export async function runMeshRefineEffectiveDiffGate(
 ): Promise<MeshRefineEffectiveDiffSummary> {
     const startedAt = Date.now();
     try {
-        const { execFileSync } = await import('node:child_process');
-        const git = (args: string[], opts?: { cwd?: string }) => execFileSync(GIT, args, {
+        const { hiddenExecFileSync } = await import('../process/hidden-spawn.js');
+        const git = (args: string[], opts?: { cwd?: string }) => hiddenExecFileSync(GIT, args, {
             cwd: opts?.cwd || repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
@@ -1307,7 +1307,7 @@ function buildPatchEquivalenceSubmoduleConflictHint(
  * subdirectory exists — a temporary index file must live in the actual git dir.
  */
 function resolveGitDir(repoRoot: string): string {
-    const out = execFileSync(GIT, ['rev-parse', '--absolute-git-dir'], {
+    const out = hiddenExecFileSync(GIT, ['rev-parse', '--absolute-git-dir'], {
         cwd: repoRoot,
         encoding: 'utf8',
         maxBuffer: 1024 * 1024,
@@ -1475,7 +1475,7 @@ export function evaluateGitlinkTrivialFastForward(
     // a genuine content conflict that must stay blocked.
     let mergeBase = '';
     try {
-        mergeBase = execFileSync(GIT, ['merge-base', baseHead, branchHead], {
+        mergeBase = hiddenExecFileSync(GIT, ['merge-base', baseHead, branchHead], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: 1024 * 1024,
@@ -1521,7 +1521,7 @@ function buildTreeWithGitlinksEqualized(
     placeholderCommit: string,
 ): string | undefined {
     try {
-        const tree = execFileSync(GIT, ['rev-parse', `${commitish}^{tree}`], {
+        const tree = hiddenExecFileSync(GIT, ['rev-parse', `${commitish}^{tree}`], {
             cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
         }).trim();
         if (!tree) return undefined;
@@ -1530,12 +1530,12 @@ function buildTreeWithGitlinksEqualized(
         const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-eq-${commitish.slice(0, 12)}.index`);
         const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
-            execFileSync(GIT, ['read-tree', tree], { cwd: repoRoot, env, stdio: 'ignore' });
-            execFileSync(GIT, ['update-index', '--index-info'], {
+            hiddenExecFileSync(GIT, ['read-tree', tree], { cwd: repoRoot, env, stdio: 'ignore' });
+            hiddenExecFileSync(GIT, ['update-index', '--index-info'], {
                 cwd: repoRoot, env, input: `${updates}\n`, encoding: 'utf8',
                 stdio: ['pipe', 'ignore', 'ignore'],
             });
-            const newTree = execFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            const newTree = hiddenExecFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
             return newTree || undefined;
         } finally {
             try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }
@@ -1581,7 +1581,7 @@ function synthesizeTrivialFastForwardMergeTree(
         // with the conflicting gitlinks neutralized. The placeholder is the
         // merge-base's value for a gitlink (or, failing that, any branch-side
         // commit) — it only needs to be identical across all three trees.
-        const mergeBase = execFileSync(GIT, ['merge-base', baseHead, branchHead], {
+        const mergeBase = hiddenExecFileSync(GIT, ['merge-base', baseHead, branchHead], {
             cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
         }).trim();
 
@@ -1596,16 +1596,16 @@ function synthesizeTrivialFastForwardMergeTree(
                 try {
                     // merge-tree --write-tree needs commits (to derive a merge-base);
                     // synthesize ours/theirs as children of a common base commit.
-                    const baseEqCommit = execFileSync(GIT, ['commit-tree', baseEqTree, '-m', 'refine-ff-base'], {
+                    const baseEqCommit = hiddenExecFileSync(GIT, ['commit-tree', baseEqTree, '-m', 'refine-ff-base'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const oursEqCommit = execFileSync(GIT, ['commit-tree', oursEqTree, '-p', baseEqCommit, '-m', 'refine-ff-ours'], {
+                    const oursEqCommit = hiddenExecFileSync(GIT, ['commit-tree', oursEqTree, '-p', baseEqCommit, '-m', 'refine-ff-ours'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const theirsEqCommit = execFileSync(GIT, ['commit-tree', theirsEqTree, '-p', baseEqCommit, '-m', 'refine-ff-theirs'], {
+                    const theirsEqCommit = hiddenExecFileSync(GIT, ['commit-tree', theirsEqTree, '-p', baseEqCommit, '-m', 'refine-ff-theirs'], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
                     }).trim();
-                    const mergeOut = execFileSync(GIT, ['merge-tree', '--write-tree', oursEqCommit, theirsEqCommit], {
+                    const mergeOut = hiddenExecFileSync(GIT, ['merge-tree', '--write-tree', oursEqCommit, theirsEqCommit], {
                         cwd: repoRoot, encoding: 'utf8', maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                     }).trim();
                     mergedContentTree = mergeOut.split(/\s+/)[0] || undefined;
@@ -1622,7 +1622,7 @@ function synthesizeTrivialFastForwardMergeTree(
         // regular-file content of the merge is exactly baseHead's tree, so just
         // overlay the gitlinks. Also used when the real merge could not run.
         const contentTree = mergedContentTree
-            || execFileSync(GIT, ['rev-parse', `${baseHead}^{tree}`], {
+            || hiddenExecFileSync(GIT, ['rev-parse', `${baseHead}^{tree}`], {
                 cwd: repoRoot, encoding: 'utf8', maxBuffer: 1024 * 1024,
             }).trim();
         if (!contentTree) return undefined;
@@ -1634,15 +1634,15 @@ function synthesizeTrivialFastForwardMergeTree(
         const tmpIndex = pathJoin(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
         const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
-            execFileSync(GIT, ['read-tree', contentTree], { cwd: repoRoot, env, stdio: 'ignore' });
-            execFileSync(GIT, ['update-index', '--index-info'], {
+            hiddenExecFileSync(GIT, ['read-tree', contentTree], { cwd: repoRoot, env, stdio: 'ignore' });
+            hiddenExecFileSync(GIT, ['update-index', '--index-info'], {
                 cwd: repoRoot,
                 env,
                 input: `${updates}\n`,
                 encoding: 'utf8',
                 stdio: ['pipe', 'ignore', 'ignore'],
             });
-            const newTree = execFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
+            const newTree = hiddenExecFileSync(GIT, ['write-tree'], { cwd: repoRoot, env, encoding: 'utf8' }).trim();
             return newTree || undefined;
         } finally {
             try { fs.rmSync(tmpIndex, { force: true }); } catch { /* ignore */ }

@@ -9,6 +9,7 @@
  * message, or result shape was changed — only physical location + `this.` → `self.`.
  */
 import { execFileSync } from 'node:child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import { existsSync } from 'node:fs';
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
@@ -546,7 +547,7 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
                 }
             } catch (rebaseErr: any) {
                 if (!rebaseErr?.alreadyAborted) {
-                    try { execFileSync('git', ['rebase', '--abort'], { ...rebaseExec, stdio: 'ignore' }); } catch { /* ignore */ }
+                    try { hiddenExecFileSync('git', ['rebase', '--abort'], { ...rebaseExec, stdio: 'ignore' }); } catch { /* ignore */ }
                 }
                 // ★REBASE-FAILURE-CLASSIFY: read what git ACTUALLY said before naming the
                 // failure. This branch used to hardcode `needs_rebase_with_conflicts` for
