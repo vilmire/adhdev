@@ -55904,7 +55904,13 @@ ${lines.join("\n")}
           "refine:accepted"
         ]);
         COORDINATOR_ALERT_EVENTS = /* @__PURE__ */ new Set([
-          "mesh:dispatch_blocked"
+          "mesh:dispatch_blocked",
+          // WORKER-MCP F3: a worker's mid-task progress note. Unicast for the same
+          // reason a terminal event is — it reports on work ONE coordinator dispatched,
+          // and broadcasting it would page every coordinator on the daemon about a task
+          // they do not own. Filtered at the producer (shouldSurfaceProgressToCoordinator)
+          // so this carries milestones, not a log tail.
+          "mesh:worker_progress"
         ]);
       }
     });
@@ -70665,6 +70671,39 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
       }
     });
+    function upsertHandoffNoteText(db, row) {
+      db.prepare(`
+        INSERT OR REPLACE INTO mesh_handoff_note_text (
+            mesh_id, task_id, attempt_id, node_id, notes_json, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+        row.meshId,
+        row.taskId,
+        row.attemptId ?? null,
+        row.nodeId ?? null,
+        row.notesJson,
+        row.recordedAt
+      );
+    }
+    function selectHandoffNoteText(db, meshId, taskId) {
+      const rows = db.prepare(
+        "SELECT * FROM mesh_handoff_note_text WHERE mesh_id = ? AND task_id = ? LIMIT 1"
+      ).all(meshId, taskId);
+      const r = rows[0];
+      if (!r) return null;
+      return {
+        meshId: r.mesh_id,
+        taskId: r.task_id,
+        ...r.attempt_id ? { attemptId: r.attempt_id } : {},
+        ...r.node_id ? { nodeId: r.node_id } : {},
+        notesJson: r.notes_json,
+        recordedAt: r.recorded_at
+      };
+    }
+    function deleteHandoffNoteTextOlderThan(db, cutoffIso) {
+      const res = db.prepare("DELETE FROM mesh_handoff_note_text WHERE recorded_at < ?").run(cutoffIso);
+      return res.changes ?? 0;
+    }
     function selectTurnEventsForTask(db, meshId, taskId) {
       const rows = db.prepare(`
         SELECT * FROM mesh_turn_events WHERE mesh_id = ? AND task_id = ? ORDER BY recorded_at ASC, event_id ASC
@@ -71602,6 +71641,40 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ON mesh_turn_held_suspensions(mesh_id, status);
         CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
             ON mesh_turn_held_suspensions(attempt_id, status);
+
+        -- WORKER-MCP (design \xA75, decision C) \u2014 handoff note TEXT.
+        --
+        -- \u2605Why a table and not the mesh_turn_events payload: that payload is the
+        -- META index and is content-free by design \xA79.1 (it stores the intent's
+        -- LENGTH, never its text). The text lived only in an in-process Map, so
+        -- its real lifetime was "until the daemon restarts" while its index row
+        -- lived 30 days \u2014 and selectRelevantHandoffNotes skips any index row whose
+        -- text is missing. Net effect: every note recorded before the last restart
+        -- was permanently undeliverable, silently, while report_completion still
+        -- answered "Handoff note stored \u2014 it will be delivered to related future
+        -- tasks automatically."
+        --
+        -- Local-only: this table is never projected to the cloud status path, so
+        -- the server content boundary is untouched. The seqscribe content-topic
+        -- append (cross-machine delivery) is unchanged and still the other half.
+        --
+        -- Keyed by (mesh_id, task_id) \u2014 one note per task, matching the Map key it
+        -- replaces and the UNIQUE(attempt_id, kind, '') on the index row. A re-report
+        -- for the same task REPLACEs, so a corrected note supersedes its predecessor
+        -- rather than accumulating.
+        CREATE TABLE IF NOT EXISTS mesh_handoff_note_text (
+            mesh_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            attempt_id TEXT,
+            node_id TEXT,
+            notes_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY (mesh_id, task_id)
+        );
+
+        -- The retention sweep deletes by age across all meshes.
+        CREATE INDEX IF NOT EXISTS idx_mesh_handoff_note_text_recorded
+            ON mesh_handoff_note_text(recorded_at);
     `);
       migrateMeshIsolationColumns(self);
       migrateMeshGraphSchema(self.db);
@@ -73860,6 +73933,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           }
           deleteTurnEventsByKindOlderThan(kind, cutoffIso, meshId) {
             return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId);
+          }
+          /** WORKER-MCP decision C: handoff note TEXT (durable, replaces the in-process mirror). */
+          upsertHandoffNoteText(row) {
+            return upsertHandoffNoteText(this.db, row);
+          }
+          getHandoffNoteText(meshId, taskId) {
+            return selectHandoffNoteText(this.db, meshId, taskId);
+          }
+          deleteHandoffNoteTextOlderThan(cutoffIso) {
+            return deleteHandoffNoteTextOlderThan(this.db, cutoffIso);
           }
           // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
           // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).
@@ -84509,13 +84592,22 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       WORKER_INTENT_MAX_CHARS: () => WORKER_INTENT_MAX_CHARS,
       WORKER_LIST_ITEM_MAX_CHARS: () => WORKER_LIST_ITEM_MAX_CHARS,
       WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
+      WORKER_PROGRESS_SURFACE_MIN_CHARS: () => WORKER_PROGRESS_SURFACE_MIN_CHARS,
+      WORKER_PROGRESS_SURFACE_MIN_GAP_MS: () => WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
       WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
       WORKER_SUMMARY_MAX_CHARS: () => WORKER_SUMMARY_MAX_CHARS,
       WORKER_TOUCHED_FILES_MAX: () => WORKER_TOUCHED_FILES_MAX,
+      __resetProgressSurfaceForTest: () => __resetProgressSurfaceForTest,
+      __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
       acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
       acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
+      buildWorkerProgressNotice: () => buildWorkerProgressNotice,
       configureHandoffNoteSink: () => configureHandoffNoteSink,
+      configureWorkerProgressNoticeSink: () => configureWorkerProgressNoticeSink,
+      findPriorWorkerReport: () => findPriorWorkerReport,
+      pruneReportedSummaries: () => pruneReportedSummaries,
       resolveWorkerIdentity: () => resolveWorkerIdentity,
+      shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator,
       validateWorkerCompletionReport: () => validateWorkerCompletionReport
     });
     function validateWorkerCompletionReport(raw) {
@@ -84581,14 +84673,14 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
             }
           }
           const noteFiles = validateStringList(n.touchedFiles, "handoffNotes.touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
-          if (n.touchedFiles === void 0 || !noteFiles?.length) {
+          if (n.touchedFiles === void 0) {
             errors.push({
               field: "handoffNotes.touchedFiles",
-              message: "touchedFiles is required and must be non-empty \u2014 it is what matches this note to future work"
+              message: "touchedFiles is required \u2014 it is what matches this note to future work (use [] on a read-only task)"
             });
           }
           const followUps = validateStringList(n.followUps, "handoffNotes.followUps", WORKER_FOLLOW_UPS_MAX, errors);
-          if (intent && noteFiles?.length) {
+          if (intent && noteFiles) {
             handoffNotes = {
               intent,
               ...guidance ? { conflictGuidance: guidance } : {},
@@ -84637,6 +84729,50 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       }
       return out;
     }
+    function findPriorWorkerReport(meshId, taskId) {
+      if (!meshId || !taskId) return null;
+      let rows;
+      try {
+        rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(meshId, taskId);
+      } catch {
+        return null;
+      }
+      const row = rows.filter((r) => r.kind === WORKER_REPORT_EVENT_KIND).pop();
+      if (!row) return null;
+      let payload = {};
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+      }
+      const outcome = payload.outcome === "completed" || payload.outcome === "blocked" || payload.outcome === "failed" ? payload.outcome : "completed";
+      const summary = readReportedSummary(meshId, taskId);
+      return {
+        taskId,
+        attemptId: row.attemptId,
+        outcome,
+        ...summary ? { summary } : {},
+        recordedAt: row.recordedAt
+      };
+    }
+    function summaryKey(meshId, taskId) {
+      return `${meshId}\0${taskId}`;
+    }
+    function readReportedSummary(meshId, taskId) {
+      return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
+    }
+    function pruneReportedSummaries(maxAgeMs, nowMs = Date.now()) {
+      let removed = 0;
+      for (const [key2, entry] of REPORTED_SUMMARY_STORE) {
+        if (nowMs - entry.recordedAtMs > maxAgeMs) {
+          REPORTED_SUMMARY_STORE.delete(key2);
+          removed += 1;
+        }
+      }
+      return removed;
+    }
+    function __resetReportedSummariesForTest() {
+      REPORTED_SUMMARY_STORE.clear();
+    }
     function resolveWorkerIdentity(credential) {
       const direct = verifyWorkerTaskToken(credential.token);
       if (direct) {
@@ -84666,15 +84802,48 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     function configureHandoffNoteSink(sink) {
       handoffSink = sink;
     }
+    function checkReportAgainstTaskMode(identity, report) {
+      let task;
+      try {
+        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity.meshId, identity.taskId);
+      } catch {
+        return null;
+      }
+      if (!task) return null;
+      const readonly2 = isTaskReadonly2(task);
+      const declaredFiles = [
+        ...report.touchedFiles || [],
+        ...report.handoffNotes?.touchedFiles || []
+      ];
+      if (readonly2) {
+        if (declaredFiles.length) {
+          return `task ${identity.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
+        }
+        return null;
+      }
+      if (report.handoffNotes && !report.handoffNotes.touchedFiles.length) {
+        return `task ${identity.taskId} changes code, so handoffNotes.touchedFiles must be non-empty \u2014 it is the key that delivers your note to whoever touches this code next.`;
+      }
+      return null;
+    }
     function acceptWorkerCompletionReport(credential, report, opts = {}) {
       const identity = resolveWorkerIdentity(credential);
       if (!identity) return { accepted: false, refusal: "unauthenticated" };
+      const taskModeError = checkReportAgainstTaskMode(identity, report);
+      if (taskModeError) {
+        return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
+      }
       const nowMs = opts.nowMs ?? Date.now();
       const nowIso = new Date(nowMs).toISOString();
       const store = MeshRuntimeStore.getInstance();
+      REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
+        summary: report.summary,
+        recordedAtMs: nowMs
+      });
+      let evidenceRecorded = !identity.attemptId;
       if (identity.attemptId) {
         try {
-          store.insertTurnEvent({
+          evidenceRecorded = store.insertTurnEvent({
             eventId: (0, import_crypto13.randomUUID)(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
@@ -84695,12 +84864,27 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
             recordedAt: nowIso
           });
         } catch (e) {
-          LOG.warn("WorkerReport", `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
+          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
+          evidenceRecorded = false;
+        }
+        if (!evidenceRecorded) {
+          const existing = findPriorWorkerReport(identity.meshId, identity.taskId);
+          if (!existing) {
+            return {
+              accepted: false,
+              refusal: "storage_failed",
+              detail: `could not persist the report evidence row for task ${identity.taskId}`
+            };
+          }
+          evidenceRecorded = true;
         }
       }
       let handoffNoteRecorded = false;
+      let handoffNoteError = null;
       if (report.handoffNotes) {
-        handoffNoteRecorded = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
       }
       const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
       let commit;
@@ -84754,16 +84938,29 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         ...identity.attemptId ? { attemptId: identity.attemptId } : {},
         outcome: report.outcome,
         duplicate: commit.duplicate,
-        handoffNoteRecorded
+        handoffNoteRecorded,
+        // ★The completion itself still stands — the terminal committed, and
+        // discarding a valid completion because its optional note failed would
+        // trade a small loss for a large one. But the worker is TOLD, so it can
+        // put the context somewhere else rather than believing it was filed.
+        ...handoffNoteError ? { handoffNoteError } : {}
       };
     }
     function acceptWorkerProgressUpdate(credential, note, opts = {}) {
       const identity = resolveWorkerIdentity(credential);
       if (!identity) return { accepted: false, refusal: "unauthenticated" };
-      if (!identity.attemptId) return { accepted: true, taskId: identity.taskId };
+      if (!identity.attemptId) {
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: `task ${identity.taskId} has no active attempt to record progress against`
+        };
+      }
       const nowMs = opts.nowMs ?? Date.now();
+      let recorded = false;
       try {
-        MeshRuntimeStore.getInstance().insertTurnEvent({
+        recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
           eventId: (0, import_crypto13.randomUUID)(),
           meshId: identity.meshId,
           attemptId: identity.attemptId,
@@ -84777,12 +84974,80 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
           recordedAt: new Date(nowMs).toISOString()
         });
       } catch (e) {
-        LOG.warn("WorkerReport", `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
+        LOG.error("WorkerReport", `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: e?.message || String(e)
+        };
       }
-      return { accepted: true, taskId: identity.taskId };
+      if (!recorded) {
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
+        };
+      }
+      const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs);
+      return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
+    }
+    function __resetProgressSurfaceForTest() {
+      PROGRESS_SURFACE_LAST_MS.clear();
+    }
+    function shouldSurfaceProgressToCoordinator(opts) {
+      const note = opts.note.trim();
+      if (note.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
+      if (opts.lastSurfacedAtMs === void 0) return true;
+      return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    }
+    function buildWorkerProgressNotice(opts) {
+      return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
+    }
+    function configureWorkerProgressNoticeSink(sink) {
+      progressNoticeSink = sink;
+    }
+    function notifyCoordinatorOfProgress(identity, note, nowMs) {
+      const key2 = summaryKey(identity.meshId, identity.taskId);
+      if (!shouldSurfaceProgressToCoordinator({
+        note,
+        nowMs,
+        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key2)
+      })) {
+        return false;
+      }
+      const sink = progressNoticeSink;
+      if (!sink) return false;
+      try {
+        sink({
+          meshId: identity.meshId,
+          taskId: identity.taskId,
+          ...identity.nodeId ? { nodeId: identity.nodeId } : {},
+          ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+          note: note.trim(),
+          coordinatorMessage: buildWorkerProgressNotice({
+            taskId: identity.taskId,
+            nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
+            note
+          }),
+          nowMs
+        });
+      } catch (e) {
+        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
+        return false;
+      }
+      PROGRESS_SURFACE_LAST_MS.set(key2, nowMs);
+      return true;
     }
     function recordHandoffNote(identity, notes, nowMs, nowIso) {
-      if (identity.attemptId) {
+      if (!identity.attemptId) {
+        return {
+          recorded: false,
+          error: `task ${identity.taskId} has no active attempt, so the note has no index row and could never be delivered`
+        };
+      }
+      {
         try {
           MeshRuntimeStore.getInstance().insertTurnEvent({
             eventId: (0, import_crypto13.randomUUID)(),
@@ -84803,8 +85068,8 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
             recordedAt: nowIso
           });
         } catch (e) {
-          LOG.warn("WorkerReport", `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
-          return false;
+          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
         }
       }
       if (handoffSink) {
@@ -84819,10 +85084,11 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
             recordedAtIso: nowIso
           });
         } catch (e) {
-          LOG.warn("WorkerReport", `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
+          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
         }
       }
-      return true;
+      return { recorded: true, error: null };
     }
     var import_crypto13;
     var WORKER_BRANCH_STATES;
@@ -84836,7 +85102,12 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     var WORKER_LIST_ITEM_MAX_CHARS;
     var WORKER_BLOCKERS_MAX;
     var WORKER_FOLLOW_UPS_MAX;
+    var REPORTED_SUMMARY_STORE;
     var handoffSink;
+    var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    var WORKER_PROGRESS_SURFACE_MIN_CHARS;
+    var PROGRESS_SURFACE_LAST_MS;
+    var progressNoticeSink;
     var init_worker_report = __esm2({
       "src/mesh/worker-report.ts"() {
         "use strict";
@@ -84844,6 +85115,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         init_logger();
         init_mesh_runtime_store();
         init_mesh_graph_transition_runner();
+        init_mesh_work_queue();
         init_worker_mcp_isolation();
         WORKER_BRANCH_STATES = [
           "merged_to_main",
@@ -84862,7 +85134,12 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         WORKER_LIST_ITEM_MAX_CHARS = 500;
         WORKER_BLOCKERS_MAX = 50;
         WORKER_FOLLOW_UPS_MAX = 50;
+        REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
         handoffSink = null;
+        WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
+        WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
+        PROGRESS_SURFACE_LAST_MS = /* @__PURE__ */ new Map();
+        progressNoticeSink = null;
       }
     });
     var worker_handoff_notes_exports = {};
@@ -84884,10 +85161,48 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     function noteKey(meshId, taskId) {
       return `${meshId}\0${taskId}`;
     }
+    function loadNoteText(meshId, taskId) {
+      const cached5 = NOTE_TEXT_STORE.get(noteKey(meshId, taskId));
+      if (cached5) return cached5;
+      let row;
+      try {
+        row = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text lookup failed for task ${taskId}: ${e?.message || e}`);
+        return null;
+      }
+      if (!row) return null;
+      let notes;
+      try {
+        notes = JSON.parse(row.notesJson);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text for task ${taskId} is unparseable: ${e?.message || e}`);
+        return null;
+      }
+      if (!notes?.intent || !Array.isArray(notes.touchedFiles)) return null;
+      const restored = {
+        meshId: row.meshId,
+        taskId: row.taskId,
+        ...row.attemptId ? { attemptId: row.attemptId } : {},
+        ...row.nodeId ? { nodeId: row.nodeId } : {},
+        notes,
+        recordedAtIso: row.recordedAt
+      };
+      NOTE_TEXT_STORE.set(noteKey(meshId, taskId), restored);
+      return restored;
+    }
     function configureHandoffNotesSeqscribe(handle) {
       seqscribeHandle = handle;
     }
     function storeHandoffNote(note) {
+      MeshRuntimeStore.getInstance().upsertHandoffNoteText({
+        meshId: note.meshId,
+        taskId: note.taskId,
+        ...note.attemptId ? { attemptId: note.attemptId } : {},
+        ...note.nodeId ? { nodeId: note.nodeId } : {},
+        notesJson: JSON.stringify(note.notes),
+        recordedAt: note.recordedAtIso
+      });
       NOTE_TEXT_STORE.set(noteKey(note.meshId, note.taskId), note);
       const handle = seqscribeHandle;
       if (!handle) return;
@@ -84909,7 +85224,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       });
     }
     function getStoredHandoffNote(meshId, taskId) {
-      return NOTE_TEXT_STORE.get(noteKey(meshId, taskId)) || null;
+      return loadNoteText(meshId, taskId);
     }
     function __resetHandoffNotesForTest() {
       NOTE_TEXT_STORE.clear();
@@ -84934,8 +85249,11 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         if (seenTasks.has(row.taskId)) continue;
         const recordedMs = Date.parse(row.recordedAt);
         if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) continue;
-        const stored = NOTE_TEXT_STORE.get(noteKey(input.meshId, row.taskId));
-        if (!stored) continue;
+        const stored = loadNoteText(input.meshId, row.taskId);
+        if (!stored) {
+          LOG.debug("HandoffNotes", `Handoff note index row for task ${row.taskId} has no local text \u2014 peer-originated note, skipping enclosure.`);
+          continue;
+        }
         let meta3 = {};
         try {
           meta3 = JSON.parse(row.payload);
@@ -85031,7 +85349,9 @@ ${block2.text}`,
       const cutoffIso = new Date(nowMs - HANDOFF_RETENTION_MS).toISOString();
       let removed = 0;
       try {
-        removed = MeshRuntimeStore.getInstance().deleteTurnEventsByKindOlderThan(WORKER_HANDOFF_EVENT_KIND, cutoffIso);
+        const store = MeshRuntimeStore.getInstance();
+        removed = store.deleteTurnEventsByKindOlderThan(WORKER_HANDOFF_EVENT_KIND, cutoffIso);
+        store.deleteHandoffNoteTextOlderThan(cutoffIso);
       } catch (e) {
         LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
       }
@@ -91854,7 +92174,23 @@ ${statusLine}`;
           });
         });
       }
-      const ledgerKind = hollowCompletionDisposition === "requeued" ? void 0 : hollowCompletionDisposition === "max_retries_exhausted" || forcedTimeoutNoResponse ? "task_failed" : EVENT_TO_LEDGER_KIND[args.event];
+      const shadowedByWorkerReport = (() => {
+        if (args.event !== "agent:generating_completed") return null;
+        const taskId = readNonEmptyString(args.metadataEvent.taskId) || completedTaskForLedger?.id || directDispatchTaskIdForLedger;
+        if (!taskId) return null;
+        try {
+          return findPriorWorkerReport(args.meshId, taskId);
+        } catch {
+          return null;
+        }
+      })();
+      if (shadowedByWorkerReport) {
+        LOG.info(
+          "MeshQueue",
+          `Suppressing scraped completion for task ${shadowedByWorkerReport.taskId} \u2014 the worker already reported '${shadowedByWorkerReport.outcome}' at ${shadowedByWorkerReport.recordedAt} via report_completion${shadowedByWorkerReport.summary ? " (its summary stands)" : ""}.`
+        );
+      }
+      const ledgerKind = hollowCompletionDisposition === "requeued" ? void 0 : shadowedByWorkerReport ? void 0 : hollowCompletionDisposition === "max_retries_exhausted" || forcedTimeoutNoResponse ? "task_failed" : EVENT_TO_LEDGER_KIND[args.event];
       if (ledgerKind) {
         try {
           const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || void 0;
@@ -92067,7 +92403,13 @@ ${statusLine}`;
           LOG.warn("MeshRecovery", `Failed to build recovery context: ${e?.message || e}`);
         }
       }
-      const messageText = buildMeshSystemMessage({
+      const messageText = shadowedByWorkerReport ? shadowedByWorkerReport.summary ? `[System] ${args.nodeLabel} reported task ${shadowedByWorkerReport.taskId} as '${shadowedByWorkerReport.outcome}' via report_completion: ${shadowedByWorkerReport.summary}` : `[System] ${args.nodeLabel} already reported task ${shadowedByWorkerReport.taskId} as '${shadowedByWorkerReport.outcome}' via report_completion; its verbatim summary is no longer held on this daemon. Screen-scraped text follows and may be truncated: ${buildMeshSystemMessage({
+        event: args.event,
+        nodeLabel: args.nodeLabel,
+        metadataEvent: args.metadataEvent,
+        recoveryContext,
+        worktreeHasQueuedTask
+      })}` : buildMeshSystemMessage({
         event: args.event,
         nodeLabel: args.nodeLabel,
         metadataEvent: args.metadataEvent,
@@ -92371,6 +92713,7 @@ ${statusLine}`;
         init_mesh_graph_transition_runner();
         init_mesh_events_utils();
         init_mesh_event_classify();
+        init_worker_report();
         init_mesh_turn_ledger();
         init_mesh_queue_assignment();
         init_mesh_autolaunch_integrity();
@@ -103815,7 +104158,7 @@ ${marker}`,
                   success: false,
                   error: result.refusal,
                   ...result.detail ? { detail: result.detail } : {},
-                  hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : "The completion was refused by the turn ledger; the task state is authoritative."
+                  hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : "The completion was refused by the turn ledger; the task state is authoritative."
                 };
               }
               return {
@@ -103824,7 +104167,10 @@ ${marker}`,
                 ...result.attemptId ? { attemptId: result.attemptId } : {},
                 outcome: result.outcome,
                 duplicate: result.duplicate,
-                handoffNoteRecorded: result.handoffNoteRecorded
+                handoffNoteRecorded: result.handoffNoteRecorded,
+                // ★F5: carries WHY a note did not persist, so the tool layer can
+                // warn instead of printing the unconditional "stored" line.
+                ...result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}
               };
             } catch (e) {
               return { success: false, error: e?.message || String(e) };
@@ -103838,9 +104184,20 @@ ${marker}`,
               const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
               const result = acceptWorkerProgressUpdate2({ token: args?.token, bind: args?.bind }, note);
               if (!result.accepted) {
-                return { success: false, error: result.refusal || "unauthenticated" };
+                return {
+                  success: false,
+                  error: result.refusal || "unauthenticated",
+                  ...result.detail ? { detail: result.detail } : {}
+                };
               }
-              return { success: true, ...result.taskId ? { taskId: result.taskId } : {} };
+              return {
+                success: true,
+                ...result.taskId ? { taskId: result.taskId } : {},
+                // ★F3: whether the note reached the coordinator, or was recorded
+                // only. The filter is at the producer, so this is the one place
+                // the worker can learn which of the two happened.
+                surfacedToCoordinator: result.surfacedToCoordinator === true
+              };
             } catch (e) {
               return { success: false, error: e?.message || String(e) };
             }
@@ -167272,6 +167629,52 @@ data: ${JSON.stringify(msg.data)}
     init_mesh_config();
     init_worker_handoff_notes();
     init_worker_report();
+    init_logger();
+    init_config();
+    init_mesh_runtime_store();
+    init_mesh_events_pending();
+    init_mesh_events_utils();
+    var WORKER_PROGRESS_EVENT_NAME = "mesh:worker_progress";
+    var queueWorkerProgressNotice = (notice) => {
+      let targetCoordinatorSessionId = "";
+      try {
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
+        if (task) targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
+      } catch (e) {
+        LOG.warn("WorkerProgress", `Could not resolve coordinator for task ${notice.taskId}: ${e?.message || e}`);
+      }
+      const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
+      const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
+      try {
+        queuePendingMeshCoordinatorEvent({
+          event: WORKER_PROGRESS_EVENT_NAME,
+          meshId: notice.meshId,
+          nodeLabel,
+          ...notice.nodeId ? { nodeId: notice.nodeId } : {},
+          metadataEvent: {
+            source: "worker_progress_update",
+            taskId: notice.taskId,
+            ...notice.sessionId ? { sessionId: notice.sessionId } : {},
+            // ★The note TEXT rides here. This is a local daemon→coordinator
+            // queue, not the cloud status path — the server content boundary
+            // is not in play. The `mesh_turn_events` row for the same note
+            // stays content-free (length only), which is what keeps the
+            // LEDGER meta-only per design §9.1.
+            note: notice.note,
+            // Never terminal. Named explicitly so a future drain-side reader
+            // cannot mistake this for a completion by its shape.
+            terminal: false,
+            coordinatorMessage: notice.coordinatorMessage
+          },
+          coordinatorMessage: notice.coordinatorMessage,
+          queuedAt: notice.nowMs,
+          ...targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {},
+          ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
+        });
+      } catch (e) {
+        LOG.warn("WorkerProgress", `Failed to queue progress notice for task ${notice.taskId}: ${e?.message || e}`);
+      }
+    };
     init_dist();
     init_topics2();
     var FLEET_STATUS_SUB_VIEW = "tail";
@@ -168499,6 +168902,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         configureFleetStatusParity(components.seqscribeNode ?? null);
         configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
         configureHandoffNoteSink(storeHandoffNote);
+        configureWorkerProgressNoticeSink(queueWorkerProgressNotice);
         if (components.seqscribeNode) {
           const node = components.seqscribeNode;
           const transcriptClaims = new TranscriptTopicClaimRegistry();
@@ -168745,6 +169149,10 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       }
       try {
         configureHandoffNoteSink(null);
+      } catch {
+      }
+      try {
+        configureWorkerProgressNoticeSink(null);
       } catch {
       }
       try {
@@ -180989,7 +181397,7 @@ var REPORT_COMPLETION_TOOL = {
           touched_files: {
             type: "array",
             items: { type: "string" },
-            description: "Files you changed. Required \u2014 this is how your note is matched to future work on the same code."
+            description: "Files you changed. Required \u2014 this is how your note is matched to future work on the same code. On a READ-ONLY task pass an empty array: it is the correct answer, and inventing a placeholder path to satisfy this field corrupts the matching key for everyone else."
           },
           follow_ups: {
             type: "array",
@@ -181020,11 +181428,14 @@ var REPORT_COMPLETION_TOOL = {
 };
 var PROGRESS_UPDATE_TOOL = {
   name: "progress_update",
-  description: "Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator can see movement without interrupting you.",
+  description: "Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator can see movement without interrupting you. Significant notes are forwarded to the coordinator; minor or closely-spaced ones are recorded but not forwarded, so report MILESTONES \u2014 a phase finishing, a blocker found, a long operation starting \u2014 rather than narrating each step. The response tells you which happened.",
   inputSchema: {
     type: "object",
     properties: {
-      note: { type: "string", description: "What you are doing or what you just learned." }
+      note: {
+        type: "string",
+        description: "What you are doing or what you just learned. Write it for a coordinator who cannot see your screen: state the milestone and what it means for the task."
+      }
     },
     required: ["note"]
   }
@@ -181077,6 +181488,10 @@ async function reportCompletion(transport, credentials, args) {
     ];
     if (result.handoffNoteRecorded) {
       lines.push("Handoff note stored \u2014 it will be delivered to related future tasks automatically.");
+    } else if (result.handoffNoteError) {
+      lines.push(
+        `WARNING: your handoff note was NOT stored (${result.handoffNoteError}). The completion itself was recorded. Put anything the next agent must know into your final message instead \u2014 it will not be delivered automatically.`
+      );
     }
     return { text: lines.join("\n") };
   }
@@ -181100,10 +181515,14 @@ async function progressUpdate(transport, credentials, args) {
   if (!note) return { text: "progress_update requires a non-empty `note`.", isError: true };
   const result = await transport.command("worker_progress_update", { ...credentials, note });
   if (result?.success === true) {
-    return { text: `Progress noted for task ${result.taskId ?? "(unknown)"}.` };
+    return {
+      text: result.surfacedToCoordinator ? `Progress noted for task ${result.taskId ?? "(unknown)"} and surfaced to the coordinator.` : `Progress noted for task ${result.taskId ?? "(unknown)"} (recorded; not surfaced to the coordinator \u2014 it was too close to your previous update or too brief to be a milestone).`
+    };
   }
+  const detail = result?.detail ? `
+Detail: ${result.detail}` : "";
   return {
-    text: `progress_update refused (${result?.error || "unknown_error"}).`,
+    text: `progress_update refused (${result?.error || "unknown_error"}).${detail}`,
     isError: true
   };
 }

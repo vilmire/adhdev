@@ -87,7 +87,8 @@ import {
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { configureFleetStatusShadow } from '../seqscribe/fleet-status-shadow.js';
 import { configureHandoffNotesSeqscribe, storeHandoffNote } from '../mesh/worker-handoff-notes.js';
-import { configureHandoffNoteSink } from '../mesh/worker-report.js';
+import { configureHandoffNoteSink, configureWorkerProgressNoticeSink } from '../mesh/worker-report.js';
+import { queueWorkerProgressNotice } from '../mesh/worker-progress-notify.js';
 import { configureFleetStatusParity } from '../seqscribe/fleet-status-parity.js';
 import {
     createFleetStatusPeerViewConsumer,
@@ -1094,6 +1095,12 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         // same-machine enclosure keeps working, cross-machine does not.
         configureHandoffNotesSeqscribe(components.seqscribeNode ?? null);
         configureHandoffNoteSink(storeHandoffNote);
+        // WORKER-MCP F3: progress_update had no consumer — the ledger row was
+        // written and nothing ever read that kind, so the tool's "the coordinator
+        // can see movement" promise was inert. Wiring the sink makes a filtered
+        // subset of notes reach the coordinator over the existing pending-events
+        // inbox (no new channel); see worker-progress-notify.ts.
+        configureWorkerProgressNoticeSink(queueWorkerProgressNotice);
         // §8 unit 3 ("dynamic transcript activation + daemon replica store"):
         // arm the publisher §8 unit 2 built against this real node, and stand
         // up the subscriber-side replica store. One claim registry instance is
@@ -1438,6 +1445,7 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
     // stops trying to store text once the node is going away.
     try { configureHandoffNotesSeqscribe(null); } catch { /* noop */ }
     try { configureHandoffNoteSink(null); } catch { /* noop */ }
+    try { configureWorkerProgressNoticeSink(null); } catch { /* noop */ }
     // Drop the termination observer too: sessions torn down below this point are
     // dying because the daemon is going away, not because something killed them.
     try { uninstallMeshTerminationObserver(); } catch { /* noop */ }

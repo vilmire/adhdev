@@ -21,7 +21,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
 import { notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
-import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, type TurnEventRow } from './mesh-turn-event-queries.js';
+import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type TurnEventRow, type HandoffNoteTextRow } from './mesh-turn-event-queries.js';
 import { selectUnsettledTerminalQueueRowsAndAttempts } from './mesh-unsettled-terminal-queries.js';
 // TURN-LEDGER pure move (file-size gate): the Stage 5 turn-attempt / turn-event /
 // held-suspension persistence lives in mesh-runtime-store-turn-attempts.ts; the
@@ -2342,6 +2342,11 @@ export class MeshRuntimeStore {
     /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
     listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }
     deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
+
+    /** WORKER-MCP decision C: handoff note TEXT (durable, replaces the in-process mirror). */
+    upsertHandoffNoteText(row: HandoffNoteTextRow): void { return upsertHandoffNoteText(this.db, row); }
+    getHandoffNoteText(meshId: string, taskId: string): HandoffNoteTextRow | null { return selectHandoffNoteText(this.db, meshId, taskId); }
+    deleteHandoffNoteTextOlderThan(cutoffIso: string): number { return deleteHandoffNoteTextOlderThan(this.db, cutoffIso); }
 
     // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
     // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).

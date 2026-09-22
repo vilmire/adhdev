@@ -193,17 +193,26 @@ describe('report_completion validation', () => {
     expect(validateWorkerCompletionReport({ ...valid, branchState: 'merged' }).errors.some(e => e.field === 'branchState')).toBe(true)
   })
 
-  it('requires intent and touchedFiles on handoffNotes', () => {
+  it('requires intent and the presence of touchedFiles on handoffNotes', () => {
     const noIntent = validateWorkerCompletionReport({ ...valid, handoffNotes: { touchedFiles: ['a.ts'] } })
     expect(noIntent.errors.some(e => e.field === 'handoffNotes.intent')).toBe(true)
 
-    // A note with no files can never be matched to future work, so it would be
-    // stored and never delivered.
+    // Omitting the key entirely is still rejected — a note that never considered
+    // its touched files cannot be matched to future work.
     const noFiles = validateWorkerCompletionReport({ ...valid, handoffNotes: { intent: 'why' } })
     expect(noFiles.errors.some(e => e.field === 'handoffNotes.touchedFiles')).toBe(true)
+  })
 
+  // ★F6: an EMPTY array is the correct answer on a read-only task, and this
+  // validator cannot see the task — so emptiness is decided post-identity by
+  // checkReportAgainstTaskMode, not here. Rejecting it at this layer is what
+  // drove a measured read-only worker to write the placeholder
+  // "N/A (read-only verification task, no files touched)" into the file list,
+  // storing a non-path as a path and poisoning the enclosure matching key.
+  it('accepts an empty touchedFiles array — task mode decides, not the schema', () => {
     const emptyFiles = validateWorkerCompletionReport({ ...valid, handoffNotes: { intent: 'why', touchedFiles: [] } })
-    expect(emptyFiles.errors.some(e => e.field === 'handoffNotes.touchedFiles')).toBe(true)
+    expect(emptyFiles.errors).toEqual([])
+    expect(emptyFiles.report?.handoffNotes?.touchedFiles).toEqual([])
   })
 
   it('accepts a full handoff note and normalizes it', () => {

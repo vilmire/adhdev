@@ -51,6 +51,66 @@ export interface TurnEventRow {
     recordedAt: string;
 }
 
+// ── WORKER-MCP decision C: handoff note TEXT ────────────────────────────
+//
+// The note's META row lives in mesh_turn_events (content-free — lengths and
+// file paths only). The TEXT lives in its own table because the ledger is the
+// meta index by design §9.1 and must not hold authored prose. It previously
+// lived only in an in-process Map, which made every note undeliverable after a
+// restart while report_completion still claimed it was stored.
+
+export interface HandoffNoteTextRow {
+    meshId: string;
+    taskId: string;
+    attemptId?: string;
+    nodeId?: string;
+    /** JSON-encoded WorkerHandoffNotes. Parsed by the caller that owns the type. */
+    notesJson: string;
+    recordedAt: string;
+}
+
+/** Upsert one note's text. REPLACE so a re-report supersedes rather than duplicates. */
+export function upsertHandoffNoteText(db: TurnEventQueryDb, row: HandoffNoteTextRow): void {
+    db.prepare(`
+        INSERT OR REPLACE INTO mesh_handoff_note_text (
+            mesh_id, task_id, attempt_id, node_id, notes_json, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+        row.meshId, row.taskId, row.attemptId ?? null, row.nodeId ?? null,
+        row.notesJson, row.recordedAt,
+    );
+}
+
+/** One note's text, or null when this daemon never held it. */
+export function selectHandoffNoteText(
+    db: TurnEventQueryDb,
+    meshId: string,
+    taskId: string,
+): HandoffNoteTextRow | null {
+    const rows = db.prepare(
+        'SELECT * FROM mesh_handoff_note_text WHERE mesh_id = ? AND task_id = ? LIMIT 1',
+    ).all(meshId, taskId) as Array<Record<string, unknown>>;
+    const r = rows[0];
+    if (!r) return null;
+    return {
+        meshId: r.mesh_id as string,
+        taskId: r.task_id as string,
+        ...(r.attempt_id ? { attemptId: r.attempt_id as string } : {}),
+        ...(r.node_id ? { nodeId: r.node_id as string } : {}),
+        notesJson: r.notes_json as string,
+        recordedAt: r.recorded_at as string,
+    };
+}
+
+/**
+ * Delete note texts recorded before `cutoffIso`, mirroring the META row's own
+ * retention sweep. Returns the row count so the sweep logs what it removed.
+ */
+export function deleteHandoffNoteTextOlderThan(db: TurnEventQueryDb, cutoffIso: string): number {
+    const res = db.prepare('DELETE FROM mesh_handoff_note_text WHERE recorded_at < ?').run(cutoffIso);
+    return res.changes ?? 0;
+}
+
 /** All events for one task, oldest first — the long-standing by-task read. */
 export function selectTurnEventsForTask(
     db: TurnEventQueryDb,

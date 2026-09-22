@@ -91,7 +91,11 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     ...(result.detail ? { detail: result.detail } : {}),
                     hint: result.refusal === 'unauthenticated'
                         ? 'No live task is bound to this worker session — the task may already be terminal or reassigned.'
-                        : 'The completion was refused by the turn ledger; the task state is authoritative.',
+                        : result.refusal === 'invalid_for_task_mode'
+                            ? 'Fix the touchedFiles list to match the task mode and call again.'
+                            : result.refusal === 'storage_failed'
+                                ? 'Nothing was recorded — call again.'
+                                : 'The completion was refused by the turn ledger; the task state is authoritative.',
                 };
             }
             return {
@@ -101,6 +105,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                 outcome: result.outcome,
                 duplicate: result.duplicate,
                 handoffNoteRecorded: result.handoffNoteRecorded,
+                // ★F5: carries WHY a note did not persist, so the tool layer can
+                // warn instead of printing the unconditional "stored" line.
+                ...(result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}),
             };
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
@@ -115,9 +122,20 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             const { acceptWorkerProgressUpdate } = await import('../../mesh/worker-report.js');
             const result = acceptWorkerProgressUpdate({ token: args?.token, bind: args?.bind }, note);
             if (!result.accepted) {
-                return { success: false, error: result.refusal || 'unauthenticated' };
+                return {
+                    success: false,
+                    error: result.refusal || 'unauthenticated',
+                    ...(result.detail ? { detail: result.detail } : {}),
+                };
             }
-            return { success: true, ...(result.taskId ? { taskId: result.taskId } : {}) };
+            return {
+                success: true,
+                ...(result.taskId ? { taskId: result.taskId } : {}),
+                // ★F3: whether the note reached the coordinator, or was recorded
+                // only. The filter is at the producer, so this is the one place
+                // the worker can learn which of the two happened.
+                surfacedToCoordinator: result.surfacedToCoordinator === true,
+            };
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }

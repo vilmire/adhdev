@@ -103,7 +103,9 @@ export const REPORT_COMPLETION_TOOL = {
             type: 'array',
             items: { type: 'string' },
             description:
-              'Files you changed. Required — this is how your note is matched to future work on the same code.',
+              'Files you changed. Required — this is how your note is matched to future work on the same code. '
+              + 'On a READ-ONLY task pass an empty array: it is the correct answer, and inventing a placeholder '
+              + 'path to satisfy this field corrupts the matching key for everyone else.',
           },
           follow_ups: {
             type: 'array',
@@ -139,11 +141,19 @@ export const PROGRESS_UPDATE_TOOL = {
   name: 'progress_update',
   description:
     'Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator '
-    + 'can see movement without interrupting you.',
+    + 'can see movement without interrupting you. Significant notes are forwarded to the coordinator; minor '
+    + 'or closely-spaced ones are recorded but not forwarded, so report MILESTONES — a phase finishing, a '
+    + 'blocker found, a long operation starting — rather than narrating each step. The response tells you '
+    + 'which happened.',
   inputSchema: {
     type: 'object' as const,
     properties: {
-      note: { type: 'string', description: 'What you are doing or what you just learned.' },
+      note: {
+        type: 'string',
+        description:
+          'What you are doing or what you just learned. Write it for a coordinator who cannot see your '
+          + 'screen: state the milestone and what it means for the task.',
+      },
     },
     required: ['note'],
   },
@@ -233,6 +243,16 @@ export async function reportCompletion(
     ];
     if (result.handoffNoteRecorded) {
       lines.push('Handoff note stored — it will be delivered to related future tasks automatically.');
+    } else if (result.handoffNoteError) {
+      // ★F5: never claim a note was stored when it was not. This line used to be
+      // unreachable — the daemon returned handoffNoteRecorded:true even after
+      // skipping the write entirely, so a worker was told its note was filed and
+      // would be delivered when nothing had been persisted.
+      lines.push(
+        `WARNING: your handoff note was NOT stored (${result.handoffNoteError}). `
+        + 'The completion itself was recorded. Put anything the next agent must know into your '
+        + 'final message instead — it will not be delivered automatically.',
+      );
     }
     return { text: lines.join('\n') };
   }
@@ -265,10 +285,20 @@ export async function progressUpdate(
 
   const result: any = await transport.command('worker_progress_update', { ...credentials, note });
   if (result?.success === true) {
-    return { text: `Progress noted for task ${result.taskId ?? '(unknown)'}.` };
+    // ★F3: say whether this note actually reached the coordinator. The channel
+    // is deliberately filtered (milestones, not a log tail), so "recorded but
+    // not surfaced" is the ordinary outcome for a small or closely-spaced note
+    // — and a worker that is told plainly will not repeat it hoping for a reply.
+    return {
+      text: result.surfacedToCoordinator
+        ? `Progress noted for task ${result.taskId ?? '(unknown)'} and surfaced to the coordinator.`
+        : `Progress noted for task ${result.taskId ?? '(unknown)'} (recorded; not surfaced to the coordinator — `
+          + 'it was too close to your previous update or too brief to be a milestone).',
+    };
   }
+  const detail = result?.detail ? `\nDetail: ${result.detail}` : '';
   return {
-    text: `progress_update refused (${result?.error || 'unknown_error'}).`,
+    text: `progress_update refused (${result?.error || 'unknown_error'}).${detail}`,
     isError: true,
   };
 }

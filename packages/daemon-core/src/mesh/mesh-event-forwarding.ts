@@ -61,6 +61,9 @@ import {
     isWeakCompletionEvidence,
 } from './mesh-events-utils.js';
 import { isMeshCoordinatorEvent, shouldForceInjectMeshEvent, EVENT_TO_LEDGER_KIND } from './mesh-event-classify.js';
+// WORKER-REPORT-SHADOWING (F1): read back the worker's own structured report so a
+// later PTY scrape cannot overwrite it in the ledger or the coordinator's inbox.
+import { findPriorWorkerReport } from './worker-report.js';
 import {
     classifyNonceEcho,
     proposeTurnCompletion,
@@ -1263,13 +1266,53 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         });
     }
 
+    // ★WORKER-REPORT-SHADOWING (F1): a turn that a worker already reported through
+    // `report_completion` emits its completion TWICE — once structurally (the tool
+    // report, which terminalizes the row immediately) and once from the PTY scrape
+    // ~25s later. Both used to append a ledger entry and build a coordinator
+    // message, so the LATER, scraped one won by arriving last: the coordinator read
+    // a truncated screen scrape while the authoritative structured summary sat in
+    // the ledger unread. The ledger was never wrong; the coordinator's view was.
+    //
+    // The same predicate already gates the hollow-completion requeue path above
+    // ("a provider event arriving after worker_tool_report already terminalized the
+    // row") — this extends it to the two paths that never got it: the ledger append
+    // and the coordinator notify.
+    //
+    // Scoped to the TASK the event names, and only when the worker's own report
+    // exists. A worker that never reached MCP (died, crashed, no MCP at all) files
+    // no report, so this is null and the PTY path stays exactly as it was — which
+    // is the point of design §4's "절반만 승격": this adds an evidence grade, it
+    // removes no fallback.
+    const shadowedByWorkerReport = (() => {
+        if (args.event !== 'agent:generating_completed') return null;
+        const taskId = readNonEmptyString(args.metadataEvent.taskId)
+            || completedTaskForLedger?.id
+            || directDispatchTaskIdForLedger;
+        if (!taskId) return null;
+        try { return findPriorWorkerReport(args.meshId, taskId); } catch { return null; }
+    })();
+    if (shadowedByWorkerReport) {
+        LOG.info(
+            'MeshQueue',
+            `Suppressing scraped completion for task ${shadowedByWorkerReport.taskId} — the worker already reported `
+            + `'${shadowedByWorkerReport.outcome}' at ${shadowedByWorkerReport.recordedAt} via report_completion`
+            + `${shadowedByWorkerReport.summary ? ' (its summary stands)' : ''}.`,
+        );
+    }
+
     // FINALIZATION-TIMEOUT-FORCE: the forced-termination flip above recorded the row as
     // 'failed' — the ledger entry must say the same (task_failed), not task_completed.
     const ledgerKind = hollowCompletionDisposition === 'requeued'
         ? undefined
-        : hollowCompletionDisposition === 'max_retries_exhausted' || forcedTimeoutNoResponse
-            ? 'task_failed' as const
-            : EVENT_TO_LEDGER_KIND[args.event];
+        // ★A structured report already wrote the terminal ledger entry for this
+        // task. A second append here would be a duplicate whose summary is the
+        // weaker of the two.
+        : shadowedByWorkerReport
+            ? undefined
+            : hollowCompletionDisposition === 'max_retries_exhausted' || forcedTimeoutNoResponse
+                ? 'task_failed' as const
+                : EVENT_TO_LEDGER_KIND[args.event];
     if (ledgerKind) {
         try {
             const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined;
@@ -1537,13 +1580,40 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
     }
 
-    const messageText = buildMeshSystemMessage({
-        event: args.event,
-        nodeLabel: args.nodeLabel,
-        metadataEvent: args.metadataEvent,
-        recoveryContext,
-        worktreeHasQueuedTask,
-    });
+    // ★WORKER-REPORT-SHADOWING (F1), coordinator half. The worker's structured
+    // report already queued the coordinator's completion notice for this task, so
+    // re-queueing the scraped one is the actual shadowing defect: it arrives later
+    // and overwrites a verbatim summary with a truncated screen read.
+    //
+    // Substitute rather than merely suppress when the report's text is still held
+    // locally — the coordinator gets the authoritative summary with the event's
+    // own metadata, so nothing is lost relative to the scrape and the truncation
+    // risk is gone (report summaries are arguments, `mayBeTruncated: false`).
+    const messageText = shadowedByWorkerReport
+        ? (shadowedByWorkerReport.summary
+            ? `[System] ${args.nodeLabel} reported task ${shadowedByWorkerReport.taskId} as `
+                + `'${shadowedByWorkerReport.outcome}' via report_completion: ${shadowedByWorkerReport.summary}`
+            // No text held (a restart dropped the mirror). Suppressing the scrape
+            // outright would leave the coordinator with nothing, so the scrape is
+            // kept — but labelled, so the coordinator knows a stronger record
+            // exists and that this text is the weaker of the two.
+            : `[System] ${args.nodeLabel} already reported task ${shadowedByWorkerReport.taskId} as `
+                + `'${shadowedByWorkerReport.outcome}' via report_completion; its verbatim summary is no longer held `
+                + `on this daemon. Screen-scraped text follows and may be truncated: `
+                + `${buildMeshSystemMessage({
+                    event: args.event,
+                    nodeLabel: args.nodeLabel,
+                    metadataEvent: args.metadataEvent,
+                    recoveryContext,
+                    worktreeHasQueuedTask,
+                })}`)
+        : buildMeshSystemMessage({
+            event: args.event,
+            nodeLabel: args.nodeLabel,
+            metadataEvent: args.metadataEvent,
+            recoveryContext,
+            worktreeHasQueuedTask,
+        });
     if (!messageText) {
         // Lifecycle events that carry no coordinator-facing message (agent:ready /
         // agent:generating_started) still drive the remote-claim state machine: the
