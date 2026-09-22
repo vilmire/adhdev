@@ -25,6 +25,8 @@ import { execFileSync } from 'node:child_process';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
+// ★B1: type-only — the gate never emits, it only carries the caller's channel.
+import type { RefineProgressContext } from './mesh-refine-progress.js';
 import { LOG } from '../logging/logger.js';
 import type { GitAncestryProbe, GitlinkTrivialFastForwardEvaluation, MeshRefineStageStatus, MeshRefineSubmoduleReachabilityEntry, MeshRefineSubmoduleReachabilitySummary } from './mesh-refine-gitlink-utils.js';
 import { GIT, REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES, ensureSubmoduleCommitLocal, isSubmoduleFastForward, probeGitAncestry, probeSubmoduleFastForward, probeSubmoduleGitlinkReachability, readChangedGitlinkPaths, readChangedPathKinds, readTreeObject, runMeshRefineSubmoduleReachabilityGate, truncateValidationOutput, verifyRemoteBranchContainsCommit, warnGitlinkFastForwardUndeterminable, warnRefineSubmoduleUndeterminable } from './mesh-refine-gitlink-utils.js';
@@ -58,6 +60,11 @@ type MeshRefineValidationSummary = {
     failureCode?: string;
     /** Human-readable cause when failureKind === 'spawn_resolution_failed' (win32 .cmd shim, etc). */
     spawnResolutionError?: string;
+    /**
+     * ★C: set when a vendor-drift failure is attributable to this refine's OWN
+     * rebase changing the bundle build base (see buildRefineVendorDriftHint).
+     */
+    vendorDriftHint?: string;
     timeoutMs: number;
     outputLimitBytes: number;
     configSource?: string;
@@ -447,6 +454,12 @@ export interface RefineContext {
      * commands (never skip on uncertainty).
      */
     changeImpact?: ChangedPackageClassification;
+    /**
+     * ★B1 progress channel for this node's run. Optional: absent means the pipeline
+     * emits no progress events, which is the behaviour every pre-existing caller
+     * (and every test that builds a context by hand) gets unchanged.
+     */
+    progress?: RefineProgressContext;
     validationSummary: Awaited<ReturnType<typeof runMeshRefineValidationGate>>;
     patchEquivalence: Awaited<ReturnType<typeof runMeshRefinePatchEquivalenceGate>>;
     submoduleReachability: Awaited<ReturnType<typeof runMeshRefineSubmoduleReachabilityGate>>;
@@ -1762,6 +1775,75 @@ export function buildMeshRefineValidationPlan(mesh: any, workspace: string): Rec
     };
 }
 
+/**
+ * ★B1: report a completed validation command to the caller's progress channel.
+ *
+ * Defensive by construction: the callback belongs to the notification layer,
+ * which is strictly less important than the validation run it observes, so a
+ * throwing callback is swallowed rather than allowed to fail the gate.
+ */
+function reportRefineCommandComplete(
+    callback: ((info: { displayCommand: string; durationMs: number; passed: boolean }) => void) | undefined,
+    candidate: MeshRefineValidationCommand,
+    startedAt: number,
+    passed: boolean,
+): void {
+    if (!callback) return;
+    try {
+        callback({
+            displayCommand: candidate.displayCommand || [candidate.command, ...(candidate.args || [])].join(' ').trim(),
+            durationMs: Date.now() - startedAt,
+            passed,
+        });
+    } catch { /* observability must never fail the run */ }
+}
+
+/**
+ * ★C: explain a vendor-drift failure that the Refinery's OWN rebase caused.
+ *
+ * ## The failure
+ *
+ * `npm run bundle:vendor:all` emits bundles built from a specific base. When the
+ * Refinery rebases a branch onto an advanced base (because a sibling landed
+ * first), the committed bundles were built against the OLD base and no longer
+ * reproduce — so `check-vendor-drift.mjs` fails. Measured 2026-09-22: the
+ * Refinery created the state its own gate then rejected.
+ *
+ * ## Why this is a MESSAGE and not an automatic re-bundle
+ *
+ * Re-bundling automatically was considered and rejected, on the strength of a
+ * design decision already recorded in this repo. `mesh-refine-generated-bundles.ts`
+ * resolves the rebase-time bundle CONFLICT by taking the branch side, and
+ * documents explicitly that this "deliberately leaves a bundle built from the
+ * branch's PRE-REBASE source" — with `check:vendor` named as the gate that must
+ * therefore catch it. That gate failing is the designed outcome, not a defect.
+ *
+ * Auto-re-bundling would dismantle that safety property: the verification the
+ * conflict resolver relies on is precisely "a separate gate rebuilds it and
+ * fails if it is wrong". A Refinery that regenerates the bundle and commits it
+ * would be marking its own homework — and would do so by running an arbitrary
+ * build (`bundle:vendor:all` spawns npm across two repos) inside a merge path,
+ * then committing output nobody reviewed into both the root repo and the oss
+ * submodule, requiring a pointer bump. A wrong bundle would reach main with no
+ * gate left to catch it.
+ *
+ * The cost of NOT automating is one worker command. The cost of automating it
+ * wrongly is unreviewed build output on a public AGPL repo's main branch. So the
+ * Refinery says exactly what happened and what to run.
+ */
+export function buildRefineVendorDriftHint(params: {
+    displayCommand: string;
+    args?: string[];
+    rebased: boolean;
+}): string | undefined {
+    if (!params.rebased) return undefined;
+    const haystack = [params.displayCommand, ...(params.args || [])].join(' ');
+    if (!/check-vendor-drift/.test(haystack)) return undefined;
+    return 'This refine REBASED the branch onto an advanced base before validating, which changed the commit the vendor bundles were built from — '
+        + 'so the committed bundles no longer reproduce and check-vendor-drift fails. This is expected after a rebase and does NOT mean the branch is wrong. '
+        + 'Fix: run `npm run bundle:vendor:all` in the worktree, commit the regenerated vendor paths (the daemon-standalone copy lives inside oss, so bump the oss pointer too), then re-run refine.';
+}
+
 export async function runMeshRefineValidationGate(
     mesh: any,
     workspace: string,
@@ -1778,6 +1860,21 @@ export async function runMeshRefineValidationGate(
          * fail-open to full validation on any uncertainty.
          */
         changeImpact?: ChangedPackageClassification;
+        /**
+         * ★B1 SLOW-GATE PROGRESS. Called after each validation command completes, with
+         * its display name and wall-clock duration. The CALLER decides what is worth
+         * announcing (see mesh-refine-progress.ts's threshold) — this gate only reports
+         * facts, so the notification policy lives in one place instead of being
+         * duplicated here. Optional and never awaited: a throwing callback must not be
+         * able to fail a validation run, so it is invoked defensively.
+         */
+        onCommandComplete?: (info: { displayCommand: string; durationMs: number; passed: boolean }) => void;
+        /**
+         * ★C: whether sync_base rebased the branch in THIS refine run. A vendor-drift
+         * failure means something different depending on the answer — see
+         * {@link buildRefineVendorDriftHint}.
+         */
+        branchWasRebased?: boolean;
     },
 ): Promise<MeshRefineValidationSummary> {
     const { execFile } = await import('node:child_process');
@@ -2060,6 +2157,7 @@ export async function runMeshRefineValidationGate(
                 ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             });
             summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
+            reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, true);
         } catch (error: any) {
             // ENOENT check first: a spawn-resolution failure ("spawn npm ENOENT")
             // carries no stderr and would otherwise fall through to an
@@ -2088,7 +2186,24 @@ export async function runMeshRefineValidationGate(
                     : outputLimitExceeded ? { failureKind: 'output_limit_exceeded' }
                     : missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
             }));
+            reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, false);
             summary.status = 'failed';
+            // ★C REBASE-VENDOR-STALENESS: when the failing command is the vendor drift
+            // check AND this refine rebased the branch, say so. Without this the
+            // coordinator sees only a bundle diff and cannot tell a genuine un-synced
+            // vendor commit from one the Refinery's own rebase invalidated — the 4th
+            // incident of 2026-09-22. See buildRefineVendorDriftHint for why the fix is a
+            // message rather than an automatic re-bundle.
+            const vendorHint = buildRefineVendorDriftHint({
+                displayCommand: candidate.displayCommand || candidate.command,
+                args: candidate.args,
+                rebased: opts?.branchWasRebased === true,
+            });
+            if (vendorHint) {
+                summary.failureKind = 'vendor_drift_after_rebase';
+                summary.failureCode = 'vendor_drift_after_rebase';
+                summary.vendorDriftHint = vendorHint;
+            }
             if (spawnResolutionFailed) {
                 summary.failureKind = 'spawn_resolution_failed';
                 summary.failureCode = 'spawn_resolution_failed';

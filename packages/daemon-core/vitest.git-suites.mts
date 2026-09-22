@@ -61,6 +61,10 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/git/git-locale.test.ts',
   'test/git/git-status.test.ts',
   'test/mesh/mesh-completion-side-effect-evidence.test.ts',
+  // ★REFINE-ACCEPT-BASE-PREFLIGHT: builds real bare-origin + clone topologies to
+  // exercise dirty / stash / ahead / diverged base states. The check reads LIVE git
+  // state (including a real fetch), so it cannot be covered with a mocked status.
+  'test/mesh/mesh-refine-accept-preflight.test.ts',
   'test/mesh/mesh-graph-workspace-bootstrap.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   'test/mesh/preview-freshness.test.ts',

@@ -28,6 +28,22 @@ import {
 // REFINE-CONCURRENCY-CAP: process-wide serial execution of refine pipelines —
 // see mesh-refine-concurrency.ts for the freeze RCA this comes from.
 import { runWithRefineExecutionSlot } from '../mesh/mesh-refine-concurrency.js';
+// ★B3/B4 chain abort — base-axis vs node-local failure classification.
+import {
+    decideRefineBatchChainAbort,
+    buildSkippedChainNodeOutcome,
+    buildChainAbortNextStep,
+    type RefineBatchChainAbortDecision,
+} from '../mesh/mesh-refine-batch-chain-abort.js';
+// ★B1/B2 progress + immediate failure notification.
+import { emitRefineProgress, type RefineProgressContext, type RefineProgressEvent } from '../mesh/mesh-refine-progress.js';
+// ★REFINE-BASE-PREFLIGHT — the batch uses it only to WARN on the dry-run plan; the
+// blocking check is the per-node pipeline's first stage (refineBasePreflightStage).
+import {
+    assessRefineAcceptPreflight,
+    buildRefineAcceptPreflightWarning,
+    resolveRefineBaseRepoRoot,
+} from '../mesh/mesh-refine-accept-preflight.js';
 import {
     classifyBatchNodeConvergence,
     executeMeshRefineNodeSynchronously,
@@ -44,6 +60,22 @@ import {
  * the caller's outer IPC deadline, so a single slow remote consumed the entire budget.
  */
 const BATCH_PLAN_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Emit a batch progress event when a progress channel was supplied.
+ *
+ * A no-op without a context, so every pre-existing caller of
+ * runMeshRefineBatchConvergence (the synchronous entry, tests) behaves exactly as
+ * before. Delegates the throttle/admission decision to mesh-refine-progress.ts
+ * rather than re-implementing it here.
+ */
+function emitRefineBatchProgress(
+    context: RefineProgressContext | undefined,
+    event: RefineProgressEvent,
+): void {
+    if (!context) return;
+    emitRefineProgress(context, event);
+}
 
     /**
      * Batch refinery: converge multiple sibling worktree nodes onto the base branch
@@ -254,6 +286,12 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         orderedNodes: any[],
         ordering: { order: string[]; rationale?: unknown },
         args: any,
+        /**
+         * ★B1/B2 progress channel. Optional so the synchronous batch entry (and every
+         * existing caller/test) keeps working unchanged — absent means no progress
+         * events, never an error. The async job path supplies it.
+         */
+        progressContext?: RefineProgressContext,
     ): Promise<CommandRouterResult> {
         type BatchNodeOutcome = {
             nodeId: string;
@@ -270,7 +308,10 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         const refineOne = async (node: any): Promise<BatchNodeOutcome> => {
             let result: Record<string, unknown>;
             try {
-                result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args) as Record<string, unknown>;
+                // ★B1: hand the node's pipeline the batch progress channel so slow gates
+                // are announced under the batch's job identity.
+                result = await executeMeshRefineNodeSynchronously(self, meshId, node.id,
+                    progressContext ? { ...args, progressContext } : args) as Record<string, unknown>;
             } catch (e: any) {
                 result = { success: false, error: e?.message || String(e) };
             }
@@ -293,18 +334,88 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
 
         const results: BatchNodeOutcome[] = [];
         const retryQueue: any[] = [];
-        for (const node of orderedNodes) {
+        // ★B3 CHAIN-ABORT state. Set when a node fails on the BASE axis, at which point
+        // every remaining node is determined to fail for the same reason — see
+        // mesh-refine-batch-chain-abort.ts for why this is base-axis-only and why a
+        // node-local failure must still let the batch continue.
+        let chainAbort: { precursorNodeId: string; decision: RefineBatchChainAbortDecision } | undefined;
+        const skippedNodeIds: string[] = [];
+        for (const [index, node] of orderedNodes.entries()) {
+            if (chainAbort) {
+                // Not attempted — recorded as skipped, never as a failure (nothing was measured).
+                results.push(buildSkippedChainNodeOutcome({
+                    nodeId: node.id,
+                    workspace: node.workspace,
+                    precursorNodeId: chainAbort.precursorNodeId,
+                    decision: chainAbort.decision,
+                }) as unknown as BatchNodeOutcome);
+                skippedNodeIds.push(node.id);
+                continue;
+            }
+            // ★B1 PROGRESS: node transition — one event per node, not per gate.
+            emitRefineBatchProgress(progressContext, {
+                phase: 'node_started',
+                nodeId: node.id,
+                nodeIndex: index + 1,
+                nodeCount: orderedNodes.length,
+            });
             const outcome = await refineOne(node);
             results.push(outcome);
+            // ★B2 IMMEDIATE FAILURE NOTIFICATION: emit the moment a node fails, rather
+            // than only in the batch's terminal event. A coordinator can start fixing while
+            // the remaining nodes are still running (or, on a chain abort, immediately).
+            if (outcome.convergence === 'blocked_review' || outcome.convergence === 'not_mergeable') {
+                emitRefineBatchProgress(progressContext, {
+                    phase: 'node_failed',
+                    nodeId: node.id,
+                    nodeIndex: index + 1,
+                    nodeCount: orderedNodes.length,
+                    convergence: outcome.convergence,
+                    ...(outcome.code ? { code: outcome.code } : {}),
+                    ...(outcome.stage ? { stage: outcome.stage } : {}),
+                    ...(outcome.error ? { errorTail: outcome.error.slice(-600) } : {}),
+                });
+            } else {
+                emitRefineBatchProgress(progressContext, {
+                    phase: 'node_finished',
+                    nodeId: node.id,
+                    nodeIndex: index + 1,
+                    nodeCount: orderedNodes.length,
+                    convergence: outcome.convergence,
+                });
+            }
             // DS2: a base-movement blocker (base_moved / base_locked) did not converge for a
             // reason the earlier merges in THIS batch may have caused (base advanced / lease
             // held). Defer it to a single second pass AFTER the first pass finishes, when the
             // base has settled — but never retry a real conflict.
-            if (outcome.retryable) retryQueue.push(node);
+            //
+            // ★Ordering matters: a retryable base-movement node goes to the retry queue and
+            // does NOT abort the chain, because the second pass is exactly the mechanism that
+            // resolves it. Only a base-axis failure with no retry left stops the batch.
+            if (outcome.retryable) {
+                retryQueue.push(node);
+                continue;
+            }
+            const decision = decideRefineBatchChainAbort(outcome);
+            if (decision.abort) {
+                chainAbort = { precursorNodeId: outcome.nodeId, decision };
+                LOG.warn('Mesh', `[Refinery] Batch chain-abort after node ${outcome.nodeId}: ${decision.reason}`);
+                emitRefineBatchProgress(progressContext, {
+                    phase: 'chain_abort',
+                    nodeId: outcome.nodeId,
+                    nodeIndex: index + 1,
+                    nodeCount: orderedNodes.length,
+                    ...(decision.code ? { code: decision.code } : {}),
+                    ...(decision.stage ? { stage: decision.stage } : {}),
+                    reason: decision.reason,
+                });
+            }
         }
 
         // ── DS2 second pass: retry ONLY the base-movement retryable nodes, once ─────
-        for (const node of retryQueue) {
+        // Skipped when the chain aborted: the base is known-bad, so a retry would spend a
+        // full gate set to re-derive the failure the abort already established.
+        for (const node of chainAbort ? [] : retryQueue) {
             const idx = results.findIndex(r => r.nodeId === node.id);
             const retried = await refineOne(node);
             retried.retried = true;
@@ -316,9 +427,16 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             skipped: results.filter(r => r.convergence === 'skipped_patch_equivalent').length,
             blocked: results.filter(r => r.convergence === 'blocked_review').length,
             notMergeable: results.filter(r => r.convergence === 'not_mergeable').length,
-            ...(retryQueue.length ? { retried: retryQueue.length } : {}),
+            // ★Counted separately from `skipped` (patch-equivalent, a SUCCESS state):
+            // a chain-skipped node was never attempted and still needs a run, so folding
+            // the two together would report un-run work as converged.
+            ...(skippedNodeIds.length ? { chainSkipped: skippedNodeIds.length } : {}),
+            ...(retryQueue.length && !chainAbort ? { retried: retryQueue.length } : {}),
         };
-        const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
+        // A chain-aborted batch has NOT converged even if no node is blocked/not_mergeable:
+        // the skipped nodes are outstanding work, and reporting allConverged would tell the
+        // coordinator the batch is done.
+        const allConverged = summary.blocked === 0 && summary.notMergeable === 0 && !chainAbort;
         return {
             success: true,
             batch: true,
@@ -329,10 +447,27 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             summary,
             allConverged,
             results,
+            ...(chainAbort ? {
+                chainAbort: {
+                    precursorNodeId: chainAbort.precursorNodeId,
+                    code: chainAbort.decision.code,
+                    stage: chainAbort.decision.stage,
+                    reason: chainAbort.decision.reason,
+                    skippedNodeIds,
+                },
+            } : {}),
             ...(allConverged ? {} : {
-                // Name the failed nodes inline — the aggregate nextStep used to hide
-                // WHICH nodes blocked, forcing a manual git-log cross-check.
-                nextStep: `Resolve blocked_review / not_mergeable nodes manually — failed: ${results.filter(r => r.convergence === 'blocked_review' || r.convergence === 'not_mergeable').map(r => `${r.nodeId}${r.code ? ` [${r.code}]` : ''}`).join(', ')} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`,
+                // ★B4: when the batch aborted, lead with the ROOT CAUSE and say the rest was
+                // never attempted — otherwise N lookalike failures read as N problems.
+                nextStep: chainAbort
+                    ? buildChainAbortNextStep({
+                        precursorNodeId: chainAbort.precursorNodeId,
+                        decision: chainAbort.decision,
+                        skippedNodeIds,
+                    })
+                    // Name the failed nodes inline — the aggregate nextStep used to hide
+                    // WHICH nodes blocked, forcing a manual git-log cross-check.
+                    : `Resolve blocked_review / not_mergeable nodes manually — failed: ${results.filter(r => r.convergence === 'blocked_review' || r.convergence === 'not_mergeable').map(r => `${r.nodeId}${r.code ? ` [${r.code}]` : ''}`).join(', ')} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`,
             }),
         };
     }
@@ -506,8 +641,17 @@ export async function finishMeshRefineBatchJob(self: DaemonCommandRouter,
     ): Promise<void> {
         const key = buildRefineBatchJobKey(self, handle.meshId);
         let result: Record<string, unknown>;
+        // ★B1/B2: the async batch job is the path a coordinator WAITS on, so it is the
+        // path that reports progress. The context carries the same return address as the
+        // terminal events, so progress and completion route identically.
+        const progressContext: RefineProgressContext = {
+            meshId: handle.meshId,
+            jobId: handle.jobId,
+            coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+            coordinatorSessionId: handle.targetCoordinatorSessionId,
+        };
         try {
-            result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args) as Record<string, unknown>;
+            result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args, progressContext) as Record<string, unknown>;
         } catch (e: any) {
             result = { success: false, error: e?.message || String(e), batch: true };
         }
@@ -721,18 +865,86 @@ async function planThenRunMeshRefineBatchJob(self: DaemonCommandRouter,
      * Idempotent: a batch already in flight for this mesh returns the running handle with
      * duplicate:true rather than spawning a second background job.
      */
+/**
+ * The base repo root a batch would merge into: the first target node that
+ * resolves one. Shared by the execute refusal and the dry-run warning so the two
+ * can never disagree about WHICH base they are describing.
+ */
+async function resolveBatchBaseRepoRoot(
+    self: DaemonCommandRouter,
+    meshId: string,
+    requestedNodeIds: string[] | undefined,
+    args: any,
+): Promise<string | undefined> {
+    const mesh = (await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true }))?.mesh;
+    const allNodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+    const candidates = Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0
+        ? requestedNodeIds.map(id => allNodes.find(n => meshNodeIdMatches(n, id))).filter(Boolean)
+        : allNodes.filter(n => n?.isLocalWorktree && typeof n.workspace === 'string' && n.workspace);
+    for (const node of candidates) {
+        const repoRoot = resolveRefineBaseRepoRoot({ node, nodes: allNodes, nodeIdMatches: meshNodeIdMatches });
+        if (repoRoot) return repoRoot;
+    }
+    return undefined;
+}
+
+/**
+ * ★REFINE-ACCEPT-BASE-PREFLIGHT (batch dry-run). The same verdict, attached to
+ * the PLAN as a warning instead of refusing it.
+ *
+ * Design judgement (owner-posed): a dry-run is a planning aid, and a plan
+ * computed on a dirty base is still a correct plan — the ordering and the change
+ * areas do not depend on base cleanliness. Refusing it would remove a useful
+ * capability to prevent nothing, since a dry-run mutates and dispatches nothing.
+ * But a coordinator that reads a clean-looking plan and then calls execute walks
+ * into the refusal, so the plan carries the finding and says so explicitly.
+ */
+async function attachBatchBasePreflightWarning(
+    self: DaemonCommandRouter,
+    meshId: string,
+    requestedNodeIds: string[] | undefined,
+    args: any,
+    plan: CommandRouterResult,
+): Promise<CommandRouterResult> {
+    try {
+        const repoRoot = await resolveBatchBaseRepoRoot(self, meshId, requestedNodeIds, args);
+        if (!repoRoot) return plan;
+        // ★refreshUpstream here and ONLY here: the dry-run is synchronous and has already
+        // paid a `git fetch` to compute change-area ordering, and it is bound by the
+        // planning budget rather than the sub-250ms accept contract. This is therefore the
+        // one place the divergence axis can be evaluated without a latency regression —
+        // and the useful one, since a coordinator plans before it executes.
+        const verdict = await assessRefineAcceptPreflight({ repoRoot, refreshUpstream: true });
+        if (verdict.ok) return plan;
+        return { ...plan, ...buildRefineAcceptPreflightWarning(verdict) };
+    } catch {
+        // A warning that cannot be computed is simply absent — never a plan failure.
+        return plan;
+    }
+}
+
 export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
         // Dry-run: the plan IS the deliverable, so resolve it synchronously as before.
         // The med-family handler already routes dry-run to batchRefineMeshNodes directly,
         // so this is defence-in-depth for any other caller — the condition is kept
         // character-identical to that handler's so the two can never disagree.
         if (args?.dryRun !== false && args?.execute !== true) {
-            return batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+            const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+            // ★Warn-only on the dry-run: the plan is still valid, but execute would be
+            // refused, and the coordinator should learn that here rather than one call later.
+            return attachBatchBasePreflightWarning(self, meshId, requestedNodeIds, args, plan);
         }
 
         const key = buildRefineBatchJobKey(self, meshId);
         const running = self.runningRefineBatchJobs.get(key);
         if (running) return { ...running, duplicate: true };
+
+        // ★No base preflight here: it runs as the per-node pipeline's FIRST STAGE
+        // (refineBasePreflightStage), which is both cheaper for the accept path — bound
+        // by IPC-ACCEPT-ASYNC-BOUNDARY — and strictly better for the batch. The first
+        // node's stage blocks in milliseconds, its verdict is a base-axis failure, and
+        // the chain abort then skips every remaining node without running a single gate.
+        // That is the full saving from incident 2, with no accept-time cost at all.
 
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
             ? args.coordinatorDaemonId.trim()

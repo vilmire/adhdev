@@ -19,6 +19,23 @@ import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-re
 import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
+// ★B1: slow-gate progress notification (threshold + throttle live in the module).
+import { emitRefineProgress, isSlowRefineGate, type RefineProgressContext } from '../mesh/mesh-refine-progress.js';
+export { emitRefineProgress, isSlowRefineGate, shouldEmitRefineProgress, SLOW_GATE_THRESHOLD_MS, MIN_EVENT_INTERVAL_MS } from '../mesh/mesh-refine-progress.js';
+export type { RefineProgressContext, RefineProgressEvent } from '../mesh/mesh-refine-progress.js';
+// ★REFINE-ACCEPT-BASE-PREFLIGHT — see mesh-refine-accept-preflight.ts for the
+// four-incident RCA this comes from. Re-exported so the batch accept path and
+// tests share one implementation.
+import {
+    assessRefineAcceptPreflight,
+    buildRefineAcceptPreflightRefusal,
+} from '../mesh/mesh-refine-accept-preflight.js';
+export {
+    assessRefineAcceptPreflight,
+    buildRefineAcceptPreflightRefusal,
+    buildRefineAcceptPreflightWarning,
+    resolveRefineBaseRepoRoot,
+} from '../mesh/mesh-refine-accept-preflight.js';
 // DURABLE-DUPLICATE-DISPATCH / WORKTREE-VANISHED-MIDFLIGHT: pure move to keep this
 // file under its frozen file-size baseline. Re-exported below for existing importers.
 import { findOpenLedgerRefineDispatch, refineWorktreeVanishedOutcome } from '../mesh/mesh-refine-inflight.js';
@@ -111,6 +128,12 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const resolved = await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
+            // ★B1: thread the caller's progress channel onto the context so the stages can
+            // announce slow gates. Carried on `args` (which already flows through every
+            // entry point) rather than as a new parameter, so the many existing callers of
+            // this function — batch loop, resume path, tests — need no signature change.
+            // Absent → ctx.progress stays undefined → no events, exactly as before.
+            if (args?.progressContext) ctx.progress = args.progressContext as RefineProgressContext;
 
             // DS2 (widened): acquire the repoRoot+baseBranch refinement lease for the
             // WHOLE pipeline, not just the merge window. Previously the lease covered
@@ -142,6 +165,23 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             }
             self.refineBaseLeases.set(leaseKey, leaseHolder);
             try {
+            // ★REFINE-BASE-PREFLIGHT: the FIRST thing the pipeline does, before sync_base
+            // and before any of the ~35 validation gates.
+            //
+            // Every gate runs against the branch worktree, so a base that cannot receive a
+            // merge stays invisible until the merge stage — which is how a dirty base cost
+            // a 3-node batch 3 x 35 gates before failing with merge_failed (2026-09-22).
+            //
+            // ★It runs HERE and not on the accept path. The accept path is capped at
+            // sub-250ms and node-count independent (IPC-ACCEPT-ASYNC-BOUNDARY, enforced by
+            // 'returns before long validation completes...' in mesh-refine-validation.test.ts);
+            // this probe measured ~55ms locally and blew that budget under concurrent load.
+            // Running it as the pipeline's first stage keeps the entire saving — the
+            // expensive thing avoided is the GATE RUN, not the accept — while leaving the
+            // accept contract untouched.
+            const basePreflight = await refineBasePreflightStage(self, ctx);
+            if (basePreflight.kind === 'terminal') return basePreflight.result;
+
             // DS2: sync_base runs BEFORE validation. A branch that is behind base — whether
             // strictly behind (fast-forwardable) or DIVERGED (ahead>0 AND behind>0, the
             // laggard the old ancestor-only rebase missed) — is auto-rebased onto the pinned
@@ -693,6 +733,23 @@ export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: Refine
      * lint / build per node config) and block on failure or when no allowlisted
      * command was available. On pass, stores the summary on the context.
      */
+/**
+ * ★C: did this refine run rebase the branch?
+ *
+ * Reads the recorded `sync_base` stage rather than tracking a parallel flag, so
+ * the answer is always exactly what the pipeline did. `recordMeshRefineStage`
+ * spreads stage details flat onto the record, so `rebased` is read directly.
+ *
+ * Deliberately checks only sync_base: the gitlink/bundle conflict resolvers
+ * record their own stages, but they run INSIDE the sync_base rebase — counting
+ * them separately would report a rebase that never happened when the resolvers
+ * merely planned resolutions and the rebase was then skipped.
+ */
+export function didRefineRebaseBranch(refineStages: Array<Record<string, unknown>>): boolean {
+    if (!Array.isArray(refineStages)) return false;
+    return refineStages.some(stage => stage?.stage === 'sync_base' && stage?.rebased === true);
+}
+
 export async function refineValidationStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             const { mesh, node, branch, baseBranch, refineStages } = ctx;
             const validationStarted = Date.now();
@@ -708,6 +765,24 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                         .then(({ updateNode }) => updateNode(mesh.id, node.id, { worktreeBootstrap: state } as any))
                         .catch(() => { /* persistence is best-effort */ });
                 },
+                // ★C: did sync_base rebase this branch? Read from the recorded stage rather
+                // than a separate flag, so the answer can never disagree with what the
+                // pipeline actually did. A vendor-drift failure means something different
+                // when the Refinery itself moved the bundle build base.
+                branchWasRebased: didRefineRebaseBranch(refineStages),
+                // ★B1: announce only the gates that actually cost time. The threshold and
+                // the throttle live in mesh-refine-progress.ts; this stage just reports.
+                onCommandComplete: ctx.progress
+                    ? (info) => {
+                        if (!isSlowRefineGate(info.durationMs)) return;
+                        emitRefineProgress(ctx.progress!, {
+                            phase: 'slow_gate',
+                            nodeId: node.id,
+                            gate: info.displayCommand,
+                            durationMs: info.durationMs,
+                        });
+                    }
+                    : undefined,
             });
             ctx.validationSummary = validationSummary;
             recordMeshRefineStage(
@@ -754,6 +829,10 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                     return [
                         base,
                         cmdName ? `First failing command: ${cmdName}` : '',
+                        // ★C: lead the tail with the rebase explanation when the Refinery's own
+                        // rebase invalidated the vendor bundles. Without it this failure reads
+                        // as an opaque bundle diff (2026-09-22, incident 4).
+                        validationSummary.vendorDriftHint ? `★ ${validationSummary.vendorDriftHint}` : '',
                         tail ? `Output (tail):\n${tail}` : '',
                     ].filter(Boolean).join('\n');
                 };
@@ -1408,7 +1487,13 @@ export {
     startMeshRefineBatchJob,
 } from './router-refine-batch-jobs.js';
 
-export type BatchNodeConvergence = 'merged_to_main' | 'blocked_review' | 'skipped_patch_equivalent' | 'not_mergeable';
+/**
+ * `skipped_chain_abort` is NOT a classifier output — `classifyBatchNodeConvergence`
+ * can never produce it, because it describes a node that was never RUN. Only the
+ * batch loop assigns it, when an earlier node's base-axis failure made the
+ * remaining nodes' outcomes foregone (mesh-refine-batch-chain-abort.ts).
+ */
+export type BatchNodeConvergence = 'merged_to_main' | 'blocked_review' | 'skipped_patch_equivalent' | 'not_mergeable' | 'skipped_chain_abort';
 
 /**
  * QW4: classify one node's per-node refine result into a batch convergence bucket.
@@ -1500,7 +1585,17 @@ async function runRefinePipelineOnce(
 
 export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: MeshRefineJobHandle, args: any): Promise<void> {
         const key = buildRefineJobKey(self, handle.meshId, handle.targetNodeId);
-        let result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+        // ★B1: a single-node refine is also minutes of silence, and its slow gates are the
+        // same ones. The channel carries the job's own return address so progress routes
+        // exactly like its terminal event.
+        const progressContext: RefineProgressContext = {
+            meshId: handle.meshId,
+            jobId: handle.jobId,
+            coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+            coordinatorSessionId: handle.targetCoordinatorSessionId,
+        };
+        const argsWithProgress = { ...args, progressContext };
+        let result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, argsWithProgress);
 
         // ③ Single automatic retry for a base-movement blocker (base_moved / base_locked).
         //
@@ -1529,7 +1624,7 @@ export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: Mes
         if (firstAttempt.retry) {
             LOG.info('Mesh', `[Refinery] Base-movement blocker (${firstAttempt.code}) for node ${handle.targetNodeId}`
                 + ` (jobId=${handle.jobId}); retrying once automatically.`);
-            result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+            result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, argsWithProgress);
             // Whatever this attempt produced is terminal — success, a different failure, or
             // the same base-movement blocker. It is NOT retried again.
             result = { ...result, refineRetried: true, refineRetryOfCode: firstAttempt.code };
@@ -1689,6 +1784,67 @@ export async function recordRefineAcceptBaseDivergence(
     } catch {
         // Signal-only: a failed pre-check must never disturb the refine job itself.
     }
+}
+
+/**
+ * ★REFINE-BASE-PREFLIGHT stage — the pipeline's first stage, before sync_base and
+ * before every validation gate.
+ *
+ * Terminates the refine when the BASE checkout cannot receive a merge, so the
+ * ~35-gate run is never spent on an outcome that is already determined. This is
+ * where the saving actually lives: what the four 2026-09-22 incidents cost was
+ * the gate runs, not the accept.
+ *
+ * ★Why a stage and not an accept-path check. Accept is contractually sub-250ms
+ * and node-count independent (IPC-ACCEPT-ASYNC-BOUNDARY); this probe measured
+ * ~55ms and exceeded that budget under concurrent load, failing the regression
+ * test that guards the contract. Nothing is lost by moving it here — the gates
+ * still have not run — and the accept path stays exactly as fast as before.
+ *
+ * Fails open on every uncertainty (base unresolvable, git unreadable): the
+ * downstream base_cas stage and the merge itself enforce the same conditions, so
+ * an indeterminate verdict restores exactly today's behaviour rather than
+ * inventing a new way for refine to be unavailable.
+ */
+export async function refineBasePreflightStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
+    const startedAt = Date.now();
+    let verdict: Awaited<ReturnType<typeof assessRefineAcceptPreflight>>;
+    try {
+        verdict = await assessRefineAcceptPreflight({ repoRoot: ctx.repoRoot });
+    } catch (e: any) {
+        recordMeshRefineStage(ctx.refineStages, 'base_preflight', 'skipped', startedAt, {
+            reason: 'probe_failed', error: e?.message || String(e),
+        });
+        return { kind: 'continue', ctx };
+    }
+
+    if (verdict.ok) {
+        recordMeshRefineStage(ctx.refineStages, 'base_preflight',
+            verdict.indeterminate ? 'skipped' : 'passed', startedAt,
+            verdict.indeterminate ? { reason: 'base_not_inspectable' } : { repoRoot: ctx.repoRoot });
+        return { kind: 'continue', ctx };
+    }
+
+    recordMeshRefineStage(ctx.refineStages, 'base_preflight', 'failed', startedAt, {
+        code: verdict.code,
+        repoRoot: ctx.repoRoot,
+        findings: verdict.findings,
+        retryable: true,
+    });
+    LOG.warn('Mesh', `[Refinery] Base preflight blocked node ${ctx.nodeId} before any gate ran`
+        + ` — base ${ctx.repoRoot} is not mergeable (${verdict.code}), checked in ${verdict.durationMs}ms.`);
+    return {
+        kind: 'terminal',
+        result: {
+            ...buildRefineAcceptPreflightRefusal({ verdict, meshId: ctx.meshId, nodeId: ctx.nodeId }),
+            branch: ctx.branch,
+            into: ctx.baseBranch,
+            refineStages: ctx.refineStages,
+            finalBranchConvergenceState: {
+                branch: ctx.branch, baseBranch: ctx.baseBranch, merged: false, removed: false, status: 'blocked_review',
+            },
+        } as CommandRouterResult,
+    };
 }
 
 export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
