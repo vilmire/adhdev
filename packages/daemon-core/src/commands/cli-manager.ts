@@ -36,7 +36,7 @@ import type { CliAdapter } from '../cli-adapter-types.js';
 import { drainInFlightSubmits, type SubmitDrainResult } from './cli-manager-submit-drain.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
-import type { ProviderInstance } from '../providers/provider-instance.js';
+import type { ProviderInstance, ProviderSendMessageResult } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
@@ -717,7 +717,15 @@ export class DaemonCliManager {
                 shutdown: () => { instanceManager.removeInstance(key); },
                 sendMessage: async (text: string) => {
                     const input = normalizeInputEnvelope(text);
-                    acpInstance.onEvent('send_message', { input });
+                    // SEND-RECORD-SYMMETRY: this shim is how the mesh funnel reaches an
+                    // ACP provider (it is awaited as an adapter). Swallowing the
+                    // acknowledgement here would reintroduce the false success the
+                    // instance-level contract now reports — a refused send (no live
+                    // session, or a prompt already in flight) must reach the caller.
+                    const outcome = await acpInstance.onEvent('send_message', { input });
+                    if (outcome && !outcome.success) {
+                        throw new Error(outcome.error || 'ACP send was not acknowledged');
+                    }
                 },
                 getStatus: () => {
                     const state = acpInstance.getState();
@@ -1883,6 +1891,11 @@ export class DaemonCliManager {
                     // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
                     // present, so existing non-mesh callers and their contracts are unchanged.
                     let interruptRequeued = false;
+                    // MESH-SEND-ACK-ASYMMETRY: a multipart dispatch that is merely ACCEPTED
+                    // into the driver FIFO must not be reported with the same shape as a
+                    // real PTY submit — same distinction handleSendChat draws for the
+                    // dashboard path.
+                    let structuredQueued = false;
                     try {
                         if (hasStructuredParts) {
                             // MESH-IMAGE-DISPATCH: multipart input goes to the provider INSTANCE
@@ -1895,12 +1908,25 @@ export class DaemonCliManager {
                             // duplicate-suppressed on redelivery exactly like a text one, and
                             // returning earlier would have bypassed both.
                             const structuredTarget = this.deps.getInstanceManager()?.getInstance(key) as
-                                | { onEvent?: (event: string, payload: unknown) => void }
+                                | { onEvent?: (event: string, payload: unknown) => void | Promise<ProviderSendMessageResult> }
                                 | undefined;
                             if (!structuredTarget || typeof structuredTarget.onEvent !== 'function') {
                                 throw new Error(`No provider instance for session '${key}' — cannot deliver multipart input for agent '${agentType}'`);
                             }
-                            structuredTarget.onEvent('send_message', { input });
+                            // MESH-SEND-ACK-ASYMMETRY: AWAIT the send and check its outcome.
+                            // This call was previously fire-and-forget, so an asynchronous
+                            // delivery failure (dead PTY, modal hold, adapter reject) still
+                            // fell through to the ack bubble below and returned
+                            // `success: true` — the exact inverse of the defect b6c2444da
+                            // fixed on the dashboard funnel, where the body was delivered
+                            // but never recorded. Throwing here routes into the catch that
+                            // releases the idempotency guard key, so a redrive is not
+                            // suppressed as a duplicate.
+                            const outcome = await structuredTarget.onEvent('send_message', { input });
+                            if (!outcome?.success) {
+                                throw new Error(outcome?.error || 'CLI send was not acknowledged');
+                            }
+                            structuredQueued = outcome.status === 'queued';
                         } else if (forceSend) {
                             // SEND-NOW: `force` no longer means "write into the
                             // generating PTY" — that path was retired in oss
@@ -1940,6 +1966,16 @@ export class DaemonCliManager {
                         success: true,
                         status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
                         ...(BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: 'agent_runtime_busy' } : {}),
+                        // MESH-SEND-ACK-ASYMMETRY: the driver parked the body in its
+                        // in-memory FIFO rather than writing it to the PTY. That is an
+                        // authoritative post-send signal and outranks the pre-send status
+                        // guess above — it can be true even when `currentStatus` read idle,
+                        // in which case the branch above contributed nothing. A parked body
+                        // does not survive a driver shutdown or daemon restart, so it must
+                        // never be advertised as submitted.
+                        ...(structuredQueued
+                            ? { queued: true, queuedReason: 'driver_fifo_parked', sent: false, submitted: false }
+                            : {}),
                         ...(forceSend ? { forceSent: true, interrupted: true, queued: interruptRequeued } : {}),
                     };
                 } else if (action === 'clear_history') {

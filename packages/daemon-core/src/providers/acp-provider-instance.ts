@@ -49,7 +49,7 @@ import {
 import type { ProviderModule, ContentBlock, InputEnvelope, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
 import { normalizeContent, flattenContent, normalizeInputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState, ProviderSendMessageResult } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
@@ -422,14 +422,37 @@ export class AcpProviderInstance implements ProviderInstance {
         };
     }
 
-    onEvent(event: string, data?: any): void {
+    onEvent(event: string, data?: any): void | Promise<ProviderSendMessageResult> {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data)
             assertProviderSupportsDeclaredInput(this.provider, input)
             const promptParts = buildAcpPromptParts(input, this.agentCapabilities)
-            this.sendPrompt(input.textFallback, promptParts.length > 0 ? promptParts : undefined).catch(e =>
+            // SEND-RECORD-SYMMETRY: report whether the prompt was ACCEPTED, mirroring
+            // CliProviderInstance.onEvent. This was previously fire-and-forget, so the
+            // two refusals below — no connection/session, and the in-flight guard —
+            // were invisible to the caller, which then reported `success: true` for a
+            // prompt the agent never received.
+            //
+            // `sendPrompt` resolves once the ACP turn COMPLETES, not when it is
+            // accepted, and it deliberately swallows mid-turn `connection.prompt`
+            // failures (see its catch: it finalizes the assistant message and returns
+            // to idle, treating the turn as having happened). So awaiting it here would
+            // block the send call for the whole turn AND still not surface those.
+            // Acceptance is what this contract reports; the turn outcome reaches the
+            // caller through status transitions as before.
+            const accepted = this.beginSendPrompt();
+            if (!accepted.ok) {
+                this.log.warn(`[${this.type}] send_message refused: ${accepted.error}`);
+                return Promise.resolve({ success: false, error: accepted.error });
+            }
+            void this.sendPrompt(
+                input.textFallback,
+                promptParts.length > 0 ? promptParts : undefined,
+                { alreadyClaimed: true },
+            ).catch(e =>
                 this.log.warn(`[${this.type}] sendPrompt error: ${e?.message}`)
             );
+            return Promise.resolve({ success: true, status: 'delivered' });
         } else if (event === 'resolve_action') {
             const action = data?.action || 'approve';
             this.resolvePermission(action === 'approve' || action === 'accept')
@@ -1019,17 +1042,39 @@ export class AcpProviderInstance implements ProviderInstance {
         }
     }
 
-    async sendPrompt(text: string, contentBlocks?: ContentBlock[]): Promise<void> {
+    /**
+     * SEND-RECORD-SYMMETRY: the two preconditions that mean a prompt will NEVER be
+     * delivered, evaluated and claimed atomically so a caller can report the refusal
+     * instead of a phantom success. Claiming here (rather than re-checking inside
+     * sendPrompt) is what makes the in-flight guard race-free: the decision and the
+     * claim are one step.
+     */
+    private beginSendPrompt(): { ok: true } | { ok: false; error: string } {
         if (!this.connection || !this.sessionId) {
-            this.log.warn(`[${this.type}] Cannot send prompt: no active connection/session`);
-            return;
+            return { ok: false, error: 'no active ACP connection/session' };
         }
-
         if (this._sendPromptInFlight) {
-            this.log.warn(`[${this.type}] sendPrompt already in flight — dropping concurrent request`);
-            throw new Error('ACP sendPrompt already in flight');
+            return { ok: false, error: 'ACP sendPrompt already in flight' };
         }
         this._sendPromptInFlight = true;
+        return { ok: true };
+    }
+
+    async sendPrompt(text: string, contentBlocks?: ContentBlock[], opts?: { alreadyClaimed?: boolean }): Promise<void> {
+        if (!opts?.alreadyClaimed) {
+            const accepted = this.beginSendPrompt();
+            if (!accepted.ok) {
+                // Preserved shape: a missing connection/session logs and returns, an
+                // in-flight collision throws. onEvent no longer relies on either —
+                // it claims up front — but direct callers still see prior behaviour.
+                if (accepted.error === 'ACP sendPrompt already in flight') {
+                    this.log.warn(`[${this.type}] sendPrompt already in flight — dropping concurrent request`);
+                    throw new Error(accepted.error);
+                }
+                this.log.warn(`[${this.type}] Cannot send prompt: no active connection/session`);
+                return;
+            }
+        }
 
  // Build prompt content
         const promptParts: any[] = contentBlocks && contentBlocks.length > 0
@@ -1095,9 +1140,15 @@ export class AcpProviderInstance implements ProviderInstance {
         this.detectStatusTransition();
         this.log.info(`[${this.type}] Sending prompt: "${text.slice(0, 100)}" (${promptParts.length} parts)`);
 
+        // Non-null by construction: beginSendPrompt() refuses the send unless both are
+        // set, and it is the only way to claim the in-flight slot. Captured locally
+        // because that guarantee lives in the helper, where TS cannot narrow from here.
+        const connection = this.connection!;
+        const sessionId = this.sessionId!;
+
         try {
-            const result = await this.connection.prompt({
-                sessionId: this.sessionId,
+            const result = await connection.prompt({
+                sessionId,
                 prompt: promptParts,
             });
 

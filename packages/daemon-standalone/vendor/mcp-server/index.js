@@ -120817,9 +120817,19 @@ ${buttons.join("\n")}`;
               const input = normalizeInputEnvelope(data);
               assertProviderSupportsDeclaredInput(this.provider, input);
               const promptParts = buildAcpPromptParts(input, this.agentCapabilities);
-              this.sendPrompt(input.textFallback, promptParts.length > 0 ? promptParts : void 0).catch(
+              const accepted = this.beginSendPrompt();
+              if (!accepted.ok) {
+                this.log.warn(`[${this.type}] send_message refused: ${accepted.error}`);
+                return Promise.resolve({ success: false, error: accepted.error });
+              }
+              void this.sendPrompt(
+                input.textFallback,
+                promptParts.length > 0 ? promptParts : void 0,
+                { alreadyClaimed: true }
+              ).catch(
                 (e) => this.log.warn(`[${this.type}] sendPrompt error: ${e?.message}`)
               );
+              return Promise.resolve({ success: true, status: "delivered" });
             } else if (event === "resolve_action") {
               const action = data?.action || "approve";
               this.resolvePermission(action === "approve" || action === "accept").catch((e) => this.log.warn(`[${this.type}] resolvePermission error: ${e?.message}`));
@@ -121294,16 +121304,35 @@ ${buttons.join("\n")}`;
               this.currentStatus = "error";
             }
           }
-          async sendPrompt(text, contentBlocks) {
+          /**
+           * SEND-RECORD-SYMMETRY: the two preconditions that mean a prompt will NEVER be
+           * delivered, evaluated and claimed atomically so a caller can report the refusal
+           * instead of a phantom success. Claiming here (rather than re-checking inside
+           * sendPrompt) is what makes the in-flight guard race-free: the decision and the
+           * claim are one step.
+           */
+          beginSendPrompt() {
             if (!this.connection || !this.sessionId) {
-              this.log.warn(`[${this.type}] Cannot send prompt: no active connection/session`);
-              return;
+              return { ok: false, error: "no active ACP connection/session" };
             }
             if (this._sendPromptInFlight) {
-              this.log.warn(`[${this.type}] sendPrompt already in flight \u2014 dropping concurrent request`);
-              throw new Error("ACP sendPrompt already in flight");
+              return { ok: false, error: "ACP sendPrompt already in flight" };
             }
             this._sendPromptInFlight = true;
+            return { ok: true };
+          }
+          async sendPrompt(text, contentBlocks, opts) {
+            if (!opts?.alreadyClaimed) {
+              const accepted = this.beginSendPrompt();
+              if (!accepted.ok) {
+                if (accepted.error === "ACP sendPrompt already in flight") {
+                  this.log.warn(`[${this.type}] sendPrompt already in flight \u2014 dropping concurrent request`);
+                  throw new Error(accepted.error);
+                }
+                this.log.warn(`[${this.type}] Cannot send prompt: no active connection/session`);
+                return;
+              }
+            }
             const promptParts = contentBlocks && contentBlocks.length > 0 ? contentBlocks.map((b) => {
               if (b.type === "text") return { type: "text", text: b.text };
               if (b.type === "image") {
@@ -121359,9 +121388,11 @@ ${buttons.join("\n")}`;
             this.turnToolCalls = [];
             this.detectStatusTransition();
             this.log.info(`[${this.type}] Sending prompt: "${text.slice(0, 100)}" (${promptParts.length} parts)`);
+            const connection = this.connection;
+            const sessionId = this.sessionId;
             try {
-              const result = await this.connection.prompt({
-                sessionId: this.sessionId,
+              const result = await connection.prompt({
+                sessionId,
                 prompt: promptParts
               });
               if (result?.stopReason) {
@@ -123213,7 +123244,10 @@ ${installInfo}`
                 },
                 sendMessage: async (text) => {
                   const input = normalizeInputEnvelope(text);
-                  acpInstance.onEvent("send_message", { input });
+                  const outcome = await acpInstance.onEvent("send_message", { input });
+                  if (outcome && !outcome.success) {
+                    throw new Error(outcome.error || "ACP send was not acknowledged");
+                  }
                 },
                 getStatus: () => {
                   const state2 = acpInstance.getState();
@@ -124038,13 +124072,18 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     }
                   }
                   let interruptRequeued = false;
+                  let structuredQueued = false;
                   try {
                     if (hasStructuredParts) {
                       const structuredTarget = this.deps.getInstanceManager()?.getInstance(key2);
                       if (!structuredTarget || typeof structuredTarget.onEvent !== "function") {
                         throw new Error(`No provider instance for session '${key2}' \u2014 cannot deliver multipart input for agent '${agentType}'`);
                       }
-                      structuredTarget.onEvent("send_message", { input });
+                      const outcome = await structuredTarget.onEvent("send_message", { input });
+                      if (!outcome?.success) {
+                        throw new Error(outcome?.error || "CLI send was not acknowledged");
+                      }
+                      structuredQueued = outcome.status === "queued";
                     } else if (forceSend) {
                       const outcome = await interruptAndDeliver(
                         adapter,
@@ -124068,6 +124107,14 @@ Run 'adhdev doctor' for detailed diagnostics.`
                     success: true,
                     status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : "generating",
                     ...BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: "agent_runtime_busy" } : {},
+                    // MESH-SEND-ACK-ASYMMETRY: the driver parked the body in its
+                    // in-memory FIFO rather than writing it to the PTY. That is an
+                    // authoritative post-send signal and outranks the pre-send status
+                    // guess above — it can be true even when `currentStatus` read idle,
+                    // in which case the branch above contributed nothing. A parked body
+                    // does not survive a driver shutdown or daemon restart, so it must
+                    // never be advertised as submitted.
+                    ...structuredQueued ? { queued: true, queuedReason: "driver_fifo_parked", sent: false, submitted: false } : {},
                     ...forceSend ? { forceSent: true, interrupted: true, queued: interruptRequeued } : {}
                   };
                 } else if (action === "clear_history") {
@@ -153828,7 +153875,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         try {
           assertProviderSupportsDeclaredInput(provider, input);
-          target.onEvent("send_message", { input });
+          const outcome = await target.onEvent("send_message", { input });
+          if (!outcome?.success) {
+            return { success: false, sent: false, error: `acp send failed: ${outcome?.error || "ACP send was not acknowledged"}` };
+          }
           return _logSendSuccess("acp-instance", target.type);
         } catch (e) {
           return { success: false, error: `acp send failed: ${e.message}` };

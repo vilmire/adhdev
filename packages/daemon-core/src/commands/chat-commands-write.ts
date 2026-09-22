@@ -166,7 +166,15 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         }
         try {
             assertProviderSupportsDeclaredInput(provider, input);
-            target.onEvent('send_message', { input });
+            // SEND-RECORD-SYMMETRY: check the acknowledgement. The ACP instance
+            // refuses a send outright when it has no live connection/session or when
+            // a prompt is already in flight; both were previously fire-and-forget and
+            // reported as success, so the dashboard showed a sent turn the agent had
+            // never received.
+            const outcome = await target.onEvent('send_message', { input });
+            if (!outcome?.success) {
+                return { success: false, sent: false, error: `acp send failed: ${outcome?.error || 'ACP send was not acknowledged'}` };
+            }
             return _logSendSuccess('acp-instance', target.type);
         } catch (e: any) {
             return { success: false, error: `acp send failed: ${e.message}` };
