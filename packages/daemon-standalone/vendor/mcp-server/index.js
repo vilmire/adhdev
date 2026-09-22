@@ -122050,10 +122050,12 @@ ${rawInput}` : rawInput;
             message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. Nothing was sent \u2014 send it again when the agent settles.`
           };
         }
-        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, {
+        const deliverOpts = claimedBody ? {
           ...options?.meshTaskId ? { meshTaskId: options.meshTaskId } : {},
-          ...claimedBody ? { bracketedPaste: claimedBody.bracketedPaste, claimKey: claimedBody.claimKey } : {}
-        });
+          bracketedPaste: claimedBody.bracketedPaste,
+          claimKey: claimedBody.claimKey
+        } : options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0;
+        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, deliverOpts);
         const queued = sendResult?.status === "queued";
         LOG.info(
           "SendNow",
@@ -153837,10 +153839,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (claimed > 0 && typeof adapter.sendMessage === "function") {
         try {
           for (const entry of claimedEntries && claimedEntries.length > 0 ? claimedEntries : [{ text }]) {
-            await adapter.sendMessage(entry.text, {
-              bracketedPaste: entry.bracketedPaste,
-              claimKey: entry.claimKey
-            });
+            const restoreOpts = entry.bracketedPaste !== void 0 || entry.claimKey !== void 0 ? { bracketedPaste: entry.bracketedPaste, claimKey: entry.claimKey } : void 0;
+            await adapter.sendMessage(entry.text, restoreOpts);
           }
           restored = true;
         } catch (e) {
