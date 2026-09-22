@@ -171,10 +171,23 @@ export function useInteractivePrompt(
     if (promptSession) setSharedDismissedPromptId(promptSession.prompt.promptId)
   }, [promptSession])
 
+  // SILENT-REOPEN-FAILURE (live defect): reopen() used to only clear the
+  // dismissal. When the daemon's parser has failed to capture the prompt at
+  // all (activeInteractivePrompt is null upstream — see the claude-cli TUI
+  // parse-drift class this hook's callers document), foundSession is null
+  // too, so clearing the dismissal changes nothing on screen: the button
+  // silently does nothing and the owner cannot tell whether the tap landed.
+  // Surface that case explicitly instead of failing silent.
   const reopen = useCallback(() => {
     setSharedDismissedPromptId(null)
+    if (!foundSession) {
+      setResponseError(t('interactivePrompt.errorUnavailable', {
+        defaultValue: 'Could not load the question — answer it in the terminal view instead.'
+      }))
+      return
+    }
     setResponseError(null)
-  }, [])
+  }, [foundSession, t])
 
   return {
     promptSession,

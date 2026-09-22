@@ -62,7 +62,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     // never take over this banner. `hasActivePrompt` stays true after a dismiss,
     // which is the point: this is the reopen affordance for a prompt the user
     // closed and now needs back.
-    const { hasActivePrompt, reopen } = useInteractivePrompt(activeConv.sessionId ?? activeConv.routeId);
+    const { hasActivePrompt, promptSession, reopen } = useInteractivePrompt(activeConv.sessionId ?? activeConv.routeId);
 
     // Reset pending on modal status change (approval complete or new approval)
     useEffect(() => {
@@ -86,6 +86,34 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
         setPendingButton(btnText);
         onModalButton(btnText);
     };
+
+    // PICKER-PARSE-DEADLOCK-ESCAPE: a structured question is tracked
+    // (hasActivePrompt) but the modal surface has nothing to render for it
+    // right now (promptSession null — e.g. the daemon-side parse of the TUI
+    // frame hasn't produced a usable prompt yet, or the prompt was dismissed
+    // and reopen() has not resolved a session). The raw modal buttons below
+    // must still not be offered here — same MULTISELECT-REMOTE-DEADLOCK
+    // reasoning as the structured-question branch, a raw press can silently
+    // corrupt a checkbox picker — so this is a dead end for the button-based
+    // banner. Point the owner at the terminal view instead of showing a CTA
+    // that (per the answerQuestion button below) can open nothing.
+    if (hasActivePrompt && !promptSession) {
+        return (
+            <div
+                className="text-white py-2.5 px-4 shrink-0 z-[5]"
+                style={{ background: 'linear-gradient(135deg, var(--status-warning), color-mix(in srgb, var(--status-warning) 85%, #000))' }}
+            >
+                <div className="flex items-center gap-2">
+                    <div className="font-black text-xs flex items-center gap-2">
+                        <IconWarning size={14} />
+                        {t('approval.questionUnavailable', {
+                            defaultValue: 'Question waiting — could not load it here. Answer it in the terminal view.',
+                        })}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     // MULTISELECT-REMOTE-DEADLOCK: a structured question owns this session — show
     // the answer CTA and NOTHING else. The raw buttons are deliberately not
