@@ -236,8 +236,13 @@ describe('ACP prompt part support', () => {
     }
     instance.type = 'acp-test'
     instance.log = { warn: vi.fn() }
+    // SEND-RECORD-SYMMETRY: onEvent now refuses a send with no live session rather
+    // than firing it into the void, so the fixture must model a connected instance.
+    instance.connection = { prompt: vi.fn() }
+    instance.sessionId = 'acp-session-1'
+    instance._sendPromptInFlight = false
 
-    instance.onEvent('send_message', {
+    const ack = await instance.onEvent('send_message', {
       input: {
         parts: [
           { type: 'text', text: 'inspect these assets' },
@@ -248,12 +253,74 @@ describe('ACP prompt part support', () => {
       },
     })
 
+    expect(ack).toEqual({ success: true, status: 'delivered' })
     await vi.waitFor(() => {
       expect(instance.sendPrompt).toHaveBeenCalledWith('inspect these assets', [
         { type: 'text', text: 'inspect these assets' },
         { type: 'image', mimeType: 'image/png', data: 'img-base64' },
         { type: 'audio', mimeType: 'audio/mpeg', data: 'audio-base64' },
-      ])
+      // onEvent claims the in-flight slot itself so the refusal decision and the
+      // claim are atomic; sendPrompt is told not to re-claim.
+      ], { alreadyClaimed: true })
     })
+  })
+
+  /**
+   * SEND-RECORD-SYMMETRY — an ACP send that is refused must say so.
+   *
+   * Both refusals below return BEFORE any delivery commitment, and both were
+   * previously fire-and-forget: handleSendChat reported `success: true` for a prompt
+   * the agent never received, leaving a bubble in the transcript with nothing behind
+   * it. (The mid-turn `connection.prompt` failure is deliberately NOT covered here —
+   * sendPrompt finalizes the turn and returns to idle, treating it as having
+   * happened, and the user bubble is intentionally kept.)
+   */
+  function makeLiveInstance() {
+    const instance = Object.create(AcpProviderInstance.prototype) as any
+    instance.sendPrompt = vi.fn().mockResolvedValue(undefined)
+    instance.agentCapabilities = { promptCapabilities: {} }
+    instance.provider = { name: 'ACP Test', type: 'acp-test', capabilities: { input: { multipart: false, mediaTypes: ['text'] } } }
+    instance.type = 'acp-test'
+    instance.log = { warn: vi.fn(), info: vi.fn() }
+    instance.connection = { prompt: vi.fn() }
+    instance.sessionId = 'acp-session-1'
+    instance._sendPromptInFlight = false
+    return instance
+  }
+
+  const TEXT_SEND = { input: { parts: [{ type: 'text', text: 'hello' }], textFallback: 'hello' } }
+
+  it('reports failure when there is no live ACP connection or session', async () => {
+    const instance = makeLiveInstance()
+    instance.connection = null
+    instance.sessionId = null
+
+    const ack = await instance.onEvent('send_message', TEXT_SEND)
+
+    expect(ack).toMatchObject({ success: false })
+    expect((ack as any).error).toMatch(/connection|session/i)
+    // Nothing was attempted — this is the case that must not read as a send.
+    expect(instance.sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('reports failure when a prompt is already in flight', async () => {
+    const instance = makeLiveInstance()
+    instance._sendPromptInFlight = true
+
+    const ack = await instance.onEvent('send_message', TEXT_SEND)
+
+    expect(ack).toMatchObject({ success: false })
+    expect((ack as any).error).toMatch(/in flight/i)
+    expect(instance.sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('does not leave the in-flight slot claimed after a refused concurrent send', async () => {
+    const instance = makeLiveInstance()
+    instance._sendPromptInFlight = true
+
+    await instance.onEvent('send_message', TEXT_SEND)
+
+    // The refusal must not clear a claim it never made — the real prompt still owns it.
+    expect(instance._sendPromptInFlight).toBe(true)
   })
 })

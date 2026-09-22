@@ -142,7 +142,9 @@ describe('handleSendChat input contracts', () => {
   })
 
   it('routes structured ACP input to the provider instance instead of collapsing it to plain text', async () => {
-    const onEvent = vi.fn()
+    // Mirrors the real AcpProviderInstance.onEvent contract: it resolves with an
+    // acknowledgement, and handleSendChat now checks it.
+    const onEvent = vi.fn(async () => ({ success: true, status: 'delivered' }))
     const result = await handleSendChat({
       getCdp: () => null,
       getProvider: () => ({
@@ -188,5 +190,38 @@ describe('handleSendChat input contracts', () => {
         textFallback: 'inspect this',
       },
     })
+  })
+
+  it('does not report an ACP send as successful when the instance refuses it', async () => {
+    // SEND-RECORD-SYMMETRY: the instance refuses when it has no live session or a
+    // prompt is already in flight. This was fire-and-forget, so the refusal was
+    // invisible and the caller was told the turn had been sent.
+    const onEvent = vi.fn(async () => ({ success: false, error: 'no active ACP connection/session' }))
+    const result = await handleSendChat({
+      getCdp: () => null,
+      getProvider: () => ({
+        type: 'acp-test',
+        name: 'ACP Test',
+        category: 'acp',
+        capabilities: { input: { multipart: false, mediaTypes: ['text'] } },
+      }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => null,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: { sessionId: 'sess-refuse', transport: 'acp', providerType: 'acp-test' },
+      agentStream: null,
+      ctx: { instanceManager: { getInstance: () => ({ category: 'acp', type: 'acp-test', onEvent }) } },
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, {
+      agentType: 'acp-test',
+      targetSessionId: 'sess-refuse',
+      input: { parts: [{ type: 'text', text: 'hello' }], textFallback: 'hello' },
+    })
+
+    expect(result).toMatchObject({ success: false, sent: false })
+    expect((result as any).error).toMatch(/connection|session/i)
   })
 })

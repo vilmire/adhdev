@@ -26,9 +26,16 @@ function createManager(options: {
   /** Declared provider capabilities — defaults to an image-capable CLI provider. */
   capabilities?: unknown
   category?: string
+  /**
+   * What the provider instance's `send_message` resolves to. Mirrors the real
+   * CliProviderInstance.onEvent contract, which ALWAYS returns a promise of a
+   * ProviderSendMessageResult and never rejects — a delivery failure surfaces as
+   * `{ success: false }`, which is exactly the case the dispatch path must catch.
+   */
+  sendOutcome?: unknown
 } = {}) {
   const sendMessage = vi.fn(async () => {})
-  const onEvent = vi.fn()
+  const onEvent = vi.fn(async () => options.sendOutcome ?? { success: true, status: 'delivered' })
   const adapter = {
     cliType: 'claude-cli',
     cliName: 'Claude Code',
@@ -52,7 +59,11 @@ function createManager(options: {
     isReady: vi.fn(() => true),
     setOnStatusChange: vi.fn(),
   }
-  const instance = { category: 'cli', type: 'claude-cli', onEvent }
+  // The ack bubble — the transcript record for the owner's own turn. It must be
+  // written ONLY after the send is acknowledged; a bubble with no delivery is the
+  // phantom-bubble half of the send/record asymmetry.
+  const recordAcknowledgedUserInput = vi.fn()
+  const instance = { category: 'cli', type: 'claude-cli', onEvent, recordAcknowledgedUserInput }
   const provider = {
     type: 'claude-cli',
     category: options.category ?? 'cli',
@@ -69,7 +80,7 @@ function createManager(options: {
     getMeta: vi.fn(() => provider),
   } as any)
   manager.adapters.set('session-1', adapter as any)
-  return { manager, adapter, sendMessage, onEvent }
+  return { manager, adapter, sendMessage, onEvent, recordAcknowledgedUserInput }
 }
 
 const BASE_ARGS = {
@@ -189,5 +200,110 @@ describe('cli-manager multipart mesh dispatch', () => {
     // collide and silently swallow the second image. The guard hashes the full envelope.
     expect(second).not.toMatchObject({ duplicateSuppressed: true })
     expect(onEvent).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * MESH-SEND-ACK-ASYMMETRY — the mesh funnel must not report a send it did not land.
+ *
+ * `agent_command` is the sibling of `handleSendChat`, and it did not receive the fix
+ * b6c2444da applied to the dashboard funnel: it called the provider instance
+ * fire-and-forget, so an asynchronous delivery failure still wrote the ack bubble and
+ * returned `success: true`. That is the exact INVERSE of the defect b6c2444da fixed —
+ * there the body was delivered but never recorded; here it is recorded but never
+ * delivered, producing a phantom bubble and a false success.
+ */
+describe('cli-manager multipart dispatch — send/record symmetry', () => {
+  it('does not record an ack bubble or report success when delivery fails', async () => {
+    const { manager, onEvent, recordAcknowledgedUserInput } = createManager({
+      // The real contract: a failed send RESOLVES with success:false. A
+      // fire-and-forget caller cannot see this at all.
+      sendOutcome: { success: false, error: 'pty is dead' },
+    })
+
+    await expect(manager.handleCliCommand('agent_command', {
+      ...BASE_ARGS,
+      input: IMAGE_INPUT,
+    })).rejects.toThrow(/pty is dead/)
+
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    // The phantom bubble: recording a turn the agent never received.
+    expect(recordAcknowledgedUserInput).not.toHaveBeenCalled()
+  })
+
+  it('releases the idempotency guard on failure so a redrive is not suppressed', async () => {
+    // Fails once (dead PTY), then the session recovers — the shape of a real redrive.
+    const { manager, onEvent } = createManager()
+    const instance = (manager as any).deps.getInstanceManager().getInstance()
+    instance.onEvent = onEvent
+      .mockResolvedValueOnce({ success: false, error: 'pty is dead' })
+      .mockResolvedValue({ success: true, status: 'delivered' })
+    const meshContext = { meshId: 'mesh-1', nodeId: 'node-1', taskId: 'task-1' }
+
+    await expect(manager.handleCliCommand('agent_command', {
+      ...BASE_ARGS, input: IMAGE_INPUT, meshContext,
+    })).rejects.toThrow(/pty is dead/)
+
+    // A failed submit never landed, so the retry is a legitimate resend — it must
+    // NOT be swallowed by PTY-SUBMIT-IDEMPOTENCY as a duplicate. Without the guard
+    // release in the catch, this second dispatch returns duplicateSuppressed and
+    // the body is lost for good.
+    const retry = await manager.handleCliCommand('agent_command', {
+      ...BASE_ARGS, input: IMAGE_INPUT, meshContext,
+    })
+    expect(retry).not.toMatchObject({ duplicateSuppressed: true })
+    expect(retry).toMatchObject({ success: true })
+    expect(onEvent).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a driver-parked body as queued, never as submitted', async () => {
+    const { manager, recordAcknowledgedUserInput } = createManager({
+      sendOutcome: { success: true, status: 'queued' },
+    })
+
+    const result = await manager.handleCliCommand('agent_command', {
+      ...BASE_ARGS,
+      input: IMAGE_INPUT,
+    })
+
+    // A queued send is a real success — the body is accepted — but it sits in the
+    // driver's in-memory FIFO and does not survive a restart. Reporting it as
+    // submitted is the lie 6cca365b was retired for.
+    expect(result).toMatchObject({ success: true, queued: true, submitted: false, sent: false })
+    expect((result as any).queuedReason).toBe('driver_fifo_parked')
+    // The bubble still renders for a queued send — matching the dashboard funnel,
+    // where the ack is deliberately not deferred until the queue drains.
+    expect(recordAcknowledgedUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a delivered send as submitted', async () => {
+    const { manager, recordAcknowledgedUserInput } = createManager()
+
+    const result = await manager.handleCliCommand('agent_command', {
+      ...BASE_ARGS,
+      input: IMAGE_INPUT,
+    })
+
+    expect(result).toMatchObject({ success: true })
+    expect((result as any).submitted).not.toBe(false)
+    expect((result as any).queuedReason).not.toBe('driver_fifo_parked')
+    expect(recordAcknowledgedUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('awaits the send rather than firing and forgetting it', async () => {
+    // Pins the mechanism, not just the outcome: if the call is not awaited, the
+    // dispatch returns BEFORE the instance resolves, and this ordering flips.
+    let resolved = false
+    const { manager } = createManager()
+    const instance = (manager as any).deps.getInstanceManager().getInstance()
+    instance.onEvent = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+      resolved = true
+      return { success: true, status: 'delivered' }
+    })
+
+    await manager.handleCliCommand('agent_command', { ...BASE_ARGS, input: IMAGE_INPUT })
+
+    expect(resolved).toBe(true)
   })
 })
