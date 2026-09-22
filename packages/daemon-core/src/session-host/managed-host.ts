@@ -1,4 +1,5 @@
-import { execFileSync, spawn, type StdioOptions } from 'child_process';
+import { spawn, type StdioOptions } from 'child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -176,9 +177,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     function killPid(pid: number): boolean {
         try {
             if (process.platform === 'win32') {
-                const spawnOpts: { stdio: 'ignore'; windowsHide?: boolean } = { stdio: 'ignore' };
-                if (options.killWindowsHide) spawnOpts.windowsHide = true;
-                execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], spawnOpts);
+                hiddenExecFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
             } else {
                 process.kill(pid, 'SIGTERM');
             }

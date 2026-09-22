@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { gitChildEnv } from '../git/git-locale.js';
 import { resolve } from 'node:path';
@@ -66,7 +66,7 @@ export function isPreviewPipelineConfigured(repoRoot: string): boolean {
 
 function runGit(repoRoot: string, args: readonly string[]): string {
     try {
-        return execFileSync('git', args, {
+        return hiddenExecFileSync('git', args, {
             cwd: repoRoot,
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],

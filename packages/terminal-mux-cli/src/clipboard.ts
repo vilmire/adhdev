@@ -6,6 +6,7 @@ function tryCopy(command: string, args: string[], text: string): boolean {
       input: text,
       stdio: ['pipe', 'ignore', 'ignore'],
       encoding: 'utf8',
+      windowsHide: true,
     });
     return result.status === 0;
   } catch {

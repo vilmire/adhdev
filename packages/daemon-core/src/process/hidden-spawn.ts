@@ -40,6 +40,7 @@ import {
     type ExecSyncOptionsWithStringEncoding,
     type SpawnOptions,
     type SpawnSyncOptions,
+    type SpawnSyncOptionsWithStringEncoding,
     type SpawnSyncReturns,
 } from 'node:child_process';
 
@@ -52,7 +53,23 @@ export function hiddenSpawn(
     return spawn(command, args as string[], { windowsHide: true, ...options });
 }
 
-/** `spawnSync` with the win32 console window hidden by default. */
+/**
+ * `spawnSync` with the win32 console window hidden by default.
+ *
+ * Overloaded on `encoding` the same way node's own typings are, so a caller
+ * passing `encoding: 'utf8'` gets `SpawnSyncReturns<string>` back and can keep
+ * calling `.trim()` on `stdout`/`stderr` without a cast.
+ */
+export function hiddenSpawnSync(
+    command: string,
+    args: readonly string[] | undefined,
+    options: SpawnSyncOptionsWithStringEncoding,
+): SpawnSyncReturns<string>;
+export function hiddenSpawnSync(
+    command: string,
+    args?: readonly string[],
+    options?: SpawnSyncOptions,
+): SpawnSyncReturns<Buffer | string>;
 export function hiddenSpawnSync(
     command: string,
     args: readonly string[] = [],

@@ -1175,7 +1175,7 @@ export class DaemonCommandHandler implements CommandHelpers {
 
         const fs = require('node:fs') as typeof import('node:fs');
         const path = require('node:path') as typeof import('node:path');
-        const { spawnSync } = require('node:child_process') as typeof import('node:child_process');
+        const { hiddenSpawnSync } = require('../process/hidden-spawn.js') as typeof import('../process/hidden-spawn.js');
 
         const file = ext.loadExternalSources();
         if (file.sources.some(s => s.name === requestedName)) {
@@ -1194,7 +1194,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         // `--` sentinel after the option list so any future regex-bypassing
         // url that *did* start with `-` would still be treated as a path
         // by git rather than an option.
-        const clone = spawnSync('git', ['clone', '--depth=1', '--branch', ref, '--', url, sourceDir], {
+        const clone = hiddenSpawnSync('git', ['clone', '--depth=1', '--branch', ref, '--', url, sourceDir], {
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: 60_000,

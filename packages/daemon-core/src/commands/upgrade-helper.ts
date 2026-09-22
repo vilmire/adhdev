@@ -1,5 +1,6 @@
 import { execFileSync, type ExecFileSyncOptions } from 'child_process';
 import { spawn } from 'child_process';
+import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -1218,7 +1219,7 @@ function runPosixInPlaceUpgrade(options: {
   // the pre-flight gate already proved the package runnable, so no retries.
   let installOutput = '';
   try {
-    installOutput = String(execFileSync(
+    installOutput = String(hiddenExecFileSync(
       installCommand.command,
       installCommand.args,
       {
@@ -1459,7 +1460,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   let installOutput = '';
   for (let attempt = 1; attempt <= maxInstallAttempts; attempt++) {
     try {
-      installOutput = String(execFileSync(
+      installOutput = String(hiddenExecFileSync(
         installCommand.command,
         installCommand.args,
         {
