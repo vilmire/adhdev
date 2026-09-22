@@ -129,6 +129,35 @@ export type FsmCondition =
 // States & transitions (v4)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The coarse status an FSM state projects to the dashboard / cli-adapter. Named
+ * (rather than repeated inline at each of the four consumers) so widening it
+ * again surfaces as type errors at every site instead of silently diverging —
+ * the `waiting_external` addition found three copies of the literal union.
+ */
+export type FsmStatus = 'idle' | 'generating' | 'approval' | 'waiting_external';
+
+/** Runtime mirror of `FsmStatus`, used by the loader to validate a spec's
+ *  declared `status`. Kept next to the type (and `satisfies`-checked against it)
+ *  so a future value cannot be added to one without the other — the loader
+ *  silently rejecting a status the engine understands would present as "my spec
+ *  does not load" with no hint why. */
+export const FSM_STATUS_VALUES = ['idle', 'generating', 'approval', 'waiting_external'] as const;
+
+// Two-way lock between the list and the union. `Extract` proves every LISTED
+// value is a real FsmStatus; `Exclude` proves every FsmStatus member is LISTED.
+// Both are needed: with only the first, adding a union member and forgetting the
+// list leaves the loader rejecting a status the engine understands — which
+// presents to a spec author as "my spec does not load" with no hint why.
+type _FsmStatusListIsValid =
+    Exclude<(typeof FSM_STATUS_VALUES)[number], FsmStatus> extends never ? true : never;
+type _FsmStatusListIsExhaustive =
+    Exclude<FsmStatus, (typeof FSM_STATUS_VALUES)[number]> extends never ? true : never;
+const _fsmStatusListIsValid: _FsmStatusListIsValid = true;
+const _fsmStatusListIsExhaustive: _FsmStatusListIsExhaustive = true;
+void _fsmStatusListIsValid;
+void _fsmStatusListIsExhaustive;
+
 export interface FsmState {
     id: string;
     label: string;
@@ -159,9 +188,34 @@ export interface FsmState {
      */
     modal_kind?: 'approval' | 'picker' | 'confirm';
     /** Status this state maps to for the dashboard/cli-adapter status field.
-     *  One of: idle | generating | approval. Defaults: modal→approval,
-     *  initial→idle, id==='busy'→generating, else idle. Explicit wins. */
-    status?: 'idle' | 'generating' | 'approval';
+     *  One of: idle | generating | approval | waiting_external. Defaults:
+     *  modal→approval, initial→idle, id==='busy'→generating, else idle.
+     *  Explicit wins.
+     *
+     *  `waiting_external` — APPROVAL-WAIT-BLINDSPOT (live defect, 2026-09-22).
+     *  The session is BLOCKED on an action outside the terminal that only a
+     *  human can perform: an OAuth/device login to be completed in a browser, a
+     *  2FA confirmation, an external approval link. It is not `generating` (no
+     *  work is happening and none will until the human acts) and it is not
+     *  `idle` (the session cannot accept a prompt). Crucially it is also not a
+     *  modal: there are NO on-screen buttons to press, so it must never be
+     *  declared with `modal: true` — mesh_approve would have nothing to press
+     *  and the auto-approve gate must not treat it as answerable.
+     *
+     *  Before this value existed there was no way to SAY "waiting on a human,
+     *  outside the terminal": grok's browser-login screen matched no state at
+     *  all (invisible to the FSM → zero ledger events → zero inbox rows, and
+     *  the mesh stall watchdog eventually killed the task), while antigravity
+     *  approximated it with `signing_in: {status: 'generating'}`, which is
+     *  indistinguishable from real work.
+     *
+     *  Downstream it projects to the `waiting_approval` ProviderStatus (see
+     *  SpecCliAdapter.getStatus) so the coordinator SEES a blocked worker in
+     *  mesh_list_pending_approvals and the stall watchdog re-arms instead of
+     *  reporting no_progress. Auto-approve stays inert by construction: it
+     *  requires a parsed `activeModal` with buttons, and a non-modal state
+     *  produces none. */
+    status?: FsmStatus;
     /** Optional extraction run whenever this state is the committed state —
      *  used by modal states to surface a title + buttons. */
     extract?: {
@@ -466,7 +520,7 @@ export function outgoingTransitions(spec: CliSpecV4, stateId: string): FsmTransi
 
 /** Map a state to the dashboard status string, applying the documented
  *  defaults when `status` is not explicit. */
-export function statusForState(state: FsmState): 'idle' | 'generating' | 'approval' {
+export function statusForState(state: FsmState): FsmStatus {
     if (state.status) return state.status;
     if (state.modal) return 'approval';
     if (state.id === 'busy' || state.id === 'generating') return 'generating';

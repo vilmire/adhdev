@@ -34,7 +34,7 @@
 'use strict';
 
 import { LOG } from '../../logging/logger.js';
-import type { CliSpecV4 } from './fsm-types.js';
+import type { CliSpecV4, FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
@@ -121,10 +121,20 @@ export interface DriverHost {
     specTag(): string;
     /**
      * ★ The authority on whether the session is idle / generating / at an
-     * approval modal. The engine GATES on this and must never compute its own
-     * answer: two opinions about the same terminal is the SEND-OVERLAP defect.
+     * approval modal / blocked on an external human action. The engine GATES on
+     * this and must never compute its own answer: two opinions about the same
+     * terminal is the SEND-OVERLAP defect.
+     *
+     * `waiting_external` (APPROVAL-WAIT-BLINDSPOT) needs no new branch here and
+     * deliberately gets none: every gate below is written as an EXPLICIT test
+     * for 'idle' (may send) or 'generating' (may interrupt), so an unrecognized
+     * status refuses both — which is the correct answer for a session parked at
+     * a browser-login screen. Writing a prompt there would type into an auth
+     * flow, and there is no turn to interrupt. The refusal even reports itself
+     * accurately, since blockedReason interpolates the status verbatim
+     * ("machine is waiting_external").
      */
-    currentStatus(): 'idle' | 'generating' | 'approval';
+    currentStatus(): FsmStatus;
 }
 
 export class SendSubmitEngine {

@@ -37,7 +37,7 @@ import {
     type CompiledSignalRule, type SignalDetection,
 } from './signal-rules.js';
 import {
-    type CliSpecV4, type FsmState, type FsmTransition,
+    type CliSpecV4, type FsmState, type FsmStatus, type FsmTransition,
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
 import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
@@ -69,7 +69,7 @@ import {
 
 export type DashboardEvent =
     | { kind: 'pty_data'; chunk: string }
-    | { kind: 'state_changed'; state: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' };
+    | { kind: 'state_changed'; state: { id: string; label: string; title: string | null; status: FsmStatus };
         modal: { title: string | null; buttons: { index: number; label: string }[]; kind: 'approval' | 'picker' | 'confirm' | null } | null;
         controls: { id: string; label: string; action_type: string }[] }
     | { kind: 'notification'; id: string; title: string; body: string }
@@ -424,7 +424,7 @@ type HistoryEntry = DriverHistoryEntry;
 /** Per-state evaluation snapshot (mirrors v3 SpecEvaluation shape for the
  *  parts the cli-adapter / panel consume). */
 interface CurrentEval {
-    state: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' };
+    state: { id: string; label: string; title: string | null; status: FsmStatus };
     modal: ModalSnapshot | null;
     controls: VisibleControl[];
 }
@@ -913,16 +913,25 @@ export class FsmDriver implements ISpecDriver {
         transitions: TransitionEval[];
     } {
         const now = Date.now();
-        const cursor = this.adapter.getCursorPosition();
-        const screen = this.adapter.snapshot();
-        const ev = this.evalFsmNow(screen, cursor, now);
+        const viewportCursor = this.adapter.getCursorPosition();
+        // APPROVAL-WAIT-BLINDSPOT fix ③: the debugger must evaluate the SAME
+        // frame reevaluate() does. Reading the bare viewport here while the real
+        // evaluation reads the guard frame would make getFsmDebug report a
+        // verdict the engine never computed — which is precisely how the 4-minute
+        // late `waiting_approval` stayed un-diagnosed: the debug surface agreed
+        // with the (wrong) viewport-only reading and nothing contradicted it.
+        const guard = this.buildGuardFrame(this.adapter.snapshot(), viewportCursor);
+        const ev = this.evalFsmNow(guard.screen, guard.cursor, now);
         const state = stateById(this.spec, this.currentStateId);
         return {
             currentState: this.currentStateId,
             label: state?.label ?? this.currentStateId,
             stateAgeMs: now - this.stateEnteredAt,
             status: state ? statusForState(state) : 'idle',
-            cursor,
+            // Report the VIEWPORT cursor — this field is a human-facing "where is
+            // the caret on screen" readout, and the guard-frame rebase is an
+            // internal coordinate shift that would read as a bogus row number.
+            cursor: viewportCursor,
             transitions: ev.transitions,
         };
     }
@@ -943,8 +952,17 @@ export class FsmDriver implements ISpecDriver {
             // observed as a screen whose first line was wrapped at one width
             // while `footer` came from a later paint at another width, a
             // combination no single VT buffer can hold.
-            const screen = screenText ?? this.adapter.snapshot();
-            const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+            // APPROVAL-WAIT-BLINDSPOT fix ③: when the caller supplies no screen,
+            // resolve against the same guard frame the transitions use, so a
+            // section whose anchor sits just above the viewport reports the text
+            // the guards actually matched rather than an empty string. When the
+            // caller DOES supply a screen the contract above still wins — slice
+            // exactly what they handed us and nothing else.
+            if (screenText === undefined) {
+                const guard = this.buildGuardFrame(this.adapter.snapshot(), this.adapter.getCursorPosition());
+                return resolveSections(this.spec.sections ?? {}, guard.lines).map(s => ({ id: s.id, text: s.text }));
+            }
+            const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
             return resolveSections(this.spec.sections ?? {}, lines).map(s => ({ id: s.id, text: s.text }));
         } catch { return null; }
     }
@@ -1100,6 +1118,102 @@ export class FsmDriver implements ISpecDriver {
         };
     }
 
+    /**
+     * APPROVAL-WAIT-BLINDSPOT fix ③ — how many scrollback lines a transition
+     * guard may look ABOVE the viewport.
+     *
+     * Bounded on purpose. `snapshotWithScrollback()` can return the session's
+     * whole history (thousands of lines), and every transition guard on every
+     * PTY frame re-runs `resolveSections` + each regex over whatever it is
+     * handed — during generating that is many frames per second. Feeding it an
+     * unbounded buffer would turn a per-frame O(viewport) scan into O(session),
+     * degrading as the session ages: the classic fix that works on a fresh
+     * session and melts after an hour.
+     *
+     * 200 lines is ~2–3 viewport heights at a normal terminal size, which is the
+     * scale of the problem being solved (a modal whose box-top anchor is pushed
+     * a screenful or two above the viewport by a tall diff). A modal taller than
+     * that is not recoverable by looking further up anyway — its own choices
+     * would have scrolled off too.
+     */
+    private static readonly GUARD_SCROLLBACK_LOOKBACK_LINES = 200;
+
+    /**
+     * Build the frame a transition guard is evaluated against.
+     *
+     * APPROVAL-WAIT-BLINDSPOT fix ③ (live defect, 2026-09-22). Until now
+     * `deriveModal` read a SCROLLBACK-inclusive buffer (so a tall approval's
+     * off-screen box-top anchor still matched) while the transition guards that
+     * decide whether we are even IN the approval state read the VIEWPORT only.
+     * The two halves disagreed exactly when it mattered: a tall modal pushed the
+     * `─────` anchor above the viewport, the `→approval` guard's section
+     * resolved empty, and the transition never fired. Measured cost was a
+     * `waiting_approval` that arrived 4 minutes late — by which time the task had
+     * already been reaped and the event was discarded as `stale`.
+     *
+     * So the guards now read the same class of buffer the extraction does. Two
+     * things must be preserved while doing it, and both are why this is a helper
+     * rather than a one-line swap to `scrollbackLines()`:
+     *
+     *  1. CURSOR ROWS STAY ALIGNED. `cursor.row` is viewport-relative, and
+     *     `cursor_above` (used by codex/antigravity/claude/hermes busy→idle
+     *     guards) slices `lines[cursor.row - N .. cursor.row]`. Prepending K
+     *     scrollback lines without rebasing the cursor would silently slide that
+     *     window K lines up the screen and compare the wrong region — turning a
+     *     stability check into noise. The cursor is therefore shifted by exactly
+     *     the number of prepended lines, making the slice byte-identical to the
+     *     viewport-only one.
+     *  2. `prevScreenLines` MUST BE TRACKED ON THE SAME BASIS. A `changed`
+     *     condition diffs current vs previous at the same row indices; mixing an
+     *     extended current frame with a viewport-only previous frame would
+     *     report "changed" on every frame purely from the offset. The caller
+     *     stores the same extended lines it evaluates (see reevaluate()).
+     *
+     * Falls back to the plain viewport whenever scrollback is unavailable or
+     * adds nothing, so a driver without scrollback support behaves exactly as
+     * before.
+     */
+    private buildGuardFrame(viewportScreen: string, cursor: { row: number; col: number }): {
+        screen: string;
+        lines: string[];
+        cursor: { row: number; col: number };
+    } {
+        const viewportLines = viewportScreen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+        let full: string[];
+        try {
+            full = this.scrollbackLines();
+        } catch {
+            return { screen: viewportScreen, lines: viewportLines, cursor };
+        }
+        // The viewport is the TAIL of the scrollback-inclusive buffer. Anything
+        // else (scrollback read failed, returned the viewport verbatim, or is
+        // somehow shorter) means there is nothing extra to look at.
+        const extraLines = full.length - viewportLines.length;
+        if (extraLines <= 0) return { screen: viewportScreen, lines: viewportLines, cursor };
+        // ★Pad to a FIXED lookback rather than using however much scrollback
+        // happens to exist right now. `changed` conditions diff the current
+        // frame against `prevScreenLines` at the SAME ABSOLUTE row indices, so a
+        // lookback that grew by even one line between two frames would shift
+        // every row and report the whole region as changed — a `stable_ms` guard
+        // would then never settle and the session would wedge in busy (the
+        // BUSY-IDLE-BOUNDED-FALLBACK family of defects, re-introduced through
+        // the back door). Padding with blank lines keeps the frame height
+        // constant from the very first frame, so row indices are stable for the
+        // whole session and the cursor rebase below is a single constant.
+        const available = Math.min(extraLines, FsmDriver.GUARD_SCROLLBACK_LOOKBACK_LINES);
+        const lookback = FsmDriver.GUARD_SCROLLBACK_LOOKBACK_LINES;
+        const pad = new Array(lookback - available).fill('');
+        const lines = [...pad, ...full.slice(full.length - viewportLines.length - available)];
+        return {
+            screen: lines.join('\n'),
+            lines,
+            // Rebase: the viewport's row 0 now sits `lookback` lines down. Fixed,
+            // so `cursor_above` slices land on exactly the same screen content
+            // they did before this change.
+            cursor: { row: cursor.row + lookback, col: cursor.col },
+        };
+    }
+
     private evalFsmNow(screen: string, cursor: { row: number; col: number }, now: number) {
         const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined;
         return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now), this.signalObservation);
@@ -1140,14 +1254,22 @@ export class FsmDriver implements ISpecDriver {
         const now = Date.now();
         const screen = this.adapter.snapshot();
         this.maybeDismissStartupPrompt(screen, now);
-        const cursor = this.adapter.getCursorPosition();
-        const currentLines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+        const viewportCursor = this.adapter.getCursorPosition();
+        // APPROVAL-WAIT-BLINDSPOT fix ③: guards evaluate against the same
+        // scrollback-inclusive class of buffer the modal extraction already
+        // used, with the cursor rebased so cursor_above/changed windows land on
+        // identical content. See buildGuardFrame for why both the frame AND the
+        // cursor have to move together, and why the height is fixed.
+        const guard = this.buildGuardFrame(screen, viewportCursor);
+        const currentLines = guard.lines;
+        const cursor = guard.cursor;
 
         // Track per-region change timestamps for stable_ms conditions BEFORE
-        // we overwrite prevScreenLines.
+        // we overwrite prevScreenLines. Uses the guard frame + rebased cursor so
+        // it stays on the same coordinate system as the conditions that read it.
         this.trackRegionChanges(currentLines, cursor, now);
 
-        const ev = this.evalFsmNow(screen, cursor, now);
+        const ev = this.evalFsmNow(guard.screen, cursor, now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
         this.logShadowDivergence(ev);
@@ -1743,7 +1865,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** The agent's current coarse status, derived from the FSM node we're in. */
-    private currentStatus(): 'idle' | 'generating' | 'approval' {
+    private currentStatus(): FsmStatus {
         const st = stateById(this.spec, this.currentStateId);
         return st ? statusForState(st) : 'idle';
     }
