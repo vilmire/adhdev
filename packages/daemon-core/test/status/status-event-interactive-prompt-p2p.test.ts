@@ -150,3 +150,78 @@ describe('status_event interactivePrompt — P2P carriage, server boundary', () 
         expect(p2pPayload).not.toHaveProperty('multiSelect')
     })
 })
+
+/**
+ * The prompt fields above are not the only agent-authored text on a raw event —
+ * they were simply the ones with a live defect. Providers routinely emit
+ * `chatTitle` (ide-provider-instance.ts, acp-provider-instance.ts) and
+ * `finalSummary` (ide-provider-instance.ts, on `agent:generating_completed`),
+ * and both are held back by this same allow-list alone.
+ *
+ * They had no canary, which made the boundary quieter than it looks: because
+ * `buildServerStatusEvent` builds a fresh object field-by-field, these pass
+ * today by OMISSION rather than by any assertion. One `payload.chatTitle = …`
+ * line added for a plausible-sounding reason (a nicer push title) would ship
+ * chat titles to the server and onward to EXTERNAL webhooks with nothing red.
+ *
+ * Paired with packages/server/test/daemon-connection-status-event-sanitize.test.ts,
+ * which pins the server-side re-application of the same rule — the defense the
+ * daemon-side allow-list cannot provide against a legacy or tampered daemon.
+ */
+describe('status_event — chatTitle/finalSummary must stay off the server wire', () => {
+    const CHAT_TITLE = 'Refactor the billing module'
+    const FINAL_SUMMARY = 'I removed the retry loop and updated 3 call sites.'
+
+    function emitCompletedEvent(reporter: DaemonStatusReporter) {
+        reporter.emitStatusEvent({
+            event: 'agent:generating_completed',
+            targetSessionId: 'sess-1',
+            providerType: 'claude-cli',
+            duration: 12,
+            chatTitle: CHAT_TITLE,
+            finalSummary: FINAL_SUMMARY,
+        })
+    }
+
+    it('★drops chatTitle and finalSummary from the server-bound payload', () => {
+        const { reporter, sendMessage } = createReporter()
+
+        emitCompletedEvent(reporter)
+
+        const payload = serverPayload(sendMessage)
+        expect(payload).toBeTruthy()
+        expect(payload).not.toHaveProperty('chatTitle')
+        expect(payload).not.toHaveProperty('finalSummary')
+
+        const wire = JSON.stringify(payload)
+        for (const leaked of [CHAT_TITLE, FINAL_SUMMARY]) {
+            expect(wire, `server payload leaked: ${leaked}`).not.toContain(leaked)
+        }
+    })
+
+    it('★still forwards the routing metadata of the same event', () => {
+        // Guards against "fixing" the leak by dropping the event wholesale —
+        // the completion push and its webhook depend on these fields.
+        const { reporter, sendMessage } = createReporter()
+
+        emitCompletedEvent(reporter)
+
+        const payload = serverPayload(sendMessage)
+        expect(payload.event).toBe('agent:generating_completed')
+        expect(payload.targetSessionId).toBe('sess-1')
+        expect(payload.providerType).toBe('claude-cli')
+        expect(payload.duration).toBe(12)
+    })
+
+    it('★drops provider:* events wholesale — they carry arbitrary UI text', () => {
+        const { reporter, sendMessage } = createReporter()
+
+        reporter.emitStatusEvent({
+            event: 'provider:toast',
+            targetSessionId: 'sess-1',
+            message: 'ARBITRARY_PROVIDER_TEXT',
+        })
+
+        expect(serverPayload(sendMessage)).toBeUndefined()
+    })
+})

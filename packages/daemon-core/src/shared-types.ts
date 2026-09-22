@@ -894,8 +894,34 @@ export interface DashboardStatusEventPayload {
     daemonId?: string;
     providerType?: string;
     targetSessionId?: string;
-    providerSessionId?: string;
-    workspaceName?: string;
+    /**
+     * NOTE: `providerSessionId` and `workspaceName` are deliberately NOT declared
+     * here, even though the daemon-side `DaemonStatusEventPayload` carries both.
+     *
+     * This interface describes what the SERVER relay actually emits, and
+     * `UserSession.buildDashboardStatusEvent` — the sole producer of this type —
+     * copies neither. Declaring them made the type claim a guarantee no producer
+     * honours: on the WS path they are always `undefined`.
+     *
+     * The dashboard consumer that reads them
+     * (web-core `useDashboardPendingLaunch`, via the `StatusEventPayload`
+     * intersection in `managers/EventManager.ts`, which re-declares both on top
+     * of this type) is fed from BOTH transports, and on the P2P path the fields
+     * are genuinely present — `buildP2PStatusEvent` extends the server payload,
+     * which does carry them. So the consumer is correct to look for them; it is
+     * only this WS-relay type that must not promise them. Its checks are
+     * written to skip gracefully when either field is absent, which is exactly
+     * the WS behaviour.
+     *
+     * Both fields are non-content identifiers, so ADDING them to
+     * `buildDashboardStatusEvent` would be permitted by the content boundary and
+     * would tighten pending-launch matching on the WS path. That is a deliberate
+     * product change (it also needs `providerSessionId` on the server's
+     * `UserSessionPushEvent`, which does not declare it today) — not something to
+     * do implicitly to satisfy a type. Removing the over-declaration is the
+     * change that makes the type match reality; widening the relay is a separate,
+     * intentional decision.
+     */
     duration?: number;
     elapsedSec?: number;
     modalMessage?: string;
