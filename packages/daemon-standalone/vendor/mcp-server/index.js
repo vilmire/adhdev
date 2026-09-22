@@ -68659,16 +68659,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const startedAt = Date.now();
         state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
-        const spawn7 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
+        const spawn8 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-          const result = await execFileAsync8(spawn7.file, spawn7.args, {
+          const result = await execFileAsync8(spawn8.file, spawn8.args, {
             cwd,
             encoding: "utf8",
             timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS2,
             maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
             env: { ...process.env, CI: process.env.CI || "1", ...command.env || {} },
             windowsHide: true,
-            ...spawn7.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           state2.commandsRun?.push({
             command: command.command,
@@ -127901,9 +127901,9 @@ ${effect.notification.body || ""}`.trim();
       const typedProvider = provider;
       const controls = Array.isArray(provider.controls) ? provider.controls : [];
       if (category === "cli" || category === "acp") {
-        const spawn7 = provider.spawn;
-        const command = spawn7 && typeof spawn7 === "object" ? spawn7.command : void 0;
-        if (!spawn7 || typeof spawn7 !== "object") {
+        const spawn8 = provider.spawn;
+        const command = spawn8 && typeof spawn8 === "object" ? spawn8.command : void 0;
+        if (!spawn8 || typeof spawn8 !== "object") {
           errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
         } else if (typeof command !== "string" || !command.trim()) {
           errors.push("spawn.command is required");
@@ -134330,7 +134330,7 @@ ${asText(streams.stderr)}
       return { enabled: false };
     }
     async function computeGitPatchId(cwd, fromRef, toRef, excludePaths = []) {
-      const { spawnSync: spawnSync3 } = await import("child_process");
+      const { spawnSync: spawnSync4 } = await import("child_process");
       const diffArgs = ["diff", "--patch", "--full-index", fromRef, toRef];
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path72) => `:(exclude)${path72}`));
@@ -134344,7 +134344,7 @@ ${asText(streams.stderr)}
         const out = openSync10(patchFile, "w");
         let diffRun;
         try {
-          diffRun = spawnSync3(GIT2, diffArgs, {
+          diffRun = spawnSync4(GIT2, diffArgs, {
             cwd,
             stdio: ["ignore", out, "pipe"],
             encoding: "utf8"
@@ -134361,7 +134361,7 @@ ${asText(streams.stderr)}
         const patchIn = openSync10(patchFile, "r");
         let patchIdRun;
         try {
-          patchIdRun = spawnSync3(GIT2, ["patch-id", "--stable"], {
+          patchIdRun = spawnSync4(GIT2, ["patch-id", "--stable"], {
             cwd,
             stdio: [patchIn, "pipe", "pipe"],
             encoding: "utf8",
@@ -134384,8 +134384,8 @@ ${asText(streams.stderr)}
     async function runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead) {
       const startedAt = Date.now();
       try {
-        const { execFileSync: execFileSync16 } = await import("child_process");
-        const git3 = (args) => execFileSync16(GIT2, args, {
+        const { execFileSync: execFileSync17 } = await import("child_process");
+        const git3 = (args) => execFileSync17(GIT2, args, {
           cwd: repoRoot,
           encoding: "utf8",
           maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
@@ -134642,8 +134642,8 @@ ${e?.stderr || ""}`
     async function checkWorktreeChangesPatchEquivalentInRef(repoRoot, ref, worktreeHead) {
       const startedAt = Date.now();
       try {
-        const { execFileSync: execFileSync16 } = await import("child_process");
-        const git3 = (gitArgs) => execFileSync16(GIT2, gitArgs, {
+        const { execFileSync: execFileSync17 } = await import("child_process");
+        const git3 = (gitArgs) => execFileSync17(GIT2, gitArgs, {
           cwd: repoRoot,
           encoding: "utf8",
           maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
@@ -134707,8 +134707,8 @@ ${mergeTreeErr?.stderr || ""}`;
     async function runMeshRefineEffectiveDiffGate(repoRoot, baseHead, branchHead) {
       const startedAt = Date.now();
       try {
-        const { execFileSync: execFileSync16 } = await import("child_process");
-        const git3 = (args, opts) => execFileSync16(GIT2, args, {
+        const { execFileSync: execFileSync17 } = await import("child_process");
+        const git3 = (args, opts) => execFileSync17(GIT2, args, {
           cwd: opts?.cwd || repoRoot,
           encoding: "utf8",
           maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
@@ -135236,16 +135236,16 @@ ${mergeTreeErr?.stderr || ""}`;
           const cwd = candidate.cwd ? (0, import_path20.resolve)(workspace, candidate.cwd) : workspace;
           const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
           const resolvedCommand = resolveWin32Executable(candidate.command);
-          const spawn7 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+          const spawn8 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
           try {
-            const result = await execFileAsync8(spawn7.file, spawn7.args, {
+            const result = await execFileAsync8(spawn8.file, spawn8.args, {
               cwd,
               encoding: "utf8",
               windowsHide: true,
               timeout,
               maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
               env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
-              ...spawn7.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+              ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
             });
             summary.bootstrapCommandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
           } catch (error48) {
@@ -135282,16 +135282,16 @@ ${mergeTreeErr?.stderr || ""}`;
           continue;
         }
         const resolvedCommand = resolveWin32Executable(candidate.command);
-        const spawn7 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+        const spawn8 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
         try {
-          const result = await execFileAsync8(spawn7.file, spawn7.args, {
+          const result = await execFileAsync8(spawn8.file, spawn8.args, {
             cwd,
             encoding: "utf8",
             windowsHide: true,
             timeout,
             maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
             env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
-            ...spawn7.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
         } catch (error48) {
@@ -146948,6 +146948,10 @@ ${e?.stderr || ""}`;
       hasPendingDependents: () => hasPendingDependents,
       hasTrailingToolActivityAfterFinalAssistant: () => hasTrailingToolActivityAfterFinalAssistant3,
       hashSignatureParts: () => hashSignatureParts,
+      hiddenExecFileSync: () => hiddenExecFileSync,
+      hiddenExecSync: () => hiddenExecSync,
+      hiddenSpawn: () => hiddenSpawn,
+      hiddenSpawnSync: () => hiddenSpawnSync,
       initDaemonComponents: () => initDaemonComponents,
       insertDirectDispatch: () => insertDirectDispatch3,
       inspectEmbeddedPath: () => inspectEmbeddedPath,
@@ -155537,7 +155541,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         const fs75 = require("fs");
         const path72 = require("path");
-        const { spawnSync: spawnSync3 } = require("child_process");
+        const { spawnSync: spawnSync4 } = require("child_process");
         const file2 = ext.loadExternalSources();
         if (file2.sources.some((s2) => s2.name === requestedName)) {
           return { success: false, error: `source name "${requestedName}" is already registered` };
@@ -155550,7 +155554,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (fs75.existsSync(sourceDir)) {
           return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
         }
-        const clone2 = spawnSync3("git", ["clone", "--depth=1", "--branch", ref, "--", url2, sourceDir], {
+        const clone2 = spawnSync4("git", ["clone", "--depth=1", "--branch", ref, "--", url2, sourceDir], {
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "pipe"],
           timeout: 6e4
@@ -161492,8 +161496,8 @@ async (params) => {
         fs71.writeFileSync(promptFile, prompt, "utf-8");
         ctx.log(`Auto-implement prompt written to ${promptFile} (${prompt.length} chars)`);
         const agentProvider = ctx.providerLoader.resolve(agent) || ctx.providerLoader.getMeta(agent);
-        const spawn7 = agentProvider?.spawn;
-        if (!spawn7?.command) {
+        const spawn8 = agentProvider?.spawn;
+        if (!spawn8?.command) {
           try {
             fs71.unlinkSync(promptFile);
           } catch {
@@ -161503,23 +161507,23 @@ async (params) => {
         }
         const agentCategory = agentProvider?.category;
         if (agentCategory === "acp") {
-          sendAutoImplSSE(ctx, { event: "progress", data: { function: "_init", status: "spawning", message: `Spawning ACP agent: ${spawn7.command} ${(spawn7.args || []).join(" ")}` } });
+          sendAutoImplSSE(ctx, { event: "progress", data: { function: "_init", status: "spawning", message: `Spawning ACP agent: ${spawn8.command} ${(spawn8.args || []).join(" ")}` } });
           ctx.autoImplStatus.running = true;
           ctx.autoImplStatus.type = type2;
           const { ClientSideConnection: ClientSideConnection2, ndJsonStream: ndJsonStream2, PROTOCOL_VERSION: PROTOCOL_VERSION2 } = await Promise.resolve().then(() => (init_acp(), acp_exports));
           const { Readable: Readable2, Writable: Writable2 } = await import("stream");
           const { spawn: spawnFn2 } = await import("child_process");
-          const acpArgs = [...spawn7.args || []];
+          const acpArgs = [...spawn8.args || []];
           if (model) {
             acpArgs.push("--model", model);
             ctx.log(`Auto-implement ACP using model: ${model}`);
           }
-          const child2 = spawnFn2(spawn7.command, acpArgs, {
+          const child2 = spawnFn2(spawn8.command, acpArgs, {
             cwd: providerDir,
             stdio: ["pipe", "pipe", "pipe"],
-            shell: spawn7.shell ?? false,
+            shell: spawn8.shell ?? false,
             windowsHide: true,
-            env: { ...process.env, ...spawn7.env || {} }
+            env: { ...process.env, ...spawn8.env || {} }
           });
           ctx.autoImplProcess = child2;
           child2.stderr?.on("data", (d) => {
@@ -161629,7 +161633,7 @@ async (params) => {
           ctx.json(res, 202, {
             started: true,
             type: type2,
-            agent: spawn7.command,
+            agent: spawn8.command,
             functions,
             providerDir,
             message: "ACP Auto-implement started. Connect to SSE for progress.",
@@ -161637,10 +161641,10 @@ async (params) => {
           });
           return;
         }
-        const command = spawn7.command;
-        const autoImpl = spawn7.autoImpl;
+        const command = spawn8.command;
+        const autoImpl = spawn8.autoImpl;
         const interactiveFlags = ["--yolo", "--interactive", "-i"];
-        const baseArgs = [...spawn7.args || []].filter((a) => !interactiveFlags.includes(a));
+        const baseArgs = [...spawn8.args || []].filter((a) => !interactiveFlags.includes(a));
         let shellCmd;
         const isWin = os37.platform() === "win32";
         const escapeArg = (a) => isWin ? `"${a.replace(/"/g, '""')}"` : `'${a.replace(/'/g, "'\\''")}'`;
@@ -161687,7 +161691,7 @@ async (params) => {
             cols: import_session_host_core10.DEFAULT_SESSION_HOST_COLS,
             rows: import_session_host_core10.DEFAULT_SESSION_HOST_ROWS,
             cwd: providerDir,
-            env: { ...process.env, ...spawn7.env || {} }
+            env: { ...process.env, ...spawn8.env || {} }
           });
           isPty = true;
         } catch (err) {
@@ -161700,7 +161704,7 @@ async (params) => {
             stdio: ["pipe", "pipe", "pipe"],
             env: {
               ...process.env,
-              ...spawn7.env || {}
+              ...spawn8.env || {}
             }
           });
           child.on("error", (err2) => {
@@ -162838,16 +162842,16 @@ data: ${JSON.stringify(msg.data)}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn7 = provider.spawn;
-        if (!spawn7) {
+        const spawn8 = provider.spawn;
+        if (!spawn8) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const child = spawnFn(spawn7.command, [...spawn7.args || []], {
-            shell: spawn7.shell ?? false,
+          const child = spawnFn(spawn8.command, [...spawn8.args || []], {
+            shell: spawn8.shell ?? false,
             windowsHide: true,
             timeout: 5e3,
             stdio: ["pipe", "pipe", "pipe"]
@@ -162880,7 +162884,7 @@ data: ${JSON.stringify(msg.data)}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: true,
-            command: `${spawn7.command} ${(spawn7.args || []).join(" ")}`,
+            command: `${spawn8.command} ${(spawn8.args || []).join(" ")}`,
             elapsed,
             stdout: stdout.trim(),
             stderr: stderr.trim(),
@@ -162890,7 +162894,7 @@ data: ${JSON.stringify(msg.data)}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: false,
-            command: `${spawn7.command} ${(spawn7.args || []).join(" ")}`,
+            command: `${spawn8.command} ${(spawn8.args || []).join(" ")}`,
             elapsed,
             error: e.message
           });
@@ -163353,21 +163357,21 @@ data: ${JSON.stringify(msg.data)}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn7 = provider.spawn;
-        if (!spawn7) {
+        const spawn8 = provider.spawn;
+        if (!spawn8) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const args = [...spawn7.args || [], message];
-          const child = spawnFn(spawn7.command, args, {
-            shell: spawn7.shell ?? false,
+          const args = [...spawn8.args || [], message];
+          const child = spawnFn(spawn8.command, args, {
+            shell: spawn8.shell ?? false,
             windowsHide: true,
             timeout,
             stdio: ["pipe", "pipe", "pipe"],
-            env: { ...process.env, ...spawn7.env || {} }
+            env: { ...process.env, ...spawn8.env || {} }
           });
           let stdout = "";
           let stderr = "";
@@ -168899,6 +168903,19 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       return { ready: true, reason: null };
     }
     init_transcript_read_chat_adapter();
+    var import_node_child_process17 = require("child_process");
+    function hiddenSpawn(command, args = [], options = {}) {
+      return (0, import_node_child_process17.spawn)(command, args, { windowsHide: true, ...options });
+    }
+    function hiddenSpawnSync(command, args = [], options = {}) {
+      return (0, import_node_child_process17.spawnSync)(command, args, { windowsHide: true, ...options });
+    }
+    function hiddenExecFileSync(file2, args = [], options = {}) {
+      return (0, import_node_child_process17.execFileSync)(file2, args, { windowsHide: true, ...options });
+    }
+    function hiddenExecSync(command, options = {}) {
+      return (0, import_node_child_process17.execSync)(command, { windowsHide: true, ...options });
+    }
   }
 });
 
