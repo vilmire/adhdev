@@ -344,6 +344,27 @@ export function mapButtonKeyToken(tokenRaw: string): string | null {
     }
 }
 
+/**
+ * WRAPPED-PATH-FALSE-BUTTON guard (see the call site in the continuation-lines
+ * branch): does `line` open the NEXT button after the one numbered `prevIndex`?
+ *
+ * Only relevant while accumulating a wrapped label. Pickers and approval modals
+ * number their options 1..N contiguously in screen order, so the only index that
+ * can legitimately end the current button's continuation run is `prevIndex + 1`.
+ * Deliberately NOT a magnitude test (`idx < 100` or similar): a legitimate
+ * picker may have many options, so a hardcoded ceiling would only relocate the
+ * failure. Returns false — i.e. "this is wrapped text, keep appending" — for any
+ * non-sequential index, which is precisely the shape a wrapped numeric path
+ * segment (`1790054.3821/emit.mjs'`) produces.
+ */
+function continuesButtonSequence(line: string, re: RegExp, prevIndex: number): boolean {
+    const m = re.exec(line);
+    if (!m) return false;
+    const idx = Number(m[1]);
+    if (!Number.isFinite(idx) || idx <= 0) return false;
+    return idx === prevIndex + 1;
+}
+
 export function extractButtonsFromRule(
     rule: ExtractButtons,
     hay: string,
@@ -392,7 +413,34 @@ export function extractButtonsFromRule(
             while (j < lines.length) {
                 const next = lines[j];
                 if (!next.trim()) break;
-                if (re.test(next)) break;
+                // WRAPPED-PATH-FALSE-BUTTON (live defect, 2026-09-22): a plain
+                // `re.test(next)` break here is what let a WRAPPED line become a
+                // phantom button. A button pattern like
+                // `^\s*(?:[❯›>]\s*)?(\d+)\.\s*(\S.+?)\s*$` matches any indented
+                // line that merely CONTAINS a "<digits>.<text>" shape — and an
+                // 80-column terminal routinely wraps a long path right inside a
+                // numeric segment, so the continuation line
+                // `     1790054.3821/emit.mjs'` matched as index=1790054.
+                //
+                // The damage is not the stray entry itself: it is that the stray
+                // index sits BETWEEN the real 1 and 2 in screen order, which
+                // breaks lastContiguousNumberedBlock's upward descend-by-one scan
+                // at that point. The block reduction then returns [2,3,4] and the
+                // real option 1 disappears — silently, with a still-plausible
+                // modal. mesh_approve aiming at "option 1" pressed option 3.
+                //
+                // The fix is STRUCTURAL rather than a magnitude cap, because a
+                // legitimate picker may carry many options and a hardcoded ceiling
+                // would just move the cliff: only an index that CONTINUES the
+                // button sequence (the next integer after the button currently
+                // being accumulated) may open a new button. Anything else is, by
+                // construction, not the next option in a 1..N list, so it is
+                // folded into the label as wrapped text. A genuine option row
+                // always satisfies this (pickers number contiguously), and a
+                // stray body-numbered line that happens to satisfy it is exactly
+                // the case lastContiguousNumberedBlock was already written to
+                // handle downstream.
+                if (re.test(next) && continuesButtonSequence(next, re, idx)) break;
                 if (!/^\s+/.test(next)) break;
                 label += ' ' + next.trim();
                 j += 1;

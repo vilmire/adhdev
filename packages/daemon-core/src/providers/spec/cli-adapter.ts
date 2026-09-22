@@ -81,7 +81,8 @@ import {
     buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
 } from '../kimi-pending-question.js';
 import { detectClaudePendingQuestion } from '../claude-pending-question.js';
-import type { InteractivePrompts } from './fsm-types.js';
+import type { FsmStatus, InteractivePrompts } from './fsm-types.js';
+import { projectAdapterStatus } from './adapter-status-projection.js';
 import {
     CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
     CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
@@ -123,7 +124,7 @@ export class SpecCliAdapter implements CliAdapter {
      *  the owning provider instance is disposed. */
     private runtimeSettings: Record<string, unknown> = {};
     private lastEvent: DashboardEvent | null = null;
-    private latestState: { id: string; label: string; title: string | null; status: 'idle' | 'generating' | 'approval' } | null = null;
+    private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
@@ -478,103 +479,31 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
-        const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
+        // Side effects stay here (they touch adapter state / lazily refresh);
+        // the DECISION is the pure projection in adapter-status-projection.ts.
         this.maybeConfirmLiveAuthBillingSuspect();
-        // A latched provider failure (auth/billing/quota) outranks generic process liveness.
-        // Returning `error` makes CliProviderInstance emit agent:stopped with the
-        // typed reason, rather than allowing an idle/exit edge to masquerade as a
-        // zero-byte completion or a generic crash eligible for blind recovery.
-        if (this.providerFailure) {
-            return {
-                status: 'error',
-                messages: [],
-                activeModal: null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                errorMessage: this.providerFailure.message,
-                errorReason: this.providerFailure.errorReason,
-                ...sessionFields,
-            };
-        }
-        if (this.exited) return { status: 'stopped', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-        if (!this.spawned) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-
         // kimi_wire prompt hold: refresh on the ROUTINE status poll (not only
         // on chat reads) so a question asked while nobody reads the chat still
         // surfaces promptly — same cadence rationale as the legacy adapter.
-        this.refreshWirePendingQuestion();
-
-        // Refresh native history lazily — the watch_path is cheap to stat,
-        // but parsing a full session.jsonl every call would be wasteful.
-        this.maybeRefreshNativeHistory();
-
-        const state = this.latestState;
-        if (!state) return { status: 'starting', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-
-        // The FSM state is authoritative for status. We do NOT infer status from whether
-        // a modal was parsed this frame: a modal/approval state whose buttons briefly fail
-        // to parse (PTY repaint) must still report waiting_approval, not collapse to idle —
-        // that collapse fired false completions while a session sat at an approval prompt.
-        const modal = this.latestModal;
-        if (state.status === 'approval') {
-            return {
-                status: 'waiting_approval',
-                messages: [],
-                // Surface buttons when we have them; an approval state with no parsed
-                // modal this frame still stays waiting_approval (no activeModal yet).
-                // `kind` carries the semantic modal class through to the auto-approve
-                // gate so a /model picker (kind='picker') is never auto-answered.
-                // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
-                // existing consumer (pickApprovalButton, mesh_approve, auto-approve) reads,
-                // but ALSO surface `buttonMeta` carrying each button's real FSM display index
-                // alongside its label. A partial/non-contiguous modal (display indices [1,3,4]
-                // at array positions [0,1,2]) then no longer loses the index → label mapping
-                // once it leaves the adapter: a consumer that has an array position can recover
-                // the true FSM index without re-parsing. resolveModal() below relies on the same
-                // ordered list to translate an array position to the correct FSM index.
-                activeModal: modal
-                    ? {
-                        message: modal.title ?? state.label,
-                        buttons: modal.buttons.map(b => b.label),
-                        buttonMeta: modal.buttons.map(b => ({ index: b.index, label: b.label })),
-                        kind: modal.kind ?? null,
-                    }
-                    : null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                ...sessionFields,
-            };
+        // Guarded by the same spawned/exited preconditions the projection uses,
+        // so a dead or unspawned adapter does no work (verbatim ordering from
+        // before the extraction: these ran only after those early returns).
+        if (!this.providerFailure && !this.exited && this.spawned) {
+            this.refreshWirePendingQuestion();
+            // Refresh native history lazily — the watch_path is cheap to stat,
+            // but parsing a full session.jsonl every call would be wasteful.
+            this.maybeRefreshNativeHistory();
         }
-        // Until the FSM has drawn a genuine non-initial idle prompt, do NOT
-        // project the initial state's declared status (often `idle`) or a
-        // boot-phase generating state (antigravity `signing_in`) onto the
-        // daemon status machine. Projecting idle consumes the starting→idle
-        // agent:ready one-shot before the prompt exists; projecting generating
-        // arms a false generating_started (signing_in lasting >3s) that never
-        // completes — no assistant text — so the dashboard/claim freeze as
-        // generating (M-MESH-INFRA-0829). Hold at 'starting' until
-        // maybeMarkReady. Missing hasSeenReady (stub/legacy drivers) is
-        // treated as "not gated" so existing tests and non-FSM adapters keep
-        // their previous projection. Approval stays visible during boot
-        // (trust/consent modals must not be hidden as 'starting').
-        const readySeen = this.driver.hasSeenReady?.();
-        if (readySeen === false) {
-            return {
-                status: 'starting',
-                messages: [],
-                activeModal: null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                fsmReadySeen: false,
-                ...sessionFields,
-            };
-        }
-        if (state.status === 'generating') {
-            return { status: 'generating', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-        }
-        // fsmReadySeen lets CliProviderInstance re-arm the queue-claim agent:ready
-        // on the first genuine ready (prompt drawn), independent of the boot-time
-        // starting→idle one-shot that the provider-instance otherwise relies on.
-        // Surfaced only on idle so the provider-instance fires agent:ready exactly
-        // when the worker is actually ready to claim.
-        return { status: 'idle', messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: readySeen === true, ...sessionFields };
+        return projectAdapterStatus({
+            providerSessionId: this.providerSessionId,
+            providerFailure: this.providerFailure,
+            exited: this.exited,
+            spawned: this.spawned,
+            activeInteractivePrompt: this.activeInteractivePrompt,
+            state: this.latestState,
+            modal: this.latestModal,
+            readySeen: () => this.driver?.hasSeenReady?.(),
+        });
     }
 
     private maybeRefreshNativeHistory(): void {

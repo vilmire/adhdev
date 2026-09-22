@@ -9,7 +9,7 @@
 'use strict';
 
 import * as fs from 'node:fs';
-import { type CliSpecV4, type FsmCondition, isV4Spec } from './fsm-types.js';
+import { type CliSpecV4, type FsmCondition, FSM_STATUS_VALUES, isV4Spec } from './fsm-types.js';
 
 export interface FsmLoadOk { ok: true; spec: CliSpecV4; sourcePath: string; warnings: string[]; }
 export interface FsmLoadErr { ok: false; errors: string[]; sourcePath: string; }
@@ -110,8 +110,19 @@ export function validateFsmSpec(raw: unknown): string[] {
         ids.add(s.id);
         if (!s.label) errs.push(`states[${i}].label is required`);
         if (s.initial) initialCount += 1;
-        if (s.status && !['idle', 'generating', 'approval'].includes(s.status)) {
-            errs.push(`states[${i}].status "${s.status}" must be idle|generating|approval`);
+        if (s.status && !FSM_STATUS_VALUES.includes(s.status)) {
+            errs.push(`states[${i}].status "${s.status}" must be ${FSM_STATUS_VALUES.join('|')}`);
+        }
+        // APPROVAL-WAIT-BLINDSPOT: `waiting_external` means "blocked on a human
+        // acting OUTSIDE the terminal" — a browser login, a 2FA tap. There is by
+        // definition nothing on screen to press, so combining it with `modal:
+        // true` describes a state that cannot exist: the adapter would report an
+        // approval with no activeModal, mesh_approve would have no button, and
+        // the coordinator would sit pressing at a screen that never answers.
+        // Reject at load so the contradiction surfaces to the spec author rather
+        // than as an unanswerable live session.
+        if (s.status === 'waiting_external' && s.modal) {
+            errs.push(`states[${i}] ("${s.id}") declares status:"waiting_external" with modal:true — an external-auth wait has no on-screen buttons to press; drop modal (and modal_kind/extract.buttons) or use a different status`);
         }
     }
     if (initialCount === 0) errs.push('exactly one state must have initial:true (none found)');
