@@ -163,3 +163,72 @@ test('progress_update refuses an empty note without calling the daemon', async (
   assert.equal(result.isError, true);
   assert.equal(capture.last, undefined);
 });
+
+// ─── Truthful reporting of what actually persisted ────────────────────────
+//
+// These pin the MCP-layer half of the F4/F5 fixes. The daemon now distinguishes
+// "recorded" from "claimed to be recorded"; the tool layer must not flatten that
+// back into an unconditional success line.
+
+test('a handoff note that did NOT store is warned about, not announced as stored', async () => {
+  const result = await reportCompletion(
+    fakeTransport({
+      success: true,
+      taskId: 't1',
+      outcome: 'completed',
+      handoffNoteRecorded: false,
+      handoffNoteError: 'handoff note text could not be stored: sink unavailable',
+    }),
+    { bind: 'wsb_x' },
+    { outcome: 'completed', summary: 'x', handoff_notes: { intent: 'y', touched_files: ['a.ts'] } },
+  );
+  // Pre-fix the daemon answered handoffNoteRecorded:true even when it had
+  // skipped the write, so this line was unreachable and the worker was told the
+  // note "will be delivered to related future tasks automatically".
+  assert.match(result.text, /WARNING/);
+  assert.match(result.text, /NOT stored/);
+  assert.doesNotMatch(result.text, /will be delivered to related future tasks automatically/);
+});
+
+test('a handoff note that did store keeps its confirmation', async () => {
+  const result = await reportCompletion(
+    fakeTransport({ success: true, taskId: 't1', outcome: 'completed', handoffNoteRecorded: true }),
+    { bind: 'wsb_x' },
+    { outcome: 'completed', summary: 'x', handoff_notes: { intent: 'y', touched_files: ['a.ts'] } },
+  );
+  assert.match(result.text, /Handoff note stored/);
+  assert.doesNotMatch(result.text, /WARNING/);
+});
+
+test('progress_update says whether the note reached the coordinator', async () => {
+  const surfaced = await progressUpdate(
+    fakeTransport({ success: true, taskId: 't1', surfacedToCoordinator: true }),
+    { bind: 'wsb_x' },
+    { note: 'a real milestone worth telling the coordinator about' },
+  );
+  assert.match(surfaced.text, /surfaced to the coordinator/);
+
+  const filtered = await progressUpdate(
+    fakeTransport({ success: true, taskId: 't1', surfacedToCoordinator: false }),
+    { bind: 'wsb_x' },
+    { note: 'minor chatter' },
+  );
+  // Recorded but filtered is the ordinary outcome; saying so stops a worker
+  // repeating the note in the hope of a response.
+  assert.match(filtered.text, /not surfaced to the coordinator/);
+});
+
+test('a progress_update refusal carries its detail instead of a bare reason', async () => {
+  const result = await progressUpdate(
+    fakeTransport({
+      success: false,
+      error: 'storage_failed',
+      detail: 'task t1 has no active attempt to record progress against',
+    }),
+    { bind: 'wsb_x' },
+    { note: 'anything' },
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.text, /storage_failed/);
+  assert.match(result.text, /no active attempt/);
+});

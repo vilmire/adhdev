@@ -50,6 +50,7 @@ import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runner.js';
+import { isTaskReadonly } from './mesh-work-queue.js';
 import {
     exchangeWorkerSessionBind,
     verifyWorkerTaskToken,
@@ -210,18 +211,23 @@ export function validateWorkerCompletionReport(raw: unknown): {
                 }
             }
             const noteFiles = validateStringList(n.touchedFiles, 'handoffNotes.touchedFiles', WORKER_TOUCHED_FILES_MAX, errors);
-            if (n.touchedFiles === undefined || !noteFiles?.length) {
-                // Required: the touched-file set is the PRIMARY relevance signal
-                // for auto-enclosure (design §5 판정 1). A note with no files can
-                // never be matched to a later task, so it would be stored and
-                // never delivered — worse than being told to supply one.
+            if (n.touchedFiles === undefined) {
+                // Still required to be PRESENT: the touched-file set is the PRIMARY
+                // relevance signal for auto-enclosure (design §5 판정 1), and a note
+                // that omits the key entirely is one that never thought about it.
+                //
+                // ★But an EMPTY array is now accepted here, because emptiness is
+                // only wrong for a code-changing task — and this validator cannot
+                // see the task. checkReportAgainstTaskMode makes that call once
+                // identity is resolved; see F6 there. Rejecting empty here is what
+                // drove read-only workers to invent placeholder "paths".
                 errors.push({
                     field: 'handoffNotes.touchedFiles',
-                    message: 'touchedFiles is required and must be non-empty — it is what matches this note to future work',
+                    message: 'touchedFiles is required — it is what matches this note to future work (use [] on a read-only task)',
                 });
             }
             const followUps = validateStringList(n.followUps, 'handoffNotes.followUps', WORKER_FOLLOW_UPS_MAX, errors);
-            if (intent && noteFiles?.length) {
+            if (intent && noteFiles) {
                 handoffNotes = {
                     intent,
                     ...(guidance ? { conflictGuidance: guidance } : {}),
@@ -276,6 +282,107 @@ function validateStringList(
         out.push(trimmed);
     }
     return out;
+}
+
+// ─── Prior-report lookup (shadowing guard) ──────────────────────────────
+
+/**
+ * What a worker already reported for a task, read back out of the ledger.
+ *
+ * ★Why this exists: a completion is emitted TWICE by two independent producers.
+ * The worker's `report_completion` terminalizes the row immediately; the PTY
+ * scrape then emits `agent:generating_completed` for the same turn seconds later
+ * (measured: 25.4s). Both paths write a ledger entry and a coordinator message,
+ * and the LATER one wins by arriving last — so the coordinator reads a truncated
+ * screen scrape while the authoritative structured report sits in the ledger,
+ * unread. The ledger was never wrong; the coordinator's view was.
+ *
+ * `mesh-event-forwarding.ts` already refuses to re-open a row "arriving after
+ * worker_tool_report already terminalized" it on the hollow-completion requeue
+ * path. This is the same predicate, made readable from the ledger-append and
+ * coordinator-notify paths that never got the guard.
+ */
+export interface PriorWorkerReport {
+    taskId: string;
+    attemptId: string;
+    outcome: WorkerReportOutcome;
+    /** The verbatim summary, when this daemon still holds the content row. */
+    summary?: string;
+    recordedAt: string;
+}
+
+/**
+ * Look up the worker's own completion report for a task, if one was filed.
+ *
+ * Returns null when no report exists — which is the ordinary case for a worker
+ * that never reached MCP, and the reason the PTY path must stay the fallback
+ * rather than being replaced (design §4 "절반만 승격").
+ */
+export function findPriorWorkerReport(meshId: string, taskId: string): PriorWorkerReport | null {
+    if (!meshId || !taskId) return null;
+    let rows: ReturnType<MeshRuntimeStore['listTurnEventsForTask']>;
+    try {
+        rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(meshId, taskId);
+    } catch {
+        // A lookup failure must not turn into "no report" silently at a call
+        // site that would then let the scrape win — callers treat null as
+        // "unknown", and the scrape is still the documented fallback.
+        return null;
+    }
+    const row = rows.filter((r) => r.kind === WORKER_REPORT_EVENT_KIND).pop();
+    if (!row) return null;
+    let payload: { outcome?: unknown } = {};
+    try { payload = JSON.parse(row.payload) as { outcome?: unknown }; } catch { /* meta is advisory */ }
+    const outcome = payload.outcome === 'completed' || payload.outcome === 'blocked' || payload.outcome === 'failed'
+        ? payload.outcome
+        : 'completed';
+    const summary = readReportedSummary(meshId, taskId);
+    return {
+        taskId,
+        attemptId: row.attemptId,
+        outcome,
+        ...(summary ? { summary } : {}),
+        recordedAt: row.recordedAt,
+    };
+}
+
+/**
+ * Verbatim report summaries, keyed `${meshId}\0${taskId}`.
+ *
+ * ★The ledger row is content-free by design (§9.1) — it stores the summary's
+ * LENGTH, not its text — so the text has to be held somewhere for the shadowing
+ * guard to substitute it back in. This mirror is the same shape and lifetime as
+ * the handoff-note mirror, and like it, it is bounded by the retention sweep.
+ *
+ * A miss is not a failure: the guard then suppresses the scrape's ledger append
+ * without substituting a summary, which still beats letting a truncated scrape
+ * overwrite the structured record.
+ */
+const REPORTED_SUMMARY_STORE = new Map<string, { summary: string; recordedAtMs: number }>();
+
+function summaryKey(meshId: string, taskId: string): string {
+    return `${meshId} ${taskId}`;
+}
+
+function readReportedSummary(meshId: string, taskId: string): string | undefined {
+    return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
+}
+
+/** Drop reported summaries older than `maxAgeMs`. Mirrors the handoff sweep. */
+export function pruneReportedSummaries(maxAgeMs: number, nowMs = Date.now()): number {
+    let removed = 0;
+    for (const [key, entry] of REPORTED_SUMMARY_STORE) {
+        if (nowMs - entry.recordedAtMs > maxAgeMs) {
+            REPORTED_SUMMARY_STORE.delete(key);
+            removed += 1;
+        }
+    }
+    return removed;
+}
+
+/** Test-only reset. */
+export function __resetReportedSummariesForTest(): void {
+    REPORTED_SUMMARY_STORE.clear();
 }
 
 // ─── Identity resolution ────────────────────────────────────────────────
@@ -344,7 +451,20 @@ export type WorkerReportRefusal =
     /** The reducer refused on causal grounds — its typed reason is carried through. */
     | 'rejected_by_reducer'
     /** The task id no longer resolves to a queue row. */
-    | 'unknown_task';
+    | 'unknown_task'
+    /**
+     * The report could not be PERSISTED. Distinct from a reducer rejection: the
+     * report was causally fine, the write failed. A worker that sees this should
+     * re-call, because nothing was recorded — which is precisely what the old
+     * `accepted: true`-on-write-failure path made impossible to know.
+     */
+    | 'storage_failed'
+    /**
+     * `touchedFiles` was supplied on a task declared read-only, or omitted on a
+     * code-changing task. Carried as a refusal rather than a validation error
+     * because the read-only bit is only knowable after identity resolution.
+     */
+    | 'invalid_for_task_mode';
 
 export type WorkerReportResult =
     | {
@@ -355,6 +475,8 @@ export type WorkerReportResult =
         /** True when this exact terminal was already committed — an idempotent re-call. */
         duplicate: boolean;
         handoffNoteRecorded: boolean;
+        /** Why the note did not persist, when `handoffNoteRecorded` is false. */
+        handoffNoteError?: string;
     }
     | { accepted: false; refusal: WorkerReportRefusal; detail?: string };
 
@@ -386,6 +508,60 @@ export function configureHandoffNoteSink(sink: HandoffNoteSink | null): void {
 }
 
 /**
+ * The `touchedFiles` rule that depends on the TASK, not on the payload shape.
+ *
+ * Two halves of one axis, and enforcing only one of them is what produced the
+ * measured damage:
+ *   - read-only task + non-empty touchedFiles ⇒ REFUSE. The task mode says the
+ *     worker was not supposed to change anything; a file list contradicts its
+ *     own report, and letting it through records a change nobody authorized.
+ *   - code-changing task + empty/absent touchedFiles ⇒ REFUSE. This is the
+ *     original requirement, unchanged, now applied where it is actually true.
+ *
+ * Returns a human-readable reason, or null when the report is consistent.
+ *
+ * ★Fails OPEN when the task row cannot be read. A queue-lookup failure is not
+ * evidence the report is wrong, and refusing on it would make an unrelated
+ * storage hiccup look like a worker error — the report path's job is to record
+ * what the worker said, not to invent refusals.
+ */
+function checkReportAgainstTaskMode(
+    identity: WorkerTokenExchangeResult,
+    report: WorkerCompletionReport,
+): string | null {
+    let task: { readonly?: boolean; taskMode?: string } | null | undefined;
+    try {
+        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity.meshId, identity.taskId);
+    } catch {
+        return null;
+    }
+    if (!task) return null;
+
+    const readonly = isTaskReadonly(task);
+    const declaredFiles = [
+        ...(report.touchedFiles || []),
+        ...(report.handoffNotes?.touchedFiles || []),
+    ];
+
+    if (readonly) {
+        if (declaredFiles.length) {
+            return `task ${identity.taskId} is read-only (taskMode=${task.taskMode || 'readonly'}) but the report declares `
+                + `${declaredFiles.length} touched file(s) — a read-only task must report an empty touchedFiles. `
+                + 'If you did change files, this task was the wrong place to do it; say so in `summary` and report `blocked`.';
+        }
+        return null;
+    }
+
+    // Code-changing task: the file list is what matches this work to future
+    // tasks, so an empty one is the same defect the validator used to catch.
+    if (report.handoffNotes && !report.handoffNotes.touchedFiles.length) {
+        return `task ${identity.taskId} changes code, so handoffNotes.touchedFiles must be non-empty — `
+            + 'it is the key that delivers your note to whoever touches this code next.';
+    }
+    return null;
+}
+
+/**
  * Accept a validated worker completion report.
  *
  * Order matters and is not arbitrary:
@@ -405,16 +581,39 @@ export function acceptWorkerCompletionReport(
     const identity = resolveWorkerIdentity(credential);
     if (!identity) return { accepted: false, refusal: 'unauthenticated' };
 
+    // ★F6: the read-only axis is only knowable HERE. `validateWorkerCompletionReport`
+    // sees the raw payload and no task, so it cannot tell a read-only verification
+    // task (which touches nothing by definition) from a code change that forgot to
+    // declare its files. Deciding it post-identity is what lets both halves be
+    // enforced instead of neither: measured, a read-only worker wrote the literal
+    // placeholder "N/A (read-only verification task, no files touched)" into
+    // handoffNotes.touchedFiles to satisfy the blanket requirement — a string that
+    // is not a path, stored as one, poisoning the enclosure matching key.
+    const taskModeError = checkReportAgainstTaskMode(identity, report);
+    if (taskModeError) {
+        return { accepted: false, refusal: 'invalid_for_task_mode', detail: taskModeError };
+    }
+
     const nowMs = opts.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
     const store = MeshRuntimeStore.getInstance();
 
+    // ★Hold the verbatim summary for the shadowing guard (findPriorWorkerReport).
+    // Written BEFORE the terminal commit: the commit can synchronously trigger
+    // downstream dispatch, and a late PTY completion for this same turn must find
+    // the authoritative text already present rather than racing it.
+    REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
+        summary: report.summary,
+        recordedAtMs: nowMs,
+    });
+
     // (2) Evidence row — content-free. The summary is NOT stored here; only its
     // length and the structured facts. The summary itself reaches the
     // coordinator through the completion envelope below.
+    let evidenceRecorded = !identity.attemptId;
     if (identity.attemptId) {
         try {
-            store.insertTurnEvent({
+            evidenceRecorded = store.insertTurnEvent({
                 eventId: randomUUID(),
                 meshId: identity.meshId,
                 attemptId: identity.attemptId,
@@ -435,14 +634,42 @@ export function acceptWorkerCompletionReport(
                 recordedAt: nowIso,
             });
         } catch (e: any) {
-            LOG.warn('WorkerReport', `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
+            // ★F7: a throw here means the evidence row is GONE — the row that
+            // proves "the worker did report" and that the shadowing guard reads
+            // back. Returning accepted:true anyway told the worker its report
+            // landed while leaving no trace of it, which is the silent-success
+            // class this module exists to remove. `false` (INSERT OR IGNORE hit
+            // the UNIQUE key) is NOT a failure — that is the idempotent re-call
+            // the dedupeKey was chosen to produce, so it must not be conflated.
+            LOG.error('WorkerReport', `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
+            evidenceRecorded = false;
+        }
+        if (!evidenceRecorded) {
+            // A duplicate insert still means the row exists; only a genuine
+            // write failure reaches here with the row absent.
+            const existing = findPriorWorkerReport(identity.meshId, identity.taskId);
+            if (!existing) {
+                return {
+                    accepted: false,
+                    refusal: 'storage_failed',
+                    detail: `could not persist the report evidence row for task ${identity.taskId}`,
+                };
+            }
+            evidenceRecorded = true;
         }
     }
 
-    // (3) Handoff note.
+    // (3) Handoff note. ★F5: `handoffNoteRecorded` now reflects whether the note
+    // was actually PERSISTED. It used to return true after skipping the insert
+    // (no attemptId) and after swallowing a sink throw, which is what put
+    // "Handoff note stored — it will be delivered to related future tasks
+    // automatically." in front of a worker whose note was not stored.
     let handoffNoteRecorded = false;
+    let handoffNoteError: string | null = null;
     if (report.handoffNotes) {
-        handoffNoteRecorded = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
     }
 
     // (4) Terminal. 'blocked' is NOT a terminal outcome the ledger knows — it
@@ -510,6 +737,11 @@ export function acceptWorkerCompletionReport(
         outcome: report.outcome,
         duplicate: commit.duplicate,
         handoffNoteRecorded,
+        // ★The completion itself still stands — the terminal committed, and
+        // discarding a valid completion because its optional note failed would
+        // trade a small loss for a large one. But the worker is TOLD, so it can
+        // put the context somewhere else rather than believing it was filed.
+        ...(handoffNoteError ? { handoffNoteError } : {}),
     };
 }
 
@@ -522,14 +754,33 @@ export function acceptWorkerProgressUpdate(
     credential: { token?: unknown; bind?: unknown },
     note: string,
     opts: { nowMs?: number } = {},
-): { accepted: boolean; taskId?: string; refusal?: WorkerReportRefusal } {
+): {
+    accepted: boolean;
+    taskId?: string;
+    refusal?: WorkerReportRefusal;
+    detail?: string;
+    /** Whether this note was judged worth paging the coordinator about (F3). */
+    surfacedToCoordinator?: boolean;
+} {
     const identity = resolveWorkerIdentity(credential);
     if (!identity) return { accepted: false, refusal: 'unauthenticated' };
-    if (!identity.attemptId) return { accepted: true, taskId: identity.taskId };
+    // ★F4: previously `return { accepted: true }` without writing a single row.
+    // The worker was told "Progress noted for task …" and nothing existed to
+    // note it. No attempt means there is no row to hang a turn event off, so the
+    // honest answer is a refusal the worker can see, not a fabricated success.
+    if (!identity.attemptId) {
+        return {
+            accepted: false,
+            taskId: identity.taskId,
+            refusal: 'storage_failed',
+            detail: `task ${identity.taskId} has no active attempt to record progress against`,
+        };
+    }
 
     const nowMs = opts.nowMs ?? Date.now();
+    let recorded = false;
     try {
-        MeshRuntimeStore.getInstance().insertTurnEvent({
+        recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
             eventId: randomUUID(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
@@ -543,9 +794,149 @@ export function acceptWorkerProgressUpdate(
             recordedAt: new Date(nowMs).toISOString(),
         });
     } catch (e: any) {
-        LOG.warn('WorkerReport', `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
+        LOG.error('WorkerReport', `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
+        return {
+            accepted: false,
+            taskId: identity.taskId,
+            refusal: 'storage_failed',
+            detail: e?.message || String(e),
+        };
     }
-    return { accepted: true, taskId: identity.taskId };
+    if (!recorded) {
+        // dedupeKey is the millisecond timestamp, so a false here means two
+        // updates landed in the same millisecond on one attempt — the note IS
+        // lost, and saying "noted" would be the same silent success as F4.
+        return {
+            accepted: false,
+            taskId: identity.taskId,
+            refusal: 'storage_failed',
+            detail: 'a progress update for this attempt already exists at this timestamp — retry',
+        };
+    }
+
+    // ★F3: surface the note to the coordinator. The ledger row above is
+    // content-free (length only), so the TEXT rides this call and nothing else.
+    // Filtered, not firehosed — see shouldSurfaceProgressToCoordinator.
+    const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs);
+    return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
+}
+
+// ─── F3: progress → coordinator ─────────────────────────────────────────
+
+/**
+ * Minimum gap between two progress notes that reach the coordinator, per task.
+ *
+ * ★The owner's requirement is explicit about what should get through: "큰줄기와
+ * 오래걸리는것들" — the main thread of the work and the things that take a long
+ * time — and NOT "자잘한부분". A worker that narrates every file it opens would
+ * turn the coordinator's inbox into a log tail, which is the failure mode that
+ * makes a notification channel worth ignoring. So the first note on a task is
+ * always surfaced (that is the "it has started and here is what it is doing"
+ * signal), and after that a note must be spaced by this interval.
+ */
+export const WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1000;
+
+/** Notes shorter than this are treated as chatter, not a milestone. */
+export const WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
+
+/** Last surfaced time per `${meshId}\0${taskId}`. */
+const PROGRESS_SURFACE_LAST_MS = new Map<string, number>();
+
+/** Test-only reset. */
+export function __resetProgressSurfaceForTest(): void {
+    PROGRESS_SURFACE_LAST_MS.clear();
+}
+
+/**
+ * Decide whether a progress note is worth paging the coordinator about.
+ *
+ * Deliberately a pure predicate so the policy is testable without a store: the
+ * alternative (deciding inside the notifier) is what makes a filter impossible
+ * to characterize later.
+ */
+export function shouldSurfaceProgressToCoordinator(opts: {
+    note: string;
+    nowMs: number;
+    lastSurfacedAtMs?: number;
+}): boolean {
+    const note = opts.note.trim();
+    if (note.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
+    // First note on this task — always the most informative one the coordinator
+    // gets, because it is the only evidence the work actually started.
+    if (opts.lastSurfacedAtMs === undefined) return true;
+    return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+}
+
+/** The coordinator-facing line for a surfaced progress note. */
+export function buildWorkerProgressNotice(opts: {
+    taskId: string;
+    nodeLabel: string;
+    note: string;
+}): string {
+    return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()}`
+        + ' — this is an informational mid-task update, NOT a completion. The task is still running;'
+        + ' do not dispatch it elsewhere and do not poll. Wait for its completion event.';
+}
+
+/**
+ * Sink that queues a coordinator-facing progress notice. Injected for the same
+ * reason the handoff sink is: worker-report.ts must stay importable from tests
+ * and from a daemon with no pending-event store wired.
+ */
+export type WorkerProgressNoticeSink = (notice: {
+    meshId: string;
+    taskId: string;
+    nodeId?: string;
+    sessionId?: string;
+    note: string;
+    coordinatorMessage: string;
+    nowMs: number;
+}) => void;
+
+let progressNoticeSink: WorkerProgressNoticeSink | null = null;
+
+/** Wire the coordinator progress sink at daemon boot; null disables surfacing. */
+export function configureWorkerProgressNoticeSink(sink: WorkerProgressNoticeSink | null): void {
+    progressNoticeSink = sink;
+}
+
+function notifyCoordinatorOfProgress(
+    identity: WorkerTokenExchangeResult,
+    note: string,
+    nowMs: number,
+): boolean {
+    const key = summaryKey(identity.meshId, identity.taskId);
+    if (!shouldSurfaceProgressToCoordinator({
+        note,
+        nowMs,
+        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key),
+    })) {
+        return false;
+    }
+    const sink = progressNoticeSink;
+    if (!sink) return false;
+    try {
+        sink({
+            meshId: identity.meshId,
+            taskId: identity.taskId,
+            ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+            note: note.trim(),
+            coordinatorMessage: buildWorkerProgressNotice({
+                taskId: identity.taskId,
+                nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
+                note,
+            }),
+            nowMs,
+        });
+    } catch (e: any) {
+        // Surfacing is an enhancement over the ledger row, which is already
+        // written. It must never turn an accepted progress update into a refusal.
+        LOG.warn('WorkerReport', `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
+        return false;
+    }
+    PROGRESS_SURFACE_LAST_MS.set(key, nowMs);
+    return true;
 }
 
 function recordHandoffNote(
@@ -553,13 +944,24 @@ function recordHandoffNote(
     notes: WorkerHandoffNotes,
     nowMs: number,
     nowIso: string,
-): boolean {
+): { recorded: boolean; error: string | null } {
+    // ★F5: no attemptId means the META INDEX ROW cannot be written, and that row
+    // is the only thing selectRelevantHandoffNotes queries. Storing the text with
+    // no index produces a note that exists and can never be delivered — so this
+    // is a failure, reported as one, rather than the `true` it used to return.
+    if (!identity.attemptId) {
+        return {
+            recorded: false,
+            error: `task ${identity.taskId} has no active attempt, so the note has no index row and could never be delivered`,
+        };
+    }
+
     // Meta index row: WHO/WHEN/WHAT-FILES, no free text. The touched-file list is
     // stored here (and not only in the topic) because it is the lookup key for
     // auto-enclosure — an index nobody can query is not an index. File paths are
     // identifiers, not authored prose, so this stays within the ledger's
     // meta-only rule.
-    if (identity.attemptId) {
+    {
         try {
             MeshRuntimeStore.getInstance().insertTurnEvent({
                 eventId: randomUUID(),
@@ -580,8 +982,8 @@ function recordHandoffNote(
                 recordedAt: nowIso,
             });
         } catch (e: any) {
-            LOG.warn('WorkerReport', `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
-            return false;
+            LOG.error('WorkerReport', `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
+            return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
         }
     }
 
@@ -601,8 +1003,12 @@ function recordHandoffNote(
                 recordedAtIso: nowIso,
             });
         } catch (e: any) {
-            LOG.warn('WorkerReport', `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
+            // ★F5: the sink is what persists the note TEXT. A throw here leaves
+            // an index row pointing at nothing, so enclosure will skip it — the
+            // note is effectively lost and the worker must be told, not thanked.
+            LOG.error('WorkerReport', `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
+            return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
         }
     }
-    return true;
+    return { recorded: true, error: null };
 }

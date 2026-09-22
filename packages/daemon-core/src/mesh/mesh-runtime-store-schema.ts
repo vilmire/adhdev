@@ -385,6 +385,40 @@ export function migrate(self: MeshRuntimeStore): void {
             ON mesh_turn_held_suspensions(mesh_id, status);
         CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
             ON mesh_turn_held_suspensions(attempt_id, status);
+
+        -- WORKER-MCP (design §5, decision C) — handoff note TEXT.
+        --
+        -- ★Why a table and not the mesh_turn_events payload: that payload is the
+        -- META index and is content-free by design §9.1 (it stores the intent's
+        -- LENGTH, never its text). The text lived only in an in-process Map, so
+        -- its real lifetime was "until the daemon restarts" while its index row
+        -- lived 30 days — and selectRelevantHandoffNotes skips any index row whose
+        -- text is missing. Net effect: every note recorded before the last restart
+        -- was permanently undeliverable, silently, while report_completion still
+        -- answered "Handoff note stored — it will be delivered to related future
+        -- tasks automatically."
+        --
+        -- Local-only: this table is never projected to the cloud status path, so
+        -- the server content boundary is untouched. The seqscribe content-topic
+        -- append (cross-machine delivery) is unchanged and still the other half.
+        --
+        -- Keyed by (mesh_id, task_id) — one note per task, matching the Map key it
+        -- replaces and the UNIQUE(attempt_id, kind, '') on the index row. A re-report
+        -- for the same task REPLACEs, so a corrected note supersedes its predecessor
+        -- rather than accumulating.
+        CREATE TABLE IF NOT EXISTS mesh_handoff_note_text (
+            mesh_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            attempt_id TEXT,
+            node_id TEXT,
+            notes_json TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY (mesh_id, task_id)
+        );
+
+        -- The retention sweep deletes by age across all meshes.
+        CREATE INDEX IF NOT EXISTS idx_mesh_handoff_note_text_recorded
+            ON mesh_handoff_note_text(recorded_at);
     `);
     migrateMeshIsolationColumns(self);
     // GRAPH-ORCHESTRATION Phase A: additive graph tables (CREATE IF NOT EXISTS only). See mesh-graph-schema.ts.

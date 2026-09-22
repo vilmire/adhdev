@@ -395,6 +395,12 @@ export function isTerminalTaskEvent(eventName: string): boolean {
  */
 const COORDINATOR_ALERT_EVENTS: ReadonlySet<string> = new Set([
   'mesh:dispatch_blocked',
+  // WORKER-MCP F3: a worker's mid-task progress note. Unicast for the same
+  // reason a terminal event is — it reports on work ONE coordinator dispatched,
+  // and broadcasting it would page every coordinator on the daemon about a task
+  // they do not own. Filtered at the producer (shouldSurfaceProgressToCoordinator)
+  // so this carries milestones, not a log tail.
+  'mesh:worker_progress',
 ]);
 
 /**
