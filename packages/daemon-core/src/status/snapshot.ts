@@ -404,7 +404,10 @@ function getUnreadState(
     completionMarker: string,
     seenCompletionMarker: string,
 ): { unread: boolean; inboxBucket: RecentSessionBucket } {
-    if (status === 'waiting_approval') {
+    // Both human-decision parks land in needs_attention: an unanswered question
+    // picker blocks the session exactly as an approval modal does, and it is the
+    // inbox entry that gets the user to the banner in the first place.
+    if (status === 'waiting_approval' || status === 'waiting_choice') {
         return { unread: false, inboxBucket: 'needs_attention' };
     }
     if (status === 'generating' || status === 'starting') {

@@ -163,6 +163,11 @@ function resolveSessionStatus(
     const topLevelStatus = normalizeManagedStatus(providerStatus, { activeModal: activeChat?.activeModal || null });
 
     if (chatStatus === 'waiting_approval' || topLevelStatus === 'waiting_approval') return 'waiting_approval';
+    // Must precede the `generating` row for the same reason approval does: a
+    // session parked on a question picker frequently still carries a stale
+    // top-level `generating` (the provider FSM has not observed the park yet).
+    // Letting `generating` win there hides the picker from every status consumer.
+    if (chatStatus === 'waiting_choice' || topLevelStatus === 'waiting_choice') return 'waiting_choice';
     if (chatStatus === 'generating' || topLevelStatus === 'generating') return 'generating';
     if (topLevelStatus !== 'idle') return topLevelStatus;
     return chatStatus;

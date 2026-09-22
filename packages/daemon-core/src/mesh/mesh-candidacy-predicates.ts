@@ -62,7 +62,7 @@ export function isTerminalSessionStatus(status: string): boolean {
 // (med-family/cli-agent.ts) can reuse the SAME status/liveness probe to independently confirm a
 // pinned target session is genuinely ready before overriding the coarse worktreeBootstrap
 // 'running' defer for that one session. Never returns true for 'starting' / 'waiting_approval' /
-// 'generating' / any other non-idle status — those still refuse the override.
+// 'waiting_choice' / 'generating' / any other non-idle status — those still refuse the override.
 export function isIdleSessionState(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
     if (isTerminalSessionStatus(status)) return false;
@@ -74,7 +74,11 @@ export function sessionStateLooksActive(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
     const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
     // 'long_generating' is retained as a legacy alias for the renamed 'no_progress' busy status.
-    const active = new Set(['generating', 'streaming', 'no_progress', 'long_generating', 'working', 'starting', 'waiting_approval']);
+    // 'waiting_choice' is active for the same reason as 'waiting_approval': the node
+    // still owns a live turn parked on a human decision. Treating it as free makes
+    // the active-work gate pass and a SECOND session gets claimed for work already
+    // running here — the duplicate-dispatch hazard this predicate exists to prevent.
+    const active = new Set(['generating', 'streaming', 'no_progress', 'long_generating', 'working', 'starting', 'waiting_approval', 'waiting_choice']);
     return active.has(status) || active.has(chatStatus);
 }
 

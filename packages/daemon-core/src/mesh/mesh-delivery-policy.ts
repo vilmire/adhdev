@@ -102,6 +102,12 @@ const BUSY_DELIVERY_STATUSES = new Set([
     'starting',
     'initializing',
     'waiting_approval',
+    // A session parked on a question picker is busy-but-alive in exactly the same
+    // sense as one parked on an approval modal: it holds a live turn and cannot
+    // take new work until the human answers. Omitting it made resolveDeliveryDecision
+    // fall through to the fail-closed 'unrecognized_session_status' reject, so
+    // mesh_send_task was refused outright rather than queued.
+    'waiting_choice',
 ]);
 
 /**
@@ -175,12 +181,16 @@ export function resolveDeliveryDecision(
                 message: `Session is ${status} but provider supports busy injection. Delivered immediately.`,
             };
         }
-        // approval-kind may be delivered to waiting_approval sessions
-        if (status === 'waiting_approval' && opts?.kind === 'approval') {
+        // approval-kind may be delivered to sessions parked on a human decision.
+        // `waiting_choice` (question picker) is the same shape as `waiting_approval`:
+        // the session is blocked on a modal whose answer IS the delivery, so routing
+        // it through the idle queue would deadlock — the session never goes idle
+        // until someone answers.
+        if ((status === 'waiting_approval' || status === 'waiting_choice') && opts?.kind === 'approval') {
             return {
                 decision: 'immediate',
-                reason: 'session_waiting_approval_approval_message',
-                message: 'Session is waiting for approval — approval message delivered immediately.',
+                reason: `session_${status}_approval_message`,
+                message: `Session is parked on a ${status === 'waiting_choice' ? 'choice' : 'approval'} prompt — answer delivered immediately.`,
             };
         }
         // ── Explicit interrupt request ────────────────────────────────────────

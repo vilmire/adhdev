@@ -15,11 +15,12 @@
 
 /**
  * Statuses that keep a session warm/active. Crucially includes
- * `waiting_approval`, which `isBusyChatTailStatus` excludes.
+ * `waiting_approval` and `waiting_choice`, which `isBusyChatTailStatus` excludes.
  */
 export const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
   'generating',
   'waiting_approval',
+  'waiting_choice',
   'starting',
   'streaming',
   'working',
@@ -63,15 +64,17 @@ export function isTerminalChatTailStatusEvent(event: unknown): boolean {
  * Shrink-defer gate (NOT a "busy" predicate). Returns true for every status that
  * keeps a session warm/active, i.e. every member of
  * WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES, which crucially includes
- * `waiting_approval`.
+ * `waiting_approval` and `waiting_choice`.
  *
  * `isBusyChatTailStatus` intentionally EXCLUDES `waiting_approval` (and other
  * warm states like `starting`) because its callers rely on the strict "busy"
  * meaning. But the chat-tail shrink-defense must protect the approval window
- * too: during `waiting_approval` the daemon can emit a short partial tail (e.g.
- * only the user prompt, assistant bubble briefly missing) that — without this
- * guard — replaces the longer hydrated `liveMessages` and makes the assistant
- * bubble transiently disappear/return (CHATFLICKER on approve). We widen ONLY
+ * too: during `waiting_approval` — and equally during `waiting_choice`, where the
+ * session is parked on a question picker in the same way — the daemon can emit a
+ * short partial tail (e.g. only the user prompt, assistant bubble briefly missing)
+ * that — without this guard — replaces the longer hydrated `liveMessages` and makes
+ * the assistant bubble transiently disappear/return (CHATFLICKER on approve/answer).
+ * We widen ONLY
  * this shrink-defer gate to WARM_ACTIVE membership; `isBusyChatTailStatus` keeps
  * its existing busy semantics untouched.
  */
