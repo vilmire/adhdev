@@ -165,8 +165,15 @@ export function getConversationViewStates(conversation: { status?: string, conne
         : normalizeManagedStatus(conversation.status)
     const isGenerating = MANAGED_STATUS_IS_WORKING[managedStatus]
     const isWaiting = managedStatus === 'waiting_approval'
+    // A parked AskUserQuestion picker is equally "agent idle, waiting on the
+    // user", but it must stay distinguishable from an approval modal: surfaces
+    // that offer RAW approval buttons (ApprovalBanner) can never offer them for
+    // a structured question — a raw single-select injection cannot submit a
+    // checkbox picker (see ApprovalBanner's MULTISELECT-REMOTE-DEADLOCK note).
+    // Kept a separate flag so each consumer opts in deliberately.
+    const isWaitingChoice = managedStatus === 'waiting_choice'
     const isErrored = MANAGED_STATUS_IS_ERRORED.has(managedStatus)
-    return { isReconnecting, isConnecting, isGenerating, isWaiting, isErrored }
+    return { isReconnecting, isConnecting, isGenerating, isWaiting, isWaitingChoice, isErrored }
 }
 
 /**
