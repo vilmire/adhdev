@@ -41,7 +41,9 @@ export function commandExists(command: string): boolean {
     }
 }
 
-export const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'no_progress', 'long_generating']);
+// 'waiting_choice' sits alongside 'waiting_approval': a session parked on a question
+// picker holds a live turn and must not read as free to the send/dispatch guards.
+export const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'waiting_choice', 'no_progress', 'long_generating']);
 const ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2_000;
 
 function normalizeAgentStatus(value: unknown): string {

@@ -50991,11 +50991,11 @@ Next step: ${nextStep}`;
             message: `Session is ${status} but provider supports busy injection. Delivered immediately.`
           };
         }
-        if (status === "waiting_approval" && opts?.kind === "approval") {
+        if ((status === "waiting_approval" || status === "waiting_choice") && opts?.kind === "approval") {
           return {
             decision: "immediate",
-            reason: "session_waiting_approval_approval_message",
-            message: "Session is waiting for approval \u2014 approval message delivered immediately."
+            reason: `session_${status}_approval_message`,
+            message: `Session is parked on a ${status === "waiting_choice" ? "choice" : "approval"} prompt \u2014 answer delivered immediately.`
           };
         }
         if (opts?.deliveryMode === "interrupt") {
@@ -51122,7 +51122,13 @@ Next step: ${nextStep}`;
           "busy",
           "starting",
           "initializing",
-          "waiting_approval"
+          "waiting_approval",
+          // A session parked on a question picker is busy-but-alive in exactly the same
+          // sense as one parked on an approval modal: it holds a live turn and cannot
+          // take new work until the human answers. Omitting it made resolveDeliveryDecision
+          // fall through to the fail-closed 'unrecognized_session_status' reject, so
+          // mesh_send_task was refused outright rather than queued.
+          "waiting_choice"
         ]);
         TERMINAL_DELIVERY_STATUSES = /* @__PURE__ */ new Set([
           "stopped",
@@ -83582,7 +83588,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function sessionStateLooksActive(state2) {
       const status = readNonEmptyString(state2?.status).toLowerCase();
       const chatStatus = readNonEmptyString(state2?.activeChat?.status).toLowerCase();
-      const active = /* @__PURE__ */ new Set(["generating", "streaming", "no_progress", "long_generating", "working", "starting", "waiting_approval"]);
+      const active = /* @__PURE__ */ new Set(["generating", "streaming", "no_progress", "long_generating", "working", "starting", "waiting_approval", "waiting_choice"]);
       return active.has(status) || active.has(chatStatus);
     }
     function nodeHasActiveMeshWork(components, meshId, nodeId, currentSessionId) {
@@ -88579,6 +88585,7 @@ ${cleanBody}`;
       const chatStatus = normalizeManagedStatus(activeChat?.status, { activeModal: activeChat?.activeModal || null });
       const topLevelStatus = normalizeManagedStatus(providerStatus, { activeModal: activeChat?.activeModal || null });
       if (chatStatus === "waiting_approval" || topLevelStatus === "waiting_approval") return "waiting_approval";
+      if (chatStatus === "waiting_choice" || topLevelStatus === "waiting_choice") return "waiting_choice";
       if (chatStatus === "generating" || topLevelStatus === "generating") return "generating";
       if (topLevelStatus !== "idle") return topLevelStatus;
       return chatStatus;
@@ -89167,7 +89174,7 @@ ${cleanBody}`;
       return getLastDisplayMessage(session)?.role || "";
     }
     function getUnreadState(hasContentChange, status, lastUsedAt, lastSeenAt, lastRole, completionMarker, seenCompletionMarker) {
-      if (status === "waiting_approval") {
+      if (status === "waiting_approval" || status === "waiting_choice") {
         return { unread: false, inboxBucket: "needs_attention" };
       }
       if (status === "generating" || status === "starting") {
@@ -122652,7 +122659,7 @@ ${rawInput}` : rawInput;
         path48 = __toESM2(require("path"));
         import_fs22 = require("fs");
         import_child_process10 = require("child_process");
-        BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set(["generating", "running", "streaming", "starting", "busy", "waiting", "waiting_approval", "no_progress", "long_generating"]);
+        BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set(["generating", "running", "streaming", "starting", "busy", "waiting", "waiting_approval", "waiting_choice", "no_progress", "long_generating"]);
         ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2e3;
       }
     });

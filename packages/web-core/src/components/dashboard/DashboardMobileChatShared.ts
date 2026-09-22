@@ -378,8 +378,14 @@ export function getConversationInboxSurfaceState(
     const isConnecting = viewStates.isConnecting
     const isGenerating = viewStates.isGenerating
     const isWaiting = viewStates.isWaiting
+    // Deliberate opt-in per getConversationViewStates' contract: the inbox only
+    // needs to know "a human must act here", which is true of an unanswered
+    // question picker as much as an approval modal. The approval/choice split
+    // matters to surfaces that render RAW approval buttons — the inbox renders
+    // an entry, not buttons, so it takes both.
+    const isWaitingChoice = viewStates.isWaitingChoice
 
-    const requiresAction = liveState.inboxBucket === 'needs_attention' || conversation.status === 'needs_attention' || conversation.status === 'waiting_for_user_input' || isWaiting
+    const requiresAction = liveState.inboxBucket === 'needs_attention' || conversation.status === 'needs_attention' || conversation.status === 'waiting_for_user_input' || isWaiting || isWaitingChoice
     const isWorking = liveState.inboxBucket === 'working' || isGenerating
     const taskCompleteUnread = liveState.inboxBucket === 'task_complete' && liveState.unread
     const unread = !!(

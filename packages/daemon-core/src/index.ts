@@ -211,7 +211,7 @@ export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // Type aliases — rollup-dts cannot bundle re-exported type aliases at all.
 // Canonical definition lives in shared-types-extra.ts — keep these in sync.
-export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'finalizing' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
 export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
 
 // ── Core Interface ──
