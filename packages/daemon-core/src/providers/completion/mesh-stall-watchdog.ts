@@ -133,6 +133,42 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     const stalledMs = now - host.meshStallAnchorAt;
     if (stalledMs < threshold) return;
 
+    // (APPROVAL-WAIT-BLINDSPOT fix ④, live defect 2026-09-22) A worker PARKED AT
+    // A PROMPT IS NOT STALLED — it is waiting for a human, and reporting it as
+    // no-progress kills work nobody had any reason to abandon.
+    //
+    // Why the existing Stage-6 branch below cannot cover this: it only engages
+    // when `authority === 'turn_reducer'`, i.e. when a `mesh_turn_attempts` row
+    // already says `waiting_approval`. That row is written from the ledger event
+    // the DAEMON emits on entering the approval state — so in exactly the
+    // situation this watchdog needs protection from (the approval was never
+    // detected, or was detected minutes late) there is no row, no authority, and
+    // therefore no veto. The watchdog was structurally blind to the failure mode
+    // it most needed to survive. Measured: a `waiting_approval` that arrived 4
+    // minutes late landed on a task the watchdog had already reaped, and was
+    // discarded as `stale`.
+    //
+    // `observedStatus` closes that loop because it is read LIVE from the adapter
+    // at the top of this tick (`getStatus({allowParse:false})`) — it does not
+    // depend on any event having been successfully emitted, forwarded, or
+    // recorded. It is the one liveness fact available even when the whole event
+    // path is broken. This also covers `waiting_external` (a browser login/2FA
+    // wait), which the adapter projects to `waiting_approval` for exactly this
+    // "a human must act" reason.
+    //
+    // Scope: re-arm, never suppress permanently. A session that leaves the
+    // prompt goes back to the normal clock on the very next tick, and a genuinely
+    // wedged GENERATING session is untouched — this branch requires the adapter
+    // to be actively reporting a prompt, which a wedged worker is not.
+    if (observedStatus === 'waiting_approval' || observedStatus === 'waiting_choice') {
+        traceMeshEventDrop('mesh_worker_stall_waiting_on_human', host.meshTraceCtx('monitor:no_progress'),
+            `PTY quiet ${Math.round(stalledMs / 1000)}s but the adapter reports '${observedStatus}' — `
+            + 'the session is parked at a prompt awaiting a human decision, not stalled');
+        host.meshStallAnchorAt = now;
+        host.meshStallEmittedForAnchor = false;
+        return;
+    }
+
     // (TURN-PRESENTATION Stage 6) Causal attempt evidence outranks the PTY quiet clock.
     const turnPresentation = resolveSessionTurnPresentation({
         sessionId: host.instanceId,
