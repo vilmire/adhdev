@@ -427,11 +427,18 @@ export async function interruptAndDeliver(
         // gates still apply and a re-park is reported as queued, not as delivered.
         // A claimed entry is delivered as ITS OWN body (built image prompt +
         // paste flag + claimKey), so an attachment survives and a re-park stays
-        // claimable.
-        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, {
-            ...(options?.meshTaskId ? { meshTaskId: options.meshTaskId } : {}),
-            ...(claimedBody ? { bracketedPaste: claimedBody.bracketedPaste, claimKey: claimedBody.claimKey } : {}),
-        });
+        // claimable. When nothing was claimed and no meshTaskId rides along, the
+        // legacy no-options call shape (second arg undefined) is preserved
+        // byte-for-byte — call-shape guards pin it, and an always-present empty
+        // object would be a silent contract change for out-of-tree adapters.
+        const deliverOpts = claimedBody
+            ? {
+                ...(options?.meshTaskId ? { meshTaskId: options.meshTaskId } : {}),
+                bracketedPaste: claimedBody.bracketedPaste,
+                claimKey: claimedBody.claimKey,
+            }
+            : (options?.meshTaskId ? { meshTaskId: options.meshTaskId } : undefined);
+        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, deliverOpts);
         const queued = sendResult?.status === 'queued';
         LOG.info(
             'SendNow',

@@ -184,11 +184,13 @@ export async function sendNowIntoAgentQueue(
     let restored = claimed === 0;
     if (claimed > 0 && typeof adapter.sendMessage === 'function') {
         try {
-            for (const entry of (claimedEntries && claimedEntries.length > 0 ? claimedEntries : [{ text }])) {
-                await adapter.sendMessage(entry.text, {
-                    bracketedPaste: entry.bracketedPaste,
-                    claimKey: entry.claimKey,
-                });
+            for (const entry of (claimedEntries && claimedEntries.length > 0 ? claimedEntries : [{ text } as { text: string; bracketedPaste?: boolean; claimKey?: string }])) {
+                // Entries with per-entry state re-park with it; a plain text body
+                // keeps the legacy no-options call shape (second arg omitted).
+                const restoreOpts = entry.bracketedPaste !== undefined || entry.claimKey !== undefined
+                    ? { bracketedPaste: entry.bracketedPaste, claimKey: entry.claimKey }
+                    : undefined;
+                await adapter.sendMessage(entry.text, restoreOpts);
             }
             restored = true;
         } catch (e) {
