@@ -105259,8 +105259,7 @@ ${marker}`,
           constructor(host) {
             this.host = host;
           }
-          /** Queued send bodies. `bracketedPaste` rides along so a queued image
-           *  prompt keeps its paste-wrapped delivery when drained later. */
+          /** Queued send bodies — see QueuedSendEntry. */
           pendingSends = [];
           /** True while a send is written but the FSM has not yet left idle, i.e. the
            *  composer is mid-submit. Blocks a second send from overwriting the first
@@ -105366,18 +105365,35 @@ ${marker}`,
           }
           /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
           claimQueuedSends(text) {
-            const before = this.pendingSends.length;
-            if (before === 0) return 0;
-            this.pendingSends = this.pendingSends.filter((s2) => s2.text !== text);
-            const claimed = before - this.pendingSends.length;
-            if (claimed > 0) {
+            return this.claimQueuedSendEntries(text).length;
+          }
+          /**
+           * SEND-NOW-DOUBLE-SEND: remove every queued body whose text OR claimKey (the
+           * raw source text a structured image prompt was built from — see
+           * QueuedSendEntry) exactly equals `text`, and RETURN the removed entries.
+           *
+           * Returning the entries is the point: a claimer that then delivers its own
+           * raw `text` would silently drop the attachment the parked body carried, so
+           * the out-of-band routes (send-now, interrupt) deliver the claimed entry's
+           * ACTUAL body instead.
+           */
+          claimQueuedSendEntries(text) {
+            if (this.pendingSends.length === 0) return [];
+            const claimedEntries = [];
+            this.pendingSends = this.pendingSends.filter((s2) => {
+              const matches = s2.text === text || s2.claimKey === text;
+              if (matches) claimedEntries.push(s2);
+              return !matches;
+            });
+            if (claimedEntries.length > 0) {
               this.recentSendHashes.delete(hashSendText(text));
+              for (const entry of claimedEntries) this.recentSendHashes.delete(hashSendText(entry.text));
               LOG.info(
                 "FsmDriver",
-                `[${this.host.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery (len=${text.length}, remaining=${this.pendingSends.length})`
+                `[${this.host.specTag()}] claimed ${claimedEntries.length} queued send(s) for out-of-band delivery (len=${text.length}, remaining=${this.pendingSends.length})`
               );
             }
-            return claimed;
+            return claimedEntries;
           }
           /**
            * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
@@ -105391,13 +105407,13 @@ ${marker}`,
            * on top of a still-generating turn, braiding the two bodies in the composer
            * (see the SEND-OVERLAP note above the constants).
            */
-          handleSendMessage(text, bracketedPaste) {
+          handleSendMessage(text, bracketedPaste, claimKey) {
             if (this.isDuplicateResend(text)) {
               LOG.info("FsmDriver", `[${this.host.specTag()}] send suppressed \u2014 duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
               return { status: "duplicate" };
             }
             if (!this.canSendNow()) {
-              this.pendingSends.push({ text, bracketedPaste });
+              this.pendingSends.push({ text, bracketedPaste, claimKey });
               const reason = this.sendBlockedReason();
               LOG.info(
                 "FsmDriver",
@@ -106559,8 +106575,8 @@ trust_level = "trusted"
             }
           }
           /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
-          sendMessageWithDisposition(text, bracketedPaste) {
-            return this.sends.handleSendMessage(text, bracketedPaste);
+          sendMessageWithDisposition(text, bracketedPaste, claimKey) {
+            return this.sends.handleSendMessage(text, bracketedPaste, claimKey);
           }
           /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
           sendMessageDuringGeneration(text, bracketedPaste) {
@@ -106581,6 +106597,10 @@ trust_level = "trusted"
           /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
           claimQueuedSends(text) {
             return this.sends.claimQueuedSends(text);
+          }
+          /** SEND-NOW-DOUBLE-SEND (image bodies): see ISpecDriver.claimQueuedSendEntries. */
+          claimQueuedSendEntries(text) {
+            return this.sends.claimQueuedSendEntries(text);
           }
           /** Forward runtime metadata to the terminal transport so mesh binding
            *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach
@@ -109620,6 +109640,7 @@ trust_level = "trusted"
             usageRecords.push(usageRecord);
           }
         }
+        if (type2 === "user" && record2.isMeta === true) continue;
         if (type2 === "user") {
           for (const part of extractUserContentParts(message.content)) {
             const msg = {
@@ -113340,7 +113361,7 @@ ${text}` : text;
             LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length})`);
             LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? "\u2026" : ""}`);
             if (typeof this.driver.sendMessageWithDisposition === "function") {
-              const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste);
+              const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste, _opts?.claimKey);
               if (disposition.status === "queued") {
                 LOG.info(
                   "SpecAdapter",
@@ -113400,6 +113421,17 @@ ${text}` : text;
           claimQueuedSends(text) {
             if (typeof this.driver.claimQueuedSends !== "function") return 0;
             return this.driver.claimQueuedSends(text);
+          }
+          /**
+           * SEND-NOW-DOUBLE-SEND (image bodies): claim queued entries by built body
+           * text OR claimKey and return them, so the caller delivers the parked body
+           * itself. See ISpecDriver.claimQueuedSendEntries.
+           */
+          claimQueuedSendEntries(text) {
+            if (typeof this.driver.claimQueuedSendEntries !== "function") {
+              return Array.from({ length: this.claimQueuedSends(text) }, () => ({ text }));
+            }
+            return this.driver.claimQueuedSendEntries(text);
           }
           /**
            * SEND-NOW-WRONG-ITEM: hold the driver's FIFO drain so this caller owns the
@@ -115936,20 +115968,17 @@ ${buttons.join("\n")}`;
       } catch {
       }
     }
-    function buildCliStructuredInputPrompt(input, options = {}) {
+    function buildStructuredInputText(input, resolveImageRef) {
       const promptParts = [];
       const imageRefs = [];
       const resourceRefs = [];
-      const materializeDir = options.materializeDir || path44.join(os29.tmpdir(), "adhdev-input-media");
       input.parts.forEach((part, index) => {
         if (part.type === "text" && part.text.trim()) {
           promptParts.push(part.text.trim());
           return;
         }
         if (part.type === "image") {
-          const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
-          const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
-          const ref = localPath || materializedPath || part.uri || "";
+          const ref = resolveImageRef(part, index);
           if (ref) imageRefs.push(ref);
           if (part.alt?.trim()) promptParts.push(part.alt.trim());
           return;
@@ -115971,8 +116000,26 @@ ${buttons.join("\n")}`;
         ...promptParts,
         ...resourceRefs
       ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
+      return { text: ordered.join("\n"), imageRefs, resourceRefs };
+    }
+    function buildCliStructuredInputPrompt(input, options = {}) {
+      const materializeDir = options.materializeDir || path44.join(os29.tmpdir(), "adhdev-input-media");
+      const { text, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
+        const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
+        const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
+        return localPath || materializedPath || part.uri || "";
+      });
       LOG.debug("CLI", `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
-      return ordered.join("\n");
+      return text;
+    }
+    function buildCliInputAckText(input) {
+      return buildStructuredInputText(input, (part) => {
+        const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
+        if (localPath) return localPath;
+        if (part.uri) return part.uri;
+        if (part.data) return `[image: ${part.mimeType || "image"}]`;
+        return "";
+      }).text;
     }
     var os29;
     var path44;
@@ -118169,7 +118216,7 @@ ${buttons.join("\n")}`;
       return mergeConversationMessages(host.runtimeMessages, host.parsedIngestTimestamps.stamp(parsedMessages));
     }
     function recordAcknowledgedUserInput(host, input) {
-      const content = typeof input === "string" ? input.trim() : buildCliStructuredInputPrompt(input).trim();
+      const content = typeof input === "string" ? input.trim() : buildCliInputAckText(input).trim();
       if (!content) return;
       const receivedAt = Date.now();
       const ackContentKey = shortHash(`${host.instanceId}:${content}`, 24);
@@ -119422,7 +119469,9 @@ ${buttons.join("\n")}`;
                   LOG.info("CLI", `[${this.type}] force send_message held \u2014 coordinator parked on modal (${this.resolveModalParkStatus()})`);
                   return Promise.resolve({ success: false, error: "send_message held by active modal" });
                 }
+                const claimKey = input.textFallback.trim();
                 const sendOpts = buildAdapterSendOpts(force, bracketedPaste);
+                if (claimKey && claimKey !== promptText) sendOpts.claimKey = claimKey;
                 return this.adapter.sendMessage(promptText, sendOpts).then(
                   (result) => ({ success: true, status: result?.status || "delivered" }),
                   (e) => {
@@ -121965,7 +122014,9 @@ ${rawInput}` : rawInput;
         LOG.warn("SendNow", `[${adapter.cliType}] interrupt refused: ${interrupted.reason}`);
         return { ok: false, reason: interrupted.reason, message: interrupted.message };
       }
-      const claimed = typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
+      const claimedEntries = typeof adapter.claimQueuedSendEntries === "function" ? adapter.claimQueuedSendEntries(text) : null;
+      const claimed = claimedEntries ? claimedEntries.length : typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
+      const claimedBody = claimedEntries && claimedEntries.length > 0 ? claimedEntries[0] : null;
       if (claimed > 0) {
         LOG.info("SendNow", `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body \u2014 this call is now its only delivery route`);
       }
@@ -121999,7 +122050,10 @@ ${rawInput}` : rawInput;
             message: `The stop key was sent to ${adapter.cliType}, but the session did not return to idle in time, so the message was not delivered. Nothing was sent \u2014 send it again when the agent settles.`
           };
         }
-        const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : void 0);
+        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, {
+          ...options?.meshTaskId ? { meshTaskId: options.meshTaskId } : {},
+          ...claimedBody ? { bracketedPaste: claimedBody.bracketedPaste, claimKey: claimedBody.claimKey } : {}
+        });
         const queued = sendResult?.status === "queued";
         LOG.info(
           "SendNow",
@@ -153768,24 +153822,31 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           restored: true
         };
       }
-      const claimed = typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
-      const outcome = adapter.sendMessageDuringGeneration(text);
+      const claimedEntries = typeof adapter.claimQueuedSendEntries === "function" ? adapter.claimQueuedSendEntries(text) : null;
+      const claimed = claimedEntries ? claimedEntries.length : typeof adapter.claimQueuedSends === "function" ? adapter.claimQueuedSends(text) : 0;
+      const body = claimedEntries && claimedEntries.length > 0 ? claimedEntries[0] : { text };
+      const outcome = adapter.sendMessageDuringGeneration(body.text, body.bracketedPaste);
       if (outcome.accepted) {
         LOG.info(
           "SendNowQueue",
-          `[${adapter.cliType}] handed to agent input queue (len=${text.length}, claimed=${claimed})`
+          `[${adapter.cliType}] handed to agent input queue (len=${body.text.length}, claimed=${claimed})`
         );
         return { ok: true, claimed };
       }
       let restored = claimed === 0;
       if (claimed > 0 && typeof adapter.sendMessage === "function") {
         try {
-          await adapter.sendMessage(text);
+          for (const entry of claimedEntries && claimedEntries.length > 0 ? claimedEntries : [{ text }]) {
+            await adapter.sendMessage(entry.text, {
+              bracketedPaste: entry.bracketedPaste,
+              claimKey: entry.claimKey
+            });
+          }
           restored = true;
         } catch (e) {
           LOG.error(
             "SendNowQueue",
-            `[${adapter.cliType}] FAILED to restore ${claimed} claimed send(s) after refusal (${outcome.reason}, len=${text.length}): ${e?.message}`
+            `[${adapter.cliType}] FAILED to restore ${claimed} claimed send(s) after refusal (${outcome.reason}, len=${body.text.length}): ${e?.message}`
           );
         }
       }
@@ -153962,9 +154023,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                   restored: queued2.restored
                 };
               }
-              const target2 = getTargetInstance(h, args);
-              if (target2?.category === "cli" && target2.type === adapter.cliType && typeof target2.recordAcknowledgedUserInput === "function") {
-                target2.recordAcknowledgedUserInput(input);
+              if (queued2.claimed === 0) {
+                const target2 = getTargetInstance(h, args);
+                if (target2?.category === "cli" && target2.type === adapter.cliType && typeof target2.recordAcknowledgedUserInput === "function") {
+                  target2.recordAcknowledgedUserInput(input);
+                }
               }
               return {
                 ..._logSendSuccess(`${transport}-adapter-agent-queue`, adapter.cliType),

@@ -253,6 +253,92 @@ describe('claude-cli-transcript — readSession', () => {
   });
 });
 
+describe('claude-cli-transcript — isMeta records (IMAGE-TRIPLE-BUBBLE ③)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-claude-ismeta-'));
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = '';
+  });
+
+  const IMAGE_SOURCE_META =
+    '[Image: source: /var/tmp/adhdev-input-media/adhdev-input-image-1789456456991-0-a43a9.png]';
+
+  it('★ skips isMeta:true user records — Claude Code hides them in its own UI', async () => {
+    const sessionId = 'a1b2c3d4-0000-0000-0000-000000000030';
+    const filePath = writeTranscript(sessionId, [
+      // The record Claude Code writes alongside a pasted image: local temp
+      // path, isMeta:true, hidden by CC's own renderer. Verified against live
+      // ~/.claude transcripts 2026-09-23.
+      {
+        ...userLine([{ type: 'text', text: IMAGE_SOURCE_META }], sessionId, 1_800_000_000_500, '/workspaces/img'),
+        isMeta: true,
+      },
+      // The REAL image turn carries no isMeta and must keep rendering.
+      userLine([{ type: 'text', text: '[Image #1]look at this' }], sessionId, 1_800_000_001_000),
+      assistantLine('Looking.', sessionId, 1_800_000_002_000),
+    ]);
+
+    const { readSession } = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const result = await readSession(filePath);
+
+    expect(result).not.toBeNull();
+    const visible = result!.messages.filter((m) => m.kind !== 'session_start');
+    expect(visible.map((m) => m.content)).toEqual(['[Image #1]look at this', 'Looking.']);
+    // The local temp path never reaches any read path (read_chat, mesh_read_chat).
+    expect(result!.messages.some((m) => m.content.includes('[Image: source:'))).toBe(false);
+    expect(result!.messages.some((m) => m.content.includes('adhdev-input-media'))).toBe(false);
+  });
+
+  it('★ keeps tool-block expand refs addressable across a skipped isMeta record', async () => {
+    const sessionId = 'a1b2c3d4-0000-0000-0000-000000000031';
+    const longCommand = 'echo ' + 'x'.repeat(600); // > TOOL_CALL_SUMMARY_MAX → truncated → ref stamped
+    const filePath = writeTranscript(sessionId, [
+      { ...userLine([{ type: 'text', text: IMAGE_SOURCE_META }], sessionId, 1_800_000_000_500, '/workspaces/img'), isMeta: true },
+      userLine('run it', sessionId, 1_800_000_001_000),
+      assistantLine([{ type: 'tool_use', name: 'Bash', input: { command: longCommand } }], sessionId, 1_800_000_002_000),
+    ]);
+
+    const mod = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const result = mod.readSession(filePath);
+    expect(result).not.toBeNull();
+
+    const toolBubble = result!.messages.find((m) => m.kind === 'tool' && m.toolBlockRef);
+    expect(toolBubble).toBeDefined();
+
+    // The expand path rebuilds the record array WITHOUT the isMeta skip. The
+    // parser must therefore keep counting skipped records, or every ref after
+    // an isMeta line would address its NEIGHBOUR's block.
+    const records = mod.readClaudeRecords(filePath);
+    const resolved = mod.readClaudeToolBlockAt(
+      records[toolBubble!.toolBlockRef!.recordIndex],
+      toolBubble!.toolBlockRef!.blockIndex,
+    );
+    expect(resolved?.toolName).toBe('Bash');
+    expect(resolved?.callArgs).toContain(longCommand);
+  });
+
+  it('listSessions previews/counts exclude isMeta records too', async () => {
+    const sessionId = 'a1b2c3d4-0000-0000-0000-000000000032';
+    writeTranscript(sessionId, [
+      userLine('real question', sessionId, 1_800_000_001_000, '/workspaces/img'),
+      assistantLine('real answer', sessionId, 1_800_000_002_000),
+      { ...userLine([{ type: 'text', text: IMAGE_SOURCE_META }], sessionId, 1_800_000_003_000), isMeta: true },
+    ], 'meta-project');
+
+    const { listSessions } = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const sessions = await listSessions(path.join(tmpDir, '.claude', 'projects'));
+    const meta = sessions.find((s) => s.sessionId === sessionId);
+    expect(meta).toBeDefined();
+    expect(meta!.messageCount).toBe(2);
+    expect(meta!.preview).toBe('real answer');
+  });
+});
+
 describe('claude-cli-transcript — listSessions', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-claude-list-'));

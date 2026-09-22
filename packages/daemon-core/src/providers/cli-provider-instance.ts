@@ -868,7 +868,16 @@ export class CliProviderInstance implements ProviderInstance {
                     LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
                     return Promise.resolve({ success: false, error: 'send_message held by active modal' });
                 }
-                const sendOpts = buildAdapterSendOpts(force, bracketedPaste);
+                // (SEND-NOW-DOUBLE-SEND, image bodies) The FIFO parks the BUILT
+                // prompt, but send-now / cancel / interrupt callers only know the
+                // raw dashboard text — so a structured body rides with its source
+                // text as `claimKey`, the second identity the queue claim matches.
+                // Omitted when it equals the built prompt (plain text sends),
+                // where the text match already works.
+                const claimKey = input.textFallback.trim();
+                const sendOpts: { force?: boolean; bracketedPaste?: boolean; claimKey?: string } =
+                    buildAdapterSendOpts(force, bracketedPaste);
+                if (claimKey && claimKey !== promptText) sendOpts.claimKey = claimKey;
                 // Return the completion to callers that need an acknowledgement.
                 // Resolve failures explicitly so legacy event-only callers can safely
                 // ignore the promise without creating unhandled rejections.

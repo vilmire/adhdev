@@ -350,7 +350,7 @@ export class SpecCliAdapter implements CliAdapter {
      *   - `sendMessageDuringGeneration` → the POSIX-only split write that the CLI's
      *     own input queue takes. This is the "mid-generation-split" delivery mode.
      */
-    async sendMessage(text: string, _opts?: { force?: boolean; bracketedPaste?: boolean }): Promise<{ status: 'queued' | 'delivered' } | void> {
+    async sendMessage(text: string, _opts?: { force?: boolean; bracketedPaste?: boolean; claimKey?: string }): Promise<{ status: 'queued' | 'delivered' } | void> {
         // Content-free at info — the prompt body is user data. `force` is logged so a
         // caller still passing it can see, in the log, that it changed nothing here.
         if (_opts?.force === true) {
@@ -367,7 +367,7 @@ export class SpecCliAdapter implements CliAdapter {
         // fire-and-forget and the method returned undefined — so every caller
         // treated a body merely parked in the driver's in-memory FIFO as sent.
         if (typeof this.driver.sendMessageWithDisposition === 'function') {
-            const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste);
+            const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste, _opts?.claimKey);
             if (disposition.status === 'queued') {
                 LOG.info(
                     'SpecAdapter',
@@ -435,6 +435,21 @@ export class SpecCliAdapter implements CliAdapter {
     claimQueuedSends(text: string): number {
         if (typeof this.driver.claimQueuedSends !== 'function') return 0;
         return this.driver.claimQueuedSends(text);
+    }
+
+    /**
+     * SEND-NOW-DOUBLE-SEND (image bodies): claim queued entries by built body
+     * text OR claimKey and return them, so the caller delivers the parked body
+     * itself. See ISpecDriver.claimQueuedSendEntries.
+     */
+    claimQueuedSendEntries(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[] {
+        if (typeof this.driver.claimQueuedSendEntries !== 'function') {
+            // Legacy driver: fall back to the count-only claim so the guard still
+            // holds for plain-text bodies; the caller gets no entry to deliver and
+            // keeps using its own text.
+            return Array.from({ length: this.claimQueuedSends(text) }, () => ({ text }));
+        }
+        return this.driver.claimQueuedSendEntries(text);
     }
 
     /**

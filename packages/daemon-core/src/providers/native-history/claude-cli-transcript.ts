@@ -500,6 +500,18 @@ function parseTranscriptFile(
       }
     }
 
+    // (IMAGE-TRIPLE-BUBBLE ③) Claude Code marks its own non-conversational user
+    // records with `isMeta: true` and HIDES them in its own UI: pasted-image
+    // source notes ("[Image: source: /tmp/…/adhdev-input-image-….png]"), local
+    // command caveats, and harness-injected continuation/context prompts
+    // (verified against live ~/.claude transcripts 2026-09-23; the real image
+    // turn carries NO isMeta). Rendering them here produced a third bubble per
+    // image send and leaked local temp paths through every read path
+    // (read_chat, mesh_read_chat). Mirror Claude Code's own UI and skip them.
+    // The skip sits AFTER recordIndex++ so tool-block refs minted for later
+    // records stay aligned with readClaudeRecords, which keeps every record.
+    if (type === 'user' && record.isMeta === true) continue;
+
     if (type === 'user') {
       for (const part of extractUserContentParts(message.content)) {
         const msg: NativeHistoryMessage = {
