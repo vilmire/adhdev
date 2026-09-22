@@ -135257,6 +135257,23 @@ ${mergeTreeErr?.stderr || ""}`;
         note: plan.sourceType === "unavailable" ? "No validation command will be executed until a repo mesh/refine config is provided. Heuristics are suggestions only." : "Validation commands are resolved from repo mesh/refine config; heuristics are suggestions only."
       };
     }
+    function reportRefineCommandComplete(callback, candidate, startedAt, passed) {
+      if (!callback) return;
+      try {
+        callback({
+          displayCommand: candidate.displayCommand || [candidate.command, ...candidate.args || []].join(" ").trim(),
+          durationMs: Date.now() - startedAt,
+          passed
+        });
+      } catch {
+      }
+    }
+    function buildRefineVendorDriftHint(params) {
+      if (!params.rebased) return void 0;
+      const haystack = [params.displayCommand, ...params.args || []].join(" ");
+      if (!/check-vendor-drift/.test(haystack)) return void 0;
+      return "This refine REBASED the branch onto an advanced base before validating, which changed the commit the vendor bundles were built from \u2014 so the committed bundles no longer reproduce and check-vendor-drift fails. This is expected after a rebase and does NOT mean the branch is wrong. Fix: run `npm run bundle:vendor:all` in the worktree, commit the regenerated vendor paths (the daemon-standalone copy lives inside oss, so bump the oss pointer too), then re-run refine.";
+    }
     async function runMeshRefineValidationGate(mesh, workspace, opts) {
       const { execFile: execFile9 } = await import("child_process");
       const { promisify: promisify11 } = await import("util");
@@ -135473,6 +135490,7 @@ ${mergeTreeErr?.stderr || ""}`;
             ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           summary.commandsRun.push(commandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
+          reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, true);
         } catch (error48) {
           const spawnResolutionFailed = isSpawnResolutionError(error48);
           const stderr = truncateValidationOutput(error48?.stderr || error48?.message);
@@ -135490,7 +135508,18 @@ ${mergeTreeErr?.stderr || ""}`;
             ...failureLogPath ? { failureLogPath } : {},
             ...spawnResolutionFailed ? { failureKind: "spawn_resolution_failed", resolvedCommand } : outputLimitExceeded ? { failureKind: "output_limit_exceeded" } : missingDependencyFailure ? { failureKind: "missing_dependencies" } : {}
           }));
+          reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, false);
           summary.status = "failed";
+          const vendorHint = buildRefineVendorDriftHint({
+            displayCommand: candidate.displayCommand || candidate.command,
+            args: candidate.args,
+            rebased: opts?.branchWasRebased === true
+          });
+          if (vendorHint) {
+            summary.failureKind = "vendor_drift_after_rebase";
+            summary.failureCode = "vendor_drift_after_rebase";
+            summary.vendorDriftHint = vendorHint;
+          }
           if (spawnResolutionFailed) {
             summary.failureKind = "spawn_resolution_failed";
             summary.failureCode = "spawn_resolution_failed";
@@ -139382,6 +139411,274 @@ ${ptyResult.output.slice(-2e3)}`);
         GIT4 = process.platform === "win32" ? resolveWin32Executable("git") : "git";
       }
     });
+    function isSlowRefineGate(durationMs) {
+      return durationMs >= SLOW_GATE_THRESHOLD_MS;
+    }
+    function shouldEmitRefineProgress(context, phase, now) {
+      if (CRITICAL_PHASES.has(phase)) return true;
+      const last = context.lastEmittedAt;
+      if (last === void 0) return true;
+      return now - last >= MIN_EVENT_INTERVAL_MS;
+    }
+    function buildRefineProgressEventPayload(context, event, suppressedSinceLast) {
+      const metadataEvent = {
+        source: "refine_mesh_node_async_job",
+        progress: true,
+        jobId: context.jobId,
+        meshId: context.meshId,
+        nodeId: event.nodeId,
+        ...event,
+        ...suppressedSinceLast > 0 ? { suppressedSinceLast } : {},
+        ...context.coordinatorSessionId ? { meshCoordinatorSessionId: context.coordinatorSessionId } : {}
+      };
+      return {
+        event: "refine:progress",
+        meshId: context.meshId,
+        nodeId: event.nodeId,
+        nodeLabel: event.nodeId,
+        metadataEvent,
+        queuedAt: Date.now(),
+        ...context.coordinatorDaemonId ? { targetCoordinatorDaemonId: context.coordinatorDaemonId } : {},
+        ...context.coordinatorSessionId ? { targetCoordinatorSessionId: context.coordinatorSessionId } : {}
+      };
+    }
+    function emitRefineProgress(context, event) {
+      try {
+        const now = Date.now();
+        if (!shouldEmitRefineProgress(context, event.phase, now)) {
+          context.suppressedCount = (context.suppressedCount ?? 0) + 1;
+          return;
+        }
+        const suppressed = context.suppressedCount ?? 0;
+        context.suppressedCount = 0;
+        if (!CRITICAL_PHASES.has(event.phase)) context.lastEmittedAt = now;
+        queuePendingMeshCoordinatorEvent(buildRefineProgressEventPayload(context, event, suppressed));
+      } catch (e) {
+        LOG.debug("Mesh", `[Refinery] progress event dropped (${event.phase}): ${e?.message || e}`);
+      }
+    }
+    var SLOW_GATE_THRESHOLD_MS;
+    var MIN_EVENT_INTERVAL_MS;
+    var CRITICAL_PHASES;
+    var init_mesh_refine_progress = __esm2({
+      "src/mesh/mesh-refine-progress.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_events();
+        SLOW_GATE_THRESHOLD_MS = 3e4;
+        MIN_EVENT_INTERVAL_MS = 15e3;
+        CRITICAL_PHASES = /* @__PURE__ */ new Set(["node_failed", "chain_abort", "job_failed"]);
+      }
+    });
+    async function assessRefineAcceptPreflight(params) {
+      const startedAt = Date.now();
+      const { repoRoot } = params;
+      const timeoutMs = params.timeoutMs ?? PREFLIGHT_TIMEOUT_MS;
+      let status;
+      try {
+        status = await getGitRepoStatus(repoRoot, {
+          includeSubmodules: true,
+          // ★Off by default — a fetch is the expensive axis. See
+          // RefineAcceptPreflightOptions for why deferring it loses nothing.
+          refreshUpstream: params.refreshUpstream === true,
+          // Live state only: a TTL-cached snapshot from a concurrent mesh_status
+          // probe cannot answer a gating question.
+          forceFresh: true,
+          timeoutMs
+        });
+      } catch {
+        return indeterminate(startedAt);
+      }
+      if (!status.isGitRepo) return indeterminate(startedAt);
+      const findings = [];
+      findings.push(...collectRootFindings(status, repoRoot));
+      findings.push(...collectSubmoduleFindings(status));
+      await attachDirtyFileNames(findings, timeoutMs);
+      if (findings.length === 0) {
+        return { ok: true, indeterminate: false, findings: [], message: "", durationMs: Date.now() - startedAt };
+      }
+      const code = chooseRefineAcceptPreflightCode(findings);
+      return {
+        ok: false,
+        indeterminate: false,
+        findings,
+        code,
+        message: renderRefineAcceptPreflightMessage(findings),
+        durationMs: Date.now() - startedAt
+      };
+    }
+    async function attachDirtyFileNames(findings, timeoutMs) {
+      await Promise.all(findings.map(async (finding) => {
+        if (finding.code === "base_worktree_dirty") {
+          try {
+            const out = await runGit(finding.repoPath, ["status", "--porcelain", "--untracked-files=no"], { timeoutMs });
+            const paths = (out.stdout || "").split("\n").map((line) => line.slice(3).trim()).filter(Boolean);
+            if (paths.length > 0) {
+              finding.fileCount = paths.length;
+              finding.files = paths.slice(0, MAX_REPORTED_FILES);
+            }
+          } catch {
+          }
+          return;
+        }
+        if (finding.code === "base_stash_entries_present") {
+          try {
+            const out = await runGit(finding.repoPath, ["stash", "list", "-1", "--pretty=%gd: %s"], { timeoutMs });
+            const latest = (out.stdout || "").split("\n")[0]?.trim();
+            if (latest) finding.latestStash = latest;
+          } catch {
+          }
+        }
+      }));
+    }
+    function indeterminate(startedAt) {
+      return { ok: true, indeterminate: true, findings: [], message: "", durationMs: Date.now() - startedAt };
+    }
+    function collectRootFindings(status, repoPath) {
+      const findings = [];
+      const dirtyCount = status.staged + status.modified + status.deleted + status.renamed;
+      if (dirtyCount > 0 || status.hasConflicts) {
+        const files = Array.isArray(status.conflictFiles) ? status.conflictFiles.slice(0, MAX_REPORTED_FILES) : [];
+        findings.push({
+          scope: "root",
+          repoPath,
+          code: "base_worktree_dirty",
+          files,
+          fileCount: status.hasConflicts ? Math.max(dirtyCount, files.length) : dirtyCount,
+          remedy: "Commit, stash, or discard the changes in the base checkout, then re-run refine."
+        });
+      }
+      if (status.stashCount > 0) {
+        findings.push({
+          scope: "root",
+          repoPath,
+          code: "base_stash_entries_present",
+          files: [],
+          fileCount: 0,
+          stashCount: status.stashCount,
+          remedy: "Resolve the stash entries in the base checkout (git stash pop / git stash drop), then re-run refine."
+        });
+      }
+      if (status.upstream && status.upstreamStatus === "fresh" && status.ahead > 0 && status.behind > 0) {
+        findings.push({
+          scope: "root",
+          repoPath,
+          code: "base_diverged_from_origin",
+          files: [],
+          fileCount: 0,
+          localHead: status.headCommit ?? void 0,
+          ahead: status.ahead,
+          behind: status.behind,
+          remedy: `Base has diverged from ${status.upstream} (${status.ahead} local / ${status.behind} remote commit(s)); neither side is an ancestor of the other, so no rebase-and-retry can reconcile it. Resolve manually, then re-run refine.`
+        });
+      }
+      return findings;
+    }
+    function collectSubmoduleFindings(status) {
+      const submodules = Array.isArray(status.submodules) ? status.submodules : [];
+      const findings = [];
+      for (const submodule of submodules) {
+        if (!submodule.dirty) continue;
+        findings.push({
+          scope: submodule.path,
+          repoPath: submodule.repoPath || submodule.path,
+          code: "base_worktree_dirty",
+          files: [],
+          fileCount: 0,
+          remedy: `Commit, stash, or discard the uncommitted changes in the '${submodule.path}' submodule of the base checkout, then re-run refine.`
+        });
+      }
+      return findings;
+    }
+    function chooseRefineAcceptPreflightCode(findings) {
+      const order = [
+        "base_worktree_dirty",
+        "base_stash_entries_present",
+        "base_diverged_from_origin"
+      ];
+      for (const code of order) {
+        if (findings.some((f) => f.code === code)) return code;
+      }
+      return findings[0]?.code;
+    }
+    function renderRefineAcceptPreflightMessage(findings) {
+      const lines = [
+        "Refine was refused BEFORE running any gates: the base checkout the merge would land in is not in a mergeable state."
+      ];
+      for (const finding of findings) {
+        const where = finding.scope === "root" ? "root repo" : `submodule '${finding.scope}'`;
+        const detail = [];
+        if (finding.fileCount > 0) {
+          detail.push(`${finding.fileCount} file(s)`);
+          if (finding.files.length > 0) {
+            const shown = finding.files.join(", ");
+            const more = finding.fileCount - finding.files.length;
+            detail.push(more > 0 ? `[${shown}, +${more} more]` : `[${shown}]`);
+          }
+        }
+        if (finding.stashCount !== void 0) {
+          detail.push(`${finding.stashCount} stash entry/entries`);
+          if (finding.latestStash) detail.push(`latest: ${finding.latestStash}`);
+        }
+        if (finding.ahead !== void 0 && finding.ahead > 0) detail.push(`ahead ${finding.ahead}`);
+        if (finding.behind !== void 0 && finding.behind > 0) detail.push(`behind ${finding.behind}`);
+        if (finding.localHead) detail.push(`local ${finding.localHead.slice(0, 7)}`);
+        if (finding.originHead) detail.push(`origin ${finding.originHead.slice(0, 7)}`);
+        lines.push(
+          `  - [${finding.code}] ${where} (${finding.repoPath})` + (detail.length ? `: ${detail.join(" ")}` : "") + `
+      \u2192 ${finding.remedy}`
+        );
+      }
+      lines.push("No gates were run and nothing was dispatched, so nothing needs to be undone.");
+      return lines.join("\n");
+    }
+    function buildRefineAcceptPreflightRefusal(params) {
+      const { verdict, meshId, nodeId } = params;
+      return {
+        success: false,
+        code: verdict.code ?? "base_preflight_blocked",
+        error: verdict.message,
+        basePreflight: {
+          blocked: true,
+          code: verdict.code,
+          findings: verdict.findings,
+          durationMs: verdict.durationMs
+        },
+        meshId,
+        ...nodeId ? { nodeId, targetNodeId: nodeId } : {},
+        convergenceStatus: "blocked_review",
+        retryable: true,
+        nextStep: "Fix the base checkout as described, then re-run refine. Nothing was dispatched."
+      };
+    }
+    function resolveRefineBaseRepoRoot(params) {
+      const { node, nodes, nodeIdMatches } = params;
+      const sourceNode = node?.clonedFromNodeId ? nodes.find((n) => nodeIdMatches(n, node.clonedFromNodeId)) : nodes.find((n) => !n?.isLocalWorktree);
+      const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+      return typeof repoRoot === "string" && repoRoot.trim() ? repoRoot.trim() : void 0;
+    }
+    function buildRefineAcceptPreflightWarning(verdict) {
+      return {
+        basePreflightWarning: {
+          code: verdict.code,
+          findings: verdict.findings,
+          message: verdict.message,
+          wouldBlockExecute: true,
+          durationMs: verdict.durationMs
+        }
+      };
+    }
+    var MAX_REPORTED_FILES;
+    var PREFLIGHT_TIMEOUT_MS;
+    var init_mesh_refine_accept_preflight = __esm2({
+      "src/mesh/mesh-refine-accept-preflight.ts"() {
+        "use strict";
+        init_git_status();
+        init_git_executor();
+        MAX_REPORTED_FILES = 10;
+        PREFLIGHT_TIMEOUT_MS = 2e4;
+      }
+    });
     var mesh_refine_zombie_sweep_exports = {};
     __export2(mesh_refine_zombie_sweep_exports, {
       classifyRefineDispatch: () => classifyRefineDispatch,
@@ -140626,6 +140923,77 @@ ${hintLines.join("\n")}` : "",
         init_mesh_refine_gates();
       }
     });
+    function decideRefineBatchChainAbort(outcome) {
+      const failed = outcome.convergence === "blocked_review" || outcome.convergence === "not_mergeable";
+      if (!failed) return { abort: false };
+      const code = typeof outcome.code === "string" ? outcome.code : "";
+      if (code && BASE_AXIS_CODES.has(code)) {
+        return {
+          abort: true,
+          code,
+          ...outcome.stage ? { stage: outcome.stage } : {},
+          reason: `Node failed on the BASE axis (${code}) \u2014 the base was not advanced, so every remaining node in this batch would fail for the same reason.`
+        };
+      }
+      const stage = typeof outcome.stage === "string" ? outcome.stage : "";
+      if (stage && BASE_AXIS_STAGES.has(stage)) {
+        return {
+          abort: true,
+          ...code ? { code } : {},
+          stage,
+          reason: `Node failed in the base-axis stage '${stage}' \u2014 the base was not advanced, so every remaining node in this batch would fail for the same reason.`
+        };
+      }
+      return { abort: false };
+    }
+    function buildSkippedChainNodeOutcome(params) {
+      const { nodeId, workspace, precursorNodeId, decision } = params;
+      return {
+        nodeId,
+        workspace,
+        convergence: "skipped_chain_abort",
+        chainSkipped: true,
+        precursorNodeId,
+        ...decision.code ? { precursorCode: decision.code } : {},
+        ...decision.stage ? { precursorStage: decision.stage } : {},
+        reason: `Not attempted: node '${precursorNodeId}' failed on the base axis${decision.code ? ` (${decision.code})` : ""}, so the base was never advanced. Re-run the batch for this node after resolving that failure.`
+      };
+    }
+    function buildChainAbortNextStep(params) {
+      const { precursorNodeId, decision, skippedNodeIds } = params;
+      const skipped = skippedNodeIds.length ? ` ${skippedNodeIds.length} node(s) were NOT attempted: ${skippedNodeIds.join(", ")}.` : "";
+      return `ROOT CAUSE: node '${precursorNodeId}' failed on the base axis${decision.code ? ` [${decision.code}]` : ""}${decision.stage ? ` at stage '${decision.stage}'` : ""} and did not advance the base.${skipped} Fix that one failure, then re-run mesh_refine_batch \u2014 the skipped nodes were never run and need no cleanup.`;
+    }
+    var BASE_AXIS_CODES;
+    var BASE_AXIS_STAGES;
+    var init_mesh_refine_batch_chain_abort = __esm2({
+      "src/mesh/mesh-refine-batch-chain-abort.ts"() {
+        "use strict";
+        BASE_AXIS_CODES = /* @__PURE__ */ new Set([
+          // Base-movement family — identical to RETRYABLE_BASE_MOVEMENT_CODES in
+          // router-refine.ts. Kept as a literal rather than imported to avoid a mesh →
+          // commands layer dependency (check:boundaries); the parity test
+          // mesh-refine-batch-chain-abort.test.ts asserts the two sets agree.
+          "base_moved",
+          "base_locked",
+          "base_cas_undeterminable",
+          // The merge itself could not be applied to the base.
+          "merge_failed",
+          // ★Accept-time base preflight (mesh-refine-accept-preflight.ts). These can
+          // reach a per-node outcome when a node is refined individually inside a
+          // batch-shaped flow; the base is unusable by definition.
+          "base_worktree_dirty",
+          "base_stash_entries_present",
+          "base_diverged_from_origin",
+          "base_preflight_blocked"
+        ]);
+        BASE_AXIS_STAGES = /* @__PURE__ */ new Set(["merge", "base_cas"]);
+      }
+    });
+    function emitRefineBatchProgress(context, event) {
+      if (!context) return;
+      emitRefineProgress(context, event);
+    }
     async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
       const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord?.mesh;
@@ -140776,11 +141144,16 @@ ${hintLines.join("\n")}` : "",
       }
       return runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args);
     }
-    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args) {
+    async function runMeshRefineBatchConvergence(self, meshId, orderedNodes, ordering, args, progressContext) {
       const refineOne = async (node) => {
         let result;
         try {
-          result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, args);
+          result = await executeMeshRefineNodeSynchronously(
+            self,
+            meshId,
+            node.id,
+            progressContext ? { ...args, progressContext } : args
+          );
         } catch (e) {
           result = { success: false, error: e?.message || String(e) };
         }
@@ -140800,12 +141173,67 @@ ${hintLines.join("\n")}` : "",
       };
       const results = [];
       const retryQueue = [];
-      for (const node of orderedNodes) {
+      let chainAbort;
+      const skippedNodeIds = [];
+      for (const [index, node] of orderedNodes.entries()) {
+        if (chainAbort) {
+          results.push(buildSkippedChainNodeOutcome({
+            nodeId: node.id,
+            workspace: node.workspace,
+            precursorNodeId: chainAbort.precursorNodeId,
+            decision: chainAbort.decision
+          }));
+          skippedNodeIds.push(node.id);
+          continue;
+        }
+        emitRefineBatchProgress(progressContext, {
+          phase: "node_started",
+          nodeId: node.id,
+          nodeIndex: index + 1,
+          nodeCount: orderedNodes.length
+        });
         const outcome = await refineOne(node);
         results.push(outcome);
-        if (outcome.retryable) retryQueue.push(node);
+        if (outcome.convergence === "blocked_review" || outcome.convergence === "not_mergeable") {
+          emitRefineBatchProgress(progressContext, {
+            phase: "node_failed",
+            nodeId: node.id,
+            nodeIndex: index + 1,
+            nodeCount: orderedNodes.length,
+            convergence: outcome.convergence,
+            ...outcome.code ? { code: outcome.code } : {},
+            ...outcome.stage ? { stage: outcome.stage } : {},
+            ...outcome.error ? { errorTail: outcome.error.slice(-600) } : {}
+          });
+        } else {
+          emitRefineBatchProgress(progressContext, {
+            phase: "node_finished",
+            nodeId: node.id,
+            nodeIndex: index + 1,
+            nodeCount: orderedNodes.length,
+            convergence: outcome.convergence
+          });
+        }
+        if (outcome.retryable) {
+          retryQueue.push(node);
+          continue;
+        }
+        const decision = decideRefineBatchChainAbort(outcome);
+        if (decision.abort) {
+          chainAbort = { precursorNodeId: outcome.nodeId, decision };
+          LOG.warn("Mesh", `[Refinery] Batch chain-abort after node ${outcome.nodeId}: ${decision.reason}`);
+          emitRefineBatchProgress(progressContext, {
+            phase: "chain_abort",
+            nodeId: outcome.nodeId,
+            nodeIndex: index + 1,
+            nodeCount: orderedNodes.length,
+            ...decision.code ? { code: decision.code } : {},
+            ...decision.stage ? { stage: decision.stage } : {},
+            reason: decision.reason
+          });
+        }
       }
-      for (const node of retryQueue) {
+      for (const node of chainAbort ? [] : retryQueue) {
         const idx = results.findIndex((r) => r.nodeId === node.id);
         const retried = await refineOne(node);
         retried.retried = true;
@@ -140817,9 +141245,13 @@ ${hintLines.join("\n")}` : "",
         skipped: results.filter((r) => r.convergence === "skipped_patch_equivalent").length,
         blocked: results.filter((r) => r.convergence === "blocked_review").length,
         notMergeable: results.filter((r) => r.convergence === "not_mergeable").length,
-        ...retryQueue.length ? { retried: retryQueue.length } : {}
+        // ★Counted separately from `skipped` (patch-equivalent, a SUCCESS state):
+        // a chain-skipped node was never attempted and still needs a run, so folding
+        // the two together would report un-run work as converged.
+        ...skippedNodeIds.length ? { chainSkipped: skippedNodeIds.length } : {},
+        ...retryQueue.length && !chainAbort ? { retried: retryQueue.length } : {}
       };
-      const allConverged = summary.blocked === 0 && summary.notMergeable === 0;
+      const allConverged = summary.blocked === 0 && summary.notMergeable === 0 && !chainAbort;
       return {
         success: true,
         batch: true,
@@ -140830,10 +141262,23 @@ ${hintLines.join("\n")}` : "",
         summary,
         allConverged,
         results,
+        ...chainAbort ? {
+          chainAbort: {
+            precursorNodeId: chainAbort.precursorNodeId,
+            code: chainAbort.decision.code,
+            stage: chainAbort.decision.stage,
+            reason: chainAbort.decision.reason,
+            skippedNodeIds
+          }
+        } : {},
         ...allConverged ? {} : {
-          // Name the failed nodes inline — the aggregate nextStep used to hide
-          // WHICH nodes blocked, forcing a manual git-log cross-check.
-          nextStep: `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
+          // ★B4: when the batch aborted, lead with the ROOT CAUSE and say the rest was
+          // never attempted — otherwise N lookalike failures read as N problems.
+          nextStep: chainAbort ? buildChainAbortNextStep({
+            precursorNodeId: chainAbort.precursorNodeId,
+            decision: chainAbort.decision,
+            skippedNodeIds
+          }) : `Resolve blocked_review / not_mergeable nodes manually \u2014 failed: ${results.filter((r) => r.convergence === "blocked_review" || r.convergence === "not_mergeable").map((r) => `${r.nodeId}${r.code ? ` [${r.code}]` : ""}`).join(", ")} (see per-node code/stage/error), then re-run mesh_refine_batch for the remaining nodes.`
         }
       };
     }
@@ -140964,8 +141409,14 @@ ${hintLines.join("\n")}` : "",
     async function finishMeshRefineBatchJob(self, handle, orderedNodes, ordering, args) {
       const key2 = buildRefineBatchJobKey(self, handle.meshId);
       let result;
+      const progressContext = {
+        meshId: handle.meshId,
+        jobId: handle.jobId,
+        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        coordinatorSessionId: handle.targetCoordinatorSessionId
+      };
       try {
-        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args);
+        result = await runMeshRefineBatchConvergence(self, handle.meshId, orderedNodes, ordering, args, progressContext);
       } catch (e) {
         result = { success: false, error: e?.message || String(e), batch: true };
       }
@@ -141105,9 +141556,31 @@ ${hintLines.join("\n")}` : "",
         () => finishMeshRefineBatchJob(self, plannedHandle, orderedNodes, ordering, args)
       );
     }
+    async function resolveBatchBaseRepoRoot(self, meshId, requestedNodeIds, args) {
+      const mesh = (await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true }))?.mesh;
+      const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+      const candidates = Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0 ? requestedNodeIds.map((id) => allNodes.find((n) => meshNodeIdMatches5(n, id))).filter(Boolean) : allNodes.filter((n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace);
+      for (const node of candidates) {
+        const repoRoot = resolveRefineBaseRepoRoot({ node, nodes: allNodes, nodeIdMatches: meshNodeIdMatches5 });
+        if (repoRoot) return repoRoot;
+      }
+      return void 0;
+    }
+    async function attachBatchBasePreflightWarning(self, meshId, requestedNodeIds, args, plan) {
+      try {
+        const repoRoot = await resolveBatchBaseRepoRoot(self, meshId, requestedNodeIds, args);
+        if (!repoRoot) return plan;
+        const verdict = await assessRefineAcceptPreflight({ repoRoot, refreshUpstream: true });
+        if (verdict.ok) return plan;
+        return { ...plan, ...buildRefineAcceptPreflightWarning(verdict) };
+      } catch {
+        return plan;
+      }
+    }
     async function startMeshRefineBatchJob(self, meshId, requestedNodeIds, args) {
       if (args?.dryRun !== false && args?.execute !== true) {
-        return batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+        const plan = await batchRefineMeshNodes(self, meshId, requestedNodeIds, { ...args, dryRun: true, execute: false });
+        return attachBatchBasePreflightWarning(self, meshId, requestedNodeIds, args, plan);
       }
       const key2 = buildRefineBatchJobKey(self, meshId);
       const running = self.runningRefineBatchJobs.get(key2);
@@ -141140,15 +141613,23 @@ ${hintLines.join("\n")}` : "",
         init_mesh_refine_submodule_preflight();
         init_git_locale();
         init_mesh_refine_concurrency();
+        init_mesh_refine_batch_chain_abort();
+        init_mesh_refine_progress();
+        init_mesh_refine_accept_preflight();
         init_router_refine();
         BATCH_PLAN_FETCH_TIMEOUT_MS = 1e4;
       }
     });
     var router_refine_exports = {};
     __export2(router_refine_exports, {
+      MIN_EVENT_INTERVAL_MS: () => MIN_EVENT_INTERVAL_MS,
+      SLOW_GATE_THRESHOLD_MS: () => SLOW_GATE_THRESHOLD_MS,
       appendRefineBatchJobLedger: () => appendRefineBatchJobLedger,
       appendRefineJobLedger: () => appendRefineJobLedger,
+      assessRefineAcceptPreflight: () => assessRefineAcceptPreflight,
       batchRefineMeshNodes: () => batchRefineMeshNodes,
+      buildRefineAcceptPreflightRefusal: () => buildRefineAcceptPreflightRefusal,
+      buildRefineAcceptPreflightWarning: () => buildRefineAcceptPreflightWarning,
       buildRefineBatchJobHandle: () => buildRefineBatchJobHandle,
       buildRefineBatchJobKey: () => buildRefineBatchJobKey,
       buildRefineBlockerContext: () => buildRefineBlockerContext,
@@ -141159,6 +141640,8 @@ ${hintLines.join("\n")}` : "",
       classifyRefineRebaseFailure: () => classifyRefineRebaseFailure,
       classifyRefineTerminal: () => classifyRefineTerminal,
       decideRefineTerminalWrite: () => decideRefineTerminalWrite,
+      didRefineRebaseBranch: () => didRefineRebaseBranch,
+      emitRefineProgress: () => emitRefineProgress,
       executeMeshRefineNodeSynchronously: () => executeMeshRefineNodeSynchronously,
       extractRefineMergeLanding: () => extractRefineMergeLanding,
       extractValidationFailureDiagnostics: () => extractValidationFailureDiagnostics,
@@ -141166,9 +141649,11 @@ ${hintLines.join("\n")}` : "",
       findOpenLedgerRefineDispatch: () => findOpenLedgerRefineDispatch,
       finishMeshRefineBatchJob: () => finishMeshRefineBatchJob,
       finishMeshRefineJob: () => finishMeshRefineJob,
+      isSlowRefineGate: () => isSlowRefineGate,
       queueRefineBatchJobEvent: () => queueRefineBatchJobEvent,
       queueRefineJobEvent: () => queueRefineJobEvent,
       recordRefineAcceptBaseDivergence: () => recordRefineAcceptBaseDivergence,
+      refineBasePreflightStage: () => refineBasePreflightStage,
       refineEffectiveDiffStage: () => refineEffectiveDiffStage,
       refineMergeAndFinalizeStage: () => refineMergeAndFinalizeStage,
       refinePatchEquivalenceStage: () => refinePatchEquivalenceStage,
@@ -141178,10 +141663,12 @@ ${hintLines.join("\n")}` : "",
       refineValidationStage: () => refineValidationStage,
       refineWorktreeVanishedOutcome: () => refineWorktreeVanishedOutcome,
       requestCoordinatorLocalCatchup: () => requestCoordinatorLocalCatchup,
+      resolveRefineBaseRepoRoot: () => resolveRefineBaseRepoRoot,
       resumePendingRefineJobsOnStartup: () => resumePendingRefineJobsOnStartup,
       runMeshRefineBatchConvergence: () => runMeshRefineBatchConvergence,
       runRefineMergeAndFinalizeLocked: () => runRefineMergeAndFinalizeLocked,
       shouldAutoRetryRefine: () => shouldAutoRetryRefine,
+      shouldEmitRefineProgress: () => shouldEmitRefineProgress,
       slimRefineEventResult: () => slimRefineEventResult,
       startMeshRefineBatchJob: () => startMeshRefineBatchJob,
       startMeshRefineJob: () => startMeshRefineJob
@@ -141192,6 +141679,7 @@ ${hintLines.join("\n")}` : "",
         const resolved = await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
         if (resolved.kind === "terminal") return resolved.result;
         const ctx = resolved.ctx;
+        if (args?.progressContext) ctx.progress = args.progressContext;
         const leaseKey = `${ctx.repoRoot}::${ctx.baseBranch}`;
         const leaseHolder = buildRefineJobKey(self, meshId, nodeId);
         if (self.refineBaseLeases.has(leaseKey) && self.refineBaseLeases.get(leaseKey) !== leaseHolder) {
@@ -141220,6 +141708,8 @@ ${hintLines.join("\n")}` : "",
         }
         self.refineBaseLeases.set(leaseKey, leaseHolder);
         try {
+          const basePreflight = await refineBasePreflightStage(self, ctx);
+          if (basePreflight.kind === "terminal") return basePreflight.result;
           const syncBase = await refineSyncBaseStage(self, ctx);
           if (syncBase.kind === "terminal") return syncBase.result;
           const afterSyncBase = refineWorktreeVanishedOutcome(ctx, "validation");
@@ -141590,6 +142080,10 @@ ${hintLines.join("\n")}` : "",
       });
       return { kind: "continue", ctx };
     }
+    function didRefineRebaseBranch(refineStages) {
+      if (!Array.isArray(refineStages)) return false;
+      return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
+    }
     async function refineValidationStage(self, ctx) {
       const { mesh, node, branch, baseBranch, refineStages } = ctx;
       const validationStarted = Date.now();
@@ -141603,7 +142097,23 @@ ${hintLines.join("\n")}` : "",
           node.worktreeBootstrap = state2;
           void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ updateNode: updateNode2 }) => updateNode2(mesh.id, node.id, { worktreeBootstrap: state2 })).catch(() => {
           });
-        }
+        },
+        // ★C: did sync_base rebase this branch? Read from the recorded stage rather
+        // than a separate flag, so the answer can never disagree with what the
+        // pipeline actually did. A vendor-drift failure means something different
+        // when the Refinery itself moved the bundle build base.
+        branchWasRebased: didRefineRebaseBranch(refineStages),
+        // ★B1: announce only the gates that actually cost time. The threshold and
+        // the throttle live in mesh-refine-progress.ts; this stage just reports.
+        onCommandComplete: ctx.progress ? (info) => {
+          if (!isSlowRefineGate(info.durationMs)) return;
+          emitRefineProgress(ctx.progress, {
+            phase: "slow_gate",
+            nodeId: node.id,
+            gate: info.displayCommand,
+            durationMs: info.durationMs
+          });
+        } : void 0
       });
       ctx.validationSummary = validationSummary;
       recordMeshRefineStage(
@@ -141624,6 +142134,10 @@ ${hintLines.join("\n")}` : "",
           return [
             base,
             cmdName ? `First failing command: ${cmdName}` : "",
+            // ★C: lead the tail with the rebase explanation when the Refinery's own
+            // rebase invalidated the vendor bundles. Without it this failure reads
+            // as an opaque bundle diff (2026-09-22, incident 4).
+            validationSummary.vendorDriftHint ? `\u2605 ${validationSummary.vendorDriftHint}` : "",
             tail ? `Output (tail):
 ${tail}` : ""
           ].filter(Boolean).join("\n");
@@ -142127,11 +142641,18 @@ ${e?.stderr || ""}`;
     }
     async function finishMeshRefineJob(self, handle, args) {
       const key2 = buildRefineJobKey(self, handle.meshId, handle.targetNodeId);
-      let result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+      const progressContext = {
+        meshId: handle.meshId,
+        jobId: handle.jobId,
+        coordinatorDaemonId: handle.targetCoordinatorDaemonId,
+        coordinatorSessionId: handle.targetCoordinatorSessionId
+      };
+      const argsWithProgress = { ...args, progressContext };
+      let result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, argsWithProgress);
       const firstAttempt = shouldAutoRetryRefine(result);
       if (firstAttempt.retry) {
         LOG.info("Mesh", `[Refinery] Base-movement blocker (${firstAttempt.code}) for node ${handle.targetNodeId} (jobId=${handle.jobId}); retrying once automatically.`);
-        result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, args);
+        result = await runRefinePipelineOnce(self, handle.meshId, handle.targetNodeId, argsWithProgress);
         result = { ...result, refineRetried: true, refineRetryOfCode: firstAttempt.code };
       }
       const completedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -142235,6 +142756,52 @@ ${e?.stderr || ""}`;
       } catch {
       }
     }
+    async function refineBasePreflightStage(self, ctx) {
+      const startedAt = Date.now();
+      let verdict;
+      try {
+        verdict = await assessRefineAcceptPreflight({ repoRoot: ctx.repoRoot });
+      } catch (e) {
+        recordMeshRefineStage(ctx.refineStages, "base_preflight", "skipped", startedAt, {
+          reason: "probe_failed",
+          error: e?.message || String(e)
+        });
+        return { kind: "continue", ctx };
+      }
+      if (verdict.ok) {
+        recordMeshRefineStage(
+          ctx.refineStages,
+          "base_preflight",
+          verdict.indeterminate ? "skipped" : "passed",
+          startedAt,
+          verdict.indeterminate ? { reason: "base_not_inspectable" } : { repoRoot: ctx.repoRoot }
+        );
+        return { kind: "continue", ctx };
+      }
+      recordMeshRefineStage(ctx.refineStages, "base_preflight", "failed", startedAt, {
+        code: verdict.code,
+        repoRoot: ctx.repoRoot,
+        findings: verdict.findings,
+        retryable: true
+      });
+      LOG.warn("Mesh", `[Refinery] Base preflight blocked node ${ctx.nodeId} before any gate ran \u2014 base ${ctx.repoRoot} is not mergeable (${verdict.code}), checked in ${verdict.durationMs}ms.`);
+      return {
+        kind: "terminal",
+        result: {
+          ...buildRefineAcceptPreflightRefusal({ verdict, meshId: ctx.meshId, nodeId: ctx.nodeId }),
+          branch: ctx.branch,
+          into: ctx.baseBranch,
+          refineStages: ctx.refineStages,
+          finalBranchConvergenceState: {
+            branch: ctx.branch,
+            baseBranch: ctx.baseBranch,
+            merged: false,
+            removed: false,
+            status: "blocked_review"
+          }
+        }
+      };
+    }
     async function startMeshRefineJob(self, meshId, nodeId, args) {
       const key2 = buildRefineJobKey(self, meshId, nodeId);
       const terminal = self.terminalRefineJobs.get(key2);
@@ -142303,6 +142870,10 @@ ${e?.stderr || ""}`;
         init_mesh_reconcile_identity();
         init_mesh_fast_forward();
         init_mesh_refine_base_divergence();
+        init_mesh_refine_progress();
+        init_mesh_refine_progress();
+        init_mesh_refine_accept_preflight();
+        init_mesh_refine_accept_preflight();
         init_mesh_refine_inflight();
         init_mesh_refine_inflight();
         init_mesh_refine_rebase_failure();
