@@ -157319,12 +157319,38 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         return payload;
       }
+      /**
+       * Enrich the P2P copy of a status event with the structured AskUserQuestion
+       * payload. The dashboard hydrates `activeInteractivePrompt` from these
+       * fields (web-core EventManager.hydrateInteractivePromptFromEvent) so the
+       * STRUCTURED picker renders even when the P2P rich status sync — previously
+       * the only carrier of that field — is degraded.
+       *
+       * P2P-only by design: `interactivePrompt` is agent-authored free text, so
+       * it must NOT join the server-bound payload built above (see
+       * P2PStatusEventPayload in shared-types — the server spreads the event into
+       * external webhook dispatch, and its dashboard relay strips unlisted fields
+       * anyway). Guards mirror buildRelayMetadataEvent (mesh-event-delivery.ts).
+       */
+      buildP2PStatusEvent(rawEvent, serverEvent) {
+        const payload = { ...serverEvent };
+        if (rawEvent.interactivePrompt && typeof rawEvent.interactivePrompt === "object" && !Array.isArray(rawEvent.interactivePrompt)) {
+          payload.interactivePrompt = rawEvent.interactivePrompt;
+        }
+        if (typeof rawEvent.promptId === "string" && rawEvent.promptId.trim()) {
+          payload.promptId = rawEvent.promptId.trim();
+        }
+        if (rawEvent.multiSelect === true) {
+          payload.multiSelect = true;
+        }
+        return payload;
+      }
       emitStatusEvent(event) {
         LOG.info("StatusEvent", `${event.event} (${event.providerType || event.ideType || ""})`);
         const serverEvent = this.buildServerStatusEvent(event);
         if (!serverEvent) return;
         if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId, "status_event");
-        this.deps.p2p?.sendStatusEvent(serverEvent);
+        this.deps.p2p?.sendStatusEvent(this.buildP2PStatusEvent(event, serverEvent));
         this.deps.serverConn?.sendMessage("status_event", serverEvent);
       }
       removeAgentTracking(_key) {
