@@ -1315,3 +1315,14 @@ export type {
   TranscriptTerminalOutcome,
   TranscriptCoverageMode,
 } from './seqscribe/transcript-projection.js';
+
+// Child-process wrappers that default to a hidden win32 console window.
+// Exported from the package entry so `packages/daemon-cloud` — which is the
+// codebase that was never swept for `windowsHide` and caused the `adhdev
+// update` console-flash — can import them without a deep src path.
+export {
+  hiddenSpawn,
+  hiddenSpawnSync,
+  hiddenExecFileSync,
+  hiddenExecSync,
+} from './process/hidden-spawn.js';
