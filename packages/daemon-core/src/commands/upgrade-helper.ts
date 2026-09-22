@@ -21,6 +21,7 @@ import {
 import { canonicalizeInstancePath } from '@adhdev/session-host-core';
 import { resolveSessionHostAppName } from '../session-host/app-name.js';
 import { getConfigDir } from '../config/config.js';
+import { openCaptureLogFd } from '../logging/logger.js';
 import { IDENTITY } from '../track-identity.js';
 import { isPidAlive } from '../system/process-utils.js';
 
@@ -1555,14 +1556,36 @@ function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): void {
     const env = { ...process.env };
     delete env[UPGRADE_HELPER_ENV];
     appendUpgradeLog(`Restarting daemon with args: ${restartArgv.join(' ')}`);
-    const child = spawn(process.execPath, restartArgv, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-      cwd: cwd || process.cwd(),
-      env,
-    });
-    child.unref();
+    // ★The post-upgrade daemon's raw stdout/stderr must land in
+    // daemon-service.log, exactly as it does for the wizard start and
+    // `daemon:restart` (both already open an append fd). This site was left on
+    // `stdio: 'ignore'`, so every UPGRADE silently retargeted the capture log to
+    // /dev/null: the file's last line stayed "[Upgrade] Exiting daemon so
+    // detached upgrader can continue..." while the replacement daemon ran fine
+    // and wrote nothing. Observed on Windows 2026-09-23 (5.2MB file frozen at
+    // 00:44:43 while pid 3536 was healthy since 00:45:01).
+    //
+    // Fd inheritance is what makes this survive the handoff: this helper exits
+    // right after the spawn, and a detached child keeps writing through an
+    // inherited append fd after the parent has exited AND closed its own copy
+    // (verified empirically). No shell — reintroducing `start /B ... >> log`
+    // would bring back the console flash that `windowsHide` cannot suppress on
+    // a hidden shell's grandchild.
+    const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
+    try {
+      const child = spawn(process.execPath, restartArgv, {
+        detached: true,
+        stdio: ['ignore', outFd, outFd],
+        windowsHide: true,
+        cwd: cwd || process.cwd(),
+        env,
+      });
+      child.unref();
+    } finally {
+      // The child inherited the fd; drop our copy so this process does not hold
+      // the log open. Runs even if spawn threw.
+      closeOutFd();
+    }
   } else {
     appendUpgradeLog('No restart argv provided; upgrade completed without restart');
   }
