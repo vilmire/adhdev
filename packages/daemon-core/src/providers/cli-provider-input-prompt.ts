@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { LOG } from '../logging/logger.js';
 import { type InputEnvelope, type InputPart } from './contracts.js';
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
@@ -53,7 +54,9 @@ function materializeImageDataPart(part: Extract<InputPart, { type: 'image' }>, i
     if (!rawData) return null;
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, safeInputImageBasename(index, part.mimeType));
-    fs.writeFileSync(filePath, Buffer.from(rawData, 'base64'));
+    const bytes = Buffer.from(rawData, 'base64');
+    fs.writeFileSync(filePath, bytes);
+    LOG.debug('CLI', `materializeImageDataPart path=${filePath} bytes=${bytes.length} partIndex=${index}`);
     cleanupStaleMaterializedImages(dir);
     return filePath;
 }
@@ -129,5 +132,6 @@ export function buildCliStructuredInputPrompt(
         ...resourceRefs,
     ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
 
+    LOG.debug('CLI', `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
     return ordered.join('\n');
 }

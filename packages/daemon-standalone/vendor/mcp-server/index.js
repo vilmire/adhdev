@@ -115373,7 +115373,9 @@ ${buttons.join("\n")}`;
       if (!rawData) return null;
       fs43.mkdirSync(dir, { recursive: true });
       const filePath = path44.join(dir, safeInputImageBasename(index, part.mimeType));
-      fs43.writeFileSync(filePath, Buffer.from(rawData, "base64"));
+      const bytes = Buffer.from(rawData, "base64");
+      fs43.writeFileSync(filePath, bytes);
+      LOG.debug("CLI", `materializeImageDataPart path=${filePath} bytes=${bytes.length} partIndex=${index}`);
       cleanupStaleMaterializedImages(dir);
       return filePath;
     }
@@ -115432,6 +115434,7 @@ ${buttons.join("\n")}`;
         ...promptParts,
         ...resourceRefs
       ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
+      LOG.debug("CLI", `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
       return ordered.join("\n");
     }
     var os29;
@@ -115449,6 +115452,7 @@ ${buttons.join("\n")}`;
         path44 = __toESM2(require("path"));
         crypto5 = __toESM2(require("crypto"));
         fs43 = __toESM2(require("fs"));
+        init_logger();
         IMAGE_MIME_EXTENSIONS = {
           "image/png": ".png",
           "image/jpeg": ".jpg",
@@ -118869,13 +118873,18 @@ ${buttons.join("\n")}`;
                 const bracketedPaste = shouldUseBracketedPasteForEnvelope(input);
                 if (force && this.isModalParked()) {
                   LOG.info("CLI", `[${this.type}] force send_message held \u2014 coordinator parked on modal (${this.resolveModalParkStatus()})`);
-                  return;
+                  return Promise.resolve({ success: false, error: "send_message held by active modal" });
                 }
                 const sendOpts = buildAdapterSendOpts(force, bracketedPaste);
-                void this.adapter.sendMessage(promptText, sendOpts).catch((e) => {
-                  LOG.warn("CLI", `[${this.type}] send_message failed: ${e?.message || e}`);
-                });
+                return this.adapter.sendMessage(promptText, sendOpts).then(
+                  (result) => ({ success: true, status: result?.status || "delivered" }),
+                  (e) => {
+                    LOG.warn("CLI", `[${this.type}] send_message failed: ${e?.message || e}`);
+                    return { success: false, error: String(e?.message || e) };
+                  }
+                );
               }
+              return Promise.resolve({ success: false, error: "No CLI input prompt to send" });
             } else if (event === "server_connected" && data?.serverConn) {
               this.adapter.setServerConn(data.serverConn);
             } else if (event === "resolve_action" && data) {
@@ -152754,8 +152763,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               }
               assertProviderSupportsDeclaredInput(provider, input);
               await waitOnceForFreshHermesCliStart(adapter, _log);
-              target2.onEvent("send_message", { input });
-              return _logSendSuccess(`${transport}-instance`, target2.type);
+              const outcome = await target2.onEvent("send_message", { input });
+              if (!outcome?.success) {
+                return { success: false, sent: false, error: `${transport} send failed: ${outcome?.error || "CLI send was not acknowledged"}` };
+              }
+              const runtimeTarget = target2;
+              if (typeof runtimeTarget.recordAcknowledgedUserInput === "function") {
+                runtimeTarget.recordAcknowledgedUserInput(input);
+              }
+              return {
+                ..._logSendSuccess(`${transport}-instance`, target2.type),
+                ...outcome.status === "queued" ? { sent: false, queued: true, submitted: false } : { submitted: true }
+              };
             }
             assertTextOnlyInput(provider, input);
             if (!text) return { success: false, error: "text required for PTY send" };

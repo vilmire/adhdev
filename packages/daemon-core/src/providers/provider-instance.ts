@@ -231,7 +231,7 @@ export interface ProviderInstance {
     getSessionModalState?(sessionId?: string): SessionModalState | null;
 
  /** Receive event (external → Instance) */
-    onEvent(event: string, data?: any): void;
+    onEvent(event: string, data?: any): void | Promise<ProviderSendMessageResult>;
 
  /** Update settings at runtime (called when user changes settings from dashboard) */
     updateSettings?(newSettings: Record<string, any>): void;
@@ -262,3 +262,8 @@ export interface ProviderInstance {
  /** cleanup */
     dispose(): void;
 }
+
+/** An acknowledged CLI send; queued acceptance is distinct from PTY delivery. */
+export type ProviderSendMessageResult =
+    | { success: true; status: 'queued' | 'delivered' }
+    | { success: false; error: string };
