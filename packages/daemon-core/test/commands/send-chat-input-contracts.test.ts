@@ -52,7 +52,7 @@ describe('handleSendChat input contracts', () => {
 
   it('routes declared structured PTY input to the provider instance instead of flattening it', async () => {
     const sendMessage = vi.fn()
-    const onEvent = vi.fn()
+    const onEvent = vi.fn(async () => ({ success: true, status: 'delivered' }))
     const result = await handleSendChat({
       getCdp: () => null,
       getProvider: () => ({

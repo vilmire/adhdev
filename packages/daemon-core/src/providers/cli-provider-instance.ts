@@ -11,7 +11,7 @@ import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-
 import { adapterSupportsMidGenerationQueue, adapterSendMessageDuringGeneration } from './cli-provider-mid-generation.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
+import type { ProviderSendMessageResult, ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
 import {
     applyInteractivePromptAnswer,
@@ -843,7 +843,7 @@ export class CliProviderInstance implements ProviderInstance {
         return describeInteractivePrompt(this.activeInteractivePrompt);
     }
 
-    onEvent(event: string, data?: any): void {
+    onEvent(event: string, data?: any): void | Promise<ProviderSendMessageResult> {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
             assertProviderSupportsDeclaredInput(this.provider, input);
@@ -866,13 +866,21 @@ export class CliProviderInstance implements ProviderInstance {
                 // (its body is parked in the adapter FIFO by the send guard, not injected).
                 if (force && this.isModalParked()) {
                     LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
-                    return;
+                    return Promise.resolve({ success: false, error: 'send_message held by active modal' });
                 }
                 const sendOpts = buildAdapterSendOpts(force, bracketedPaste);
-                void this.adapter.sendMessage(promptText, sendOpts).catch((e: any) => {
-                    LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
-                });
+                // Return the completion to callers that need an acknowledgement.
+                // Resolve failures explicitly so legacy event-only callers can safely
+                // ignore the promise without creating unhandled rejections.
+                return this.adapter.sendMessage(promptText, sendOpts).then(
+                    (result): ProviderSendMessageResult => ({ success: true, status: result?.status || 'delivered' }),
+                    (e: any): ProviderSendMessageResult => {
+                        LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
+                        return { success: false, error: String(e?.message || e) };
+                    },
+                );
             }
+            return Promise.resolve({ success: false, error: 'No CLI input prompt to send' });
         } else if (event === 'server_connected' && data?.serverConn) {
             this.adapter.setServerConn(data.serverConn);
         } else if (event === 'resolve_action' && data) {

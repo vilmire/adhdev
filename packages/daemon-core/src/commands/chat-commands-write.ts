@@ -189,8 +189,22 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     }
                     assertProviderSupportsDeclaredInput(provider, input);
                     await waitOnceForFreshHermesCliStart(adapter, _log);
-                    target.onEvent('send_message', { input });
-                    return _logSendSuccess(`${transport}-instance`, target.type);
+                    const outcome = await target.onEvent('send_message', { input });
+                    if (!outcome?.success) {
+                        return { success: false, sent: false, error: `${transport} send failed: ${outcome?.error || 'CLI send was not acknowledged'}` };
+                    }
+                    const runtimeTarget = target as RuntimeChatMessageMerger;
+                    if (typeof runtimeTarget.recordAcknowledgedUserInput === 'function') {
+                        runtimeTarget.recordAcknowledgedUserInput(input);
+                    }
+                    // Match text-only sends: accepted queue entries get a bubble,
+                    // but must not be advertised as already submitted to the PTY.
+                    return {
+                        ..._logSendSuccess(`${transport}-instance`, target.type),
+                        ...(outcome.status === 'queued'
+                            ? { sent: false, queued: true, submitted: false }
+                            : { submitted: true }),
+                    };
                 }
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
