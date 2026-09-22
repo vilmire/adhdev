@@ -766,6 +766,91 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
     ]);
   });
 
+  it.each([
+    { label: '6-buttons', count: 6 },
+    { label: '5-buttons', count: 5 },
+    { label: '2-buttons', count: 2 },
+  ])('parses a checkbox-marker picker regardless of option count ($label, remote-answer-picker-parse regression)', ({ count }) => {
+    // LIVE 2026-09-22 defect: a multi-select AskUserQuestion with a checkbox
+    // glyph BEFORE the option number ("❯ [ ] 1. Label") failed the spec
+    // extract.buttons pattern (number-only, no checkbox tolerance), dropping
+    // extract.buttons to 0 rows as the picker shrank from 6→5→2 options —
+    // below min_count=2 — so the modal was "not parseable", activeModal never
+    // held a picker, and the TUI-page parser here is the fallback path that
+    // must still resolve the picker on its own. Pin non-null across a range of
+    // option counts (a single fixed count would not have caught the same
+    // pattern failing only once the option list shrank).
+    const options = Array.from({ length: count }, (_, i) => `Option ${i + 1}`);
+    const screen = [
+      '←  ☐ Pick  ✔ Submit  →',
+      '',
+      'Pick as many as apply',
+      '',
+      ...options.map((label, i) => `${i === 0 ? '❯' : ' '} [ ] ${i + 1}. ${label}`),
+      '────────────────────────────────────────────────',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: `checkbox-count-${count}`, createdAt: 1234 });
+
+    expect(prompt).not.toBeNull();
+    expect(prompt?.questions[0]?.multiSelect).toBe(true);
+    expect(prompt?.questions[0]?.options.map(o => o.label)).toEqual(options);
+  });
+
+  it('parses a checkbox picker with NO "Enter to select" footer at all (footer scrolled out of frame)', () => {
+    // Third recurrence of the same failure class (rc.19, mission fb2a7053, and
+    // this fix): isClaudeTuiSelectFooter used to depend entirely on the
+    // "Enter to select" footer string. When that line is scrolled out of the
+    // captured frame (a tall prompt body, or a narrow terminal), the parse
+    // failed even though the numbered checkbox option block is fully visible.
+    // The structural fallback (numbered option rows with checkbox glyphs) must
+    // resolve the picker with no footer line present anywhere in the screen.
+    const screen = [
+      '←  ☐ Pick  ✔ Submit  →',
+      '',
+      'Pick as many as apply',
+      '',
+      '❯ [ ] 1. Alpha',
+      '  [x] 2. Beta',
+      '  [ ] 3. Gamma',
+    ].join('\n');
+    expect(screen).not.toMatch(/Enter to select/i);
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'no-footer-checkbox', createdAt: 1234 });
+
+    expect(prompt).not.toBeNull();
+    expect(prompt?.questions[0]?.multiSelect).toBe(true);
+    expect(prompt?.questions[0]?.options.map(o => o.label)).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('still refuses a genuine approval modal with no footer and no checkbox markers (negative control)', () => {
+    // The structural fallback must not turn every footerless numbered-button
+    // screen into a picker — a real tool-consent modal's option rows never
+    // carry checkbox glyphs, so it must still fail to parse as a question.
+    const screen = [
+      ' Bash command',
+      '',
+      ' npm test',
+      ' Run shell command',
+      '',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. No',
+    ].join('\n');
+    expect(screen).not.toMatch(/Enter to select/i);
+
+    const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([
+      { screenText: screen },
+    ], { promptId: 'no-footer-approval', createdAt: 1234 });
+
+    expect(prompt).toBeNull();
+  });
+
   it('keeps single-select numbered screens as multiSelect:false (no false positive)', () => {
     // No per-option checkbox markers and no multi-select footer hint. The ☐ on
     // the `✔ Submit` nav line is per-question answered state, NOT multi-select,

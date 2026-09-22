@@ -407,7 +407,29 @@ function isClaudeTuiSelectFooter(text: string): boolean {
   // is a safe discriminator. The option-block anchor below (numbered option
   // rows above the footer line) keeps a bare "Enter to select" mention in
   // prose from parsing as a picker.
-  return /Enter to select/i.test(text);
+  if (/Enter to select/i.test(text)) return true;
+  // FOOTER-DRIFT FALLBACK (third recurrence of the same failure class — rc.19,
+  // mission fb2a7053, and this fix): the footer hint is a single string this
+  // parser depends on, and claude-cli's TUI layout has now drifted out from
+  // under it three times. Rather than chase the next exact wording, accept a
+  // second, structural anchor that does not depend on any footer string at
+  // all: a numbered option block whose rows carry a checkbox glyph
+  // (multi-select picker markers — see CLAUDE_TUI_OPTION_CHECKBOX below). A
+  // genuine tool-consent modal's option rows never render checkbox glyphs (its
+  // buttons are plain "N. Label" lines), so this stays a safe discriminator
+  // even with no footer present or scrolled out of the captured frame.
+  return claudeTuiChecklistOptionPattern().test(text);
+}
+
+// Mirrors the checkbox glyph set detectClaudeTuiMultiSelect below matches per
+// line — kept as a single-string `test()` here (rather than a shared helper)
+// because this call site only needs "is there at least one such row anywhere
+// in the frame", not per-line classification.
+function claudeTuiChecklistOptionPattern(): RegExp {
+  const optionCheckbox = '(?:\\[[ xX]\\]|[☐☒◻◼])';
+  return new RegExp(
+    `(?:^|\\n)\\s*(?:[❯›>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S|(?:^|\\n)\\s*(?:[❯›>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`,
+  );
 }
 
 /**
@@ -481,13 +503,32 @@ function parseClaudeHeaderlessInteractiveTuiQuestion(page: ClaudeInteractiveTuiP
       break;
     }
   }
-  if (footerIndex < 0) return null;
 
-  let optionBlockEnd = footerIndex - 1;
-  for (let i = footerIndex - 1; i >= 0; i -= 1) {
-    if (/^─+$/.test(lines[i].text.trim())) {
-      optionBlockEnd = i - 1;
-      break;
+  // FOOTER-DRIFT FALLBACK: isClaudeTuiSelectFooter can accept a frame with no
+  // "Enter to select" line at all (the structural checkbox-option anchor —
+  // see its comment). In that case there is no footer row to anchor the
+  // option block above, so anchor on the LAST line that itself looks like a
+  // numbered option row instead. optionBlockEnd is inclusive of that row (the
+  // scan below walks upward from it), matching the footerIndex-1 semantics
+  // used when a footer line is present.
+  let optionBlockEnd: number;
+  if (footerIndex < 0) {
+    let lastOptionIndex = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
+        lastOptionIndex = i;
+        break;
+      }
+    }
+    if (lastOptionIndex < 0) return null;
+    optionBlockEnd = lastOptionIndex;
+  } else {
+    optionBlockEnd = footerIndex - 1;
+    for (let i = footerIndex - 1; i >= 0; i -= 1) {
+      if (/^─+$/.test(lines[i].text.trim())) {
+        optionBlockEnd = i - 1;
+        break;
+      }
     }
   }
 
@@ -614,7 +655,12 @@ export function parseClaudeInteractiveTuiQuestion(page: ClaudeInteractiveTuiPage
     }
   }
   if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
-  if (!page.screenText.includes('Enter to select')) return null;
+  // FOOTER-DRIFT FALLBACK: mirrors isClaudeTuiSelectFooter's structural
+  // fallback (see its comment) — a bare `.includes('Enter to select')` check
+  // here missed the same footer-scrolled-out-of-frame case on the HEADERED
+  // (nav-line) picker shape, even after the headerless path above was fixed
+  // to tolerate it.
+  if (!isClaudeTuiSelectFooter(page.screenText)) return null;
 
   // REVIEW-PAGE GUARD. The final review/submit page renders the same nav line
   // and footer as a question page, so it must be rejected here — otherwise its
