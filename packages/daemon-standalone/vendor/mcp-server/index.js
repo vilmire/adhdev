@@ -99384,9 +99384,11 @@ ${statusLine}`;
       if (state2.modal) return "approval";
       return null;
     }
+    var FSM_STATUS_VALUES;
     var init_fsm_types = __esm2({
       "src/providers/spec/fsm-types.ts"() {
         "use strict";
+        FSM_STATUS_VALUES = ["idle", "generating", "approval", "waiting_external"];
       }
     });
     var fsm_loader_exports = {};
@@ -99486,8 +99488,11 @@ ${statusLine}`;
         ids.add(s2.id);
         if (!s2.label) errs.push(`states[${i}].label is required`);
         if (s2.initial) initialCount += 1;
-        if (s2.status && !["idle", "generating", "approval"].includes(s2.status)) {
-          errs.push(`states[${i}].status "${s2.status}" must be idle|generating|approval`);
+        if (s2.status && !FSM_STATUS_VALUES.includes(s2.status)) {
+          errs.push(`states[${i}].status "${s2.status}" must be ${FSM_STATUS_VALUES.join("|")}`);
+        }
+        if (s2.status === "waiting_external" && s2.modal) {
+          errs.push(`states[${i}] ("${s2.id}") declares status:"waiting_external" with modal:true \u2014 an external-auth wait has no on-screen buttons to press; drop modal (and modal_kind/extract.buttons) or use a different status`);
         }
       }
       if (initialCount === 0) errs.push("exactly one state must have initial:true (none found)");
@@ -99895,6 +99900,13 @@ ${statusLine}`;
           return null;
       }
     }
+    function continuesButtonSequence(line, re, prevIndex) {
+      const m = re.exec(line);
+      if (!m) return false;
+      const idx = Number(m[1]);
+      if (!Number.isFinite(idx) || idx <= 0) return false;
+      return idx === prevIndex + 1;
+    }
     function extractButtonsFromRule(rule, hay) {
       const keyTemplate = rule.key_for_index ?? "{index}";
       if (rule.label_group !== void 0 || rule.key_group !== void 0) {
@@ -99933,7 +99945,7 @@ ${statusLine}`;
           while (j < lines.length) {
             const next = lines[j];
             if (!next.trim()) break;
-            if (re.test(next)) break;
+            if (re.test(next) && continuesButtonSequence(next, re, idx)) break;
             if (!/^\s+/.test(next)) break;
             label += " " + next.trim();
             j += 1;
@@ -105819,7 +105831,7 @@ trust_level = "trusted"
         DEFAULT_SPAWN_PRIME_MAX_WAIT_MS = 2e3;
         STALL_REFOCUS_INFO_LIMIT = 3;
         fsmDriverSeq = 0;
-        FsmDriver = class {
+        FsmDriver = class _FsmDriver {
           constructor(opts) {
             this.opts = opts;
             const self = this;
@@ -106237,16 +106249,19 @@ trust_level = "trusted"
           // how many ms until it would flip. No screenshots required.
           getFsmDebug() {
             const now = Date.now();
-            const cursor = this.adapter.getCursorPosition();
-            const screen = this.adapter.snapshot();
-            const ev = this.evalFsmNow(screen, cursor, now);
+            const viewportCursor = this.adapter.getCursorPosition();
+            const guard = this.buildGuardFrame(this.adapter.snapshot(), viewportCursor);
+            const ev = this.evalFsmNow(guard.screen, guard.cursor, now);
             const state2 = stateById(this.spec, this.currentStateId);
             return {
               currentState: this.currentStateId,
               label: state2?.label ?? this.currentStateId,
               stateAgeMs: now - this.stateEnteredAt,
               status: state2 ? statusForState(state2) : "idle",
-              cursor,
+              // Report the VIEWPORT cursor — this field is a human-facing "where is
+              // the caret on screen" readout, and the guard-frame rebase is an
+              // internal coordinate shift that would read as a bogus row number.
+              cursor: viewportCursor,
               transitions: ev.transitions
             };
           }
@@ -106262,8 +106277,11 @@ trust_level = "trusted"
           }
           getSections(screenText) {
             try {
-              const screen = screenText ?? this.adapter.snapshot();
-              const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
+              if (screenText === void 0) {
+                const guard = this.buildGuardFrame(this.adapter.snapshot(), this.adapter.getCursorPosition());
+                return resolveSections(this.spec.sections ?? {}, guard.lines).map((s2) => ({ id: s2.id, text: s2.text }));
+              }
+              const lines = screenText.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
               return resolveSections(this.spec.sections ?? {}, lines).map((s2) => ({ id: s2.id, text: s2.text }));
             } catch {
               return null;
@@ -106393,6 +106411,83 @@ trust_level = "trusted"
               regionLastChangedAt: this.regionLastChangedAt
             };
           }
+          /**
+           * APPROVAL-WAIT-BLINDSPOT fix ③ — how many scrollback lines a transition
+           * guard may look ABOVE the viewport.
+           *
+           * Bounded on purpose. `snapshotWithScrollback()` can return the session's
+           * whole history (thousands of lines), and every transition guard on every
+           * PTY frame re-runs `resolveSections` + each regex over whatever it is
+           * handed — during generating that is many frames per second. Feeding it an
+           * unbounded buffer would turn a per-frame O(viewport) scan into O(session),
+           * degrading as the session ages: the classic fix that works on a fresh
+           * session and melts after an hour.
+           *
+           * 200 lines is ~2–3 viewport heights at a normal terminal size, which is the
+           * scale of the problem being solved (a modal whose box-top anchor is pushed
+           * a screenful or two above the viewport by a tall diff). A modal taller than
+           * that is not recoverable by looking further up anyway — its own choices
+           * would have scrolled off too.
+           */
+          static GUARD_SCROLLBACK_LOOKBACK_LINES = 200;
+          /**
+           * Build the frame a transition guard is evaluated against.
+           *
+           * APPROVAL-WAIT-BLINDSPOT fix ③ (live defect, 2026-09-22). Until now
+           * `deriveModal` read a SCROLLBACK-inclusive buffer (so a tall approval's
+           * off-screen box-top anchor still matched) while the transition guards that
+           * decide whether we are even IN the approval state read the VIEWPORT only.
+           * The two halves disagreed exactly when it mattered: a tall modal pushed the
+           * `─────` anchor above the viewport, the `→approval` guard's section
+           * resolved empty, and the transition never fired. Measured cost was a
+           * `waiting_approval` that arrived 4 minutes late — by which time the task had
+           * already been reaped and the event was discarded as `stale`.
+           *
+           * So the guards now read the same class of buffer the extraction does. Two
+           * things must be preserved while doing it, and both are why this is a helper
+           * rather than a one-line swap to `scrollbackLines()`:
+           *
+           *  1. CURSOR ROWS STAY ALIGNED. `cursor.row` is viewport-relative, and
+           *     `cursor_above` (used by codex/antigravity/claude/hermes busy→idle
+           *     guards) slices `lines[cursor.row - N .. cursor.row]`. Prepending K
+           *     scrollback lines without rebasing the cursor would silently slide that
+           *     window K lines up the screen and compare the wrong region — turning a
+           *     stability check into noise. The cursor is therefore shifted by exactly
+           *     the number of prepended lines, making the slice byte-identical to the
+           *     viewport-only one.
+           *  2. `prevScreenLines` MUST BE TRACKED ON THE SAME BASIS. A `changed`
+           *     condition diffs current vs previous at the same row indices; mixing an
+           *     extended current frame with a viewport-only previous frame would
+           *     report "changed" on every frame purely from the offset. The caller
+           *     stores the same extended lines it evaluates (see reevaluate()).
+           *
+           * Falls back to the plain viewport whenever scrollback is unavailable or
+           * adds nothing, so a driver without scrollback support behaves exactly as
+           * before.
+           */
+          buildGuardFrame(viewportScreen, cursor) {
+            const viewportLines = viewportScreen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
+            let full;
+            try {
+              full = this.scrollbackLines();
+            } catch {
+              return { screen: viewportScreen, lines: viewportLines, cursor };
+            }
+            const extraLines = full.length - viewportLines.length;
+            if (extraLines <= 0) return { screen: viewportScreen, lines: viewportLines, cursor };
+            const available = Math.min(extraLines, _FsmDriver.GUARD_SCROLLBACK_LOOKBACK_LINES);
+            const lookback = _FsmDriver.GUARD_SCROLLBACK_LOOKBACK_LINES;
+            const pad = new Array(lookback - available).fill("");
+            const lines = [...pad, ...full.slice(full.length - viewportLines.length - available)];
+            return {
+              screen: lines.join("\n"),
+              lines,
+              // Rebase: the viewport's row 0 now sits `lookback` lines down. Fixed,
+              // so `cursor_above` slices land on exactly the same screen content
+              // they did before this change.
+              cursor: { row: cursor.row + lookback, col: cursor.col }
+            };
+          }
           evalFsmNow(screen, cursor, now) {
             const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : void 0;
             return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now), this.signalObservation);
@@ -106429,10 +106524,12 @@ trust_level = "trusted"
             const now = Date.now();
             const screen = this.adapter.snapshot();
             this.maybeDismissStartupPrompt(screen, now);
-            const cursor = this.adapter.getCursorPosition();
-            const currentLines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
+            const viewportCursor = this.adapter.getCursorPosition();
+            const guard = this.buildGuardFrame(screen, viewportCursor);
+            const currentLines = guard.lines;
+            const cursor = guard.cursor;
             this.trackRegionChanges(currentLines, cursor, now);
-            const ev = this.evalFsmNow(screen, cursor, now);
+            const ev = this.evalFsmNow(guard.screen, cursor, now);
             this.lastFsmEval = ev;
             this.prevScreenLines = currentLines;
             this.logShadowDivergence(ev);
@@ -112334,6 +112431,68 @@ ${text}` : text;
         TAIL_BYTES3 = 512 * 1024;
       }
     });
+    function projectAdapterStatus(input) {
+      const sessionFields = input.providerSessionId ? { providerSessionId: input.providerSessionId } : {};
+      const base = {
+        messages: [],
+        activeModal: null,
+        activeInteractivePrompt: input.activeInteractivePrompt,
+        ...sessionFields
+      };
+      if (input.providerFailure) {
+        return {
+          ...base,
+          status: "error",
+          errorMessage: input.providerFailure.message,
+          errorReason: input.providerFailure.errorReason
+        };
+      }
+      if (input.exited) return { ...base, status: "stopped" };
+      if (!input.spawned) return { ...base, status: "starting" };
+      const state2 = input.state;
+      if (!state2) return { ...base, status: "starting" };
+      const modal = input.modal;
+      if (state2.status === "approval") {
+        return {
+          ...base,
+          status: "waiting_approval",
+          // Surface buttons when we have them; an approval state with no parsed
+          // modal this frame still stays waiting_approval (no activeModal yet).
+          // `kind` carries the semantic modal class through to the auto-approve
+          // gate so a /model picker (kind='picker') is never auto-answered.
+          // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
+          // existing consumer (pickApprovalButton, mesh_approve, auto-approve) reads,
+          // but ALSO surface `buttonMeta` carrying each button's real FSM display index
+          // alongside its label. A partial/non-contiguous modal (display indices [1,3,4]
+          // at array positions [0,1,2]) then no longer loses the index → label mapping
+          // once it leaves the adapter: a consumer that has an array position can recover
+          // the true FSM index without re-parsing. SpecCliAdapter.resolveModal relies on
+          // the same ordered list to translate an array position to the correct FSM index.
+          activeModal: modal ? {
+            message: modal.title ?? state2.label,
+            buttons: modal.buttons.map((b) => b.label),
+            buttonMeta: modal.buttons.map((b) => ({ index: b.index, label: b.label })),
+            kind: modal.kind ?? null
+          } : null
+        };
+      }
+      if (state2.status === "waiting_external") {
+        return { ...base, status: "waiting_approval" };
+      }
+      const readySeen = input.readySeen();
+      if (readySeen === false) {
+        return { ...base, status: "starting", fsmReadySeen: false };
+      }
+      if (state2.status === "generating") {
+        return { ...base, status: "generating" };
+      }
+      return { ...base, status: "idle", fsmReadySeen: readySeen === true };
+    }
+    var init_adapter_status_projection = __esm2({
+      "src/providers/spec/adapter-status-projection.ts"() {
+        "use strict";
+      }
+    });
     function stripAnsi(text) {
       const s2 = String(text || "");
       if (s2.indexOf("\x1B") === -1) return s2;
@@ -112544,6 +112703,7 @@ ${text}` : text;
         init_interactive_prompt();
         init_kimi_pending_question();
         init_claude_pending_question();
+        init_adapter_status_projection();
         init_dist();
         init_provider_failure_classifier();
         init_live_auth_advisory();
@@ -112857,67 +113017,21 @@ ${text}` : text;
             }
           }
           getStatus(_options) {
-            const sessionFields = this.providerSessionId ? { providerSessionId: this.providerSessionId } : {};
             this.maybeConfirmLiveAuthBillingSuspect();
-            if (this.providerFailure) {
-              return {
-                status: "error",
-                messages: [],
-                activeModal: null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                errorMessage: this.providerFailure.message,
-                errorReason: this.providerFailure.errorReason,
-                ...sessionFields
-              };
+            if (!this.providerFailure && !this.exited && this.spawned) {
+              this.refreshWirePendingQuestion();
+              this.maybeRefreshNativeHistory();
             }
-            if (this.exited) return { status: "stopped", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-            if (!this.spawned) return { status: "starting", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-            this.refreshWirePendingQuestion();
-            this.maybeRefreshNativeHistory();
-            const state2 = this.latestState;
-            if (!state2) return { status: "starting", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-            const modal = this.latestModal;
-            if (state2.status === "approval") {
-              return {
-                status: "waiting_approval",
-                messages: [],
-                // Surface buttons when we have them; an approval state with no parsed
-                // modal this frame still stays waiting_approval (no activeModal yet).
-                // `kind` carries the semantic modal class through to the auto-approve
-                // gate so a /model picker (kind='picker') is never auto-answered.
-                // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
-                // existing consumer (pickApprovalButton, mesh_approve, auto-approve) reads,
-                // but ALSO surface `buttonMeta` carrying each button's real FSM display index
-                // alongside its label. A partial/non-contiguous modal (display indices [1,3,4]
-                // at array positions [0,1,2]) then no longer loses the index → label mapping
-                // once it leaves the adapter: a consumer that has an array position can recover
-                // the true FSM index without re-parsing. resolveModal() below relies on the same
-                // ordered list to translate an array position to the correct FSM index.
-                activeModal: modal ? {
-                  message: modal.title ?? state2.label,
-                  buttons: modal.buttons.map((b) => b.label),
-                  buttonMeta: modal.buttons.map((b) => ({ index: b.index, label: b.label })),
-                  kind: modal.kind ?? null
-                } : null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                ...sessionFields
-              };
-            }
-            const readySeen = this.driver.hasSeenReady?.();
-            if (readySeen === false) {
-              return {
-                status: "starting",
-                messages: [],
-                activeModal: null,
-                activeInteractivePrompt: this.activeInteractivePrompt,
-                fsmReadySeen: false,
-                ...sessionFields
-              };
-            }
-            if (state2.status === "generating") {
-              return { status: "generating", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, ...sessionFields };
-            }
-            return { status: "idle", messages: [], activeModal: null, activeInteractivePrompt: this.activeInteractivePrompt, fsmReadySeen: readySeen === true, ...sessionFields };
+            return projectAdapterStatus({
+              providerSessionId: this.providerSessionId,
+              providerFailure: this.providerFailure,
+              exited: this.exited,
+              spawned: this.spawned,
+              activeInteractivePrompt: this.activeInteractivePrompt,
+              state: this.latestState,
+              modal: this.latestModal,
+              readySeen: () => this.driver?.hasSeenReady?.()
+            });
           }
           maybeRefreshNativeHistory() {
           }
@@ -115937,6 +116051,16 @@ ${buttons.join("\n")}`;
       const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS2 : MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
       const stalledMs = now - host.meshStallAnchorAt;
       if (stalledMs < threshold) return;
+      if (observedStatus === "waiting_approval" || observedStatus === "waiting_choice") {
+        traceMeshEventDrop(
+          "mesh_worker_stall_waiting_on_human",
+          host.meshTraceCtx("monitor:no_progress"),
+          `PTY quiet ${Math.round(stalledMs / 1e3)}s but the adapter reports '${observedStatus}' \u2014 the session is parked at a prompt awaiting a human decision, not stalled`
+        );
+        host.meshStallAnchorAt = now;
+        host.meshStallEmittedForAnchor = false;
+        return;
+      }
       const turnPresentation = resolveSessionTurnPresentation({
         sessionId: host.instanceId,
         legacyStatus: observedStatus,
