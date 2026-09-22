@@ -166,7 +166,7 @@ export interface ISpecDriver {
      * a body still sitting in memory use this instead. Optional so test doubles
      * implementing ISpecDriver need not provide it.
      */
-    sendMessageWithDisposition?(text: string, bracketedPaste?: boolean): SendDisposition;
+    sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition;
     /**
      * SEND-NOW-DOUBLE-SEND: remove every queued copy of `text` from the
      * pendingSends FIFO and report how many were taken out, so exactly ONE
@@ -185,6 +185,15 @@ export interface ISpecDriver {
      * so test doubles implementing ISpecDriver need not provide it.
      */
     claimQueuedSends?(text: string): number;
+    /**
+     * SEND-NOW-DOUBLE-SEND (image bodies): like claimQueuedSends, but matches a
+     * queued entry by its built body text OR its `claimKey` (the raw dashboard
+     * text a structured image prompt was built from) and RETURNS the removed
+     * entries, so the claimer can deliver the parked body itself instead of the
+     * raw text — which would silently drop the attachment. See
+     * SendSubmitEngine.claimQueuedSendEntries. Optional for test doubles.
+     */
+    claimQueuedSendEntries?(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[];
     /**
      * SEND-NOW-WRONG-ITEM: suspend the autonomous pendingSends drain for up to
      * `ttlMs`, so an out-of-band caller owns the next write to the PTY.
@@ -789,8 +798,8 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
-    sendMessageWithDisposition(text: string, bracketedPaste?: boolean): SendDisposition {
-        return this.sends.handleSendMessage(text, bracketedPaste);
+    sendMessageWithDisposition(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition {
+        return this.sends.handleSendMessage(text, bracketedPaste, claimKey);
     }
 
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
@@ -816,6 +825,11 @@ export class FsmDriver implements ISpecDriver {
     /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
     claimQueuedSends(text: string): number {
         return this.sends.claimQueuedSends(text);
+    }
+
+    /** SEND-NOW-DOUBLE-SEND (image bodies): see ISpecDriver.claimQueuedSendEntries. */
+    claimQueuedSendEntries(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[] {
+        return this.sends.claimQueuedSendEntries(text);
     }
 
     /** Forward runtime metadata to the terminal transport so mesh binding

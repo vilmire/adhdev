@@ -71,8 +71,14 @@ export interface QueueWritableAdapter {
     /** SEND-NOW-DOUBLE-SEND: remove every queued copy of `text` from the driver
      *  FIFO, returning how many were taken. */
     claimQueuedSends?(text: string): number;
+    /** SEND-NOW-DOUBLE-SEND (image bodies): claim by built body text OR
+     *  claimKey (the raw dashboard text a structured prompt was built from) and
+     *  return the removed entries, so this module can deliver the ACTUAL parked
+     *  body — a claimed image prompt delivered as its raw text would silently
+     *  drop the attachment. Preferred over claimQueuedSends when present. */
+    claimQueuedSendEntries?(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[];
     /** Ordinary send, used ONLY to put a claimed body back after a refusal. */
-    sendMessage?(text: string, options?: { force?: boolean }): Promise<{ status: 'queued' | 'delivered' } | void>;
+    sendMessage?(text: string, options?: { force?: boolean; bracketedPaste?: boolean; claimKey?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
 }
 
 export type QueuedWriteFailure = {
@@ -142,15 +148,28 @@ export async function sendNowIntoAgentQueue(
 
     // ★ Claim BEFORE writing. See the double-send note in the module header.
     // A claim of 0 is the ordinary case for an unparked body and is not an error.
-    const claimed = typeof adapter.claimQueuedSends === 'function'
-        ? adapter.claimQueuedSends(text)
-        : 0;
+    //
+    // ★ Entry-returning claim, when the adapter has it. A structured image send
+    // parks the BUILT prompt ("<materialized path>\n<text>") while the dashboard
+    // presses Send now with only the raw text — the old text-keyed claim could
+    // never find that body, which disarmed this whole guard: the split write
+    // delivered the raw text AND the idle drain later delivered the parked image
+    // prompt (one press → two agent turns, observed live 2026-09-23). Claiming
+    // by either identity AND writing the claimed entry's own body closes both
+    // halves: exactly one delivery, with the attachment reference intact.
+    const claimedEntries = typeof adapter.claimQueuedSendEntries === 'function'
+        ? adapter.claimQueuedSendEntries(text)
+        : null;
+    const claimed = claimedEntries
+        ? claimedEntries.length
+        : (typeof adapter.claimQueuedSends === 'function' ? adapter.claimQueuedSends(text) : 0);
+    const body = claimedEntries && claimedEntries.length > 0 ? claimedEntries[0] : { text };
 
-    const outcome = adapter.sendMessageDuringGeneration(text);
+    const outcome = adapter.sendMessageDuringGeneration(body.text, body.bracketedPaste);
     if (outcome.accepted) {
         LOG.info(
             'SendNowQueue',
-            `[${adapter.cliType}] handed to agent input queue (len=${text.length}, claimed=${claimed})`,
+            `[${adapter.cliType}] handed to agent input queue (len=${body.text.length}, claimed=${claimed})`,
         );
         return { ok: true, claimed };
     }
@@ -160,17 +179,23 @@ export async function sendNowIntoAgentQueue(
     // shows the bubble as still queued (correctly — we report failure), but the
     // driver would no longer hold it, so the idle drain that the bubble promises
     // would never fire. The restore goes through the ORDINARY sendMessage, which
-    // re-parks it exactly the way the original send did.
+    // re-parks it exactly the way the original send did — including its claimKey,
+    // so a second Send now press (or a cancel) can still find it.
     let restored = claimed === 0;
     if (claimed > 0 && typeof adapter.sendMessage === 'function') {
         try {
-            await adapter.sendMessage(text);
+            for (const entry of (claimedEntries && claimedEntries.length > 0 ? claimedEntries : [{ text }])) {
+                await adapter.sendMessage(entry.text, {
+                    bracketedPaste: entry.bracketedPaste,
+                    claimKey: entry.claimKey,
+                });
+            }
             restored = true;
         } catch (e) {
             LOG.error(
                 'SendNowQueue',
                 `[${adapter.cliType}] FAILED to restore ${claimed} claimed send(s) after refusal `
-                + `(${outcome.reason}, len=${text.length}): ${(e as Error)?.message}`,
+                + `(${outcome.reason}, len=${body.text.length}): ${(e as Error)?.message}`,
             );
         }
     }

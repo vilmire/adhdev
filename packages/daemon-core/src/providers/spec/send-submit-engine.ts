@@ -137,10 +137,30 @@ export interface DriverHost {
     currentStatus(): FsmStatus;
 }
 
+/**
+ * A body parked in the FIFO. `bracketedPaste` rides along so a queued image
+ * prompt keeps its paste-wrapped delivery when drained later.
+ *
+ * (SEND-NOW-DOUBLE-SEND, image bodies) `claimKey` is the SECOND identity of a
+ * structured send: the raw dashboard text (`InputEnvelope.textFallback`) the
+ * body was built FROM. A structured image send parks the BUILT prompt
+ * ("<materialized path>\n<text>"), but every out-of-band caller — send-now,
+ * cancel, interrupt — only ever knows the raw text the owner typed, so a claim
+ * keyed on `text` alone could never find the parked image body. That broken
+ * claim disarmed the double-send guard: the send-now split write delivered the
+ * raw text AND the idle drain later delivered the parked image prompt, one
+ * owner press → two agent turns (observed live 2026-09-23). The claim below
+ * matches EITHER identity, exactly — never a substring.
+ */
+export interface QueuedSendEntry {
+    text: string;
+    bracketedPaste?: boolean;
+    claimKey?: string;
+}
+
 export class SendSubmitEngine {
-    /** Queued send bodies. `bracketedPaste` rides along so a queued image
-     *  prompt keeps its paste-wrapped delivery when drained later. */
-    private pendingSends: { text: string; bracketedPaste?: boolean }[] = [];
+    /** Queued send bodies — see QueuedSendEntry. */
+    private pendingSends: QueuedSendEntry[] = [];
     /** True while a send is written but the FSM has not yet left idle, i.e. the
      *  composer is mid-submit. Blocks a second send from overwriting the first
      *  before the CLI has consumed it (see handleSendMessage). */
@@ -265,23 +285,42 @@ export class SendSubmitEngine {
 
     /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
     claimQueuedSends(text: string): number {
-        const before = this.pendingSends.length;
-        if (before === 0) return 0;
-        this.pendingSends = this.pendingSends.filter(s => s.text !== text);
-        const claimed = before - this.pendingSends.length;
-        if (claimed > 0) {
-            // Also clear the pre-write duplicate gate for this body. The claimer
-            // is about to re-send the SAME text, and isDuplicateResend would
+        return this.claimQueuedSendEntries(text).length;
+    }
+
+    /**
+     * SEND-NOW-DOUBLE-SEND: remove every queued body whose text OR claimKey (the
+     * raw source text a structured image prompt was built from — see
+     * QueuedSendEntry) exactly equals `text`, and RETURN the removed entries.
+     *
+     * Returning the entries is the point: a claimer that then delivers its own
+     * raw `text` would silently drop the attachment the parked body carried, so
+     * the out-of-band routes (send-now, interrupt) deliver the claimed entry's
+     * ACTUAL body instead.
+     */
+    claimQueuedSendEntries(text: string): QueuedSendEntry[] {
+        if (this.pendingSends.length === 0) return [];
+        const claimedEntries: QueuedSendEntry[] = [];
+        this.pendingSends = this.pendingSends.filter(s => {
+            const matches = s.text === text || s.claimKey === text;
+            if (matches) claimedEntries.push(s);
+            return !matches;
+        });
+        if (claimedEntries.length > 0) {
+            // Also clear the pre-write duplicate gate for every claimed BODY (the
+            // built prompt text may differ from the claim text). The claimer is
+            // about to re-send the same body, and isDuplicateResend would
             // otherwise suppress it as a redelivery of the copy we just removed —
             // turning the claim into silent data loss instead of a fix.
             this.recentSendHashes.delete(hashSendText(text));
+            for (const entry of claimedEntries) this.recentSendHashes.delete(hashSendText(entry.text));
             LOG.info(
                 'FsmDriver',
-                `[${this.host.specTag()}] claimed ${claimed} queued send(s) for out-of-band delivery `
+                `[${this.host.specTag()}] claimed ${claimedEntries.length} queued send(s) for out-of-band delivery `
                 + `(len=${text.length}, remaining=${this.pendingSends.length})`,
             );
         }
-        return claimed;
+        return claimedEntries;
     }
 
     /**
@@ -296,7 +335,7 @@ export class SendSubmitEngine {
      * on top of a still-generating turn, braiding the two bodies in the composer
      * (see the SEND-OVERLAP note above the constants).
      */
-    handleSendMessage(text: string, bracketedPaste?: boolean): SendDisposition {
+    handleSendMessage(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition {
         // A resend of text we are already in the middle of delivering is dropped
         // outright rather than queued: queueing it would just submit the same
         // prompt a second time once the turn ends, which is the duplicate-bubble
@@ -306,7 +345,7 @@ export class SendSubmitEngine {
             return { status: 'duplicate' };
         }
         if (!this.canSendNow()) {
-            this.pendingSends.push({ text, bracketedPaste });
+            this.pendingSends.push({ text, bracketedPaste, claimKey });
             const reason = this.sendBlockedReason();
             LOG.info(
                 'FsmDriver',

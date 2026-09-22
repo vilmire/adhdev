@@ -249,11 +249,23 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                             restored: queued.restored,
                         };
                     }
-                    const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
-                    if (target?.category === 'cli'
-                        && target.type === adapter.cliType
-                        && typeof target.recordAcknowledgedUserInput === 'function') {
-                        target.recordAcknowledgedUserInput(input);
+                    // (IMAGE-TRIPLE-BUBBLE ④) claimed > 0 means this body was
+                    // parked by an EARLIER send_chat whose ack already rendered
+                    // the owner's bubble — send-now merely re-routed its
+                    // delivery. Re-acking here with THIS call's (text-only)
+                    // envelope would append a second, differently-worded user
+                    // bubble for the same message whenever the original send
+                    // carried attachments (the content-keyed dedup window only
+                    // collapses identical content). A direct press on a body the
+                    // driver never parked (claimed === 0) is a genuine first
+                    // delivery and still gets its ack.
+                    if (queued.claimed === 0) {
+                        const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+                        if (target?.category === 'cli'
+                            && target.type === adapter.cliType
+                            && typeof target.recordAcknowledgedUserInput === 'function') {
+                            target.recordAcknowledgedUserInput(input);
+                        }
                     }
                     return {
                         ..._logSendSuccess(`${transport}-adapter-agent-queue`, adapter.cliType),

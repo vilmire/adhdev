@@ -75,6 +75,41 @@ function normalizeForEchoMatch(value: unknown): string {
 }
 
 /**
+ * (IMAGE-TRIPLE-BUBBLE ①) Leading image tokens an echo may carry that the
+ * optimistic bubble never does:
+ *
+ *   - `[Image #N]` — claude-cli rewrites a delivered image body into a paste
+ *     chip plus the typed text, so the transcript echo of "그게…" comes back as
+ *     "[Image #2]그게…". The exact-match retirement below could then never
+ *     fire and the optimistic bubble was pinned forever (the reported
+ *     text-only ghost bubble).
+ *   - `[image: <mime>]` — the daemon's own runtime_input_ack renders an
+ *     attached image as this content-free marker line ahead of the text (see
+ *     buildCliInputAckText in daemon-core), so the ack echo of the same send
+ *     is "[image: image/png]\n그게…".
+ *
+ * Matching is deliberately kept TIGHT: only these two literal token shapes, only
+ * as a LEADING run, and the remainder must equal the pending body EXACTLY. A
+ * fuzzy contains/suffix match could retire a different message that merely ends
+ * with the same words, which is worse than a lingering bubble.
+ */
+const LEADING_IMAGE_ECHO_TOKENS = /^(?:\s*(?:\[Image #\d+\]|\[image: [^\]\n]{1,100}\]))+\s*/
+
+/**
+ * Does this live message's content account for the pending body `target`?
+ * Exact match first; otherwise strip a leading image-chip/marker run and
+ * require the remainder to be EXACTLY the pending text. The second branch only
+ * applies when a token run was actually present, so a plain-text echo can never
+ * match through it.
+ */
+function echoContentMatchesTarget(content: unknown, target: string): boolean {
+    const normalized = normalizeForEchoMatch(content)
+    if (normalized === target) return true
+    const stripped = normalized.replace(LEADING_IMAGE_ECHO_TOKENS, '').trim()
+    return stripped !== normalized && stripped.length > 0 && stripped === target
+}
+
+/**
  * ★ DUPLICATE PREVENTION — the whole risk of the optimistic bubble.
  *
  * The daemon ALREADY renders the owner's bubble: `recordAcknowledgedUserInput`
@@ -103,7 +138,7 @@ export function hasEchoedPendingMessage(
     for (let i = liveMessages.length - 1; i >= 0; i -= 1) {
         const message = liveMessages[i]
         if (String(message.role || '').toLowerCase() !== 'user') continue
-        if (normalizeForEchoMatch(message.content) === target) return true
+        if (echoContentMatchesTarget(message.content, target)) return true
     }
     return false
 }
@@ -123,7 +158,7 @@ function countEchoedMessages(liveMessages: DashboardMessage[], target: string): 
     let count = 0
     for (const message of liveMessages) {
         if (String(message.role || '').toLowerCase() !== 'user') continue
-        if (normalizeForEchoMatch(message.content) === target) count += 1
+        if (echoContentMatchesTarget(message.content, target)) count += 1
     }
     return count
 }

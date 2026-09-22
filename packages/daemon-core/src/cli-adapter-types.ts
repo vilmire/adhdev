@@ -130,7 +130,14 @@ export interface CliAdapter {
     workingDir: string;
     _acpInstance?: AcpAdapterHandle;
     spawn(): Promise<void>;
-    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
+    /**
+     * `bracketedPaste` routes an image-bearing body through the provider's
+     * declared paste channel; `claimKey` (SEND-NOW-DOUBLE-SEND, image bodies) is
+     * the raw source text a structured prompt was built from, parked alongside a
+     * queued body so out-of-band claims (send-now / cancel / interrupt) can find
+     * it by the only identity the dashboard knows.
+     */
+    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string; bracketedPaste?: boolean; claimKey?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
     /**
      * Abort the turn currently in flight by writing the provider's OWN stop key,
      * so the caller can wait for busy→idle and then deliver a new prompt as a

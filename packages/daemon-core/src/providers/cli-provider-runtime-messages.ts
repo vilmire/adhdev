@@ -22,7 +22,7 @@ import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
 import type { InputEnvelope } from './contracts.js';
-import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
+import { buildCliInputAckText } from './cli-provider-input-prompt.js';
 import { shortHash } from '../system/hash.js';
 import { USER_INPUT_ACK_DEDUP_WINDOW_MS } from './cli-provider-instance-types.js';
 
@@ -143,9 +143,18 @@ export function recordAcknowledgedUserInput(
     host: RuntimeMessagesHost,
     input: InputEnvelope | string,
 ): void {
+    // (IMAGE-TRIPLE-BUBBLE ③) The ack DESCRIBES the send, it must not re-perform
+    // it: running the delivery prompt builder here re-materialized every base64
+    // image into a second temp file (1ms twin files per send, observed live) and
+    // recorded that never-delivered temp path in the ledger. buildCliInputAckText
+    // renders data images as content-free `[image: <mime>]` markers and touches
+    // no filesystem. It also makes the ack content DETERMINISTIC for a given
+    // envelope, which is what lets the TASKBUBBLE-DUP window below actually
+    // collapse a redelivered image dispatch — the twin temp paths used to make
+    // every redelivery hash differently.
     const content = typeof input === 'string'
         ? input.trim()
-        : buildCliStructuredInputPrompt(input).trim();
+        : buildCliInputAckText(input).trim();
     if (!content) return;
 
     const receivedAt = Date.now();

@@ -191,7 +191,7 @@ export type InterruptAndDeliverOutcome =
 export interface InterruptibleAdapter {
     cliType: string;
     getStatus(options?: { allowParse?: boolean }): { status?: string } | undefined;
-    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
+    sendMessage(text: string, options?: { force?: boolean; meshTaskId?: string; bracketedPaste?: boolean; claimKey?: string }): Promise<{ status: 'queued' | 'delivered' } | void>;
     interruptTurn?(): Promise<
         | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
         | { ok: false; reason: string; message: string }
@@ -200,6 +200,11 @@ export interface InterruptibleAdapter {
      *  FIFO, returning how many were taken. Optional: an adapter without it
      *  simply has no second delivery route to reconcile. */
     claimQueuedSends?(text: string): number;
+    /** SEND-NOW-DOUBLE-SEND (image bodies): claim by built body text OR claimKey
+     *  and return the removed entries, so the delivery below can send the ACTUAL
+     *  parked body (a built image prompt) rather than the raw text — which would
+     *  silently drop the attachment. Preferred when present. */
+    claimQueuedSendEntries?(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[];
     /** SEND-NOW-WRONG-ITEM: suspend the driver's autonomous FIFO drain so this
      *  call owns the next write. Optional — an adapter without it simply has no
      *  competing drain (and no multi-entry queue) to hold back. */
@@ -345,9 +350,19 @@ export async function interruptAndDeliver(
     // rejection above leaves the session untouched, so the queued copy must stay
     // exactly where it was and keep its ordinary drain. From here on the stop key
     // HAS been written and this call owns the delivery.
-    const claimed = typeof adapter.claimQueuedSends === 'function'
-        ? adapter.claimQueuedSends(text)
-        : 0;
+    //
+    // Entry-returning claim when available (SEND-NOW-DOUBLE-SEND, image bodies):
+    // a parked STRUCTURED body is the built image prompt, not the raw text this
+    // caller holds, so the claim matches either identity and step 3 delivers the
+    // claimed entry's own body — delivering the raw text instead would silently
+    // drop the attachment reference.
+    const claimedEntries = typeof adapter.claimQueuedSendEntries === 'function'
+        ? adapter.claimQueuedSendEntries(text)
+        : null;
+    const claimed = claimedEntries
+        ? claimedEntries.length
+        : (typeof adapter.claimQueuedSends === 'function' ? adapter.claimQueuedSends(text) : 0);
+    const claimedBody = claimedEntries && claimedEntries.length > 0 ? claimedEntries[0] : null;
     if (claimed > 0) {
         LOG.info('SendNow', `[${adapter.cliType}] claimed ${claimed} queued copy/copies of this body — this call is now its only delivery route`);
     }
@@ -410,7 +425,13 @@ export async function interruptAndDeliver(
 
         // Step 3 — ordinary send. Same call an idle send makes; the driver's own
         // gates still apply and a re-park is reported as queued, not as delivered.
-        const sendResult = await adapter.sendMessage(text, options?.meshTaskId ? { meshTaskId: options.meshTaskId } : undefined);
+        // A claimed entry is delivered as ITS OWN body (built image prompt +
+        // paste flag + claimKey), so an attachment survives and a re-park stays
+        // claimable.
+        const sendResult = await adapter.sendMessage(claimedBody ? claimedBody.text : text, {
+            ...(options?.meshTaskId ? { meshTaskId: options.meshTaskId } : {}),
+            ...(claimedBody ? { bracketedPaste: claimedBody.bracketedPaste, claimKey: claimedBody.claimKey } : {}),
+        });
         const queued = sendResult?.status === 'queued';
         LOG.info(
             'SendNow',

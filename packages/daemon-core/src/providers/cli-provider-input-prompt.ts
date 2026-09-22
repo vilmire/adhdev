@@ -84,14 +84,24 @@ function cleanupStaleMaterializedImages(dir: string): void {
     } catch { /* dir may not exist or be inaccessible */ }
 }
 
-export function buildCliStructuredInputPrompt(
+/**
+ * Shared envelope → flat text walk.
+ *
+ * `resolveImageRef` decides what an image part contributes as its reference
+ * line, which is the ONLY thing the two public builders disagree on: the
+ * delivery prompt needs a real on-disk path (materializing base64 data when
+ * necessary), while the transcript ack must stay content-free and never touch
+ * the filesystem. Sharing the walk keeps every other shape decision (part
+ * order, alt handling, textFallback fallback, dedup) from drifting between the
+ * delivered body and its ledger record.
+ */
+function buildStructuredInputText(
     input: InputEnvelope,
-    options: { materializeDir?: string } = {},
-): string {
+    resolveImageRef: (part: Extract<InputPart, { type: 'image' }>, index: number) => string,
+): { text: string; imageRefs: string[]; resourceRefs: string[] } {
     const promptParts: string[] = [];
     const imageRefs: string[] = [];
     const resourceRefs: string[] = [];
-    const materializeDir = options.materializeDir || path.join(os.tmpdir(), 'adhdev-input-media');
 
     input.parts.forEach((part, index) => {
         if (part.type === 'text' && part.text.trim()) {
@@ -100,9 +110,7 @@ export function buildCliStructuredInputPrompt(
         }
 
         if (part.type === 'image') {
-            const localPath = typeof part.uri === 'string' ? filePathFromUri(part.uri) : null;
-            const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
-            const ref = localPath || materializedPath || part.uri || '';
+            const ref = resolveImageRef(part, index);
             if (ref) imageRefs.push(ref);
             if (part.alt?.trim()) promptParts.push(part.alt.trim());
             return;
@@ -132,6 +140,51 @@ export function buildCliStructuredInputPrompt(
         ...resourceRefs,
     ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
 
+    return { text: ordered.join('\n'), imageRefs, resourceRefs };
+}
+
+export function buildCliStructuredInputPrompt(
+    input: InputEnvelope,
+    options: { materializeDir?: string } = {},
+): string {
+    const materializeDir = options.materializeDir || path.join(os.tmpdir(), 'adhdev-input-media');
+    const { text, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
+        const localPath = typeof part.uri === 'string' ? filePathFromUri(part.uri) : null;
+        const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
+        return localPath || materializedPath || part.uri || '';
+    });
     LOG.debug('CLI', `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
-    return ordered.join('\n');
+    return text;
+}
+
+/**
+ * (IMAGE-TRIPLE-BUBBLE ③) Envelope → transcript-ack text, WITHOUT materializing
+ * anything.
+ *
+ * `recordAcknowledgedUserInput` used to re-run the full prompt builder on the
+ * envelope, which re-materialized every base64 image into a SECOND temp file
+ * (1ms twin files observed live per send) and stamped that never-delivered
+ * temp path into the ledger ack. The ack must describe the send, not
+ * re-perform it:
+ *
+ *   - an image part that arrived as base64 DATA is recorded as the
+ *     content-free marker `[image: <mime>]` — never a temp path;
+ *   - an image part that arrived as a caller-supplied URI keeps its path,
+ *     exactly as the delivered prompt shows it (that path is the caller's own
+ *     reference, not daemon-minted temp state);
+ *   - text/alt/resource parts and the textFallback fallback are identical to
+ *     the delivered prompt, via the shared walk above.
+ *
+ * Note the dashboard echo-retirement (web-core conversation-message-snapshot)
+ * recognises the `[image: <mime>]` marker shape — change it in both places or
+ * the owner's optimistic bubble stops retiring.
+ */
+export function buildCliInputAckText(input: InputEnvelope): string {
+    return buildStructuredInputText(input, (part) => {
+        const localPath = typeof part.uri === 'string' ? filePathFromUri(part.uri) : null;
+        if (localPath) return localPath;
+        if (part.uri) return part.uri;
+        if (part.data) return `[image: ${part.mimeType || 'image'}]`;
+        return '';
+    }).text;
 }

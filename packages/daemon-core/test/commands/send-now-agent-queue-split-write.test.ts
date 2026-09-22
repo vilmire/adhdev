@@ -205,6 +205,81 @@ describe('SEND-NOW-AGENT-QUEUE: split write into a generating session', () => {
     }, 15_000);
 });
 
+describe('SEND-NOW-DOUBLE-SEND: image bodies claim by claimKey and deliver the PARKED body (IMAGE-TRIPLE-BUBBLE ④)', () => {
+    /**
+     * Live defect (2026-09-23): an image send parks the BUILT prompt
+     * ("<path>\n<text>") while the dashboard presses Send now with only the raw
+     * text. The text-keyed claim found nothing → the split write delivered the
+     * raw text AND the idle drain later delivered the parked prompt: one press,
+     * two agent turns (17:24:08 text-only + 17:24:21 image turn, separate
+     * assistant responses each).
+     */
+    it('★ one press → exactly ONE delivery, of the parked image body', async () => {
+        const { adapter, pty } = await makeGeneratingAdapter();
+        try {
+            const builtBody = '/tmp/adhdev-input-media/img-abc.png\ncheck this shot';
+            // The structured send parked earlier, while generating — with its
+            // claimKey (the raw dashboard text), as cli-provider-instance now sends.
+            const parked = await adapter.sendMessage(builtBody, { bracketedPaste: true, claimKey: 'check this shot' });
+            expect(parked).toEqual({ status: 'queued' });
+
+            // Send now arrives with ONLY the raw text.
+            const result = await sendNowIntoAgentQueue(adapter as never, 'check this shot');
+            expect(result.ok).toBe(true);
+            if (result.ok) expect(result.claimed).toBe(1);
+
+            await sleep(900);
+            // The split write delivered the PARKED body — attachment path intact —
+            // not the bare text.
+            const bodyWrites = pty.writes.filter(w => w.data === builtBody);
+            expect(bodyWrites).toHaveLength(1);
+            expect(pty.writes.some(w => w.data === 'check this shot')).toBe(false);
+
+            // Regression: the turn ends → the idle drain must have NOTHING left to
+            // redeliver. Under the broken claim this is where the second turn came from.
+            pty.feed('\n>\n? for shortcuts');
+            await sleep(600);
+            expect(pty.writes.filter(w => w.data === builtBody)).toHaveLength(1);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('★ a refused write re-parks the body WITH its claimKey, so it stays claimable and drains once', async () => {
+        const { adapter, pty } = await makeGeneratingAdapter();
+        try {
+            const builtBody = '/tmp/adhdev-input-media/img-def.png\nlook';
+            await adapter.sendMessage(builtBody, { bracketedPaste: true, claimKey: 'look' });
+
+            // Force the refusal AFTER the claim: platform gate reads at call time.
+            vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+            const refused = await sendNowIntoAgentQueue(adapter as never, 'look');
+            expect(refused.ok).toBe(false);
+            if (!refused.ok) expect(refused.restored).toBe(true);
+            vi.restoreAllMocks();
+
+            // Still claimable by the raw text — the restore preserved the claimKey.
+            const entries = adapter.claimQueuedSendEntries('look');
+            expect(entries).toHaveLength(1);
+            expect(entries[0].text).toBe(builtBody);
+            expect(entries[0].claimKey).toBe('look');
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('cancel-by-raw-text now finds a parked image body too (same claim primitive)', async () => {
+        const { adapter } = await makeGeneratingAdapter();
+        try {
+            await adapter.sendMessage('/tmp/img.png\nnever mind', { bracketedPaste: true, claimKey: 'never mind' });
+            expect(adapter.claimQueuedSends('never mind')).toBe(1);
+            expect(adapter.claimQueuedSends('never mind')).toBe(0);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+});
+
 describe('SEND-NOW-AGENT-QUEUE: claim / restore bookkeeping', () => {
     /** Adapter double for the bookkeeping properties, which are about what this
      *  module does AROUND the write and are not observable at the PTY. */
@@ -240,6 +315,27 @@ describe('SEND-NOW-AGENT-QUEUE: claim / restore bookkeeping', () => {
             expect(result.restored).toBe(true);
         }
         expect(adapter.calls).toEqual(['claim', 'write', 'restore']);
+    });
+
+    it('★ delivers the claimed ENTRY body and restores it with claimKey on refusal (entry-returning claim)', async () => {
+        const written: string[] = [];
+        const restored: Array<{ text: string; opts?: Record<string, unknown> }> = [];
+        const adapter = {
+            cliType: 'claude-cli',
+            claimQueuedSendEntries(_text: string) {
+                return [{ text: 'BUILT-IMG-BODY', bracketedPaste: true, claimKey: 'raw text' }];
+            },
+            sendMessageDuringGeneration(text: string) { written.push(text); return { accepted: false, reason: 'send_in_flight' } as never; },
+            async sendMessage(text: string, opts?: Record<string, unknown>) { restored.push({ text, opts }); return { status: 'queued' as const }; },
+        };
+        const result = await sendNowIntoAgentQueue(adapter as never, 'raw text');
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.restored).toBe(true);
+        // The write attempt used the PARKED body, not the raw text…
+        expect(written).toEqual(['BUILT-IMG-BODY']);
+        // …and the restore re-parked that same body with its claimKey intact.
+        expect(restored).toEqual([{ text: 'BUILT-IMG-BODY', opts: { bracketedPaste: true, claimKey: 'raw text' } }]);
     });
 
     it('reports not_supported (and writes nothing) for a driver without the split write', async () => {
