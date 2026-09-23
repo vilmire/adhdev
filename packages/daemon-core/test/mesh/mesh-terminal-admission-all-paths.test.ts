@@ -71,7 +71,7 @@ import { getTerminalAdmissionObservations } from '../../src/providers/completion
 // test/turn-ledger/probe.test.ts and the C-W1 admission/reducer tables.
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __clearMeshQueueForTests, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { getRecentLogs } from '../../src/logging/logger.js'
 
 afterEach(() => {

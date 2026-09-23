@@ -1,27 +1,30 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-// The resolver queries direct-dispatch state via mesh-work-queue / mesh-events-stale.
-// Mock both so the unit test stays pure (no SQLite, no ledger files).
+// The resolver queries direct-dispatch state via mesh-work-queue (open mesh_direct
+// attempts). Mock it so the unit test stays pure (no SQLite).
 const dispatchMocks = vi.hoisted(() => ({
   getActiveDirectDispatches: vi.fn(() => [] as any[]),
-  hasUnterminalDirectDispatchLedgerEntry: vi.fn(() => false),
 }))
 
 vi.mock('../../src/mesh/mesh-work-queue.js', () => ({
   getActiveDirectDispatches: dispatchMocks.getActiveDirectDispatches,
 }))
-vi.mock('../../src/mesh/mesh-dispatch-ledger-reads.js', () => ({
-  hasUnterminalDirectDispatchLedgerEntry: dispatchMocks.hasUnterminalDirectDispatchLedgerEntry,
-}))
 
-// Isolate the ledger so delivery_unroutable diagnostics are inspectable without real file I/O.
+// Isolate the record write/read so delivery_unroutable diagnostics are inspectable
+// without SQLite. `meshRecord(meshId, kind, scalars, opts)` is captured as
+// `(meshId, { kind, ...scalars })` so the assertions below read one partial.
 const ledgerMocks = vi.hoisted(() => ({
-  appendLedgerEntry: vi.fn((meshId: string, partial: any) => ({ id: 'x', meshId, timestamp: new Date(0).toISOString(), ...partial })),
-  readLedgerEntries: vi.fn(() => [] as any[]),
+  seedLocalRecord: vi.fn((meshId: string, partial: any) => ({ id: 'x', meshId, timestamp: new Date(0).toISOString(), ...partial })),
+  readLocalRecords: vi.fn(() => [] as any[]),
 }))
-vi.mock('../../src/mesh/mesh-ledger.js', () => ({
-  appendLedgerEntry: ledgerMocks.appendLedgerEntry,
-  readLedgerEntries: ledgerMocks.readLedgerEntries,
+vi.mock('../../src/mesh/mesh-record.js', () => ({
+  meshRecord: (meshId: string, kind: string, scalars: any, opts: any) => {
+    ledgerMocks.seedLocalRecord(meshId, { kind, ...scalars })
+    return { eventId: 'x', timestamp: new Date(0).toISOString(), published: false, storedLocally: opts?.local !== undefined }
+  },
+}))
+vi.mock('../../src/mesh/mesh-local-records.js', () => ({
+  readLocalRecords: ledgerMocks.readLocalRecords,
 }))
 
 import {
@@ -67,7 +70,6 @@ const deps = {
 describe('resolveWorkerDelegateRouting', () => {
   beforeEach(() => {
     dispatchMocks.getActiveDirectDispatches.mockReturnValue([])
-    dispatchMocks.hasUnterminalDirectDispatchLedgerEntry.mockReturnValue(false)
     deps.getMeshById.mockClear()
     deps.getMeshByWorkspace.mockClear()
   })
@@ -230,16 +232,6 @@ describe('resolveWorkerDelegateRouting', () => {
       expect(r.isDelegate).toBe(true)
       expect(r.meshId).toBe('mesh_1')
     })
-
-    it('also accepts an unterminal direct-dispatch ledger entry as the dispatch signal', () => {
-      dispatchMocks.hasUnterminalDirectDispatchLedgerEntry.mockReturnValue(true)
-      const r = resolveWorkerDelegateRouting(
-        makeComponents({ settings: { meshCoordinatorFor: 'mesh_1' } }),
-        'session-1',
-        deps,
-      )
-      expect(r.isDelegate).toBe(true)
-    })
   })
 
   describe('rejections', () => {
@@ -289,9 +281,9 @@ describe('resolveWorkerDelegateRouting', () => {
 
 describe('R4 fail-loud routing diagnostics', () => {
   beforeEach(() => {
-    ledgerMocks.appendLedgerEntry.mockClear()
-    ledgerMocks.readLedgerEntries.mockReset()
-    ledgerMocks.readLedgerEntries.mockReturnValue([])
+    ledgerMocks.seedLocalRecord.mockClear()
+    ledgerMocks.readLocalRecords.mockReset()
+    ledgerMocks.readLocalRecords.mockReturnValue([])
     __resetUnroutableDiagnosticsForTests()
   })
 
@@ -317,8 +309,8 @@ describe('R4 fail-loud routing diagnostics', () => {
   it('writes a delivery_unroutable ledger entry for an enveloped-but-unresolved drop', () => {
     const wrote = recordUnroutableDelegateEvent(unresolved(), 'agent:generating_completed')
     expect(wrote).toBe(true)
-    expect(ledgerMocks.appendLedgerEntry).toHaveBeenCalledTimes(1)
-    const [meshId, partial] = ledgerMocks.appendLedgerEntry.mock.calls[0]
+    expect(ledgerMocks.seedLocalRecord).toHaveBeenCalledTimes(1)
+    const [meshId, partial] = ledgerMocks.seedLocalRecord.mock.calls[0]
     expect(meshId).toBe(UNROUTABLE_DIAGNOSTIC_STREAM)
     expect(partial.kind).toBe('delivery_unroutable')
     expect(partial.sessionId).toBe('session-1')
@@ -334,7 +326,7 @@ describe('R4 fail-loud routing diagnostics', () => {
     for (const reason of ['not_cli', 'no_workspace', 'no_worker_envelope', 'coordinator_not_dispatch_target']) {
       expect(recordUnroutableDelegateEvent({ ...unresolved(), rejectionReason: reason } as any, 'agent:generating_completed')).toBe(false)
     }
-    expect(ledgerMocks.appendLedgerEntry).not.toHaveBeenCalled()
+    expect(ledgerMocks.seedLocalRecord).not.toHaveBeenCalled()
   })
 
   it('dedups repeated drops from the same session+event within the window', () => {
@@ -342,12 +334,12 @@ describe('R4 fail-loud routing diagnostics', () => {
     expect(recordUnroutableDelegateEvent(unresolved(), 'agent:generating_completed')).toBe(false)
     // A different event from the same session is NOT deduped.
     expect(recordUnroutableDelegateEvent(unresolved(), 'agent:waiting_approval')).toBe(true)
-    expect(ledgerMocks.appendLedgerEntry).toHaveBeenCalledTimes(2)
+    expect(ledgerMocks.seedLocalRecord).toHaveBeenCalledTimes(2)
   })
 
   it('getRecentUnroutableDeliveries reads the diagnostic stream newest-first', () => {
     const now = Date.now()
-    ledgerMocks.readLedgerEntries.mockReturnValue([
+    ledgerMocks.readLocalRecords.mockReturnValue([
       { id: '1', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 1000).toISOString(), sessionId: 'sess-a', payload: { event: 'agent:generating_completed', workspace: '/w/a' } },
       { id: '2', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 500).toISOString(), sessionId: 'sess-b', payload: { event: 'agent:waiting_approval', workspace: '/w/b', coordinatorDaemonId: 'daemon_y' } },
     ] as any)
@@ -359,7 +351,7 @@ describe('R4 fail-loud routing diagnostics', () => {
 
   it('getRecentUnroutableDeliveries excludes entries older than the window', () => {
     const now = Date.now()
-    ledgerMocks.readLedgerEntries.mockReturnValue([
+    ledgerMocks.readLocalRecords.mockReturnValue([
       { id: '1', meshId: UNROUTABLE_DIAGNOSTIC_STREAM, kind: 'delivery_unroutable', timestamp: new Date(now - 2 * 60 * 60 * 1000).toISOString(), sessionId: 'old', payload: { event: 'agent:generating_completed' } },
     ] as any)
     expect(getRecentUnroutableDeliveries({ sinceMs: 60 * 60 * 1000 })).toHaveLength(0)

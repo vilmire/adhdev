@@ -19,7 +19,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { DirectDispatchView } from './mesh-runtime-store-queue-reads.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import { cancelTask, recordDirectDispatchTask, requeueTask } from './mesh-work-queue.js';
 
 // ── Direct Dispatch Tracking ─────────────────────────────────────────────────
@@ -125,8 +125,7 @@ export function terminalizeSiblingDispatch(
         const closed = cancelDirectDispatchAttempts(meshId, [taskId]);
         LOG.info('MeshQueue', `SIBLING-DISPATCH-ORPHAN: task ${taskId} (mesh ${meshId}) was abandoned (${reason}) while its direct dispatch was still '${sibling.status}'; ${closed > 0 ? 'cancelled its attempt' : 'no ledger armed to cancel its attempt'} so it stops rendering as active work.`);
         try {
-            appendLedgerEntry(meshId, {
-                kind: 'sibling_dispatch_terminalized',
+            meshRecord(meshId, 'sibling_dispatch_terminalized', {
                 taskId,
                 ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
                 ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
@@ -139,7 +138,7 @@ export function terminalizeSiblingDispatch(
                     ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
                     ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
                 },
-            });
+            }, { local: true });
         } catch { /* best-effort audit — the cancel above still stands */ }
     } catch { /* best-effort — never fail the queue mutation that already committed */ }
 }

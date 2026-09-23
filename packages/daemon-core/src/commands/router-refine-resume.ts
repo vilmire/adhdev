@@ -39,14 +39,11 @@ function resolveRefineResumeDispatchGraceMs(): number {
 // orphan the ledger never closed". That is FALSE, and believing it sends the next
 // reader looking for a missing writer that does not exist. In the observed case the
 // ledger DID close all five jobs — within 1–4 minutes of dispatch — and the terminal
-// rows were later archived out of the live store by compactLedger while the dispatch
-// rows (never archivable) stayed. The reader, which only replays the live set, then
-// saw dispatch-with-no-terminal and reported a week-old completed job as a zombie.
-// Because the archive window (7d) is wider than this cutoff (24h), that asymmetry
-// made the false positive structural for any job key that lives long enough.
-// mesh-ledger.ts now keeps the pair atomic (B) and records archived terminal keys
-// (A) so the reader can still see the closure; passing the cutoff no longer implies
-// "the ledger never closed it", only "the live set holds no terminal row for it".
+// rows were later archived out of the live store by the (retired) ledger compaction
+// while the dispatch rows stayed. The reader then saw dispatch-with-no-terminal and
+// reported a week-old completed job as a zombie. The event ledger and its archive are
+// gone (C-W9a): local records are pruned by age only, which drops a dispatch before
+// its terminal — passing the cutoff means "no terminal record for it", nothing more.
 function resolveRefineResumeZombieCutoffMs(): number {
     return resolveTunedReconcileMs('MESH_REFINE_RESUME_ZOMBIE_CUTOFF_MS', 24 * 60 * 60_000, 5 * 60_000, 30 * 24 * 60 * 60_000);
 }
@@ -77,7 +74,7 @@ function resolveRefineCloseOutNotifyHorizonMs(): number {
 export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter): Promise<void> {
         try {
             const { listMeshes, getMesh } = await import('../config/mesh-config.js');
-            const { readLedgerEntries, readArchivedTerminalKeys } = await import('../mesh/mesh-ledger.js');
+            const { readLocalRecords } = await import('../mesh/mesh-local-records.js');
             const { selectOpenRefineDispatches, classifyRefineDispatch, shouldNotifyRefineCloseOut } = await import('../mesh/mesh-refine-zombie-sweep.js');
             const meshIds: string[] = listMeshes().map(m => m.id).filter(Boolean) as string[];
             const nowMs = Date.now();
@@ -85,13 +82,8 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
             const zombieCutoffMs = resolveRefineResumeZombieCutoffMs();
             const notifyHorizonMs = resolveRefineCloseOutNotifyHorizonMs();
             for (const meshId of meshIds) {
-                const entries = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
-
-                // ARCHIVE-TERMINAL-KEY-INDEX (A): a job whose terminal row was archived
-                // out of the live set is closed, not open — consult the sidecar index so
-                // rows stranded by the old asymmetric archive policy are not re-read as
-                // zombies. Absent index → empty set → previous behavior.
-                const archivedTerminalKeys = readArchivedTerminalKeys(meshId);
+                // Refine jobs are local records (dispatch + terminal), not turns.
+                const entries = readLocalRecords(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'], turnTerminals: false });
 
                 // NODE-EXISTENCE (D): resolve the mesh's live node list ONCE per mesh.
                 // Compared via meshNodeIdMatches, never raw ===, because node ids appear
@@ -110,7 +102,7 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                 const nodeExists = (nodeId: string): boolean =>
                     meshNodes.length === 0 || meshNodes.some((n: any) => meshNodeIdMatches(n, nodeId));
 
-                const openDispatches = selectOpenRefineDispatches(entries, archivedTerminalKeys);
+                const openDispatches = selectOpenRefineDispatches(entries);
                 for (const record of openDispatches) {
                     const decision = classifyRefineDispatch(record, {
                         nowMs,

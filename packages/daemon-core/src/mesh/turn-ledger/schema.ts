@@ -9,9 +9,10 @@
 // store open, exactly like the rest of mesh-runtime-store-schema.ts. What is
 // NOT additive — folding the legacy tables in and dropping them — is the
 // one-way `migrate-v1.ts` (0 → 1; nothing in the tree used user_version
-// before, C3 correction 2) and `migrate-v2.ts` (1 → 2, C-W8: drops the legacy
-// tables whose last writer was retired); they are the only writers of
-// `PRAGMA user_version`.
+// before, C3 correction 2), `migrate-v2.ts` (1 → 2, C-W8: drops the legacy
+// tables whose last writer was retired) and `migrate-v3.ts` (2 → 3, C-W9a:
+// folds the recent event-ledger rows into `mesh_local_records` and drops
+// `mesh_event_ledger`); they are the only writers of `PRAGMA user_version`.
 //
 // Column deltas vs the design DDL, all content-free and each justified:
 //   turn_attempts.consume_profile / max_task_retries / last_liveness /
@@ -23,6 +24,14 @@
 //     the reducer's TRANSITIONS id, the one field every audit asks for first.
 //   mesh_operating_notes.category — the per-category TTL
 //     (OPERATING_NOTE_CATEGORY_TTL_DAYS) needs it; it was payload.category.
+//   mesh_local_records (C-W9a) — the LOCAL-ONLY half of `meshRecord(...,
+//     {local})`: the full nested payload of a non-turn mesh record (refine
+//     job results, MAGI synthesis, dispatch failure errors, diagnostics) that
+//     the content-free `mesh.<id>.events` projection drops. Its own table,
+//     not `turn_events` rows: a record has no attempt / generation / verdict /
+//     publish state, often no session (turn_events.session_id is NOT NULL),
+//     and needs time-based retention independent of attempt pruning. Never
+//     published; never reaches the server.
 //   mesh_topic_index — indexes per C3 correction 1 (never on the constant
 //     `kind`), plus a writer index for own-writer reads (correction 3:
 //     `WHERE writer = ?` before LIMIT).
@@ -40,10 +49,12 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 export const TURN_LEDGER_V1 = 1;
 
 /**
- * The current schema version: 2 once migrate-v2 has dropped the legacy tables
- * whose last writer C-W8 retired (and folded post-v1 operating notes).
+ * The current schema version: 3 once migrate-v3 (C-W9a) has folded the recent
+ * `mesh_event_ledger` rows into `mesh_local_records` and dropped the event
+ * ledger — the last legacy table. (2 = migrate-v2 dropped the other retired
+ * tables and folded post-v1 operating notes.)
  */
-export const TURN_LEDGER_SCHEMA_VERSION = 2;
+export const TURN_LEDGER_SCHEMA_VERSION = 3;
 
 /** The legacy tables migrate-v1 folds and drops (C3 step 8). */
 export const LEGACY_TURN_TABLES = [
@@ -203,6 +214,29 @@ export const TURN_LEDGER_DDL = `
     );
     CREATE INDEX IF NOT EXISTS ix_mesh_operating_notes_mesh
         ON mesh_operating_notes(mesh_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS mesh_local_records (
+        event_id TEXT PRIMARY KEY,
+        mesh_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        node_id TEXT,
+        session_id TEXT,
+        provider_type TEXT,
+        task_id TEXT,
+        at_ms INTEGER NOT NULL,
+        -- local-only; may hold free text / nested objects (never published as-is)
+        payload_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS ix_mesh_local_records_kind
+        ON mesh_local_records(mesh_id, kind, at_ms);
+    CREATE INDEX IF NOT EXISTS ix_mesh_local_records_time
+        ON mesh_local_records(mesh_id, at_ms);
+    CREATE INDEX IF NOT EXISTS ix_mesh_local_records_task
+        ON mesh_local_records(mesh_id, task_id, at_ms) WHERE task_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_mesh_local_records_session
+        ON mesh_local_records(mesh_id, session_id, at_ms) WHERE session_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_mesh_local_records_at
+        ON mesh_local_records(at_ms);
 `;
 
 /** Additive, idempotent: create every turn-ledger table and index (+ the C-W8 column add). */

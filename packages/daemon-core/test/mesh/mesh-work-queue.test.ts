@@ -26,7 +26,8 @@ import {
     buildMeshTaskModeViolationError,
     summarizeQueueEntryInputForView,
 } from '../../src/mesh/mesh-work-queue.js';
-import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
 
 describe('Mesh Work Queue (GUPP)', () => {
     const meshId = `test_mesh_${Date.now()}`;

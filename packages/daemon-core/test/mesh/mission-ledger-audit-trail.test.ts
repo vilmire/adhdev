@@ -19,7 +19,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
-import { readLedgerEntries, __clearMeshLedgerForTests } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords, __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 describe('mission ledger audit trail', () => {
@@ -35,14 +35,14 @@ describe('mission ledger audit trail', () => {
 
     afterEach(() => {
         try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
-        __clearMeshLedgerForTests(meshId);
+        __clearLocalRecordsForTests(meshId);
         MeshRuntimeStore.resetForTests();
     });
 
     it('appends mission_created on first upsert, with a truncated goal summary', () => {
         const mission = upsertMeshMission(meshId, { title: 'Ship feature X', goal: 'Merge all subtasks to main' });
 
-        const created = readLedgerEntries(meshId, { kind: ['mission_created'] });
+        const created = readLocalRecords(meshId, { kind: ['mission_created'] });
         expect(created).toHaveLength(1);
         expect(created[0].payload).toMatchObject({
             missionId: mission.id,
@@ -53,15 +53,15 @@ describe('mission ledger audit trail', () => {
             status: 'active',
         });
         // No status/goal-change entries on a pure create.
-        expect(readLedgerEntries(meshId, { kind: ['mission_status_changed'] })).toHaveLength(0);
-        expect(readLedgerEntries(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
+        expect(readLocalRecords(meshId, { kind: ['mission_status_changed'] })).toHaveLength(0);
+        expect(readLocalRecords(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
     });
 
     it('truncates a long goal in the mission_created payload but records the full length', () => {
         const longGoal = 'g'.repeat(500);
         upsertMeshMission(meshId, { title: 'Big mission', goal: longGoal });
 
-        const created = readLedgerEntries(meshId, { kind: ['mission_created'] });
+        const created = readLocalRecords(meshId, { kind: ['mission_created'] });
         expect(created).toHaveLength(1);
         const payload = created[0].payload as Record<string, unknown>;
         expect((payload.goalSummary as string).length).toBe(200);
@@ -77,9 +77,9 @@ describe('mission ledger audit trail', () => {
         // Status transition.
         upsertMeshMission(meshId, { id: created.id, title: 'Mission Y', status: 'completed' });
 
-        const createdEntries = readLedgerEntries(meshId, { kind: ['mission_created'] });
-        const goalEntries = readLedgerEntries(meshId, { kind: ['mission_goal_updated'] });
-        const statusEntries = readLedgerEntries(meshId, { kind: ['mission_status_changed'] });
+        const createdEntries = readLocalRecords(meshId, { kind: ['mission_created'] });
+        const goalEntries = readLocalRecords(meshId, { kind: ['mission_goal_updated'] });
+        const statusEntries = readLocalRecords(meshId, { kind: ['mission_status_changed'] });
 
         expect(createdEntries).toHaveLength(1);
         expect(goalEntries).toHaveLength(1);
@@ -99,7 +99,7 @@ describe('mission ledger audit trail', () => {
         });
 
         // All three are retrievable via a combined kind filter on mesh_task_history's read path.
-        const all = readLedgerEntries(meshId, {
+        const all = readLocalRecords(meshId, {
             kind: ['mission_created', 'mission_goal_updated', 'mission_status_changed'],
         });
         expect(all.map(e => e.kind).sort()).toEqual(
@@ -112,16 +112,16 @@ describe('mission ledger audit trail', () => {
         // No-op goal overwrite (identical text) + a real status change.
         upsertMeshMission(meshId, { id: created.id, title: 'Mission Z', goal: 'Same goal', status: 'paused' });
 
-        expect(readLedgerEntries(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
-        expect(readLedgerEntries(meshId, { kind: ['mission_status_changed'] })).toHaveLength(1);
+        expect(readLocalRecords(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
+        expect(readLocalRecords(meshId, { kind: ['mission_status_changed'] })).toHaveLength(1);
     });
 
     it('does not emit a goal update when goal is omitted on a status-only upsert', () => {
         const created = upsertMeshMission(meshId, { title: 'Mission W', goal: 'Stable goal' });
         upsertMeshMission(meshId, { id: created.id, title: 'Mission W', status: 'abandoned' });
 
-        expect(readLedgerEntries(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
-        const statusEntries = readLedgerEntries(meshId, { kind: ['mission_status_changed'] });
+        expect(readLocalRecords(meshId, { kind: ['mission_goal_updated'] })).toHaveLength(0);
+        const statusEntries = readLocalRecords(meshId, { kind: ['mission_status_changed'] });
         expect(statusEntries).toHaveLength(1);
         expect(statusEntries[0].payload).toMatchObject({ fromStatus: 'active', toStatus: 'abandoned' });
     });

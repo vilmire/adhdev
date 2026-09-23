@@ -45,7 +45,7 @@
 import { LOG } from '../logging/logger.js';
 import { buildMeshActiveWork, type MeshActiveWorkRecord, type MeshActiveWorkStatus } from './mesh-active-work.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
-import { readActiveWorkLedgerEntries } from './mesh-ledger.js';
+import { readActiveWorkRecords } from './mesh-local-records.js';
 
 /** Hard upper bound on the rendered line, including the `[Mesh] ` prefix. */
 export const MESH_STATUS_LINE_MAX_CHARS = 200;
@@ -199,7 +199,7 @@ export function buildMeshStatusLineForNotification(meshId: string, now?: number,
             meshId,
             queue: getQueue(meshId),
             directDispatches: getActiveDirectDispatches(meshId),
-            ledgerEntries: readActiveWorkLedgerEntries(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+            ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
             nodes,
             now: now ?? Date.now(),
         });

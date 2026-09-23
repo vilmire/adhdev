@@ -266,7 +266,8 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
 
 export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {
         try {
-            const { appendLedgerEntry, buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            const { buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            const { meshRecord } = await import('../mesh/mesh-record.js');
             // B2a: on dispatch, stamp the originating coordinator so a later completion
             // emit can restore `dispatchedBy` and route the terminal event back (unicast).
             // Refine jobs carry only a coordinator DAEMON id (no session), which is enough
@@ -283,8 +284,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
             const executorStamp = kind === 'task_dispatched'
                 ? (await import('../mesh/mesh-refine-executor-liveness.js')).buildRefineExecutorStamp()
                 : undefined;
-            appendLedgerEntry(handle.meshId, {
-                kind,
+            meshRecord(handle.meshId, kind, {
                 nodeId: handle.targetNodeId,
                 payload: {
                     source: 'refine_mesh_node_async_job',
@@ -312,7 +312,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                         ...(result.blockerContext ? { blockerContext: result.blockerContext } : {}),
                     } : {}),
                 },
-            });
+            }, { local: true });
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
         }

@@ -8,6 +8,7 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refine'
 import { createMesh, addNode } from '../../src/config/mesh-config'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
+import { insertLocalRecordRow } from '../helpers/local-records'
 
 /**
  * JOBID-RESUME-PRESERVE regression suite.
@@ -51,11 +52,11 @@ function createRouter() {
 
 // Appends a task_dispatched ledger entry directly at the SQLite store layer (the
 // primary read path — see mesh-ledger.ts G2 comment) with a CALLER-CONTROLLED
-// timestamp. mesh-ledger.ts's own appendLedgerEntry always stamps `new
+// timestamp. mesh-ledger.ts's own seedLocalRecord always stamps `new
 // Date().toISOString()`, which cannot express "dispatched N ms ago" for the
 // grace/cutoff tests below.
 function appendDispatchedEntry(meshId: string, nodeId: string, jobId: string, timestamp: string) {
-  MeshRuntimeStore.getInstance().appendLedgerEntry({
+  insertLocalRecordRow({
     id: randomUUID(),
     meshId,
     timestamp,
@@ -159,8 +160,8 @@ describe('resumePendingRefineJobsOnStartup — JOBID-RESUME-PRESERVE', () => {
     // A synthetic task_failed entry closes the ledger loop so this dispatch stops
     // reading as "pending" — without this, resumePendingRefineJobsOnStartup would
     // see the SAME un-terminated task_dispatched entry again on the next boot.
-    const { readLedgerEntries } = await import('../../src/mesh/mesh-ledger')
-    const entries = readLedgerEntries(meshId, { kind: ['task_completed', 'task_failed'] })
+    const { readLocalRecords } = await import('../../src/mesh/mesh-local-records')
+    const entries = readLocalRecords(meshId, { kind: ['task_completed', 'task_failed'] })
     const terminalForJob = entries.find(e => (e.payload as any)?.refineJob?.jobId === originalJobId)
     expect(terminalForJob).toBeDefined()
     expect(terminalForJob!.kind).toBe('task_failed')
@@ -185,7 +186,7 @@ describe('resumePendingRefineJobsOnStartup — JOBID-RESUME-PRESERVE', () => {
     const jobId = 'refine_real_failure_test'
     const dispatchedAt = new Date(Date.now() - 10 * 60_000).toISOString()
     appendDispatchedEntry(meshId, 'node-real-failure', jobId, dispatchedAt)
-    MeshRuntimeStore.getInstance().appendLedgerEntry({
+    insertLocalRecordRow({
       id: randomUUID(),
       meshId,
       timestamp: new Date().toISOString(),

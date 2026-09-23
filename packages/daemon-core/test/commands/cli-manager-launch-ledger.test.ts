@@ -26,7 +26,7 @@ vi.mock('../../src/config/config.js', () => ({
 }))
 
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
 
 // A real workspace dir so resolveLaunchDirectory's existence validation passes.
@@ -63,7 +63,7 @@ async function launch(manager: DaemonCliManager, settings: Record<string, unknow
 }
 
 function sessionLaunchedEntries(meshId: string) {
-  return readLedgerEntries(meshId, { tail: 50 }).filter(e => e.kind === 'session_launched')
+  return readLocalRecords(meshId, { tail: 50 }).filter(e => e.kind === 'session_launched')
 }
 
 afterEach(() => {

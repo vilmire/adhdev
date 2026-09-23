@@ -9,7 +9,7 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { notifyMeshCoordinator } from '../../src/mesh/mesh-events'
 // C-W3: notices are turn.notify rows; the helper binds a capturing notice runtime.
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
-import { appendLedgerEntry } from '../../src/mesh/mesh-ledger'
+import { seedLocalRecord } from '../helpers/local-records'
 
 const execFileAsync = promisify(execFile)
 
@@ -1506,7 +1506,7 @@ describe('mesh_status', () => {
         },
         queuedAt: Date.now(),
       })
-      appendLedgerEntry(mesh.id, {
+      seedLocalRecord(mesh.id, {
         kind: 'task_dispatched',
         nodeId: 'node-pending',
         payload: {
@@ -1574,7 +1574,7 @@ describe('mesh_status', () => {
   })
 
   // ★LEDGER-KIND-TAIL-BLINDSPOT: asyncRefineLedgerEntries used to be a bare
-  // `readLedgerEntries(meshId, { tail: 100 })` — a bare tail window can be crowded out by
+  // `readLocalRecords(meshId, { tail: 100 })` — a bare tail window can be crowded out by
   // unrelated mesh traffic while an in-flight refine job's task_dispatched row is still
   // running (a refine pass runs typecheck/test/build for minutes). The fix reads with an
   // explicit kind filter and no tail, so the accepted refine job must still surface in
@@ -1595,7 +1595,7 @@ describe('mesh_status', () => {
       addNode(mesh.id, { workspace: repoRoot, repoRoot })
       const { router } = createRouter()
 
-      appendLedgerEntry(mesh.id, {
+      seedLocalRecord(mesh.id, {
         kind: 'task_dispatched',
         nodeId: 'node-buried',
         payload: {
@@ -1615,7 +1615,7 @@ describe('mesh_status', () => {
 
       // Bury the dispatch under far more than 100 unrelated ledger entries.
       for (let i = 0; i < 150; i++) {
-        appendLedgerEntry(mesh.id, {
+        seedLocalRecord(mesh.id, {
           kind: 'session_launched',
           nodeId: 'node-other',
           payload: { source: 'unrelated_traffic', seq: i },

@@ -408,7 +408,8 @@ describe('structural pins: every scheduler surface gates through the one predica
     });
 
     it('the predicate itself is unchanged: no graph/run_if/gate/workspace/skip handling inside it', () => {
-        const src = fs.readFileSync(path.join(SRC_ROOT, 'mesh/mesh-work-queue.ts'), 'utf8');
+        // C-W9a: the predicate moved (verbatim) into the pure leaf mesh-task-predicates.ts.
+        const src = fs.readFileSync(path.join(SRC_ROOT, 'mesh/mesh-task-predicates.ts'), 'utf8');
         const fnStart = src.indexOf('export function taskDependenciesSatisfied');
         expect(fnStart).toBeGreaterThan(-1);
         const fnBody = src.slice(fnStart, src.indexOf('\n}', fnStart) + 2);

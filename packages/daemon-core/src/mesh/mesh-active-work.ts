@@ -1,5 +1,5 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 import { cancelDirectDispatchAttempts } from './mesh-work-queue.js';
 import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -1125,15 +1125,14 @@ export async function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatche
         prunedCount = await (opts.closeDispatches
             ? opts.closeDispatches(taskIds)
             : cancelDirectDispatchAttempts(opts.meshId, taskIds));
-        appendLedgerEntry(opts.meshId, {
-            kind: 'direct_dispatch_pruned',
+        meshRecord(opts.meshId, 'direct_dispatch_pruned', {
             payload: {
                 source: opts.source || 'prune_stale_direct',
                 prunedCount,
                 taskIds: prunable.map(r => r.taskId),
                 reasons: Array.from(new Set(prunable.map(r => r.staleReason || (r.terminal ? 'terminal' : 'unknown')))),
             },
-        });
+        }, { local: true });
     }
 
     return {

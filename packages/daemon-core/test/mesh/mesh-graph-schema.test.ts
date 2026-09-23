@@ -95,8 +95,9 @@ describe('graph schema migration (design :98-191)', () => {
         // `turn_attempts` (the turn ledger) replaces them: this list is a
         // spot-check that the GRAPH migration is additive, so any surviving
         // turn-ledger table serves, and naming a table the tree still creates keeps
-        // the assertion meaningful rather than vacuous.
-        for (const t of ['mesh_queue', 'mesh_event_ledger', 'turn_attempts']) {
+        // the assertion meaningful rather than vacuous. (C-W9a: `mesh_local_records`
+        // replaced the retired event ledger as the record table.)
+        for (const t of ['mesh_queue', 'mesh_local_records', 'turn_attempts']) {
             expect(tables, `pre-existing table ${t} must survive`).toContain(t);
         }
         // Spot-check the indexes that the design's access patterns need.

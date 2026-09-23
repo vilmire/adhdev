@@ -60,7 +60,7 @@ import { __replaceMeshQueueForTests, __resetMeshRuntimeStoreForTests } from '../
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from '../../src/mesh/mesh-quota-routing.js';
 import { SLOT_MODEL_BUSY_SKIP_REASON } from '../../src/mesh/slot-model-enforcement.js';
 import { buildAutoLaunchRoutingDecision } from '../../src/mesh/mesh-routing-decision.js';
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js';
 import { getLogLevel, LOG } from '../../src/logging/logger.js';
 import { DEFAULT_QUOTA_ROUTING_POLICY } from '../../src/repo-mesh-types.js';
@@ -159,7 +159,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             transport: 'local', routingDecision: decision,
         }, 'sonnet-delivery');
 
-        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+        const entry = readLocalRecords(MESH_ID, { kind: ['task_dispatched'] })
             .find(candidate => candidate.taskId === 'sonnet-task');
         const routing = (entry?.payload as any)?.routingDecision;
         expect(routing.fitnessScore).toBe(1);
@@ -340,7 +340,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
             transport: 'local', routingDecision: decision,
         }, 'quota-delivery');
 
-        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+        const entry = readLocalRecords(MESH_ID, { kind: ['task_dispatched'] })
             .find(candidate => candidate.taskId === 'quota-diagnostic-task');
         const routing = (entry?.payload as any)?.routingDecision;
         expect(routing.quotaRiskSnapshot).toEqual([
@@ -414,7 +414,7 @@ describe('resolveUsableProvider — quota gate inside the selection loop', () =>
 
         // Only read the durable entry below: these assertions are the four incident
         // questions the owner requires the ledger to answer without daemon logs.
-        const entry = readLedgerEntries(MESH_ID, { kind: ['task_dispatched'] })
+        const entry = readLocalRecords(MESH_ID, { kind: ['task_dispatched'] })
             .find(candidate => candidate.taskId === 'today-difficult-task');
         const routing = (entry?.payload as any)?.routingDecision;
         expect(routing.selectionTrajectory.candidates).toEqual(expect.arrayContaining([

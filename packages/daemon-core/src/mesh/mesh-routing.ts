@@ -1,7 +1,7 @@
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getActiveDirectDispatches } from './mesh-work-queue.js';
-import { hasUnterminalDirectDispatchLedgerEntry } from './mesh-dispatch-ledger-reads.js';
-import { appendLedgerEntry, readLedgerEntries } from './mesh-ledger.js';
+import { readLocalRecords } from './mesh-local-records.js';
+import { meshRecord } from './mesh-record.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -116,9 +116,10 @@ export function resolveWorkerDelegateRouting(
     if (coordinatorMeshId) {
         let hasActiveDispatch = false;
         try {
+            // The open `mesh_direct` attempt IS the active direct dispatch (C-W8); the
+            // ledger-order fallback retired with the event ledger (C-W9a).
             hasActiveDispatch =
-                getActiveDirectDispatches(coordinatorMeshId).some(d => sessionIdsEquivalent(d.sessionId, instanceId))
-                || hasUnterminalDirectDispatchLedgerEntry(coordinatorMeshId, instanceId);
+                getActiveDirectDispatches(coordinatorMeshId).some(d => sessionIdsEquivalent(d.sessionId, instanceId));
         } catch { /* best-effort */ }
         if (!hasActiveDispatch) return reject('coordinator_not_dispatch_target');
         meshIdFromDirectDispatch = coordinatorMeshId;
@@ -229,8 +230,7 @@ export function recordUnroutableDelegateEvent(routing: WorkerDelegateRouting, ev
     }
 
     try {
-        appendLedgerEntry(UNROUTABLE_DIAGNOSTIC_STREAM, {
-            kind: 'delivery_unroutable',
+        meshRecord(UNROUTABLE_DIAGNOSTIC_STREAM, 'delivery_unroutable', {
             sessionId: routing.sessionId || undefined,
             payload: {
                 event: eventName,
@@ -239,7 +239,7 @@ export function recordUnroutableDelegateEvent(routing: WorkerDelegateRouting, ev
                 coordinatorDaemonId: routing.coordinatorDaemonId || undefined,
                 detail: 'Worker envelope was present but no mesh could be resolved; the event could not be routed to a coordinator.',
             },
-        });
+        }, { local: true });
         LOG.warn('MeshEvents', `delivery_unroutable: ${eventName} from session ${routing.sessionId || '(unknown)'} at ${routing.workspace || '(no workspace)'} — envelope present but mesh unresolved`);
         return true;
     } catch (e: any) {
@@ -265,9 +265,9 @@ export interface UnroutableDeliveryDiagnostic {
 export function getRecentUnroutableDeliveries(opts?: { sinceMs?: number; limit?: number }): UnroutableDeliveryDiagnostic[] {
     const sinceMs = opts?.sinceMs ?? 60 * 60 * 1000; // last hour by default
     const limit = opts?.limit ?? 20;
-    let entries: ReturnType<typeof readLedgerEntries>;
+    let entries: ReturnType<typeof readLocalRecords>;
     try {
-        entries = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'], tail: 200 });
+        entries = readLocalRecords(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'], tail: 200, turnTerminals: false });
     } catch {
         return [];
     }

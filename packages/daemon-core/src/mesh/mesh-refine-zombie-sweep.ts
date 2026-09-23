@@ -1,20 +1,17 @@
 /**
  * REFINE-ZOMBIE-SWEEP — classification of un-terminated refine dispatches.
  *
- * A refine job has no dedicated table: its state is DERIVED by replaying the
- * generic mesh event ledger. `task_dispatched` with no matching
+ * A refine job has no dedicated table: its state is DERIVED by replaying this
+ * daemon's local mesh records (`mesh_local_records`, mesh-local-records.ts). `task_dispatched` with no matching
  * `task_completed`/`task_failed` for the same (nodeId, jobId) reads as "still
  * open". That derivation has two failure modes this module exists to bound:
  *
  *  1. ARCHIVE ASYMMETRY (the root cause of the 2026-08-09 → 08-16 false
- *     zombies): compactLedger archives terminal kinds after
- *     ARCHIVE_TERMINAL_OLDER_THAN_MS and DELETES them from SQLite, while
- *     `task_dispatched` is deliberately never archived. Past that age the
- *     dispatch row outlives its own completion, so a job that finished in
- *     90 seconds re-reads as eternally open. mesh-ledger.ts now keeps the pair
- *     atomic (a terminal row is only archived when its dispatch goes with it),
- *     which stops NEW occurrences; this module is what makes the reader robust
- *     to rows already stranded by the old policy, and to a removed node.
+ *     zombies): the retired event ledger archived terminal kinds after 7 days
+ *     while `task_dispatched` stayed, so a finished job re-read as open. Gone
+ *     with the ledger (C-W9a): `mesh_local_records` retention deletes by age,
+ *     which always drops a job's dispatch before its terminal. What remains
+ *     here is the removed-node guard and the age cutoff.
  *
  *  2. BOOT-ONLY EVALUATION: the zombie cutoff used to be evaluated exclusively
  *     in resumePendingRefineJobsOnStartup, so a stale dispatch survived until
@@ -170,14 +167,6 @@ export function classifyRefineDispatch(
  */
 export function selectOpenRefineDispatches(
     entries: Array<{ kind: string; nodeId?: string; timestamp: string; payload?: unknown }>,
-    /**
-     * ARCHIVE-TERMINAL-KEY-INDEX (A): pair keys (`refine:<nodeId>:<jobId>`) whose
-     * terminal row was archived out of the live set. Rows stranded by the old
-     * asymmetric policy have no readable terminal entry, so without this the
-     * scanner re-reads a long-finished job as open. Optional — omitted by callers
-     * that only have the live set, which keeps the previous behavior.
-     */
-    archivedTerminalKeys?: ReadonlySet<string>,
 ): RefineDispatchRecord[] {
     const terminalKeys = new Set<string>();
     for (const e of entries) {
@@ -197,11 +186,6 @@ export function selectOpenRefineDispatches(
         if (!jobId) continue;
         const key = `${e.nodeId}:${jobId}`;
         if (terminalKeys.has(key) || seen.has(key)) continue;
-        // ARCHIVE-TERMINAL-KEY-INDEX (A): the terminal row may have been archived out
-        // of `entries` entirely. `refineArchivePairKey` mirrors mesh-ledger's
-        // ledgerPairKey spelling for refine jobs — the two MUST stay in step, which is
-        // what the cross-module key-format test pins.
-        if (archivedTerminalKeys?.has(refineArchivePairKey(e.nodeId, jobId))) continue;
         seen.add(key);
         // ★REFINE-RESUME-LIVENESS: carry the dispatching process's stamp forward so the
         // classifier can ask the OS whether that process still exists. Absent on
@@ -211,15 +195,6 @@ export function selectOpenRefineDispatches(
         open.push({ nodeId: e.nodeId, jobId, timestamp: e.timestamp, ...(executor ? { executor } : {}) });
     }
     return open;
-}
-
-/**
- * The archived-terminal-key spelling for a refine job. Mirrors mesh-ledger's
- * `ledgerPairKey` refine branch; kept here so this module stays dependency-light
- * and pure. A cross-module test asserts the two agree.
- */
-export function refineArchivePairKey(nodeId: string, jobId: string): string {
-    return `refine:${nodeId}:${jobId}`;
 }
 
 /**

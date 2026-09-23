@@ -22,7 +22,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { createMesh, addNode } from '../../src/config/mesh-config.js';
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
 import {
     scheduleTaskCompletionSideEffectEvidence,
     checkGitEvidenceSync,
@@ -56,7 +56,7 @@ afterEach(() => {
 
 function waitForLedgerEntry(meshId: string, taskId: string) {
     return vi.waitFor(() => {
-        const entries = readLedgerEntries(meshId, { kind: ['task_completion_no_side_effects'] });
+        const entries = readLocalRecords(meshId, { kind: ['task_completion_no_side_effects'] });
         const match = entries.find(e => e.taskId === taskId || e.payload?.taskId === taskId);
         expect(match).toBeDefined();
         return match!;
@@ -86,7 +86,7 @@ describe('scheduleTaskCompletionSideEffectEvidence', () => {
         // Give the async fire-and-forget check a real chance to run before asserting absence —
         // otherwise a false negative (asserting too early) would look identical to a true pass.
         await new Promise(resolve => setTimeout(resolve, 300));
-        const entries = readLedgerEntries(mesh.id, { kind: ['task_completion_no_side_effects'] });
+        const entries = readLocalRecords(mesh.id, { kind: ['task_completion_no_side_effects'] });
         expect(entries.find(e => e.taskId === taskId)).toBeUndefined();
     });
 
@@ -132,7 +132,7 @@ describe('scheduleTaskCompletionSideEffectEvidence', () => {
         });
 
         await new Promise(resolve => setTimeout(resolve, 300));
-        const entries = readLedgerEntries(mesh.id, { kind: ['task_completion_no_side_effects'] });
+        const entries = readLocalRecords(mesh.id, { kind: ['task_completion_no_side_effects'] });
         expect(entries.find(e => e.taskId === taskId)).toBeUndefined();
     });
 
@@ -153,7 +153,7 @@ describe('scheduleTaskCompletionSideEffectEvidence', () => {
         });
 
         await new Promise(resolve => setTimeout(resolve, 300));
-        const entries = readLedgerEntries(mesh.id, { kind: ['task_completion_no_side_effects'] });
+        const entries = readLocalRecords(mesh.id, { kind: ['task_completion_no_side_effects'] });
         expect(entries.find(e => e.taskId === taskId)).toBeUndefined();
     });
 });

@@ -165,7 +165,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       process.env.ADHDEV_CONFIG_DIR = configDir
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
       const { notifyMeshCoordinator } = await import('../../src/mesh/mesh-events.js')
-      const { appendLedgerEntry } = await import('../../src/mesh/mesh-ledger.js')
+      const { seedLocalRecord } = await import('../helpers/local-records.js')
       const { getMeshQueueRevision } = await import('../../src/mesh/mesh-work-queue.js')
       const { loadConfig } = await import('../../src/config/config.js')
 
@@ -178,7 +178,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       seedStalePendingAggregate(router, mesh.id, getMeshQueueRevision(mesh.id))
       vi.spyOn(router, 'execute').mockImplementation(async () => ({ success: true }) as any)
 
-      appendLedgerEntry(mesh.id, {
+      seedLocalRecord(mesh.id, {
         kind: 'task_dispatched',
         nodeId: 'node_stale',
         payload: {

@@ -53,7 +53,10 @@ import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { removeNode as removeNodeFromMeshConfig } from '../config/mesh-config.js';
-import { appendLedgerEntry, getLedgerDir, readLedgerEntriesByKind, type MeshLedgerEntry } from './mesh-ledger.js';
+import { type MeshLedgerEntry } from './mesh-ledger.js';
+import { getLedgerDir } from './mesh-ledger-paths.js';
+import { readLocalRecordsByKind } from './mesh-local-records.js';
+import { meshRecord } from './mesh-record.js';
 import { getQueue, getActiveDirectDispatches, type DirectDispatchRecord, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { buildMeshAsyncRefineJobs } from './mesh-refine-status.js';
 import { hasBlockedReviewRefineResult } from './mesh-review-inbox.js';
@@ -587,7 +590,7 @@ async function buildPlan(
     // runs typecheck/test/build for minutes) is still running, letting the sweep
     // wrongly conclude the node is free to remove out from under a live reviewer.
     const ledgerEntries = opts.ledgerEntries ?? (() => {
-        try { return readLedgerEntriesByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed']); } catch { return []; }
+        try { return readLocalRecordsByKind(meshId, ['task_dispatched', 'task_completed', 'task_failed']); } catch { return []; }
     })();
 
     const ctxData = {
@@ -701,8 +704,7 @@ async function executeNodeRemoval(
         // `node_removed` for the same nodeId IS the orphaned shape.
         if (cleanup.skipped !== true) {
             try {
-                appendLedgerEntry(meshId, {
-                    kind: 'worktree_directory_removed',
+                meshRecord(meshId, 'worktree_directory_removed', {
                     nodeId,
                     payload: {
                         source: 'worktree_node_retention',
@@ -714,7 +716,7 @@ async function executeNodeRemoval(
                         residue: cleanup.residue === true ? true : undefined,
                         convergenceStatus: entry.convergence?.status,
                     },
-                });
+                }, { local: true });
             } catch { /* ledger append is best-effort */ }
         }
 
@@ -745,8 +747,7 @@ async function executeNodeRemoval(
         try { deps.invalidateAggregateMeshStatus?.(meshId); } catch { /* best-effort */ }
 
         try {
-            appendLedgerEntry(meshId, {
-                kind: 'node_removed',
+            meshRecord(meshId, 'node_removed', {
                 nodeId,
                 payload: {
                     worktree: true,
@@ -761,7 +762,7 @@ async function executeNodeRemoval(
                     branchRefReason: typeof cleanup.branchRefReason === 'string' ? cleanup.branchRefReason : undefined,
                     forced: false,
                 },
-            });
+            }, { local: true });
         } catch { /* ledger append is best-effort */ }
 
         entry.execution = {

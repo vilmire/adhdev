@@ -1,9 +1,9 @@
 // Pure move out of mesh-runtime-store.ts (file-size gate: baseline-growth cap hit by
 // MESH-TOOL-CALL-CALLER-INSTRUMENTATION 1단계's caller_role addition). No behavior
 // change — the mesh-runtime.db retention sweep (and, until C-W8, the legacy
-// mesh_turn_* row shapes) was the most self-contained slice: every symbol
-// here only calls PUBLIC MeshRuntimeStore methods (never touches the private `db`
-// handle or class-internal state), so it needed no class surgery to extract.
+// mesh_turn_* row shapes; until C-W9a, the event-ledger cache-invalidation hook)
+// was the most self-contained slice: every symbol here only calls PUBLIC
+// MeshRuntimeStore methods, so it needed no class surgery to extract.
 // mesh-runtime-store.ts re-exports these names — see the barrel-preserving pattern in
 // mesh-tools-internal.ts / mesh-tools.ts for precedent (export diff verified: 0 change
 // to mesh-runtime-store.ts's public surface).
@@ -17,36 +17,17 @@ import {
 } from './mesh-retention-config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
-/**
- * Hook invoked when mesh_event_ledger rows change in a way that is NOT scoped to a
- * single mesh, so mesh-ledger can drop its (per-mesh keyed) read cache wholesale.
- * Two callers: the retention sweep's cross-mesh DELETE below, and
- * MeshRuntimeStore.resetForTests, which swaps the entire database out.
- *
- * Registered by mesh-ledger at import time; a no-op until then, which is correct —
- * nothing can be holding a ledger cache before mesh-ledger has loaded. It lives
- * here rather than in mesh-ledger because mesh-ledger imports mesh-runtime-store,
- * which imports this file: a static import back would close an import cycle.
- */
-let onLedgerBulkChange: (() => void) | undefined;
-
-export function registerLedgerBulkChangeListener(fn: () => void): void {
-    onLedgerBulkChange = fn;
-}
-
-export function notifyLedgerBulkChange(): void {
-    try { onLedgerBulkChange?.(); } catch { /* cache invalidation is best-effort */ }
-}
-
 // ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────
-// mesh-runtime.db had lifecycle GC only for the legacy pending-event inbox (prunePendingEvents,
-// hourly via the mesh-event maintenance sweep) and fingerprints/tool-call windows;
-// mesh_event_ledger and terminal mesh_queue rows grew without bound. These windows
-// are deliberately CONSERVATIVE — every production reader operates on a recent
-// window far narrower than these, so the deletes trade only dead space:
-//   - Event ledger 30 days: readers are tail/limit-bounded (≤ a few hundred rows) or
-//     recent-task scoped; 30d comfortably exceeds any reconcile/stat/audit horizon.
-//     Operating notes are exempted inside pruneEventLedger (retained forever).
+// mesh-runtime.db had lifecycle GC only for the legacy pending-event inbox and
+// fingerprints/tool-call windows; the (retired) event ledger and terminal mesh_queue
+// rows grew without bound. These windows are deliberately CONSERVATIVE — every
+// production reader operates on a recent window far narrower than these, so the
+// deletes trade only dead space:
+//   - Local mesh records 30 days (C-W9a: `mesh_local_records`, successor of the
+//     event ledger): readers are tail/limit-bounded or recent-task scoped; 30d
+//     comfortably exceeds any refine-resume / stat / audit horizon. Time-ordered
+//     deletion drops a job's dispatch before its terminal, never the reverse.
+//     (Operating notes live in `mesh_operating_notes`, not here.)
 //   - Tool-call log 14 days: it backs a seconds-scale rate-limit window; 14d keeps a
 //     generous debugging horizon at trivial cost.
 //   - Terminal queue rows 30 days: mesh_task_history / completion-dedup lookups are
@@ -68,13 +49,13 @@ export function notifyLedgerBulkChange(): void {
 //     MeshGraphStore.pruneTerminalGraphs / pruneTerminalOutbox.
 // No VACUUM here by design: reclaiming file pages is not worth stalling the daemon's
 // single writer; freed pages are reused by future inserts.
-export const MESH_EVENT_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
+export const MESH_LOCAL_RECORD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
 export const MESH_TOOL_CALL_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
 export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
  * Periodic retention sweep for the mesh-runtime.db tables that previously had no
- * lifecycle GC (event ledger, tool-call log, terminal queue rows, terminal
+ * lifecycle GC (local mesh records, tool-call log, terminal queue rows, terminal
  * mesh turn attempts). Runs on the SAME cadence as the pending-events retention
  * prune (the hourly mesh-event maintenance sweep in mesh-event-forwarding.ts).
  * Best-effort and idempotent: a store failure degrades to a no-op with one warn;
@@ -83,7 +64,7 @@ export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 
  * message/payload content).
  */
 export function pruneMeshRuntimeRetention(): {
-    ledger: number;
+    localRecords: number;
     toolCalls: number;
     terminalQueue: number;
     turnAttempts: number;
@@ -91,20 +72,12 @@ export function pruneMeshRuntimeRetention(): {
 } {
     try {
         const store = MeshRuntimeStore.getInstance();
-        const ledger = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS);
-        // LEDGER-READ-AMPLIFICATION: this DELETE is cross-mesh (one statement, no
-        // meshId), so it cannot use mesh-ledger's per-mesh invalidateLedgerCache.
-        // That cache holds entries for up to 30s, so without this a sweep would
-        // leave pruned rows readable for the rest of the TTL. Dispatched through a
-        // registered hook rather than importing mesh-ledger directly: mesh-ledger
-        // imports mesh-runtime-store, which imports THIS file, so a static import
-        // back would close an import cycle. Only pay the cost when rows went away.
-        if (ledger > 0) notifyLedgerBulkChange();
+        const localRecords = store.localRecordStore().prune(MESH_LOCAL_RECORD_RETENTION_MS);
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
-        if (ledger + toolCalls + terminalQueue + turn.attempts > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
+        if (localRecords + toolCalls + terminalQueue + turn.attempts > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
         }
         // Slice 3 — graph control-plane retention. Deliberately its own try/catch
         // and its own log line: it is the newest and by far the widest-blast-radius
@@ -113,7 +86,7 @@ export function pruneMeshRuntimeRetention(): {
         // to be legible on its own rather than buried in the line above.
         const graph = pruneMeshGraphRetention(store);
         return {
-            ledger,
+            localRecords,
             toolCalls,
             terminalQueue,
             turnAttempts: turn.attempts,
@@ -122,7 +95,7 @@ export function pruneMeshRuntimeRetention(): {
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
         return {
-            ledger: 0, toolCalls: 0, terminalQueue: 0, turnAttempts: 0,
+            localRecords: 0, toolCalls: 0, terminalQueue: 0, turnAttempts: 0,
             graph: emptyGraphRetentionCounts(),
         };
     }

@@ -28,6 +28,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
+import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
@@ -108,26 +109,31 @@ describe('runtime ledger over mesh-runtime.db', () => {
     });
 });
 
-describe('boot migration on the live store (C integration, C-W8 v2)', () => {
-    it('v1 recreates only the still-live event ledger; v2 then drops every retired legacy table for good (user_version 2)', () => {
+describe('boot migration on the live store (C integration, C-W8 v2, C-W9a v3)', () => {
+    it('v1 recreates no legacy table; v2 and v3 are no-op drops on a fresh store; records land in mesh_local_records (user_version 3)', () => {
         const mesh = meshId();
         const store = MeshRuntimeStore.getInstance();
         const exists = (t: string) => !!store.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
         const report = store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null });
         expect(report.skipped).toBe(false);
-        // The event ledger's writers are still live, so this boot gets it back EMPTY…
-        expect(exists('mesh_event_ledger')).toBe(true);
-        store.appendLedgerEntry({ id: randomUUID(), meshId: mesh, timestamp: new Date().toISOString(), kind: 'task_dispatched' });
-        expect(store.readLedgerEntriesOrdered(mesh)).toHaveLength(1);
-        // …while the tables whose writers C-W8 retired are no longer created at all.
-        for (const t of ['mesh_session_delivery', 'mesh_direct_dispatches', 'mesh_turn_attempts', 'mesh_pending_events', 'mesh_inflight_hold', 'mesh_completion_fingerprints']) {
+        // C-W9a: the event ledger is no longer re-created — no legacy table is.
+        for (const t of ['mesh_event_ledger', 'mesh_session_delivery', 'mesh_direct_dispatches', 'mesh_turn_attempts', 'mesh_pending_events', 'mesh_inflight_hold', 'mesh_completion_fingerprints']) {
             expect(exists(t), t).toBe(false);
         }
+        // Records go to the local-record table instead.
+        meshRecord(mesh, 'task_dispatched', { payload: { taskId: 't-1' } }, { local: true });
+        expect(store.localRecordStore().query(mesh)).toHaveLength(1);
         // Idempotent: v1 is a no-op at user_version ≥ 1.
         expect(store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null }).skipped).toBe(true);
         const v2 = store.runTurnLedgerMigrationV2({ exportPath: null });
         expect(v2.skipped).toBe(false);
         expect(store.db.pragma('user_version', { simple: true })).toBe(2);
         expect(store.runTurnLedgerMigrationV2({ exportPath: null }).skipped).toBe(true);
+        const v3 = store.runTurnLedgerMigrationV3({ exportPath: null, jsonlDir: null });
+        expect(v3).toMatchObject({ skipped: false, droppedTables: [] });
+        expect(store.db.pragma('user_version', { simple: true })).toBe(3);
+        expect(store.runTurnLedgerMigrationV3({ exportPath: null, jsonlDir: null }).skipped).toBe(true);
+        // The fresh record survived every step.
+        expect(store.localRecordStore().query(mesh)).toHaveLength(1);
     });
 });

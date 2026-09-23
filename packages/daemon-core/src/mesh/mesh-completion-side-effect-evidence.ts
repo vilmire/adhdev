@@ -43,7 +43,7 @@ import { getMesh } from '../config/mesh-config.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { LOG } from '../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import { MESH_TASK_MODES, type MeshTaskMode } from './mesh-work-queue.js';
 
@@ -694,8 +694,7 @@ export function scheduleTaskCompletionSideEffectEvidence(
                 if (!status.isGitRepo) return;
                 if (status.dirty) return; // has a diff — evidence is already consistent, nothing to downgrade
 
-                appendLedgerEntry(args.meshId, {
-                    kind: 'task_completion_no_side_effects',
+                meshRecord(args.meshId, 'task_completion_no_side_effects', {
                     nodeId,
                     sessionId: args.sessionId,
                     taskId: args.taskId,
@@ -708,7 +707,7 @@ export function scheduleTaskCompletionSideEffectEvidence(
                         changedFiles: 0,
                         reason: 'no_side_effects',
                     },
-                });
+                }, { local: true });
             } catch (e: any) {
                 // Fail-open: this is purely diagnostic. Never let a git error surface as a
                 // task failure or slow down/interrupt the completion path.

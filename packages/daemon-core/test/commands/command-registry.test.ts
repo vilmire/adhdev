@@ -188,7 +188,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'mark_session_seen', 'delete_notification', 'mark_notification_unread', 'daemon_upgrade', 'daemon_restart',
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
     'set_quota_provider_enabled', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
-    'record_mesh_note', 'forget_mesh_note', 'import_mesh_ledger_slice', 'get_mesh_node_logs',
+    'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs',
     'worker_resolve_task', 'worker_report_completion', 'worker_progress_update', 'deposit_worker_mailbox',
     'worker_drain_mailbox', 'worker_peer_context_pull', 'ensure_transcript_subscription',
     'read_transcript_replica',
@@ -209,12 +209,22 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // (check:boundaries C8). IPC-only: pinned by the `sources` test below.
     'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
     'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
+    // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
+    // composites, missions list, active work, recovery hints. IPC-only too.
+    'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
+    'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'graph_audit_record', 'active_work_query', 'recovery_context_query',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
 const TURN_LEDGER_IPC_COMMANDS = [
     'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
     'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
+    // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
+    // composites, missions list, active work, recovery hints. IPC-only too.
+    'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
+    'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'graph_audit_record', 'active_work_query', 'recovery_context_query',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */

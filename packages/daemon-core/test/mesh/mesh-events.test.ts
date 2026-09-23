@@ -73,7 +73,9 @@ import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTas
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
-import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords, getLocalRecordSummary } from '../../src/mesh/mesh-local-records.js'
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js'
+import { seedLocalRecord } from '../helpers/local-records.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
 import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { LOG } from '../../src/logging/logger.js'
@@ -229,7 +231,7 @@ describe('setupMeshEventForwarding', () => {
       // No supersede: the non-redrive reason is left to the normal path (row stays pending).
       const row = getQueue(meshId).find(t => t.id === claimed.id)!
       expect(row.status).toBe('pending')
-      expect(readLedgerEntries(meshId).some(
+      expect(readLocalRecords(meshId).some(
         e => (e.payload as any)?.source === 'redrive_late_completion_supersede',
       )).toBe(false)
     } finally {
@@ -272,7 +274,7 @@ describe('setupMeshEventForwarding', () => {
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
 
       // A fail-loud diagnostic landed in the shared unroutable stream.
-      const diagnostics = readLedgerEntries(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] })
+      const diagnostics = readLocalRecords(UNROUTABLE_DIAGNOSTIC_STREAM, { kind: ['delivery_unroutable'] })
       const mine = diagnostics.filter(d => (d.payload as any)?.workspace === '/repo/worktree-a' && d.sessionId === 'runtime-session-1')
       expect(mine.length).toBeGreaterThanOrEqual(1)
       expect((mine[mine.length - 1].payload as any).event).toBe('agent:generating_completed')
@@ -741,7 +743,7 @@ describe('setupMeshEventForwarding', () => {
       })
       expect(getQueue(meshId).find(t => t.id === queued.id)?.status).not.toBe('failed')
 
-      const dispatchFailed = readLedgerEntries(meshId).filter(entry => entry.kind === 'dispatch_failed')
+      const dispatchFailed = readLocalRecords(meshId).filter(entry => entry.kind === 'dispatch_failed')
       expect(dispatchFailed).toHaveLength(1)
       expect(dispatchFailed[0].payload).toMatchObject({ taskId: queued.id, retryable: true })
       expect((dispatchFailed[0].payload as any).error).toContain('adapter busy')
@@ -775,7 +777,7 @@ describe('setupMeshEventForwarding', () => {
       })
 
       expect(getQueue(meshId).find(task => task.id === queued.id)?.status).toBe('assigned')
-      expect(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
+      expect(readLocalRecords(meshId).filter(entry => entry.kind === 'task_completed')).toHaveLength(0)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1016,7 +1018,7 @@ const { emit } = components
       expect(entry.assignedNodeId).toBe('node_child_1')
       expect(entry.assignedSessionId).toBe('auto-session-1')
       expect(entry.autoLaunch?.status).toBe('completed')
-      expect(readLedgerEntries(meshId).some(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'completed')).toBe(true)
+      expect(readLocalRecords(meshId).some(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'completed')).toBe(true)
     } finally {
       cleanupMeshFiles(meshId)
     }
@@ -1577,7 +1579,7 @@ const { emit } = components
       await triggerMeshQueue(components, meshId)
       await triggerMeshQueue(components, meshId)
 
-      const skips = readLedgerEntries(meshId).filter(
+      const skips = readLocalRecords(meshId).filter(
         e => e.kind === 'session_auto_launch'
           && e.payload?.phase === 'skipped'
           && e.payload?.reason === 'remote_auto_launch_unsupported',
@@ -1631,7 +1633,7 @@ const { emit } = components
       await triggerMeshQueue(components, meshId)
       await triggerMeshQueue(components, meshId)
 
-      const skips = readLedgerEntries(meshId).filter(
+      const skips = readLocalRecords(meshId).filter(
         e => e.kind === 'session_auto_launch' && e.payload?.phase === 'skipped',
       )
       // Two distinct reasons were genuinely observed, so both must remain visible...
@@ -1680,7 +1682,7 @@ const { emit } = components
       })
       await triggerMeshQueue(components, meshId)
 
-      const reasons = readLedgerEntries(meshId)
+      const reasons = readLocalRecords(meshId)
         .filter(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'skipped')
         .map(e => e.payload?.reason)
       expect(new Set(reasons).size).toBeGreaterThanOrEqual(2)
@@ -1994,7 +1996,7 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
       meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      appendLedgerEntry(meshId, {
+      seedLocalRecord(meshId, {
         kind: 'task_completed',
         nodeId: 'node_child_1',
         sessionId: 'runtime-session-1',

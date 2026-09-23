@@ -5,7 +5,7 @@
 //      (wiring-unification C4): a stuck assigned row cannot exist once the queue
 //      status is a ledger commit effect; a dead session reaches the ledger as
 //      liveness{dead} (scheduler probe) → R31 reclaim.
-//  (b) retention sweeps — pruneEventLedger / pruneToolCallLog /
+//  (b) retention sweeps — local records / pruneToolCallLog /
 //      pruneTerminalQueueEntries delete rows past their conservative windows,
 //      with the documented exemptions (operating notes; live dependsOn anchors).
 // ---------------------------------------------------------------------------
@@ -33,13 +33,13 @@ vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({ fastForwardMeshNode: vi.
 import {
   MeshRuntimeStore,
   pruneMeshRuntimeRetention,
-  MESH_EVENT_LEDGER_RETENTION_MS,
+  MESH_LOCAL_RECORD_RETENTION_MS,
   MESH_TOOL_CALL_LOG_RETENTION_MS,
   MESH_TERMINAL_QUEUE_RETENTION_MS,
 } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetMeshRuntimeStoreForTests, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue.js'
-import { appendLedgerEntry } from '../../src/mesh/mesh-ledger.js'
+import { insertLocalRecordRow } from '../helpers/local-records.js'
 
 const MESH = 'mesh_gc_test'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -91,23 +91,18 @@ afterEach(() => {
 })
 
 describe('(b) retention sweeps', () => {
-  it('pruneEventLedger deletes aged rows but retains recent rows and operating notes', () => {
+  it('local-record retention deletes aged rows but retains recent rows (notes live in mesh_operating_notes)', () => {
     const store = MeshRuntimeStore.getInstance()
     const oldIso = isoAgo(40 * DAY_MS) // past the 30-day window
-    store.appendLedgerEntry({ id: 'led-old', meshId: MESH, timestamp: oldIso, kind: 'task_completed', payload: { taskId: 't1' } })
-    store.appendLedgerEntry({ id: 'led-recent', meshId: MESH, timestamp: new Date().toISOString(), kind: 'task_completed', payload: { taskId: 't2' } })
-    // Operating notes (and their tombstones) survive forever by design.
-    store.appendLedgerEntry({ id: 'led-note', meshId: MESH, timestamp: oldIso, kind: 'coordinator_operating_note', payload: { text: 'old lesson' } })
-    store.appendLedgerEntry({ id: 'led-tomb', meshId: MESH, timestamp: oldIso, kind: 'coordinator_operating_note_tombstone', payload: { targetNoteId: 'led-note' } })
+    insertLocalRecordRow({ id: 'led-old', meshId: MESH, timestamp: oldIso, kind: 'task_completed', payload: { taskId: 't1' } })
+    insertLocalRecordRow({ id: 'led-recent', meshId: MESH, timestamp: new Date().toISOString(), kind: 'task_completed', payload: { taskId: 't2' } })
 
-    const removed = store.pruneEventLedger(MESH_EVENT_LEDGER_RETENTION_MS)
+    const removed = store.localRecordStore().prune(MESH_LOCAL_RECORD_RETENTION_MS)
     expect(removed).toBe(1)
 
-    const remainingIds = store.readLedgerEntries(MESH, { tail: 50 }).map(e => e.id)
+    const remainingIds = store.localRecordStore().query(MESH, { tail: 50 }).map(e => e.id)
     expect(remainingIds).not.toContain('led-old')
     expect(remainingIds).toContain('led-recent')
-    expect(remainingIds).toContain('led-note')
-    expect(remainingIds).toContain('led-tomb')
   })
 
   it('pruneToolCallLog deletes only rows past the retention window', () => {
@@ -155,11 +150,11 @@ describe('(b) retention sweeps', () => {
   it('pruneMeshRuntimeRetention runs all three sweeps and reports counts (no VACUUM, best-effort)', () => {
     const store = MeshRuntimeStore.getInstance()
     const oldIso = isoAgo(40 * DAY_MS)
-    store.appendLedgerEntry({ id: 'led-old-2', meshId: MESH, timestamp: oldIso, kind: 'session_stopped', payload: {} })
+    insertLocalRecordRow({ id: 'led-old-2', meshId: MESH, timestamp: oldIso, kind: 'session_stopped', payload: {} })
     store.insertQueueEntry(queueEntry({ id: 'old-done-2', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
 
     const result = pruneMeshRuntimeRetention()
-    expect(result.ledger).toBe(1)
+    expect(result.localRecords).toBe(1)
     expect(result.terminalQueue).toBe(1)
     expect(result.toolCalls).toBe(0)
   })

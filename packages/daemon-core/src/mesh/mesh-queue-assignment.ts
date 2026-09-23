@@ -4,7 +4,7 @@ import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, getQueueHeads, requeueTask, applyDispatchFailureBackoff } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
@@ -519,8 +519,7 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
     // way to see that was to hand-join two task_dispatched entries and diff providerType.
     // null for an ordinary first dispatch → payload shape unchanged for the common case.
     const redriveProvenance = buildRedriveProvenance(task.lastReclaim, ctx.providerType);
-    appendLedgerEntry(ctx.meshId, {
-        kind: 'task_dispatched',
+    meshRecord(ctx.meshId, 'task_dispatched', {
         nodeId: ctx.nodeId,
         sessionId: ctx.sessionId,
         providerType: ctx.providerType,
@@ -536,7 +535,7 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
             routingDecision,
             ...(redriveProvenance ? { redriveProvenance } : {}),
         },
-    });
+    }, { local: true });
     // A provider-CHANGING redrive additionally gets its own top-level marker, so the flip is
     // greppable and queryable without inspecting every task_dispatched payload. A redrive that
     // kept its provider (the benign majority) writes no extra entry — this must stay a signal,
@@ -552,14 +551,13 @@ function recordTaskDispatchedLedger(ctx: DeliverTaskContext, deliveryId: string)
             meshId: ctx.meshId,
         }, `${redriveProvenance.previousProviderType} → ${redriveProvenance.providerType} (${redriveProvenance.reason}, reclaim #${redriveProvenance.reclaimCount})`);
         try {
-            appendLedgerEntry(ctx.meshId, {
-                kind: 'redrive_provider_changed',
+            meshRecord(ctx.meshId, 'redrive_provider_changed', {
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
                 providerType: ctx.providerType,
                 taskId: task.id,
                 payload: { taskId: task.id, deliveryId, transport: ctx.transport, ...redriveProvenance },
-            });
+            }, { local: true });
         } catch { /* best-effort: never fail a dispatch on a diagnostic write */ }
     }
 }
@@ -684,8 +682,7 @@ function deliverTaskToSession(
                 } as TurnEvidence);
             }
             try {
-                appendLedgerEntry(ctx.meshId, {
-                    kind: 'dispatch_duplicate_rebound',
+                meshRecord(ctx.meshId, 'dispatch_duplicate_rebound', {
                     nodeId: ctx.nodeId,
                     sessionId: duplicate.holderSessionId,
                     payload: {
@@ -697,7 +694,7 @@ function deliverTaskToSession(
                         ...(ctx.attemptRef ? { attemptId: ctx.attemptRef.attemptId } : {}),
                         rebound: true,
                     },
-                });
+                }, { local: true });
             } catch { /* ledger write is best-effort */ }
             return;
         }
@@ -783,18 +780,16 @@ function deliverTaskToSession(
             }
         }
         try {
-            appendLedgerEntry(ctx.meshId, {
-                // 'dispatch_failed' is a real MeshLedgerKind and a member of
-                // TASK_LIFECYCLE_LEDGER_KINDS, so appendLedgerEntry derives the top-level
-                // taskId from payload.taskId below. It spent its whole life as
-                // `as any` — off the union, hence off the lifecycle set, hence written to
-                // the indexed SQLite task_id column as NULL and unreachable by the
-                // kind+taskId join every reader uses. Do not reintroduce the cast.
-                kind: 'dispatch_failed',
+            // 'dispatch_failed' is a real MeshLedgerKind in the task-lifecycle set, so
+            // meshRecord derives the top-level taskId from payload.taskId below. It spent
+            // its whole life as `as any` — off the union, hence off the lifecycle set,
+            // hence written with a NULL task_id and unreachable by the kind+taskId join
+            // every reader uses. Do not reintroduce the cast.
+            meshRecord(ctx.meshId, 'dispatch_failed', {
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
                 payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport },
-            });
+            }, { local: true });
         } catch { /* ledger write is best-effort */ }
     });
 }
@@ -824,12 +819,11 @@ function failTaskAsUndeliverable(ctx: Pick<DeliverTaskContext, 'meshId' | 'nodeI
     }
     LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: ${reason}`);
     try {
-        appendLedgerEntry(ctx.meshId, {
-            kind: 'task_failed' as any,
+        meshRecord(ctx.meshId, 'task_failed', {
             nodeId: ctx.nodeId,
             sessionId: ctx.sessionId,
             payload: { taskId: ctx.task.id, reason, undeliverable: true },
-        });
+        }, { local: true });
     } catch { /* ledger write is best-effort */ }
 }
 
@@ -1245,8 +1239,7 @@ export function tryAssignQueueTask(
     // claim path (event/idle drain, auto-launch, remote reclaim) flows through, so one
     // append here covers them all. Best-effort — a ledger write must never fail a claim.
     try {
-        appendLedgerEntry(meshId, {
-            kind: 'task_claimed',
+        meshRecord(meshId, 'task_claimed', {
             nodeId,
             sessionId,
             providerType,
@@ -1259,7 +1252,7 @@ export function tryAssignQueueTask(
                 providerType,
                 claimedAt: new Date().toISOString(),
             },
-        });
+        }, { local: true });
     } catch { /* best-effort — claim proceeds regardless */ }
 
     // FALSE-BLOCKER-CLONE-QUEUE (stale-event clear): the task just claimed and will dispatch,

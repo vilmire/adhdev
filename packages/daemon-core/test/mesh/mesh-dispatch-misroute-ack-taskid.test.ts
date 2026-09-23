@@ -50,7 +50,7 @@ import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, 
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js'
 import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 const SESSION_ID = 'runtime-session-1'

@@ -56,7 +56,7 @@ export interface MeshMissionStats {
 
 function readPayloadTaskId(entry: ProjectedLedgerView): string {
     // ★ payload.taskId ONLY — deliberately not the `taskId` base field, and not
-    // a fallback between them. The two are not interchangeable: appendLedgerEntry
+    // a fallback between them. The two are not interchangeable: meshRecord
     // derives the base field FROM payload.taskId for the task-lifecycle kinds,
     // but an explicitly-set base field wins over the payload, so a kind that
     // sets `taskId` directly without a payload copy would start matching here if

@@ -15,7 +15,7 @@ import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-
 // mesh_topic_index (fed by the `mesh.index` cursor). Seed it directly, as a
 // peer daemon's `mesh.record` entry would land there.
 let indexSeq = 0
-function appendLedgerEntry(meshId: string, e: { kind: string; taskId?: string; nodeId?: string; payload?: Record<string, unknown> }): void {
+function seedLocalRecord(meshId: string, e: { kind: string; taskId?: string; nodeId?: string; payload?: Record<string, unknown> }): void {
   const seq = ++indexSeq
   const at = Date.now() + seq
   const id = `led-peer-${seq}`
@@ -87,10 +87,10 @@ describe('worker_peer_context_pull low-family handler', () => {
     const siblingId = `${meshId}-sibling-1`
     const { bind } = bindWorker(meshId, selfTaskId, 'sess-self')
 
-    appendLedgerEntry(meshId, { kind: 'task_dispatched', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId } })
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_dispatched', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId, outcome: 'completed' } })
     // An event for the CALLER's own task must never come back as a "peer".
-    appendLedgerEntry(meshId, { kind: 'task_dispatched', taskId: selfTaskId, nodeId: 'node-a', payload: { taskId: selfTaskId } })
+    seedLocalRecord(meshId, { kind: 'task_dispatched', taskId: selfTaskId, nodeId: 'node-a', payload: { taskId: selfTaskId } })
 
     const result: any = await workerPeerContextHandlers.worker_peer_context_pull({} as any, { bind })
     expect(result.success).toBe(true)
@@ -104,7 +104,7 @@ describe('worker_peer_context_pull low-family handler', () => {
     const siblingId = `${meshId}-sibling-1`
     const { bind } = bindWorker(meshId, selfTaskId, 'sess-self')
 
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: siblingId, nodeId: 'node-b', payload: { taskId: siblingId, outcome: 'completed' } })
     storeHandoffNote({
       meshId,
       taskId: siblingId,
@@ -130,7 +130,7 @@ describe('worker_peer_context_pull low-family handler', () => {
     const selfTaskId = `${meshId}-self`
     const remoteSiblingId = `${meshId}-sibling-remote`
     const { bind } = bindWorker(meshId, selfTaskId, 'sess-self')
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: remoteSiblingId, nodeId: 'node-remote', payload: { taskId: remoteSiblingId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: remoteSiblingId, nodeId: 'node-remote', payload: { taskId: remoteSiblingId, outcome: 'completed' } })
 
     const result: any = await workerPeerContextHandlers.worker_peer_context_pull({} as any, { bind })
     expect(result.peers).toHaveLength(1)
@@ -153,8 +153,8 @@ describe('worker_peer_context_pull low-family handler', () => {
 
     seedQueueEntry(meshId, inMissionId, 'mission-a')
     seedQueueEntry(meshId, outOfMissionId, 'mission-b')
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: inMissionId, payload: { taskId: inMissionId, outcome: 'completed' } })
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: outOfMissionId, payload: { taskId: outOfMissionId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: inMissionId, payload: { taskId: inMissionId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: outOfMissionId, payload: { taskId: outOfMissionId, outcome: 'completed' } })
 
     const result: any = await workerPeerContextHandlers.worker_peer_context_pull({} as any, { bind: bind.bind, scope: 'same_mission' })
     expect(result.scope).toBe('same_mission')
@@ -168,13 +168,13 @@ describe('worker_peer_context_pull low-family handler', () => {
     const uiTaskId = `${meshId}-about-ui`
     const { bind } = bindWorker(meshId, selfTaskId, 'sess-self')
 
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: authTaskId, payload: { taskId: authTaskId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: authTaskId, payload: { taskId: authTaskId, outcome: 'completed' } })
     storeHandoffNote({
       meshId, taskId: authTaskId,
       notes: { intent: 'refactored session-host auth', touchedFiles: ['src/auth.ts'] },
       recordedAtIso: new Date().toISOString(),
     })
-    appendLedgerEntry(meshId, { kind: 'task_completed', taskId: uiTaskId, payload: { taskId: uiTaskId, outcome: 'completed' } })
+    seedLocalRecord(meshId, { kind: 'task_completed', taskId: uiTaskId, payload: { taskId: uiTaskId, outcome: 'completed' } })
     storeHandoffNote({
       meshId, taskId: uiTaskId,
       notes: { intent: 'reworked the settings panel layout', touchedFiles: ['src/ui/settings.tsx'] },

@@ -13,8 +13,8 @@
 //   1. (retired, C-W8) the legacy session-delivery table terminal-row pruning went with the
 //      table; (1b) turn-ledger mesh attempts replaced it in
 //      pruneMeshRuntimeRetention (mesh-runtime-store-turn-rows.ts).
-//   2. Per-mesh ledger rotation total-byte/count cap over CLOSED rotation
-//      files (wired into runDiskRetentionSweep in mesh-disk-retention.ts).
+//   2. (retired, C-W9a) the per-mesh ledger rotation cap went with the JSONL
+//      mirror; leftover rotations age out through the 30-day JSONL pass.
 //
 // Scope (Slice 2): converged local worktree-node auto-removal —
 //   3. Convergence grace before an eligible worktree node may be removed
@@ -34,7 +34,6 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MB = 1024 * 1024;
 
 // (1) The legacy session-delivery retention retired with its table (C-W8).
 
@@ -61,52 +60,9 @@ export function resolveTurnAttemptRetentionMs(): number {
     return DEFAULT_TURN_ATTEMPT_RETENTION_MS;
 }
 
-// ─── (2) per-mesh ledger rotation cap ────────────────────────────────────────
-// Closed rotation files (<mesh>.<n>.jsonl and <mesh>.archive.<n>.jsonl) are the
-// only unbounded on-disk ledger growth left: the active file self-limits via
-// compaction/rotation slots, but the rotated-out files accumulate forever. The
-// cap evicts the OLDEST closed rotation files once the per-mesh totals exceed
-// the bounds. It NEVER touches the active ledger (<mesh>.jsonl), the current
-// archive append target (<mesh>.archive.jsonl), archived-counts.json, or the
-// runtime DB (mesh-runtime.db*).
-//
-// Default 200 MB per mesh: comfortably above what a long-lived mesh's closed
-// rotations hold, so eviction only triggers on genuinely unbounded growth.
-// Clamp [16 MB, 4 GB]: below 16 MB the cap would fight the 10 MB rotation
-// threshold (a single rotation could not exist); above 4 GB is effectively
-// unbounded. An explicit 0 disables the byte cap.
-export const DEFAULT_LEDGER_ROTATION_MAX_BYTES = 200 * MB;
-
-export function resolveLedgerRotationMaxBytes(): number {
-    const raw = readNonEmptyString(process.env.MESH_LEDGER_ROTATION_MAX_BYTES);
-    if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed)) {
-            if (parsed === 0) return 0; // disabled
-            if (parsed >= 16 * MB && parsed <= 4 * 1024 * MB) return parsed;
-        }
-    }
-    return DEFAULT_LEDGER_ROTATION_MAX_BYTES;
-}
-
-// Count backstop over the same closed-rotation set. The rotation naming scheme
-// already bounds slots (≤10 active rotations + ≤5 archive rotations), so the
-// default 15 matches that natural ceiling and only guards against a future
-// naming change re-opening unbounded growth. Clamp [1, 50]; an explicit 0
-// disables the count cap.
-export const DEFAULT_LEDGER_ROTATION_MAX_FILES = 15;
-
-export function resolveLedgerRotationMaxFiles(): number {
-    const raw = readNonEmptyString(process.env.MESH_LEDGER_ROTATION_MAX_FILES);
-    if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed)) {
-            if (parsed === 0) return 0; // disabled
-            if (parsed >= 1 && parsed <= 50) return parsed;
-        }
-    }
-    return DEFAULT_LEDGER_ROTATION_MAX_FILES;
-}
+// ─── (2) per-mesh ledger rotation cap — retired with the JSONL mirror (C-W9a) ─
+// The rotated-out files that are left age out through runDiskRetentionSweep's
+// 30-day JSONL pass.
 
 // ─── (3) worktree-node convergence grace (Slice 2) ───────────────────────────
 // A converged local worktree node must be OBSERVED as fully eligible (every

@@ -62,7 +62,7 @@ import {
 } from '../../src/mesh/mesh-queue-assignment.js'
 import { __seedAutoLaunchOrphanFirstSeenForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_A = 'node_alpha'
@@ -382,7 +382,7 @@ describe('AUTOLAUNCH-ORPHAN-SWEEP — an auto-launched session whose task went e
   function orphanLedgerReasons(meshId: string): string[] {
     try {
       // recordAutoLaunchEvent writes the reason into the `session_auto_launch` payload.
-      return readLedgerEntries(meshId)
+      return readLocalRecords(meshId)
         .map((e: any) => e?.payload?.reason)
         .filter((r: any) => r === 'auto_launch_orphan_session_detected')
     } catch {

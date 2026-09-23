@@ -41,7 +41,8 @@
 import { describe, expect, it } from 'vitest'
 import { buildMeshActiveWork, collectPendingApprovals } from '../../src/mesh/mesh-active-work.js'
 import { buildMeshStatusLineForNotification, renderMeshStatusLine } from '../../src/mesh/mesh-notification-status-line.js'
-import { __clearMeshLedgerForTests, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js'
+import { __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js'
+import { seedLocalRecord } from '../helpers/local-records.js'
 import { __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 
@@ -151,12 +152,12 @@ describe('stale approval pinned with no live sniff available', () => {
     it('passes supplied live nodes through the real notification collector', () => {
         const meshId = `mesh_live_nodes_banner_${Date.now()}`
         try {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_dispatched', timestamp: DISPATCH_AT, nodeId: NODE_ID, sessionId: SESSION_ID,
                 providerType: 'claude-cli',
                 payload: { taskId: TASK_ID, source: 'direct', via: 'mesh_send_task', message: 'waiting' },
             } as any)
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_approval_needed', timestamp: APPROVAL_AT, nodeId: NODE_ID, sessionId: SESSION_ID,
                 providerType: 'claude-cli', payload: { taskId: TASK_ID, event: 'agent:waiting_approval' },
             } as any)
@@ -164,7 +165,7 @@ describe('stale approval pinned with no live sniff available', () => {
             const nodes = [{ id: NODE_ID, nodeId: NODE_ID, sessions: [{ id: SESSION_ID, status: 'idle' }] }] as any
             expect(buildMeshStatusLineForNotification(meshId, NOW, nodes)).toBeNull()
         } finally {
-            __clearMeshLedgerForTests(meshId)
+            __clearLocalRecordsForTests(meshId)
         }
     })
 
@@ -246,7 +247,7 @@ describe('stale approval pinned with no live sniff available', () => {
         const meshId = `mesh_stopped_banner_${Date.now()}`
         const taskId = 'stopped-session-collected-task'
         try {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_dispatched',
                 timestamp: DISPATCH_AT,
                 nodeId: NODE_ID,
@@ -254,7 +255,7 @@ describe('stale approval pinned with no live sniff available', () => {
                 providerType: 'claude-cli',
                 payload: { taskId, source: 'direct', via: 'mesh_dispatch_task', message: 'direct dispatch awaiting approval' },
             } as any)
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_approval_needed',
                 timestamp: APPROVAL_AT,
                 nodeId: NODE_ID,
@@ -262,7 +263,7 @@ describe('stale approval pinned with no live sniff available', () => {
                 providerType: 'claude-cli',
                 payload: { event: 'agent:waiting_approval' },
             } as any)
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_stopped',
                 timestamp: TERMINAL_AT,
                 nodeId: NODE_ID,
@@ -273,7 +274,7 @@ describe('stale approval pinned with no live sniff available', () => {
 
             expect(buildMeshStatusLineForNotification(meshId, NOW)).toBeNull()
         } finally {
-            __clearMeshLedgerForTests(meshId)
+            __clearLocalRecordsForTests(meshId)
         }
     })
 
@@ -288,7 +289,7 @@ describe('stale approval pinned with no live sniff available', () => {
                 updatedAt: '2026-09-02T10:05:00.000Z',
                 dispatchTimestamp: '2026-09-02T10:00:00.000Z',
             })
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_dispatched',
                 timestamp: '2026-09-02T10:00:00.000Z',
                 nodeId: NODE_ID,
@@ -296,7 +297,7 @@ describe('stale approval pinned with no live sniff available', () => {
                 providerType: 'claude-cli',
                 payload: { taskId, source: 'direct', via: 'mesh_dispatch_task', message: 'direct dispatch awaiting approval' },
             } as any)
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'task_approval_needed',
                 timestamp: '2026-09-02T10:01:00.000Z',
                 nodeId: NODE_ID,
@@ -305,7 +306,7 @@ describe('stale approval pinned with no live sniff available', () => {
                 // Historical orphan: payload.taskId absent, so ledger task_id is NULL.
                 payload: { event: 'agent:waiting_approval' },
             } as any)
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_stopped',
                 timestamp: '2026-09-02T10:05:00.000Z',
                 nodeId: NODE_ID,
@@ -320,7 +321,7 @@ describe('stale approval pinned with no live sniff available', () => {
             expect(buildMeshStatusLineForNotification(meshId, thirteenDaysLater)).toBeNull()
         } finally {
             __clearMeshQueueForTests(meshId)
-            __clearMeshLedgerForTests(meshId)
+            __clearLocalRecordsForTests(meshId)
         }
     })
 

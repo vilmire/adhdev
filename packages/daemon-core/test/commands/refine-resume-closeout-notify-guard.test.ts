@@ -8,7 +8,8 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refine'
 import { createMesh, addNode } from '../../src/config/mesh-config'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { insertLocalRecordRow } from '../helpers/local-records'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records'
 import { getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { shouldNotifyRefineCloseOut } from '../../src/mesh/mesh-refine-zombie-sweep'
 
@@ -44,7 +45,7 @@ function createRouter() {
 }
 
 function appendDispatchedEntry(meshId: string, nodeId: string, jobId: string, timestamp: string) {
-  MeshRuntimeStore.getInstance().appendLedgerEntry({
+  insertLocalRecordRow({
     id: randomUUID(),
     meshId,
     timestamp,
@@ -116,7 +117,7 @@ describe('resumePendingRefineJobsOnStartup — NOTIFY-GRADE-WIRING', () => {
 
     // Ledger truth: all 5 are still recorded as task_failed — history/mesh_refine_status
     // stay complete. Suppression must never touch this path.
-    const terminalEntries = readLedgerEntries(meshId, { kind: ['task_failed'] })
+    const terminalEntries = readLocalRecords(meshId, { kind: ['task_failed'] })
     const floodTerminals = terminalEntries.filter(e => jobIds.includes((e.payload as any)?.refineJob?.jobId))
     expect(floodTerminals).toHaveLength(5)
 
@@ -145,7 +146,7 @@ describe('resumePendingRefineJobsOnStartup — NOTIFY-GRADE-WIRING', () => {
       const router = createRouter()
       await resumePendingRefineJobsOnStartup(router)
 
-      const terminalEntries = readLedgerEntries(meshId, { kind: ['task_failed'] })
+      const terminalEntries = readLocalRecords(meshId, { kind: ['task_failed'] })
       expect(terminalEntries.some(e => (e.payload as any)?.refineJob?.jobId === jobId)).toBe(true)
 
       const pending = getPendingMeshCoordinatorEvents(meshId)
@@ -171,7 +172,7 @@ describe('resumePendingRefineJobsOnStartup — NOTIFY-GRADE-WIRING', () => {
     const router = createRouter()
     await resumePendingRefineJobsOnStartup(router)
 
-    const terminalEntries = readLedgerEntries(meshId, { kind: ['task_failed'] })
+    const terminalEntries = readLocalRecords(meshId, { kind: ['task_failed'] })
     expect(terminalEntries.some(e => (e.payload as any)?.refineJob?.jobId === jobId)).toBe(true)
 
     const pending = getPendingMeshCoordinatorEvents(meshId)

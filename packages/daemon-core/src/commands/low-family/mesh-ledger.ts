@@ -1,10 +1,12 @@
 /**
- * RF-ROUTER LOW family — mesh ledger read / slice / import commands.
+ * RF-ROUTER LOW family — mesh record read / slice commands + operating notes.
  *
- * Extracted verbatim from DaemonCommandRouter.executeDaemonCommand. Each handler
- * touches only the on-disk mesh ledger (dynamically imported mesh-ledger module)
- * keyed by meshId — no router instance state — and returns the same
- * CommandRouterResult the inlined cases did.
+ * `get_mesh_ledger` / `get_mesh_ledger_slice` keep their wire names (dashboard,
+ * refine job handles' `evidence.ledgerCommand`, remote coordinators over P2P)
+ * but read this daemon's `mesh_local_records` + turn outcomes since C-W9a
+ * (mesh-local-records.ts). `import_mesh_ledger_slice` is gone with the event
+ * ledger: a peer's records are read from the peer (its slice) or the fleet
+ * index, never copied into this daemon's local store.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -14,12 +16,12 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { readLedgerEntries, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
+            const { readLocalRecords, getLocalRecordSummary } = await import('../../mesh/mesh-local-records.js');
             const tail = typeof args?.tail === 'number' ? args.tail : 20;
             const since = typeof args?.since === 'string' ? args.since : undefined;
             const kind = Array.isArray(args?.kind) ? args.kind.filter((k: any) => typeof k === 'string') : undefined;
-            const entries = readLedgerEntries(meshId, { tail, since, kind });
-            const summary = getLedgerSummary(meshId);
+            const entries = readLocalRecords(meshId, { tail, since, kind });
+            const summary = getLocalRecordSummary(meshId);
             return { success: true, entries, summary };
         } catch (e: any) {
             return { success: false, error: e.message };
@@ -30,9 +32,9 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { readLedgerSlice } = await import('../../mesh/mesh-ledger.js');
+            const { readLocalRecordSlice } = await import('../../mesh/mesh-local-records.js');
             const kind = Array.isArray(args?.kind) ? args.kind.filter((k: any) => typeof k === 'string') : undefined;
-            const slice = readLedgerSlice(meshId, {
+            const slice = readLocalRecordSlice(meshId, {
                 afterId: typeof args?.afterId === 'string' ? args.afterId : undefined,
                 since: typeof args?.since === 'string' ? args.since : undefined,
                 kind,
@@ -131,23 +133,6 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
                 reason,
             });
             return { success: true, matched: result.matched };
-        } catch (e: any) {
-            return { success: false, error: e.message };
-        }
-    },
-
-    import_mesh_ledger_slice: async (_ctx: LowFamilyContext, args: any) => {
-        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-        if (!meshId) return { success: false, error: 'meshId required' };
-        try {
-            const { appendRemoteLedgerEntries, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
-            const entries = Array.isArray(args?.entries)
-                ? args.entries as any[]
-                : Array.isArray(args?.slice?.entries)
-                    ? args.slice.entries as any[]
-                    : [];
-            const result = appendRemoteLedgerEntries(meshId, entries as any);
-            return { success: true, result, summary: getLedgerSummary(meshId) };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

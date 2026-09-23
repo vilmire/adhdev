@@ -5,12 +5,11 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../src/mesh/mesh-work-queue.js', () => ({
   getActiveDirectDispatches: vi.fn(() => [] as any[]),
 }))
-vi.mock('../../src/mesh/mesh-dispatch-ledger-reads.js', () => ({
-  hasUnterminalDirectDispatchLedgerEntry: vi.fn(() => false),
+vi.mock('../../src/mesh/mesh-record.js', () => ({
+  meshRecord: vi.fn(() => ({ eventId: 'x', timestamp: new Date(0).toISOString(), published: false, storedLocally: false })),
 }))
-vi.mock('../../src/mesh/mesh-ledger.js', () => ({
-  appendLedgerEntry: vi.fn(),
-  readLedgerEntries: vi.fn(() => [] as any[]),
+vi.mock('../../src/mesh/mesh-local-records.js', () => ({
+  readLocalRecords: vi.fn(() => [] as any[]),
 }))
 
 import { buildMeshWorkerRelayStamp } from '../../src/mesh/mesh-events-utils.js'

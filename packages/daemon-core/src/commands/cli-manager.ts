@@ -22,7 +22,7 @@ import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
-import { appendLedgerEntry } from '../mesh/mesh-ledger.js';
+import { meshRecord } from '../mesh/mesh-record.js';
 import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
@@ -1715,8 +1715,7 @@ export class DaemonCliManager {
                     ? settingsOverride.meshLaunchSource.trim() : '';
                 const meshNodeId = typeof settingsOverride?.meshNodeId === 'string'
                     ? settingsOverride.meshNodeId.trim() : '';
-                appendLedgerEntry(delegatedMeshId, {
-                    kind: 'session_launched',
+                meshRecord(delegatedMeshId, 'session_launched', {
                     ...(meshNodeId ? { nodeId: meshNodeId } : {}),
                     sessionId: started.runtimeSessionId,
                     providerType,
@@ -1729,7 +1728,7 @@ export class DaemonCliManager {
                         // else (legacy caller / version skew) is labeled as such.
                         source: declaredSource || (autoLaunchTaskId ? 'auto_launch' : 'unlabeled_delegated_launch'),
                     },
-                });
+                }, { local: true });
                 ledgerLaunchRecorded = true;
             } catch { /* accounting is best-effort — never fail the launch */ }
         }

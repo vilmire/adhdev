@@ -45,7 +45,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests, __seedAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main'
@@ -468,7 +468,7 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
       expect(dispatchCalls(components, 'launch_cli')).toBe(0)
       expect(dispatchCalls(components, 'agent_command')).toBe(0)
       expect(getQueue(meshId).find(t => t.id === taskA.id)?.status).toBe('pending')
-      const backoffLogged = readLedgerEntries(meshId).some(e =>
+      const backoffLogged = readLocalRecords(meshId).some(e =>
         e.kind === 'session_auto_launch' && (e.payload as any)?.reason === 'awaiting_launched_session_claim_backoff')
       expect(backoffLogged).toBe(true)
     } finally {
@@ -499,7 +499,7 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
       const row = getQueue(meshId).find(t => t.id === taskA.id)!
       expect(row.status).toBe('assigned')
       expect(row.assignedSessionId).toBe('remote-sess-A')
-      const fallbackLogged = readLedgerEntries(meshId).some(e =>
+      const fallbackLogged = readLocalRecords(meshId).some(e =>
         e.kind === 'session_auto_launch' && (e.payload as any)?.reason === 'await_claim_direct_dispatch_fallback')
       expect(fallbackLogged).toBe(true)
     } finally {

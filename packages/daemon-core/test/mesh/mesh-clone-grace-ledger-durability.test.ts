@@ -40,11 +40,11 @@ describe("M-MESH-INFRA-0829 [B] — isWithinCloneBootstrapGraceDurable ledger fa
   })
 
   async function appendClonedEntryAt(nodeId: string, atMs: number) {
-    const { appendLedgerEntry } = await import('../../src/mesh/mesh-ledger.js')
+    const { seedLocalRecord } = await import('../helpers/local-records.js')
     vi.useFakeTimers()
     vi.setSystemTime(atMs)
     try {
-      appendLedgerEntry(meshId, { kind: 'node_cloned', nodeId, payload: { sourceNodeId: 'node_base', branch: 'feature-x' } })
+      seedLocalRecord(meshId, { kind: 'node_cloned', nodeId, payload: { sourceNodeId: 'node_base', branch: 'feature-x' } })
     } finally {
       vi.useRealTimers()
     }

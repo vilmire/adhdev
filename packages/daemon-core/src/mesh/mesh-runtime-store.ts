@@ -3,13 +3,15 @@ import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getConfigDir } from '../config/config.js';
-import { getLedgerDir } from './mesh-ledger.js';
+import { getLedgerDir } from './mesh-ledger-paths.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
 import { MeshGraphStore } from './mesh-graph-store.js';
 import { TurnStore } from './turn-ledger/store.js';
 import { migrateTurnLedgerV1, turnLedgerExportPath, type TurnLedgerMigrationOptions, type TurnLedgerMigrationReport } from './turn-ledger/migrate-v1.js';
 import { migrateTurnLedgerV2, type TurnLedgerMigrationV2Report } from './turn-ledger/migrate-v2.js';
+import { migrateTurnLedgerV3, type TurnLedgerMigrationV3Report } from './turn-ledger/migrate-v3.js';
+import { LocalRecordStore } from './mesh-local-record-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -23,28 +25,16 @@ import {
     pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, selectActiveDirectDispatches, selectSoleActiveDirectDispatchTaskId, type DirectDispatchView,
     type MeshQueueHead,
 } from './mesh-runtime-store-queue-reads.js';
-// Pure move (file-size gate): row shapes/mappers + the retention sweep now live in
-// mesh-runtime-store-turn-rows.ts. Imported back for internal use by class methods
-// below, and re-exported at the bottom of this file so every existing import path
-// (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
-// same pattern as mesh-tools-internal.ts / mesh-tools.ts.
-import { notifyLedgerBulkChange } from './mesh-runtime-store-turn-rows.js';
 import { upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type HandoffNoteTextRow } from './mesh-handoff-note-text.js';
-// Pure move (file-size gate): the schema DDL + column migrations and the G2 event
-// ledger now live in mesh-runtime-store-schema.ts / -ledger.ts (the G3
-// pending-coordinator-event store retired with C-W3 — notices are turn_events). The class keeps
-// thin delegating wrappers below so the public surface and every existing call
-// site are unchanged — same `self`-passing pattern as the turn-attempt extraction.
+// Pure move (file-size gate): the schema DDL + column migrations live in
+// mesh-runtime-store-schema.ts (the G2 event ledger retired with C-W9a — records
+// are `mesh_local_records`, mesh-local-record-store.ts). The class keeps thin
+// delegating wrappers below — same `self`-passing pattern as the turn-attempt extraction.
 import {
     migrate as migrateSchema, tableColumns as schemaTableColumns,
     migrateMeshIsolationColumns as schemaMigrateMeshIsolationColumns,
     hasLoggedMigrationFailure, markLoggedMigrationFailure,
 } from './mesh-runtime-store-schema.js';
-import {
-    appendLedgerEntry, readLedgerEntries, readLedgerEntriesOrdered, clearLedgerForMesh,
-    deleteLedgerEntries, hasLedgerEntry, ledgerEntryCount, importLedgerEntries, readLedgerSlice,
-    readLedgerEntryHeads, readLedgerKindCounts,
-} from './mesh-runtime-store-ledger.js';
 
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
@@ -196,11 +186,6 @@ export class MeshRuntimeStore {
     static resetForTests(): void {
         this.instance?.close();
         this.instance = undefined;
-        // The whole database is going away, including mesh_event_ledger. mesh-ledger
-        // caches ledger reads for up to 30s and keys that cache by meshId, so it
-        // cannot detect a store swap on its own — tell it to drop everything, or the
-        // next test reads the previous test's rows.
-        notifyLedgerBulkChange();
     }
 
     /**
@@ -248,23 +233,40 @@ export class MeshRuntimeStore {
         return this.turnStoreInstance;
     }
 
+    /** C-W9a: `mesh_local_records` (the local leg of `meshRecord`) on THIS handle. */
+    private localRecordStoreInstance: LocalRecordStore | undefined;
+    localRecordStore(): LocalRecordStore {
+        if (!this.localRecordStoreInstance) this.localRecordStoreInstance = new LocalRecordStore(this.db);
+        return this.localRecordStoreInstance;
+    }
+
     /** C3 one-way fold of the legacy turn/outbox/ledger tables (user_version 0 → 1). Boot calls it once. */
     runTurnLedgerMigrationV1(opts: Omit<TurnLedgerMigrationOptions, 'exportPath'> & { exportPath?: string | null }): TurnLedgerMigrationReport {
         const nowMs = opts.nowMs ?? Date.now();
-        const report = migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
-        // v1 dropped `mesh_event_ledger` with the rest; its generic event readers
-        // and writers are still live (the remaining C-W8 work), so the schema step
-        // re-creates it EMPTY for this boot — the state every later open has. The
-        // other legacy tables are no longer created (C-W8 retired their writers;
-        // migrate-v2 drops any that survive).
-        if (report.droppedTables.length > 0) this.migrate();
-        return report;
+        // v1 drops every legacy table (the schema step creates none of them any
+        // more — C-W9a retired the last, the event ledger; v2/v3 drop any
+        // that survive on a post-v1 install).
+        return migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
     }
 
     /** C-W8 one-way step (user_version 1 → 2): drop the retired legacy tables, fold post-v1 notes. Boot runs it after v1. */
     runTurnLedgerMigrationV2(opts: { exportPath?: string | null; nowMs?: number }): TurnLedgerMigrationV2Report {
         const nowMs = opts.nowMs ?? Date.now();
         return migrateTurnLedgerV2(this.db, { exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs).replace(/\.jsonl$/, '.v2.jsonl') : opts.exportPath });
+    }
+
+    /**
+     * C-W9a one-way step (user_version 2 → 3): fold the recent event-ledger rows (and
+     * the active per-mesh JSONL mirrors) into `mesh_local_records`, drop the ledger.
+     * Boot runs it after v2.
+     */
+    runTurnLedgerMigrationV3(opts: { exportPath?: string | null; jsonlDir?: string | null; nowMs?: number }): TurnLedgerMigrationV3Report {
+        const nowMs = opts.nowMs ?? Date.now();
+        return migrateTurnLedgerV3(this.db, {
+            nowMs,
+            exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs).replace(/\.jsonl$/, '.v3.jsonl') : opts.exportPath,
+            jsonlDir: opts.jsonlDir === undefined ? getLedgerDir() : opts.jsonlDir,
+        });
     }
 
     // ── Schema DDL + column migrations ───────────────────────────────────────
@@ -1123,28 +1125,6 @@ export class MeshRuntimeStore {
         return rows.map(r => ({ tool: r.tool, sessionId: r.session_id, callerRole: r.caller_role, calledAt: r.called_at }));
     }
 
-    /**
-     * Retention prune for mesh_event_ledger (SoT 1-11 (b)). The ledger is append-only
-     * with NO lifecycle GC of its own, so lifecycle events accumulate without bound
-     * (the dominant mesh-runtime.db growth). Every production reader is bounded to a
-     * recent window (readLedgerEntries tail/limit ≤ a few hundred; task-stats /
-     * terminal-evidence scans look at recent tasks), so rows past a generous age only
-     * cost space. Excluded from deletion — retained forever:
-     *   - coordinator_operating_note / _tombstone: runtime-accumulated lessons whose
-     *     whole point is surviving restarts; a tombstone must also outlive the notes
-     *     it retracts.
-     * Timestamps are ISO-8601 TEXT, so the lexicographic `<` cutoff is a correct time
-     * comparison; a malformed timestamp compares greater than any ISO date and is
-     * conservatively retained. Returns rows deleted.
-     */
-    pruneEventLedger(olderThanMs: number): number {
-        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-        return this.db.prepare(
-            `DELETE FROM mesh_event_ledger
-             WHERE timestamp < ?
-               AND kind NOT IN ('coordinator_operating_note', 'coordinator_operating_note_tombstone')`
-        ).run(cutoffIso).changes;
-    }
 
     /**
      * Retention prune for TERMINAL (completed/cancelled/failed) mesh_queue rows
@@ -1161,105 +1141,6 @@ export class MeshRuntimeStore {
         return pruneTerminalQueueEntriesImpl(this, olderThanMs);
     }
 
-    // ── G2: Event Ledger ────────────────────────────────────────────────────
-    // Implementation lives in ./mesh-runtime-store-ledger.ts (behavior-preserving
-    // code move, file-size gate). Thin delegators keep the public surface and
-    // every call site unchanged.
-
-    appendLedgerEntry(entry: {
-        id: string;
-        meshId: string;
-        timestamp: string;
-        kind: string;
-        nodeId?: string | null;
-        sessionId?: string | null;
-        providerType?: string | null;
-        taskId?: string | null;
-        payload?: unknown;
-    }): void {
-        appendLedgerEntry(this, entry);
-    }
-
-    readLedgerEntries(meshId: string, opts?: {
-        tail?: number;
-        since?: string;
-        kind?: string;
-        limit?: number;
-    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
-        return readLedgerEntries(this, meshId, opts);
-    }
-
-    /**
-     * G2 read cutover: read ledger entries in append order (oldest first),
-     * matching legacy JSONL file-order semantics. Ties on the same timestamp
-     * are broken by rowid (insertion order), preserving the positional
-     * guarantee that mesh-events relies on for same-millisecond entries.
-     */
-    readLedgerEntriesOrdered(meshId: string, opts?: {
-        since?: string;
-        kinds?: string[];
-        tail?: number;
-    }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
-        return readLedgerEntriesOrdered(this, meshId, opts);
-    }
-
-    /** Projection read: entry columns + only the named payload paths (no full payload parse). */
-    readLedgerEntryHeads(meshId: string, opts: { kinds: string[]; since?: string; payloadPaths: readonly string[] }): ReturnType<typeof readLedgerEntryHeads> {
-        return readLedgerEntryHeads(this, meshId, opts);
-    }
-
-    /** Per-kind counts + newest timestamp (getLedgerSummary aggregate; no payload read). */
-    readLedgerKindCounts(meshId: string): ReturnType<typeof readLedgerKindCounts> {
-        return readLedgerKindCounts(this, meshId);
-    }
-
-    /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
-    clearLedgerForMesh(meshId: string): number {
-        return clearLedgerForMesh(this, meshId);
-    }
-
-    /** G2: remove entries moved to the JSONL archive so the SQLite runtime set mirrors the active ledger. */
-    deleteLedgerEntries(meshId: string, ids: string[]): number {
-        return deleteLedgerEntries(this, meshId, ids);
-    }
-
-    hasLedgerEntry(meshId: string, id: string): boolean {
-        return hasLedgerEntry(this, meshId, id);
-    }
-
-    ledgerEntryCount(meshId: string): number {
-        return ledgerEntryCount(this, meshId);
-    }
-
-    importLedgerEntries(entries: Array<{
-        id: string; meshId: string; timestamp: string; kind: string;
-        nodeId?: string | null; sessionId?: string | null; providerType?: string | null; taskId?: string | null; payload?: unknown;
-    }>): number {
-        return importLedgerEntries(this, entries);
-    }
-
-    /**
-     * G4: Read a bounded, cursor-addressable ledger slice directly from the SQLite
-     * mesh_event_ledger table. This is the P2P reconcile read path; JSONL files are
-     * retained as export/import/debug/legacy artifacts only.
-     *
-     * The return shape is structurally compatible with MeshLedgerSlice so callers
-     * in mesh-tools.ts can pass it directly to buildMeshLedgerReplicaEvidence.
-     */
-    readLedgerSlice(meshId: string, opts?: {
-        afterId?: string;
-        since?: string;
-        kind?: string;
-        limit?: number;
-    }): {
-        protocol: 'adhdev.mesh.ledger.slice.v1';
-        meshId: string;
-        entries: Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; payload: unknown }>;
-        cursor: { afterId: string | null; nextAfterId: string | null; limit: number; hasMore: boolean };
-        sourceOfTruth: { kind: 'local_sqlite'; table: 'mesh_event_ledger'; bounded: true; maxLimit: number };
-    } {
-        return readLedgerSlice(this, meshId, opts);
-    }
     // ── M3: Mission Records ─────────────────────────────────────────────────
 
     upsertMission(mission: {
@@ -1377,7 +1258,7 @@ export class MeshRuntimeStore {
 // here so callers can keep importing it alongside the claim API they already use.
 export type { MeshClaimRefusal, MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 export {
-    MESH_EVENT_LEDGER_RETENTION_MS,
+    MESH_LOCAL_RECORD_RETENTION_MS,
     MESH_TOOL_CALL_LOG_RETENTION_MS,
     MESH_TERMINAL_QUEUE_RETENTION_MS,
     pruneMeshRuntimeRetention,

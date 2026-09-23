@@ -13,7 +13,7 @@ import {
 } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask, updateTaskStatus, __writeTaskStatusForTests, claimNextTask, recordDirectDispatchTask, updateSessionTaskStatus, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
 import { computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
-import { appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index.js';
@@ -130,7 +130,7 @@ describe('M3 — mission persistence', () => {
         expect(assignedAgg.completed).toBe(0);
 
         // The terminal completion path (same as enqueued tasks) flips it by session.
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node-1',
             sessionId: 'session-direct',
@@ -138,7 +138,7 @@ describe('M3 — mission persistence', () => {
         });
         const completed = updateSessionTaskStatus(meshId, 'session-direct', 'completed');
         expect(completed?.id).toBe(taskId);
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_completed',
             nodeId: 'node-1',
             sessionId: 'session-direct',

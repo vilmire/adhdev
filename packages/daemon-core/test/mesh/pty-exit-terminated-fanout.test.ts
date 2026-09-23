@@ -26,7 +26,7 @@ import {
   subscribeWorkerBindRevocation,
   verifyWorkerSessionBind,
 } from '../../src/mesh/worker-mcp-isolation.js'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { subscribeLiveSessions } from '../../src/boot/live-sessions.js'
 import { subscribeTranscriptProjection } from '../../src/seqscribe/transcript-bus-subscriber.js'
 
@@ -87,7 +87,7 @@ describe('one terminated{pty_exit} fans out to every session-gone consumer exact
     expect(h.terminated).toHaveLength(1)
     expect(h.terminated[0]).toMatchObject({ sessionId, cause: 'pty_exit', providerType: 'claude-cli', workspace: '/tmp/ws' })
     // mesh-termination subscriber → exactly one session_stopped row
-    const stops = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const stops = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(stops).toHaveLength(1)
     expect(stops[0].payload).toMatchObject({ reason: 'external_signal', signalName: 'SIGKILL', coordinatorSession: true })
     // coordinator-registry subscriber
@@ -119,6 +119,6 @@ describe('one terminated{pty_exit} fans out to every session-gone consumer exact
     expect(h.terminated[0].cause).toBe('daemon_shutdown')
     // A coordinator torn down with the daemon must re-attach after restart.
     expect(getCoordinatorForSession(sessionId)).toBeTruthy()
-    expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
+    expect(readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
   })
 })

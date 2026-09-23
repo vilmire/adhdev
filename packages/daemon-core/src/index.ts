@@ -334,10 +334,21 @@ export type {
 export { loadRepoSettings } from './config/repo-settings.js';
 export type { RepoSettings, LoadRepoSettingsOptions } from './config/repo-settings.js';
 
-// ── Mesh Task Ledger ──
-export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, isIntentionalCleanupStopEntry, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
+// ── Mesh records (C-W9a: the event ledger + JSONL retired; write = meshRecord, read = local records) ──
+export { buildTaskCompletionEvidence, isIntentionalCleanupStopEntry, normalizeMeshWorkerResult, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
+export { getLedgerDir } from './mesh/mesh-ledger-paths.js';
+export {
+  readLocalRecords,
+  readLocalRecordsByKind,
+  readLocalRecordSlice,
+  getLocalRecordSummary,
+  getSessionRecoveryContext,
+  readTurnTerminalViews,
+  __clearLocalRecordsForTests,
+  type ReadLocalRecordOptions,
+} from './mesh/mesh-local-records.js';
 export { isMeshTestPollution, isSyntheticTestMeshId, isSyntheticTestCoordinatorSession } from './mesh/mesh-test-pollution.js';
-export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
+export type { MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
 export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, MAX_SESSIONS_PER_MESH, USAGE_MAX_AGE_MS } from './mesh/mesh-usage-store.js';
 // WORKER-MCP: pure env-flag read, no daemon state — same category as
 // isTaskReadonly/DEFAULT_QUOTA_ROUTING_POLICY above, which is why mcp-server
@@ -355,11 +366,16 @@ export { applyBoundedRetention, setWithBoundedRetention } from './shared/bounded
 export type { BoundedRetentionOptions, BoundedRetentionResult } from './shared/bounded-retention.js';
 export { fastForwardMeshNode } from './mesh/mesh-fast-forward.js';
 export type { MeshFastForwardNodeArgs, MeshFastForwardPlannedStep, MeshFastForwardResult } from './mesh/mesh-fast-forward.js';
-export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
-export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
+export { enqueueTask, enqueueTaskGraph, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, MESH_TASK_PRIORITIES } from './mesh/mesh-work-queue.js';
+// C-W9a: the PURE queue helpers are exported from their leaf modules, so the
+// mcp-server can use them without value-importing the DB-backed queue module
+// (check:boundaries C8 forbids mesh-work-queue / mesh-ledger / mesh-graph-provenance there).
+export { summarizeQueueEntryInputForView, isTaskReadonly, describeTaskDependencyState, taskDependenciesSatisfied, MESH_TASK_GRAPH_MAX_TASKS, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-task-predicates.js';
+export type { MeshTaskInputSummary } from './mesh/mesh-task-predicates.js';
+export { normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations } from './mesh/mesh-task-mode-guardrail.js';
+export { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags } from './mesh/mesh-node-capability-tags.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
@@ -456,31 +472,34 @@ export type {
     BuildMeshGraphViewOptions,
 } from './mesh/mesh-graph-view.js';
 export {
-    normalizeOrchestrationDecision,
     recordGraphEnqueueCommitted,
     recordGraphEnqueueValidationFailed,
     recordGraphEnqueueRolledBack,
     recordSingleEnqueueDecision,
-    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     // GRAPH-MEASUREMENT-DIRECT — the direct dispatch surface's decision record.
     recordDirectDispatchDecision,
-    MESH_UNSANCTIONED_DIRECT_HINT,
     recordGraphGateClaimed,
     recordGraphGateReleased,
     recordGraphGateAbandoned,
     recordGraphNodePatched,
     recordGraphGateExpired,
+} from './mesh/mesh-graph-provenance.js';
+// C-W9a: the pure decision vocabulary from its leaf (see the queue-helper note above).
+export {
+    normalizeOrchestrationDecision,
+    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
+    MESH_UNSANCTIONED_DIRECT_HINT,
     MESH_VALID_SINGLE_REASONS,
     MESH_SUPERSEDED_SINGLE_REASONS,
     MESH_DIRECT_REASONS,
     MESH_VALID_DIRECT_REASONS,
     MESH_UNSANCTIONED_DIRECT_REASONS,
-} from './mesh/mesh-graph-provenance.js';
+} from './mesh/mesh-orchestration-decision.js';
+export type { GraphEnqueueProvenance } from './mesh/mesh-graph-provenance.js';
 export type {
-    GraphEnqueueProvenance,
     NormalizedOrchestrationDecision,
     OrchestrationDecisionNormalizeResult,
-} from './mesh/mesh-graph-provenance.js';
+} from './mesh/mesh-orchestration-decision.js';
 export type { MeshGraphGateRow, MeshTaskGraphNodeRow, MeshTaskGraphRow } from './mesh/mesh-graph-types.js';
 export type { GraphWorkspaceDeclaration, WorkspaceSagaTickResult, WorkspaceSagaStepResult } from './mesh/mesh-graph-workspace-saga.js';
 export type { WorkspaceDeleteRefusal, WorkspaceInspectReport, WorkspaceSafetySnapshot } from './mesh/mesh-graph-workspace-safety.js';
@@ -1209,8 +1228,8 @@ export {
   type MeshPublisherCounters,
   type MeshRecordEntry,
 } from './seqscribe/mesh-publisher.js';
-// C3: the write API for every non-turn mesh event (mesh.record).
-export { meshRecord, meshRecordEntry, type MeshRecordScalars, type MeshRecordResult } from './mesh/mesh-record.js';
+// C3: the write API for every non-turn mesh event (mesh.record + the C-W9a local leg).
+export { meshRecord, meshRecordAppended, type MeshRecordScalars, type MeshRecordResult, type MeshRecordOptions } from './mesh/mesh-record.js';
 // C1–C3 turn ledger (C-W2): store, one-way migration, observe() write path, wire projection.
 export {
   createTurnLedger,
@@ -1237,6 +1256,7 @@ export { projectTurnWireEvent, turnWireEventName, TURN_WIRE_EVENT_NAMES, type Tu
 export type { TurnLedgerPorts, TurnTxnHost, CancelDispatchRequest, TurnCompletionEnvelope } from './mesh/turn-ledger/effects.js';
 export { createMeshRuntimeTurnLedger } from './mesh/turn-ledger/runtime-ledger.js';
 export { migrateTurnLedgerV2, formatTurnLedgerMigrationV2Line, V2_RETIRED_TABLES, type TurnLedgerMigrationV2Report } from './mesh/turn-ledger/migrate-v2.js';
+export { migrateTurnLedgerV3, formatTurnLedgerMigrationV3Line, V3_RETIRED_TABLE, type TurnLedgerMigrationV3Report } from './mesh/turn-ledger/migrate-v3.js';
 // C-W8: the process's active ledger slot + the daemon-side turn IPC responders
 // (an mcp-server test process arms an in-process ledger and answers its fake
 // transport's turn_observe / turn_cancel through the real handlers).

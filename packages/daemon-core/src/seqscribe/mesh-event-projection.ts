@@ -80,7 +80,7 @@ export const MAX_PROJECTED_STRING = 200;
  * Payload keys copied into the replicated record.
  *
  * Each entry is a per-key assertion of "this is non-content". Reviewed
- * 2026-08-27 against every `appendLedgerEntry` call site:
+ * 2026-08-27 against every ledger-append call site (now `meshRecord`):
  *
  *   ids       — taskId/deliveryId/attemptId/missionId/... : opaque handles
  *   routing   — nodeId/sessionId/providerType/transport   : addressing enums

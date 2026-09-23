@@ -1386,9 +1386,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
             // deletion record rather than losing either.
             if (worktreeCleanup && worktreeCleanup.success === true && worktreeCleanup.skipped !== true) {
                 try {
-                    const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                    appendLedgerEntry(meshId, {
-                        kind: 'worktree_directory_removed',
+                    const { meshRecord } = await import('../../mesh/mesh-record.js');
+                    meshRecord(meshId, 'worktree_directory_removed', {
                         nodeId,
                         payload: {
                             workspace: typeof worktreeCleanup.removedPath === 'string'
@@ -1406,16 +1405,15 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                             requestedForce: args?.force === true ? true : undefined,
                             ...(remoteForwardedResult ? { removedByRemoteDaemon: true } : {}),
                         },
-                    });
+                    }, { local: true });
                 } catch { /* ledger append is best-effort */ }
             }
 
             // Record in task ledger
             if (removed) {
                 try {
-                    const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                    appendLedgerEntry(meshId, {
-                        kind: 'node_removed',
+                    const { meshRecord } = await import('../../mesh/mesh-record.js');
+                    meshRecord(meshId, 'node_removed', {
                         nodeId,
                         payload: {
                             worktree: !!node?.isLocalWorktree,
@@ -1433,7 +1431,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                             branchRefDeleted: typeof worktreeCleanup?.branchRefDeleted === 'boolean' ? worktreeCleanup.branchRefDeleted : undefined,
                             branchRefReason: typeof worktreeCleanup?.branchRefReason === 'string' ? worktreeCleanup.branchRefReason : undefined,
                         },
-                    });
+                    }, { local: true });
                 } catch { /* ledger append is best-effort */ }
             }
 
@@ -1689,9 +1687,8 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
 
             const appendCloneLedger = async (initSubmodules: boolean, bootstrapState: WorktreeBootstrapState): Promise<void> => {
                 try {
-                    const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                    appendLedgerEntry(meshId, {
-                        kind: 'node_cloned',
+                    const { meshRecord } = await import('../../mesh/mesh-record.js');
+                    meshRecord(meshId, 'node_cloned', {
                         nodeId: node.id,
                         payload: {
                             sourceNodeId,
@@ -1707,7 +1704,7 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
                                 exitCode: bootstrapState.exitCode,
                             },
                         },
-                    });
+                    }, { local: true });
                 } catch { /* ledger append is best-effort */ }
             };
 

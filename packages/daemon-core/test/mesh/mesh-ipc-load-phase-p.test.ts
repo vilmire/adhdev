@@ -27,17 +27,9 @@ import {
     __resetMeshRuntimeStoreForTests,
     type MeshWorkQueueEntry,
 } from '../../src/mesh/mesh-work-queue.js';
-import {
-    appendLedgerEntry,
-    readLedgerEntries,
-    readLedgerEntriesByKind,
-    readActiveWorkLedgerEntries,
-    readRefineJobLedgerEntries,
-    getLedgerSummary,
-    invalidateAllLedgerCaches,
-    __clearMeshLedgerForTests,
-    type MeshLedgerKind,
-} from '../../src/mesh/mesh-ledger.js';
+import { type MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords, readLocalRecordsByKind, readActiveWorkRecords, readRefineJobRecords, getLocalRecordSummary, __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
 import { buildMeshAsyncRefineJobs } from '../../src/mesh/mesh-refine-status.js';
 // autoPruneStaleDirectDispatches (the reconcile PHASE 5 auto-prune) was deleted in C4 (C-W4).
@@ -73,7 +65,7 @@ describe('Phase P — IPC / event-loop load fixes', () => {
 
     afterEach(() => {
         vi.useRealTimers();
-        try { __clearMeshLedgerForTests(meshId); } catch { /* store may already be reset */ }
+        try { __clearLocalRecordsForTests(meshId); } catch { /* store may already be reset */ }
         __resetMeshRuntimeStoreForTests();
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
@@ -90,33 +82,31 @@ describe('Phase P — IPC / event-loop load fixes', () => {
 
         function seedActiveWorkLedger(): void {
             const big = 'x'.repeat(20_000); // stands in for the completion bodies the projection skips
-            const dispatch = (taskId: string, sessionId: string, extra: Record<string, unknown> = {}) => appendLedgerEntry(meshId, {
+            const dispatch = (taskId: string, sessionId: string, extra: Record<string, unknown> = {}) => seedLocalRecord(meshId, {
                 kind: 'task_dispatched', nodeId: 'daemon_mach_a', sessionId,
                 payload: { taskId, source: 'direct', via: 'local_direct', message: `do ${taskId}`, taskTitle: `title ${taskId}`, taskMode: 'code_change', providerType: 'claude-cli', ...extra },
             } as any);
             dispatch('t-done', 's1');
-            appendLedgerEntry(meshId, { kind: 'task_completed', nodeId: 'daemon_mach_a', sessionId: 's1', payload: { taskId: 't-done', finalSummary: big, evidenceLevel: 'sufficient' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'daemon_mach_a', sessionId: 's1', payload: { taskId: 't-done', finalSummary: big, evidenceLevel: 'sufficient' } } as any);
             dispatch('t-weak', 's2', { dispatchedToIdleSession: true });
-            appendLedgerEntry(meshId, { kind: 'task_completed', nodeId: 'daemon_mach_a', sessionId: 's2', payload: { taskId: 't-weak', finalSummary: big, completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' } } } as any);
+            seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'daemon_mach_a', sessionId: 's2', payload: { taskId: 't-weak', finalSummary: big, completionDiagnostic: { finalAssistantPresent: false, blockReason: 'missing_final_assistant' } } } as any);
             dispatch('t-approval', 's3');
-            appendLedgerEntry(meshId, { kind: 'task_approval_needed', nodeId: 'daemon_mach_a', sessionId: 's3', payload: { taskId: 't-approval', modal: big } } as any);
+            seedLocalRecord(meshId, { kind: 'task_approval_needed', nodeId: 'daemon_mach_a', sessionId: 's3', payload: { taskId: 't-approval', modal: big } } as any);
             dispatch('t-resolved', 's4');
-            appendLedgerEntry(meshId, { kind: 'task_approval_needed', nodeId: 'daemon_mach_a', sessionId: 's4', payload: { taskId: 't-resolved' } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_approval_resolved', nodeId: 'daemon_mach_a', sessionId: 's4', payload: { taskId: 't-resolved' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_approval_needed', nodeId: 'daemon_mach_a', sessionId: 's4', payload: { taskId: 't-resolved' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_approval_resolved', nodeId: 'daemon_mach_a', sessionId: 's4', payload: { taskId: 't-resolved' } } as any);
             dispatch('t-failed', 's5');
-            appendLedgerEntry(meshId, { kind: 'task_failed', nodeId: 'daemon_mach_a', sessionId: 's5', payload: { taskId: 't-failed', error: big, reviewRecommended: true } } as any);
-            appendLedgerEntry(meshId, { kind: 'session_stopped', nodeId: 'daemon_mach_a', sessionId: 's6', payload: { reason: 'exit' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'daemon_mach_a', sessionId: 's5', payload: { taskId: 't-failed', error: big, reviewRecommended: true } } as any);
+            seedLocalRecord(meshId, { kind: 'session_stopped', nodeId: 'daemon_mach_a', sessionId: 's6', payload: { reason: 'exit' } } as any);
             dispatch('t-orphan', 's7', { source: undefined, via: 'p2p_direct' });
-            appendLedgerEntry(meshId, { kind: 'task_dispatched', nodeId: 'daemon_mach_a', sessionId: 's8', payload: { taskId: 't-queue', source: 'queue', via: 'local_direct', message: 'queued' } } as any);
-            appendLedgerEntry(meshId, { kind: 'session_launched', nodeId: 'daemon_mach_a', payload: { unrelated: big } } as any);
+            seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'daemon_mach_a', sessionId: 's8', payload: { taskId: 't-queue', source: 'queue', via: 'local_direct', message: 'queued' } } as any);
+            seedLocalRecord(meshId, { kind: 'session_launched', nodeId: 'daemon_mach_a', payload: { unrelated: big } } as any);
         }
 
         it('active-work projection yields identical buildMeshActiveWork output (with and without live nodes)', () => {
             seedActiveWorkLedger();
-            invalidateAllLedgerCaches();
-            const full = readLedgerEntriesByKind(meshId, ACTIVE_KINDS);
-            invalidateAllLedgerCaches();
-            const projected = readActiveWorkLedgerEntries(meshId, ACTIVE_KINDS);
+            const full = readLocalRecordsByKind(meshId, ACTIVE_KINDS);
+            const projected = readActiveWorkRecords(meshId, ACTIVE_KINDS);
 
             expect(projected.map(e => e.id)).toEqual(full.map(e => e.id));
             // The projection really drops the bodies.
@@ -144,27 +134,25 @@ describe('Phase P — IPC / event-loop load fixes', () => {
 
         it('refine-job projection yields identical buildMeshAsyncRefineJobs output', () => {
             const refineJob = (jobId: string, status: string) => ({ jobId, status, meshId, nodeId: 'node-w', workspace: '/w', startedAt: new Date().toISOString(), interactionId: `i-${jobId}` });
-            appendLedgerEntry(meshId, { kind: 'task_dispatched', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-1', 'accepted') } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_completed', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-1', 'completed'), result: { branch: 'feat/x', into: 'main', log: 'y'.repeat(20_000) } } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_dispatched', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-2', 'accepted'), retryOfJobId: 'job-1' } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_failed', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-2', 'failed'), finalBranchConvergenceState: { branch: 'feat/y', baseBranch: 'main' } } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_completed', nodeId: 'node-w', payload: { taskId: 'unrelated', finalSummary: 'z'.repeat(20_000) } } as any);
+            seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-1', 'accepted') } } as any);
+            seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-1', 'completed'), result: { branch: 'feat/x', into: 'main', log: 'y'.repeat(20_000) } } } as any);
+            seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-2', 'accepted'), retryOfJobId: 'job-1' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'node-w', payload: { source: 'refine_mesh_node_async_job', refineJob: refineJob('job-2', 'failed'), finalBranchConvergenceState: { branch: 'feat/y', baseBranch: 'main' } } } as any);
+            seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'node-w', payload: { taskId: 'unrelated', finalSummary: 'z'.repeat(20_000) } } as any);
 
-            invalidateAllLedgerCaches();
-            const full = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
-            invalidateAllLedgerCaches();
-            const projected = readRefineJobLedgerEntries(meshId);
+            const full = readLocalRecords(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
+            const projected = readRefineJobRecords(meshId);
             const a = buildMeshAsyncRefineJobs({ meshId, ledgerEntries: full });
             expect(a).toHaveLength(2);
             expect(buildMeshAsyncRefineJobs({ meshId, ledgerEntries: projected })).toEqual(a);
         });
 
-        it('the multi-kind projection query seeks the (mesh_id, kind, timestamp) index', () => {
+        it('the multi-kind projection query seeks the (mesh_id, kind, at_ms) index', () => {
             const db = MeshRuntimeStore.getInstance().db;
             const plan = db.prepare(
-                `EXPLAIN QUERY PLAN SELECT rowid, id FROM mesh_event_ledger WHERE mesh_id = ? AND kind IN (?, ?, ?)`
+                `EXPLAIN QUERY PLAN SELECT rowid, event_id FROM mesh_local_records WHERE mesh_id = ? AND kind IN (?, ?, ?)`
             ).all(meshId, 'task_dispatched', 'task_completed', 'task_failed') as Array<{ detail: string }>;
-            expect(plan.map(r => r.detail).join(' ')).toContain('idx_mesh_event_ledger_mesh_kind');
+            expect(plan.map(r => r.detail).join(' ')).toContain('ix_mesh_local_records_kind');
         });
     });
 
@@ -172,12 +160,12 @@ describe('Phase P — IPC / event-loop load fixes', () => {
         function seed(n: number): void {
             for (let i = 0; i < n; i++) {
                 const kind = (['task_dispatched', 'session_launched', 'task_completed', 'checkpoint_created'] as const)[i % 4];
-                appendLedgerEntry(meshId, { kind, nodeId: i % 2 ? 'daemon_mach_a' : 'daemon_mach_b', payload: { seq: i, taskId: `t-${i}` } } as any);
+                seedLocalRecord(meshId, { kind, nodeId: i % 2 ? 'daemon_mach_a' : 'daemon_mach_b', payload: { seq: i, taskId: `t-${i}` } } as any);
             }
-            appendLedgerEntry(meshId, { kind: 'task_failed', payload: { taskId: 't-f1', error: 'boom' } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_failed', payload: { taskId: 't-f2', intentional: true, reason: 'operator_cleanup' } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_stalled', payload: { taskId: 't-s1' } } as any);
-            appendLedgerEntry(meshId, { kind: 'task_stalled', payload: { taskId: 't-s2', intentional: true, source: 'mesh_remove_node' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_failed', payload: { taskId: 't-f1', error: 'boom' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_failed', payload: { taskId: 't-f2', intentional: true, reason: 'operator_cleanup' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_stalled', payload: { taskId: 't-s1' } } as any);
+            seedLocalRecord(meshId, { kind: 'task_stalled', payload: { taskId: 't-s2', intentional: true, source: 'mesh_remove_node' } } as any);
         }
 
         it('tail reads through SQL match the full-scan slice (bare, kind-filtered, since) and node filters still apply in JS', () => {
@@ -189,29 +177,26 @@ describe('Phase P — IPC / event-loop load fixes', () => {
                 { tail: 4, node: 'daemon_mach_a' },
             ];
             for (const opts of cases) {
-                invalidateAllLedgerCaches();
-                const pushed = readLedgerEntries(meshId, opts);
-                readLedgerEntries(meshId); // warm the full cache → in-memory reference path
-                const reference = readLedgerEntries(meshId, opts);
+                    const pushed = readLocalRecords(meshId, opts);
+                readLocalRecords(meshId); // warm the full cache → in-memory reference path
+                const reference = readLocalRecords(meshId, opts);
                 expect(pushed).toEqual(reference);
             }
-            invalidateAllLedgerCaches();
-            expect(readLedgerEntries(meshId, { tail: 4, node: 'daemon_mach_a' })).toHaveLength(4);
+            expect(readLocalRecords(meshId, { tail: 4, node: 'daemon_mach_a' })).toHaveLength(4);
         });
 
-        it('SQL summary equals the in-memory summary (cleanup stops excluded, recent failures windowed)', () => {
+        it('SQL summary counts kinds without loading payloads (cleanup stops excluded, recent failures windowed)', () => {
             seed(25);
-            invalidateAllLedgerCaches();
-            const fromSql = getLedgerSummary(meshId);
-            readLedgerEntries(meshId);
-            const fromMemory = getLedgerSummary(meshId);
-            expect(fromSql).toEqual(fromMemory);
+            const fromSql = getLocalRecordSummary(meshId);
+            const all = readLocalRecords(meshId);
+            expect(fromSql.totalEntries).toBe(all.length);
+            expect(fromSql.taskDispatched).toBe(all.filter(e => e.kind === 'task_dispatched').length);
+            expect(fromSql.lastActivityAt).toBe(all[all.length - 1].timestamp);
             expect(fromSql).toMatchObject({ taskFailed: 1, taskStalled: 1, recentFailures: 1 });
         });
 
         it('an empty mesh summarizes to zero with no lastActivityAt', () => {
-            invalidateAllLedgerCaches();
-            expect(getLedgerSummary(meshId)).toMatchObject({ totalEntries: 0, lastActivityAt: null, recentFailures: 0 });
+            expect(getLocalRecordSummary(meshId)).toMatchObject({ totalEntries: 0, lastActivityAt: null, recentFailures: 0 });
         });
     });
 

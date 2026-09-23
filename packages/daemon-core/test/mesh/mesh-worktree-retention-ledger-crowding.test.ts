@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 
-// mesh-worktree-retention reads refine-job evidence through readLedgerEntriesByKind, whose
+// mesh-worktree-retention reads refine-job evidence through readLocalRecordsByKind, whose
 // underlying store side-writes a per-mesh JSONL/SQLite under getConfigDir(); redirect it to a
 // temp dir so the test never touches the real ~/.adhdev.
 const testConfigDir = join(tmpdir(), `adhdev-worktree-retention-test-${randomUUID().slice(0, 8)}`, '.adhdev');
@@ -20,7 +20,8 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { runWorktreeNodeRetentionTick, __deleteWorktreeNodeRetentionStateForTests, type WorktreeRetentionDeps } from '../../src/mesh/mesh-worktree-retention.js';
-import { __clearMeshLedgerForTests, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 
 function makeDeps(): WorktreeRetentionDeps {
     return {
@@ -50,12 +51,12 @@ describe('mesh-worktree-retention — LEDGER-KIND-TAIL-BLINDSPOT (review_infligh
     });
 
     afterEach(() => {
-        __clearMeshLedgerForTests(meshId);
+        __clearLocalRecordsForTests(meshId);
         __deleteWorktreeNodeRetentionStateForTests();
     });
 
     function appendRefineDispatch(jobId: string, nodeId: string) {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId,
             payload: {
@@ -69,7 +70,7 @@ describe('mesh-worktree-retention — LEDGER-KIND-TAIL-BLINDSPOT (review_infligh
     // ★DATA-LOSS ADJACENT: an in-flight Refinery job's task_dispatched row must keep blocking
     // destructive worktree removal even when 260+ unrelated ledger entries are appended after
     // it — the same class as M-WORKTREE-DELETED-WHILE-TASK-RUNNING (2026-08-16). Before the
-    // fix, buildPlan's fallback read was `readLedgerEntries(meshId, { tail: 500 })`; a bare
+    // fix, buildPlan's fallback read was `readLocalRecords(meshId, { tail: 500 })`; a bare
     // tail window can be crowded out by unrelated mesh traffic while a refine job (which runs
     // typecheck/test/build for minutes) is still running, letting the sweep wrongly conclude
     // the node is free to remove out from under a live reviewer.
@@ -78,7 +79,7 @@ describe('mesh-worktree-retention — LEDGER-KIND-TAIL-BLINDSPOT (review_infligh
         appendRefineDispatch('job-buried', nodeId);
 
         for (let i = 0; i < 520; i++) {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_launched',
                 nodeId: 'node-other',
                 payload: { source: 'unrelated_traffic', seq: i },
@@ -103,13 +104,13 @@ describe('mesh-worktree-retention — LEDGER-KIND-TAIL-BLINDSPOT (review_infligh
         const nodeId = 'node-refined-done';
         appendRefineDispatch('job-buried-done', nodeId);
         for (let i = 0; i < 520; i++) {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_launched',
                 nodeId: 'node-other',
                 payload: { source: 'unrelated_traffic', seq: i },
             } as any);
         }
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_completed',
             nodeId,
             payload: {

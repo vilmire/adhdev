@@ -1,5 +1,7 @@
 import { normalizeMeshNodeId, type MeshNodeIdentified } from '@adhdev/mesh-shared';
-import { readLedgerEntriesByKind } from './mesh-ledger.js';
+import { readLocalRecordsByKind } from './mesh-local-records.js';
+import { meshTopicIndexFor } from './mesh-topic-index.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 // ---------------------------------------------------------------------------
 // Recently-cloned worktree node grace window
@@ -69,8 +71,9 @@ export function isWithinCloneBootstrapGrace(nodeId: string | undefined | null, n
 // visible again and a mesh_status refresh changes nothing (refreshing mesh_status does not
 // repopulate this registry; only a fresh clone does).
 //
-// The ledger's durable 'node_cloned' entry (appended by clone_mesh_node — mesh-crud.ts)
-// survives a restart, so it is the fallback source of truth. Consulted ONLY when the fast
+// The durable 'node_cloned' record (meshRecord by clone_mesh_node — mesh-crud.ts) survives
+// a restart, so it is the fallback source of truth: this daemon's local records plus the
+// fleet index (a clone recorded by another coordinator daemon; ids + time only). Consulted ONLY when the fast
 // in-memory check misses, so the hot path (every autolaunch tick, every candidate node) stays
 // allocation/IO-free in the overwhelmingly common case; the ledger read is paid only on the
 // rare miss this fix exists to cover.
@@ -98,8 +101,13 @@ export function isWithinCloneBootstrapGraceDurable(
     const key = normalizeNodeIdKey(nodeId);
     if (!key || !meshId) return false;
     try {
-        const entries = readLedgerEntriesByKind(meshId, ['node_cloned'], CLONE_LEDGER_LOOKBACK_CAP);
-        for (const entry of entries) {
+        const local = readLocalRecordsByKind(meshId, ['node_cloned'], CLONE_LEDGER_LOOKBACK_CAP);
+        let fleet: Array<{ nodeId?: string; timestamp: string }> = [];
+        try {
+            fleet = meshTopicIndexFor(MeshRuntimeStore.getInstance().db)
+                .query(meshId, { writer: { scope: 'fleet' }, kinds: ['node_cloned'], tail: CLONE_LEDGER_LOOKBACK_CAP });
+        } catch { /* no index on this handle — local records only */ }
+        for (const entry of [...local, ...fleet]) {
             if (normalizeNodeIdKey(entry.nodeId) !== key) continue;
             // CLOCK-LOWER-BOUND (2026-09-21): the ledger `timestamp` is FOREIGN (stamped by
             // whichever node appended the `node_cloned` entry), so skew / an NTP step can put

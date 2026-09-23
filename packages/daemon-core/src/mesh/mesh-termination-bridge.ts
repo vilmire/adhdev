@@ -301,14 +301,13 @@ export async function recordMeshSessionTerminationStop(
     if (input.meshId && input.sessionId) logMeshSessionTerminated(input);
     if (!input.meshId || !input.sessionId || input.termination.requestedStop) return;
     try {
-        const { appendLedgerEntry } = await import('./mesh-ledger.js');
-        appendLedgerEntry(input.meshId, {
-            kind: 'session_stopped',
+        const { meshRecord } = await import('./mesh-record.js');
+        meshRecord(input.meshId, 'session_stopped', {
             ...(input.nodeId ? { nodeId: input.nodeId } : {}),
             sessionId: input.sessionId,
             ...(input.providerType ? { providerType: input.providerType } : {}),
             payload: buildMeshTerminationStopPayload(input),
-        });
+        }, { local: true });
     } catch (e: any) {
         LOG.warn('MeshTermination', `Failed to record termination stop for ${input.sessionId}: ${e?.message || e}`);
     }

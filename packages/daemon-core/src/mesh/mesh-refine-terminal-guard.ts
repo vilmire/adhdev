@@ -201,9 +201,9 @@ export async function decideRefineTerminalWriteFromLedger(args: {
     onReadError?: (message: string) => void;
 }): Promise<RefineTerminalDecision> {
     try {
-        const { readLedgerEntries } = await import('./mesh-ledger.js');
+        const { readLocalRecords } = await import('./mesh-local-records.js');
         const existing = findExistingRefineTerminal(
-            readLedgerEntries(args.meshId, { kind: ['task_completed', 'task_failed'] }),
+            readLocalRecords(args.meshId, { kind: ['task_completed', 'task_failed'], turnTerminals: false }),
             args.nodeId,
             args.jobId,
         );

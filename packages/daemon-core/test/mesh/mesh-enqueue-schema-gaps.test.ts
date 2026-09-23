@@ -15,7 +15,7 @@ import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
 
 // MESH-PRIMITIVES-GAPS WT-C: enqueue schema bundle — G6 (task priority), G7 (not_before
 // delayed execution), P3 (maxRetries exposure). G4 (duplicate detection) lives in the

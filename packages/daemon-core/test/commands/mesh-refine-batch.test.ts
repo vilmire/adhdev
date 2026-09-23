@@ -8,7 +8,7 @@ import { DaemonCommandRouter } from '../../src/commands/router'
 import { orderMeshRefineBatchNodes } from '../../src/mesh/mesh-refine-batch'
 import type { MeshRefineBatchNodeChangeArea } from '../../src/mesh/mesh-refine-batch'
 import { classifyBatchNodeConvergence } from '../../src/commands/router-refine'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records'
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 // ── Pure ordering unit tests (no git, no native bindings) ──────────────────
@@ -283,7 +283,7 @@ function waitForPlannedAcceptedEvent(meshId: string, jobId: string, timeoutMs = 
 async function waitForBatchLedger(meshId: string, jobId: string, timeoutMs = 90000): Promise<any> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const entries = readLedgerEntries(meshId)
+    const entries = readLocalRecords(meshId)
     const terminal = entries.find(entry =>
       (entry.kind === 'task_completed' || entry.kind === 'task_failed')
       && (entry.payload as any)?.refineJob?.batch === true
@@ -611,7 +611,7 @@ describe('batch_refine_mesh_nodes', () => {
       const terminal = await waitForBatchLedger(mesh.id, first.jobId)
       expect(terminal.kind).toBe('task_completed')
       // Exactly one dispatched + one terminal ledger entry for this batch job.
-      const entries = readLedgerEntries(mesh.id).filter(e => (e.payload as any)?.refineJob?.batch === true)
+      const entries = readLocalRecords(mesh.id).filter(e => (e.payload as any)?.refineJob?.batch === true)
       const dispatched = entries.filter(e => e.kind === 'task_dispatched' && (e.payload as any)?.refineJob?.jobId === first.jobId)
       const terminals = entries.filter(e => (e.kind === 'task_completed' || e.kind === 'task_failed') && (e.payload as any)?.refineJob?.jobId === first.jobId)
       expect(dispatched).toHaveLength(1)
