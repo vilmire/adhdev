@@ -2,13 +2,21 @@ import { existsSync } from 'fs';
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
+import { listMeshes } from '../config/mesh-config.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
 import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId, expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
-import { readMeshNodeDaemonId } from './mesh-node-identity.js';
+import { readMeshNodeDaemonId, readObjectRecord } from './mesh-node-identity.js';
 import { queuePendingMeshCoordinatorEvent, drainPendingMeshCoordinatorEvents } from './mesh-events-pending.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { getMeshWithCache, isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode } from './mesh-queue-assignment.js';
+import {
+    DEFAULT_AUTO_FF_SCAN_BASE_MS,
+    resolveAutoFastForwardScanBaseMs,
+    resolveAutoFastForwardScanMaxMs,
+    AUTO_FF_SCAN_BACKOFF_MULTIPLIER,
+    resolveAutoFastForwardCallTimeoutMs,
+} from './mesh-reconcile-config.js';
 
 // ---------------------------------------------------------------------------
 // Idle auto fast-forward throttle state
@@ -16,13 +24,30 @@ import { getMeshWithCache, isIdleSessionState, nodeHasActiveMeshWork, isLocalAut
 const IDLE_AUTO_FAST_FORWARD_THROTTLE_MS = 30 * 60 * 1000;
 const idleAutoFastForwardLastAttempt = new Map<string, number>();
 
-// Continuous-mode per-node scan cooldown (mode:"continuous" reconcile scan). The
-// reconcile tick fires every ~4s; fetching every connected peer that often would
-// hammer the network and each owning daemon's git. This cooldown throttles the
-// per-node continuous scan to at most once per window (default 45s), independent of
-// the 30-minute idle-edge throttle above (which stays the idle-edge cadence).
-const CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS = 45 * 1000;
-const continuousAutoFastForwardLastScan = new Map<string, number>();
+// Continuous-mode per-node scan cooldown (mode:"continuous" scan, now run by its OWN
+// scheduler — see startContinuousAutoFastForwardScheduler — NOT the 4s reconcile tick).
+//
+// P6 (2026-09-23 IPC-load audit, finding 6): this used to be a FIXED per-node cooldown
+// (45s), so a node that never has anything to fast-forward was re-polled with a P2P
+// dry-run every 45s forever. Measured: 15,177 of 16,040 logged P2P mesh sends over
+// ~3.5 days (94.6%, ~4,300/day). This is now an EXPONENTIAL BACKOFF per node: a
+// confirmed no-op round (dry-run says nothing to do, or the cheap git-status precheck
+// already shows nothing to do) grows the node's next-eligible time; any round that
+// finds real movement (or executes an ff) resets it back to the base interval. The
+// map's value is the NEXT time (ms epoch) this node is eligible to be scanned again —
+// not merely "last scanned at" — so a stale entry from a previous scan interval never
+// causes an early re-scan when the base/max tunables change at runtime (env override).
+interface AutoFastForwardScanState {
+    nextEligibleAtMs: number;
+    // Current backoff step width, in ms. Starts at the base interval; doubles on each
+    // consecutive no-op, capped at the configured max; resets to the base the moment a
+    // scan finds real movement or executes.
+    currentStepMs: number;
+}
+const continuousAutoFastForwardScanState = new Map<string, AutoFastForwardScanState>();
+// Legacy alias kept for the existing per-node-cooldown regression test's mental model
+// (still exercised via runContinuousAutoFastForwardScan — see mesh-auto-ff-remote-nodes.test.ts).
+const continuousAutoFastForwardLastScan = continuousAutoFastForwardScanState;
 
 // Workspace mutation lease. A git-mutating auto ff and the task-assignment path must
 // not both touch the same workspace concurrently (an ff mid-checkout while a task is
@@ -152,6 +177,34 @@ function remoteNodeIsConnected(components: DaemonComponents, node: any): boolean
  * both remote calls so the assignment path cannot dispatch a task onto this workspace
  * mid-ff.
  */
+// Sentinel thrown by withCallTimeout on expiry, distinguished from a real transport
+// rejection so callers can log/backoff differently for "peer never answered" vs
+// "peer answered with an error".
+class AutoFastForwardCallTimeoutError extends Error {
+    constructor(ms: number) {
+        super(`auto fast-forward call timed out after ${ms}ms`);
+        this.name = 'AutoFastForwardCallTimeoutError';
+    }
+}
+
+/** Race a dispatchMeshCommand call against a fixed budget so a slow/degraded peer
+ *  cannot stall the CALLER (the continuous scheduler tick) for other nodes. This
+ *  does NOT cancel the underlying P2P request — dispatchMeshCommand has no cancel
+ *  primitive at this layer — it only stops the SCANNER from waiting on it. A late
+ *  reply after the timeout is simply discarded here. Used for the continuous scan's
+ *  dry-run precheck; the idle-edge path and the TOCTOU execute keep the full
+ *  transport timeout, since a mutating execute racing its own cancellation would be
+ *  the wrong trade (better to wait than to risk a lease held past an abandoned
+ *  await, though the lease is always released via `finally` regardless). */
+function withCallTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new AutoFastForwardCallTimeoutError(timeoutMs)), timeoutMs);
+        if (typeof (timer as any)?.unref === 'function') (timer as any).unref();
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function delegateRemoteAutoFastForward(components: DaemonComponents, args: {
     meshId: string;
     nodeId: string;
@@ -160,10 +213,14 @@ async function delegateRemoteAutoFastForward(components: DaemonComponents, args:
     workspace: string;
     policy: { maxBehind?: number; requireCleanSubmodules: boolean };
     trigger: string;
-}): Promise<void> {
+    // Continuous scan only: bounds the dry-run round-trip so one slow peer cannot
+    // stall the scanner for every OTHER node. Omitted (idle-edge path) = no timeout,
+    // matching historical behavior exactly.
+    dryRunTimeoutMs?: number;
+}): Promise<{ outcome: 'executed' | 'available' | 'no_op' | 'skipped' | 'error' }> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
-    if (!dispatchMeshCommand) return;
-    if (!acquireAutoFastForwardLease(args.workspace)) return; // another ff already mutating this workspace
+    if (!dispatchMeshCommand) return { outcome: 'skipped' };
+    if (!acquireAutoFastForwardLease(args.workspace)) return { outcome: 'skipped' }; // another ff already mutating this workspace
     const submoduleIgnorePaths = readNodeSubmoduleIgnorePaths(args.node);
     const mesh = getMeshWithCache(components, args.meshId);
     const baseArgs: Record<string, unknown> = {
@@ -182,15 +239,23 @@ async function delegateRemoteAutoFastForward(components: DaemonComponents, args:
     };
     try {
         // Fresh remote dry-run (owning daemon re-reads live git state) — TOCTOU re-check.
-        const remoteDry = await dispatchMeshCommand(args.daemonId, 'fast_forward_mesh_node', {
+        const dryRunCall = dispatchMeshCommand(args.daemonId, 'fast_forward_mesh_node', {
             ...baseArgs,
             execute: false,
             dryRun: true,
-        }) as { code?: string; allowed?: boolean; current?: any } | null;
-        if (!dryRunSatisfiesAutoFastForwardPolicy(remoteDry, args.policy)) return;
+        }) as Promise<{ code?: string; allowed?: boolean; current?: any } | null>;
+        const remoteDry = await (args.dryRunTimeoutMs ? withCallTimeout(dryRunCall, args.dryRunTimeoutMs) : dryRunCall);
+        if (!dryRunSatisfiesAutoFastForwardPolicy(remoteDry, args.policy)) {
+            // Whether the dry-run says "nothing to do" or "blocked by a real
+            // condition" (dirty, over maxBehind, ahead>0, …), both back off the
+            // scanner the same way — the policy gate itself already logs specifics
+            // on the manual/idle paths, so this scan-scheduler layer only needs to
+            // know "not eligible to execute right now".
+            return { outcome: 'no_op' };
+        }
         // Re-check eligibility right before mutating: a task may have been dispatched to
         // this node between the scan and now (busy → skip, not an error).
-        if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId)) return;
+        if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId)) return { outcome: 'skipped' };
         const executed = await dispatchMeshCommand(args.daemonId, 'fast_forward_mesh_node', {
             ...baseArgs,
             execute: true,
@@ -198,9 +263,13 @@ async function delegateRemoteAutoFastForward(components: DaemonComponents, args:
         }) as { executed?: boolean; postStatus?: any; code?: string } | null;
         if (executed?.executed === true) {
             LOG.info('MeshFastForward', `Remote auto fast-forward executed for node ${args.nodeId} (daemon ${String(args.daemonId).slice(0, 12)}, trigger ${args.trigger})`);
+            return { outcome: 'executed' };
         }
+        return { outcome: 'available' };
     } catch (e: any) {
+        const isTimeout = e instanceof AutoFastForwardCallTimeoutError;
         LOG.warn('MeshFastForward', `Remote auto fast-forward delegation failed for ${args.nodeId}: ${e?.message || e}`);
+        return { outcome: isTimeout ? 'skipped' : 'error' };
     } finally {
         releaseAutoFastForwardLease(args.workspace);
     }
@@ -288,17 +357,99 @@ export async function maybeAutoFastForwardIdleNode(components: DaemonComponents,
     await delegateRemoteAutoFastForward(components, { meshId: args.meshId, nodeId: args.nodeId, node, daemonId, workspace, policy, trigger: 'idle_auto' });
 }
 
+// How stale a peer's last-reported git status may be before the cheap precheck
+// below refuses to rely on it and falls through to a real P2P dry-run. Wider than
+// the scan's own base interval so a node currently backed off (scanned less often
+// than the base) doesn't force a dry-run purely because its cached status aged out
+// between scans; narrower than the max backoff so a truly stale peer eventually
+// gets a fresh dry-run regardless of what the cache claims.
+const AUTO_FF_GIT_PRECHECK_MAX_AGE_MS = 15 * 60_000; // 15m
+
 /**
- * Continuous-mode remote auto fast-forward scan (mode:"continuous" only). Called by
- * the reconcile tick BEFORE queue claim. Scans every connected, eligible, non-worktree
- * remote node of every mesh this daemon hosts and delegates an ff to its owning daemon
- * when it is online/clean/behind within policy. Per-node cooldown + the workspace lease
- * keep the ~4s reconcile cadence from hammering peers or racing an assignment.
+ * Cheap "has the tracked ref moved?" precheck using data the daemon ALREADY has —
+ * the peer's last-reported git status carried on the mesh node object. Reads
+ * `node.git` first, falling back to `node.cachedStatus.git` — the SAME precedence
+ * `resolveEffectiveNodeGit` in mesh-node-identity.ts uses for node health, so this
+ * precheck agrees with the rest of the mesh layer about which telemetry is "the
+ * node's git status right now". No network call.
+ *
+ * Returns `true` only when the cached status POSITIVELY shows nothing to do: a
+ * FRESH, RECENT upstream check with ahead=0 and behind=0 — the exact
+ * fast_forward_available precondition already enforced by
+ * dryRunSatisfiesAutoFastForwardPolicy, just read from cache instead of a live
+ * dry-run. Any other case (stale/unchecked/unavailable status, missing counters,
+ * or an actual ahead/behind) returns `false` so the caller falls through to the
+ * real P2P dry-run — this precheck may only SKIP a call, never substitute a
+ * positive "go ahead and ff" decision, so a false-negative here just costs one
+ * extra (now-backed-off, not per-tick) dry-run rather than a missed fast-forward.
+ */
+function cachedGitStatusShowsNoMovement(node: any, nowMs: number): boolean {
+    const directGit = readObjectRecord(node?.git);
+    const git = Object.keys(directGit).length > 0
+        ? directGit
+        : readObjectRecord(readObjectRecord(node?.cachedStatus).git);
+    if (Object.keys(git).length === 0) return false;
+    if (git.upstreamStatus !== 'fresh') return false;
+    const fetchedAt = Number(git.upstreamFetchedAt);
+    if (!Number.isFinite(fetchedAt) || fetchedAt <= 0) return false;
+    if (nowMs - fetchedAt > AUTO_FF_GIT_PRECHECK_MAX_AGE_MS) return false;
+    return git.ahead === 0 && git.behind === 0;
+}
+
+function autoFastForwardScanCooldownKey(meshId: string, nodeId: string): string {
+    return `${meshId}:${nodeId}`;
+}
+
+/** Whether `key` is currently within its backoff window. Does not mutate state —
+ *  separate from noteAutoFastForwardScanResult so a caller can check-then-conditionally-
+ *  scan without prematurely consuming a state transition. */
+function isAutoFastForwardScanBackedOff(key: string, nowMs: number): boolean {
+    const state = continuousAutoFastForwardScanState.get(key);
+    return !!state && nowMs < state.nextEligibleAtMs;
+}
+
+/** Record the outcome of a scan round for `key` and update its backoff step.
+ *  no_op → grow the step (doubling, capped at the configured max); anything else
+ *  (executed / available / skipped / error) → reset to the base interval. `skipped`
+ *  resets rather than backs off deliberately: a skip (busy node, lease held, peer
+ *  disconnected moments ago) is not evidence the upstream hasn't moved, so treating
+ *  it as a no-op would silently extend staleness for a reason unrelated to git
+ *  state. */
+function noteAutoFastForwardScanResult(key: string, outcome: 'executed' | 'available' | 'no_op' | 'skipped' | 'error' | 'precheck_skip', nowMs: number): void {
+    const baseMs = resolveAutoFastForwardScanBaseMs();
+    const maxMs = resolveAutoFastForwardScanMaxMs();
+    const prev = continuousAutoFastForwardScanState.get(key);
+    if (outcome === 'no_op' || outcome === 'precheck_skip') {
+        const nextStep = Math.min(maxMs, Math.max(baseMs, (prev?.currentStepMs ?? baseMs) * AUTO_FF_SCAN_BACKOFF_MULTIPLIER));
+        continuousAutoFastForwardScanState.set(key, { nextEligibleAtMs: nowMs + nextStep, currentStepMs: nextStep });
+        return;
+    }
+    continuousAutoFastForwardScanState.set(key, { nextEligibleAtMs: nowMs + baseMs, currentStepMs: baseMs });
+}
+
+/**
+ * Continuous-mode remote auto fast-forward scan (mode:"continuous" only). Runs on
+ * its OWN scheduler (startContinuousAutoFastForwardScheduler below) — NOT the 4s
+ * reconcile tick; the tick never awaits this. Scans every connected, eligible,
+ * non-worktree remote node of the given mesh and delegates an ff to its owning
+ * daemon when it is online/clean/behind within policy. A per-node EXPONENTIAL
+ * BACKOFF (grows on confirmed no-op, resets on real movement — see
+ * noteAutoFastForwardScanResult) plus the workspace lease keep this from hammering
+ * peers or racing an assignment.
+ *
+ * Before issuing a P2P dry-run, a cheap in-memory precheck
+ * (cachedGitStatusShowsNoMovement) checks the peer's own last-reported git status
+ * for a fresh, recent, ahead=0/behind=0 reading — if so, the round is treated as a
+ * confirmed no-op WITHOUT a network call at all.
  *
  * Ephemeral worktree nodes are DELIBERATELY excluded from the continuous catch-up: a
  * Refinery worktree branch must not be silently advanced by a background scan (only its
  * own idle-edge ff, which the coordinator drives intentionally). Non-worktree base
  * nodes are the sole continuous target.
+ *
+ * Kept callable per-mesh (unchanged signature) for the existing regression suite
+ * (mesh-auto-ff-remote-nodes.test.ts) and for the scheduler, which calls it once per
+ * hosted mesh per scheduler tick.
  */
 export async function runContinuousAutoFastForwardScan(components: DaemonComponents, mesh: any): Promise<void> {
     if (!components.dispatchMeshCommand) return; // standalone has no remote nodes to scan
@@ -308,6 +459,12 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
     if (!meshId) return;
     const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
     const now = Date.now();
+    const dryRunTimeoutMs = resolveAutoFastForwardCallTimeoutMs();
+    // One node at a time (sequential, not Promise.all): this scan already runs off
+    // the reconcile tick on its own cadence, so there is no per-tick deadline
+    // forcing parallelism, and going one-at-a-time keeps concurrent P2P load
+    // (and workspace-lease contention) bounded to whatever the caller's own
+    // scheduler cadence allows rather than bursting every node in the mesh at once.
     for (const node of nodes) {
         const nodeId = normalizeMeshNodeId(node);
         if (!nodeId) continue;
@@ -320,12 +477,68 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
         if (!daemonId) continue;
         if (!nodeIsAutoFastForwardEligible(components, meshId, nodeId, node)) continue;
         if (!remoteNodeIsConnected(components, node)) continue;
-        const cooldownKey = `${meshId}:${nodeId}`;
-        const lastScan = continuousAutoFastForwardLastScan.get(cooldownKey) || 0;
-        if (now - lastScan < CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS) continue;
-        continuousAutoFastForwardLastScan.set(cooldownKey, now);
-        await delegateRemoteAutoFastForward(components, { meshId, nodeId, node, daemonId, workspace, policy, trigger: 'reconcile_auto' });
+        const cooldownKey = autoFastForwardScanCooldownKey(meshId, nodeId);
+        if (isAutoFastForwardScanBackedOff(cooldownKey, now)) continue;
+        // Cheap precheck FIRST — no network call, no backoff-map write races with a
+        // concurrent scan of the same key (there is none; this loop is sequential).
+        if (cachedGitStatusShowsNoMovement(node, now)) {
+            noteAutoFastForwardScanResult(cooldownKey, 'precheck_skip', now);
+            LOG.debug('MeshFastForward', `Continuous auto-ff precheck: ${nodeId} cached git status shows no movement — skipping dry-run`);
+            continue;
+        }
+        const result = await delegateRemoteAutoFastForward(components, { meshId, nodeId, node, daemonId, workspace, policy, trigger: 'reconcile_auto', dryRunTimeoutMs });
+        noteAutoFastForwardScanResult(cooldownKey, result.outcome, Date.now());
     }
+}
+
+interface AutoFastForwardSchedulerHandle {
+    stop(): void;
+}
+
+/**
+ * Start the continuous auto-fast-forward scan on its OWN timer — independent of,
+ * and never awaited by, the 4s mesh reconcile tick (P6, 2026-09-23 IPC-load audit).
+ * Runs `runContinuousAutoFastForwardScan` for every mesh this daemon hosts, at a
+ * fixed poll cadence; the actual per-node work rate is governed by each node's own
+ * backoff state (see noteAutoFastForwardScanResult), not by this timer's period —
+ * the timer only needs to be at least as frequent as the SHORTEST possible backoff
+ * step (the base interval) so a freshly-reset node is picked up promptly.
+ *
+ * `listMeshesFn` is injectable for tests; defaults to the real config reader.
+ */
+export function startContinuousAutoFastForwardScheduler(
+    components: DaemonComponents,
+    listMeshesFn: () => any[] = listMeshes,
+): AutoFastForwardSchedulerHandle {
+    let running = false;
+    const pollMs = Math.max(1_000, Math.min(resolveAutoFastForwardScanBaseMs(), DEFAULT_AUTO_FF_SCAN_BASE_MS));
+    const tick = () => {
+        if (running) return; // never overlap scans
+        running = true;
+        void (async () => {
+            try {
+                const meshes = listMeshesFn();
+                for (const mesh of meshes) {
+                    try {
+                        await runContinuousAutoFastForwardScan(components, mesh);
+                    } catch (e: any) {
+                        LOG.warn('MeshFastForward', `Continuous auto fast-forward scheduler failed for mesh ${mesh?.id}: ${e?.message || e}`);
+                    }
+                }
+            } catch (e: any) {
+                LOG.warn('MeshFastForward', `Continuous auto fast-forward scheduler tick failed: ${e?.message || e}`);
+            } finally {
+                running = false;
+            }
+        })();
+    };
+    const timer = setInterval(tick, pollMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    return {
+        stop() {
+            clearInterval(timer);
+        },
+    };
 }
 
 /**
