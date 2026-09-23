@@ -211,8 +211,11 @@ function ringCoversWriterStart(rows: readonly Row[], ownerWriterId: string | und
  * The topic is defined on THIS node with the same policy the daemon uses
  * (`sessionTranscriptPolicy`) because `topicSchemaHash` covers the policy —
  * a divergent one is rejected peer-side as `ERR_SCHEMA_MISMATCH`, not silently
- * tolerated. `TranscriptWorkerNode`'s ring-only interlock independently refuses
- * anything non-ring here.
+ * tolerated. `TranscriptWorkerNode`'s browser-safe-finality interlock
+ * (`browser-reject-authority.ts`) independently refuses any policy it has not
+ * reasoned about being safe here — `sessionTranscriptPolicy()`'s current
+ * shape (`full` retention, `subscribe-only` replication, G2b) is one of the
+ * two shapes it accepts.
  */
 export function subscribeSessionTranscript(
     node: TranscriptWorkerNode,
@@ -261,6 +264,14 @@ export function subscribeSessionTranscript(
         // `||=`, never `=`: an armed flag must survive a later reset that
         // happens to arrive with a complete ring, because the gap the earlier
         // reset opened does not heal.
+        //
+        // ★ G2b note: `session.*.transcript` is now `full` retention
+        // (`topic-addressing.ts#sessionTranscriptPolicy`), bounded by the
+        // daemon's `writer-gc.ts` prune sweep rather than ring eviction. A
+        // `reset:true` SNAP can therefore also arrive after a prune moved the
+        // tail window's floor forward — `ringCoversWriterStart` below still
+        // answers the right question either way ("does this window reach the
+        // writer's seq 1"), so no logic change was needed, only this note.
         if (reset && !ringCoversWriterStart(rows, options.ownerWriterId)) pendingOmittedBefore = true;
 
         // ── Why a reset collapses to ONE emission ──────────────────────────

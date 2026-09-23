@@ -86,9 +86,10 @@ scope.onmessage = (ev) => {
         writerId,
         openStorage: () => openOpfsStorage(sessionKey, writerId),
         // Satisfies seqscribe's `finalityAuthority` presence gate without any
-        // key material, and arms the ring-only interlock. See
-        // `browser-reject-authority.ts` — this is what lets a browser define a
-        // content-class transcript topic with no fleet secret.
+        // key material, and arms the browser-safe-finality interlock (ring OR
+        // full+subscribe-only — see `browser-reject-authority.ts`). This is
+        // what lets a browser define a content-class transcript topic with no
+        // fleet secret.
         authority: browserRejectAuthority,
     });
     activeNode = node;

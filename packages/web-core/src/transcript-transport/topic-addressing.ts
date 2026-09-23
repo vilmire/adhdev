@@ -61,11 +61,24 @@ export const SESSION_TRANSCRIPT_RING = 500;
  * `AuthorityHooks.verifyFinality` *exists* — so the browser supplies the
  * non-signing `browserRejectAuthority` and this policy stays byte-identical to
  * the daemon's.
+ *
+ * ★ G2b (landed 2026-09-24): retention is now `{mode:'full'}`, matching
+ * daemon-core exactly. The earlier revert's blocker (`subs.ts`'s
+ * `view:'tail'` throwing `ERR_UNKNOWN_VIEW` for any non-ring topic) is
+ * resolved upstream — `tail` now also serves `full` + `subscribe-only`
+ * topics, which is what both this file's own live delivery path
+ * (`transcript-session-subscription.ts`) and the daemon's use. This file's
+ * whole enforcement mechanism is "stay byte-identical to the daemon's
+ * policy, checked by a structural-equality test" (`browser-reject-
+ * authority.test.ts`) — see `topics.ts#sessionTranscriptPolicy` for the full
+ * account, including why a browser-side hard cap is not needed (only the
+ * daemon-side `writer-gc.ts` prunes; the browser never accumulates durable
+ * rows of its own).
  */
-export function sessionTranscriptPolicy(ringSize: number = SESSION_TRANSCRIPT_RING): TopicPolicy {
+export function sessionTranscriptPolicy(): TopicPolicy {
     return {
         kind: 'append',
-        retention: { mode: 'ring', size: ringSize },
+        retention: { mode: 'full' },
         replication: 'subscribe-only',
         access: 'content',
         finalityAuthority: ADHDEV_AUTHORITY_ID,
