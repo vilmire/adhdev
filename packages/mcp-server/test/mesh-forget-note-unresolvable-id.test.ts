@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { meshRecordNote, meshForgetNote } from '../src/tools/mesh-tools.js';
 import { getLedgerDir } from '@adhdev/daemon-core';
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 // MISSION-UPSERT-SILENT-CREATE: a note_id is a specific, singular target (unlike text,
 // which can legitimately match zero notes). Previously an unresolved note_id (e.g. a
@@ -21,9 +22,18 @@ function nextMeshId(): string {
 }
 
 function buildCtx(meshId: string): any {
-  // meshRecordNote/meshForgetNote only read ctx.mesh.id (plus optional identity fields
-  // for note attribution, none required) — a minimal mesh is enough.
-  return { mesh: { id: meshId }, transport: {} };
+  // meshRecordNote/meshForgetNote read ctx.mesh.id and (C-W8) reach the daemon's
+  // note_upsert / note_forget over the transport — answered here by the real
+  // daemon-side handlers against this process's store.
+  return {
+    mesh: { id: meshId },
+    transport: {
+      command: async (command: string, args: Record<string, unknown> = {}) => {
+        if (isTurnIpcCommand(command)) return answerTurnIpc(command, args);
+        throw new Error(`unexpected command: ${command}`);
+      },
+    },
+  };
 }
 
 test.after(() => {

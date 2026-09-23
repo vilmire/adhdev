@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshSendTask, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, readLedgerEntries } from '@adhdev/daemon-core';
-import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
@@ -35,7 +36,6 @@ const COORDINATOR_DAEMON = 'daemon-coordinator';
 
 function cleanupMesh(meshId: string): void {
     __clearMeshQueueForTests(meshId);
-    __clearDirectDispatchesForTests(meshId);
     __clearMeshLedgerForTests(meshId);
     __clearMeshPendingEventsForTests(meshId);
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -94,6 +94,8 @@ function createLocalIdleCtx(meshId: string, opts: { agentCommandSucceeds?: boole
         if (command === 'get_pending_mesh_events') return { events: [] };
         if (command === 'get_status_metadata') return { success: true, status: { sessions: [idleSession] } };
         if (command === 'agent_command') return { success: agentCommandSucceeds };
+        // C-W8: the attempt open / deliver / close goes through the daemon's turn IPC.
+        if (isTurnIpcCommand(command)) return answerTurnIpc(command, _args);
         throw new Error(`unexpected local command: ${command}`);
     };
     transport.meshCommand = async (_daemonId, command) => {

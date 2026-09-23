@@ -48,7 +48,6 @@ import {
     ipcDispatchToRemoteAgent,
     isLocalControlPlaneNode,
     isMeshNodeHealthLaunchable,
-    markStaleDirectDispatches,
     meshNodeIdMatches,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
@@ -1219,9 +1218,6 @@ export async function meshViewQueue(
             ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
             directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         }
-        // Mark dispatched entries with no session activity after 30 min as stale.
-        markStaleDirectDispatches(ctx.mesh.id);
-        directDispatches = getActiveDirectDispatches(ctx.mesh.id);
         const activeWorkEvidence = buildMeshActiveWork({
             meshId: ctx.mesh.id,
             queue: fullQueue,

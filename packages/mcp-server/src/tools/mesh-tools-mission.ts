@@ -17,13 +17,9 @@
 // not something this file's migration should paper over with a guess:
 //   - meshRecordNote / meshForgetNote: write/tombstone `coordinator_operating_note`
 //     ledger entries carrying a free-text `text` field. That is CONTENT — it
-//     cannot go through `mesh_record`'s scalar ProjectedScalars allow-list (see
-//     turn-ipc.ts's file header) and has no IPC command of its own yet. A
-//     REQUESTED EDIT for the owner: route operating notes through
-//     `mesh.<id>.handoff` (C10-1's precedent for free-text mission/graph state)
-//     with a dedicated IPC command, or an explicit decision to keep this one
-//     in-process as a deliberate carve-out. Left calling `appendLedgerEntry`/
-//     `tombstoneOperatingNote` (still live daemon-core exports) unchanged.
+//     cannot go through `mesh_record`'s scalar ProjectedScalars allow-list.
+//     C-W8: routed over the dedicated `note_upsert` / `note_forget` local IPC
+//     commands (the 2026-09-24 decision) to the daemon's mesh_operating_notes.
 //   - meshReconcileLedger: P2P ledger-slice reconciliation
 //     (`readLedgerSliceFromStore`/`appendRemoteLedgerEntries`/
 //     `buildMeshLedgerReplicaEvidence`) — C7-6 parity-system territory, a
@@ -52,13 +48,12 @@ import {
     readString,
     refreshMeshFromDaemon,
     slimLedgerPayload,
-    tombstoneOperatingNote,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
-import { missionUpsert, missionQuery, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { missionUpsert, missionQuery, noteForget, noteUpsert, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import type { MeshMissionStatusValue } from '@adhdev/mesh-shared';
 
 export async function meshTaskHistory(
@@ -192,24 +187,28 @@ export async function meshRecordNote(
     // future coordinator can attribute the note. Session id is the most precise;
     // fall back to the daemon/hostname.
     const sourceCoordinator = ctx.coordinatorSessionId || ctx.localDaemonId || ctx.coordinatorHostname || undefined;
-    const entry = appendLedgerEntry(mesh.id, {
-        kind: 'coordinator_operating_note',
-        ...(sourceCoordinator ? { sessionId: sourceCoordinator } : {}),
-        payload: {
+    // C-W8: the note is recorded by the daemon that owns mesh_operating_notes
+    // (`note_upsert` over local IPC) — the event ledger no longer holds notes.
+    let noteId: string;
+    try {
+        const recorded = await noteUpsert(ctx.transport, {
+            meshId: mesh.id,
             text,
             ...(category ? { category } : {}),
-            createdAt,
-            ...(sourceCoordinator ? { sourceCoordinator } : {}),
             ...(pinned ? { pinned } : {}),
             ...(expiresAt ? { expiresAt } : {}),
             ...(supersedes ? { supersedes } : {}),
             ...(subjectKey ? { subjectKey } : {}),
-        },
-    });
+            ...(sourceCoordinator ? { sourceCoordinator } : {}),
+        });
+        noteId = recorded.noteId;
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e), ...(e instanceof TurnIpcCommandError ? { code: e.code } : {}) }, null, 2);
+    }
     return JSON.stringify({
         success: true,
         meshId: mesh.id,
-        noteId: entry.id,
+        noteId,
         recorded: {
             text,
             category: category ?? null,
@@ -219,7 +218,7 @@ export async function meshRecordNote(
             supersedes: supersedes ?? null,
             subjectKey: subjectKey ?? null,
         },
-        note: 'Recorded to the mesh ledger. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
+        note: 'Recorded to the mesh operating notes. Future coordinators on this mesh will see it under "## Operating Notes" at launch.',
     }, null, 2);
 }
 
@@ -234,7 +233,9 @@ export async function meshForgetNote(
         return JSON.stringify({ success: false, error: 'note_id or text required' }, null, 2);
     }
     try {
-        const { tombstone, matched } = tombstoneOperatingNote(mesh.id, {
+        // C-W8: retracted on the daemon that owns mesh_operating_notes (`note_forget`).
+        const { tombstoneId, matched } = await noteForget(ctx.transport, {
+            meshId: mesh.id,
             ...(noteId ? { noteId } : {}),
             ...(text ? { text } : {}),
             ...(typeof args.reason === 'string' && args.reason.trim() ? { reason: args.reason.trim() } : {}),
@@ -243,14 +244,14 @@ export async function meshForgetNote(
         // text (which can legitimately match zero notes, e.g. retracting-by-content when
         // nothing currently matches that wording). A caller that supplied note_id and got
         // matched:0 almost always passed a truncated/wrong id (the tombstone is still
-        // recorded either way — see tombstoneOperatingNote's doc comment — but the caller
+        // recorded either way — see forgetOperatingNote's doc comment — but the caller
         // needs to know their id did NOT hit a live note). success:false here means "the id
         // you gave didn't match anything", distinct from the try/catch failure path below.
         const idTargetMissed = Boolean(noteId) && matched === 0;
         return JSON.stringify({
             success: !idTargetMissed,
             meshId: mesh.id,
-            tombstoneId: tombstone.id,
+            tombstoneId,
             forgot: { noteId: noteId ?? null, text: text || null, matched },
             ...(idTargetMissed ? { code: 'note_not_found' } : {}),
             note: matched > 0
