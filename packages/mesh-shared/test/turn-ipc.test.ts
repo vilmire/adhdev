@@ -9,16 +9,22 @@ import {
     decodeNoteUpsertResponse,
     TURN_IPC_ERROR_CODES,
     TURN_IPC_PROTOCOL_VERSION,
+    decodeLedgerQueryRequest,
+    decodeLedgerQueryResponse,
     decodeMeshIndexQueryRequest,
     decodeMeshIndexQueryResponse,
     decodeMeshRecordRequest,
     decodeMeshRecordResponse,
+    decodeMissionListQueryRequest,
+    decodeMissionListQueryResponse,
     decodeMissionQueryRequest,
     decodeMissionQueryResponse,
     decodeMissionUpsertRequest,
     decodeMissionUpsertResponse,
     decodeOperatorStatusRequest,
     decodeOperatorStatusResponse,
+    decodeToolCallRecordRequest,
+    decodeToolCallRecordResponse,
     decodeTurnCancelRequest,
     decodeTurnCancelResponse,
     decodeTurnObserveRequest,
@@ -28,6 +34,26 @@ import {
     isMeshRecordPayload,
     isTurnIpcCommand,
     isTurnIpcError,
+    decodeRecordLocalRequest,
+    decodeRecordLocalResponse,
+    decodeQueueQueryRequest,
+    decodeQueueQueryResponse,
+    decodeQueueEnqueueRequest,
+    decodeQueueEnqueueResponse,
+    decodeQueueEnqueueGraphRequest,
+    decodeQueueEnqueueGraphResponse,
+    decodeQueueCancelRequest,
+    decodeQueueCancelResponse,
+    decodeQueueRequeueRequest,
+    decodeQueueRequeueResponse,
+    decodeDirectDispatchRecordRequest,
+    decodeDirectDispatchRecordResponse,
+    decodeGraphAuditRecordRequest,
+    decodeGraphAuditRecordResponse,
+    decodeActiveWorkQueryRequest,
+    decodeActiveWorkQueryResponse,
+    decodeRecoveryContextQueryRequest,
+    decodeRecoveryContextQueryResponse,
 } from '../src/turn-ipc'
 
 // Content-boundary contract (design §5 C2): every request/response in this
@@ -54,16 +80,26 @@ describe('turn-ipc — command registry', () => {
     // pattern is the same one C-W2's report used for its own count changes.
     // C-W8: note_upsert/note_forget added per the 2026-09-24 C-W6b decision —
     // operating-note text is free text like a mission goal (local IPC only).
-    it('declares exactly ten commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(10)
+    // C-W9b (2026-09-24 14:00 stamp "C-W9"): tool_call_record/ledger_query/
+    // mission_list_query added — the remaining in-process daemon-core calls
+    // this workstream closes (rate-limit counter, general ledger browse,
+    // widened mission-list projection). Ten became thirteen.
+    // C-W9a: the event ledger retired and the mcp-server's remaining in-process
+    // store access (record appends, queue mutations/reads, active work, recovery
+    // hints) moved behind ten more commands. Thirteen became twenty-three.
+    it('declares exactly twenty-three commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(23)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
-            'mesh_index_query', 'mesh_record', 'mission_query', 'mission_upsert',
+            'active_work_query', 'direct_dispatch_record', 'graph_audit_record',
+            'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
             'note_forget', 'note_upsert',
-            'operator_status', 'turn_cancel', 'turn_observe', 'turn_query',
+            'operator_status', 'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
+            'record_local', 'recovery_context_query',
+            'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the ten names', () => {
+    it('isTurnIpcCommand accepts only the twenty-three names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -366,5 +402,170 @@ describe('turn-ipc — note_upsert / note_forget (C-W8)', () => {
         expect(decodeNoteForgetRequest({ v: 1, meshId: 'm1' })).toBeNull()
         expect(decodeNoteForgetResponse({ matched: 2, tombstoneId: 't1' })).not.toBeNull()
         expect(decodeNoteForgetResponse({ matched: -1, tombstoneId: 't1' })).toBeNull()
+    })
+})
+
+describe('turn-ipc — tool_call_record (C-W9b)', () => {
+    it('decodes a request and rejects an unknown callerRole', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', tool: 'mesh_status', sessionId: 's1', callerRole: 'coordinator' as const }
+        expect(decodeToolCallRecordRequest(req)).toEqual(req)
+        expect(decodeToolCallRecordRequest({ ...req, callerRole: 'worker' })).toBeNull()
+    })
+
+    it('decodes a request with no sessionId (unknown caller)', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', tool: 'mesh_status', callerRole: 'unknown' as const }
+        expect(decodeToolCallRecordRequest(req)).toEqual(req)
+    })
+
+    it('decodes the response and rejects a negative callsInWindow', () => {
+        expect(decodeToolCallRecordResponse({ rateLimitExceeded: false, callsInWindow: 0, advisory: null })).not.toBeNull()
+        expect(decodeToolCallRecordResponse({ rateLimitExceeded: true, callsInWindow: -1, advisory: null })).toBeNull()
+    })
+})
+
+describe('turn-ipc — ledger_query (C-W9b)', () => {
+    it('decodes a request with kind/since/node/tail filters', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', kind: ['task_dispatched', 'task_failed'], since: '2026-09-24T00:00:00.000Z', node: 'mach_alpha', tail: 50, includeSummary: true }
+        expect(decodeLedgerQueryRequest(req)).toEqual(req)
+    })
+
+    it('rejects an empty kind array (meaningless filter)', () => {
+        expect(decodeLedgerQueryRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', kind: [] })).toBeNull()
+    })
+
+    it('decodes a response entry with an unbounded JSON payload (local IPC, not the mesh_record boundary)', () => {
+        const res = {
+            entries: [{
+                id: 'e1', meshId: 'm1', timestamp: '2026-09-24T00:00:00.000Z', kind: 'magi_synthesis',
+                payload: { nested: { deep: ['anything', 1, true, null] }, question: 'x'.repeat(500) },
+            }],
+        }
+        expect(decodeLedgerQueryResponse(res)).toEqual(res)
+    })
+
+    it('decodes a response with the optional summary attached', () => {
+        const res = {
+            entries: [],
+            summary: {
+                meshId: 'm1', totalEntries: 0, taskDispatched: 0, taskCompleted: 0, taskFailed: 0, taskStalled: 0,
+                sessionLaunched: 0, checkpointCreated: 0, lastActivityAt: null, recentFailures: 0,
+            },
+        }
+        expect(decodeLedgerQueryResponse(res)).toEqual(res)
+    })
+
+    it('rejects an entry missing a required field', () => {
+        expect(decodeLedgerQueryResponse({ entries: [{ id: 'e1', meshId: 'm1', kind: 'x', payload: {} }] })).toBeNull()
+    })
+})
+
+describe('turn-ipc — mission_list_query (C-W9b)', () => {
+    it('decodes a request with every option', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', statuses: ['active'] as const, verbose: true, includeMagi: true, withStats: true, limit: 10, historyIdLimit: 5 }
+        expect(decodeMissionListQueryRequest(req)).toEqual(req)
+    })
+
+    it('decodes a verbose (full-goal) mission row', () => {
+        const res = {
+            missions: [{
+                id: 'mission-1', meshId: 'm1', title: 't', goal: 'the goal',
+                status: 'active' as const,
+                tasks: { total: 1, pending: 1, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null },
+            }],
+            historyFold: null, truncated: false, matched: 1,
+        }
+        expect(decodeMissionListQueryResponse(res)).toEqual(res)
+    })
+
+    it('decodes a compact (goalPreview) mission row with stats and a history fold', () => {
+        const res = {
+            missions: [{
+                id: 'mission-1', meshId: 'm1', title: 't', goalPreview: 'preview', goalTruncated: true,
+                status: 'completed' as const, source: 'magi' as const,
+                tasks: { total: 2, pending: 0, assigned: 0, completed: 2, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: '2026-09-24T00:00:00.000Z' },
+                stats: { missionId: 'mission-1', taskCount: 2, completed: 2, failed: 0, totalDurationMs: 1000, wallClockMs: 500, retries: 0, incompleteTaskIds: [] },
+            }],
+            historyFold: { count: 3, byStatus: { completed: 2, abandoned: 1 }, missionIds: ['m1', 'm2'], note: 'folded' },
+            truncated: true, matched: 30, overflowIds: ['m3'],
+        }
+        expect(decodeMissionListQueryResponse(res)).toEqual(res)
+    })
+
+    it('rejects a mission row carrying BOTH goal and goalPreview (exactly one shape)', () => {
+        const bad = {
+            missions: [{
+                id: 'mission-1', meshId: 'm1', title: 't', goal: 'g', goalPreview: 'p', goalTruncated: false,
+                status: 'active' as const,
+                tasks: { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null },
+            }],
+            historyFold: null, truncated: false, matched: 1,
+        }
+        expect(decodeMissionListQueryResponse(bad)).toBeNull()
+    })
+})
+
+describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
+    const v = TURN_IPC_PROTOCOL_VERSION
+    const row = { id: 't-1', status: 'pending', message: 'free text is local IPC' }
+
+    it('record_local: nested free-form payload accepted; kind must be an identifier; extra keys rejected', () => {
+        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'magi_synthesis', payload: { synthesis: { verdict: 'agree', notes: ['x y'] } } })).not.toBeNull()
+        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'has space', payload: {} })).toBeNull()
+        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'k', payload: [] })).toBeNull()
+        expect(decodeRecordLocalRequest({ v, meshId: 'm', kind: 'k', payload: {}, summary: 'x' })).toBeNull()
+        expect(decodeRecordLocalResponse({ eventId: 'e', timestamp: 'T', storedLocally: true, published: false })).not.toBeNull()
+        expect(decodeRecordLocalResponse({ eventId: 'e', timestamp: 'T', storedLocally: true })).toBeNull()
+    })
+
+    it('queue_query / queue_enqueue / queue_cancel / queue_requeue round-trip their shapes', () => {
+        expect(decodeQueueQueryRequest({ v, meshId: 'm', statuses: ['pending', 'assigned'], view: true })).not.toBeNull()
+        expect(decodeQueueQueryRequest({ v, meshId: 'm', statuses: ['has space'] })).toBeNull()
+        expect(decodeQueueQueryResponse({ entries: [row] })).not.toBeNull()
+        expect(decodeQueueQueryResponse({ entries: [{ status: 'pending' }] })).toBeNull()
+        expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: { difficulty: 'easy' }, decision: { decision: { decision: 'single' } } })).not.toBeNull()
+        expect(decodeQueueEnqueueRequest({ v, meshId: 'm' })).toBeNull()
+        expect(decodeQueueEnqueueResponse({ entry: row })).not.toBeNull()
+        expect(decodeQueueCancelRequest({ v, meshId: 'm', taskId: 't-1', reason: 'no longer needed' })).not.toBeNull()
+        expect(decodeQueueCancelResponse({ task: row, before: row })).not.toBeNull()
+        expect(decodeQueueCancelResponse({ task: null, before: null })).not.toBeNull()
+        expect(decodeQueueCancelResponse({ task: null })).toBeNull()
+        expect(decodeQueueRequeueRequest({ v, meshId: 'm', taskId: 't-1', options: { force: true } })).not.toBeNull()
+        expect(decodeQueueRequeueResponse({ task: null })).not.toBeNull()
+    })
+
+    it('queue_enqueue_graph: mode picks exactly one of specs / plan; the response is ok|refusal', () => {
+        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'compat', specs: [{ message: 'a' }] })).not.toBeNull()
+        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'graph', plan: { tasks: [] }, audit: { batchId: 'b' } })).not.toBeNull()
+        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'graph', specs: [] })).toBeNull()
+        expect(decodeQueueEnqueueGraphRequest({ v, meshId: 'm', mode: 'other', specs: [] })).toBeNull()
+        expect(decodeQueueEnqueueGraphResponse({ ok: true, tasks: [row], graph: { graphId: 'g' } })).not.toBeNull()
+        expect(decodeQueueEnqueueGraphResponse({ ok: false, refusalCode: 'task_graph_too_large', message: 'too big', extra: { limit: 50 } })).not.toBeNull()
+        expect(decodeQueueEnqueueGraphResponse({ ok: false })).toBeNull()
+        // `code` / `error` are the command ENVELOPE's keys — a refusal result must not reuse them.
+        expect(decodeQueueEnqueueGraphResponse({ ok: false, code: 'x', error: 'y' })).toBeNull()
+    })
+
+    it('direct_dispatch_record / graph_audit_record', () => {
+        expect(decodeDirectDispatchRecordRequest({ v, meshId: 'm', taskId: 't', message: 'msg', task: { assignedNodeId: 'n' }, decision: { via: 'local_direct' } })).not.toBeNull()
+        expect(decodeDirectDispatchRecordResponse({ taskRecorded: true, decisionRecorded: false })).not.toBeNull()
+        expect(decodeGraphAuditRecordRequest({ v, meshId: 'm', event: 'gate_claimed', fields: { graphId: 'g' } })).not.toBeNull()
+        expect(decodeGraphAuditRecordRequest({ v, meshId: 'm', event: 'gate_exploded', fields: {} })).toBeNull()
+        expect(decodeGraphAuditRecordResponse({ recorded: true })).not.toBeNull()
+    })
+
+    it('active_work_query: the scheduling runtime needs a mesh snapshot; response parts are all optional records', () => {
+        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', nodes: [{ id: 'n' }], includeInputs: true, recordTail: 200 })).not.toBeNull()
+        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', includeSchedulingRuntime: true })).toBeNull()
+        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', includeSchedulingRuntime: true, mesh: { id: 'm', nodes: [] } })).not.toBeNull()
+        expect(decodeActiveWorkQueryRequest({ v, meshId: 'm', nodes: 'x' })).toBeNull()
+        expect(decodeActiveWorkQueryResponse({ activeWork: { activeWork: [] }, records: [], directDispatches: [], summary: { totalEntries: 0 } })).not.toBeNull()
+        expect(decodeActiveWorkQueryResponse({ records: {} })).toBeNull()
+    })
+
+    it('recovery_context_query needs a node or a session', () => {
+        expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm', nodeId: 'n' })).not.toBeNull()
+        expect(decodeRecoveryContextQueryRequest({ v, meshId: 'm' })).toBeNull()
+        expect(decodeRecoveryContextQueryResponse({ context: { consecutiveNodeFailures: 0, advice: 'free text' } })).not.toBeNull()
+        expect(decodeRecoveryContextQueryResponse({ context: {} })).toBeNull()
     })
 })
