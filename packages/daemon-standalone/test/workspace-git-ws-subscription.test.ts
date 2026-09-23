@@ -3,27 +3,35 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { test } from 'node:test'
 
+// Source-shape guard over the standalone entry. Since wiring-unification B5 the
+// topic registry is built by daemon-core's createDaemonHostRuntime (one copy
+// for both hosts); standalone supplies only the WS transport.
+
 const standaloneIndexPath = path.resolve(process.cwd(), 'src/index.ts')
+const standaloneTransportPath = path.resolve(process.cwd(), 'src/standalone-host-transport.ts')
 
 function source(): string {
   return fs.readFileSync(standaloneIndexPath, 'utf8')
 }
 
-test('standalone websocket serves workspace.git through the core topic registry engine', () => {
+function transportSource(): string {
+  return fs.readFileSync(standaloneTransportPath, 'utf8')
+}
+
+test('standalone websocket serves workspace.git through the host runtime topic registry', () => {
   const text = source()
 
-  // The engine (normalize/throttle/seq/refresh-concurrency) is core-owned
-  // (daemon-core TopicSubscriptionRegistry); standalone keeps only the WS sink.
-  assert.match(text, /createGitWorkspaceMonitor/)
-  assert.match(text, /TopicSubscriptionRegistry,/)
-  assert.match(text, /new TopicSubscriptionRegistry\(\{/)
-  assert.match(text, /gitMonitor: this\.gitWorkspaceMonitor/)
-  assert.match(text, /if \(this\.topicRegistry\.handlesTopic\(msg\.topic\)\)/)
-  assert.match(text, /this\.topicRegistry\.subscribe\(connectionId, msg\)/)
+  // The engine (normalize/throttle/seq/refresh-concurrency) and its git monitor
+  // are core-owned (createDaemonHostRuntime); standalone keeps only the WS sink.
+  assert.match(text, /createDaemonHostRuntime\(this\.runtime, createStandaloneHostTransport\(\{/)
+  assert.doesNotMatch(text, /new TopicSubscriptionRegistry\(/)
+  assert.doesNotMatch(text, /createGitWorkspaceMonitor\(/)
+  assert.match(text, /if \(topics\?\.handlesTopic\(msg\.topic\)\)/)
+  assert.match(text, /topics\.subscribe\(connectionId, msg\)/)
   // Targeted first flush right after subscribe, scoped to the new connection.
-  assert.match(text, /await this\.topicRegistry\.flushNow\(msg\.topic, connectionId\)/)
+  assert.match(text, /await topics\.flushNow\(msg\.topic, connectionId\)/)
   // The WS transport framing stays standalone's.
-  assert.match(text, /ws\.send\(JSON\.stringify\(\{ type: 'topic_update', update \}\)\)/)
+  assert.match(transportSource(), /ws\.send\(JSON\.stringify\(\{ type: 'topic_update', update \}\)\)/)
   // The old daemon-local engine must stay deleted.
   assert.doesNotMatch(text, /flushWsGitSubscriptions/)
   assert.doesNotMatch(text, /interface GitSubscriptionState/)
@@ -34,37 +42,35 @@ test('standalone workspace.git subscriptions are dropped on cleanup and unsubscr
 
   // Connection teardown (close AND error) releases registry-owned state.
   assert.match(text, /private releaseWsConnection\(ws: WebSocket\): void/)
-  assert.match(text, /this\.topicRegistry\.dropConnection\(id\)/)
+  assert.match(text, /this\.host\?\.topics\.dropConnection\(id\)/)
   const releaseCalls = text.match(/this\.releaseWsConnection\(ws\)/g) || []
   assert.ok(releaseCalls.length >= 2, `expected releaseWsConnection wired on close and error handlers, saw ${releaseCalls.length}`)
   // Explicit unsubscribe routes into the registry.
-  assert.match(text, /if \(this\.topicRegistry\.handlesTopic\(msg\.topic\)\) \{[\s\S]*?this\.topicRegistry\.unsubscribe\(connectionId, msg\)/)
+  assert.match(text, /if \(topics\?\.handlesTopic\(msg\.topic\)\) \{[\s\S]*?topics\.unsubscribe\(connectionId, msg\)/)
 })
 
-test('standalone workspace.git subscriptions only flush while subscribers exist', () => {
+test('standalone push-topic flushes only run while subscribers exist', () => {
   const text = source()
 
-  assert.match(text, /if \(this\.topicRegistry\.hasSubscriptions\('workspace\.git'\)\) void this\.topicRegistry\.flushNow\('workspace\.git'\)/)
+  assert.match(text, /if \(topics\?\.hasSubscriptions\(topic\)\) void topics\.flushNow\(topic\)/)
+  assert.match(text, /this\.flushTopic\('workspace\.git'\)/)
 })
 
-test('standalone command flush gate consumes the core-owned invalidation table', () => {
+test('standalone command invalidation rides the router command_executed event, not a host table', () => {
   const text = source()
 
-  // Which commands invalidate which topics is core-owned (daemon-core
-  // commandInvalidations) — standalone must not re-hardcode the list.
-  assert.match(text, /commandInvalidations,/)
-  assert.match(text, /const invalidated = commandInvalidations\(type\)/)
-  // Metadata topic flush now rides the registry's invalidate consumption; only
-  // the standalone-specific legacy `type:'status'` broadcast stays local.
-  assert.match(text, /invalidated\.has\('daemon\.metadata'\)\) \{[\s\S]*?this\.scheduleBroadcastStatus\(\)/)
-  assert.doesNotMatch(text, /flushWsDaemonMetadataSubscriptions/)
-  // session.modal / session_host.diagnostics invalidation flushes now ride the
-  // registry's invalidate consumption — no daemon-local flush branches remain.
-  assert.doesNotMatch(text, /flushWsSessionModalSubscriptions/)
-  assert.doesNotMatch(text, /flushWsSessionHostDiagnosticsSubscriptions/)
-  assert.doesNotMatch(text, /flushWsMachineRuntimeSubscriptions/)
-  // Registry-migrated cohorts (workspace.git) consume the set via the registry.
-  assert.match(text, /void this\.topicRegistry\.invalidate\(invalidated\)/)
+  // Which commands invalidate which topics is the command spec's `invalidates`
+  // (daemon-core command registry); the router emits `command_executed` for
+  // EVERY caller and the host runtime runs the topic invalidation. Standalone
+  // adds only its legacy `type:'status'` push.
+  assert.doesNotMatch(text, /commandInvalidations/)
+  assert.doesNotMatch(text, /SESSION_TARGET_COMMANDS/)
+  assert.doesNotMatch(text, /ensureInteractionContext/)
+  assert.doesNotMatch(text, /recentInteractionIdsBySession/)
+  assert.match(transportSource(), /onCommandExecuted: \(e\) => \{[\s\S]*?e\.invalidates\.has\('daemon\.metadata'\)[\s\S]*?deps\.scheduleBroadcastStatus\(\)/)
+  assert.match(text, /return this\.host\.execute\(type, args, 'standalone'\)/)
   // The old local predicate must stay deleted (it diverged from cloud once already).
   assert.doesNotMatch(text, /function commandMayAffectMeshGraphStatus/)
+  assert.doesNotMatch(text, /flushWsDaemonMetadataSubscriptions/)
+  assert.doesNotMatch(text, /flushWsSessionModalSubscriptions/)
 })
