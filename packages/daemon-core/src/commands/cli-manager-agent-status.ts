@@ -13,6 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
+import { SESSION_STATUS_ALIASES, isBusyStatus, statusesOfClass } from '@adhdev/mesh-shared';
 
 function isExplicitCommand(command: string): boolean {
     const trimmed = command.trim();
@@ -41,9 +42,20 @@ export function commandExists(command: string): boolean {
     }
 }
 
-// 'waiting_choice' sits alongside 'waiting_approval': a session parked on a question
-// picker holds a live turn and must not read as free to the send/dispatch guards.
-export const BUSY_AGENT_STATUSES = new Set(['generating', 'running', 'streaming', 'starting', 'busy', 'waiting', 'waiting_approval', 'waiting_choice', 'no_progress', 'long_generating']);
+/**
+ * Every spelling the send guard treats as "not free to receive input": the
+ * `working` and `blocked` classes of the one status vocabulary plus every raw
+ * alias that resolves into them. Derived, never listed — `waiting_choice` sits
+ * alongside `waiting_approval` because both are class `blocked` (a session
+ * parked on a question picker still holds a live turn). Kept as a Set only for
+ * the `.has()` call sites in cli-manager.ts; new code should call
+ * `isBusyStatus` directly.
+ */
+export const BUSY_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
+    ...statusesOfClass('working'),
+    ...statusesOfClass('blocked'),
+    ...Object.keys(SESSION_STATUS_ALIASES).filter((alias) => isBusyStatus(alias)),
+]);
 const ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2_000;
 
 function normalizeAgentStatus(value: unknown): string {
@@ -61,10 +73,6 @@ function hasAdapterPendingResponse(adapter: any): boolean {
     try {
         if (typeof adapter?.isProcessing === 'function' && adapter.isProcessing()) return true;
     } catch { /* defensive: send guard should not fail on diagnostics */ }
-    try {
-        const partial = typeof adapter?.getPartialResponse === 'function' ? adapter.getPartialResponse() : '';
-        if (typeof partial === 'string' && partial.trim()) return true;
-    } catch { /* defensive: missing partial means no pending evidence */ }
     return false;
 }
 
@@ -124,7 +132,7 @@ export function normalizeDirForCompare(dir?: string): string {
 
 function shouldSuppressStaleParsedBusyStatus(adapterStatus: string, parsedStatus: any, adapter: any): boolean {
     const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
-    if (!BUSY_AGENT_STATUSES.has(parsedRawStatus)) return false;
+    if (!isBusyStatus(parsedRawStatus)) return false;
     if (adapterStatus !== 'idle') return false;
     if (hasNonEmptyModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
     return !hasAdapterPendingResponse(adapter);
@@ -140,7 +148,7 @@ export function getEffectiveAgentSendStatus(adapter: any): string {
     try {
         const parsedStatus = adapter.getScriptParsedStatus();
         const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
-        if (BUSY_AGENT_STATUSES.has(parsedRawStatus) && !shouldSuppressStaleParsedBusyStatus(adapterStatus, parsedStatus, adapter)) {
+        if (isBusyStatus(parsedRawStatus) && !shouldSuppressStaleParsedBusyStatus(adapterStatus, parsedStatus, adapter)) {
             return parsedRawStatus;
         }
     } catch {

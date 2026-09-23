@@ -40033,6 +40033,1680 @@ var require_dist3 = __commonJS({
         );
       }
     });
+    var dist_exports = {};
+    __export2(dist_exports, {
+      CANONICAL_MESH_TOOL_COUNT: () => CANONICAL_MESH_TOOL_COUNT2,
+      CANONICAL_MESH_TOOL_NAMES: () => CANONICAL_MESH_TOOL_NAMES2,
+      CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX: () => CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
+      CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX: () => CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
+      CLI_SLOT_RECIPES: () => CLI_SLOT_RECIPES2,
+      DAEMON_P2P_SIGNAL_TYPES: () => DAEMON_P2P_SIGNAL_TYPES2,
+      DAEMON_STATUS_EVENT_NAMES: () => DAEMON_STATUS_EVENT_NAMES2,
+      DAEMON_TO_DASHBOARD_P2P_TYPES: () => DAEMON_TO_DASHBOARD_P2P_TYPES2,
+      DAEMON_TO_SERVER_TYPES: () => DAEMON_TO_SERVER_TYPES2,
+      DAEMON_TO_SERVER_WS_MSGS: () => DAEMON_TO_SERVER_WS_MSGS,
+      DASHBOARD_P2P_MESSAGE_KINDS: () => DASHBOARD_P2P_MESSAGE_KINDS2,
+      DASHBOARD_P2P_SIGNAL_TYPES: () => DASHBOARD_P2P_SIGNAL_TYPES2,
+      DASHBOARD_STATUS_EVENT_NAMES: () => DASHBOARD_STATUS_EVENT_NAMES2,
+      DASHBOARD_TO_DAEMON_P2P_TYPES: () => DASHBOARD_TO_DAEMON_P2P_TYPES2,
+      DASHBOARD_TO_USER_SESSION_TYPES: () => DASHBOARD_TO_USER_SESSION_TYPES2,
+      DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
+      MAGI_RAW_ANSWER_CAP: () => MAGI_RAW_ANSWER_CAP3,
+      MESH_CHUNK_KIND: () => MESH_CHUNK_KIND,
+      MESH_CHUNK_PAYLOAD_CHARS: () => MESH_CHUNK_PAYLOAD_CHARS,
+      MESH_CHUNK_TTL_MS: () => MESH_CHUNK_TTL_MS,
+      MESH_DELIVERY_MODES: () => MESH_DELIVERY_MODES2,
+      MESH_MAX_CHUNKS: () => MESH_MAX_CHUNKS,
+      MESH_MAX_INLINE_FRAME_BYTES: () => MESH_MAX_INLINE_FRAME_BYTES,
+      MESH_MAX_REASSEMBLED_BYTES: () => MESH_MAX_REASSEMBLED_BYTES,
+      MESH_P2P_SIGNAL_TYPES: () => MESH_P2P_SIGNAL_TYPES2,
+      MESH_SESSION_CLEANUP_MODES: () => MESH_SESSION_CLEANUP_MODES2,
+      MESH_TASK_DIFFICULTIES: () => MESH_TASK_DIFFICULTIES2,
+      MESH_TASK_MODES: () => MESH_TASK_MODES2,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES2,
+      MESH_TASK_STATUSES: () => MESH_TASK_STATUSES2,
+      MESH_TERMINAL_TASK_STATUSES: () => MESH_TERMINAL_TASK_STATUSES2,
+      MESH_THINKING_LEVELS: () => MESH_THINKING_LEVELS2,
+      MeshChunkAssembler: () => MeshChunkAssembler,
+      NPM_UPDATE_TAGS: () => NPM_UPDATE_TAGS,
+      P2P_SIGNAL_TYPES: () => P2P_SIGNAL_TYPES2,
+      QUOTA_SUPPORTED_PROVIDERS: () => QUOTA_SUPPORTED_PROVIDERS,
+      RECENT_SESSION_BUCKETS: () => RECENT_SESSION_BUCKETS,
+      RELEASE_CHANNELS: () => RELEASE_CHANNELS,
+      SERVER_STATUS_EVENT_NAMES: () => SERVER_STATUS_EVENT_NAMES2,
+      SERVER_TO_DAEMON_CONTROL_TYPES: () => SERVER_TO_DAEMON_CONTROL_TYPES2,
+      SERVER_TO_DAEMON_WS_MSGS: () => SERVER_TO_DAEMON_WS_MSGS,
+      SESSION_STATUSES: () => SESSION_STATUSES2,
+      SESSION_STATUS_ALIASES: () => SESSION_STATUS_ALIASES,
+      SESSION_STATUS_CLASS: () => SESSION_STATUS_CLASS,
+      SHARED_SESSION_TO_VIEWER_TYPES: () => SHARED_SESSION_TO_VIEWER_TYPES2,
+      STATUS_PROBE_ARG_KEY: () => STATUS_PROBE_ARG_KEY2,
+      SYSTEM_ANNOUNCEMENT_TYPES: () => SYSTEM_ANNOUNCEMENT_TYPES,
+      UNKNOWN_CLI_SLOT_RECIPE: () => UNKNOWN_CLI_SLOT_RECIPE2,
+      USER_SESSION_TO_DASHBOARD_TYPES: () => USER_SESSION_TO_DASHBOARD_TYPES2,
+      VERSION_UPDATE_REASONS: () => VERSION_UPDATE_REASONS,
+      VIEWER_TO_SHARED_SESSION_TYPES: () => VIEWER_TO_SHARED_SESSION_TYPES2,
+      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
+      WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER2,
+      WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
+      WORKER_TOOLS: () => WORKER_TOOLS2,
+      appendWorkerProtocolFooter: () => appendWorkerProtocolFooter2,
+      argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
+      buildMagiPanelProposal: () => buildMagiPanelProposal2,
+      buildSlotProposal: () => buildSlotProposal2,
+      canonicalDaemonId: () => canonicalDaemonId2,
+      classifySessionStatus: () => classifySessionStatus,
+      compareSemver: () => compareSemver,
+      daemonIdsEquivalent: () => daemonIdsEquivalent4,
+      decodeDaemonToDashboardP2P: () => decodeDaemonToDashboardP2P,
+      decodeDaemonToServer: () => decodeDaemonToServer,
+      decodeDashboardToDaemonP2P: () => decodeDashboardToDaemonP2P,
+      decodeDashboardToDaemonP2PChunk: () => decodeDashboardToDaemonP2PChunk,
+      decodeDashboardToUserSession: () => decodeDashboardToUserSession,
+      decodeServerToDaemon: () => decodeServerToDaemon,
+      decodeTypeField: () => decodeTypeField,
+      decodeUserSessionToDashboard: () => decodeUserSessionToDashboard,
+      decodeViewerToSharedSession: () => decodeViewerToSharedSession,
+      deriveProviderPriorityFromSlots: () => deriveProviderPriorityFromSlots2,
+      deriveSlotsFromLegacy: () => deriveSlotsFromLegacy,
+      enumOf: () => enumOf2,
+      expandDaemonIdForms: () => expandDaemonIdForms,
+      formatQuotaAccount: () => formatQuotaAccount,
+      hasGitStatusEvidence: () => hasGitStatusEvidence,
+      hasWorkerProtocolFooter: () => hasWorkerProtocolFooter2,
+      interpolateArgs: () => interpolateArgs,
+      interpolateString: () => interpolateString,
+      isBlockedStatus: () => isBlockedStatus,
+      isBusyStatus: () => isBusyStatus,
+      isChunkType: () => isChunkType,
+      isDaemonDirectCommandType: () => isDaemonDirectCommandType,
+      isDaemonP2PSignalType: () => isDaemonP2PSignalType2,
+      isDaemonStatusEventName: () => isDaemonStatusEventName2,
+      isDaemonToDashboardP2PType: () => isDaemonToDashboardP2PType2,
+      isDaemonToServerType: () => isDaemonToServerType2,
+      isDaemonToServerWsMsg: () => isDaemonToServerWsMsg,
+      isDashboardP2PSignalType: () => isDashboardP2PSignalType2,
+      isDashboardStatusEventName: () => isDashboardStatusEventName2,
+      isDashboardToDaemonChunkType: () => isDashboardToDaemonChunkType,
+      isDashboardToDaemonP2PType: () => isDashboardToDaemonP2PType2,
+      isDashboardToUserSessionType: () => isDashboardToUserSessionType2,
+      isDeadStatus: () => isDeadStatus,
+      isDowngrade: () => isDowngrade,
+      isFiniteNumber: () => isFiniteNumber,
+      isMeshDeliveryMode: () => isMeshDeliveryMode2,
+      isMeshP2PSignalType: () => isMeshP2PSignalType2,
+      isMeshSessionCleanupMode: () => isMeshSessionCleanupMode2,
+      isMeshTaskDifficulty: () => isMeshTaskDifficulty2,
+      isMeshTaskMode: () => isMeshTaskMode2,
+      isMeshTaskPriority: () => isMeshTaskPriority2,
+      isMeshTaskStatus: () => isMeshTaskStatus2,
+      isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
+      isMeshThinkingLevel: () => isMeshThinkingLevel2,
+      isNonEmptyString: () => isNonEmptyString,
+      isP2PSignalType: () => isP2PSignalType2,
+      isPhantomDaemonEntry: () => isPhantomDaemonEntry,
+      isRawDaemonDoId: () => isRawDaemonDoId,
+      isReadyStatus: () => isReadyStatus,
+      isRecord: () => isRecord,
+      isServerDirectCommandMsg: () => isServerDirectCommandMsg,
+      isServerToDaemonControlType: () => isServerToDaemonControlType2,
+      isServerToDaemonWsMsg: () => isServerToDaemonWsMsg,
+      isSessionStatus: () => isSessionStatus,
+      isSharedSessionToViewerType: () => isSharedSessionToViewerType2,
+      isUserSessionToDashboardType: () => isUserSessionToDashboardType2,
+      isViewerToSharedSessionType: () => isViewerToSharedSessionType2,
+      isWorkerBranchState: () => isWorkerBranchState2,
+      isWorkerReportOutcome: () => isWorkerReportOutcome2,
+      isWorkerTool: () => isWorkerTool,
+      isWorkingStatus: () => isWorkingStatus,
+      joinRepoPath: () => joinRepoPath,
+      machineCoreFromDaemonId: () => machineCoreFromDaemonId,
+      makeTypeGuard: () => makeTypeGuard2,
+      measureWorstCaseChunkEnvelopeBytes: () => measureWorstCaseChunkEnvelopeBytes,
+      meshFrameNeedsChunking: () => meshFrameNeedsChunking,
+      meshNodeIdMatches: () => meshNodeIdMatches5,
+      meshUtf8ByteLength: () => meshUtf8ByteLength,
+      meshWorkspacesEquivalent: () => meshWorkspacesEquivalent,
+      normalizeAuthOkLimits: () => normalizeAuthOkLimits,
+      normalizeBrainSlot: () => normalizeBrainSlot,
+      normalizeDifficultyBrainMap: () => normalizeDifficultyBrainMap,
+      normalizeGitStatus: () => normalizeGitStatus,
+      normalizeMeshNodeFacts: () => normalizeMeshNodeFacts,
+      normalizeMeshNodeId: () => normalizeMeshNodeId,
+      normalizeMeshSessionRecord: () => normalizeMeshSessionRecord,
+      normalizeMeshWorkspaceForCompare: () => normalizeMeshWorkspaceForCompare,
+      normalizeNodeCapabilitySlot: () => normalizeNodeCapabilitySlot2,
+      normalizeNodeCapabilitySlots: () => normalizeNodeCapabilitySlots2,
+      normalizeSessionStatus: () => normalizeSessionStatus,
+      normalizeThinkingLevel: () => normalizeThinkingLevel,
+      parseJsonRecord: () => parseJsonRecord,
+      parseSemver: () => parseSemver,
+      pickBestTransitGitStatus: () => pickBestTransitGitStatus,
+      readBoolean: () => readBoolean,
+      readEnvelopeFields: () => readEnvelopeFields,
+      readGitSubmodules: () => readGitSubmodules,
+      readNumber: () => readNumber2,
+      readRecord: () => readRecord,
+      readString: () => readString22,
+      readStringArray: () => readStringArray2,
+      renderCoordinatorWorkerSection: () => renderCoordinatorWorkerSection,
+      renderWorkerProtocolFooter: () => renderWorkerProtocolFooter2,
+      scoreGitStatusCandidate: () => scoreGitStatusCandidate,
+      scoreGitUpstreamFreshness: () => scoreGitUpstreamFreshness,
+      sessionIdsEquivalent: () => sessionIdsEquivalent,
+      splitMeshFrame: () => splitMeshFrame,
+      statusesOfClass: () => statusesOfClass,
+      stripStatusProbeMarker: () => stripStatusProbeMarker,
+      stripWorkerProtocolFooter: () => stripWorkerProtocolFooter,
+      summarizeGitShape: () => summarizeGitShape,
+      supportsQuota: () => supportsQuota,
+      withStatusProbeMarker: () => withStatusProbeMarker2
+    });
+    function readRecord(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+    function readString22(...values) {
+      for (const value of values) {
+        if (typeof value !== "string") continue;
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      }
+      return void 0;
+    }
+    function readNumber2(...values) {
+      for (const value of values) {
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+      }
+      return void 0;
+    }
+    function readBoolean(...values) {
+      for (const value of values) {
+        if (typeof value === "boolean") return value;
+      }
+      return void 0;
+    }
+    function readStringArray2(value) {
+      return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim().length > 0) : [];
+    }
+    function parseJsonRecord(value) {
+      if (!value) return {};
+      if (typeof value === "object") return readRecord(value);
+      if (typeof value !== "string") return {};
+      const trimmed = value.trim();
+      if (!trimmed) return {};
+      try {
+        return readRecord(JSON.parse(trimmed));
+      } catch {
+        return {};
+      }
+    }
+    function joinRepoPath(root, relativePath) {
+      const normalizedRoot = typeof root === "string" ? root.trim().replace(/[\\/]+$/, "") : "";
+      const normalizedPath = typeof relativePath === "string" ? relativePath.trim() : "";
+      if (!normalizedPath) return void 0;
+      if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath;
+      if (!normalizedRoot) return void 0;
+      return `${normalizedRoot}/${normalizedPath.replace(/^[\\/]+/, "")}`;
+    }
+    function scoreGitUpstreamFreshness(status) {
+      switch (status) {
+        case "fresh":
+          return 30;
+        case "no_upstream":
+          return 4;
+        case "unchecked":
+        case void 0:
+          return 0;
+        case "stale":
+          return -10;
+        case "unavailable":
+          return -15;
+        default:
+          return 0;
+      }
+    }
+    function readGitSubmodules(value, parentRepoRoot) {
+      if (!Array.isArray(value)) return void 0;
+      const submodules = value.map((entry) => {
+        const submodule = readRecord(entry);
+        const path74 = readString22(submodule.path);
+        const commit = readString22(submodule.commit);
+        const repoPath = readString22(submodule.repoPath, submodule.repo_root) ?? joinRepoPath(parentRepoRoot, path74);
+        if (!path74 || !commit) return null;
+        const result = {
+          path: path74,
+          commit,
+          dirty: readBoolean(submodule.dirty) ?? false,
+          outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false
+        };
+        const lastCheckedAt = readNumber2(submodule.lastCheckedAt, submodule.last_checked_at);
+        if (lastCheckedAt !== void 0) result.lastCheckedAt = lastCheckedAt;
+        if (repoPath) result.repoPath = repoPath;
+        const error48 = readString22(submodule.error);
+        if (error48) result.error = error48;
+        return result;
+      }).filter((entry) => entry !== null);
+      return submodules.length > 0 ? submodules : void 0;
+    }
+    function hasGitStatusEvidence(status) {
+      return readBoolean(status.isGitRepo) !== void 0 || Boolean(readString22(status.branch, status.upstream, status.upstreamStatus, status.upstream_status, status.headCommit)) || Boolean(readString22(status.repoRoot, status.repo_root, status.workspace)) || readNumber2(
+        status.ahead,
+        status.behind,
+        status.staged,
+        status.modified,
+        status.untracked,
+        status.deleted,
+        status.renamed,
+        status.lastCheckedAt,
+        status.last_checked_at
+      ) !== void 0 || Array.isArray(status.submodules) && status.submodules.length > 0;
+    }
+    function normalizeGitStatus(status, node, options) {
+      const explicitIsGitRepo = readBoolean(status.isGitRepo);
+      if (!Object.keys(status).length || !hasGitStatusEvidence(status)) return void 0;
+      const isGitRepo = explicitIsGitRepo ?? true;
+      const conflictFiles = Array.isArray(status.conflictFiles) ? status.conflictFiles.filter((entry) => typeof entry === "string") : [];
+      const conflictCount = readNumber2(status.conflicts) ?? conflictFiles.length;
+      const hasConflicts = readBoolean(status.hasConflicts) ?? conflictCount > 0;
+      const repoRoot = readString22(status.repoRoot, status.repo_root, node.repoRoot, node.repo_root, status.workspace, node.workspace) || void 0;
+      const submodules = readGitSubmodules(status.submodules, repoRoot);
+      const upstreamStatus = readString22(status.upstreamStatus, status.upstream_status);
+      const upstreamFetchedAt2 = readNumber2(status.upstreamFetchedAt, status.upstream_fetched_at);
+      const upstreamFetchError = readString22(status.upstreamFetchError, status.upstream_fetch_error);
+      const error48 = readString22(status.error);
+      const staged = readNumber2(status.staged) ?? 0;
+      const modified = readNumber2(status.modified) ?? 0;
+      const untracked = readNumber2(status.untracked) ?? 0;
+      const deleted = readNumber2(status.deleted) ?? 0;
+      const renamed2 = readNumber2(status.renamed) ?? 0;
+      const lastCheckedAt = options?.lastCheckedAt ?? readNumber2(status.lastCheckedAt, status.last_checked_at);
+      return {
+        workspace: readString22(status.workspace, node.workspace) || "",
+        repoRoot: repoRoot ?? null,
+        isGitRepo,
+        branch: readString22(status.branch) ?? null,
+        headCommit: readString22(status.headCommit) ?? null,
+        headMessage: readString22(status.headMessage) ?? null,
+        upstream: readString22(status.upstream) ?? null,
+        upstreamStatus: upstreamStatus ?? "unchecked",
+        ...upstreamFetchedAt2 !== void 0 ? { upstreamFetchedAt: upstreamFetchedAt2 } : {},
+        ...upstreamFetchError ? { upstreamFetchError } : {},
+        ahead: readNumber2(status.ahead) ?? 0,
+        behind: readNumber2(status.behind) ?? 0,
+        staged,
+        modified,
+        untracked,
+        deleted,
+        renamed: renamed2,
+        dirty: readBoolean(status.dirty, status.isDirty, status.is_dirty) ?? (staged + modified + untracked + deleted + renamed2 > 0 || hasConflicts),
+        hasConflicts,
+        conflictFiles,
+        stashCount: readNumber2(status.stashCount, status.stash_count) ?? 0,
+        ...lastCheckedAt !== void 0 ? { lastCheckedAt } : {},
+        ...submodules ? { submodules } : {},
+        // Deploy-lag visibility: daemonBuildBehind is computed by the reporting
+        // daemon's git probe (build commit vs workspace/submodule HEAD). It must
+        // survive relay reassembly or downstream staleDaemonBuild surfaces
+        // (dashboard Status tab badge, MCP staleDaemonBuilds warning) never fire
+        // for remote nodes.
+        ...status.daemonBuildBehind && typeof status.daemonBuildBehind === "object" ? { daemonBuildBehind: status.daemonBuildBehind } : {},
+        ...error48 ? { error: error48 } : {}
+      };
+    }
+    function scoreGitStatusCandidate(git3) {
+      if (!git3) return Number.NEGATIVE_INFINITY;
+      let score = 0;
+      if (git3.isGitRepo === true) score += 50;
+      if (git3.isGitRepo === false) score -= 10;
+      if (git3.branch) score += 20;
+      if (git3.headCommit) score += 20;
+      if (git3.upstream) score += 10;
+      score += scoreGitUpstreamFreshness(git3.upstreamStatus);
+      if (typeof git3.ahead === "number") score += 2;
+      if (typeof git3.behind === "number") score += 2;
+      if (Array.isArray(git3.submodules) && git3.submodules.length > 0) score += 4 + git3.submodules.length;
+      if (git3.error) score -= 20;
+      return score;
+    }
+    function pickBestTransitGitStatus(node, options) {
+      const rawGit = readRecord(node.lastGit ?? node.last_git);
+      const gitResult = readRecord(rawGit.result);
+      const directStatus = readRecord(rawGit.status);
+      const nestedStatus = readRecord(gitResult.status);
+      const rawProbe = readRecord(node.lastProbe ?? node.last_probe);
+      const probeGit = readRecord(rawProbe.git);
+      const probeGitResult = readRecord(probeGit.result);
+      const probeDirectStatus = readRecord(probeGit.status);
+      const probeNestedStatus = readRecord(probeGitResult.status);
+      let best = null;
+      for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
+        const normalized = normalizeGitStatus(status, node, options);
+        if (!normalized) continue;
+        const score = scoreGitStatusCandidate(normalized);
+        if (!best || score > best.score) best = { git: normalized, score };
+      }
+      return best?.git;
+    }
+    function deriveSyntheticSessionId(record2) {
+      const parts = [
+        readString22(record2.workspace),
+        readString22(record2.providerType, record2.provider),
+        readString22(record2.role),
+        readString22(record2.state, record2.status),
+        readString22(record2.title),
+        readString22(record2.createdAt, record2.created_at),
+        readString22(record2.startedAt, record2.started_at)
+      ].filter((part) => Boolean(part));
+      if (parts.length === 0) return void 0;
+      return `synthetic:${parts.join("|")}`;
+    }
+    function sessionIdsEquivalent(a, b) {
+      const idA = readString22(a);
+      const idB = readString22(b);
+      if (!idA || !idB) return false;
+      return idA === idB;
+    }
+    function normalizeMeshSessionRecord(entry) {
+      const record2 = readRecord(entry);
+      const sessionId = readString22(record2.sessionId, record2.session_id, record2.id) ?? deriveSyntheticSessionId(record2);
+      if (!sessionId) return null;
+      return {
+        sessionId,
+        ...readString22(record2.providerType, record2.provider) ? { providerType: readString22(record2.providerType, record2.provider) } : {},
+        ...readString22(record2.state, record2.status) ? { state: readString22(record2.state, record2.status) } : {},
+        ...readString22(record2.chatStatus, record2.chat_status) ? { chatStatus: readString22(record2.chatStatus, record2.chat_status) } : {},
+        ...readString22(record2.lifecycle) ? { lifecycle: readString22(record2.lifecycle) } : {},
+        ...readString22(record2.surfaceKind, record2.surface_kind) ? { surfaceKind: readString22(record2.surfaceKind, record2.surface_kind) } : {},
+        ...readString22(record2.recoveryState, record2.recovery_state) ? { recoveryState: readString22(record2.recoveryState, record2.recovery_state) } : {},
+        ...readString22(record2.workspace) ? { workspace: readString22(record2.workspace) } : {},
+        ...readString22(record2.title) ? { title: readString22(record2.title) } : {},
+        ...readString22(record2.role) ? { role: readString22(record2.role) } : {},
+        ...readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) } : {},
+        ...readString22(record2.statusNote, record2.status_note) ? { statusNote: readString22(record2.statusNote, record2.status_note) } : {},
+        ...readString22(record2.createdAt, record2.created_at) ? { createdAt: readString22(record2.createdAt, record2.created_at) } : {},
+        ...readString22(record2.startedAt, record2.started_at) ? { startedAt: readString22(record2.startedAt, record2.started_at) } : {},
+        ...readString22(record2.lastActivityAt, record2.last_activity_at) ? { lastActivityAt: readString22(record2.lastActivityAt, record2.last_activity_at) } : {},
+        ...readBoolean(record2.isCached, record2.is_cached) !== void 0 ? { isCached: readBoolean(record2.isCached, record2.is_cached) } : {}
+      };
+    }
+    function normalizeMeshNodeId(node) {
+      const record2 = node && typeof node === "object" ? node : {};
+      return readString22(record2.id, record2.nodeId, record2.node_id);
+    }
+    function meshNodeIdMatches5(node, candidateId) {
+      if (!candidateId) return false;
+      const trimmed = candidateId.trim();
+      if (!trimmed) return false;
+      return normalizeMeshNodeId(node) === trimmed;
+    }
+    function normalizeMeshNodeFacts(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+      const record2 = raw;
+      const schemaVersion = Number(record2.schemaVersion);
+      const reportedAt = Number(record2.reportedAt);
+      if (!Number.isFinite(schemaVersion) || schemaVersion < 1) return void 0;
+      if (!Number.isFinite(reportedAt) || reportedAt <= 0) return void 0;
+      return { ...record2, schemaVersion, reportedAt };
+    }
+    function supportsQuota(providerType) {
+      return !!providerType && QUOTA_SUPPORTED_PROVIDERS.includes(providerType);
+    }
+    function formatQuotaAccount(quota) {
+      const meta3 = quota?.metadata;
+      const email3 = typeof meta3?.accountEmail === "string" ? meta3.accountEmail.trim() : "";
+      const plan = typeof meta3?.planType === "string" ? meta3.planType.trim() : "";
+      const parts = [email3, plan].filter(Boolean);
+      return parts.length > 0 ? parts.join(" \xB7 ") : null;
+    }
+    function normalizeMeshWorkspaceForCompare(dir) {
+      if (typeof dir !== "string") return "";
+      return dir.trim().replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+    }
+    function meshWorkspacesEquivalent(a, b) {
+      const left = normalizeMeshWorkspaceForCompare(a);
+      const right = normalizeMeshWorkspaceForCompare(b);
+      if (!left || !right) return false;
+      return left === right;
+    }
+    function isRawDaemonDoId(id) {
+      const trimmed = readString22(id);
+      return !!trimmed && /^[0-9a-f]{64}$/i.test(trimmed);
+    }
+    function isPhantomDaemonEntry(entry) {
+      if (!entry) return false;
+      if (!isRawDaemonDoId(entry.id)) return false;
+      const hasMachineEvidence = Boolean(
+        readString22(entry.machineNickname) || readString22(entry.nickname) || readString22(entry.hostname) || readString22(entry.platform) || readString22(entry.machine?.hostname) || readString22(entry.machine?.platform) || readString22(entry.machineId) || Array.isArray(entry.sessions) && entry.sessions.length > 0
+      );
+      return !hasMachineEvidence;
+    }
+    function machineCoreFromDaemonId(id) {
+      const trimmed = readString22(id);
+      if (!trimmed) return void 0;
+      for (const prefix of DAEMON_ID_PREFIXES) {
+        if (trimmed.startsWith(prefix)) {
+          const core2 = trimmed.slice(prefix.length).trim();
+          return core2 || void 0;
+        }
+      }
+      return trimmed;
+    }
+    function canonicalDaemonId2(id) {
+      const core2 = machineCoreFromDaemonId(id);
+      if (!core2) return void 0;
+      if (!core2.startsWith("mach_")) return core2;
+      return `daemon_${core2}`;
+    }
+    function daemonIdsEquivalent4(a, b) {
+      const coreA = machineCoreFromDaemonId(a);
+      const coreB = machineCoreFromDaemonId(b);
+      if (!coreA || !coreB) return false;
+      return coreA === coreB;
+    }
+    function expandDaemonIdForms(ids) {
+      const list = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
+      const out = [];
+      const seen = /* @__PURE__ */ new Set();
+      const add = (value) => {
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        out.push(value);
+      };
+      for (const raw of list) add(readString22(raw));
+      for (const raw of list) {
+        const core2 = machineCoreFromDaemonId(readString22(raw));
+        if (!core2 || !core2.startsWith("mach_")) continue;
+        add(core2);
+        for (const prefix of DAEMON_ID_PREFIXES) add(`${prefix}${core2}`);
+      }
+      return out;
+    }
+    function summarizeGitShape(status) {
+      const record2 = readRecord(status);
+      if (!Object.keys(record2).length) return null;
+      const submodules = Array.isArray(record2.submodules) ? record2.submodules.map((entry) => {
+        const sub = readRecord(entry);
+        return {
+          path: readString22(sub.path) ?? null,
+          commit: readString22(sub.commit)?.slice(0, 12) ?? null,
+          dirty: readBoolean(sub.dirty) ?? false,
+          outOfSync: readBoolean(sub.outOfSync, sub.out_of_sync) ?? false
+        };
+      }) : [];
+      return {
+        isGitRepo: readBoolean(record2.isGitRepo),
+        workspace: readString22(record2.workspace) ?? null,
+        repoRoot: readString22(record2.repoRoot, record2.repo_root) ?? null,
+        branch: readString22(record2.branch) ?? null,
+        upstream: readString22(record2.upstream) ?? null,
+        upstreamStatus: readString22(record2.upstreamStatus, record2.upstream_status) ?? null,
+        headCommit: readString22(record2.headCommit, record2.head_commit)?.slice(0, 12) ?? null,
+        ahead: readNumber2(record2.ahead) ?? null,
+        behind: readNumber2(record2.behind) ?? null,
+        dirtyCounts: {
+          staged: readNumber2(record2.staged) ?? 0,
+          modified: readNumber2(record2.modified) ?? 0,
+          untracked: readNumber2(record2.untracked) ?? 0,
+          deleted: readNumber2(record2.deleted) ?? 0,
+          renamed: readNumber2(record2.renamed) ?? 0
+        },
+        lastCheckedAt: readNumber2(record2.lastCheckedAt, record2.last_checked_at) ?? null,
+        submoduleCount: submodules.length,
+        submodules
+      };
+    }
+    function isMeshTaskDifficulty2(value) {
+      return typeof value === "string" && MESH_TASK_DIFFICULTIES2.includes(value);
+    }
+    function normalizeThinkingLevel(value) {
+      const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return v === "low" || v === "medium" || v === "high" ? v : void 0;
+    }
+    function normalizeBrainSlot(raw) {
+      const r = raw && typeof raw === "object" ? raw : {};
+      const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+      const model = typeof r.model === "string" ? r.model.trim() : "";
+      const thinkingLevel = normalizeThinkingLevel(r.thinkingLevel);
+      return {
+        ...provider ? { provider } : {},
+        ...model ? { model } : {},
+        ...thinkingLevel ? { thinkingLevel } : {}
+      };
+    }
+    function normalizeDifficultyBrainMap(raw) {
+      const out = {};
+      if (!raw || typeof raw !== "object") return out;
+      for (const key2 of MESH_TASK_DIFFICULTIES2) {
+        const slot = normalizeBrainSlot(raw[key2]);
+        if (slot.provider || slot.model || slot.thinkingLevel) out[key2] = slot;
+      }
+      return out;
+    }
+    function normalizeNodeCapabilitySlot2(raw) {
+      const r = raw && typeof raw === "object" ? raw : {};
+      const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+      if (!provider) return null;
+      const model = typeof r.model === "string" ? r.model.trim() : "";
+      const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
+      const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty2) : [];
+      const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
+      const maxParallelNum = Number(r.maxParallel);
+      const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
+      return {
+        provider,
+        ...model ? { model } : {},
+        ...thinkingLevel ? { thinkingLevel } : {},
+        ...difficulty.length ? { difficulty } : {},
+        ...capability.length ? { capability } : {},
+        ...maxParallel !== void 0 ? { maxParallel } : {}
+      };
+    }
+    function normalizeNodeCapabilitySlots2(raw) {
+      if (!Array.isArray(raw)) return [];
+      const out = [];
+      for (const entry of raw) {
+        const slot = normalizeNodeCapabilitySlot2(entry);
+        if (slot) out.push(slot);
+      }
+      return out;
+    }
+    function deriveSlotsFromLegacy(input) {
+      const priority = Array.isArray(input.providerPriority) ? input.providerPriority.filter((p) => typeof p === "string" && !!p.trim()).map((p) => p.trim()) : [];
+      if (priority.length === 0) return [];
+      const brains = input.difficultyBrains || {};
+      const byProvider = /* @__PURE__ */ new Map();
+      const shared = [];
+      for (const diff of MESH_TASK_DIFFICULTIES2) {
+        const b = brains[diff];
+        if (!b) continue;
+        const entry = { difficulty: diff, model: b.model, thinkingLevel: b.thinkingLevel };
+        if (b.provider) {
+          const list = byProvider.get(b.provider) ?? [];
+          list.push(entry);
+          byProvider.set(b.provider, list);
+        } else {
+          shared.push(entry);
+        }
+      }
+      return priority.map((provider) => {
+        const specific = byProvider.get(provider) || [];
+        const applied = specific.length ? specific : shared;
+        const difficulty = applied.map((a) => a.difficulty);
+        const model = applied.find((a) => a.model)?.model;
+        const thinkingLevel = applied.find((a) => a.thinkingLevel)?.thinkingLevel;
+        return {
+          provider,
+          ...model ? { model } : {},
+          ...thinkingLevel ? { thinkingLevel } : {},
+          ...difficulty.length ? { difficulty } : {}
+        };
+      });
+    }
+    function deriveProviderPriorityFromSlots2(slots) {
+      const seen = /* @__PURE__ */ new Set();
+      const out = [];
+      for (const slot of normalizeNodeCapabilitySlots2(slots)) {
+        if (seen.has(slot.provider)) continue;
+        seen.add(slot.provider);
+        out.push(slot.provider);
+      }
+      return out;
+    }
+    function slotKey2(slot) {
+      return [
+        slot.provider,
+        slot.model ?? "",
+        slot.thinkingLevel ?? "",
+        [...slot.difficulty ?? []].sort().join("|"),
+        [...slot.capability ?? []].sort().join("|"),
+        slot.maxParallel ?? ""
+      ].join("\0");
+    }
+    function dedupeDetected2(detected) {
+      const seen = /* @__PURE__ */ new Set();
+      const out = [];
+      for (const d of detected) {
+        const type2 = typeof d?.type === "string" ? d.type.trim() : "";
+        if (!type2 || seen.has(type2)) continue;
+        seen.add(type2);
+        out.push({ ...d, type: type2 });
+      }
+      return out;
+    }
+    function buildSlotProposal2(detected, currentSlots = []) {
+      const providers = dedupeDetected2(detected ?? []);
+      const proposedSlots = [];
+      const entries = [];
+      const unknownProviders = [];
+      const provisionalProviders = [];
+      for (const provider of providers) {
+        const known = CLI_SLOT_RECIPES2[provider.type];
+        const recipes = known ?? [UNKNOWN_CLI_SLOT_RECIPE2];
+        const isUnknown = !known;
+        if (isUnknown) unknownProviders.push(provider.type);
+        let providerProvisional = false;
+        for (const recipe of recipes) {
+          const slot = normalizeNodeCapabilitySlot2({
+            provider: provider.type,
+            model: recipe.model,
+            thinkingLevel: recipe.thinkingLevel,
+            difficulty: recipe.difficulty,
+            maxParallel: recipe.maxParallel
+          });
+          if (!slot) continue;
+          const provisional = recipe.provisional === true;
+          if (provisional) providerProvisional = true;
+          proposedSlots.push(slot);
+          entries.push({
+            slot,
+            unknownProvider: isUnknown,
+            provisional,
+            ...recipe.rationale ? { rationale: recipe.rationale } : {}
+          });
+        }
+        if (providerProvisional) provisionalProviders.push(provider.type);
+      }
+      const proposedKeys = new Set(proposedSlots.map(slotKey2));
+      const droppedSlots = currentSlots.filter((slot) => !proposedKeys.has(slotKey2(slot)));
+      const proposedProviders = new Set(proposedSlots.map((s2) => s2.provider));
+      const droppedProviders = [...new Set(
+        droppedSlots.map((s2) => s2.provider).filter((p) => !proposedProviders.has(p))
+      )];
+      return {
+        proposedSlots,
+        entries,
+        unknownProviders,
+        provisionalProviders,
+        droppedSlots,
+        droppedProviders,
+        destructive: droppedSlots.length > 0
+      };
+    }
+    function buildMagiPanelProposal2(detected, opts = {}) {
+      const providers = dedupeDetected2(detected ?? []);
+      const tableOrder = Object.keys(CLI_SLOT_RECIPES2);
+      const rank = (type2) => {
+        const i = tableOrder.indexOf(type2);
+        return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+      };
+      const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type));
+      const limit = Number.isFinite(opts.maxSlots) && opts.maxSlots > 0 ? Math.floor(opts.maxSlots) : ordered.length;
+      return ordered.slice(0, limit).map((p) => ({
+        ...opts.nodeId ? { nodeId: opts.nodeId } : {},
+        provider: p.type
+        // A model is intentionally NOT pinned: the panel's job is cross-provider
+        // independence, and pinning models here would silently couple the panel
+        // to this table's cost assumptions rather than to review quality.
+      }));
+    }
+    function interpolateArgs(args, context) {
+      const result = {};
+      for (const [k, v] of Object.entries(args)) {
+        result[k] = typeof v === "string" ? interpolateString(v, context) : v;
+      }
+      return result;
+    }
+    function interpolateString(template, ctx) {
+      return template.replace(/\{\{(\w+)\}\}/g, (_, key2) => {
+        const val = ctx[key2];
+        return val !== void 0 ? String(val) : `{{${key2}}}`;
+      });
+    }
+    function withStatusProbeMarker2(args = {}) {
+      return { ...args, [STATUS_PROBE_ARG_KEY2]: true };
+    }
+    function argsCarryStatusProbeMarker(args) {
+      return !!args && typeof args === "object" && args[STATUS_PROBE_ARG_KEY2] === true;
+    }
+    function stripStatusProbeMarker(args) {
+      if (!argsCarryStatusProbeMarker(args)) return args;
+      const { [STATUS_PROBE_ARG_KEY2]: _drop, ...rest } = args;
+      return rest;
+    }
+    function meshUtf8ByteLength(value) {
+      if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).byteLength;
+      let bytes = 0;
+      for (let i = 0; i < value.length; i += 1) {
+        const code = value.charCodeAt(i);
+        if (code < 128) bytes += 1;
+        else if (code < 2048) bytes += 2;
+        else if (code >= 55296 && code <= 56319) {
+          bytes += 4;
+          i += 1;
+        } else bytes += 3;
+      }
+      return bytes;
+    }
+    function measureWorstCaseChunkEnvelopeBytes() {
+      const densest = "\uD55C".repeat(MESH_CHUNK_PAYLOAD_CHARS);
+      return meshUtf8ByteLength(JSON.stringify(
+        buildChunkEnvelope(Number.MAX_SAFE_INTEGER, "x".repeat(64), MESH_MAX_CHUNKS, MESH_MAX_CHUNKS, densest)
+      ));
+    }
+    function meshFrameNeedsChunking(json3) {
+      return meshUtf8ByteLength(json3) > MESH_MAX_INLINE_FRAME_BYTES;
+    }
+    function buildChunkEnvelope(version2, chunkId, index, total, data) {
+      return { v: version2, kind: MESH_CHUNK_KIND, chunkId, index, total, data };
+    }
+    function splitMeshFrame(json3, chunkId, version2) {
+      const slices = [];
+      let offset = 0;
+      while (offset < json3.length) {
+        let end = Math.min(json3.length, offset + MESH_CHUNK_PAYLOAD_CHARS);
+        while (end > offset) {
+          const candidate = json3.slice(offset, end);
+          const probe = JSON.stringify(buildChunkEnvelope(version2, chunkId, slices.length, MESH_MAX_CHUNKS, candidate));
+          if (meshUtf8ByteLength(probe) <= MESH_MAX_INLINE_FRAME_BYTES) break;
+          const shrunk = Math.max(1, Math.floor((end - offset) * 0.8));
+          if (offset + shrunk >= end) {
+            end -= 1;
+            continue;
+          }
+          end = offset + shrunk;
+        }
+        if (end <= offset) {
+          return { ok: false, reason: "chunk_too_large", detail: "a single character did not fit the chunk envelope budget" };
+        }
+        slices.push(json3.slice(offset, end));
+        if (slices.length > MESH_MAX_CHUNKS) {
+          return {
+            ok: false,
+            reason: "too_many_chunks",
+            detail: `frame needs more than ${MESH_MAX_CHUNKS} chunks (${meshUtf8ByteLength(json3)} bytes)`
+          };
+        }
+        offset = end;
+      }
+      if (slices.length === 0) {
+        return { ok: false, reason: "chunk_too_large", detail: "refusing to chunk an empty frame" };
+      }
+      const total = slices.length;
+      return { ok: true, chunks: slices.map((data, index) => buildChunkEnvelope(version2, chunkId, index, total, data)) };
+    }
+    function parseSemver(version2) {
+      if (typeof version2 !== "string") return null;
+      const match = version2.trim().replace(/^v/, "").match(SEMVER_PATTERN);
+      if (!match) return null;
+      return {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+        prerelease: match[4] ? match[4].split(".") : []
+      };
+    }
+    function comparePrerelease(a, b) {
+      if (a.length === 0 && b.length === 0) return 0;
+      if (a.length === 0) return 1;
+      if (b.length === 0) return -1;
+      for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+        const idA = a[i];
+        const idB = b[i];
+        if (idA === idB) continue;
+        const numA = NUMERIC_IDENTIFIER.test(idA);
+        const numB = NUMERIC_IDENTIFIER.test(idB);
+        if (numA && numB) return Number(idA) < Number(idB) ? -1 : 1;
+        if (numA) return -1;
+        if (numB) return 1;
+        return idA < idB ? -1 : 1;
+      }
+      return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+    }
+    function compareSemver(a, b) {
+      const pa = parseSemver(a);
+      const pb = parseSemver(b);
+      if (!pa || !pb) return null;
+      if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
+      if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
+      if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
+      return comparePrerelease(pa.prerelease, pb.prerelease);
+    }
+    function isDowngrade(current, target) {
+      const direction = compareSemver(target, current);
+      if (direction === null) return false;
+      return direction < 0;
+    }
+    function isRecord(value) {
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+    }
+    function isNonEmptyString(value) {
+      return typeof value === "string" && value.length > 0;
+    }
+    function isFiniteNumber(value) {
+      return typeof value === "number" && Number.isFinite(value);
+    }
+    function makeTypeGuard2(names) {
+      const set3 = new Set(names);
+      return (value) => typeof value === "string" && set3.has(value);
+    }
+    function decodeTypeField(raw, isType) {
+      if (!isRecord(raw)) return null;
+      if (!isType(raw.type)) return null;
+      return { type: raw.type, frame: raw };
+    }
+    function readEnvelopeFields(frame2) {
+      return {
+        ...isNonEmptyString(frame2.id) ? { id: frame2.id } : {},
+        ...isFiniteNumber(frame2.timestamp) ? { timestamp: frame2.timestamp } : {}
+      };
+    }
+    function decodeDaemonToServer(raw) {
+      if (!isRecord(raw) || !isDaemonToServerType2(raw.type)) return null;
+      if (raw.type === "daemon_mesh_command") {
+        return {
+          type: "daemon_mesh_command",
+          requestId: typeof raw.requestId === "string" ? raw.requestId : String(raw.requestId ?? ""),
+          targetDaemonId: typeof raw.targetDaemonId === "string" ? raw.targetDaemonId : "",
+          command: raw.command,
+          args: isRecord(raw.args) ? raw.args : {},
+          timestamp: typeof raw.timestamp === "number" ? raw.timestamp : Date.now()
+        };
+      }
+      if (!isRecord(raw.payload)) return null;
+      if (raw.type === "auth" && !isNonEmptyString(raw.payload.token)) return null;
+      return { type: raw.type, payload: raw.payload, ...readEnvelopeFields(raw) };
+    }
+    function isServerDirectCommandMsg(msg) {
+      return !isServerToDaemonControlType2(msg.type);
+    }
+    function isDaemonDirectCommandType(value) {
+      return typeof value === "string" && DIRECT_COMMAND_TYPE_PATTERN.test(value) && !isServerToDaemonControlType2(value);
+    }
+    function decodeServerToDaemon(raw) {
+      if (!isRecord(raw) || typeof raw.type !== "string") return null;
+      const relay = {
+        ...readEnvelopeFields(raw),
+        ...isNonEmptyString(raw.source) ? { source: raw.source } : {}
+      };
+      if (raw.type === "beacon_vectors_result" || raw.type === "daemon_mesh_result") {
+        if (!isNonEmptyString(raw.requestId)) return null;
+        const base = { requestId: raw.requestId, success: raw.success === true };
+        if (raw.type === "beacon_vectors_result") {
+          return {
+            type: "beacon_vectors_result",
+            ...base,
+            ...Array.isArray(raw.reports) ? { reports: raw.reports } : {},
+            ...typeof raw.truncated === "number" ? { truncated: raw.truncated } : {},
+            ...typeof raw.error === "string" ? { error: raw.error } : {}
+          };
+        }
+        return {
+          type: "daemon_mesh_result",
+          ...base,
+          ..."result" in raw ? { result: raw.result } : {},
+          ...typeof raw.error === "string" ? { error: raw.error } : {}
+        };
+      }
+      if (!isRecord(raw.payload)) return null;
+      if (isServerToDaemonControlType2(raw.type)) {
+        return { type: raw.type, payload: raw.payload, ...relay };
+      }
+      if (!isDaemonDirectCommandType(raw.type)) return null;
+      return { type: raw.type, payload: raw.payload, ...relay };
+    }
+    function decodeUserSessionToDashboard(raw) {
+      if (!isRecord(raw) || !isUserSessionToDashboardType2(raw.type)) return null;
+      if (raw.type === "heartbeat") {
+        return { type: "heartbeat", payload: isRecord(raw.payload) ? raw.payload : {}, ...readEnvelopeFields(raw) };
+      }
+      if (!isRecord(raw.payload)) return null;
+      return { type: raw.type, payload: raw.payload, ...readEnvelopeFields(raw) };
+    }
+    function decodeDashboardToUserSession(raw) {
+      if (!isRecord(raw) || !isDashboardToUserSessionType2(raw.type)) return null;
+      if (raw.type === "heartbeat") return { type: "heartbeat", ...readEnvelopeFields(raw) };
+      if (raw.type === "refresh") return { type: "refresh" };
+      if (!isRecord(raw.payload) || typeof raw.payload.daemonId !== "string") return null;
+      return { type: raw.type, payload: raw.payload, ...readEnvelopeFields(raw) };
+    }
+    function decodeViewerToSharedSession(raw) {
+      if (!isRecord(raw) || !isViewerToSharedSessionType2(raw.type)) return null;
+      const payload = isRecord(raw.payload) ? raw.payload : {};
+      return { type: raw.type, payload, ...readEnvelopeFields(raw) };
+    }
+    function isChunkType(value) {
+      return typeof value === "string" && value.endsWith("_chunk") && value.length > "_chunk".length;
+    }
+    function readChunkFields(frame2) {
+      if (!isNonEmptyString(frame2.chunkId)) return null;
+      if (!Number.isInteger(frame2.index) || !Number.isInteger(frame2.total)) return null;
+      if (typeof frame2.data !== "string") return null;
+      return {
+        ...isNonEmptyString(frame2.id) ? { id: frame2.id } : {},
+        chunkId: frame2.chunkId,
+        index: frame2.index,
+        total: frame2.total,
+        data: frame2.data
+      };
+    }
+    function isDashboardToDaemonChunkType(value) {
+      return isChunkType(value) && isDashboardToDaemonP2PType2(value.slice(0, -"_chunk".length));
+    }
+    function decodeDashboardToDaemonP2PChunk(raw) {
+      if (!isRecord(raw) || !isDashboardToDaemonChunkType(raw.type)) return null;
+      const fields = readChunkFields(raw);
+      return fields ? { type: raw.type, ...fields } : null;
+    }
+    function decodeDashboardToDaemonP2P(raw) {
+      if (!isRecord(raw) || !isDashboardToDaemonP2PType2(raw.type)) return null;
+      if (DASHBOARD_REQUEST_TYPES.has(raw.type) && !isNonEmptyString(raw.id)) return null;
+      return raw;
+    }
+    function decodeDaemonToDashboardP2P(raw) {
+      if (!isRecord(raw)) return null;
+      if (raw.type === void 0 && isNonEmptyString(raw.id) && typeof raw.success === "boolean") {
+        return { ...raw, type: "response" };
+      }
+      if (!isDaemonToDashboardP2PType2(raw.type)) return null;
+      switch (raw.type) {
+        case "ping":
+        case "pong":
+        case "p2p_evicted":
+          return raw;
+        case "status_report":
+        case "status_event":
+          return isRecord(raw.payload) ? raw : null;
+        case "topic_update":
+          return isRecord(raw.update) ? raw : null;
+        case "topic_update_chunk":
+        case "command_result_chunk":
+        case "session_output_chunk": {
+          const fields = readChunkFields(raw);
+          if (!fields) return null;
+          if (raw.type === "session_output_chunk") {
+            return isNonEmptyString(raw.sessionId) ? { type: raw.type, sessionId: raw.sessionId, ...fields } : null;
+          }
+          return { type: raw.type, ...fields };
+        }
+        case "session_output":
+          return isNonEmptyString(raw.sessionId) && typeof raw.data === "string" ? raw : null;
+        case "session_io_error":
+          return isNonEmptyString(raw.sessionId) ? raw : null;
+        case "command_result":
+        case "response":
+          return isNonEmptyString(raw.id) ? raw : null;
+      }
+    }
+    function normalizeAuthOkLimits(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const src = raw;
+      const num2 = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+      return {
+        maxP2Pconnections: num2(
+          src.maxP2Pconnections !== void 0 ? src.maxP2Pconnections : src.maxP2PConnections,
+          -1
+        ),
+        screenshotIntervalSeconds: num2(src.screenshotIntervalSeconds, 0),
+        dailyScreenshotMinutes: num2(src.dailyScreenshotMinutes, -1),
+        maxMachines: num2(src.maxMachines, -1)
+      };
+    }
+    function isSessionStatus(value) {
+      return typeof value === "string" && SESSION_STATUS_SET2.has(value);
+    }
+    function normalizeSessionStatus(raw) {
+      if (typeof raw !== "string") return null;
+      const value = raw.trim().toLowerCase();
+      if (SESSION_STATUS_SET2.has(value)) return value;
+      return SESSION_STATUS_ALIASES[value] ?? null;
+    }
+    function classifySessionStatus(raw) {
+      const status = normalizeSessionStatus(raw);
+      return status ? SESSION_STATUS_CLASS[status] : "unknown";
+    }
+    function isWorkingStatus(raw) {
+      return classifySessionStatus(raw) === "working";
+    }
+    function isBlockedStatus(raw) {
+      return classifySessionStatus(raw) === "blocked";
+    }
+    function isReadyStatus(raw) {
+      return classifySessionStatus(raw) === "ready";
+    }
+    function isDeadStatus(raw) {
+      return classifySessionStatus(raw) === "dead";
+    }
+    function isBusyStatus(raw) {
+      const cls = classifySessionStatus(raw);
+      return cls === "working" || cls === "blocked";
+    }
+    function statusesOfClass(cls) {
+      return SESSION_STATUSES2.filter((status) => SESSION_STATUS_CLASS[status] === cls);
+    }
+    function makeGuard2(values) {
+      const set3 = new Set(values);
+      return (value) => typeof value === "string" && set3.has(value);
+    }
+    function enumOf2(values, description) {
+      return {
+        type: "string",
+        enum: [...values],
+        ...description ? { description } : {}
+      };
+    }
+    function isWorkerTool(value) {
+      return typeof value === "string" && WORKER_TOOL_SET2.has(value);
+    }
+    function hasWorkerProtocolFooter2(body) {
+      return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER2);
+    }
+    function renderWorkerProtocolFooter2(input = {}) {
+      const lines = [WORKER_PROTOCOL_FOOTER_MARKER2];
+      const scope = [];
+      if (input.taskId) scope.push(`task ${input.taskId}`);
+      if (input.taskMode) scope.push(`mode ${input.taskMode}`);
+      if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
+      if (input.readonly) scope.push("read-only");
+      if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
+      else lines.push("You are a delegated worker.");
+      lines.push(
+        "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
+        "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
+        "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace (pass its absolute path as `workspace`).",
+        "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`."
+      );
+      if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+        lines.push(
+          `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and add your own in \`handoff_notes\` when you report.`
+        );
+      }
+      return lines.join("\n");
+    }
+    function stripWorkerProtocolFooter(body) {
+      if (typeof body !== "string") return body;
+      const at = body.indexOf(WORKER_PROTOCOL_FOOTER_MARKER2);
+      if (at < 0) return body;
+      return body.slice(0, at).replace(/\s+$/, "");
+    }
+    function appendWorkerProtocolFooter2(body, input = {}) {
+      if (hasWorkerProtocolFooter2(body)) return body;
+      const trimmed = body.replace(/\s+$/, "");
+      return `${trimmed}
+
+${renderWorkerProtocolFooter2(input)}`;
+    }
+    function renderCoordinatorWorkerSection() {
+      return [
+        "## Workers",
+        "",
+        `Every task you dispatch is delivered with a worker protocol footer. Workers hold exactly these tools: ${WORKER_TOOLS2.map((tool) => `\`${tool}\``).join(", ")} \u2014 and no \`mesh_*\` tools.`,
+        "- A worker finishes by calling `report_completion`; its structured report (outcome, summary, touched files, branch state, handoff notes) is what reaches you as the completion event. Read that report \u2014 do not re-derive the outcome from `mesh_read_chat` or the terminal unless the report is missing.",
+        "- `progress_update` from a worker arrives as a lightweight progress note. Do NOT poll `mesh_status`, `mesh_view_queue` or `mesh_read_chat` to check on a running worker; completion, progress, blocked and failure all arrive as events.",
+        "- To reach a busy worker mid-task use `mesh_notify_worker`: the memo is delivered on the worker's next tool call (or when it becomes idle). A worker that reports `blocked` is asking you for a decision \u2014 answer it with `mesh_send_task` to the same session.",
+        "- `mesh_status` is for node health and capacity before delegating, never for progress."
+      ].join("\n");
+    }
+    var QUOTA_SUPPORTED_PROVIDERS;
+    var DAEMON_ID_PREFIXES;
+    var MAGI_RAW_ANSWER_CAP3;
+    var MESH_TASK_DIFFICULTIES2;
+    var DEFAULT_DIFFICULTY_BRAINS;
+    var CLI_SLOT_RECIPES2;
+    var UNKNOWN_CLI_SLOT_RECIPE2;
+    var CANONICAL_MESH_TOOL_NAMES2;
+    var CANONICAL_MESH_TOOL_COUNT2;
+    var STATUS_PROBE_ARG_KEY2;
+    var MESH_MAX_INLINE_FRAME_BYTES;
+    var MESH_CHUNK_PAYLOAD_CHARS;
+    var MESH_MAX_CHUNKS;
+    var MESH_MAX_REASSEMBLED_BYTES;
+    var MESH_CHUNK_TTL_MS;
+    var MESH_CHUNK_KIND;
+    var MeshChunkAssembler;
+    var SEMVER_PATTERN;
+    var NUMERIC_IDENTIFIER;
+    var DAEMON_STATUS_EVENT_NAMES2;
+    var isDaemonStatusEventName2;
+    var RELEASE_CHANNELS;
+    var NPM_UPDATE_TAGS;
+    var VERSION_UPDATE_REASONS;
+    var P2P_SIGNAL_TYPES2;
+    var isP2PSignalType2;
+    var DAEMON_P2P_SIGNAL_TYPES2;
+    var isDaemonP2PSignalType2;
+    var MESH_P2P_SIGNAL_TYPES2;
+    var isMeshP2PSignalType2;
+    var DAEMON_TO_SERVER_TYPES2;
+    var isDaemonToServerType2;
+    var SERVER_TO_DAEMON_CONTROL_TYPES2;
+    var isServerToDaemonControlType2;
+    var DIRECT_COMMAND_TYPE_PATTERN;
+    var SERVER_STATUS_EVENT_NAMES2;
+    var DASHBOARD_STATUS_EVENT_NAMES2;
+    var isDashboardStatusEventName2;
+    var SYSTEM_ANNOUNCEMENT_TYPES;
+    var USER_SESSION_TO_DASHBOARD_TYPES2;
+    var isUserSessionToDashboardType2;
+    var DASHBOARD_TO_USER_SESSION_TYPES2;
+    var isDashboardToUserSessionType2;
+    var DASHBOARD_P2P_SIGNAL_TYPES2;
+    var isDashboardP2PSignalType2;
+    var SHARED_SESSION_TO_VIEWER_TYPES2;
+    var isSharedSessionToViewerType2;
+    var VIEWER_TO_SHARED_SESSION_TYPES2;
+    var isViewerToSharedSessionType2;
+    var DASHBOARD_TO_DAEMON_P2P_TYPES2;
+    var isDashboardToDaemonP2PType2;
+    var DASHBOARD_REQUEST_TYPES;
+    var DAEMON_TO_DASHBOARD_P2P_TYPES2;
+    var isDaemonToDashboardP2PType2;
+    var DASHBOARD_P2P_MESSAGE_KINDS2;
+    var DAEMON_TO_SERVER_WS_MSGS;
+    var SERVER_TO_DAEMON_WS_MSGS;
+    var isDaemonToServerWsMsg;
+    var isServerToDaemonWsMsg;
+    var CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX;
+    var CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX;
+    var SESSION_STATUSES2;
+    var RECENT_SESSION_BUCKETS;
+    var SESSION_STATUS_CLASS;
+    var SESSION_STATUS_ALIASES;
+    var SESSION_STATUS_SET2;
+    var MESH_TASK_STATUSES2;
+    var MESH_TERMINAL_TASK_STATUSES2;
+    var MESH_TASK_MODES2;
+    var MESH_TASK_PRIORITIES2;
+    var MESH_THINKING_LEVELS2;
+    var MESH_DELIVERY_MODES2;
+    var MESH_SESSION_CLEANUP_MODES2;
+    var WORKER_REPORT_OUTCOMES2;
+    var WORKER_BRANCH_STATES2;
+    var isMeshTaskStatus2;
+    var isMeshTerminalTaskStatus2;
+    var isMeshTaskMode2;
+    var isMeshTaskPriority2;
+    var isMeshThinkingLevel2;
+    var isMeshDeliveryMode2;
+    var isMeshSessionCleanupMode2;
+    var isWorkerReportOutcome2;
+    var isWorkerBranchState2;
+    var WORKER_TOOLS2;
+    var WORKER_TOOL_SET2;
+    var WORKER_PROTOCOL_FOOTER_MARKER2;
+    var init_dist = __esm2({
+      "../mesh-shared/dist/index.mjs"() {
+        "use strict";
+        QUOTA_SUPPORTED_PROVIDERS = [
+          "antigravity-cli",
+          "claude-cli",
+          "codex-cli",
+          "cursor-cli",
+          "grok-cli",
+          "kimi",
+          "opencode"
+        ];
+        DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
+        MAGI_RAW_ANSWER_CAP3 = 4e3;
+        MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
+        DEFAULT_DIFFICULTY_BRAINS = {};
+        CLI_SLOT_RECIPES2 = Object.freeze({
+          "claude-cli": [
+            {
+              model: "sonnet",
+              thinkingLevel: "high",
+              difficulty: ["medium", "easy"],
+              maxParallel: 5,
+              rationale: "Primary workhorse \u2014 widest parallelism for routine work."
+            },
+            {
+              model: "opus",
+              thinkingLevel: "high",
+              difficulty: ["difficult"],
+              maxParallel: 1,
+              rationale: "Reserved for hard tasks; capped at 1 to bound cost."
+            }
+          ],
+          "kimi": [
+            {
+              model: "kimi-code/k3",
+              difficulty: ["medium", "difficult"],
+              maxParallel: 2,
+              rationale: "Independent second opinion on mid/hard work."
+            }
+          ],
+          "codex-cli": [
+            {
+              difficulty: ["medium", "difficult", "freeform"],
+              maxParallel: 2,
+              rationale: "Broad range including freeform; no model pin."
+            }
+          ],
+          "antigravity-cli": [
+            {
+              model: "Gemini 3.1 Pro (High)",
+              difficulty: ["easy"],
+              maxParallel: 2,
+              rationale: "Cheap capacity for easy tasks."
+            }
+          ],
+          "cursor-cli": [
+            {
+              model: "auto",
+              difficulty: ["easy"],
+              maxParallel: 1,
+              rationale: "Easy tasks only; auto model selection."
+            }
+          ],
+          "hermes-cli": [
+            {
+              difficulty: ["medium"],
+              maxParallel: 2,
+              provisional: true,
+              // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
+              // slot configuration this table was seeded from, so `medium` is a
+              // conservative placement rather than a transcription. Revisit once
+              // it has real usage data.
+              rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
+            }
+          ]
+        });
+        UNKNOWN_CLI_SLOT_RECIPE2 = Object.freeze({
+          difficulty: ["medium"],
+          maxParallel: 1,
+          provisional: true,
+          rationale: "Unrecognized provider \u2014 conservative default (medium, maxParallel 1). Review before relying on it."
+        });
+        CANONICAL_MESH_TOOL_NAMES2 = [
+          "mesh_status",
+          "mesh_route_preview",
+          "mesh_list_nodes",
+          // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
+          "mesh_enqueue_batch",
+          "mesh_enqueue_task",
+          "mesh_view_queue",
+          // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
+          "mesh_graph_view",
+          "mesh_graph_gate_claim",
+          "mesh_graph_gate_release",
+          "mesh_graph_gate_abandon",
+          "mesh_graph_node_patch",
+          "mesh_queue_cancel",
+          "mesh_queue_requeue",
+          "mesh_send_task",
+          "mesh_read_chat",
+          "mesh_read_debug",
+          "mesh_read_terminal",
+          "mesh_send_keys",
+          "mesh_launch_session",
+          "mesh_git_status",
+          "mesh_read_node_logs",
+          "mesh_fast_forward_node",
+          "mesh_restart_daemon",
+          "mesh_checkpoint",
+          "mesh_approve",
+          "mesh_answer_question",
+          "mesh_list_pending_approvals",
+          "mesh_plan_onboarding",
+          "mesh_create",
+          "mesh_add_node",
+          "mesh_clone_node",
+          "mesh_remove_node",
+          "mesh_cleanup_worktree_nodes",
+          "mesh_refine_node",
+          "mesh_refine_batch",
+          "mesh_refine_config",
+          "mesh_change_impact_config",
+          "mesh_init",
+          "mesh_reinit",
+          "mesh_write_mesh_json_config",
+          "mesh_refine_plan",
+          "mesh_cleanup_sessions",
+          "mesh_prune_stale_direct",
+          "mesh_task_history",
+          "mesh_ledger_query",
+          "mesh_record_note",
+          "mesh_forget_note",
+          "mesh_reconcile_ledger",
+          "mesh_requeue_held_events",
+          "mesh_mission_upsert",
+          "mesh_mission_list",
+          "mesh_review_inbox",
+          "mesh_magi_review",
+          "mesh_magi_collect",
+          "mesh_magi_kind_panel_set",
+          "mesh_magi_kind_panel_list",
+          "mesh_node_slots_set",
+          "mesh_node_slots_list",
+          "mesh_node_slots_propose",
+          "mesh_coordinator_prompt_append_get",
+          "mesh_coordinator_prompt_append_set"
+        ];
+        CANONICAL_MESH_TOOL_COUNT2 = CANONICAL_MESH_TOOL_NAMES2.length;
+        STATUS_PROBE_ARG_KEY2 = "_statusProbe";
+        MESH_MAX_INLINE_FRAME_BYTES = 6e4;
+        MESH_CHUNK_PAYLOAD_CHARS = 16e3;
+        MESH_MAX_CHUNKS = 1024;
+        MESH_MAX_REASSEMBLED_BYTES = 16e6;
+        MESH_CHUNK_TTL_MS = 6e4;
+        MESH_CHUNK_KIND = "rpc_chunk";
+        MeshChunkAssembler = class {
+          constructor(now = () => Date.now()) {
+            this.now = now;
+          }
+          buffers = /* @__PURE__ */ new Map();
+          /** True when the frame is a chunk envelope this assembler should handle. */
+          static isChunkFrame(frame2) {
+            return !!frame2 && typeof frame2 === "object" && frame2.kind === MESH_CHUNK_KIND;
+          }
+          /** Drop partials older than the TTL so a dead sender cannot pin memory. */
+          sweep() {
+            const now = this.now();
+            for (const [key2, entry] of Array.from(this.buffers.entries())) {
+              if (now - entry.createdAt > MESH_CHUNK_TTL_MS) this.buffers.delete(key2);
+            }
+          }
+          /** Discard any partial state for a peer (call on disconnect). */
+          reset() {
+            this.buffers.clear();
+          }
+          /** Number of frames currently mid-reassembly — for tests and diagnostics. */
+          get pendingCount() {
+            return this.buffers.size;
+          }
+          /**
+           * Accept one chunk envelope.
+           *
+           * Never throws and never returns a partially-applied frame: the result is exactly one
+           * of partial / complete / failed, and `failed` carries a typed reason the transport
+           * turns into an explicit RPC error.
+           */
+          accept(frame2) {
+            this.sweep();
+            const raw = frame2;
+            const chunkId = typeof raw?.chunkId === "string" ? raw.chunkId : "";
+            const index = Number(raw?.index);
+            const total = Number(raw?.total);
+            const data = typeof raw?.data === "string" ? raw.data : "";
+            if (!chunkId || !Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total <= 0 || index >= total || !data) {
+              return {
+                status: "failed",
+                reason: "malformed_chunk",
+                detail: `malformed chunk envelope (chunkId=${chunkId || "-"} index=${raw?.index} total=${raw?.total})`,
+                chunkId
+              };
+            }
+            if (total > MESH_MAX_CHUNKS) {
+              this.buffers.delete(chunkId);
+              return {
+                status: "failed",
+                reason: "too_many_chunks",
+                detail: `chunk total ${total} exceeds the ${MESH_MAX_CHUNKS} cap`,
+                chunkId
+              };
+            }
+            let entry = this.buffers.get(chunkId);
+            if (!entry) {
+              entry = { total, chunks: new Array(total).fill(""), received: 0, bytesReceived: 0, createdAt: this.now() };
+              this.buffers.set(chunkId, entry);
+            } else if (entry.total !== total) {
+              this.buffers.delete(chunkId);
+              return {
+                status: "failed",
+                reason: "inconsistent_total",
+                detail: `chunk ${index} declares total ${total} but the group was opened with ${entry.total}`,
+                chunkId
+              };
+            }
+            const existing = entry.chunks[index];
+            if (existing) {
+              if (existing === data) return { status: "partial", received: entry.received, total: entry.total };
+              this.buffers.delete(chunkId);
+              return {
+                status: "failed",
+                reason: "duplicate_chunk_mismatch",
+                detail: `chunk ${index} arrived twice with different content`,
+                chunkId
+              };
+            }
+            const chunkBytes = meshUtf8ByteLength(data);
+            if (entry.bytesReceived + chunkBytes > MESH_MAX_REASSEMBLED_BYTES) {
+              this.buffers.delete(chunkId);
+              return {
+                status: "failed",
+                reason: "budget_exceeded",
+                detail: `reassembled frame would exceed ${MESH_MAX_REASSEMBLED_BYTES} bytes`,
+                chunkId
+              };
+            }
+            entry.chunks[index] = data;
+            entry.received += 1;
+            entry.bytesReceived += chunkBytes;
+            if (entry.received < entry.total) {
+              return { status: "partial", received: entry.received, total: entry.total };
+            }
+            this.buffers.delete(chunkId);
+            try {
+              return { status: "complete", frame: JSON.parse(entry.chunks.join("")) };
+            } catch (error48) {
+              return {
+                status: "failed",
+                reason: "reassembled_parse_failed",
+                detail: `reassembled frame is not valid JSON: ${error48 instanceof Error ? error48.message : String(error48)}`,
+                chunkId
+              };
+            }
+          }
+        };
+        SEMVER_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+        NUMERIC_IDENTIFIER = /^\d+$/;
+        DAEMON_STATUS_EVENT_NAMES2 = [
+          "agent:generating_started",
+          "agent:waiting_approval",
+          "agent:waiting_choice",
+          "agent:generating_completed",
+          "agent:stopped",
+          "monitor:no_progress",
+          /** Legacy alias for `monitor:no_progress`, still emitted by older daemons. */
+          "monitor:long_generating"
+        ];
+        isDaemonStatusEventName2 = makeTypeGuard2(DAEMON_STATUS_EVENT_NAMES2);
+        RELEASE_CHANNELS = ["stable", "preview"];
+        NPM_UPDATE_TAGS = ["latest", "next"];
+        VERSION_UPDATE_REASONS = ["force_update_below", "major_minor_mismatch", "patch_mismatch", "daemon_ahead"];
+        P2P_SIGNAL_TYPES2 = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];
+        isP2PSignalType2 = makeTypeGuard2(P2P_SIGNAL_TYPES2);
+        DAEMON_P2P_SIGNAL_TYPES2 = ["p2p_offer", "p2p_ice"];
+        isDaemonP2PSignalType2 = makeTypeGuard2(DAEMON_P2P_SIGNAL_TYPES2);
+        MESH_P2P_SIGNAL_TYPES2 = ["mesh_p2p_ready", "mesh_p2p_offer", "mesh_p2p_answer", "mesh_p2p_ice"];
+        isMeshP2PSignalType2 = makeTypeGuard2(MESH_P2P_SIGNAL_TYPES2);
+        DAEMON_TO_SERVER_TYPES2 = [
+          "auth",
+          "status_report",
+          "status_heartbeat",
+          "status_event",
+          "command_result",
+          "error",
+          "agent_event",
+          "beacon_vectors",
+          "daemon_mesh_command",
+          "p2p_offer",
+          "p2p_ice"
+        ];
+        isDaemonToServerType2 = makeTypeGuard2(DAEMON_TO_SERVER_TYPES2);
+        SERVER_TO_DAEMON_CONTROL_TYPES2 = [
+          "auth_ok",
+          "auth_error",
+          "machine_evicted",
+          "force_disconnect",
+          "token_revoked",
+          "version_mismatch",
+          "force_update_required",
+          "command",
+          "agent_command",
+          "resolve_action",
+          "beacon_vectors_result",
+          "daemon_mesh_result",
+          "p2p_ready",
+          "p2p_offer",
+          "p2p_answer",
+          "p2p_ice",
+          "mesh_p2p_ready",
+          "mesh_p2p_offer",
+          "mesh_p2p_answer",
+          "mesh_p2p_ice"
+        ];
+        isServerToDaemonControlType2 = makeTypeGuard2(SERVER_TO_DAEMON_CONTROL_TYPES2);
+        DIRECT_COMMAND_TYPE_PATTERN = /^[a-z][a-z0-9_:.-]{0,63}$/;
+        SERVER_STATUS_EVENT_NAMES2 = [
+          "daemon:disconnect",
+          "team:session_viewed",
+          "team:view_request",
+          "team:view_request_approved",
+          "team:view_request_rejected"
+        ];
+        DASHBOARD_STATUS_EVENT_NAMES2 = [...DAEMON_STATUS_EVENT_NAMES2, ...SERVER_STATUS_EVENT_NAMES2];
+        isDashboardStatusEventName2 = makeTypeGuard2(DASHBOARD_STATUS_EVENT_NAMES2);
+        SYSTEM_ANNOUNCEMENT_TYPES = ["info", "warning", "critical"];
+        USER_SESSION_TO_DASHBOARD_TYPES2 = [
+          "connected",
+          "initial_state",
+          "daemon_status",
+          "status_event",
+          "system_announcement",
+          "auth_error",
+          "heartbeat",
+          "p2p_offer",
+          "p2p_ice"
+        ];
+        isUserSessionToDashboardType2 = makeTypeGuard2(USER_SESSION_TO_DASHBOARD_TYPES2);
+        DASHBOARD_TO_USER_SESSION_TYPES2 = ["heartbeat", "refresh", "p2p_ready", "p2p_answer", "p2p_ice"];
+        isDashboardToUserSessionType2 = makeTypeGuard2(DASHBOARD_TO_USER_SESSION_TYPES2);
+        DASHBOARD_P2P_SIGNAL_TYPES2 = ["p2p_ready", "p2p_answer", "p2p_ice"];
+        isDashboardP2PSignalType2 = makeTypeGuard2(DASHBOARD_P2P_SIGNAL_TYPES2);
+        SHARED_SESSION_TO_VIEWER_TYPES2 = [
+          "share:connected",
+          "share:revoked",
+          "share:expired",
+          "share:error",
+          "share:viewer_count",
+          "p2p_offer",
+          "p2p_ice"
+        ];
+        isSharedSessionToViewerType2 = makeTypeGuard2(SHARED_SESSION_TO_VIEWER_TYPES2);
+        VIEWER_TO_SHARED_SESSION_TYPES2 = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];
+        isViewerToSharedSessionType2 = makeTypeGuard2(VIEWER_TO_SHARED_SESSION_TYPES2);
+        DASHBOARD_TO_DAEMON_P2P_TYPES2 = [
+          "ping",
+          "pong",
+          "command",
+          "input",
+          "pty_input",
+          "pty_resize",
+          "screenshot_start",
+          "screenshot_stop",
+          "subscribe",
+          "unsubscribe",
+          "seqscribe_session_interest",
+          "read",
+          "write",
+          "list"
+        ];
+        isDashboardToDaemonP2PType2 = makeTypeGuard2(DASHBOARD_TO_DAEMON_P2P_TYPES2);
+        DASHBOARD_REQUEST_TYPES = /* @__PURE__ */ new Set(["command", "input", "read", "write", "list"]);
+        DAEMON_TO_DASHBOARD_P2P_TYPES2 = [
+          "ping",
+          "pong",
+          "p2p_evicted",
+          "status_report",
+          "status_event",
+          "topic_update",
+          "topic_update_chunk",
+          "session_output",
+          "session_output_chunk",
+          "session_io_error",
+          "command_result",
+          "command_result_chunk",
+          "response"
+        ];
+        isDaemonToDashboardP2PType2 = makeTypeGuard2(DAEMON_TO_DASHBOARD_P2P_TYPES2);
+        DASHBOARD_P2P_MESSAGE_KINDS2 = [
+          .../* @__PURE__ */ new Set([...DASHBOARD_TO_DAEMON_P2P_TYPES2, ...DAEMON_TO_DASHBOARD_P2P_TYPES2])
+        ];
+        DAEMON_TO_SERVER_WS_MSGS = DAEMON_TO_SERVER_TYPES2;
+        SERVER_TO_DAEMON_WS_MSGS = SERVER_TO_DAEMON_CONTROL_TYPES2;
+        isDaemonToServerWsMsg = isDaemonToServerType2;
+        isServerToDaemonWsMsg = isServerToDaemonControlType2;
+        CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX = "Claude TUI review page is not focused";
+        CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX = "Claude TUI answer delivered but not confirmed";
+        SESSION_STATUSES2 = [
+          "idle",
+          "generating",
+          "waiting_approval",
+          "waiting_choice",
+          "finalizing",
+          "error",
+          "stopped",
+          "starting",
+          "panel_hidden",
+          "not_monitored",
+          "disconnected"
+        ];
+        RECENT_SESSION_BUCKETS = ["needs_attention", "working", "task_complete", "idle"];
+        SESSION_STATUS_CLASS = {
+          generating: "working",
+          finalizing: "working",
+          starting: "working",
+          waiting_approval: "blocked",
+          waiting_choice: "blocked",
+          idle: "ready",
+          panel_hidden: "ready",
+          not_monitored: "ready",
+          error: "dead",
+          stopped: "dead",
+          disconnected: "dead"
+        };
+        SESSION_STATUS_ALIASES = {
+          running: "generating",
+          streaming: "generating",
+          busy: "generating",
+          working: "generating",
+          loading: "generating",
+          loading_reference: "generating",
+          thinking: "generating",
+          active: "generating",
+          // Status-lane refinements of a turn that is still owned by the agent.
+          no_progress: "generating",
+          long_generating: "generating",
+          initializing: "starting",
+          waiting: "waiting_approval"
+        };
+        SESSION_STATUS_SET2 = new Set(SESSION_STATUSES2);
+        MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "failed", "cancelled"];
+        MESH_TERMINAL_TASK_STATUSES2 = ["completed", "failed", "cancelled"];
+        MESH_TASK_MODES2 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
+        MESH_TASK_PRIORITIES2 = ["low", "normal", "high"];
+        MESH_THINKING_LEVELS2 = ["low", "medium", "high"];
+        MESH_DELIVERY_MODES2 = ["when_idle", "interrupt"];
+        MESH_SESSION_CLEANUP_MODES2 = ["preserve", "stop", "delete_stopped", "stop_and_delete"];
+        WORKER_REPORT_OUTCOMES2 = ["completed", "blocked", "failed"];
+        WORKER_BRANCH_STATES2 = [
+          "merged_to_main",
+          "pushed_feature_branch_needs_merge",
+          "blocked_review",
+          "cleanup_candidate",
+          "not_mergeable"
+        ];
+        isMeshTaskStatus2 = makeGuard2(MESH_TASK_STATUSES2);
+        isMeshTerminalTaskStatus2 = makeGuard2(MESH_TERMINAL_TASK_STATUSES2);
+        isMeshTaskMode2 = makeGuard2(MESH_TASK_MODES2);
+        isMeshTaskPriority2 = makeGuard2(MESH_TASK_PRIORITIES2);
+        isMeshThinkingLevel2 = makeGuard2(MESH_THINKING_LEVELS2);
+        isMeshDeliveryMode2 = makeGuard2(MESH_DELIVERY_MODES2);
+        isMeshSessionCleanupMode2 = makeGuard2(MESH_SESSION_CLEANUP_MODES2);
+        isWorkerReportOutcome2 = makeGuard2(WORKER_REPORT_OUTCOMES2);
+        isWorkerBranchState2 = makeGuard2(WORKER_BRANCH_STATES2);
+        WORKER_TOOLS2 = [
+          "report_completion",
+          "progress_update",
+          "peer_context_pull",
+          "git_status",
+          "git_log",
+          "git_diff"
+        ];
+        WORKER_TOOL_SET2 = new Set(WORKER_TOOLS2);
+        WORKER_PROTOCOL_FOOTER_MARKER2 = "--- adhdev worker protocol ---";
+      }
+    });
     function isKnownDangerousLaunchArg(arg) {
       const normalized = arg.trim();
       if (KNOWN_DANGEROUS_LAUNCH_ARGS.has(normalized)) return true;
@@ -40368,6 +42042,7 @@ var require_dist3 = __commonJS({
     var init_repo_mesh_types = __esm2({
       "src/repo-mesh-types.ts"() {
         "use strict";
+        init_dist();
         init_auto_approve_modes();
         MESH_SCHEDULING_STRATEGIES = [
           "first_eligible",
@@ -40436,12 +42111,7 @@ var require_dist3 = __commonJS({
           quotaBusyFallback: true
         };
         SILENT_IDLE_PUSH_TTL_MS = 10 * 60 * 1e3;
-        SESSION_CLEANUP_MODES = /* @__PURE__ */ new Set([
-          "preserve",
-          "stop",
-          "delete_stopped",
-          "stop_and_delete"
-        ]);
+        SESSION_CLEANUP_MODES = new Set(MESH_SESSION_CLEANUP_MODES2);
         SPAWNED_SESSION_VISIBILITY_MODES = /* @__PURE__ */ new Set([
           "visible",
           "hidden"
@@ -40480,11 +42150,11 @@ var require_dist3 = __commonJS({
       normalizeRepoMeshDeclarativeConfig: () => normalizeRepoMeshDeclarativeConfig,
       serializeMeshJsonConfigScaffold: () => serializeMeshJsonConfigScaffold
     });
-    function isRecord(value) {
+    function isRecord2(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function normalizeOperatingNote(value) {
-      if (!isRecord(value)) return null;
+      if (!isRecord2(value)) return null;
       const text = typeof value.text === "string" ? value.text.trim() : "";
       if (!text) return null;
       const category = value.category === "provider_quirk" || value.category === "pattern_to_avoid" || value.category === "recovery_lesson" ? value.category : void 0;
@@ -40505,13 +42175,13 @@ var require_dist3 = __commonJS({
     }
     function normalizeRepoMeshDeclarativeConfig(parsed) {
       const errors = [];
-      if (!isRecord(parsed)) return { valid: false, errors: ["config must be an object"] };
+      if (!isRecord2(parsed)) return { valid: false, errors: ["config must be an object"] };
       if (parsed.version !== 1) {
         return { valid: false, errors: [`version must be 1 (got ${JSON.stringify(parsed.version)})`] };
       }
       const config2 = { version: 1 };
       if (parsed.coordinator !== void 0) {
-        if (isRecord(parsed.coordinator)) {
+        if (isRecord2(parsed.coordinator)) {
           const coord = {};
           const c = parsed.coordinator;
           if (typeof c.systemPromptOverride === "string") coord.systemPromptOverride = c.systemPromptOverride;
@@ -40531,7 +42201,7 @@ var require_dist3 = __commonJS({
         }
       }
       if (parsed.limits !== void 0) {
-        if (isRecord(parsed.limits)) {
+        if (isRecord2(parsed.limits)) {
           const limits = {};
           if (Number.isFinite(Number(parsed.limits.maxNoteChars))) limits.maxNoteChars = Number(parsed.limits.maxNoteChars);
           if (Number.isFinite(Number(parsed.limits.maxNotes))) limits.maxNotes = Number(parsed.limits.maxNotes);
@@ -40541,11 +42211,11 @@ var require_dist3 = __commonJS({
         }
       }
       if (parsed.providerDefaults !== void 0) {
-        if (isRecord(parsed.providerDefaults)) {
+        if (isRecord2(parsed.providerDefaults)) {
           const pd = {};
           const rawModes = parsed.providerDefaults.autoApproveModes;
           if (rawModes !== void 0) {
-            if (isRecord(rawModes)) {
+            if (isRecord2(rawModes)) {
               const modes = {};
               for (const [providerType, modeId] of Object.entries(rawModes)) {
                 const type2 = typeof providerType === "string" ? providerType.trim() : "";
@@ -41018,14 +42688,14 @@ var require_dist3 = __commonJS({
         "use strict";
       }
     });
-    function isRecord2(value) {
+    function isRecord3(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function isStringArray(value) {
       return Array.isArray(value) && value.every((v) => typeof v === "string" && v.length > 0);
     }
     function validateTarget(value, key2, errors) {
-      if (!isRecord2(value)) {
+      if (!isRecord3(value)) {
         errors.push(`impactTargets.${key2} must be an object`);
         return void 0;
       }
@@ -41041,7 +42711,7 @@ var require_dist3 = __commonJS({
     }
     function validateChangeImpactConfig(raw, source = "inline") {
       const errors = [];
-      if (!isRecord2(raw)) {
+      if (!isRecord3(raw)) {
         return { valid: false, errors: [`${source}: config must be an object`] };
       }
       const config2 = {};
@@ -41058,7 +42728,7 @@ var require_dist3 = __commonJS({
         else errors.push("nonRuntimeRootFilePatterns must be an array of non-empty strings");
       }
       if (raw.impactTargets !== void 0) {
-        if (!isRecord2(raw.impactTargets)) {
+        if (!isRecord3(raw.impactTargets)) {
           errors.push("impactTargets must be an object");
         } else {
           const targets = {};
@@ -47078,1309 +48748,6 @@ child.on('exit', () => process.exit(0));
         buildCliSpawnEnv = import_session_host_core.sanitizeSpawnEnv;
       }
     });
-    var dist_exports = {};
-    __export2(dist_exports, {
-      CANONICAL_MESH_TOOL_COUNT: () => CANONICAL_MESH_TOOL_COUNT2,
-      CANONICAL_MESH_TOOL_NAMES: () => CANONICAL_MESH_TOOL_NAMES2,
-      CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX: () => CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
-      CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX: () => CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
-      CLI_SLOT_RECIPES: () => CLI_SLOT_RECIPES2,
-      DAEMON_TO_SERVER_WS_MSGS: () => DAEMON_TO_SERVER_WS_MSGS,
-      DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
-      MAGI_RAW_ANSWER_CAP: () => MAGI_RAW_ANSWER_CAP3,
-      MESH_CHUNK_KIND: () => MESH_CHUNK_KIND,
-      MESH_CHUNK_PAYLOAD_CHARS: () => MESH_CHUNK_PAYLOAD_CHARS,
-      MESH_CHUNK_TTL_MS: () => MESH_CHUNK_TTL_MS,
-      MESH_DELIVERY_MODES: () => MESH_DELIVERY_MODES2,
-      MESH_MAX_CHUNKS: () => MESH_MAX_CHUNKS,
-      MESH_MAX_INLINE_FRAME_BYTES: () => MESH_MAX_INLINE_FRAME_BYTES,
-      MESH_MAX_REASSEMBLED_BYTES: () => MESH_MAX_REASSEMBLED_BYTES,
-      MESH_TASK_DIFFICULTIES: () => MESH_TASK_DIFFICULTIES2,
-      MESH_TASK_MODES: () => MESH_TASK_MODES2,
-      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES2,
-      MESH_TASK_STATUSES: () => MESH_TASK_STATUSES2,
-      MESH_TERMINAL_TASK_STATUSES: () => MESH_TERMINAL_TASK_STATUSES2,
-      MESH_THINKING_LEVELS: () => MESH_THINKING_LEVELS2,
-      MeshChunkAssembler: () => MeshChunkAssembler,
-      QUOTA_SUPPORTED_PROVIDERS: () => QUOTA_SUPPORTED_PROVIDERS,
-      RECENT_SESSION_BUCKETS: () => RECENT_SESSION_BUCKETS,
-      SERVER_TO_DAEMON_WS_MSGS: () => SERVER_TO_DAEMON_WS_MSGS,
-      SESSION_STATUSES: () => SESSION_STATUSES2,
-      SESSION_STATUS_ALIASES: () => SESSION_STATUS_ALIASES,
-      SESSION_STATUS_CLASS: () => SESSION_STATUS_CLASS,
-      STATUS_PROBE_ARG_KEY: () => STATUS_PROBE_ARG_KEY2,
-      UNKNOWN_CLI_SLOT_RECIPE: () => UNKNOWN_CLI_SLOT_RECIPE2,
-      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
-      WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER,
-      WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
-      WORKER_TOOLS: () => WORKER_TOOLS2,
-      appendWorkerProtocolFooter: () => appendWorkerProtocolFooter,
-      argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
-      buildMagiPanelProposal: () => buildMagiPanelProposal2,
-      buildSlotProposal: () => buildSlotProposal2,
-      canonicalDaemonId: () => canonicalDaemonId2,
-      classifySessionStatus: () => classifySessionStatus,
-      compareSemver: () => compareSemver,
-      daemonIdsEquivalent: () => daemonIdsEquivalent4,
-      deriveProviderPriorityFromSlots: () => deriveProviderPriorityFromSlots2,
-      deriveSlotsFromLegacy: () => deriveSlotsFromLegacy,
-      enumOf: () => enumOf,
-      expandDaemonIdForms: () => expandDaemonIdForms,
-      formatQuotaAccount: () => formatQuotaAccount,
-      hasGitStatusEvidence: () => hasGitStatusEvidence,
-      hasWorkerProtocolFooter: () => hasWorkerProtocolFooter,
-      interpolateArgs: () => interpolateArgs,
-      interpolateString: () => interpolateString,
-      isBlockedStatus: () => isBlockedStatus,
-      isBusyStatus: () => isBusyStatus,
-      isDaemonToServerWsMsg: () => isDaemonToServerWsMsg,
-      isDeadStatus: () => isDeadStatus,
-      isDowngrade: () => isDowngrade,
-      isMeshDeliveryMode: () => isMeshDeliveryMode2,
-      isMeshTaskDifficulty: () => isMeshTaskDifficulty2,
-      isMeshTaskMode: () => isMeshTaskMode2,
-      isMeshTaskPriority: () => isMeshTaskPriority2,
-      isMeshTaskStatus: () => isMeshTaskStatus2,
-      isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
-      isMeshThinkingLevel: () => isMeshThinkingLevel2,
-      isPhantomDaemonEntry: () => isPhantomDaemonEntry,
-      isRawDaemonDoId: () => isRawDaemonDoId,
-      isReadyStatus: () => isReadyStatus,
-      isServerToDaemonWsMsg: () => isServerToDaemonWsMsg,
-      isSessionStatus: () => isSessionStatus,
-      isWorkerBranchState: () => isWorkerBranchState2,
-      isWorkerReportOutcome: () => isWorkerReportOutcome2,
-      isWorkerTool: () => isWorkerTool,
-      isWorkingStatus: () => isWorkingStatus,
-      joinRepoPath: () => joinRepoPath,
-      machineCoreFromDaemonId: () => machineCoreFromDaemonId,
-      measureWorstCaseChunkEnvelopeBytes: () => measureWorstCaseChunkEnvelopeBytes,
-      meshFrameNeedsChunking: () => meshFrameNeedsChunking,
-      meshNodeIdMatches: () => meshNodeIdMatches5,
-      meshUtf8ByteLength: () => meshUtf8ByteLength,
-      meshWorkspacesEquivalent: () => meshWorkspacesEquivalent,
-      normalizeAuthOkLimits: () => normalizeAuthOkLimits,
-      normalizeBrainSlot: () => normalizeBrainSlot,
-      normalizeDifficultyBrainMap: () => normalizeDifficultyBrainMap,
-      normalizeGitStatus: () => normalizeGitStatus,
-      normalizeMeshNodeFacts: () => normalizeMeshNodeFacts,
-      normalizeMeshNodeId: () => normalizeMeshNodeId,
-      normalizeMeshSessionRecord: () => normalizeMeshSessionRecord,
-      normalizeMeshWorkspaceForCompare: () => normalizeMeshWorkspaceForCompare,
-      normalizeNodeCapabilitySlot: () => normalizeNodeCapabilitySlot2,
-      normalizeNodeCapabilitySlots: () => normalizeNodeCapabilitySlots2,
-      normalizeSessionStatus: () => normalizeSessionStatus,
-      normalizeThinkingLevel: () => normalizeThinkingLevel,
-      parseJsonRecord: () => parseJsonRecord,
-      parseSemver: () => parseSemver,
-      pickBestTransitGitStatus: () => pickBestTransitGitStatus,
-      readBoolean: () => readBoolean,
-      readGitSubmodules: () => readGitSubmodules,
-      readNumber: () => readNumber2,
-      readRecord: () => readRecord,
-      readString: () => readString22,
-      readStringArray: () => readStringArray2,
-      renderCoordinatorWorkerSection: () => renderCoordinatorWorkerSection,
-      renderWorkerProtocolFooter: () => renderWorkerProtocolFooter,
-      scoreGitStatusCandidate: () => scoreGitStatusCandidate,
-      scoreGitUpstreamFreshness: () => scoreGitUpstreamFreshness,
-      sessionIdsEquivalent: () => sessionIdsEquivalent,
-      splitMeshFrame: () => splitMeshFrame,
-      statusesOfClass: () => statusesOfClass,
-      stripStatusProbeMarker: () => stripStatusProbeMarker,
-      summarizeGitShape: () => summarizeGitShape,
-      supportsQuota: () => supportsQuota,
-      withStatusProbeMarker: () => withStatusProbeMarker2
-    });
-    function readRecord(value) {
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    }
-    function readString22(...values) {
-      for (const value of values) {
-        if (typeof value !== "string") continue;
-        const trimmed = value.trim();
-        if (trimmed) return trimmed;
-      }
-      return void 0;
-    }
-    function readNumber2(...values) {
-      for (const value of values) {
-        if (typeof value === "number" && Number.isFinite(value)) return value;
-      }
-      return void 0;
-    }
-    function readBoolean(...values) {
-      for (const value of values) {
-        if (typeof value === "boolean") return value;
-      }
-      return void 0;
-    }
-    function readStringArray2(value) {
-      return Array.isArray(value) ? value.filter((entry) => typeof entry === "string" && entry.trim().length > 0) : [];
-    }
-    function parseJsonRecord(value) {
-      if (!value) return {};
-      if (typeof value === "object") return readRecord(value);
-      if (typeof value !== "string") return {};
-      const trimmed = value.trim();
-      if (!trimmed) return {};
-      try {
-        return readRecord(JSON.parse(trimmed));
-      } catch {
-        return {};
-      }
-    }
-    function joinRepoPath(root, relativePath) {
-      const normalizedRoot = typeof root === "string" ? root.trim().replace(/[\\/]+$/, "") : "";
-      const normalizedPath = typeof relativePath === "string" ? relativePath.trim() : "";
-      if (!normalizedPath) return void 0;
-      if (/^(?:[A-Za-z]:[\\/]|\/)/.test(normalizedPath)) return normalizedPath;
-      if (!normalizedRoot) return void 0;
-      return `${normalizedRoot}/${normalizedPath.replace(/^[\\/]+/, "")}`;
-    }
-    function scoreGitUpstreamFreshness(status) {
-      switch (status) {
-        case "fresh":
-          return 30;
-        case "no_upstream":
-          return 4;
-        case "unchecked":
-        case void 0:
-          return 0;
-        case "stale":
-          return -10;
-        case "unavailable":
-          return -15;
-        default:
-          return 0;
-      }
-    }
-    function readGitSubmodules(value, parentRepoRoot) {
-      if (!Array.isArray(value)) return void 0;
-      const submodules = value.map((entry) => {
-        const submodule = readRecord(entry);
-        const path74 = readString22(submodule.path);
-        const commit = readString22(submodule.commit);
-        const repoPath = readString22(submodule.repoPath, submodule.repo_root) ?? joinRepoPath(parentRepoRoot, path74);
-        if (!path74 || !commit) return null;
-        const result = {
-          path: path74,
-          commit,
-          dirty: readBoolean(submodule.dirty) ?? false,
-          outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false
-        };
-        const lastCheckedAt = readNumber2(submodule.lastCheckedAt, submodule.last_checked_at);
-        if (lastCheckedAt !== void 0) result.lastCheckedAt = lastCheckedAt;
-        if (repoPath) result.repoPath = repoPath;
-        const error48 = readString22(submodule.error);
-        if (error48) result.error = error48;
-        return result;
-      }).filter((entry) => entry !== null);
-      return submodules.length > 0 ? submodules : void 0;
-    }
-    function hasGitStatusEvidence(status) {
-      return readBoolean(status.isGitRepo) !== void 0 || Boolean(readString22(status.branch, status.upstream, status.upstreamStatus, status.upstream_status, status.headCommit)) || Boolean(readString22(status.repoRoot, status.repo_root, status.workspace)) || readNumber2(
-        status.ahead,
-        status.behind,
-        status.staged,
-        status.modified,
-        status.untracked,
-        status.deleted,
-        status.renamed,
-        status.lastCheckedAt,
-        status.last_checked_at
-      ) !== void 0 || Array.isArray(status.submodules) && status.submodules.length > 0;
-    }
-    function normalizeGitStatus(status, node, options) {
-      const explicitIsGitRepo = readBoolean(status.isGitRepo);
-      if (!Object.keys(status).length || !hasGitStatusEvidence(status)) return void 0;
-      const isGitRepo = explicitIsGitRepo ?? true;
-      const conflictFiles = Array.isArray(status.conflictFiles) ? status.conflictFiles.filter((entry) => typeof entry === "string") : [];
-      const conflictCount = readNumber2(status.conflicts) ?? conflictFiles.length;
-      const hasConflicts = readBoolean(status.hasConflicts) ?? conflictCount > 0;
-      const repoRoot = readString22(status.repoRoot, status.repo_root, node.repoRoot, node.repo_root, status.workspace, node.workspace) || void 0;
-      const submodules = readGitSubmodules(status.submodules, repoRoot);
-      const upstreamStatus = readString22(status.upstreamStatus, status.upstream_status);
-      const upstreamFetchedAt2 = readNumber2(status.upstreamFetchedAt, status.upstream_fetched_at);
-      const upstreamFetchError = readString22(status.upstreamFetchError, status.upstream_fetch_error);
-      const error48 = readString22(status.error);
-      const staged = readNumber2(status.staged) ?? 0;
-      const modified = readNumber2(status.modified) ?? 0;
-      const untracked = readNumber2(status.untracked) ?? 0;
-      const deleted = readNumber2(status.deleted) ?? 0;
-      const renamed2 = readNumber2(status.renamed) ?? 0;
-      const lastCheckedAt = options?.lastCheckedAt ?? readNumber2(status.lastCheckedAt, status.last_checked_at);
-      return {
-        workspace: readString22(status.workspace, node.workspace) || "",
-        repoRoot: repoRoot ?? null,
-        isGitRepo,
-        branch: readString22(status.branch) ?? null,
-        headCommit: readString22(status.headCommit) ?? null,
-        headMessage: readString22(status.headMessage) ?? null,
-        upstream: readString22(status.upstream) ?? null,
-        upstreamStatus: upstreamStatus ?? "unchecked",
-        ...upstreamFetchedAt2 !== void 0 ? { upstreamFetchedAt: upstreamFetchedAt2 } : {},
-        ...upstreamFetchError ? { upstreamFetchError } : {},
-        ahead: readNumber2(status.ahead) ?? 0,
-        behind: readNumber2(status.behind) ?? 0,
-        staged,
-        modified,
-        untracked,
-        deleted,
-        renamed: renamed2,
-        dirty: readBoolean(status.dirty, status.isDirty, status.is_dirty) ?? (staged + modified + untracked + deleted + renamed2 > 0 || hasConflicts),
-        hasConflicts,
-        conflictFiles,
-        stashCount: readNumber2(status.stashCount, status.stash_count) ?? 0,
-        ...lastCheckedAt !== void 0 ? { lastCheckedAt } : {},
-        ...submodules ? { submodules } : {},
-        // Deploy-lag visibility: daemonBuildBehind is computed by the reporting
-        // daemon's git probe (build commit vs workspace/submodule HEAD). It must
-        // survive relay reassembly or downstream staleDaemonBuild surfaces
-        // (dashboard Status tab badge, MCP staleDaemonBuilds warning) never fire
-        // for remote nodes.
-        ...status.daemonBuildBehind && typeof status.daemonBuildBehind === "object" ? { daemonBuildBehind: status.daemonBuildBehind } : {},
-        ...error48 ? { error: error48 } : {}
-      };
-    }
-    function scoreGitStatusCandidate(git3) {
-      if (!git3) return Number.NEGATIVE_INFINITY;
-      let score = 0;
-      if (git3.isGitRepo === true) score += 50;
-      if (git3.isGitRepo === false) score -= 10;
-      if (git3.branch) score += 20;
-      if (git3.headCommit) score += 20;
-      if (git3.upstream) score += 10;
-      score += scoreGitUpstreamFreshness(git3.upstreamStatus);
-      if (typeof git3.ahead === "number") score += 2;
-      if (typeof git3.behind === "number") score += 2;
-      if (Array.isArray(git3.submodules) && git3.submodules.length > 0) score += 4 + git3.submodules.length;
-      if (git3.error) score -= 20;
-      return score;
-    }
-    function pickBestTransitGitStatus(node, options) {
-      const rawGit = readRecord(node.lastGit ?? node.last_git);
-      const gitResult = readRecord(rawGit.result);
-      const directStatus = readRecord(rawGit.status);
-      const nestedStatus = readRecord(gitResult.status);
-      const rawProbe = readRecord(node.lastProbe ?? node.last_probe);
-      const probeGit = readRecord(rawProbe.git);
-      const probeGitResult = readRecord(probeGit.result);
-      const probeDirectStatus = readRecord(probeGit.status);
-      const probeNestedStatus = readRecord(probeGitResult.status);
-      let best = null;
-      for (const status of [directStatus, nestedStatus, probeDirectStatus, probeNestedStatus]) {
-        const normalized = normalizeGitStatus(status, node, options);
-        if (!normalized) continue;
-        const score = scoreGitStatusCandidate(normalized);
-        if (!best || score > best.score) best = { git: normalized, score };
-      }
-      return best?.git;
-    }
-    function deriveSyntheticSessionId(record2) {
-      const parts = [
-        readString22(record2.workspace),
-        readString22(record2.providerType, record2.provider),
-        readString22(record2.role),
-        readString22(record2.state, record2.status),
-        readString22(record2.title),
-        readString22(record2.createdAt, record2.created_at),
-        readString22(record2.startedAt, record2.started_at)
-      ].filter((part) => Boolean(part));
-      if (parts.length === 0) return void 0;
-      return `synthetic:${parts.join("|")}`;
-    }
-    function sessionIdsEquivalent(a, b) {
-      const idA = readString22(a);
-      const idB = readString22(b);
-      if (!idA || !idB) return false;
-      return idA === idB;
-    }
-    function normalizeMeshSessionRecord(entry) {
-      const record2 = readRecord(entry);
-      const sessionId = readString22(record2.sessionId, record2.session_id, record2.id) ?? deriveSyntheticSessionId(record2);
-      if (!sessionId) return null;
-      return {
-        sessionId,
-        ...readString22(record2.providerType, record2.provider) ? { providerType: readString22(record2.providerType, record2.provider) } : {},
-        ...readString22(record2.state, record2.status) ? { state: readString22(record2.state, record2.status) } : {},
-        ...readString22(record2.chatStatus, record2.chat_status) ? { chatStatus: readString22(record2.chatStatus, record2.chat_status) } : {},
-        ...readString22(record2.lifecycle) ? { lifecycle: readString22(record2.lifecycle) } : {},
-        ...readString22(record2.surfaceKind, record2.surface_kind) ? { surfaceKind: readString22(record2.surfaceKind, record2.surface_kind) } : {},
-        ...readString22(record2.recoveryState, record2.recovery_state) ? { recoveryState: readString22(record2.recoveryState, record2.recovery_state) } : {},
-        ...readString22(record2.workspace) ? { workspace: readString22(record2.workspace) } : {},
-        ...readString22(record2.title) ? { title: readString22(record2.title) } : {},
-        ...readString22(record2.role) ? { role: readString22(record2.role) } : {},
-        ...readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) } : {},
-        ...readString22(record2.statusNote, record2.status_note) ? { statusNote: readString22(record2.statusNote, record2.status_note) } : {},
-        ...readString22(record2.createdAt, record2.created_at) ? { createdAt: readString22(record2.createdAt, record2.created_at) } : {},
-        ...readString22(record2.startedAt, record2.started_at) ? { startedAt: readString22(record2.startedAt, record2.started_at) } : {},
-        ...readString22(record2.lastActivityAt, record2.last_activity_at) ? { lastActivityAt: readString22(record2.lastActivityAt, record2.last_activity_at) } : {},
-        ...readBoolean(record2.isCached, record2.is_cached) !== void 0 ? { isCached: readBoolean(record2.isCached, record2.is_cached) } : {}
-      };
-    }
-    function normalizeMeshNodeId(node) {
-      const record2 = node && typeof node === "object" ? node : {};
-      return readString22(record2.id, record2.nodeId, record2.node_id);
-    }
-    function meshNodeIdMatches5(node, candidateId) {
-      if (!candidateId) return false;
-      const trimmed = candidateId.trim();
-      if (!trimmed) return false;
-      return normalizeMeshNodeId(node) === trimmed;
-    }
-    function normalizeMeshNodeFacts(raw) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const record2 = raw;
-      const schemaVersion = Number(record2.schemaVersion);
-      const reportedAt = Number(record2.reportedAt);
-      if (!Number.isFinite(schemaVersion) || schemaVersion < 1) return void 0;
-      if (!Number.isFinite(reportedAt) || reportedAt <= 0) return void 0;
-      return { ...record2, schemaVersion, reportedAt };
-    }
-    function supportsQuota(providerType) {
-      return !!providerType && QUOTA_SUPPORTED_PROVIDERS.includes(providerType);
-    }
-    function formatQuotaAccount(quota) {
-      const meta3 = quota?.metadata;
-      const email3 = typeof meta3?.accountEmail === "string" ? meta3.accountEmail.trim() : "";
-      const plan = typeof meta3?.planType === "string" ? meta3.planType.trim() : "";
-      const parts = [email3, plan].filter(Boolean);
-      return parts.length > 0 ? parts.join(" \xB7 ") : null;
-    }
-    function normalizeMeshWorkspaceForCompare(dir) {
-      if (typeof dir !== "string") return "";
-      return dir.trim().replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
-    }
-    function meshWorkspacesEquivalent(a, b) {
-      const left = normalizeMeshWorkspaceForCompare(a);
-      const right = normalizeMeshWorkspaceForCompare(b);
-      if (!left || !right) return false;
-      return left === right;
-    }
-    function isRawDaemonDoId(id) {
-      const trimmed = readString22(id);
-      return !!trimmed && /^[0-9a-f]{64}$/i.test(trimmed);
-    }
-    function isPhantomDaemonEntry(entry) {
-      if (!entry) return false;
-      if (!isRawDaemonDoId(entry.id)) return false;
-      const hasMachineEvidence = Boolean(
-        readString22(entry.machineNickname) || readString22(entry.nickname) || readString22(entry.hostname) || readString22(entry.platform) || readString22(entry.machine?.hostname) || readString22(entry.machine?.platform) || readString22(entry.machineId) || Array.isArray(entry.sessions) && entry.sessions.length > 0
-      );
-      return !hasMachineEvidence;
-    }
-    function machineCoreFromDaemonId(id) {
-      const trimmed = readString22(id);
-      if (!trimmed) return void 0;
-      for (const prefix of DAEMON_ID_PREFIXES) {
-        if (trimmed.startsWith(prefix)) {
-          const core2 = trimmed.slice(prefix.length).trim();
-          return core2 || void 0;
-        }
-      }
-      return trimmed;
-    }
-    function canonicalDaemonId2(id) {
-      const core2 = machineCoreFromDaemonId(id);
-      if (!core2) return void 0;
-      if (!core2.startsWith("mach_")) return core2;
-      return `daemon_${core2}`;
-    }
-    function daemonIdsEquivalent4(a, b) {
-      const coreA = machineCoreFromDaemonId(a);
-      const coreB = machineCoreFromDaemonId(b);
-      if (!coreA || !coreB) return false;
-      return coreA === coreB;
-    }
-    function expandDaemonIdForms(ids) {
-      const list = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
-      const out = [];
-      const seen = /* @__PURE__ */ new Set();
-      const add = (value) => {
-        if (!value || seen.has(value)) return;
-        seen.add(value);
-        out.push(value);
-      };
-      for (const raw of list) add(readString22(raw));
-      for (const raw of list) {
-        const core2 = machineCoreFromDaemonId(readString22(raw));
-        if (!core2 || !core2.startsWith("mach_")) continue;
-        add(core2);
-        for (const prefix of DAEMON_ID_PREFIXES) add(`${prefix}${core2}`);
-      }
-      return out;
-    }
-    function summarizeGitShape(status) {
-      const record2 = readRecord(status);
-      if (!Object.keys(record2).length) return null;
-      const submodules = Array.isArray(record2.submodules) ? record2.submodules.map((entry) => {
-        const sub = readRecord(entry);
-        return {
-          path: readString22(sub.path) ?? null,
-          commit: readString22(sub.commit)?.slice(0, 12) ?? null,
-          dirty: readBoolean(sub.dirty) ?? false,
-          outOfSync: readBoolean(sub.outOfSync, sub.out_of_sync) ?? false
-        };
-      }) : [];
-      return {
-        isGitRepo: readBoolean(record2.isGitRepo),
-        workspace: readString22(record2.workspace) ?? null,
-        repoRoot: readString22(record2.repoRoot, record2.repo_root) ?? null,
-        branch: readString22(record2.branch) ?? null,
-        upstream: readString22(record2.upstream) ?? null,
-        upstreamStatus: readString22(record2.upstreamStatus, record2.upstream_status) ?? null,
-        headCommit: readString22(record2.headCommit, record2.head_commit)?.slice(0, 12) ?? null,
-        ahead: readNumber2(record2.ahead) ?? null,
-        behind: readNumber2(record2.behind) ?? null,
-        dirtyCounts: {
-          staged: readNumber2(record2.staged) ?? 0,
-          modified: readNumber2(record2.modified) ?? 0,
-          untracked: readNumber2(record2.untracked) ?? 0,
-          deleted: readNumber2(record2.deleted) ?? 0,
-          renamed: readNumber2(record2.renamed) ?? 0
-        },
-        lastCheckedAt: readNumber2(record2.lastCheckedAt, record2.last_checked_at) ?? null,
-        submoduleCount: submodules.length,
-        submodules
-      };
-    }
-    function isMeshTaskDifficulty2(value) {
-      return typeof value === "string" && MESH_TASK_DIFFICULTIES2.includes(value);
-    }
-    function normalizeThinkingLevel(value) {
-      const v = typeof value === "string" ? value.trim().toLowerCase() : "";
-      return v === "low" || v === "medium" || v === "high" ? v : void 0;
-    }
-    function normalizeBrainSlot(raw) {
-      const r = raw && typeof raw === "object" ? raw : {};
-      const provider = typeof r.provider === "string" ? r.provider.trim() : "";
-      const model = typeof r.model === "string" ? r.model.trim() : "";
-      const thinkingLevel = normalizeThinkingLevel(r.thinkingLevel);
-      return {
-        ...provider ? { provider } : {},
-        ...model ? { model } : {},
-        ...thinkingLevel ? { thinkingLevel } : {}
-      };
-    }
-    function normalizeDifficultyBrainMap(raw) {
-      const out = {};
-      if (!raw || typeof raw !== "object") return out;
-      for (const key2 of MESH_TASK_DIFFICULTIES2) {
-        const slot = normalizeBrainSlot(raw[key2]);
-        if (slot.provider || slot.model || slot.thinkingLevel) out[key2] = slot;
-      }
-      return out;
-    }
-    function normalizeNodeCapabilitySlot2(raw) {
-      const r = raw && typeof raw === "object" ? raw : {};
-      const provider = typeof r.provider === "string" ? r.provider.trim() : "";
-      if (!provider) return null;
-      const model = typeof r.model === "string" ? r.model.trim() : "";
-      const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
-      const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty2) : [];
-      const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
-      const maxParallelNum = Number(r.maxParallel);
-      const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
-      return {
-        provider,
-        ...model ? { model } : {},
-        ...thinkingLevel ? { thinkingLevel } : {},
-        ...difficulty.length ? { difficulty } : {},
-        ...capability.length ? { capability } : {},
-        ...maxParallel !== void 0 ? { maxParallel } : {}
-      };
-    }
-    function normalizeNodeCapabilitySlots2(raw) {
-      if (!Array.isArray(raw)) return [];
-      const out = [];
-      for (const entry of raw) {
-        const slot = normalizeNodeCapabilitySlot2(entry);
-        if (slot) out.push(slot);
-      }
-      return out;
-    }
-    function deriveSlotsFromLegacy(input) {
-      const priority = Array.isArray(input.providerPriority) ? input.providerPriority.filter((p) => typeof p === "string" && !!p.trim()).map((p) => p.trim()) : [];
-      if (priority.length === 0) return [];
-      const brains = input.difficultyBrains || {};
-      const byProvider = /* @__PURE__ */ new Map();
-      const shared = [];
-      for (const diff of MESH_TASK_DIFFICULTIES2) {
-        const b = brains[diff];
-        if (!b) continue;
-        const entry = { difficulty: diff, model: b.model, thinkingLevel: b.thinkingLevel };
-        if (b.provider) {
-          const list = byProvider.get(b.provider) ?? [];
-          list.push(entry);
-          byProvider.set(b.provider, list);
-        } else {
-          shared.push(entry);
-        }
-      }
-      return priority.map((provider) => {
-        const specific = byProvider.get(provider) || [];
-        const applied = specific.length ? specific : shared;
-        const difficulty = applied.map((a) => a.difficulty);
-        const model = applied.find((a) => a.model)?.model;
-        const thinkingLevel = applied.find((a) => a.thinkingLevel)?.thinkingLevel;
-        return {
-          provider,
-          ...model ? { model } : {},
-          ...thinkingLevel ? { thinkingLevel } : {},
-          ...difficulty.length ? { difficulty } : {}
-        };
-      });
-    }
-    function deriveProviderPriorityFromSlots2(slots) {
-      const seen = /* @__PURE__ */ new Set();
-      const out = [];
-      for (const slot of normalizeNodeCapabilitySlots2(slots)) {
-        if (seen.has(slot.provider)) continue;
-        seen.add(slot.provider);
-        out.push(slot.provider);
-      }
-      return out;
-    }
-    function slotKey2(slot) {
-      return [
-        slot.provider,
-        slot.model ?? "",
-        slot.thinkingLevel ?? "",
-        [...slot.difficulty ?? []].sort().join("|"),
-        [...slot.capability ?? []].sort().join("|"),
-        slot.maxParallel ?? ""
-      ].join("\0");
-    }
-    function dedupeDetected2(detected) {
-      const seen = /* @__PURE__ */ new Set();
-      const out = [];
-      for (const d of detected) {
-        const type2 = typeof d?.type === "string" ? d.type.trim() : "";
-        if (!type2 || seen.has(type2)) continue;
-        seen.add(type2);
-        out.push({ ...d, type: type2 });
-      }
-      return out;
-    }
-    function buildSlotProposal2(detected, currentSlots = []) {
-      const providers = dedupeDetected2(detected ?? []);
-      const proposedSlots = [];
-      const entries = [];
-      const unknownProviders = [];
-      const provisionalProviders = [];
-      for (const provider of providers) {
-        const known = CLI_SLOT_RECIPES2[provider.type];
-        const recipes = known ?? [UNKNOWN_CLI_SLOT_RECIPE2];
-        const isUnknown = !known;
-        if (isUnknown) unknownProviders.push(provider.type);
-        let providerProvisional = false;
-        for (const recipe of recipes) {
-          const slot = normalizeNodeCapabilitySlot2({
-            provider: provider.type,
-            model: recipe.model,
-            thinkingLevel: recipe.thinkingLevel,
-            difficulty: recipe.difficulty,
-            maxParallel: recipe.maxParallel
-          });
-          if (!slot) continue;
-          const provisional = recipe.provisional === true;
-          if (provisional) providerProvisional = true;
-          proposedSlots.push(slot);
-          entries.push({
-            slot,
-            unknownProvider: isUnknown,
-            provisional,
-            ...recipe.rationale ? { rationale: recipe.rationale } : {}
-          });
-        }
-        if (providerProvisional) provisionalProviders.push(provider.type);
-      }
-      const proposedKeys = new Set(proposedSlots.map(slotKey2));
-      const droppedSlots = currentSlots.filter((slot) => !proposedKeys.has(slotKey2(slot)));
-      const proposedProviders = new Set(proposedSlots.map((s2) => s2.provider));
-      const droppedProviders = [...new Set(
-        droppedSlots.map((s2) => s2.provider).filter((p) => !proposedProviders.has(p))
-      )];
-      return {
-        proposedSlots,
-        entries,
-        unknownProviders,
-        provisionalProviders,
-        droppedSlots,
-        droppedProviders,
-        destructive: droppedSlots.length > 0
-      };
-    }
-    function buildMagiPanelProposal2(detected, opts = {}) {
-      const providers = dedupeDetected2(detected ?? []);
-      const tableOrder = Object.keys(CLI_SLOT_RECIPES2);
-      const rank = (type2) => {
-        const i = tableOrder.indexOf(type2);
-        return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-      };
-      const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type));
-      const limit = Number.isFinite(opts.maxSlots) && opts.maxSlots > 0 ? Math.floor(opts.maxSlots) : ordered.length;
-      return ordered.slice(0, limit).map((p) => ({
-        ...opts.nodeId ? { nodeId: opts.nodeId } : {},
-        provider: p.type
-        // A model is intentionally NOT pinned: the panel's job is cross-provider
-        // independence, and pinning models here would silently couple the panel
-        // to this table's cost assumptions rather than to review quality.
-      }));
-    }
-    function interpolateArgs(args, context) {
-      const result = {};
-      for (const [k, v] of Object.entries(args)) {
-        result[k] = typeof v === "string" ? interpolateString(v, context) : v;
-      }
-      return result;
-    }
-    function interpolateString(template, ctx) {
-      return template.replace(/\{\{(\w+)\}\}/g, (_, key2) => {
-        const val = ctx[key2];
-        return val !== void 0 ? String(val) : `{{${key2}}}`;
-      });
-    }
-    function withStatusProbeMarker2(args = {}) {
-      return { ...args, [STATUS_PROBE_ARG_KEY2]: true };
-    }
-    function argsCarryStatusProbeMarker(args) {
-      return !!args && typeof args === "object" && args[STATUS_PROBE_ARG_KEY2] === true;
-    }
-    function stripStatusProbeMarker(args) {
-      if (!argsCarryStatusProbeMarker(args)) return args;
-      const { [STATUS_PROBE_ARG_KEY2]: _drop, ...rest } = args;
-      return rest;
-    }
-    function meshUtf8ByteLength(value) {
-      if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).byteLength;
-      let bytes = 0;
-      for (let i = 0; i < value.length; i += 1) {
-        const code = value.charCodeAt(i);
-        if (code < 128) bytes += 1;
-        else if (code < 2048) bytes += 2;
-        else if (code >= 55296 && code <= 56319) {
-          bytes += 4;
-          i += 1;
-        } else bytes += 3;
-      }
-      return bytes;
-    }
-    function measureWorstCaseChunkEnvelopeBytes() {
-      const densest = "\uD55C".repeat(MESH_CHUNK_PAYLOAD_CHARS);
-      return meshUtf8ByteLength(JSON.stringify(
-        buildChunkEnvelope(Number.MAX_SAFE_INTEGER, "x".repeat(64), MESH_MAX_CHUNKS, MESH_MAX_CHUNKS, densest)
-      ));
-    }
-    function meshFrameNeedsChunking(json3) {
-      return meshUtf8ByteLength(json3) > MESH_MAX_INLINE_FRAME_BYTES;
-    }
-    function buildChunkEnvelope(version2, chunkId, index, total, data) {
-      return { v: version2, kind: MESH_CHUNK_KIND, chunkId, index, total, data };
-    }
-    function splitMeshFrame(json3, chunkId, version2) {
-      const slices = [];
-      let offset = 0;
-      while (offset < json3.length) {
-        let end = Math.min(json3.length, offset + MESH_CHUNK_PAYLOAD_CHARS);
-        while (end > offset) {
-          const candidate = json3.slice(offset, end);
-          const probe = JSON.stringify(buildChunkEnvelope(version2, chunkId, slices.length, MESH_MAX_CHUNKS, candidate));
-          if (meshUtf8ByteLength(probe) <= MESH_MAX_INLINE_FRAME_BYTES) break;
-          const shrunk = Math.max(1, Math.floor((end - offset) * 0.8));
-          if (offset + shrunk >= end) {
-            end -= 1;
-            continue;
-          }
-          end = offset + shrunk;
-        }
-        if (end <= offset) {
-          return { ok: false, reason: "chunk_too_large", detail: "a single character did not fit the chunk envelope budget" };
-        }
-        slices.push(json3.slice(offset, end));
-        if (slices.length > MESH_MAX_CHUNKS) {
-          return {
-            ok: false,
-            reason: "too_many_chunks",
-            detail: `frame needs more than ${MESH_MAX_CHUNKS} chunks (${meshUtf8ByteLength(json3)} bytes)`
-          };
-        }
-        offset = end;
-      }
-      if (slices.length === 0) {
-        return { ok: false, reason: "chunk_too_large", detail: "refusing to chunk an empty frame" };
-      }
-      const total = slices.length;
-      return { ok: true, chunks: slices.map((data, index) => buildChunkEnvelope(version2, chunkId, index, total, data)) };
-    }
-    function parseSemver(version2) {
-      if (typeof version2 !== "string") return null;
-      const match = version2.trim().replace(/^v/, "").match(SEMVER_PATTERN);
-      if (!match) return null;
-      return {
-        major: Number(match[1]),
-        minor: Number(match[2]),
-        patch: Number(match[3]),
-        prerelease: match[4] ? match[4].split(".") : []
-      };
-    }
-    function comparePrerelease(a, b) {
-      if (a.length === 0 && b.length === 0) return 0;
-      if (a.length === 0) return 1;
-      if (b.length === 0) return -1;
-      for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
-        const idA = a[i];
-        const idB = b[i];
-        if (idA === idB) continue;
-        const numA = NUMERIC_IDENTIFIER.test(idA);
-        const numB = NUMERIC_IDENTIFIER.test(idB);
-        if (numA && numB) return Number(idA) < Number(idB) ? -1 : 1;
-        if (numA) return -1;
-        if (numB) return 1;
-        return idA < idB ? -1 : 1;
-      }
-      return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
-    }
-    function compareSemver(a, b) {
-      const pa = parseSemver(a);
-      const pb = parseSemver(b);
-      if (!pa || !pb) return null;
-      if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
-      if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
-      if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
-      return comparePrerelease(pa.prerelease, pb.prerelease);
-    }
-    function isDowngrade(current, target) {
-      const direction = compareSemver(target, current);
-      if (direction === null) return false;
-      return direction < 0;
-    }
-    function isDaemonToServerWsMsg(value) {
-      return typeof value === "string" && DAEMON_TO_SERVER_WS_MSGS.includes(value);
-    }
-    function isServerToDaemonWsMsg(value) {
-      return typeof value === "string" && SERVER_TO_DAEMON_WS_MSGS.includes(value);
-    }
-    function normalizeAuthOkLimits(raw) {
-      if (!raw || typeof raw !== "object") return null;
-      const src = raw;
-      const num2 = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
-      return {
-        maxP2Pconnections: num2(
-          src.maxP2Pconnections !== void 0 ? src.maxP2Pconnections : src.maxP2PConnections,
-          -1
-        ),
-        screenshotIntervalSeconds: num2(src.screenshotIntervalSeconds, 0),
-        dailyScreenshotMinutes: num2(src.dailyScreenshotMinutes, -1),
-        maxMachines: num2(src.maxMachines, -1)
-      };
-    }
-    function isSessionStatus(value) {
-      return typeof value === "string" && SESSION_STATUS_SET2.has(value);
-    }
-    function normalizeSessionStatus(raw) {
-      if (typeof raw !== "string") return null;
-      const value = raw.trim().toLowerCase();
-      if (SESSION_STATUS_SET2.has(value)) return value;
-      return SESSION_STATUS_ALIASES[value] ?? null;
-    }
-    function classifySessionStatus(raw) {
-      const status = normalizeSessionStatus(raw);
-      return status ? SESSION_STATUS_CLASS[status] : "unknown";
-    }
-    function isWorkingStatus(raw) {
-      return classifySessionStatus(raw) === "working";
-    }
-    function isBlockedStatus(raw) {
-      return classifySessionStatus(raw) === "blocked";
-    }
-    function isReadyStatus(raw) {
-      return classifySessionStatus(raw) === "ready";
-    }
-    function isDeadStatus(raw) {
-      return classifySessionStatus(raw) === "dead";
-    }
-    function isBusyStatus(raw) {
-      const cls = classifySessionStatus(raw);
-      return cls === "working" || cls === "blocked";
-    }
-    function statusesOfClass(cls) {
-      return SESSION_STATUSES2.filter((status) => SESSION_STATUS_CLASS[status] === cls);
-    }
-    function makeGuard2(values) {
-      const set3 = new Set(values);
-      return (value) => typeof value === "string" && set3.has(value);
-    }
-    function enumOf(values, description) {
-      return {
-        type: "string",
-        enum: [...values],
-        ...description ? { description } : {}
-      };
-    }
-    function isWorkerTool(value) {
-      return typeof value === "string" && WORKER_TOOL_SET2.has(value);
-    }
-    function hasWorkerProtocolFooter(body) {
-      return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
-    }
-    function renderWorkerProtocolFooter(input = {}) {
-      const lines = [WORKER_PROTOCOL_FOOTER_MARKER];
-      const scope = [];
-      if (input.taskId) scope.push(`task ${input.taskId}`);
-      if (input.taskMode) scope.push(`mode ${input.taskMode}`);
-      if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
-      if (input.readonly) scope.push("read-only");
-      if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
-      else lines.push("You are a delegated worker.");
-      lines.push(
-        "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
-        "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
-        "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace.",
-        "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`."
-      );
-      if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
-        lines.push(
-          `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and add your own in \`handoff_notes\` when you report.`
-        );
-      }
-      return lines.join("\n");
-    }
-    function appendWorkerProtocolFooter(body, input = {}) {
-      if (hasWorkerProtocolFooter(body)) return body;
-      const trimmed = body.replace(/\s+$/, "");
-      return `${trimmed}
-
-${renderWorkerProtocolFooter(input)}`;
-    }
-    function renderCoordinatorWorkerSection() {
-      return [
-        "## Workers",
-        "",
-        `Every task you dispatch is delivered with a worker protocol footer. Workers hold exactly these tools: ${WORKER_TOOLS2.map((tool) => `\`${tool}\``).join(", ")} \u2014 and no \`mesh_*\` tools.`,
-        "- A worker finishes by calling `report_completion`; its structured report (outcome, summary, touched files, branch state, handoff notes) is what reaches you as the completion event. Read that report \u2014 do not re-derive the outcome from `mesh_read_chat` or the terminal unless the report is missing.",
-        "- `progress_update` from a worker arrives as a lightweight progress note. Do NOT poll `mesh_status`, `mesh_view_queue` or `mesh_read_chat` to check on a running worker; completion, progress, blocked and failure all arrive as events.",
-        "- To reach a busy worker mid-task use `mesh_notify_worker`: the memo is delivered on the worker's next tool call (or when it becomes idle). A worker that reports `blocked` is asking you for a decision \u2014 answer it with `mesh_send_task` to the same session.",
-        "- `mesh_status` is for node health and capacity before delegating, never for progress."
-      ].join("\n");
-    }
-    var QUOTA_SUPPORTED_PROVIDERS;
-    var DAEMON_ID_PREFIXES;
-    var MAGI_RAW_ANSWER_CAP3;
-    var MESH_TASK_DIFFICULTIES2;
-    var DEFAULT_DIFFICULTY_BRAINS;
-    var CLI_SLOT_RECIPES2;
-    var UNKNOWN_CLI_SLOT_RECIPE2;
-    var CANONICAL_MESH_TOOL_NAMES2;
-    var CANONICAL_MESH_TOOL_COUNT2;
-    var STATUS_PROBE_ARG_KEY2;
-    var MESH_MAX_INLINE_FRAME_BYTES;
-    var MESH_CHUNK_PAYLOAD_CHARS;
-    var MESH_MAX_CHUNKS;
-    var MESH_MAX_REASSEMBLED_BYTES;
-    var MESH_CHUNK_TTL_MS;
-    var MESH_CHUNK_KIND;
-    var MeshChunkAssembler;
-    var SEMVER_PATTERN;
-    var NUMERIC_IDENTIFIER;
-    var DAEMON_TO_SERVER_WS_MSGS;
-    var SERVER_TO_DAEMON_WS_MSGS;
-    var CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX;
-    var CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX;
-    var SESSION_STATUSES2;
-    var RECENT_SESSION_BUCKETS;
-    var SESSION_STATUS_CLASS;
-    var SESSION_STATUS_ALIASES;
-    var SESSION_STATUS_SET2;
-    var MESH_TASK_STATUSES2;
-    var MESH_TERMINAL_TASK_STATUSES2;
-    var MESH_TASK_MODES2;
-    var MESH_TASK_PRIORITIES2;
-    var MESH_THINKING_LEVELS2;
-    var MESH_DELIVERY_MODES2;
-    var WORKER_REPORT_OUTCOMES2;
-    var WORKER_BRANCH_STATES2;
-    var isMeshTaskStatus2;
-    var isMeshTerminalTaskStatus2;
-    var isMeshTaskMode2;
-    var isMeshTaskPriority2;
-    var isMeshThinkingLevel2;
-    var isMeshDeliveryMode2;
-    var isWorkerReportOutcome2;
-    var isWorkerBranchState2;
-    var WORKER_TOOLS2;
-    var WORKER_TOOL_SET2;
-    var WORKER_PROTOCOL_FOOTER_MARKER;
-    var init_dist = __esm2({
-      "../mesh-shared/dist/index.mjs"() {
-        "use strict";
-        QUOTA_SUPPORTED_PROVIDERS = [
-          "antigravity-cli",
-          "claude-cli",
-          "codex-cli",
-          "cursor-cli",
-          "grok-cli",
-          "kimi",
-          "opencode"
-        ];
-        DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
-        MAGI_RAW_ANSWER_CAP3 = 4e3;
-        MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
-        DEFAULT_DIFFICULTY_BRAINS = {};
-        CLI_SLOT_RECIPES2 = Object.freeze({
-          "claude-cli": [
-            {
-              model: "sonnet",
-              thinkingLevel: "high",
-              difficulty: ["medium", "easy"],
-              maxParallel: 5,
-              rationale: "Primary workhorse \u2014 widest parallelism for routine work."
-            },
-            {
-              model: "opus",
-              thinkingLevel: "high",
-              difficulty: ["difficult"],
-              maxParallel: 1,
-              rationale: "Reserved for hard tasks; capped at 1 to bound cost."
-            }
-          ],
-          "kimi": [
-            {
-              model: "kimi-code/k3",
-              difficulty: ["medium", "difficult"],
-              maxParallel: 2,
-              rationale: "Independent second opinion on mid/hard work."
-            }
-          ],
-          "codex-cli": [
-            {
-              difficulty: ["medium", "difficult", "freeform"],
-              maxParallel: 2,
-              rationale: "Broad range including freeform; no model pin."
-            }
-          ],
-          "antigravity-cli": [
-            {
-              model: "Gemini 3.1 Pro (High)",
-              difficulty: ["easy"],
-              maxParallel: 2,
-              rationale: "Cheap capacity for easy tasks."
-            }
-          ],
-          "cursor-cli": [
-            {
-              model: "auto",
-              difficulty: ["easy"],
-              maxParallel: 1,
-              rationale: "Easy tasks only; auto model selection."
-            }
-          ],
-          "hermes-cli": [
-            {
-              difficulty: ["medium"],
-              maxParallel: 2,
-              provisional: true,
-              // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
-              // slot configuration this table was seeded from, so `medium` is a
-              // conservative placement rather than a transcription. Revisit once
-              // it has real usage data.
-              rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
-            }
-          ]
-        });
-        UNKNOWN_CLI_SLOT_RECIPE2 = Object.freeze({
-          difficulty: ["medium"],
-          maxParallel: 1,
-          provisional: true,
-          rationale: "Unrecognized provider \u2014 conservative default (medium, maxParallel 1). Review before relying on it."
-        });
-        CANONICAL_MESH_TOOL_NAMES2 = [
-          "mesh_status",
-          "mesh_route_preview",
-          "mesh_list_nodes",
-          // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
-          "mesh_enqueue_batch",
-          "mesh_enqueue_task",
-          "mesh_view_queue",
-          // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
-          "mesh_graph_view",
-          "mesh_graph_gate_claim",
-          "mesh_graph_gate_release",
-          "mesh_graph_gate_abandon",
-          "mesh_graph_node_patch",
-          "mesh_queue_cancel",
-          "mesh_queue_requeue",
-          "mesh_send_task",
-          "mesh_read_chat",
-          "mesh_read_debug",
-          "mesh_read_terminal",
-          "mesh_send_keys",
-          "mesh_launch_session",
-          "mesh_git_status",
-          "mesh_read_node_logs",
-          "mesh_fast_forward_node",
-          "mesh_restart_daemon",
-          "mesh_checkpoint",
-          "mesh_approve",
-          "mesh_answer_question",
-          "mesh_list_pending_approvals",
-          "mesh_plan_onboarding",
-          "mesh_create",
-          "mesh_add_node",
-          "mesh_clone_node",
-          "mesh_remove_node",
-          "mesh_cleanup_worktree_nodes",
-          "mesh_refine_node",
-          "mesh_refine_batch",
-          "mesh_refine_config",
-          "mesh_change_impact_config",
-          "mesh_init",
-          "mesh_reinit",
-          "mesh_write_mesh_json_config",
-          "mesh_refine_plan",
-          "mesh_cleanup_sessions",
-          "mesh_prune_stale_direct",
-          "mesh_task_history",
-          "mesh_ledger_query",
-          "mesh_record_note",
-          "mesh_forget_note",
-          "mesh_reconcile_ledger",
-          "mesh_requeue_held_events",
-          "mesh_mission_upsert",
-          "mesh_mission_list",
-          "mesh_review_inbox",
-          "mesh_magi_review",
-          "mesh_magi_collect",
-          "mesh_magi_kind_panel_set",
-          "mesh_magi_kind_panel_list",
-          "mesh_node_slots_set",
-          "mesh_node_slots_list",
-          "mesh_node_slots_propose",
-          "mesh_coordinator_prompt_append_get",
-          "mesh_coordinator_prompt_append_set"
-        ];
-        CANONICAL_MESH_TOOL_COUNT2 = CANONICAL_MESH_TOOL_NAMES2.length;
-        STATUS_PROBE_ARG_KEY2 = "_statusProbe";
-        MESH_MAX_INLINE_FRAME_BYTES = 6e4;
-        MESH_CHUNK_PAYLOAD_CHARS = 16e3;
-        MESH_MAX_CHUNKS = 1024;
-        MESH_MAX_REASSEMBLED_BYTES = 16e6;
-        MESH_CHUNK_TTL_MS = 6e4;
-        MESH_CHUNK_KIND = "rpc_chunk";
-        MeshChunkAssembler = class {
-          constructor(now = () => Date.now()) {
-            this.now = now;
-          }
-          buffers = /* @__PURE__ */ new Map();
-          /** True when the frame is a chunk envelope this assembler should handle. */
-          static isChunkFrame(frame2) {
-            return !!frame2 && typeof frame2 === "object" && frame2.kind === MESH_CHUNK_KIND;
-          }
-          /** Drop partials older than the TTL so a dead sender cannot pin memory. */
-          sweep() {
-            const now = this.now();
-            for (const [key2, entry] of Array.from(this.buffers.entries())) {
-              if (now - entry.createdAt > MESH_CHUNK_TTL_MS) this.buffers.delete(key2);
-            }
-          }
-          /** Discard any partial state for a peer (call on disconnect). */
-          reset() {
-            this.buffers.clear();
-          }
-          /** Number of frames currently mid-reassembly — for tests and diagnostics. */
-          get pendingCount() {
-            return this.buffers.size;
-          }
-          /**
-           * Accept one chunk envelope.
-           *
-           * Never throws and never returns a partially-applied frame: the result is exactly one
-           * of partial / complete / failed, and `failed` carries a typed reason the transport
-           * turns into an explicit RPC error.
-           */
-          accept(frame2) {
-            this.sweep();
-            const raw = frame2;
-            const chunkId = typeof raw?.chunkId === "string" ? raw.chunkId : "";
-            const index = Number(raw?.index);
-            const total = Number(raw?.total);
-            const data = typeof raw?.data === "string" ? raw.data : "";
-            if (!chunkId || !Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total <= 0 || index >= total || !data) {
-              return {
-                status: "failed",
-                reason: "malformed_chunk",
-                detail: `malformed chunk envelope (chunkId=${chunkId || "-"} index=${raw?.index} total=${raw?.total})`,
-                chunkId
-              };
-            }
-            if (total > MESH_MAX_CHUNKS) {
-              this.buffers.delete(chunkId);
-              return {
-                status: "failed",
-                reason: "too_many_chunks",
-                detail: `chunk total ${total} exceeds the ${MESH_MAX_CHUNKS} cap`,
-                chunkId
-              };
-            }
-            let entry = this.buffers.get(chunkId);
-            if (!entry) {
-              entry = { total, chunks: new Array(total).fill(""), received: 0, bytesReceived: 0, createdAt: this.now() };
-              this.buffers.set(chunkId, entry);
-            } else if (entry.total !== total) {
-              this.buffers.delete(chunkId);
-              return {
-                status: "failed",
-                reason: "inconsistent_total",
-                detail: `chunk ${index} declares total ${total} but the group was opened with ${entry.total}`,
-                chunkId
-              };
-            }
-            const existing = entry.chunks[index];
-            if (existing) {
-              if (existing === data) return { status: "partial", received: entry.received, total: entry.total };
-              this.buffers.delete(chunkId);
-              return {
-                status: "failed",
-                reason: "duplicate_chunk_mismatch",
-                detail: `chunk ${index} arrived twice with different content`,
-                chunkId
-              };
-            }
-            const chunkBytes = meshUtf8ByteLength(data);
-            if (entry.bytesReceived + chunkBytes > MESH_MAX_REASSEMBLED_BYTES) {
-              this.buffers.delete(chunkId);
-              return {
-                status: "failed",
-                reason: "budget_exceeded",
-                detail: `reassembled frame would exceed ${MESH_MAX_REASSEMBLED_BYTES} bytes`,
-                chunkId
-              };
-            }
-            entry.chunks[index] = data;
-            entry.received += 1;
-            entry.bytesReceived += chunkBytes;
-            if (entry.received < entry.total) {
-              return { status: "partial", received: entry.received, total: entry.total };
-            }
-            this.buffers.delete(chunkId);
-            try {
-              return { status: "complete", frame: JSON.parse(entry.chunks.join("")) };
-            } catch (error48) {
-              return {
-                status: "failed",
-                reason: "reassembled_parse_failed",
-                detail: `reassembled frame is not valid JSON: ${error48 instanceof Error ? error48.message : String(error48)}`,
-                chunkId
-              };
-            }
-          }
-        };
-        SEMVER_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-        NUMERIC_IDENTIFIER = /^\d+$/;
-        DAEMON_TO_SERVER_WS_MSGS = [
-          "auth",
-          "status_report",
-          "status_heartbeat",
-          "status_event",
-          "command_result",
-          "error",
-          "agent_event",
-          "log",
-          "beacon_vectors"
-        ];
-        SERVER_TO_DAEMON_WS_MSGS = [
-          "auth_ok",
-          "auth_error",
-          "machine_evicted",
-          "force_disconnect",
-          "token_revoked",
-          "version_mismatch",
-          "force_update_required",
-          "command",
-          "agent_command",
-          "resolve_action",
-          "beacon_vectors_result"
-        ];
-        CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX = "Claude TUI review page is not focused";
-        CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX = "Claude TUI answer delivered but not confirmed";
-        SESSION_STATUSES2 = [
-          "idle",
-          "generating",
-          "waiting_approval",
-          "waiting_choice",
-          "finalizing",
-          "error",
-          "stopped",
-          "starting",
-          "panel_hidden",
-          "not_monitored",
-          "disconnected"
-        ];
-        RECENT_SESSION_BUCKETS = ["needs_attention", "working", "task_complete", "idle"];
-        SESSION_STATUS_CLASS = {
-          generating: "working",
-          finalizing: "working",
-          starting: "working",
-          waiting_approval: "blocked",
-          waiting_choice: "blocked",
-          idle: "ready",
-          panel_hidden: "ready",
-          not_monitored: "ready",
-          error: "dead",
-          stopped: "dead",
-          disconnected: "dead"
-        };
-        SESSION_STATUS_ALIASES = {
-          running: "generating",
-          streaming: "generating",
-          busy: "generating",
-          working: "generating",
-          loading: "generating",
-          loading_reference: "generating",
-          thinking: "generating",
-          active: "generating",
-          // Status-lane refinements of a turn that is still owned by the agent.
-          no_progress: "generating",
-          long_generating: "generating",
-          initializing: "starting",
-          waiting: "waiting_approval"
-        };
-        SESSION_STATUS_SET2 = new Set(SESSION_STATUSES2);
-        MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "failed", "cancelled"];
-        MESH_TERMINAL_TASK_STATUSES2 = ["completed", "failed", "cancelled"];
-        MESH_TASK_MODES2 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
-        MESH_TASK_PRIORITIES2 = ["low", "normal", "high"];
-        MESH_THINKING_LEVELS2 = ["low", "medium", "high"];
-        MESH_DELIVERY_MODES2 = ["when_idle", "interrupt"];
-        WORKER_REPORT_OUTCOMES2 = ["completed", "blocked", "failed"];
-        WORKER_BRANCH_STATES2 = [
-          "merged_to_main",
-          "pushed_feature_branch_needs_merge",
-          "blocked_review",
-          "cleanup_candidate",
-          "not_mergeable"
-        ];
-        isMeshTaskStatus2 = makeGuard2(MESH_TASK_STATUSES2);
-        isMeshTerminalTaskStatus2 = makeGuard2(MESH_TERMINAL_TASK_STATUSES2);
-        isMeshTaskMode2 = makeGuard2(MESH_TASK_MODES2);
-        isMeshTaskPriority2 = makeGuard2(MESH_TASK_PRIORITIES2);
-        isMeshThinkingLevel2 = makeGuard2(MESH_THINKING_LEVELS2);
-        isMeshDeliveryMode2 = makeGuard2(MESH_DELIVERY_MODES2);
-        isWorkerReportOutcome2 = makeGuard2(WORKER_REPORT_OUTCOMES2);
-        isWorkerBranchState2 = makeGuard2(WORKER_BRANCH_STATES2);
-        WORKER_TOOLS2 = [
-          "report_completion",
-          "progress_update",
-          "peer_context_pull",
-          "git_status",
-          "git_log",
-          "git_diff"
-        ];
-        WORKER_TOOL_SET2 = new Set(WORKER_TOOLS2);
-        WORKER_PROTOCOL_FOOTER_MARKER = "--- adhdev worker protocol ---";
-      }
-    });
     async function runAsyncBatch(items, worker, options = {}) {
       const list = Array.from(items);
       if (list.length === 0) return;
@@ -51214,9 +51581,15 @@ Next step: ${nextStep}`;
     function normalizeDeliveryMode(raw) {
       if (raw === void 0 || raw === null || raw === "") return { mode: DEFAULT_DELIVERY_MODE };
       const v = String(raw).trim().toLowerCase();
-      if (v === "when_idle" || v === "whenidle") return { mode: "when_idle" };
-      if (v === "interrupt") return { mode: "interrupt" };
+      if (v === "whenidle") return { mode: "when_idle" };
+      if (isMeshDeliveryMode2(v)) return { mode: v };
       return { mode: DEFAULT_DELIVERY_MODE, unrecognized: String(raw) };
+    }
+    function isImmediateDeliveryStatus(status) {
+      return normalizeSessionStatus(status) === "idle" || LEGACY_IMMEDIATE_DELIVERY_STATUSES.has(status);
+    }
+    function isTerminalDeliveryStatus(status) {
+      return isDeadStatus(status) || LEGACY_TERMINAL_DELIVERY_STATUSES.has(status);
     }
     function resolveDeliveryDecision(sessionStatus, opts) {
       const status = (sessionStatus || "").trim().toLowerCase();
@@ -51227,14 +51600,14 @@ Next step: ${nextStep}`;
           message: "Session status is unknown. Delivery rejected (fail-closed). Use mesh_launch_session to start a fresh session."
         };
       }
-      if (IMMEDIATE_DELIVERY_STATUSES.has(status)) {
+      if (isImmediateDeliveryStatus(status)) {
         return {
           decision: "immediate",
           reason: `session_${status}`,
           message: `Session is ${status} \u2014 delivery allowed immediately.`
         };
       }
-      if (BUSY_DELIVERY_STATUSES.has(status)) {
+      if (isBusyStatus(status)) {
         if (opts?.allowBusyInjection) {
           return {
             decision: "immediate",
@@ -51242,7 +51615,7 @@ Next step: ${nextStep}`;
             message: `Session is ${status} but provider supports busy injection. Delivered immediately.`
           };
         }
-        if ((status === "waiting_approval" || status === "waiting_choice") && opts?.kind === "approval") {
+        if (isBlockedStatus(status) && opts?.kind === "approval") {
           return {
             decision: "immediate",
             reason: `session_${status}_approval_message`,
@@ -51269,7 +51642,7 @@ Next step: ${nextStep}`;
           message: `Session is ${status}. Task queued for delivery when session becomes idle. Do not inject directly into a busy session.`
         };
       }
-      if (TERMINAL_DELIVERY_STATUSES.has(status)) {
+      if (isTerminalDeliveryStatus(status)) {
         return {
           decision: "rejected",
           reason: `session_${status}_terminal`,
@@ -51352,44 +51725,17 @@ Next step: ${nextStep}`;
     }
     var import_crypto4;
     var DEFAULT_DELIVERY_MODE;
-    var IMMEDIATE_DELIVERY_STATUSES;
-    var BUSY_DELIVERY_STATUSES;
-    var TERMINAL_DELIVERY_STATUSES;
+    var LEGACY_IMMEDIATE_DELIVERY_STATUSES;
+    var LEGACY_TERMINAL_DELIVERY_STATUSES;
     var init_mesh_delivery_policy = __esm2({
       "src/mesh/mesh-delivery-policy.ts"() {
         "use strict";
         import_crypto4 = require("crypto");
+        init_dist();
         init_mesh_runtime_store();
         DEFAULT_DELIVERY_MODE = "when_idle";
-        IMMEDIATE_DELIVERY_STATUSES = /* @__PURE__ */ new Set([
-          "idle",
-          "waiting_input",
-          "ready"
-        ]);
-        BUSY_DELIVERY_STATUSES = /* @__PURE__ */ new Set([
-          "generating",
-          "running",
-          "streaming",
-          "busy",
-          "starting",
-          "initializing",
-          "waiting_approval",
-          // A session parked on a question picker is busy-but-alive in exactly the same
-          // sense as one parked on an approval modal: it holds a live turn and cannot
-          // take new work until the human answers. Omitting it made resolveDeliveryDecision
-          // fall through to the fail-closed 'unrecognized_session_status' reject, so
-          // mesh_send_task was refused outright rather than queued.
-          "waiting_choice"
-        ]);
-        TERMINAL_DELIVERY_STATUSES = /* @__PURE__ */ new Set([
-          "stopped",
-          "failed",
-          "terminated",
-          "exited",
-          "closed",
-          "deleted",
-          "error"
-        ]);
+        LEGACY_IMMEDIATE_DELIVERY_STATUSES = /* @__PURE__ */ new Set(["waiting_input", "ready"]);
+        LEGACY_TERMINAL_DELIVERY_STATUSES = /* @__PURE__ */ new Set(["failed", "terminated", "exited", "closed", "deleted"]);
       }
     });
     function key(meshId, taskId) {
@@ -55442,7 +55788,7 @@ ${lines.join("\n")}
     function normalizeMeshTaskMode(value) {
       if (typeof value !== "string") return void 0;
       const normalized = value.trim();
-      return MESH_TASK_MODES22.includes(normalized) ? normalized : void 0;
+      return isMeshTaskMode2(normalized) ? normalized : void 0;
     }
     function validateMeshTaskModeRequest3(mode, message, readonly2) {
       const taskMode = normalizeMeshTaskMode(mode);
@@ -55486,6 +55832,7 @@ ${lines.join("\n")}
       "src/mesh/mesh-task-mode-guardrail.ts"() {
         "use strict";
         init_mesh_work_queue();
+        init_dist();
         MAX_REPORTED_MATCH_LEN = 40;
         LIVE_DEBUG_READONLY_FORBIDDEN = [
           { label: "source_edit", pattern: /\b(edit|modify|patch|apply\s+patch|write\s+(?:to\s+)?(?:file|source)|overwrite|delete\s+file|remove\s+file|create\s+file|touch\s+file)\b/i },
@@ -55601,18 +55948,7 @@ ${lines.join("\n")}
     }
     function normalizeManagedStatus(status, opts) {
       if (hasApprovalButtons(opts?.activeModal)) return "waiting_approval";
-      const normalized = String(status || "idle").trim().toLowerCase();
-      if (normalized === "waiting_approval") return "waiting_approval";
-      if (normalized === "waiting_choice") return "waiting_choice";
-      if (normalized === "finalizing") return "finalizing";
-      if (WORKING_STATUSES2.has(normalized)) return "generating";
-      if (normalized === "error") return "error";
-      if (normalized === "stopped") return "stopped";
-      if (normalized === "starting") return "starting";
-      if (normalized === "panel_hidden") return "panel_hidden";
-      if (normalized === "not_monitored") return "not_monitored";
-      if (normalized === "disconnected") return "disconnected";
-      return "idle";
+      return normalizeSessionStatus(status) ?? "idle";
     }
     function isManagedStatusWorking(status) {
       return normalizeManagedStatus(status) === "generating";
@@ -55646,7 +55982,6 @@ ${lines.join("\n")}
       }
       return normalized;
     }
-    var WORKING_STATUSES2;
     var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
     var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
     var STATUS_MODAL_MESSAGE_LIMIT;
@@ -55654,14 +55989,7 @@ ${lines.join("\n")}
     var init_normalize = __esm2({
       "src/status/normalize.ts"() {
         "use strict";
-        WORKING_STATUSES2 = /* @__PURE__ */ new Set([
-          "generating",
-          "streaming",
-          "loading",
-          "loading_reference",
-          "thinking",
-          "active"
-        ]);
+        init_dist();
         FULL_STATUS_ACTIVE_CHAT_OPTIONS = {
           includeMessages: true,
           includeInputContent: true,
@@ -56016,7 +56344,7 @@ ${lines.join("\n")}
     function isMeshEventScope(value) {
       return typeof value === "string" && MESH_EVENT_SCOPES.includes(value);
     }
-    function isNonEmptyString(value) {
+    function isNonEmptyString2(value) {
       return typeof value === "string" && value.length > 0;
     }
     function assertCoordinatorIdentity(raw, path74) {
@@ -56024,14 +56352,14 @@ ${lines.join("\n")}
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, path74, "must be an object");
       }
       const obj = raw;
-      if (!isNonEmptyString(obj.daemonId)) {
+      if (!isNonEmptyString2(obj.daemonId)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.daemonId`, "must be a non-empty string");
       }
-      if (!isNonEmptyString(obj.coordinatorRunId)) {
+      if (!isNonEmptyString2(obj.coordinatorRunId)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.coordinatorRunId`, "must be a non-empty string");
       }
       const sessionId = obj.sessionId;
-      if (sessionId !== void 0 && !isNonEmptyString(sessionId)) {
+      if (sessionId !== void 0 && !isNonEmptyString2(sessionId)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.sessionId`, "must be a non-empty string when provided");
       }
       return sessionId !== void 0 ? { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId, sessionId } : { daemonId: obj.daemonId, coordinatorRunId: obj.coordinatorRunId };
@@ -56044,16 +56372,16 @@ ${lines.join("\n")}
       if (!isSupportedMeshProtocolVersion(obj.protocolVersion)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.protocolVersion`, `must be one of ${SUPPORTED_MESH_PROTOCOL_VERSIONS.join(", ")}`);
       }
-      if (!isNonEmptyString(obj.eventId)) {
+      if (!isNonEmptyString2(obj.eventId)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.eventId`, "must be a non-empty string");
       }
       if (!isMeshEventScope(obj.scope)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.scope`, `must be one of ${MESH_EVENT_SCOPES.join(", ")}`);
       }
-      if (!isNonEmptyString(obj.event)) {
+      if (!isNonEmptyString2(obj.event)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.event`, "must be a non-empty string");
       }
-      if (!isNonEmptyString(obj.meshId)) {
+      if (!isNonEmptyString2(obj.meshId)) {
         throw new MeshContractViolationError(MESH_PROTOCOL_VERSION_V2, `${path74}.meshId`, "must be a non-empty string");
       }
       const dispatchedBy = assertCoordinatorIdentity(obj.dispatchedBy, `${path74}.dispatchedBy`);
@@ -56076,7 +56404,7 @@ ${lines.join("\n")}
       return {
         event: obj.event,
         meshId: obj.meshId,
-        nodeLabel: isNonEmptyString(obj.nodeLabel) ? obj.nodeLabel : "",
+        nodeLabel: isNonEmptyString2(obj.nodeLabel) ? obj.nodeLabel : "",
         nodeId: typeof obj.nodeId === "string" ? obj.nodeId : void 0,
         workspace: typeof obj.workspace === "string" ? obj.workspace : void 0,
         metadataEvent: metadata,
@@ -56139,6 +56467,7 @@ ${lines.join("\n")}
     var init_contracts = __esm2({
       "src/mesh/contracts.ts"() {
         "use strict";
+        init_dist();
         init_dist();
         MESH_PROTOCOL_VERSION_V1 = "1.0";
         MESH_PROTOCOL_VERSION_V2 = "2.0";
@@ -66304,8 +66633,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var mesh_work_queue_exports = {};
     __export2(mesh_work_queue_exports, {
       MESH_TASK_GRAPH_MAX_TASKS: () => MESH_TASK_GRAPH_MAX_TASKS3,
-      MESH_TASK_MODES: () => MESH_TASK_MODES22,
-      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES22,
+      MESH_TASK_MODES: () => MESH_TASK_MODES2,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES2,
+      MESH_TASK_STATUSES: () => MESH_TASK_STATUSES2,
+      MESH_TERMINAL_TASK_STATUSES: () => MESH_TERMINAL_TASK_STATUSES2,
       NOT_BEFORE_RELATIVE_THRESHOLD_MS: () => NOT_BEFORE_RELATIVE_THRESHOLD_MS,
       REDRIVE_RECLAIM_REASONS: () => REDRIVE_RECLAIM_REASONS,
       REDRIVE_SUPERSEDE_WINDOW_MS: () => REDRIVE_SUPERSEDE_WINDOW_MS,
@@ -66333,6 +66664,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       getQueue: () => getQueue3,
       hasPendingDependents: () => hasPendingDependents,
       insertDirectDispatch: () => insertDirectDispatch3,
+      isMeshTaskMode: () => isMeshTaskMode2,
+      isMeshTaskPriority: () => isMeshTaskPriority2,
+      isMeshTaskStatus: () => isMeshTaskStatus2,
+      isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
       isTaskReadonly: () => isTaskReadonly2,
       markStaleDirectDispatches: () => markStaleDirectDispatches3,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
@@ -66351,6 +66686,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       requeueTask: () => requeueTask3,
       resolveConvergeRequiredTags: () => resolveConvergeRequiredTags,
       resolveNotBefore: () => resolveNotBefore2,
+      summarizeQueueEntryInputForView: () => summarizeQueueEntryInputForView3,
       takeCancelledTaskAssignment: () => takeCancelledTaskAssignment,
       taskDependenciesSatisfied: () => taskDependenciesSatisfied3,
       terminalizeSiblingDispatch: () => terminalizeSiblingDispatch,
@@ -66359,6 +66695,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       updateTaskStatus: () => updateTaskStatus,
       validateMeshTaskModeRequest: () => validateMeshTaskModeRequest3
     });
+    function summarizeQueueEntryInputForView3(entry) {
+      if (!entry.input) return entry;
+      const { input, ...rest } = entry;
+      const partTypes = [];
+      for (const part of input.parts) {
+        const type2 = typeof part?.type === "string" ? part.type : "unknown";
+        if (!partTypes.includes(type2)) partTypes.push(type2);
+      }
+      return { ...rest, inputSummary: { partCount: input.parts.length, partTypes } };
+    }
     function meshTaskPriorityRank2(priority) {
       switch (priority) {
         case "high":
@@ -66370,7 +66716,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     function normalizeMeshTaskPriority2(value) {
-      return value === "low" || value === "normal" || value === "high" ? value : void 0;
+      return isMeshTaskPriority2(value) ? value : void 0;
     }
     function resolveNotBefore2(value, nowMs = Date.now()) {
       if (value === void 0 || value === null) return void 0;
@@ -66518,6 +66864,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           ...effectiveThinkingLevel && thinkingLevelSource ? { thinkingLevel: effectiveThinkingLevel, thinkingLevelSource } : {},
           difficulty: taskDifficulty,
           ...typeof opts?.sourceCoordinatorSessionId === "string" && opts.sourceCoordinatorSessionId.trim() ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() } : {},
+          // MESH-IMAGE-DISPATCH: persist the envelope only when it carries parts, so a
+          // text-only task's payload is byte-identical to what it was before this field.
+          ...Array.isArray(opts?.input?.parts) && opts.input.parts.length > 0 ? { input: opts.input } : {},
           createdAt: (/* @__PURE__ */ new Date()).toISOString(),
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
@@ -67066,8 +67415,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       MeshRuntimeStore.resetForTests();
     }
     var import_crypto11;
-    var MESH_TASK_MODES22;
-    var MESH_TASK_PRIORITIES22;
     var NOT_BEFORE_RELATIVE_THRESHOLD_MS;
     var MESH_TASK_GRAPH_MAX_TASKS3;
     var DEPENDENCY_FAILURE_TERMINALS;
@@ -67097,14 +67444,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_mode_guardrail();
         init_worker_mcp_isolation();
         init_mesh_task_parking();
+        init_dist();
         init_mesh_task_mode_guardrail();
         init_mesh_node_capability_tags();
         init_mesh_direct_dispatch();
         init_mesh_autolaunch_spawn_budget();
         init_mesh_direct_dispatch();
         init_mesh_reconcile_acked_hold();
-        MESH_TASK_MODES22 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
-        MESH_TASK_PRIORITIES22 = ["low", "normal", "high"];
         NOT_BEFORE_RELATIVE_THRESHOLD_MS = 365 * 24 * 60 * 60 * 1e3;
         MESH_TASK_GRAPH_MAX_TASKS3 = 50;
         DEPENDENCY_FAILURE_TERMINALS = /* @__PURE__ */ new Set(["failed", "cancelled"]);
@@ -68350,14 +68696,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const rejectedCommands = [];
       const deprecationWarnings = [];
       let bootstrapMode = "inherit";
-      if (!isRecord3(config2)) return { valid: false, errors: ["config must be an object"], bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
+      if (!isRecord4(config2)) return { valid: false, errors: ["config must be an object"], bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
       if (config2.version !== 1) errors.push("version must be 1");
       if (config2.allowAutoPublishSubmoduleMainCommits !== void 0 && typeof config2.allowAutoPublishSubmoduleMainCommits !== "boolean") {
         errors.push("allowAutoPublishSubmoduleMainCommits must be a boolean when provided");
       }
       const validation = config2.validation;
-      if (validation !== void 0 && !isRecord3(validation)) errors.push("validation must be an object");
-      const rawBootstrapMode = isRecord3(validation) ? validation.bootstrap : void 0;
+      if (validation !== void 0 && !isRecord4(validation)) errors.push("validation must be an object");
+      const rawBootstrapMode = isRecord4(validation) ? validation.bootstrap : void 0;
       if (rawBootstrapMode !== void 0) {
         if (rawBootstrapMode === "inherit" || rawBootstrapMode === "skip") {
           bootstrapMode = rawBootstrapMode;
@@ -68365,8 +68711,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           errors.push("validation.bootstrap must be 'inherit' or 'skip' when provided");
         }
       }
-      const rawCommands = isRecord3(validation) ? validation.commands : void 0;
-      const rawBootstrapCommands = isRecord3(validation) ? validation.bootstrapCommands : void 0;
+      const rawCommands = isRecord4(validation) ? validation.commands : void 0;
+      const rawBootstrapCommands = isRecord4(validation) ? validation.bootstrapCommands : void 0;
       if (rawCommands !== void 0 && !Array.isArray(rawCommands)) errors.push("validation.commands must be an array");
       if (rawBootstrapCommands !== void 0 && !Array.isArray(rawBootstrapCommands)) errors.push("validation.bootstrapCommands must be an array");
       if (Array.isArray(rawBootstrapCommands) && rawBootstrapCommands.length > 0) {
@@ -68418,19 +68764,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function readPackageScripts(workspace) {
       try {
         const parsed = JSON.parse((0, import_fs8.readFileSync)((0, import_path7.join)(workspace, "package.json"), "utf-8"));
-        return isRecord3(parsed?.scripts) ? parsed.scripts : {};
+        return isRecord4(parsed?.scripts) ? parsed.scripts : {};
       } catch {
         return {};
       }
     }
     function collectProjectContextSuggestions(mesh) {
       const commands = mesh?.projectContext?.commands;
-      if (!isRecord3(commands)) return [];
+      if (!isRecord4(commands)) return [];
       const suggestions = [];
       for (const category of MESH_REFINE_VALIDATION_CATEGORIES) {
         const entries = Array.isArray(commands[category]) ? commands[category] : [];
         for (const entry of entries) {
-          if (isRecord3(entry) && typeof entry.command === "string") suggestions.push({ command: entry.command, category });
+          if (isRecord4(entry) && typeof entry.command === "string") suggestions.push({ command: entry.command, category });
         }
       }
       return suggestions;
@@ -68501,7 +68847,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var SHELL_METACHAR_RE;
     var SAFE_TOKEN_RE;
     var SAFE_WIN32_EXEC_TOKEN_RE;
-    var isRecord3;
+    var isRecord4;
     var init_refine_config = __esm2({
       "src/mesh/refine-config.ts"() {
         "use strict";
@@ -68596,7 +68942,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         SHELL_METACHAR_RE = /[;&|<>`$\n\r'"]/;
         SAFE_TOKEN_RE = /^[A-Za-z0-9_@./:=+-]+$/;
         SAFE_WIN32_EXEC_TOKEN_RE = /^[A-Za-z0-9_@./:=+\\-]+$/;
-        isRecord3 = isMeshConfigRecord;
+        isRecord4 = isMeshConfigRecord;
       }
     });
     var worktree_bootstrap_config_exports = {};
@@ -75661,6 +76007,7 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
       const magiSection = buildMagiKindPanelsSection(ctx.magiKindPanels);
       if (magiSection) sections.push(magiSection);
       sections.push(TOOLS_SECTION);
+      sections.push(WORKERS_SECTION);
       sections.push(TOOL_EXPOSURE_PREFLIGHT_SECTION);
       const rulesLayer = splitRulesLayer((ctx.repoRules ?? resolveCoordinatorRules(void 0)).text);
       if (rulesLayer.workflow) sections.push(rulesLayer.workflow);
@@ -75699,6 +76046,7 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
         operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || "",
         policy: buildPolicySection(mergeAndNormalizePolicy(void 0, mesh.policy)),
         tools: TOOLS_SECTION,
+        workers: WORKERS_SECTION,
         workflow: rulesLayer.workflow,
         quota: QUOTA_SECTION,
         onboarding: ONBOARDING_SECTION,
@@ -75795,7 +76143,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
           lines.push(`  \u{1F4CC} Node instruction: ${indentFollowing(nodePrompt, "     ")}`);
         }
       }
-      lines.push("", "_Use `mesh_status` to probe live health before delegating work._");
+      lines.push("", "_Use `mesh_status` for node health and capacity before delegating work \u2014 never to check on a running worker's progress; completion, progress and blocked reports arrive as events (see Workers)._");
       return lines.join("\n");
     }
     function indentFollowing(text, pad) {
@@ -76057,6 +76405,7 @@ ${rules.join("\n")}`;
     var OPERATING_NOTE_MAX_CHARS;
     var OPERATING_NOTE_INJECTION_BYTE_BUDGET;
     var TOOLS_SECTION;
+    var WORKERS_SECTION;
     var TOOL_EXPOSURE_PREFLIGHT_SECTION;
     var QUOTA_SECTION;
     var ONBOARDING_SECTION;
@@ -76094,6 +76443,7 @@ ${rules.join("\n")}`;
 | \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
 | \`mesh_queue_requeue\` | Return a task to pending for retry |
 | \`mesh_send_task\` | Push a task straight to a specific node/session |
+| \`mesh_notify_worker\` | Deliver an urgent memo to a BUSY worker mid-task \u2014 piggybacks on the worker's next tool call, no interrupt. Published only while worker MCP is on (\`ADHDEV_WORKER_MCP\`, default on) |
 | \`mesh_mission_upsert\` | Create/update a persistent mission; set completed/abandoned when decided |
 | \`mesh_mission_list\` | All missions with goal/status/progress \u2014 the authority for "what work remains" |
 | \`mesh_launch_session\` | Start a new agent session on a node |
@@ -76141,6 +76491,7 @@ ${rules.join("\n")}`;
 | \`mesh_node_slots_propose\` | Auto-detect installed CLIs and draft a slot profile (read-only; reports droppedSlots) |
 | \`mesh_coordinator_prompt_append_get\` | Read this daemon's per-machine coordinator prompt APPEND for a CLI type |
 | \`mesh_coordinator_prompt_append_set\` | Write/clear that APPEND (append-only; base prompt is not replaceable) |`;
+        WORKERS_SECTION = renderCoordinatorWorkerSection();
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
 Before searching for an enqueue tool, classify the whole currently known work frontier. For every new delegation search, include \`mesh_enqueue_batch\` by exact name; never search for or load only \`mesh_enqueue_task\`. Load \`mesh_enqueue_task\` only as the single-task fallback after the batch eligibility check below fails.
@@ -77886,6 +78237,866 @@ ${rendered}`, "utf-8");
           cacheReadTokens: 0,
           cacheCreationTokens: 0
         };
+      }
+    });
+    var worker_report_exports = {};
+    __export2(worker_report_exports, {
+      WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
+      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
+      WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
+      WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
+      WORKER_HANDOFF_EVENT_KIND: () => WORKER_HANDOFF_EVENT_KIND,
+      WORKER_INTENT_MAX_CHARS: () => WORKER_INTENT_MAX_CHARS,
+      WORKER_LIST_ITEM_MAX_CHARS: () => WORKER_LIST_ITEM_MAX_CHARS,
+      WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
+      WORKER_PROGRESS_SURFACE_MIN_CHARS: () => WORKER_PROGRESS_SURFACE_MIN_CHARS,
+      WORKER_PROGRESS_SURFACE_MIN_GAP_MS: () => WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
+      WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
+      WORKER_SUMMARY_MAX_CHARS: () => WORKER_SUMMARY_MAX_CHARS,
+      WORKER_TOUCHED_FILES_MAX: () => WORKER_TOUCHED_FILES_MAX,
+      __resetProgressSurfaceForTest: () => __resetProgressSurfaceForTest,
+      __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
+      acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
+      acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
+      buildWorkerProgressNotice: () => buildWorkerProgressNotice,
+      configureHandoffNoteSink: () => configureHandoffNoteSink,
+      configureWorkerProgressNoticeSink: () => configureWorkerProgressNoticeSink,
+      findPriorWorkerReport: () => findPriorWorkerReport,
+      pruneReportedSummaries: () => pruneReportedSummaries,
+      resolveWorkerIdentity: () => resolveWorkerIdentity,
+      shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator,
+      validateWorkerCompletionReport: () => validateWorkerCompletionReport
+    });
+    function validateWorkerCompletionReport(raw) {
+      const errors = [];
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return { errors: [{ field: "", message: "report must be an object" }] };
+      }
+      const input = raw;
+      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers"]);
+      for (const key2 of Object.keys(input)) {
+        if (!KNOWN.has(key2)) {
+          errors.push({ field: key2, message: `unknown field '${key2}' (expected one of: ${[...KNOWN].join(", ")})` });
+        }
+      }
+      const outcome = input.outcome;
+      if (!isWorkerReportOutcome2(outcome)) {
+        errors.push({ field: "outcome", message: `outcome must be one of ${WORKER_REPORT_OUTCOMES2.map((o) => `'${o}'`).join(" | ")}` });
+      }
+      const summary = typeof input.summary === "string" ? input.summary.trim() : "";
+      if (!summary) {
+        errors.push({ field: "summary", message: "summary is required and must be a non-empty string" });
+      } else if (summary.length > WORKER_SUMMARY_MAX_CHARS) {
+        errors.push({
+          field: "summary",
+          message: `summary is ${summary.length} chars, over the ${WORKER_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`
+        });
+      }
+      const touchedFiles = validateStringList(input.touchedFiles, "touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
+      const blockers = validateStringList(input.blockers, "blockers", WORKER_BLOCKERS_MAX, errors);
+      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES2.includes(input.branchState)) {
+        errors.push({
+          field: "branchState",
+          message: `branchState must be one of: ${WORKER_BRANCH_STATES2.join(", ")}`
+        });
+      }
+      let handoffNotes;
+      if (input.handoffNotes !== void 0) {
+        const notes = input.handoffNotes;
+        if (!notes || typeof notes !== "object" || Array.isArray(notes)) {
+          errors.push({ field: "handoffNotes", message: "handoffNotes must be an object" });
+        } else {
+          const n = notes;
+          const KNOWN_NOTES = /* @__PURE__ */ new Set(["intent", "conflictGuidance", "touchedFiles", "followUps"]);
+          for (const key2 of Object.keys(n)) {
+            if (!KNOWN_NOTES.has(key2)) {
+              errors.push({ field: `handoffNotes.${key2}`, message: `unknown field '${key2}'` });
+            }
+          }
+          const intent = typeof n.intent === "string" ? n.intent.trim() : "";
+          if (!intent) {
+            errors.push({ field: "handoffNotes.intent", message: "intent is required \u2014 it is the part a diff cannot convey" });
+          } else if (intent.length > WORKER_INTENT_MAX_CHARS) {
+            errors.push({ field: "handoffNotes.intent", message: `intent is over the ${WORKER_INTENT_MAX_CHARS} char limit` });
+          }
+          let guidance;
+          if (n.conflictGuidance !== void 0) {
+            if (typeof n.conflictGuidance !== "string") {
+              errors.push({ field: "handoffNotes.conflictGuidance", message: "conflictGuidance must be a string" });
+            } else if (n.conflictGuidance.trim().length > WORKER_GUIDANCE_MAX_CHARS) {
+              errors.push({ field: "handoffNotes.conflictGuidance", message: `conflictGuidance is over the ${WORKER_GUIDANCE_MAX_CHARS} char limit` });
+            } else {
+              guidance = n.conflictGuidance.trim() || void 0;
+            }
+          }
+          const noteFiles = validateStringList(n.touchedFiles, "handoffNotes.touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
+          if (n.touchedFiles === void 0) {
+            errors.push({
+              field: "handoffNotes.touchedFiles",
+              message: "touchedFiles is required \u2014 it is what matches this note to future work (use [] on a read-only task)"
+            });
+          }
+          const followUps = validateStringList(n.followUps, "handoffNotes.followUps", WORKER_FOLLOW_UPS_MAX, errors);
+          if (intent && noteFiles) {
+            handoffNotes = {
+              intent,
+              ...guidance ? { conflictGuidance: guidance } : {},
+              touchedFiles: noteFiles,
+              ...followUps?.length ? { followUps } : {}
+            };
+          }
+        }
+      }
+      if (errors.length) return { errors };
+      return {
+        report: {
+          outcome,
+          summary,
+          ...handoffNotes ? { handoffNotes } : {},
+          ...touchedFiles?.length ? { touchedFiles } : {},
+          ...input.branchState ? { branchState: input.branchState } : {},
+          ...blockers?.length ? { blockers } : {}
+        },
+        errors: []
+      };
+    }
+    function validateStringList(value, field2, max, errors) {
+      if (value === void 0) return void 0;
+      if (!Array.isArray(value)) {
+        errors.push({ field: field2, message: `${field2} must be an array of strings` });
+        return void 0;
+      }
+      if (value.length > max) {
+        errors.push({ field: field2, message: `${field2} has ${value.length} entries, over the ${max} limit` });
+        return void 0;
+      }
+      const out = [];
+      for (const item of value) {
+        if (typeof item !== "string") {
+          errors.push({ field: field2, message: `${field2} must contain only strings` });
+          return void 0;
+        }
+        const trimmed = item.trim();
+        if (!trimmed) continue;
+        if (trimmed.length > WORKER_LIST_ITEM_MAX_CHARS) {
+          errors.push({ field: field2, message: `${field2} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
+          return void 0;
+        }
+        out.push(trimmed);
+      }
+      return out;
+    }
+    function findPriorWorkerReport(meshId, taskId) {
+      if (!meshId || !taskId) return null;
+      let rows;
+      try {
+        rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(meshId, taskId);
+      } catch {
+        return null;
+      }
+      const row = rows.filter((r) => r.kind === WORKER_REPORT_EVENT_KIND).pop();
+      if (!row) return null;
+      let payload = {};
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+      }
+      const outcome = payload.outcome === "completed" || payload.outcome === "blocked" || payload.outcome === "failed" ? payload.outcome : "completed";
+      const summary = readReportedSummary(meshId, taskId);
+      return {
+        taskId,
+        attemptId: row.attemptId,
+        outcome,
+        ...summary ? { summary } : {},
+        recordedAt: row.recordedAt
+      };
+    }
+    function summaryKey(meshId, taskId) {
+      return `${meshId}\0${taskId}`;
+    }
+    function readReportedSummary(meshId, taskId) {
+      return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
+    }
+    function pruneReportedSummaries(maxAgeMs, nowMs = Date.now()) {
+      let removed = 0;
+      for (const [key2, entry] of REPORTED_SUMMARY_STORE) {
+        if (nowMs - entry.recordedAtMs > maxAgeMs) {
+          REPORTED_SUMMARY_STORE.delete(key2);
+          removed += 1;
+        }
+      }
+      return removed;
+    }
+    function __resetReportedSummariesForTest() {
+      REPORTED_SUMMARY_STORE.clear();
+    }
+    function resolveWorkerIdentity(credential) {
+      const direct = verifyWorkerTaskToken(credential.token);
+      if (direct) {
+        return {
+          token: direct.token,
+          meshId: direct.meshId,
+          taskId: direct.taskId,
+          ...direct.attemptId ? { attemptId: direct.attemptId } : {},
+          sessionId: direct.sessionId || "",
+          ...direct.nodeId ? { nodeId: direct.nodeId } : {}
+        };
+      }
+      return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
+    }
+    function resolveCurrentTaskForSession(meshId, sessionId) {
+      try {
+        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId);
+        if (!entry?.id) return null;
+        return {
+          taskId: entry.id,
+          ...entry.attemptId ? { attemptId: entry.attemptId } : {}
+        };
+      } catch {
+        return null;
+      }
+    }
+    function configureHandoffNoteSink(sink) {
+      handoffSink = sink;
+    }
+    function checkReportAgainstTaskMode(identity, report) {
+      let task;
+      try {
+        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity.meshId, identity.taskId);
+      } catch {
+        return null;
+      }
+      if (!task) return null;
+      const readonly2 = isTaskReadonly2(task);
+      const declaredFiles = [
+        ...report.touchedFiles || [],
+        ...report.handoffNotes?.touchedFiles || []
+      ];
+      if (readonly2) {
+        if (declaredFiles.length) {
+          return `task ${identity.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
+        }
+        return null;
+      }
+      if (report.handoffNotes && !report.handoffNotes.touchedFiles.length) {
+        return `task ${identity.taskId} changes code, so handoffNotes.touchedFiles must be non-empty \u2014 it is the key that delivers your note to whoever touches this code next.`;
+      }
+      return null;
+    }
+    function acceptWorkerCompletionReport(credential, report, opts = {}) {
+      const identity = resolveWorkerIdentity(credential);
+      if (!identity) return { accepted: false, refusal: "unauthenticated" };
+      const taskModeError = checkReportAgainstTaskMode(identity, report);
+      if (taskModeError) {
+        return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
+      }
+      const nowMs = opts.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const store = MeshRuntimeStore.getInstance();
+      REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
+        summary: report.summary,
+        recordedAtMs: nowMs
+      });
+      let evidenceRecorded = !identity.attemptId;
+      if (identity.attemptId) {
+        try {
+          evidenceRecorded = store.insertTurnEvent({
+            eventId: (0, import_crypto13.randomUUID)(),
+            meshId: identity.meshId,
+            attemptId: identity.attemptId,
+            taskId: identity.taskId,
+            kind: WORKER_REPORT_EVENT_KIND,
+            // UNIQUE(attempt_id, kind, dedupe_key) makes a re-call for the
+            // same outcome insert-once, matching the reducer's own idempotency.
+            dedupeKey: report.outcome,
+            payload: JSON.stringify({
+              outcome: report.outcome,
+              summaryLength: report.summary.length,
+              touchedFileCount: report.touchedFiles?.length ?? 0,
+              blockerCount: report.blockers?.length ?? 0,
+              hasHandoffNotes: !!report.handoffNotes,
+              ...report.branchState ? { branchState: report.branchState } : {}
+            }),
+            occurredAtMs: nowMs,
+            recordedAt: nowIso
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
+          evidenceRecorded = false;
+        }
+        if (!evidenceRecorded) {
+          const existing = findPriorWorkerReport(identity.meshId, identity.taskId);
+          if (!existing) {
+            return {
+              accepted: false,
+              refusal: "storage_failed",
+              detail: `could not persist the report evidence row for task ${identity.taskId}`
+            };
+          }
+          evidenceRecorded = true;
+        }
+      }
+      let handoffNoteRecorded = false;
+      let handoffNoteError = null;
+      if (report.handoffNotes) {
+        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
+      }
+      const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
+      let commit;
+      try {
+        commit = commitTaskTerminalAndAdvanceGraph({
+          meshId: identity.meshId,
+          taskId: identity.taskId,
+          status: terminalStatus,
+          ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+          ...identity.attemptId ? { attemptId: identity.attemptId } : {},
+          occurredAtMs: nowMs,
+          // ★A NEW proposal source. The reducer's causal checks apply to it
+          // exactly as they do to a provider event — a valid token does not
+          // buy an exemption from stale-attempt or session-mismatch.
+          source: "worker_tool_report",
+          reason: report.outcome === "blocked" ? `worker_reported_blocked:${(report.blockers || []).length}` : `worker_reported:${report.outcome}`,
+          envelope: {
+            finalSummary: report.summary,
+            ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
+            evidence: {
+              // The grade this report earns (design §4 등급표): declared by
+              // the worker, so it is complete by construction and carries
+              // no truncation risk the way a screen scrape does.
+              summarySource: "tool_report",
+              mayBeTruncated: false,
+              reportedOutcome: report.outcome,
+              ...report.branchState ? { branchState: report.branchState } : {},
+              ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
+            },
+            ...identity.nodeId ? { nodeId: identity.nodeId } : {},
+            completedAt: nowIso
+          }
+        });
+      } catch (e) {
+        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity.taskId}: ${e?.message || e}`);
+        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
+      }
+      if (!commit.committed) {
+        if (commit.rejectionReason) {
+          return { accepted: false, refusal: "rejected_by_reducer", detail: commit.rejectionReason };
+        }
+        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
+      }
+      LOG.info(
+        "WorkerReport",
+        `Accepted ${report.outcome} report for task ${identity.taskId}` + (identity.attemptId ? ` attempt ${identity.attemptId}` : "") + (commit.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+      );
+      return {
+        accepted: true,
+        taskId: identity.taskId,
+        ...identity.attemptId ? { attemptId: identity.attemptId } : {},
+        outcome: report.outcome,
+        duplicate: commit.duplicate,
+        handoffNoteRecorded,
+        // ★The completion itself still stands — the terminal committed, and
+        // discarding a valid completion because its optional note failed would
+        // trade a small loss for a large one. But the worker is TOLD, so it can
+        // put the context somewhere else rather than believing it was filed.
+        ...handoffNoteError ? { handoffNoteError } : {}
+      };
+    }
+    function acceptWorkerProgressUpdate(credential, note, opts = {}) {
+      const identity = resolveWorkerIdentity(credential);
+      if (!identity) return { accepted: false, refusal: "unauthenticated" };
+      if (!identity.attemptId) {
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: `task ${identity.taskId} has no active attempt to record progress against`
+        };
+      }
+      const nowMs = opts.nowMs ?? Date.now();
+      let recorded = false;
+      try {
+        recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
+          eventId: (0, import_crypto13.randomUUID)(),
+          meshId: identity.meshId,
+          attemptId: identity.attemptId,
+          taskId: identity.taskId,
+          kind: WORKER_PROGRESS_EVENT_KIND,
+          // Distinct per call — progress updates are a SEQUENCE, unlike the
+          // completion report where the UNIQUE constraint provides idempotency.
+          dedupeKey: `${nowMs}`,
+          payload: JSON.stringify({ noteLength: note.length }),
+          occurredAtMs: nowMs,
+          recordedAt: new Date(nowMs).toISOString()
+        });
+      } catch (e) {
+        LOG.error("WorkerReport", `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: e?.message || String(e)
+        };
+      }
+      if (!recorded) {
+        return {
+          accepted: false,
+          taskId: identity.taskId,
+          refusal: "storage_failed",
+          detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
+        };
+      }
+      const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs);
+      return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
+    }
+    function __resetProgressSurfaceForTest() {
+      PROGRESS_SURFACE_LAST_MS.clear();
+    }
+    function shouldSurfaceProgressToCoordinator(opts) {
+      const note = opts.note.trim();
+      if (note.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
+      if (opts.lastSurfacedAtMs === void 0) return true;
+      return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    }
+    function buildWorkerProgressNotice(opts) {
+      return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
+    }
+    function configureWorkerProgressNoticeSink(sink) {
+      progressNoticeSink = sink;
+    }
+    function notifyCoordinatorOfProgress(identity, note, nowMs) {
+      const key2 = summaryKey(identity.meshId, identity.taskId);
+      if (!shouldSurfaceProgressToCoordinator({
+        note,
+        nowMs,
+        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key2)
+      })) {
+        return false;
+      }
+      const sink = progressNoticeSink;
+      if (!sink) return false;
+      try {
+        sink({
+          meshId: identity.meshId,
+          taskId: identity.taskId,
+          ...identity.nodeId ? { nodeId: identity.nodeId } : {},
+          ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+          note: note.trim(),
+          coordinatorMessage: buildWorkerProgressNotice({
+            taskId: identity.taskId,
+            nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
+            note
+          }),
+          nowMs
+        });
+      } catch (e) {
+        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
+        return false;
+      }
+      PROGRESS_SURFACE_LAST_MS.set(key2, nowMs);
+      return true;
+    }
+    function recordHandoffNote(identity, notes, nowMs, nowIso) {
+      if (!identity.attemptId) {
+        return {
+          recorded: false,
+          error: `task ${identity.taskId} has no active attempt, so the note has no index row and could never be delivered`
+        };
+      }
+      {
+        try {
+          MeshRuntimeStore.getInstance().insertTurnEvent({
+            eventId: (0, import_crypto13.randomUUID)(),
+            meshId: identity.meshId,
+            attemptId: identity.attemptId,
+            taskId: identity.taskId,
+            kind: WORKER_HANDOFF_EVENT_KIND,
+            dedupeKey: "",
+            payload: JSON.stringify({
+              touchedFiles: notes.touchedFiles,
+              intentLength: notes.intent.length,
+              hasConflictGuidance: !!notes.conflictGuidance,
+              followUpCount: notes.followUps?.length ?? 0,
+              ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+              ...identity.nodeId ? { nodeId: identity.nodeId } : {}
+            }),
+            occurredAtMs: nowMs,
+            recordedAt: nowIso
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
+        }
+      }
+      if (handoffSink) {
+        try {
+          handoffSink({
+            meshId: identity.meshId,
+            taskId: identity.taskId,
+            ...identity.attemptId ? { attemptId: identity.attemptId } : {},
+            ...identity.sessionId ? { sessionId: identity.sessionId } : {},
+            ...identity.nodeId ? { nodeId: identity.nodeId } : {},
+            notes,
+            recordedAtIso: nowIso
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
+        }
+      }
+      return { recorded: true, error: null };
+    }
+    var import_crypto13;
+    var WORKER_REPORT_EVENT_KIND;
+    var WORKER_PROGRESS_EVENT_KIND;
+    var WORKER_HANDOFF_EVENT_KIND;
+    var WORKER_SUMMARY_MAX_CHARS;
+    var WORKER_INTENT_MAX_CHARS;
+    var WORKER_GUIDANCE_MAX_CHARS;
+    var WORKER_TOUCHED_FILES_MAX;
+    var WORKER_LIST_ITEM_MAX_CHARS;
+    var WORKER_BLOCKERS_MAX;
+    var WORKER_FOLLOW_UPS_MAX;
+    var REPORTED_SUMMARY_STORE;
+    var handoffSink;
+    var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    var WORKER_PROGRESS_SURFACE_MIN_CHARS;
+    var PROGRESS_SURFACE_LAST_MS;
+    var progressNoticeSink;
+    var init_worker_report = __esm2({
+      "src/mesh/worker-report.ts"() {
+        "use strict";
+        import_crypto13 = require("crypto");
+        init_dist();
+        init_logger();
+        init_mesh_runtime_store();
+        init_mesh_graph_transition_runner();
+        init_mesh_work_queue();
+        init_worker_mcp_isolation();
+        WORKER_REPORT_EVENT_KIND = "worker_tool_report";
+        WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
+        WORKER_HANDOFF_EVENT_KIND = "worker_handoff_note";
+        WORKER_SUMMARY_MAX_CHARS = 8e3;
+        WORKER_INTENT_MAX_CHARS = 4e3;
+        WORKER_GUIDANCE_MAX_CHARS = 4e3;
+        WORKER_TOUCHED_FILES_MAX = 200;
+        WORKER_LIST_ITEM_MAX_CHARS = 500;
+        WORKER_BLOCKERS_MAX = 50;
+        WORKER_FOLLOW_UPS_MAX = 50;
+        REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
+        handoffSink = null;
+        WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
+        WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
+        PROGRESS_SURFACE_LAST_MS = /* @__PURE__ */ new Map();
+        progressNoticeSink = null;
+      }
+    });
+    var worker_handoff_notes_exports = {};
+    __export2(worker_handoff_notes_exports, {
+      HANDOFF_ENCLOSE_MAX_BYTES: () => HANDOFF_ENCLOSE_MAX_BYTES,
+      HANDOFF_ENCLOSE_MAX_NOTES: () => HANDOFF_ENCLOSE_MAX_NOTES,
+      HANDOFF_ENTRY_KIND: () => HANDOFF_ENTRY_KIND,
+      HANDOFF_RETENTION_DAYS: () => HANDOFF_RETENTION_DAYS,
+      HANDOFF_RETENTION_MS: () => HANDOFF_RETENTION_MS,
+      __resetHandoffNotesForTest: () => __resetHandoffNotesForTest,
+      composeTaskDispatchBody: () => composeTaskDispatchBody,
+      configureHandoffNotesSeqscribe: () => configureHandoffNotesSeqscribe,
+      getStoredHandoffNote: () => getStoredHandoffNote,
+      pruneExpiredHandoffNotes: () => pruneExpiredHandoffNotes,
+      renderHandoffNotesBlock: () => renderHandoffNotesBlock,
+      selectRelevantHandoffNotes: () => selectRelevantHandoffNotes,
+      storeHandoffNote: () => storeHandoffNote
+    });
+    function noteKey(meshId, taskId) {
+      return `${meshId}\0${taskId}`;
+    }
+    function loadNoteText(meshId, taskId) {
+      const cached5 = NOTE_TEXT_STORE.get(noteKey(meshId, taskId));
+      if (cached5) return cached5;
+      let row;
+      try {
+        row = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text lookup failed for task ${taskId}: ${e?.message || e}`);
+        return null;
+      }
+      if (!row) return null;
+      let notes;
+      try {
+        notes = JSON.parse(row.notesJson);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text for task ${taskId} is unparseable: ${e?.message || e}`);
+        return null;
+      }
+      if (!notes?.intent || !Array.isArray(notes.touchedFiles)) return null;
+      const restored = {
+        meshId: row.meshId,
+        taskId: row.taskId,
+        ...row.attemptId ? { attemptId: row.attemptId } : {},
+        ...row.nodeId ? { nodeId: row.nodeId } : {},
+        notes,
+        recordedAtIso: row.recordedAt
+      };
+      NOTE_TEXT_STORE.set(noteKey(meshId, taskId), restored);
+      return restored;
+    }
+    function configureHandoffNotesSeqscribe(handle) {
+      seqscribeHandle = handle;
+    }
+    function storeHandoffNote(note) {
+      MeshRuntimeStore.getInstance().upsertHandoffNoteText({
+        meshId: note.meshId,
+        taskId: note.taskId,
+        ...note.attemptId ? { attemptId: note.attemptId } : {},
+        ...note.nodeId ? { nodeId: note.nodeId } : {},
+        notesJson: JSON.stringify(note.notes),
+        recordedAt: note.recordedAtIso
+      });
+      NOTE_TEXT_STORE.set(noteKey(note.meshId, note.taskId), note);
+      const handle = seqscribeHandle;
+      if (!handle) return;
+      const topic = meshHandoffTopic(note.meshId);
+      if (!handle.topics.some((d) => d.topic === topic)) {
+        return;
+      }
+      void handle.node.log(topic).append(HANDOFF_ENTRY_KIND, {
+        taskId: note.taskId,
+        ...note.attemptId ? { attemptId: note.attemptId } : {},
+        ...note.nodeId ? { nodeId: note.nodeId } : {},
+        recordedAt: note.recordedAtIso,
+        intent: note.notes.intent,
+        ...note.notes.conflictGuidance ? { conflictGuidance: note.notes.conflictGuidance } : {},
+        touchedFiles: note.notes.touchedFiles,
+        ...note.notes.followUps?.length ? { followUps: note.notes.followUps } : {}
+      }).catch((e) => {
+        LOG.warn("HandoffNotes", `Failed to append handoff note for task ${note.taskId}: ${e?.message || e}`);
+      });
+    }
+    function getStoredHandoffNote(meshId, taskId) {
+      return loadNoteText(meshId, taskId);
+    }
+    function __resetHandoffNotesForTest() {
+      NOTE_TEXT_STORE.clear();
+      seqscribeHandle = null;
+    }
+    function selectRelevantHandoffNotes(input) {
+      const store = MeshRuntimeStore.getInstance();
+      let rows;
+      try {
+        rows = store.listTurnEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note lookup failed for mesh ${input.meshId}: ${e?.message || e}`);
+        return [];
+      }
+      const wantedFiles = new Set((input.touchedFiles || []).map(normalizeFilePath).filter(Boolean));
+      const cutoffMs = (input.nowMs ?? Date.now()) - HANDOFF_RETENTION_MS;
+      const byFiles = [];
+      const byMission = [];
+      const byBranch = [];
+      const seenTasks = /* @__PURE__ */ new Set([input.taskId]);
+      for (const row of rows) {
+        if (seenTasks.has(row.taskId)) continue;
+        const recordedMs = Date.parse(row.recordedAt);
+        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) continue;
+        const stored = loadNoteText(input.meshId, row.taskId);
+        if (!stored) {
+          LOG.debug("HandoffNotes", `Handoff note index row for task ${row.taskId} has no local text \u2014 peer-originated note, skipping enclosure.`);
+          continue;
+        }
+        let meta3 = {};
+        try {
+          meta3 = JSON.parse(row.payload);
+        } catch {
+        }
+        const noteFiles = Array.isArray(meta3.touchedFiles) ? meta3.touchedFiles.filter((f) => typeof f === "string") : stored.notes.touchedFiles;
+        const overlap = wantedFiles.size ? noteFiles.filter((f) => wantedFiles.has(normalizeFilePath(f))) : [];
+        if (overlap.length) {
+          seenTasks.add(row.taskId);
+          byFiles.push({ ...stored, reason: "touched_files", overlap });
+          continue;
+        }
+        if (input.missionId && input.lookupMissionId?.(row.taskId) === input.missionId) {
+          seenTasks.add(row.taskId);
+          byMission.push({ ...stored, reason: "same_mission" });
+          continue;
+        }
+        if (input.branch && input.lookupBranch?.(row.taskId) === input.branch) {
+          seenTasks.add(row.taskId);
+          byBranch.push({ ...stored, reason: "same_branch" });
+        }
+      }
+      return [...byFiles, ...byMission, ...byBranch];
+    }
+    function normalizeFilePath(value) {
+      return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+    }
+    function renderHandoffNotesBlock(notes, opts = {}) {
+      if (!notes.length) return null;
+      const maxNotes = opts.maxNotes ?? HANDOFF_ENCLOSE_MAX_NOTES;
+      const maxBytes = opts.maxBytes ?? HANDOFF_ENCLOSE_MAX_BYTES;
+      const header = "## Handoff notes from related work\n\n_Left by earlier agents whose changes overlap yours. They cannot be asked follow-up questions._\n";
+      const parts = [];
+      let used = Buffer.byteLength(header, "utf8");
+      let included = 0;
+      for (const note of notes) {
+        if (included >= maxNotes) break;
+        const rendered = renderOneNote(note);
+        const cost = Buffer.byteLength(rendered, "utf8");
+        if (included > 0 && used + cost > maxBytes) break;
+        parts.push(rendered);
+        used += cost;
+        included += 1;
+      }
+      const omitted = notes.length - included;
+      const omissionLine = omitted > 0 ? `
+_${omitted} further related note(s) omitted to fit the enclosure budget \u2014 the most relevant are shown first._
+` : "";
+      return { text: `${header}${parts.join("")}${omissionLine}`, included, omitted };
+    }
+    function renderOneNote(note) {
+      const why = note.reason === "touched_files" ? `overlapping files: ${(note.overlap || []).join(", ")}` : note.reason === "same_mission" ? "same mission" : "same branch";
+      const lines = [`
+### From task ${note.taskId} (${why})
+`];
+      lines.push(`- **Intent:** ${note.notes.intent}
+`);
+      if (note.notes.conflictGuidance) {
+        lines.push(`- **If you conflict with this:** ${note.notes.conflictGuidance}
+`);
+      }
+      if (note.notes.touchedFiles.length) {
+        lines.push(`- **Touched:** ${note.notes.touchedFiles.join(", ")}
+`);
+      }
+      if (note.notes.followUps?.length) {
+        lines.push(`- **Left undone:** ${note.notes.followUps.join("; ")}
+`);
+      }
+      return lines.join("");
+    }
+    function composeTaskDispatchBody(message, input) {
+      let selected = [];
+      try {
+        selected = selectRelevantHandoffNotes(input);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff selection failed for task ${input.taskId}: ${e?.message || e}`);
+        return { body: message, enclosedNotes: 0, omittedNotes: 0 };
+      }
+      const block2 = renderHandoffNotesBlock(selected);
+      if (!block2) return { body: message, enclosedNotes: 0, omittedNotes: 0 };
+      return {
+        body: `${message}
+
+---
+
+${block2.text}`,
+        enclosedNotes: block2.included,
+        omittedNotes: block2.omitted
+      };
+    }
+    function pruneExpiredHandoffNotes(nowMs = Date.now()) {
+      const cutoffIso = new Date(nowMs - HANDOFF_RETENTION_MS).toISOString();
+      let removed = 0;
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        removed = store.deleteTurnEventsByKindOlderThan(WORKER_HANDOFF_EVENT_KIND, cutoffIso);
+        store.deleteHandoffNoteTextOlderThan(cutoffIso);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
+      }
+      const cutoffMs = nowMs - HANDOFF_RETENTION_MS;
+      for (const [key2, note] of NOTE_TEXT_STORE) {
+        const recordedMs = Date.parse(note.recordedAtIso);
+        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) NOTE_TEXT_STORE.delete(key2);
+      }
+      return removed;
+    }
+    var HANDOFF_ENTRY_KIND;
+    var HANDOFF_RETENTION_DAYS;
+    var HANDOFF_RETENTION_MS;
+    var HANDOFF_ENCLOSE_MAX_NOTES;
+    var HANDOFF_ENCLOSE_MAX_BYTES;
+    var NOTE_TEXT_STORE;
+    var seqscribeHandle;
+    var init_worker_handoff_notes = __esm2({
+      "src/mesh/worker-handoff-notes.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_runtime_store();
+        init_worker_report();
+        init_topics2();
+        HANDOFF_ENTRY_KIND = "worker.handoff";
+        HANDOFF_RETENTION_DAYS = 30;
+        HANDOFF_RETENTION_MS = HANDOFF_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
+        HANDOFF_ENCLOSE_MAX_NOTES = 5;
+        HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
+        NOTE_TEXT_STORE = /* @__PURE__ */ new Map();
+        seqscribeHandle = null;
+      }
+    });
+    function readNonEmpty2(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : void 0;
+    }
+    function resolveDispatchMessage3(task, meshId, node) {
+      if (hasWorkerProtocolFooter2(task.message)) {
+        LOG.debug("WorkerProtocol", `Task ${task.id} body already carries the worker protocol footer \u2014 not re-materializing`);
+        return task.message;
+      }
+      let body = task.message;
+      let enclosedHandoffNotes = 0;
+      if (isWorkerMcpEnabled()) {
+        try {
+          const touchedFiles = task.touchedFiles;
+          const branch = readNonEmpty2(node?.worktreeBranch);
+          const composed = composeTaskDispatchBody(task.message, {
+            meshId,
+            taskId: task.id,
+            ...Array.isArray(touchedFiles) ? { touchedFiles } : {},
+            ...task.missionId ? { missionId: task.missionId } : {},
+            ...branch ? { branch } : {},
+            // Injected rather than imported by the note module: resolving a
+            // note's mission means reading a QUEUE row, and the note module
+            // must not depend on the queue (it is read by the queue).
+            lookupMissionId: (candidateTaskId) => {
+              try {
+                return MeshRuntimeStore.getInstance().findQueueEntryById(meshId, candidateTaskId)?.missionId;
+              } catch {
+                return void 0;
+              }
+            }
+          });
+          if (composed.enclosedNotes > 0) {
+            LOG.info(
+              "HandoffNotes",
+              `Enclosed ${composed.enclosedNotes} handoff note(s) with task ${task.id}` + (composed.omittedNotes ? ` (${composed.omittedNotes} omitted to fit)` : "")
+            );
+          }
+          body = composed.body;
+          enclosedHandoffNotes = composed.enclosedNotes;
+        } catch (e) {
+          LOG.warn("HandoffNotes", `Failed to compose dispatch body for ${task.id}: ${e?.message || e}`);
+          body = task.message;
+          enclosedHandoffNotes = 0;
+        }
+      }
+      return appendWorkerProtocolFooter2(body, {
+        taskId: task.id,
+        ...readNonEmpty2(task.taskMode) ? { taskMode: task.taskMode.trim() } : {},
+        ...readNonEmpty2(task.difficulty) ? { difficulty: task.difficulty.trim() } : {},
+        ...isTaskReadonly2(task) ? { readonly: true } : {},
+        ...enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {}
+      });
+    }
+    var init_worker_handoff_dispatch = __esm2({
+      "src/mesh/worker-handoff-dispatch.ts"() {
+        "use strict";
+        init_dist();
+        init_logger();
+        init_mesh_runtime_store();
+        init_worker_mcp_isolation();
+        init_worker_handoff_notes();
+        init_mesh_work_queue();
       }
     });
     function applyBoundedRetention(map3, options) {
@@ -83862,14 +85073,13 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     }
     function isIdleSessionState2(state2) {
       const status = readNonEmptyString(state2?.status).toLowerCase();
-      if (isTerminalSessionStatus(status)) return false;
-      return status === "idle" || state2?.activeChat?.status === "waiting_input";
+      if (isTerminalSessionStatus(status) || isDeadStatus(status)) return false;
+      return isReadyStatus(status) || state2?.activeChat?.status === "waiting_input";
     }
     function sessionStateLooksActive(state2) {
       const status = readNonEmptyString(state2?.status).toLowerCase();
       const chatStatus = readNonEmptyString(state2?.activeChat?.status).toLowerCase();
-      const active = /* @__PURE__ */ new Set(["generating", "streaming", "no_progress", "long_generating", "working", "starting", "waiting_approval", "waiting_choice"]);
-      return active.has(status) || active.has(chatStatus);
+      return isBusyStatus(status) || isBusyStatus(chatStatus);
     }
     function nodeHasActiveMeshWork(components, meshId, nodeId, currentSessionId) {
       if (nodeHasActiveAssignment(meshId, nodeId)) return true;
@@ -84866,855 +86076,6 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         init_mesh_candidacy_predicates();
         DISPATCH_FAILED_PINNED_REASON = "pinned_session_dispatch_failed";
         RECLAIMED_PINNED_REASON = "pinned_session_reclaimed_stranded";
-      }
-    });
-    var worker_report_exports = {};
-    __export2(worker_report_exports, {
-      WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
-      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES22,
-      WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
-      WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
-      WORKER_HANDOFF_EVENT_KIND: () => WORKER_HANDOFF_EVENT_KIND,
-      WORKER_INTENT_MAX_CHARS: () => WORKER_INTENT_MAX_CHARS,
-      WORKER_LIST_ITEM_MAX_CHARS: () => WORKER_LIST_ITEM_MAX_CHARS,
-      WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
-      WORKER_PROGRESS_SURFACE_MIN_CHARS: () => WORKER_PROGRESS_SURFACE_MIN_CHARS,
-      WORKER_PROGRESS_SURFACE_MIN_GAP_MS: () => WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
-      WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
-      WORKER_SUMMARY_MAX_CHARS: () => WORKER_SUMMARY_MAX_CHARS,
-      WORKER_TOUCHED_FILES_MAX: () => WORKER_TOUCHED_FILES_MAX,
-      __resetProgressSurfaceForTest: () => __resetProgressSurfaceForTest,
-      __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
-      acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
-      acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
-      buildWorkerProgressNotice: () => buildWorkerProgressNotice,
-      configureHandoffNoteSink: () => configureHandoffNoteSink,
-      configureWorkerProgressNoticeSink: () => configureWorkerProgressNoticeSink,
-      findPriorWorkerReport: () => findPriorWorkerReport,
-      pruneReportedSummaries: () => pruneReportedSummaries,
-      resolveWorkerIdentity: () => resolveWorkerIdentity,
-      shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator,
-      validateWorkerCompletionReport: () => validateWorkerCompletionReport
-    });
-    function validateWorkerCompletionReport(raw) {
-      const errors = [];
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        return { errors: [{ field: "", message: "report must be an object" }] };
-      }
-      const input = raw;
-      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers"]);
-      for (const key2 of Object.keys(input)) {
-        if (!KNOWN.has(key2)) {
-          errors.push({ field: key2, message: `unknown field '${key2}' (expected one of: ${[...KNOWN].join(", ")})` });
-        }
-      }
-      const outcome = input.outcome;
-      if (outcome !== "completed" && outcome !== "blocked" && outcome !== "failed") {
-        errors.push({ field: "outcome", message: "outcome must be one of 'completed' | 'blocked' | 'failed'" });
-      }
-      const summary = typeof input.summary === "string" ? input.summary.trim() : "";
-      if (!summary) {
-        errors.push({ field: "summary", message: "summary is required and must be a non-empty string" });
-      } else if (summary.length > WORKER_SUMMARY_MAX_CHARS) {
-        errors.push({
-          field: "summary",
-          message: `summary is ${summary.length} chars, over the ${WORKER_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`
-        });
-      }
-      const touchedFiles = validateStringList(input.touchedFiles, "touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
-      const blockers = validateStringList(input.blockers, "blockers", WORKER_BLOCKERS_MAX, errors);
-      if (input.branchState !== void 0 && !WORKER_BRANCH_STATES22.includes(input.branchState)) {
-        errors.push({
-          field: "branchState",
-          message: `branchState must be one of: ${WORKER_BRANCH_STATES22.join(", ")}`
-        });
-      }
-      let handoffNotes;
-      if (input.handoffNotes !== void 0) {
-        const notes = input.handoffNotes;
-        if (!notes || typeof notes !== "object" || Array.isArray(notes)) {
-          errors.push({ field: "handoffNotes", message: "handoffNotes must be an object" });
-        } else {
-          const n = notes;
-          const KNOWN_NOTES = /* @__PURE__ */ new Set(["intent", "conflictGuidance", "touchedFiles", "followUps"]);
-          for (const key2 of Object.keys(n)) {
-            if (!KNOWN_NOTES.has(key2)) {
-              errors.push({ field: `handoffNotes.${key2}`, message: `unknown field '${key2}'` });
-            }
-          }
-          const intent = typeof n.intent === "string" ? n.intent.trim() : "";
-          if (!intent) {
-            errors.push({ field: "handoffNotes.intent", message: "intent is required \u2014 it is the part a diff cannot convey" });
-          } else if (intent.length > WORKER_INTENT_MAX_CHARS) {
-            errors.push({ field: "handoffNotes.intent", message: `intent is over the ${WORKER_INTENT_MAX_CHARS} char limit` });
-          }
-          let guidance;
-          if (n.conflictGuidance !== void 0) {
-            if (typeof n.conflictGuidance !== "string") {
-              errors.push({ field: "handoffNotes.conflictGuidance", message: "conflictGuidance must be a string" });
-            } else if (n.conflictGuidance.trim().length > WORKER_GUIDANCE_MAX_CHARS) {
-              errors.push({ field: "handoffNotes.conflictGuidance", message: `conflictGuidance is over the ${WORKER_GUIDANCE_MAX_CHARS} char limit` });
-            } else {
-              guidance = n.conflictGuidance.trim() || void 0;
-            }
-          }
-          const noteFiles = validateStringList(n.touchedFiles, "handoffNotes.touchedFiles", WORKER_TOUCHED_FILES_MAX, errors);
-          if (n.touchedFiles === void 0) {
-            errors.push({
-              field: "handoffNotes.touchedFiles",
-              message: "touchedFiles is required \u2014 it is what matches this note to future work (use [] on a read-only task)"
-            });
-          }
-          const followUps = validateStringList(n.followUps, "handoffNotes.followUps", WORKER_FOLLOW_UPS_MAX, errors);
-          if (intent && noteFiles) {
-            handoffNotes = {
-              intent,
-              ...guidance ? { conflictGuidance: guidance } : {},
-              touchedFiles: noteFiles,
-              ...followUps?.length ? { followUps } : {}
-            };
-          }
-        }
-      }
-      if (errors.length) return { errors };
-      return {
-        report: {
-          outcome,
-          summary,
-          ...handoffNotes ? { handoffNotes } : {},
-          ...touchedFiles?.length ? { touchedFiles } : {},
-          ...input.branchState ? { branchState: input.branchState } : {},
-          ...blockers?.length ? { blockers } : {}
-        },
-        errors: []
-      };
-    }
-    function validateStringList(value, field2, max, errors) {
-      if (value === void 0) return void 0;
-      if (!Array.isArray(value)) {
-        errors.push({ field: field2, message: `${field2} must be an array of strings` });
-        return void 0;
-      }
-      if (value.length > max) {
-        errors.push({ field: field2, message: `${field2} has ${value.length} entries, over the ${max} limit` });
-        return void 0;
-      }
-      const out = [];
-      for (const item of value) {
-        if (typeof item !== "string") {
-          errors.push({ field: field2, message: `${field2} must contain only strings` });
-          return void 0;
-        }
-        const trimmed = item.trim();
-        if (!trimmed) continue;
-        if (trimmed.length > WORKER_LIST_ITEM_MAX_CHARS) {
-          errors.push({ field: field2, message: `${field2} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
-          return void 0;
-        }
-        out.push(trimmed);
-      }
-      return out;
-    }
-    function findPriorWorkerReport(meshId, taskId) {
-      if (!meshId || !taskId) return null;
-      let rows;
-      try {
-        rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(meshId, taskId);
-      } catch {
-        return null;
-      }
-      const row = rows.filter((r) => r.kind === WORKER_REPORT_EVENT_KIND).pop();
-      if (!row) return null;
-      let payload = {};
-      try {
-        payload = JSON.parse(row.payload);
-      } catch {
-      }
-      const outcome = payload.outcome === "completed" || payload.outcome === "blocked" || payload.outcome === "failed" ? payload.outcome : "completed";
-      const summary = readReportedSummary(meshId, taskId);
-      return {
-        taskId,
-        attemptId: row.attemptId,
-        outcome,
-        ...summary ? { summary } : {},
-        recordedAt: row.recordedAt
-      };
-    }
-    function summaryKey(meshId, taskId) {
-      return `${meshId}\0${taskId}`;
-    }
-    function readReportedSummary(meshId, taskId) {
-      return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
-    }
-    function pruneReportedSummaries(maxAgeMs, nowMs = Date.now()) {
-      let removed = 0;
-      for (const [key2, entry] of REPORTED_SUMMARY_STORE) {
-        if (nowMs - entry.recordedAtMs > maxAgeMs) {
-          REPORTED_SUMMARY_STORE.delete(key2);
-          removed += 1;
-        }
-      }
-      return removed;
-    }
-    function __resetReportedSummariesForTest() {
-      REPORTED_SUMMARY_STORE.clear();
-    }
-    function resolveWorkerIdentity(credential) {
-      const direct = verifyWorkerTaskToken(credential.token);
-      if (direct) {
-        return {
-          token: direct.token,
-          meshId: direct.meshId,
-          taskId: direct.taskId,
-          ...direct.attemptId ? { attemptId: direct.attemptId } : {},
-          sessionId: direct.sessionId || "",
-          ...direct.nodeId ? { nodeId: direct.nodeId } : {}
-        };
-      }
-      return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
-    }
-    function resolveCurrentTaskForSession(meshId, sessionId) {
-      try {
-        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId);
-        if (!entry?.id) return null;
-        return {
-          taskId: entry.id,
-          ...entry.attemptId ? { attemptId: entry.attemptId } : {}
-        };
-      } catch {
-        return null;
-      }
-    }
-    function configureHandoffNoteSink(sink) {
-      handoffSink = sink;
-    }
-    function checkReportAgainstTaskMode(identity, report) {
-      let task;
-      try {
-        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity.meshId, identity.taskId);
-      } catch {
-        return null;
-      }
-      if (!task) return null;
-      const readonly2 = isTaskReadonly2(task);
-      const declaredFiles = [
-        ...report.touchedFiles || [],
-        ...report.handoffNotes?.touchedFiles || []
-      ];
-      if (readonly2) {
-        if (declaredFiles.length) {
-          return `task ${identity.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
-        }
-        return null;
-      }
-      if (report.handoffNotes && !report.handoffNotes.touchedFiles.length) {
-        return `task ${identity.taskId} changes code, so handoffNotes.touchedFiles must be non-empty \u2014 it is the key that delivers your note to whoever touches this code next.`;
-      }
-      return null;
-    }
-    function acceptWorkerCompletionReport(credential, report, opts = {}) {
-      const identity = resolveWorkerIdentity(credential);
-      if (!identity) return { accepted: false, refusal: "unauthenticated" };
-      const taskModeError = checkReportAgainstTaskMode(identity, report);
-      if (taskModeError) {
-        return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
-      }
-      const nowMs = opts.nowMs ?? Date.now();
-      const nowIso = new Date(nowMs).toISOString();
-      const store = MeshRuntimeStore.getInstance();
-      REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
-        summary: report.summary,
-        recordedAtMs: nowMs
-      });
-      let evidenceRecorded = !identity.attemptId;
-      if (identity.attemptId) {
-        try {
-          evidenceRecorded = store.insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
-            meshId: identity.meshId,
-            attemptId: identity.attemptId,
-            taskId: identity.taskId,
-            kind: WORKER_REPORT_EVENT_KIND,
-            // UNIQUE(attempt_id, kind, dedupe_key) makes a re-call for the
-            // same outcome insert-once, matching the reducer's own idempotency.
-            dedupeKey: report.outcome,
-            payload: JSON.stringify({
-              outcome: report.outcome,
-              summaryLength: report.summary.length,
-              touchedFileCount: report.touchedFiles?.length ?? 0,
-              blockerCount: report.blockers?.length ?? 0,
-              hasHandoffNotes: !!report.handoffNotes,
-              ...report.branchState ? { branchState: report.branchState } : {}
-            }),
-            occurredAtMs: nowMs,
-            recordedAt: nowIso
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity.taskId}: ${e?.message || e}`);
-          evidenceRecorded = false;
-        }
-        if (!evidenceRecorded) {
-          const existing = findPriorWorkerReport(identity.meshId, identity.taskId);
-          if (!existing) {
-            return {
-              accepted: false,
-              refusal: "storage_failed",
-              detail: `could not persist the report evidence row for task ${identity.taskId}`
-            };
-          }
-          evidenceRecorded = true;
-        }
-      }
-      let handoffNoteRecorded = false;
-      let handoffNoteError = null;
-      if (report.handoffNotes) {
-        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
-        handoffNoteRecorded = noteResult.recorded;
-        handoffNoteError = noteResult.error;
-      }
-      const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
-      let commit;
-      try {
-        commit = commitTaskTerminalAndAdvanceGraph({
-          meshId: identity.meshId,
-          taskId: identity.taskId,
-          status: terminalStatus,
-          ...identity.sessionId ? { sessionId: identity.sessionId } : {},
-          ...identity.attemptId ? { attemptId: identity.attemptId } : {},
-          occurredAtMs: nowMs,
-          // ★A NEW proposal source. The reducer's causal checks apply to it
-          // exactly as they do to a provider event — a valid token does not
-          // buy an exemption from stale-attempt or session-mismatch.
-          source: "worker_tool_report",
-          reason: report.outcome === "blocked" ? `worker_reported_blocked:${(report.blockers || []).length}` : `worker_reported:${report.outcome}`,
-          envelope: {
-            finalSummary: report.summary,
-            ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
-            evidence: {
-              // The grade this report earns (design §4 등급표): declared by
-              // the worker, so it is complete by construction and carries
-              // no truncation risk the way a screen scrape does.
-              summarySource: "tool_report",
-              mayBeTruncated: false,
-              reportedOutcome: report.outcome,
-              ...report.branchState ? { branchState: report.branchState } : {},
-              ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
-            },
-            ...identity.nodeId ? { nodeId: identity.nodeId } : {},
-            completedAt: nowIso
-          }
-        });
-      } catch (e) {
-        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity.taskId}: ${e?.message || e}`);
-        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
-      }
-      if (!commit.committed) {
-        if (commit.rejectionReason) {
-          return { accepted: false, refusal: "rejected_by_reducer", detail: commit.rejectionReason };
-        }
-        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
-      }
-      LOG.info(
-        "WorkerReport",
-        `Accepted ${report.outcome} report for task ${identity.taskId}` + (identity.attemptId ? ` attempt ${identity.attemptId}` : "") + (commit.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
-      );
-      return {
-        accepted: true,
-        taskId: identity.taskId,
-        ...identity.attemptId ? { attemptId: identity.attemptId } : {},
-        outcome: report.outcome,
-        duplicate: commit.duplicate,
-        handoffNoteRecorded,
-        // ★The completion itself still stands — the terminal committed, and
-        // discarding a valid completion because its optional note failed would
-        // trade a small loss for a large one. But the worker is TOLD, so it can
-        // put the context somewhere else rather than believing it was filed.
-        ...handoffNoteError ? { handoffNoteError } : {}
-      };
-    }
-    function acceptWorkerProgressUpdate(credential, note, opts = {}) {
-      const identity = resolveWorkerIdentity(credential);
-      if (!identity) return { accepted: false, refusal: "unauthenticated" };
-      if (!identity.attemptId) {
-        return {
-          accepted: false,
-          taskId: identity.taskId,
-          refusal: "storage_failed",
-          detail: `task ${identity.taskId} has no active attempt to record progress against`
-        };
-      }
-      const nowMs = opts.nowMs ?? Date.now();
-      let recorded = false;
-      try {
-        recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
-          eventId: (0, import_crypto13.randomUUID)(),
-          meshId: identity.meshId,
-          attemptId: identity.attemptId,
-          taskId: identity.taskId,
-          kind: WORKER_PROGRESS_EVENT_KIND,
-          // Distinct per call — progress updates are a SEQUENCE, unlike the
-          // completion report where the UNIQUE constraint provides idempotency.
-          dedupeKey: `${nowMs}`,
-          payload: JSON.stringify({ noteLength: note.length }),
-          occurredAtMs: nowMs,
-          recordedAt: new Date(nowMs).toISOString()
-        });
-      } catch (e) {
-        LOG.error("WorkerReport", `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
-        return {
-          accepted: false,
-          taskId: identity.taskId,
-          refusal: "storage_failed",
-          detail: e?.message || String(e)
-        };
-      }
-      if (!recorded) {
-        return {
-          accepted: false,
-          taskId: identity.taskId,
-          refusal: "storage_failed",
-          detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
-        };
-      }
-      const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs);
-      return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
-    }
-    function __resetProgressSurfaceForTest() {
-      PROGRESS_SURFACE_LAST_MS.clear();
-    }
-    function shouldSurfaceProgressToCoordinator(opts) {
-      const note = opts.note.trim();
-      if (note.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
-      if (opts.lastSurfacedAtMs === void 0) return true;
-      return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
-    }
-    function buildWorkerProgressNotice(opts) {
-      return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
-    }
-    function configureWorkerProgressNoticeSink(sink) {
-      progressNoticeSink = sink;
-    }
-    function notifyCoordinatorOfProgress(identity, note, nowMs) {
-      const key2 = summaryKey(identity.meshId, identity.taskId);
-      if (!shouldSurfaceProgressToCoordinator({
-        note,
-        nowMs,
-        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key2)
-      })) {
-        return false;
-      }
-      const sink = progressNoticeSink;
-      if (!sink) return false;
-      try {
-        sink({
-          meshId: identity.meshId,
-          taskId: identity.taskId,
-          ...identity.nodeId ? { nodeId: identity.nodeId } : {},
-          ...identity.sessionId ? { sessionId: identity.sessionId } : {},
-          note: note.trim(),
-          coordinatorMessage: buildWorkerProgressNotice({
-            taskId: identity.taskId,
-            nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
-            note
-          }),
-          nowMs
-        });
-      } catch (e) {
-        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
-        return false;
-      }
-      PROGRESS_SURFACE_LAST_MS.set(key2, nowMs);
-      return true;
-    }
-    function recordHandoffNote(identity, notes, nowMs, nowIso) {
-      if (!identity.attemptId) {
-        return {
-          recorded: false,
-          error: `task ${identity.taskId} has no active attempt, so the note has no index row and could never be delivered`
-        };
-      }
-      {
-        try {
-          MeshRuntimeStore.getInstance().insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
-            meshId: identity.meshId,
-            attemptId: identity.attemptId,
-            taskId: identity.taskId,
-            kind: WORKER_HANDOFF_EVENT_KIND,
-            dedupeKey: "",
-            payload: JSON.stringify({
-              touchedFiles: notes.touchedFiles,
-              intentLength: notes.intent.length,
-              hasConflictGuidance: !!notes.conflictGuidance,
-              followUpCount: notes.followUps?.length ?? 0,
-              ...identity.sessionId ? { sessionId: identity.sessionId } : {},
-              ...identity.nodeId ? { nodeId: identity.nodeId } : {}
-            }),
-            occurredAtMs: nowMs,
-            recordedAt: nowIso
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);
-          return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
-        }
-      }
-      if (handoffSink) {
-        try {
-          handoffSink({
-            meshId: identity.meshId,
-            taskId: identity.taskId,
-            ...identity.attemptId ? { attemptId: identity.attemptId } : {},
-            ...identity.sessionId ? { sessionId: identity.sessionId } : {},
-            ...identity.nodeId ? { nodeId: identity.nodeId } : {},
-            notes,
-            recordedAtIso: nowIso
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity.taskId}: ${e?.message || e}`);
-          return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
-        }
-      }
-      return { recorded: true, error: null };
-    }
-    var import_crypto13;
-    var WORKER_BRANCH_STATES22;
-    var WORKER_REPORT_EVENT_KIND;
-    var WORKER_PROGRESS_EVENT_KIND;
-    var WORKER_HANDOFF_EVENT_KIND;
-    var WORKER_SUMMARY_MAX_CHARS;
-    var WORKER_INTENT_MAX_CHARS;
-    var WORKER_GUIDANCE_MAX_CHARS;
-    var WORKER_TOUCHED_FILES_MAX;
-    var WORKER_LIST_ITEM_MAX_CHARS;
-    var WORKER_BLOCKERS_MAX;
-    var WORKER_FOLLOW_UPS_MAX;
-    var REPORTED_SUMMARY_STORE;
-    var handoffSink;
-    var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
-    var WORKER_PROGRESS_SURFACE_MIN_CHARS;
-    var PROGRESS_SURFACE_LAST_MS;
-    var progressNoticeSink;
-    var init_worker_report = __esm2({
-      "src/mesh/worker-report.ts"() {
-        "use strict";
-        import_crypto13 = require("crypto");
-        init_logger();
-        init_mesh_runtime_store();
-        init_mesh_graph_transition_runner();
-        init_mesh_work_queue();
-        init_worker_mcp_isolation();
-        WORKER_BRANCH_STATES22 = [
-          "merged_to_main",
-          "pushed_feature_branch_needs_merge",
-          "blocked_review",
-          "cleanup_candidate",
-          "not_mergeable"
-        ];
-        WORKER_REPORT_EVENT_KIND = "worker_tool_report";
-        WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
-        WORKER_HANDOFF_EVENT_KIND = "worker_handoff_note";
-        WORKER_SUMMARY_MAX_CHARS = 8e3;
-        WORKER_INTENT_MAX_CHARS = 4e3;
-        WORKER_GUIDANCE_MAX_CHARS = 4e3;
-        WORKER_TOUCHED_FILES_MAX = 200;
-        WORKER_LIST_ITEM_MAX_CHARS = 500;
-        WORKER_BLOCKERS_MAX = 50;
-        WORKER_FOLLOW_UPS_MAX = 50;
-        REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
-        handoffSink = null;
-        WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
-        WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
-        PROGRESS_SURFACE_LAST_MS = /* @__PURE__ */ new Map();
-        progressNoticeSink = null;
-      }
-    });
-    var worker_handoff_notes_exports = {};
-    __export2(worker_handoff_notes_exports, {
-      HANDOFF_ENCLOSE_MAX_BYTES: () => HANDOFF_ENCLOSE_MAX_BYTES,
-      HANDOFF_ENCLOSE_MAX_NOTES: () => HANDOFF_ENCLOSE_MAX_NOTES,
-      HANDOFF_ENTRY_KIND: () => HANDOFF_ENTRY_KIND,
-      HANDOFF_RETENTION_DAYS: () => HANDOFF_RETENTION_DAYS,
-      HANDOFF_RETENTION_MS: () => HANDOFF_RETENTION_MS,
-      __resetHandoffNotesForTest: () => __resetHandoffNotesForTest,
-      composeTaskDispatchBody: () => composeTaskDispatchBody,
-      configureHandoffNotesSeqscribe: () => configureHandoffNotesSeqscribe,
-      getStoredHandoffNote: () => getStoredHandoffNote,
-      pruneExpiredHandoffNotes: () => pruneExpiredHandoffNotes,
-      renderHandoffNotesBlock: () => renderHandoffNotesBlock,
-      selectRelevantHandoffNotes: () => selectRelevantHandoffNotes,
-      storeHandoffNote: () => storeHandoffNote
-    });
-    function noteKey(meshId, taskId) {
-      return `${meshId}\0${taskId}`;
-    }
-    function loadNoteText(meshId, taskId) {
-      const cached5 = NOTE_TEXT_STORE.get(noteKey(meshId, taskId));
-      if (cached5) return cached5;
-      let row;
-      try {
-        row = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note text lookup failed for task ${taskId}: ${e?.message || e}`);
-        return null;
-      }
-      if (!row) return null;
-      let notes;
-      try {
-        notes = JSON.parse(row.notesJson);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note text for task ${taskId} is unparseable: ${e?.message || e}`);
-        return null;
-      }
-      if (!notes?.intent || !Array.isArray(notes.touchedFiles)) return null;
-      const restored = {
-        meshId: row.meshId,
-        taskId: row.taskId,
-        ...row.attemptId ? { attemptId: row.attemptId } : {},
-        ...row.nodeId ? { nodeId: row.nodeId } : {},
-        notes,
-        recordedAtIso: row.recordedAt
-      };
-      NOTE_TEXT_STORE.set(noteKey(meshId, taskId), restored);
-      return restored;
-    }
-    function configureHandoffNotesSeqscribe(handle) {
-      seqscribeHandle = handle;
-    }
-    function storeHandoffNote(note) {
-      MeshRuntimeStore.getInstance().upsertHandoffNoteText({
-        meshId: note.meshId,
-        taskId: note.taskId,
-        ...note.attemptId ? { attemptId: note.attemptId } : {},
-        ...note.nodeId ? { nodeId: note.nodeId } : {},
-        notesJson: JSON.stringify(note.notes),
-        recordedAt: note.recordedAtIso
-      });
-      NOTE_TEXT_STORE.set(noteKey(note.meshId, note.taskId), note);
-      const handle = seqscribeHandle;
-      if (!handle) return;
-      const topic = meshHandoffTopic(note.meshId);
-      if (!handle.topics.some((d) => d.topic === topic)) {
-        return;
-      }
-      void handle.node.log(topic).append(HANDOFF_ENTRY_KIND, {
-        taskId: note.taskId,
-        ...note.attemptId ? { attemptId: note.attemptId } : {},
-        ...note.nodeId ? { nodeId: note.nodeId } : {},
-        recordedAt: note.recordedAtIso,
-        intent: note.notes.intent,
-        ...note.notes.conflictGuidance ? { conflictGuidance: note.notes.conflictGuidance } : {},
-        touchedFiles: note.notes.touchedFiles,
-        ...note.notes.followUps?.length ? { followUps: note.notes.followUps } : {}
-      }).catch((e) => {
-        LOG.warn("HandoffNotes", `Failed to append handoff note for task ${note.taskId}: ${e?.message || e}`);
-      });
-    }
-    function getStoredHandoffNote(meshId, taskId) {
-      return loadNoteText(meshId, taskId);
-    }
-    function __resetHandoffNotesForTest() {
-      NOTE_TEXT_STORE.clear();
-      seqscribeHandle = null;
-    }
-    function selectRelevantHandoffNotes(input) {
-      const store = MeshRuntimeStore.getInstance();
-      let rows;
-      try {
-        rows = store.listTurnEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note lookup failed for mesh ${input.meshId}: ${e?.message || e}`);
-        return [];
-      }
-      const wantedFiles = new Set((input.touchedFiles || []).map(normalizeFilePath).filter(Boolean));
-      const cutoffMs = (input.nowMs ?? Date.now()) - HANDOFF_RETENTION_MS;
-      const byFiles = [];
-      const byMission = [];
-      const byBranch = [];
-      const seenTasks = /* @__PURE__ */ new Set([input.taskId]);
-      for (const row of rows) {
-        if (seenTasks.has(row.taskId)) continue;
-        const recordedMs = Date.parse(row.recordedAt);
-        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) continue;
-        const stored = loadNoteText(input.meshId, row.taskId);
-        if (!stored) {
-          LOG.debug("HandoffNotes", `Handoff note index row for task ${row.taskId} has no local text \u2014 peer-originated note, skipping enclosure.`);
-          continue;
-        }
-        let meta3 = {};
-        try {
-          meta3 = JSON.parse(row.payload);
-        } catch {
-        }
-        const noteFiles = Array.isArray(meta3.touchedFiles) ? meta3.touchedFiles.filter((f) => typeof f === "string") : stored.notes.touchedFiles;
-        const overlap = wantedFiles.size ? noteFiles.filter((f) => wantedFiles.has(normalizeFilePath(f))) : [];
-        if (overlap.length) {
-          seenTasks.add(row.taskId);
-          byFiles.push({ ...stored, reason: "touched_files", overlap });
-          continue;
-        }
-        if (input.missionId && input.lookupMissionId?.(row.taskId) === input.missionId) {
-          seenTasks.add(row.taskId);
-          byMission.push({ ...stored, reason: "same_mission" });
-          continue;
-        }
-        if (input.branch && input.lookupBranch?.(row.taskId) === input.branch) {
-          seenTasks.add(row.taskId);
-          byBranch.push({ ...stored, reason: "same_branch" });
-        }
-      }
-      return [...byFiles, ...byMission, ...byBranch];
-    }
-    function normalizeFilePath(value) {
-      return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
-    }
-    function renderHandoffNotesBlock(notes, opts = {}) {
-      if (!notes.length) return null;
-      const maxNotes = opts.maxNotes ?? HANDOFF_ENCLOSE_MAX_NOTES;
-      const maxBytes = opts.maxBytes ?? HANDOFF_ENCLOSE_MAX_BYTES;
-      const header = "## Handoff notes from related work\n\n_Left by earlier agents whose changes overlap yours. They cannot be asked follow-up questions._\n";
-      const parts = [];
-      let used = Buffer.byteLength(header, "utf8");
-      let included = 0;
-      for (const note of notes) {
-        if (included >= maxNotes) break;
-        const rendered = renderOneNote(note);
-        const cost = Buffer.byteLength(rendered, "utf8");
-        if (included > 0 && used + cost > maxBytes) break;
-        parts.push(rendered);
-        used += cost;
-        included += 1;
-      }
-      const omitted = notes.length - included;
-      const omissionLine = omitted > 0 ? `
-_${omitted} further related note(s) omitted to fit the enclosure budget \u2014 the most relevant are shown first._
-` : "";
-      return { text: `${header}${parts.join("")}${omissionLine}`, included, omitted };
-    }
-    function renderOneNote(note) {
-      const why = note.reason === "touched_files" ? `overlapping files: ${(note.overlap || []).join(", ")}` : note.reason === "same_mission" ? "same mission" : "same branch";
-      const lines = [`
-### From task ${note.taskId} (${why})
-`];
-      lines.push(`- **Intent:** ${note.notes.intent}
-`);
-      if (note.notes.conflictGuidance) {
-        lines.push(`- **If you conflict with this:** ${note.notes.conflictGuidance}
-`);
-      }
-      if (note.notes.touchedFiles.length) {
-        lines.push(`- **Touched:** ${note.notes.touchedFiles.join(", ")}
-`);
-      }
-      if (note.notes.followUps?.length) {
-        lines.push(`- **Left undone:** ${note.notes.followUps.join("; ")}
-`);
-      }
-      return lines.join("");
-    }
-    function composeTaskDispatchBody(message, input) {
-      let selected = [];
-      try {
-        selected = selectRelevantHandoffNotes(input);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff selection failed for task ${input.taskId}: ${e?.message || e}`);
-        return { body: message, enclosedNotes: 0, omittedNotes: 0 };
-      }
-      const block2 = renderHandoffNotesBlock(selected);
-      if (!block2) return { body: message, enclosedNotes: 0, omittedNotes: 0 };
-      return {
-        body: `${message}
-
----
-
-${block2.text}`,
-        enclosedNotes: block2.included,
-        omittedNotes: block2.omitted
-      };
-    }
-    function pruneExpiredHandoffNotes(nowMs = Date.now()) {
-      const cutoffIso = new Date(nowMs - HANDOFF_RETENTION_MS).toISOString();
-      let removed = 0;
-      try {
-        const store = MeshRuntimeStore.getInstance();
-        removed = store.deleteTurnEventsByKindOlderThan(WORKER_HANDOFF_EVENT_KIND, cutoffIso);
-        store.deleteHandoffNoteTextOlderThan(cutoffIso);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
-      }
-      const cutoffMs = nowMs - HANDOFF_RETENTION_MS;
-      for (const [key2, note] of NOTE_TEXT_STORE) {
-        const recordedMs = Date.parse(note.recordedAtIso);
-        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) NOTE_TEXT_STORE.delete(key2);
-      }
-      return removed;
-    }
-    var HANDOFF_ENTRY_KIND;
-    var HANDOFF_RETENTION_DAYS;
-    var HANDOFF_RETENTION_MS;
-    var HANDOFF_ENCLOSE_MAX_NOTES;
-    var HANDOFF_ENCLOSE_MAX_BYTES;
-    var NOTE_TEXT_STORE;
-    var seqscribeHandle;
-    var init_worker_handoff_notes = __esm2({
-      "src/mesh/worker-handoff-notes.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_runtime_store();
-        init_worker_report();
-        init_topics2();
-        HANDOFF_ENTRY_KIND = "worker.handoff";
-        HANDOFF_RETENTION_DAYS = 30;
-        HANDOFF_RETENTION_MS = HANDOFF_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
-        HANDOFF_ENCLOSE_MAX_NOTES = 5;
-        HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
-        NOTE_TEXT_STORE = /* @__PURE__ */ new Map();
-        seqscribeHandle = null;
-      }
-    });
-    function readNonEmpty2(value) {
-      return typeof value === "string" && value.trim() ? value.trim() : void 0;
-    }
-    function resolveDispatchMessage(task, meshId, node) {
-      if (!isWorkerMcpEnabled()) return task.message;
-      try {
-        const touchedFiles = task.touchedFiles;
-        const branch = readNonEmpty2(node?.worktreeBranch);
-        const composed = composeTaskDispatchBody(task.message, {
-          meshId,
-          taskId: task.id,
-          ...Array.isArray(touchedFiles) ? { touchedFiles } : {},
-          ...task.missionId ? { missionId: task.missionId } : {},
-          ...branch ? { branch } : {},
-          // Injected rather than imported by the note module: resolving a
-          // note's mission means reading a QUEUE row, and the note module
-          // must not depend on the queue (it is read by the queue).
-          lookupMissionId: (candidateTaskId) => {
-            try {
-              return MeshRuntimeStore.getInstance().findQueueEntryById(meshId, candidateTaskId)?.missionId;
-            } catch {
-              return void 0;
-            }
-          }
-        });
-        if (composed.enclosedNotes > 0) {
-          LOG.info(
-            "HandoffNotes",
-            `Enclosed ${composed.enclosedNotes} handoff note(s) with task ${task.id}` + (composed.omittedNotes ? ` (${composed.omittedNotes} omitted to fit)` : "")
-          );
-        }
-        return composed.body;
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Failed to compose dispatch body for ${task.id}: ${e?.message || e}`);
-        return task.message;
-      }
-    }
-    var init_worker_handoff_dispatch = __esm2({
-      "src/mesh/worker-handoff-dispatch.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_runtime_store();
-        init_worker_mcp_isolation();
-        init_worker_handoff_notes();
       }
     });
     async function waitForRemoteSessionReady(meshId, nodeId, sessionId, opts) {
@@ -87283,7 +87644,7 @@ ${block2.text}`,
           LOG.warn("WorkerMcp", `Failed to mint worker task token for ${task.id}: ${e?.message || e}`);
         }
       }
-      const dispatchMessage = resolveDispatchMessage(task, meshId, node);
+      const dispatchMessage = resolveDispatchMessage3(task, meshId, node);
       if (dispatchAttemptId) {
         try {
           const attemptRow = MeshRuntimeStore.getInstance().getTurnAttempt(dispatchAttemptId);
@@ -87330,6 +87691,11 @@ ${block2.text}`,
               // Handoff-note enclosure applies to the DISPATCHED body only;
               // task.message stays the authored text (see composition above).
               message: dispatchMessage,
+              // MESH-IMAGE-DISPATCH: the envelope the task was enqueued with rides
+              // to the worker exactly as the direct-dispatch path forwards it
+              // (mesh-tools-session mesh_send_task). Spread conditionally so a
+              // text-only task sends the byte-identical payload it always did.
+              ...task.input ? { input: task.input } : {},
               // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
               dispatchSource: "mesh-queue-assignment:tryAssignQueueTask:remote",
               meshContext: {
@@ -87407,6 +87773,8 @@ ${block2.text}`,
           action: "send_chat",
           // Same enclosure as the remote arm — one composed body, both paths.
           message: dispatchMessage,
+          // MESH-IMAGE-DISPATCH: same envelope forwarding as the remote arm.
+          ...task.input ? { input: task.input } : {},
           // DISPATCH-SOURCE-TRACE: call-site tag echoed in the daemon log.
           dispatchSource: "mesh-queue-assignment:tryAssignQueueTask:local",
           meshContext: {
@@ -89773,7 +90141,7 @@ ${cleanBody}`;
       }
     }
     function assertTaskModeEvidenceStrategyIsExhaustive() {
-      const missing = MESH_TASK_MODES22.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
+      const missing = MESH_TASK_MODES2.filter((mode) => !(mode in TASK_MODE_EVIDENCE_STRATEGY));
       if (missing.length > 0) {
         throw new Error(`TASK_MODE_EVIDENCE_STRATEGY is missing an entry for taskMode(s): ${missing.join(", ")} \u2014 every MeshTaskMode must have a completion-evidence strategy (see mesh-completion-side-effect-evidence.ts)`);
       }
@@ -94593,7 +94961,7 @@ ${statusLine}`;
     function isPlainObject3(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
-    function isFiniteNumber(value) {
+    function isFiniteNumber2(value) {
       return typeof value === "number" && Number.isFinite(value);
     }
     function validateStatus(status, source) {
@@ -94638,14 +95006,14 @@ ${statusLine}`;
       if (typeof message.bubbleId === "string") normalized.bubbleId = message.bubbleId;
       if (typeof message.providerUnitKey === "string") normalized.providerUnitKey = message.providerUnitKey;
       if (message.bubbleState !== void 0) normalized.bubbleState = validateBubbleState(message.bubbleState, source, index);
-      if (isFiniteNumber(message.index)) normalized.index = message.index;
-      if (isFiniteNumber(message.timestamp)) normalized.timestamp = message.timestamp;
-      if (isFiniteNumber(message.receivedAt)) normalized.receivedAt = message.receivedAt;
-      if (isFiniteNumber(message.sequence)) normalized.sequence = message.sequence;
+      if (isFiniteNumber2(message.index)) normalized.index = message.index;
+      if (isFiniteNumber2(message.timestamp)) normalized.timestamp = message.timestamp;
+      if (isFiniteNumber2(message.receivedAt)) normalized.receivedAt = message.receivedAt;
+      if (isFiniteNumber2(message.sequence)) normalized.sequence = message.sequence;
       if (typeof message._turnKey === "string") normalized._turnKey = message._turnKey;
       if (isPlainObject3(message.toolBlockRef)) {
         const ref = message.toolBlockRef;
-        if (isFiniteNumber(ref.sourceMtimeMs) && isFiniteNumber(ref.recordIndex) && isFiniteNumber(ref.blockIndex)) {
+        if (isFiniteNumber2(ref.sourceMtimeMs) && isFiniteNumber2(ref.recordIndex) && isFiniteNumber2(ref.blockIndex)) {
           normalized.toolBlockRef = {
             sourceMtimeMs: ref.sourceMtimeMs,
             recordIndex: ref.recordIndex,
@@ -94688,8 +95056,8 @@ ${statusLine}`;
         message: activeModal.message,
         buttons: activeModal.buttons.map((button) => button.trim())
       };
-      if (isFiniteNumber(activeModal.width)) normalized.width = activeModal.width;
-      if (isFiniteNumber(activeModal.height)) normalized.height = activeModal.height;
+      if (isFiniteNumber2(activeModal.width)) normalized.width = activeModal.width;
+      if (isFiniteNumber2(activeModal.height)) normalized.height = activeModal.height;
       return normalized;
     }
     function validateTurnTerminalMarkers(value, source) {
@@ -94700,7 +95068,7 @@ ${statusLine}`;
         if (!isPlainObject3(marker)) {
           throw new Error(`${source}: turnTerminalMarkers[${index}] must be an object`);
         }
-        if (!isFiniteNumber(marker.receivedAt)) {
+        if (!isFiniteNumber2(marker.receivedAt)) {
           throw new Error(`${source}: turnTerminalMarkers[${index}].receivedAt must be a finite number`);
         }
         if (marker.outcome !== "completed" && marker.outcome !== "aborted") {
@@ -106560,7 +106928,10 @@ trust_level = "trusted"
                   this.scheduleSpawnPrimeAfterFirstOutput();
                   this.emit({ kind: "pty_data", chunk });
                 },
-                on_screen_changed: () => this.reevaluate(),
+                on_screen_changed: () => {
+                  this.lastScreenChangedAt = Date.now();
+                  this.reevaluate();
+                },
                 on_exit: (info) => this.handleExit(info)
               }
             );
@@ -106653,6 +107024,13 @@ trust_level = "trusted"
            *  on_pty_data — including the echo of text written into the composer — so the
            *  win32 submit settle-gate can tell when input has finished landing. */
           lastPtyDataAt = 0;
+          /** Wall-clock (ms) of the most recent RENDERED screen change — set from the
+           *  TerminalAdapter's coalesced on_screen_changed, which fires only when the
+           *  rendered text actually differs from the previous snapshot. Stricter than
+           *  lastPtyDataAt (keepalive / cursor-only bytes advance that one but not
+           *  this). Session-global, unlike the per-state stable_ms bookkeeping in
+           *  regionLastChangedAt, which is cleared on every transition. */
+          lastScreenChangedAt = 0;
           /** Timer driving the win32 verification-based modal-confirm CR resend loop (see
            *  scheduleWin32ModalConfirm). A lone CR that confirms an approval/picker choice
            *  is absorbed by ConPTY the same way a send_message submit CR is, so the confirm
@@ -107031,6 +107409,14 @@ trust_level = "trusted"
            */
           hasSeenReady() {
             return this.readySeenOnce;
+          }
+          /** @see ISpecDriver.getLastOutputAt — raw PTY chunk clock, 0 until first output. */
+          getLastOutputAt() {
+            return this.lastPtyDataAt;
+          }
+          /** @see ISpecDriver.getLastScreenChangeAt — rendered screen-change clock, 0 until first change. */
+          getLastScreenChangeAt() {
+            return this.lastScreenChangedAt;
           }
           getCompletionIdleDebounceState() {
             const out = outgoingTransitions(this.spec, this.currentStateId);
@@ -107532,10 +107918,12 @@ trust_level = "trusted"
             const ms = this.spec.refocus_when_stalled_ms;
             return typeof ms === "number" && ms > 0 && Array.isArray(this.spec.send_on_spawn) && this.spec.send_on_spawn.length > 0;
           }
-          /** Wall-clock time the screen last changed in the current state, falling
+          /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling
            *  back to state entry when it has not changed since (i.e. fully stalled
-           *  from the start of the state). */
-          lastScreenChangeAt() {
+           *  from the start of the state). State-relative on purpose — the stall
+           *  window is measured from state entry. Not the session-global clock the
+           *  adapter status surfaces; that is getLastScreenChangeAt(). */
+          stallScreenReferenceAt() {
             return this.regionLastChangedAt.get(-1) ?? this.stateEnteredAt;
           }
           /** Arm a timer to re-inject the focus-in prime if the screen stays frozen
@@ -107551,7 +107939,7 @@ trust_level = "trusted"
             const st = stateById(this.spec, this.currentStateId);
             if (!st || statusForState(st) !== "generating") return;
             const windowMs = this.spec.refocus_when_stalled_ms;
-            const since = Math.max(this.lastScreenChangeAt(), this.lastRefocusAt);
+            const since = Math.max(this.stallScreenReferenceAt(), this.lastRefocusAt);
             const remaining = windowMs - (Date.now() - since);
             this.stallTimer = setTimeout(
               () => {
@@ -107569,7 +107957,7 @@ trust_level = "trusted"
             if (!st || statusForState(st) !== "generating") return;
             const windowMs = this.spec.refocus_when_stalled_ms;
             const now = Date.now();
-            const stalledFor = now - this.lastScreenChangeAt();
+            const stalledFor = now - this.stallScreenReferenceAt();
             const sinceLastRefocus = now - this.lastRefocusAt;
             if (stalledFor >= windowMs && sinceLastRefocus >= windowMs) {
               if (this.stallRefocusInfoCount < STALL_REFOCUS_INFO_LIMIT) {
@@ -113172,13 +113560,18 @@ ${text}` : text;
         TAIL_BYTES3 = 512 * 1024;
       }
     });
+    function clockField(key2, value) {
+      return typeof value === "number" && Number.isFinite(value) && value > 0 ? { [key2]: value } : {};
+    }
     function projectAdapterStatus(input) {
       const sessionFields = input.providerSessionId ? { providerSessionId: input.providerSessionId } : {};
       const base = {
         messages: [],
         activeModal: null,
         activeInteractivePrompt: input.activeInteractivePrompt,
-        ...sessionFields
+        ...sessionFields,
+        ...clockField("lastOutputAt", input.lastOutputAt),
+        ...clockField("lastScreenChangeAt", input.lastScreenChangeAt)
       };
       if (input.providerFailure) {
         return {
@@ -113477,7 +113870,6 @@ ${text}` : text;
           statusCallback = null;
           approvalResolvedCallback = null;
           ptyDataCallback = null;
-          partialResponse = "";
           activeInteractivePrompt = null;
           interactivePromptTransport = null;
           claudeTuiPromptCaptureInFlight = false;
@@ -113783,7 +114175,12 @@ ${text}` : text;
               activeInteractivePrompt: this.activeInteractivePrompt,
               state: this.latestState,
               modal: this.latestModal,
-              readySeen: () => this.driver?.hasSeenReady?.()
+              readySeen: () => this.driver?.hasSeenReady?.(),
+              // A5-3: cheap reads of latched driver counters — no snapshot, no
+              // re-evaluation — so the watchdog's getStatus({ allowParse: false })
+              // poll stays a pure read and cannot itself move the clocks.
+              lastOutputAt: this.driver?.getLastOutputAt?.(),
+              lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.()
             });
           }
           /**
@@ -113857,9 +114254,6 @@ ${text}` : text;
             } catch {
               return { active: false, count: 0, ids: [], support: "unknown" };
             }
-          }
-          getPartialResponse() {
-            return this.partialResponse;
           }
           shutdown() {
             (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
@@ -115520,7 +115914,7 @@ ${text}` : text;
       return Array.isArray(buttons) && buttons.some((button) => String(button || "").trim().length > 0);
     }
     function isCliGeneratingLikeStatus(status) {
-      return status === "generating" || status === "streaming" || status === "no_progress" || status === "long_generating" || status === "starting";
+      return isWorkingStatus(status);
     }
     function computeTurnAnchoredDurationMs(engineTurnStartedAt, generatingStartedAt, now) {
       const engineStart = typeof engineTurnStartedAt === "number" && Number.isFinite(engineTurnStartedAt) ? engineTurnStartedAt : 0;
@@ -115580,6 +115974,7 @@ ${text}` : text;
         "use strict";
         path43 = __toESM2(require("path"));
         import_node_module = require("module");
+        init_dist();
         CachedDatabaseSync = null;
       }
     });
@@ -116447,9 +116842,6 @@ ${buttons.join("\n")}`;
       }
       if (!approvalResolvedIdle && reader.inApprovalResumeGrace()) {
         return { block: { reason: "approval_resume_grace", terminal: false }, evidencePatch };
-      }
-      if (reader.partialResponsePending()) {
-        return { block: { reason: "partial_response_pending", terminal: true }, evidencePatch };
       }
       const parsed = reader.parsedStatus();
       if (!parsed.ok) {
@@ -117581,8 +117973,7 @@ ${buttons.join("\n")}`;
       const newStatus = isQuestionPicker ? "waiting_choice" : autoApproveActive || autoApproveHoldIdle ? "generating" : rawStatus;
       const dirName = workingDirBasename(host.workingDir);
       const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
-      const partial2 = host.adapter.getPartialResponse();
-      const progressFingerprint = newStatus === "generating" ? `${`${partial2 || ""}`.slice(-2e3)}::scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}` : void 0;
+      const progressFingerprint = newStatus === "generating" ? `scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}` : void 0;
       const previousStatus = host.lastStatus;
       if (newStatus !== host.lastStatus) {
         LOG.info("CLI", `[${host.type}] status: ${host.lastStatus} \u2192 ${newStatus}`);
@@ -118201,11 +118592,6 @@ ${buttons.join("\n")}`;
         if (typeof host.adapter.isProcessing === "function" && host.adapter.isProcessing()) return true;
       } catch {
       }
-      try {
-        const partial2 = typeof host.adapter.getPartialResponse === "function" ? host.adapter.getPartialResponse() : "";
-        if (typeof partial2 === "string" && partial2.trim()) return true;
-      } catch {
-      }
       return false;
     }
     function antigravityHoldPtyStillActive(host) {
@@ -118333,10 +118719,6 @@ ${buttons.join("\n")}`;
         adapterWaitingForResponse: () => host.adapter?.isWaitingForResponse === true,
         adapterTurnScopeActive: () => !!host.adapter?.currentTurnScope,
         adapterAnyPending: () => host.hasAdapterPendingResponse(),
-        partialResponsePending: () => {
-          const partial2 = typeof host.adapter.getPartialResponse === "function" ? host.adapter.getPartialResponse() : "";
-          return typeof partial2 === "string" && !!partial2.trim();
-        },
         parsedStatus: () => once("parsedStatus", () => {
           const rp = rawParsed();
           if (!rp.ok) return { ok: false, error: rp.error };
@@ -122335,11 +122717,11 @@ ${rawInput}` : rawInput;
       let busySince = null;
       for (; ; ) {
         const status = readStatus(adapter);
-        if (status !== void 0 && TERMINAL_STATUSES2.has(status)) {
+        if (status !== void 0 && isDeadStatus(status)) {
           options?.onTerminalStatus?.(status);
           return false;
         }
-        if (status !== void 0 && !BUSY_STATUSES2.has(status)) return true;
+        if (status !== void 0 && !isBusyStatus(status)) return true;
         const now = Date.now();
         if (status === void 0) busySince = null;
         else if (busySince === null) busySince = now;
@@ -122428,19 +122810,16 @@ ${rawInput}` : rawInput;
     var INTERRUPT_SECOND_PRESS_DELAY_MS;
     var INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS;
     var DRAIN_RESERVE_SLACK_MS;
-    var BUSY_STATUSES2;
-    var TERMINAL_STATUSES2;
     var init_interrupt_and_deliver = __esm2({
       "src/commands/interrupt-and-deliver.ts"() {
         "use strict";
+        init_dist();
         init_logger();
         INTERRUPT_IDLE_TIMEOUT_MS = 15e3;
         INTERRUPT_IDLE_POLL_MS = 120;
         INTERRUPT_SECOND_PRESS_DELAY_MS = 200;
         INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS = 260;
         DRAIN_RESERVE_SLACK_MS = 5e3;
-        BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
-        TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["stopped", "error", "exited", "crashed"]);
       }
     });
     function hashSignatureParts(parts) {
@@ -123035,11 +123414,6 @@ ${rawInput}` : rawInput;
         if (typeof adapter?.isProcessing === "function" && adapter.isProcessing()) return true;
       } catch {
       }
-      try {
-        const partial2 = typeof adapter?.getPartialResponse === "function" ? adapter.getPartialResponse() : "";
-        if (typeof partial2 === "string" && partial2.trim()) return true;
-      } catch {
-      }
       return false;
     }
     function countMessages(value) {
@@ -123081,7 +123455,7 @@ ${rawInput}` : rawInput;
     }
     function shouldSuppressStaleParsedBusyStatus2(adapterStatus, parsedStatus, adapter) {
       const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
-      if (!BUSY_AGENT_STATUSES.has(parsedRawStatus)) return false;
+      if (!isBusyStatus(parsedRawStatus)) return false;
       if (adapterStatus !== "idle") return false;
       if (hasNonEmptyModalButtons2(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
       return !hasAdapterPendingResponse2(adapter);
@@ -123095,7 +123469,7 @@ ${rawInput}` : rawInput;
       try {
         const parsedStatus = adapter.getScriptParsedStatus();
         const parsedRawStatus = normalizeAgentStatus(parsedStatus?.status);
-        if (BUSY_AGENT_STATUSES.has(parsedRawStatus) && !shouldSuppressStaleParsedBusyStatus2(adapterStatus, parsedStatus, adapter)) {
+        if (isBusyStatus(parsedRawStatus) && !shouldSuppressStaleParsedBusyStatus2(adapterStatus, parsedStatus, adapter)) {
           return parsedRawStatus;
         }
       } catch {
@@ -123129,7 +123503,12 @@ ${rawInput}` : rawInput;
         path48 = __toESM2(require("path"));
         import_fs22 = require("fs");
         import_child_process10 = require("child_process");
-        BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set(["generating", "running", "streaming", "starting", "busy", "waiting", "waiting_approval", "waiting_choice", "no_progress", "long_generating"]);
+        init_dist();
+        BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set([
+          ...statusesOfClass("working"),
+          ...statusesOfClass("blocked"),
+          ...Object.keys(SESSION_STATUS_ALIASES).filter((alias) => isBusyStatus(alias))
+        ]);
         ZERO_MESSAGE_STARTING_SEND_WAIT_MS = 2e3;
       }
     });
@@ -123696,7 +124075,6 @@ ${installInfo}`
                     activeModal: state2.activeChat?.activeModal || null
                   };
                 },
-                getPartialResponse: () => "",
                 cancel: () => {
                   instanceManager2.removeInstance(key2);
                 },
@@ -134645,13 +135023,13 @@ ${result.stderr}`, result.code);
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             try {
-              const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue22, describeTaskDependencyState: describeTaskDependencyState22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue22, describeTaskDependencyState: describeTaskDependencyState22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               const status = Array.isArray(args?.status) ? args.status.map((s2) => typeof s2 === "string" ? s2.trim() : "").filter(Boolean) : void 0;
               const rawQueue = getQueue22(meshId, { status });
               const allQueue = getQueue22(meshId);
               const statusById = new Map(allQueue.map((task) => [task.id, task.status]));
               const depMetaById = new Map(allQueue.map((task) => [task.id, task]));
-              const queue = rawQueue.map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
+              const queue = rawQueue.map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
               const summary = getMeshQueueStats2(meshId);
               return {
                 success: true,
@@ -134675,7 +135053,7 @@ ${result.stderr}`, result.code);
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "queue cancellation");
             if (ownerFailure) return ownerFailure;
             try {
-              const { cancelTask: cancelTask22, takeCancelledTaskAssignment: takeCancelledTaskAssignment2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, cancelTask: cancelTask22, takeCancelledTaskAssignment: takeCancelledTaskAssignment2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               const reason = typeof args?.reason === "string" ? args.reason : void 0;
               const task = cancelTask22(meshId, taskId, { reason });
               if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
@@ -134683,7 +135061,7 @@ ${result.stderr}`, result.code);
               if (prior?.sessionId) {
                 void stopCancelledTaskWorker(ctx, meshId, prior);
               }
-              return { success: true, task };
+              return { success: true, task: summarizeQueueEntryInputForView22(task) };
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -134695,7 +135073,7 @@ ${result.stderr}`, result.code);
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "queue requeue");
             if (ownerFailure) return ownerFailure;
             try {
-              const { requeueTask: requeueTask22, getQueue: getQueue22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTask: requeueTask22, getQueue: getQueue22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               if (args?.force !== true) {
                 const { isSessionActivelyGenerating: isSessionActivelyGenerating2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
                 const existing = getQueue22(meshId).find((t) => t?.id === taskId);
@@ -134731,7 +135109,7 @@ ${result.stderr}`, result.code);
                   task
                 };
               }
-              return { success: true, task };
+              return { success: true, task: summarizeQueueEntryInputForView22(task) };
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -139800,8 +140178,8 @@ ${ptyResult.output.slice(-2e3)}`);
                 }
               }
               const refreshReason = refreshRequested ? "explicit_refresh" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
-              const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
-              const queue = getQueue22(meshId);
+              const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const queue = getQueue22(meshId).map(summarizeQueueEntryInputForView22);
               const queueSummary = getMeshQueueStats2(meshId);
               const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime22 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
               const schedulingRuntime = buildMeshSchedulingRuntime22(mesh, queue);
@@ -148738,7 +149116,7 @@ ${e?.stderr || ""}`;
       MESH_SCHEDULING_STRATEGIES: () => MESH_SCHEDULING_STRATEGIES,
       MESH_SUPERSEDED_SINGLE_REASONS: () => MESH_SUPERSEDED_SINGLE_REASONS,
       MESH_TASK_GRAPH_MAX_TASKS: () => MESH_TASK_GRAPH_MAX_TASKS3,
-      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES22,
+      MESH_TASK_PRIORITIES: () => MESH_TASK_PRIORITIES2,
       MESH_UNSANCTIONED_DIRECT_HINT: () => MESH_UNSANCTIONED_DIRECT_HINT3,
       MESH_UNSANCTIONED_DIRECT_REASONS: () => MESH_UNSANCTIONED_DIRECT_REASONS,
       MESH_VALID_DIRECT_REASONS: () => MESH_VALID_DIRECT_REASONS3,
@@ -149318,6 +149696,7 @@ ${e?.stderr || ""}`;
       resolveDelegatedWorkerAutoApprove: () => resolveDelegatedWorkerAutoApprove3,
       resolveDelegatedWorkerDangerousModeAllow: () => resolveDelegatedWorkerDangerousModeAllow3,
       resolveDeliveryDecision: () => resolveDeliveryDecision,
+      resolveDispatchMessage: () => resolveDispatchMessage3,
       resolveEffectiveMeshNodeHealth: () => resolveEffectiveMeshNodeHealth3,
       resolveFleetSecret: () => resolveFleetSecret,
       resolveGitRepository: () => resolveGitRepository,
@@ -149391,6 +149770,7 @@ ${e?.stderr || ""}`;
       summarizeMeshMission: () => summarizeMeshMission,
       summarizeMeshUsage: () => summarizeMeshUsage3,
       summarizeMissionTasks: () => summarizeMissionTasks,
+      summarizeQueueEntryInputForView: () => summarizeQueueEntryInputForView3,
       summarizeSeqscribeStats: () => summarizeSeqscribeStats,
       summarizeSoleCopy: () => summarizeSoleCopy,
       supportsUnicodeSymbols: () => supportsUnicodeSymbols,
@@ -150563,6 +150943,7 @@ ${e?.stderr || ""}`;
       };
     }
     init_worker_mcp_isolation();
+    init_worker_handoff_dispatch();
     init_usage_normalize();
     init_bounded_retention();
     init_mesh_fast_forward();
@@ -154387,7 +154768,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const parsedStatus = cli?.parsedStatus && typeof cli.parsedStatus === "object" ? cli.parsedStatus : null;
       const cliParsedMessageCount = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages.length : void 0;
       const readChatReturnedMessages = Array.isArray(readChat2.messagesTail) ? readChat2.messagesTail.length : void 0;
-      const cliPartialResponse = typeof cli?.partialResponse === "string" ? cli.partialResponse : "";
       const readChatStatus = typeof readChat2.status === "string" ? readChat2.status : "";
       const cliStatus = typeof cli?.status === "string" ? cli.status : "";
       const cliParsedStatus = typeof parsedStatus?.status === "string" ? parsedStatus.status : "";
@@ -154404,7 +154784,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         cliParsedStatus: cliParsedStatus || void 0,
         cliMessageCount: cli?.messageCount,
         cliParsedMessageCount,
-        cliPartialResponseChars: cliPartialResponse.length,
         parserAdapterStatusMismatch: Boolean(cliStatus && cliParsedStatus && cliStatus !== cliParsedStatus),
         parserReadChatStatusMismatch: Boolean(readChatStatus && cliParsedStatus && readChatStatus !== cliParsedStatus),
         readChatDebug: Object.keys(debugReadChat).length ? {
@@ -154494,7 +154873,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       let adapterStatus = null;
       let parsedStatus = null;
       let adapterDebugSnapshot = null;
-      let partialResponse = "";
       if (adapter) {
         try {
           adapterStatus = adapter.getStatus?.();
@@ -154510,11 +154888,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           adapterDebugSnapshot = typeof adapter.getDebugSnapshot === "function" ? adapter.getDebugSnapshot() : null;
         } catch (error48) {
           adapterDebugSnapshot = { error: error48?.message || String(error48) };
-        }
-        try {
-          partialResponse = adapter.getPartialResponse?.() || "";
-        } catch {
-          partialResponse = "";
         }
       }
       let instanceState = null;
@@ -154586,7 +154959,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           messageCount: Array.isArray(adapterStatus?.messages) ? adapterStatus.messages.length : void 0,
           messagesTail: Array.isArray(adapterStatus?.messages) ? adapterStatus.messages.slice(-20) : void 0,
           parsedStatus,
-          partialResponse,
           ready: typeof adapter.isReady === "function" ? adapter.isReady() : void 0,
           processing: typeof adapter.isProcessing === "function" ? adapter.isProcessing() : void 0,
           debugSnapshot: adapterDebugSnapshot,
@@ -171273,6 +171645,496 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// ../mesh-shared/dist/index.mjs
+var MESH_TASK_DIFFICULTIES = ["easy", "medium", "difficult", "freeform"];
+function isMeshTaskDifficulty(value) {
+  return typeof value === "string" && MESH_TASK_DIFFICULTIES.includes(value);
+}
+function normalizeNodeCapabilitySlot(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const provider = typeof r.provider === "string" ? r.provider.trim() : "";
+  if (!provider) return null;
+  const model = typeof r.model === "string" ? r.model.trim() : "";
+  const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
+  const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty) : [];
+  const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
+  const maxParallelNum = Number(r.maxParallel);
+  const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
+  return {
+    provider,
+    ...model ? { model } : {},
+    ...thinkingLevel ? { thinkingLevel } : {},
+    ...difficulty.length ? { difficulty } : {},
+    ...capability.length ? { capability } : {},
+    ...maxParallel !== void 0 ? { maxParallel } : {}
+  };
+}
+function normalizeNodeCapabilitySlots(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    const slot = normalizeNodeCapabilitySlot(entry);
+    if (slot) out.push(slot);
+  }
+  return out;
+}
+function deriveProviderPriorityFromSlots(slots) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const slot of normalizeNodeCapabilitySlots(slots)) {
+    if (seen.has(slot.provider)) continue;
+    seen.add(slot.provider);
+    out.push(slot.provider);
+  }
+  return out;
+}
+var CLI_SLOT_RECIPES = Object.freeze({
+  "claude-cli": [
+    {
+      model: "sonnet",
+      thinkingLevel: "high",
+      difficulty: ["medium", "easy"],
+      maxParallel: 5,
+      rationale: "Primary workhorse \u2014 widest parallelism for routine work."
+    },
+    {
+      model: "opus",
+      thinkingLevel: "high",
+      difficulty: ["difficult"],
+      maxParallel: 1,
+      rationale: "Reserved for hard tasks; capped at 1 to bound cost."
+    }
+  ],
+  "kimi": [
+    {
+      model: "kimi-code/k3",
+      difficulty: ["medium", "difficult"],
+      maxParallel: 2,
+      rationale: "Independent second opinion on mid/hard work."
+    }
+  ],
+  "codex-cli": [
+    {
+      difficulty: ["medium", "difficult", "freeform"],
+      maxParallel: 2,
+      rationale: "Broad range including freeform; no model pin."
+    }
+  ],
+  "antigravity-cli": [
+    {
+      model: "Gemini 3.1 Pro (High)",
+      difficulty: ["easy"],
+      maxParallel: 2,
+      rationale: "Cheap capacity for easy tasks."
+    }
+  ],
+  "cursor-cli": [
+    {
+      model: "auto",
+      difficulty: ["easy"],
+      maxParallel: 1,
+      rationale: "Easy tasks only; auto model selection."
+    }
+  ],
+  "hermes-cli": [
+    {
+      difficulty: ["medium"],
+      maxParallel: 2,
+      provisional: true,
+      // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
+      // slot configuration this table was seeded from, so `medium` is a
+      // conservative placement rather than a transcription. Revisit once
+      // it has real usage data.
+      rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
+    }
+  ]
+});
+var UNKNOWN_CLI_SLOT_RECIPE = Object.freeze({
+  difficulty: ["medium"],
+  maxParallel: 1,
+  provisional: true,
+  rationale: "Unrecognized provider \u2014 conservative default (medium, maxParallel 1). Review before relying on it."
+});
+function slotKey(slot) {
+  return [
+    slot.provider,
+    slot.model ?? "",
+    slot.thinkingLevel ?? "",
+    [...slot.difficulty ?? []].sort().join("|"),
+    [...slot.capability ?? []].sort().join("|"),
+    slot.maxParallel ?? ""
+  ].join("\0");
+}
+function dedupeDetected(detected) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const d of detected) {
+    const type2 = typeof d?.type === "string" ? d.type.trim() : "";
+    if (!type2 || seen.has(type2)) continue;
+    seen.add(type2);
+    out.push({ ...d, type: type2 });
+  }
+  return out;
+}
+function buildSlotProposal(detected, currentSlots = []) {
+  const providers = dedupeDetected(detected ?? []);
+  const proposedSlots = [];
+  const entries = [];
+  const unknownProviders = [];
+  const provisionalProviders = [];
+  for (const provider of providers) {
+    const known = CLI_SLOT_RECIPES[provider.type];
+    const recipes = known ?? [UNKNOWN_CLI_SLOT_RECIPE];
+    const isUnknown = !known;
+    if (isUnknown) unknownProviders.push(provider.type);
+    let providerProvisional = false;
+    for (const recipe of recipes) {
+      const slot = normalizeNodeCapabilitySlot({
+        provider: provider.type,
+        model: recipe.model,
+        thinkingLevel: recipe.thinkingLevel,
+        difficulty: recipe.difficulty,
+        maxParallel: recipe.maxParallel
+      });
+      if (!slot) continue;
+      const provisional = recipe.provisional === true;
+      if (provisional) providerProvisional = true;
+      proposedSlots.push(slot);
+      entries.push({
+        slot,
+        unknownProvider: isUnknown,
+        provisional,
+        ...recipe.rationale ? { rationale: recipe.rationale } : {}
+      });
+    }
+    if (providerProvisional) provisionalProviders.push(provider.type);
+  }
+  const proposedKeys = new Set(proposedSlots.map(slotKey));
+  const droppedSlots = currentSlots.filter((slot) => !proposedKeys.has(slotKey(slot)));
+  const proposedProviders = new Set(proposedSlots.map((s) => s.provider));
+  const droppedProviders = [...new Set(
+    droppedSlots.map((s) => s.provider).filter((p) => !proposedProviders.has(p))
+  )];
+  return {
+    proposedSlots,
+    entries,
+    unknownProviders,
+    provisionalProviders,
+    droppedSlots,
+    droppedProviders,
+    destructive: droppedSlots.length > 0
+  };
+}
+function buildMagiPanelProposal(detected, opts = {}) {
+  const providers = dedupeDetected(detected ?? []);
+  const tableOrder = Object.keys(CLI_SLOT_RECIPES);
+  const rank = (type2) => {
+    const i = tableOrder.indexOf(type2);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  };
+  const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type));
+  const limit = Number.isFinite(opts.maxSlots) && opts.maxSlots > 0 ? Math.floor(opts.maxSlots) : ordered.length;
+  return ordered.slice(0, limit).map((p) => ({
+    ...opts.nodeId ? { nodeId: opts.nodeId } : {},
+    provider: p.type
+    // A model is intentionally NOT pinned: the panel's job is cross-provider
+    // independence, and pinning models here would silently couple the panel
+    // to this table's cost assumptions rather than to review quality.
+  }));
+}
+var CANONICAL_MESH_TOOL_NAMES = [
+  "mesh_status",
+  "mesh_route_preview",
+  "mesh_list_nodes",
+  // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
+  "mesh_enqueue_batch",
+  "mesh_enqueue_task",
+  "mesh_view_queue",
+  // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
+  "mesh_graph_view",
+  "mesh_graph_gate_claim",
+  "mesh_graph_gate_release",
+  "mesh_graph_gate_abandon",
+  "mesh_graph_node_patch",
+  "mesh_queue_cancel",
+  "mesh_queue_requeue",
+  "mesh_send_task",
+  "mesh_read_chat",
+  "mesh_read_debug",
+  "mesh_read_terminal",
+  "mesh_send_keys",
+  "mesh_launch_session",
+  "mesh_git_status",
+  "mesh_read_node_logs",
+  "mesh_fast_forward_node",
+  "mesh_restart_daemon",
+  "mesh_checkpoint",
+  "mesh_approve",
+  "mesh_answer_question",
+  "mesh_list_pending_approvals",
+  "mesh_plan_onboarding",
+  "mesh_create",
+  "mesh_add_node",
+  "mesh_clone_node",
+  "mesh_remove_node",
+  "mesh_cleanup_worktree_nodes",
+  "mesh_refine_node",
+  "mesh_refine_batch",
+  "mesh_refine_config",
+  "mesh_change_impact_config",
+  "mesh_init",
+  "mesh_reinit",
+  "mesh_write_mesh_json_config",
+  "mesh_refine_plan",
+  "mesh_cleanup_sessions",
+  "mesh_prune_stale_direct",
+  "mesh_task_history",
+  "mesh_ledger_query",
+  "mesh_record_note",
+  "mesh_forget_note",
+  "mesh_reconcile_ledger",
+  "mesh_requeue_held_events",
+  "mesh_mission_upsert",
+  "mesh_mission_list",
+  "mesh_review_inbox",
+  "mesh_magi_review",
+  "mesh_magi_collect",
+  "mesh_magi_kind_panel_set",
+  "mesh_magi_kind_panel_list",
+  "mesh_node_slots_set",
+  "mesh_node_slots_list",
+  "mesh_node_slots_propose",
+  "mesh_coordinator_prompt_append_get",
+  "mesh_coordinator_prompt_append_set"
+];
+var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
+var STATUS_PROBE_ARG_KEY = "_statusProbe";
+function withStatusProbeMarker(args = {}) {
+  return { ...args, [STATUS_PROBE_ARG_KEY]: true };
+}
+function makeTypeGuard(names) {
+  const set3 = new Set(names);
+  return (value) => typeof value === "string" && set3.has(value);
+}
+var DAEMON_STATUS_EVENT_NAMES = [
+  "agent:generating_started",
+  "agent:waiting_approval",
+  "agent:waiting_choice",
+  "agent:generating_completed",
+  "agent:stopped",
+  "monitor:no_progress",
+  /** Legacy alias for `monitor:no_progress`, still emitted by older daemons. */
+  "monitor:long_generating"
+];
+var isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES);
+var P2P_SIGNAL_TYPES = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];
+var isP2PSignalType = makeTypeGuard(P2P_SIGNAL_TYPES);
+var DAEMON_P2P_SIGNAL_TYPES = ["p2p_offer", "p2p_ice"];
+var isDaemonP2PSignalType = makeTypeGuard(DAEMON_P2P_SIGNAL_TYPES);
+var MESH_P2P_SIGNAL_TYPES = ["mesh_p2p_ready", "mesh_p2p_offer", "mesh_p2p_answer", "mesh_p2p_ice"];
+var isMeshP2PSignalType = makeTypeGuard(MESH_P2P_SIGNAL_TYPES);
+var DAEMON_TO_SERVER_TYPES = [
+  "auth",
+  "status_report",
+  "status_heartbeat",
+  "status_event",
+  "command_result",
+  "error",
+  "agent_event",
+  "beacon_vectors",
+  "daemon_mesh_command",
+  "p2p_offer",
+  "p2p_ice"
+];
+var isDaemonToServerType = makeTypeGuard(DAEMON_TO_SERVER_TYPES);
+var SERVER_TO_DAEMON_CONTROL_TYPES = [
+  "auth_ok",
+  "auth_error",
+  "machine_evicted",
+  "force_disconnect",
+  "token_revoked",
+  "version_mismatch",
+  "force_update_required",
+  "command",
+  "agent_command",
+  "resolve_action",
+  "beacon_vectors_result",
+  "daemon_mesh_result",
+  "p2p_ready",
+  "p2p_offer",
+  "p2p_answer",
+  "p2p_ice",
+  "mesh_p2p_ready",
+  "mesh_p2p_offer",
+  "mesh_p2p_answer",
+  "mesh_p2p_ice"
+];
+var isServerToDaemonControlType = makeTypeGuard(SERVER_TO_DAEMON_CONTROL_TYPES);
+var SERVER_STATUS_EVENT_NAMES = [
+  "daemon:disconnect",
+  "team:session_viewed",
+  "team:view_request",
+  "team:view_request_approved",
+  "team:view_request_rejected"
+];
+var DASHBOARD_STATUS_EVENT_NAMES = [...DAEMON_STATUS_EVENT_NAMES, ...SERVER_STATUS_EVENT_NAMES];
+var isDashboardStatusEventName = makeTypeGuard(DASHBOARD_STATUS_EVENT_NAMES);
+var USER_SESSION_TO_DASHBOARD_TYPES = [
+  "connected",
+  "initial_state",
+  "daemon_status",
+  "status_event",
+  "system_announcement",
+  "auth_error",
+  "heartbeat",
+  "p2p_offer",
+  "p2p_ice"
+];
+var isUserSessionToDashboardType = makeTypeGuard(USER_SESSION_TO_DASHBOARD_TYPES);
+var DASHBOARD_TO_USER_SESSION_TYPES = ["heartbeat", "refresh", "p2p_ready", "p2p_answer", "p2p_ice"];
+var isDashboardToUserSessionType = makeTypeGuard(DASHBOARD_TO_USER_SESSION_TYPES);
+var DASHBOARD_P2P_SIGNAL_TYPES = ["p2p_ready", "p2p_answer", "p2p_ice"];
+var isDashboardP2PSignalType = makeTypeGuard(DASHBOARD_P2P_SIGNAL_TYPES);
+var SHARED_SESSION_TO_VIEWER_TYPES = [
+  "share:connected",
+  "share:revoked",
+  "share:expired",
+  "share:error",
+  "share:viewer_count",
+  "p2p_offer",
+  "p2p_ice"
+];
+var isSharedSessionToViewerType = makeTypeGuard(SHARED_SESSION_TO_VIEWER_TYPES);
+var VIEWER_TO_SHARED_SESSION_TYPES = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];
+var isViewerToSharedSessionType = makeTypeGuard(VIEWER_TO_SHARED_SESSION_TYPES);
+var DASHBOARD_TO_DAEMON_P2P_TYPES = [
+  "ping",
+  "pong",
+  "command",
+  "input",
+  "pty_input",
+  "pty_resize",
+  "screenshot_start",
+  "screenshot_stop",
+  "subscribe",
+  "unsubscribe",
+  "seqscribe_session_interest",
+  "read",
+  "write",
+  "list"
+];
+var isDashboardToDaemonP2PType = makeTypeGuard(DASHBOARD_TO_DAEMON_P2P_TYPES);
+var DAEMON_TO_DASHBOARD_P2P_TYPES = [
+  "ping",
+  "pong",
+  "p2p_evicted",
+  "status_report",
+  "status_event",
+  "topic_update",
+  "topic_update_chunk",
+  "session_output",
+  "session_output_chunk",
+  "session_io_error",
+  "command_result",
+  "command_result_chunk",
+  "response"
+];
+var isDaemonToDashboardP2PType = makeTypeGuard(DAEMON_TO_DASHBOARD_P2P_TYPES);
+var DASHBOARD_P2P_MESSAGE_KINDS = [
+  .../* @__PURE__ */ new Set([...DASHBOARD_TO_DAEMON_P2P_TYPES, ...DAEMON_TO_DASHBOARD_P2P_TYPES])
+];
+var SESSION_STATUSES = [
+  "idle",
+  "generating",
+  "waiting_approval",
+  "waiting_choice",
+  "finalizing",
+  "error",
+  "stopped",
+  "starting",
+  "panel_hidden",
+  "not_monitored",
+  "disconnected"
+];
+var SESSION_STATUS_SET = new Set(SESSION_STATUSES);
+var MESH_TASK_STATUSES = ["pending", "assigned", "completed", "failed", "cancelled"];
+var MESH_TERMINAL_TASK_STATUSES = ["completed", "failed", "cancelled"];
+var MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
+var MESH_TASK_PRIORITIES = ["low", "normal", "high"];
+var MESH_THINKING_LEVELS = ["low", "medium", "high"];
+var MESH_DELIVERY_MODES = ["when_idle", "interrupt"];
+var MESH_SESSION_CLEANUP_MODES = ["preserve", "stop", "delete_stopped", "stop_and_delete"];
+var WORKER_REPORT_OUTCOMES = ["completed", "blocked", "failed"];
+var WORKER_BRANCH_STATES = [
+  "merged_to_main",
+  "pushed_feature_branch_needs_merge",
+  "blocked_review",
+  "cleanup_candidate",
+  "not_mergeable"
+];
+function makeGuard(values) {
+  const set3 = new Set(values);
+  return (value) => typeof value === "string" && set3.has(value);
+}
+var isMeshTaskStatus = makeGuard(MESH_TASK_STATUSES);
+var isMeshTerminalTaskStatus = makeGuard(MESH_TERMINAL_TASK_STATUSES);
+var isMeshTaskMode = makeGuard(MESH_TASK_MODES);
+var isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES);
+var isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS);
+var isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES);
+var isMeshSessionCleanupMode = makeGuard(MESH_SESSION_CLEANUP_MODES);
+var isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES);
+var isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES);
+function enumOf(values, description) {
+  return {
+    type: "string",
+    enum: [...values],
+    ...description ? { description } : {}
+  };
+}
+var WORKER_TOOLS = [
+  "report_completion",
+  "progress_update",
+  "peer_context_pull",
+  "git_status",
+  "git_log",
+  "git_diff"
+];
+var WORKER_TOOL_SET = new Set(WORKER_TOOLS);
+var WORKER_PROTOCOL_FOOTER_MARKER = "--- adhdev worker protocol ---";
+function hasWorkerProtocolFooter(body) {
+  return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
+}
+function renderWorkerProtocolFooter(input = {}) {
+  const lines = [WORKER_PROTOCOL_FOOTER_MARKER];
+  const scope = [];
+  if (input.taskId) scope.push(`task ${input.taskId}`);
+  if (input.taskMode) scope.push(`mode ${input.taskMode}`);
+  if (input.difficulty) scope.push(`difficulty ${input.difficulty}`);
+  if (input.readonly) scope.push("read-only");
+  if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
+  else lines.push("You are a delegated worker.");
+  lines.push(
+    "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
+    "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
+    "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace (pass its absolute path as `workspace`).",
+    "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`."
+  );
+  if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+    lines.push(
+      `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and add your own in \`handoff_notes\` when you report.`
+    );
+  }
+  return lines.join("\n");
+}
+function appendWorkerProtocolFooter(body, input = {}) {
+  if (hasWorkerProtocolFooter(body)) return body;
+  const trimmed = body.replace(/\s+$/, "");
+  return `${trimmed}
+
+${renderWorkerProtocolFooter(input)}`;
+}
+
 // src/transports/ipc.ts
 var import_daemon_core = __toESM(require_dist3());
 var DEFAULT_IPC_PORT = import_daemon_core.IDENTITY.defaultPort;
@@ -171752,323 +172614,6 @@ function compactChatPayload(payload, opts = {}) {
   };
 }
 
-// ../mesh-shared/dist/index.mjs
-var MESH_TASK_DIFFICULTIES = ["easy", "medium", "difficult", "freeform"];
-function isMeshTaskDifficulty(value) {
-  return typeof value === "string" && MESH_TASK_DIFFICULTIES.includes(value);
-}
-function normalizeNodeCapabilitySlot(raw) {
-  const r = raw && typeof raw === "object" ? raw : {};
-  const provider = typeof r.provider === "string" ? r.provider.trim() : "";
-  if (!provider) return null;
-  const model = typeof r.model === "string" ? r.model.trim() : "";
-  const thinkingLevel = typeof r.thinkingLevel === "string" ? r.thinkingLevel.trim() : "";
-  const difficulty = Array.isArray(r.difficulty) ? r.difficulty.filter(isMeshTaskDifficulty) : [];
-  const capability = Array.isArray(r.capability) ? r.capability.filter((t) => typeof t === "string" && !!t.trim()).map((t) => t.trim()) : [];
-  const maxParallelNum = Number(r.maxParallel);
-  const maxParallel = Number.isFinite(maxParallelNum) && maxParallelNum > 0 ? Math.floor(maxParallelNum) : void 0;
-  return {
-    provider,
-    ...model ? { model } : {},
-    ...thinkingLevel ? { thinkingLevel } : {},
-    ...difficulty.length ? { difficulty } : {},
-    ...capability.length ? { capability } : {},
-    ...maxParallel !== void 0 ? { maxParallel } : {}
-  };
-}
-function normalizeNodeCapabilitySlots(raw) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const entry of raw) {
-    const slot = normalizeNodeCapabilitySlot(entry);
-    if (slot) out.push(slot);
-  }
-  return out;
-}
-function deriveProviderPriorityFromSlots(slots) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const slot of normalizeNodeCapabilitySlots(slots)) {
-    if (seen.has(slot.provider)) continue;
-    seen.add(slot.provider);
-    out.push(slot.provider);
-  }
-  return out;
-}
-var CLI_SLOT_RECIPES = Object.freeze({
-  "claude-cli": [
-    {
-      model: "sonnet",
-      thinkingLevel: "high",
-      difficulty: ["medium", "easy"],
-      maxParallel: 5,
-      rationale: "Primary workhorse \u2014 widest parallelism for routine work."
-    },
-    {
-      model: "opus",
-      thinkingLevel: "high",
-      difficulty: ["difficult"],
-      maxParallel: 1,
-      rationale: "Reserved for hard tasks; capped at 1 to bound cost."
-    }
-  ],
-  "kimi": [
-    {
-      model: "kimi-code/k3",
-      difficulty: ["medium", "difficult"],
-      maxParallel: 2,
-      rationale: "Independent second opinion on mid/hard work."
-    }
-  ],
-  "codex-cli": [
-    {
-      difficulty: ["medium", "difficult", "freeform"],
-      maxParallel: 2,
-      rationale: "Broad range including freeform; no model pin."
-    }
-  ],
-  "antigravity-cli": [
-    {
-      model: "Gemini 3.1 Pro (High)",
-      difficulty: ["easy"],
-      maxParallel: 2,
-      rationale: "Cheap capacity for easy tasks."
-    }
-  ],
-  "cursor-cli": [
-    {
-      model: "auto",
-      difficulty: ["easy"],
-      maxParallel: 1,
-      rationale: "Easy tasks only; auto model selection."
-    }
-  ],
-  "hermes-cli": [
-    {
-      difficulty: ["medium"],
-      maxParallel: 2,
-      provisional: true,
-      // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
-      // slot configuration this table was seeded from, so `medium` is a
-      // conservative placement rather than a transcription. Revisit once
-      // it has real usage data.
-      rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
-    }
-  ]
-});
-var UNKNOWN_CLI_SLOT_RECIPE = Object.freeze({
-  difficulty: ["medium"],
-  maxParallel: 1,
-  provisional: true,
-  rationale: "Unrecognized provider \u2014 conservative default (medium, maxParallel 1). Review before relying on it."
-});
-function slotKey(slot) {
-  return [
-    slot.provider,
-    slot.model ?? "",
-    slot.thinkingLevel ?? "",
-    [...slot.difficulty ?? []].sort().join("|"),
-    [...slot.capability ?? []].sort().join("|"),
-    slot.maxParallel ?? ""
-  ].join("\0");
-}
-function dedupeDetected(detected) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const d of detected) {
-    const type2 = typeof d?.type === "string" ? d.type.trim() : "";
-    if (!type2 || seen.has(type2)) continue;
-    seen.add(type2);
-    out.push({ ...d, type: type2 });
-  }
-  return out;
-}
-function buildSlotProposal(detected, currentSlots = []) {
-  const providers = dedupeDetected(detected ?? []);
-  const proposedSlots = [];
-  const entries = [];
-  const unknownProviders = [];
-  const provisionalProviders = [];
-  for (const provider of providers) {
-    const known = CLI_SLOT_RECIPES[provider.type];
-    const recipes = known ?? [UNKNOWN_CLI_SLOT_RECIPE];
-    const isUnknown = !known;
-    if (isUnknown) unknownProviders.push(provider.type);
-    let providerProvisional = false;
-    for (const recipe of recipes) {
-      const slot = normalizeNodeCapabilitySlot({
-        provider: provider.type,
-        model: recipe.model,
-        thinkingLevel: recipe.thinkingLevel,
-        difficulty: recipe.difficulty,
-        maxParallel: recipe.maxParallel
-      });
-      if (!slot) continue;
-      const provisional = recipe.provisional === true;
-      if (provisional) providerProvisional = true;
-      proposedSlots.push(slot);
-      entries.push({
-        slot,
-        unknownProvider: isUnknown,
-        provisional,
-        ...recipe.rationale ? { rationale: recipe.rationale } : {}
-      });
-    }
-    if (providerProvisional) provisionalProviders.push(provider.type);
-  }
-  const proposedKeys = new Set(proposedSlots.map(slotKey));
-  const droppedSlots = currentSlots.filter((slot) => !proposedKeys.has(slotKey(slot)));
-  const proposedProviders = new Set(proposedSlots.map((s) => s.provider));
-  const droppedProviders = [...new Set(
-    droppedSlots.map((s) => s.provider).filter((p) => !proposedProviders.has(p))
-  )];
-  return {
-    proposedSlots,
-    entries,
-    unknownProviders,
-    provisionalProviders,
-    droppedSlots,
-    droppedProviders,
-    destructive: droppedSlots.length > 0
-  };
-}
-function buildMagiPanelProposal(detected, opts = {}) {
-  const providers = dedupeDetected(detected ?? []);
-  const tableOrder = Object.keys(CLI_SLOT_RECIPES);
-  const rank = (type2) => {
-    const i = tableOrder.indexOf(type2);
-    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-  };
-  const ordered = [...providers].sort((a, b) => rank(a.type) - rank(b.type));
-  const limit = Number.isFinite(opts.maxSlots) && opts.maxSlots > 0 ? Math.floor(opts.maxSlots) : ordered.length;
-  return ordered.slice(0, limit).map((p) => ({
-    ...opts.nodeId ? { nodeId: opts.nodeId } : {},
-    provider: p.type
-    // A model is intentionally NOT pinned: the panel's job is cross-provider
-    // independence, and pinning models here would silently couple the panel
-    // to this table's cost assumptions rather than to review quality.
-  }));
-}
-var CANONICAL_MESH_TOOL_NAMES = [
-  "mesh_status",
-  "mesh_route_preview",
-  "mesh_list_nodes",
-  // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
-  "mesh_enqueue_batch",
-  "mesh_enqueue_task",
-  "mesh_view_queue",
-  // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
-  "mesh_graph_view",
-  "mesh_graph_gate_claim",
-  "mesh_graph_gate_release",
-  "mesh_graph_gate_abandon",
-  "mesh_graph_node_patch",
-  "mesh_queue_cancel",
-  "mesh_queue_requeue",
-  "mesh_send_task",
-  "mesh_read_chat",
-  "mesh_read_debug",
-  "mesh_read_terminal",
-  "mesh_send_keys",
-  "mesh_launch_session",
-  "mesh_git_status",
-  "mesh_read_node_logs",
-  "mesh_fast_forward_node",
-  "mesh_restart_daemon",
-  "mesh_checkpoint",
-  "mesh_approve",
-  "mesh_answer_question",
-  "mesh_list_pending_approvals",
-  "mesh_plan_onboarding",
-  "mesh_create",
-  "mesh_add_node",
-  "mesh_clone_node",
-  "mesh_remove_node",
-  "mesh_cleanup_worktree_nodes",
-  "mesh_refine_node",
-  "mesh_refine_batch",
-  "mesh_refine_config",
-  "mesh_change_impact_config",
-  "mesh_init",
-  "mesh_reinit",
-  "mesh_write_mesh_json_config",
-  "mesh_refine_plan",
-  "mesh_cleanup_sessions",
-  "mesh_prune_stale_direct",
-  "mesh_task_history",
-  "mesh_ledger_query",
-  "mesh_record_note",
-  "mesh_forget_note",
-  "mesh_reconcile_ledger",
-  "mesh_requeue_held_events",
-  "mesh_mission_upsert",
-  "mesh_mission_list",
-  "mesh_review_inbox",
-  "mesh_magi_review",
-  "mesh_magi_collect",
-  "mesh_magi_kind_panel_set",
-  "mesh_magi_kind_panel_list",
-  "mesh_node_slots_set",
-  "mesh_node_slots_list",
-  "mesh_node_slots_propose",
-  "mesh_coordinator_prompt_append_get",
-  "mesh_coordinator_prompt_append_set"
-];
-var CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
-var STATUS_PROBE_ARG_KEY = "_statusProbe";
-function withStatusProbeMarker(args = {}) {
-  return { ...args, [STATUS_PROBE_ARG_KEY]: true };
-}
-var SESSION_STATUSES = [
-  "idle",
-  "generating",
-  "waiting_approval",
-  "waiting_choice",
-  "finalizing",
-  "error",
-  "stopped",
-  "starting",
-  "panel_hidden",
-  "not_monitored",
-  "disconnected"
-];
-var SESSION_STATUS_SET = new Set(SESSION_STATUSES);
-var MESH_TASK_STATUSES = ["pending", "assigned", "completed", "failed", "cancelled"];
-var MESH_TERMINAL_TASK_STATUSES = ["completed", "failed", "cancelled"];
-var MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
-var MESH_TASK_PRIORITIES = ["low", "normal", "high"];
-var MESH_THINKING_LEVELS = ["low", "medium", "high"];
-var MESH_DELIVERY_MODES = ["when_idle", "interrupt"];
-var WORKER_REPORT_OUTCOMES = ["completed", "blocked", "failed"];
-var WORKER_BRANCH_STATES = [
-  "merged_to_main",
-  "pushed_feature_branch_needs_merge",
-  "blocked_review",
-  "cleanup_candidate",
-  "not_mergeable"
-];
-function makeGuard(values) {
-  const set3 = new Set(values);
-  return (value) => typeof value === "string" && set3.has(value);
-}
-var isMeshTaskStatus = makeGuard(MESH_TASK_STATUSES);
-var isMeshTerminalTaskStatus = makeGuard(MESH_TERMINAL_TASK_STATUSES);
-var isMeshTaskMode = makeGuard(MESH_TASK_MODES);
-var isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES);
-var isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS);
-var isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES);
-var isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES);
-var isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES);
-var WORKER_TOOLS = [
-  "report_completion",
-  "progress_update",
-  "peer_context_pull",
-  "git_status",
-  "git_log",
-  "git_diff"
-];
-var WORKER_TOOL_SET = new Set(WORKER_TOOLS);
-
 // src/tools/mesh-tools-internal.ts
 var import_daemon_core8 = __toESM(require_dist3());
 
@@ -172092,6 +172637,7 @@ function readTaskInput(value) {
   if (parts.length === 0) {
     throw new Error("`input.parts` is empty \u2014 omit `input` entirely for a text-only task.");
   }
+  let totalBytes = 0;
   for (const [index, part] of parts.entries()) {
     if (!part || typeof part !== "object" || Array.isArray(part)) {
       throw new Error(`\`input.parts[${index}]\` must be an object.`);
@@ -172099,8 +172645,30 @@ function readTaskInput(value) {
     if (!readString(part.type)) {
       throw new Error(`\`input.parts[${index}].type\` is required (e.g. "text" or "image").`);
     }
+    const partBytes = measurePartBytes(part);
+    if (partBytes > MESH_TASK_INPUT_MAX_PART_BYTES) {
+      throw new Error(
+        `\`input.parts[${index}]\` is ${formatMiB(partBytes)} \u2014 the per-part limit is ${formatMiB(MESH_TASK_INPUT_MAX_PART_BYTES)}. Downscale or crop the image before dispatching.`
+      );
+    }
+    totalBytes += partBytes;
+  }
+  if (totalBytes > MESH_TASK_INPUT_MAX_TOTAL_BYTES) {
+    throw new Error(
+      `\`input\` totals ${formatMiB(totalBytes)} across ${parts.length} part(s) \u2014 the envelope limit is ${formatMiB(MESH_TASK_INPUT_MAX_TOTAL_BYTES)}. Send fewer or smaller attachments.`
+    );
   }
   return { parts };
+}
+var MESH_TASK_INPUT_MAX_PART_BYTES = 8 * 1024 * 1024;
+var MESH_TASK_INPUT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+function measurePartBytes(part) {
+  const data = typeof part.data === "string" ? part.data.length : 0;
+  const text = typeof part.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0;
+  return data + text;
+}
+function formatMiB(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 var LARGE_LEDGER_FIELD_KEYS = /* @__PURE__ */ new Set(["plan", "validationPlan", "suggestedConfig", "payload"]);
 var LARGE_LEDGER_OBJECT_THRESHOLD = 800;
@@ -172676,8 +173244,7 @@ var MESH_ROUTE_PREVIEW_TOOL = {
     required: ["difficulty"],
     properties: {
       difficulty: {
-        type: "string",
-        enum: ["easy", "medium", "difficult", "freeform"],
+        ...enumOf(MESH_TASK_DIFFICULTIES),
         description: "Hypothetical task difficulty. Classified tasks enforce the hard difficulty floor; freeform contributes zero on every difficulty score axis."
       },
       required_tags: {
@@ -172735,8 +173302,8 @@ var MESH_ENQUEUE_TASK_TOOL = {
     properties: {
       message: { type: "string", description: "The task instruction for the agent." },
       input: MESH_TASK_INPUT_SCHEMA,
-      task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch \u2014 and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one." },
-      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch \u2014 and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one." },
+      taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode." },
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
       requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
@@ -172751,10 +173318,10 @@ var MESH_ENQUEUE_TASK_TOOL = {
       dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached \u2014 use mesh_mission_list to get a valid full id." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
+      priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) \u2014 distinct from a node's schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue." },
       model: { type: "string", description: "Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default." },
-      thinkingLevel: { type: "string", enum: ["low", "medium", "high"], description: "Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
-      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
+      thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning." },
+      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty \u2014 a ROUTING HINT, not a model selector. It is matched against each node's capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT's own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node's slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins." },
       notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
       max_retries: { type: "number", description: "P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1)." },
       maxRetries: { type: "number", description: "CamelCase alias for max_retries." },
@@ -172792,8 +173359,8 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             ref: { type: "string", description: `Batch-local label other entries' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted \u2014 resolved to the generated task id at insert.` },
             message: { type: "string", description: "The task instruction for the agent." },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract (same semantics as mesh_enqueue_task)." },
-            taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract (same semantics as mesh_enqueue_task)." },
+            taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
             readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task." },
             read_only: { type: "boolean", description: "Snake-case alias for readonly." },
             requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>." },
@@ -172806,10 +173373,10 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             dependsOn: { type: "array", items: { type: "string" }, description: "CamelCase alias for depends_on." },
             mission_id: { type: "string", description: "Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic)." },
             missionId: { type: "string", description: "CamelCase alias for mission_id." },
-            priority: { type: "string", enum: ["low", "normal", "high"], description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
+            priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "G6 task-level scheduling priority (same semantics as mesh_enqueue_task)." },
             model: { type: "string", description: "Optional model override for the agent that runs this task (best-effort at launch)." },
-            thinkingLevel: { type: "string", enum: ["low", "medium", "high"], description: "Optional reasoning-effort level (best-effort at launch)." },
-            difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED per task \u2014 routing hint matched against node capability slots (same semantics as mesh_enqueue_task)." },
+            thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: "Optional reasoning-effort level (best-effort at launch)." },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED per task \u2014 routing hint matched against node capability slots (same semantics as mesh_enqueue_task)." },
             not_before: { type: "number", description: "G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string)." },
             notBefore: { type: "number", description: "CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string." },
             max_retries: { type: "number", description: "P3 retry cap (same semantics as mesh_enqueue_task)." },
@@ -173073,22 +173640,21 @@ var MESH_SEND_TASK_TOOL = {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID (from mesh_list_nodes)." },
-      session_id: { type: "string", description: "Agent session ID on the target node." },
+      session_id: { type: "string", description: "Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull)." },
       message: { type: "string", description: "Natural-language task to send to the agent." },
       input: MESH_TASK_INPUT_SCHEMA,
-      task_mode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
-      taskMode: { type: "string", enum: ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"], description: "CamelCase alias for task_mode." },
+      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch." },
+      taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
-      difficulty: { type: "string", enum: ["easy", "medium", "difficult", "freeform"], description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." },
+      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." },
       delivery_mode: {
-        type: "string",
-        enum: ["when_idle", "interrupt"],
+        ...enumOf(MESH_DELIVERY_MODES),
         description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn \u2014 the task is queued and auto-delivered the moment the session goes idle. \u2605'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. THE WORK IN PROGRESS IS DISCARDED \u2014 whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle \u2014 so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. Has no effect on an idle session (delivered immediately either way)."
       },
-      deliveryMode: { type: "string", enum: ["when_idle", "interrupt"], description: "CamelCase alias for delivery_mode." },
+      deliveryMode: { ...enumOf(MESH_DELIVERY_MODES), description: "CamelCase alias for delivery_mode." },
       // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
       //
       // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
@@ -173106,7 +173672,9 @@ var MESH_SEND_TASK_TOOL = {
       },
       orchestrationDecision: { type: "object", description: "CamelCase alias for orchestration_decision." }
     },
-    required: ["node_id", "session_id", "message", "difficulty"]
+    // session_id is deliberately NOT required: meshSendTask supports a sessionless
+    // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
+    required: ["node_id", "message", "difficulty"]
   }
 };
 var MESH_READ_CHAT_TOOL = {
@@ -173445,8 +174013,7 @@ var MESH_REMOVE_NODE_TOOL = {
     properties: {
       node_id: { type: "string", description: "Node ID to remove." },
       session_cleanup_mode: {
-        type: "string",
-        enum: ["preserve", "stop", "delete_stopped", "stop_and_delete"],
+        ...enumOf(MESH_SESSION_CLEANUP_MODES),
         description: "Optional override for cleanup of delegated sessions attached to this node. preserve keeps history/processes; stop stops live runtimes only; delete_stopped removes completed transcripts only; stop_and_delete stops live runtimes and deletes records."
       },
       force: { type: "boolean", description: "Override the coordinator-base-node guard. Only set true to intentionally tear down this mesh; the coordinator must then be re-registered/restarted. Worktree nodes never need force." }
@@ -173474,8 +174041,7 @@ var MESH_CLEANUP_SESSIONS_TOOL = {
     properties: {
       node_id: { type: "string", description: "Node ID whose delegated sessions should be considered for cleanup." },
       mode: {
-        type: "string",
-        enum: ["preserve", "stop", "delete_stopped", "stop_and_delete"],
+        ...enumOf(MESH_SESSION_CLEANUP_MODES),
         description: "preserve = no-op; stop = release process occupancy by stopping live runtimes; delete_stopped = remove completed/stopped records while leaving live runtimes alone; stop_and_delete = stop live runtimes and delete records."
       },
       session_ids: {
@@ -176255,6 +176821,7 @@ function resolveRefineConfigNode(ctx, nodeId) {
 }
 
 // src/tools/mesh-tools-status.ts
+var import_daemon_core10 = __toESM(require_dist3());
 var MESH_PROTOCOL_VERSION_V2_WIRE = "2.0";
 function summarizePendingEventProtocolMetrics(pendingEvents) {
   if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) return null;
@@ -176462,7 +177029,11 @@ async function meshStatus(ctx, args = {}) {
   }
   const activeWorkEvidence = (0, import_daemon_core9.buildMeshActiveWork)({
     meshId: mesh.id,
-    queue: (0, import_daemon_core9.getQueue)(mesh.id),
+    // MESH-IMAGE-DISPATCH: mesh_status is a VIEW surface — strip any persisted
+    // input envelope (may carry base64 image data) before this queue snapshot
+    // feeds the response. buildMeshActiveWork never reads `task.input`, so this
+    // is a pure size/privacy trim with no effect on the derived records.
+    queue: (0, import_daemon_core9.getQueue)(mesh.id).map((task) => (0, import_daemon_core10.summarizeQueueEntryInputForView)(task)),
     ledgerEntries,
     directDispatches,
     nodes: results
@@ -176853,7 +177424,7 @@ async function meshListNodes(ctx) {
 }
 
 // src/tools/mesh-tools-route-preview.ts
-var import_daemon_core10 = __toESM(require_dist3());
+var import_daemon_core11 = __toESM(require_dist3());
 var ROUTABLE_DIFFICULTIES = /* @__PURE__ */ new Set(["easy", "medium", "difficult", "freeform"]);
 async function meshRoutePreview(ctx, args) {
   const difficulty = typeof args?.difficulty === "string" ? args.difficulty.trim() : "";
@@ -176866,7 +177437,7 @@ async function meshRoutePreview(ctx, args) {
   }
   const requiredTags = Array.isArray(args.required_tags) ? args.required_tags : Array.isArray(args.requiredTags) ? args.requiredTags : [];
   const targetNodeId = typeof args.target_node_id === "string" ? args.target_node_id : args.targetNodeId;
-  return JSON.stringify((0, import_daemon_core10.buildMeshRoutePreview)({
+  return JSON.stringify((0, import_daemon_core11.buildMeshRoutePreview)({
     mesh: ctx.mesh,
     difficulty,
     requiredTags,
@@ -176874,6 +177445,9 @@ async function meshRoutePreview(ctx, args) {
     targetNodeId
   }), null, 2);
 }
+
+// src/tools/mesh-tools-queue.ts
+var import_daemon_core12 = __toESM(require_dist3());
 
 // src/tools/mesh-tools-graph.ts
 function readGraphTaskFields(entry) {
@@ -177399,6 +177973,16 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
       error: `${callerLabel} requires a non-empty string \`message\`.`
     };
   }
+  let input;
+  try {
+    input = readTaskInput(args.input);
+  } catch (e) {
+    return {
+      ok: false,
+      code: "invalid_input",
+      error: `${callerLabel} received an unusable \`input\`: ${e?.message || e}`
+    };
+  }
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly2 = args.readonly === true || args.read_only === true;
   const requiredTags = (0, import_daemon_core9.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
@@ -177445,6 +178029,7 @@ function normalizeEnqueueTaskArgs(ctx, args, callerLabel) {
     value: {
       message,
       taskMode,
+      input,
       readonly: readonly2,
       requiredTags,
       dependsOn,
@@ -177486,7 +178071,11 @@ function eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTa
   if (node) {
     dispatchPromises.push(
       ipcDispatchToRemoteAgent(ctx, node, {
-        message,
+        // F1: materialize the worker-protocol footer (and any relevant handoff
+        // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
+        // keep the authored `message` (see summarizeTaskMessage(message) further
+        // down, which must describe what the coordinator wrote, not the footer).
+        message: (0, import_daemon_core12.resolveDispatchMessage)({ ...task, message }, ctx.mesh.id, node),
         // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
         // selectEagerPushReceiver above only answered "could some provider on
         // this node satisfy the pin?" — a node-level question. Without the tags
@@ -177581,6 +178170,7 @@ async function meshEnqueueTask(ctx, args) {
   const {
     message,
     taskMode,
+    input,
     readonly: readonly2,
     requiredTags,
     dependsOn,
@@ -177620,6 +178210,7 @@ async function meshEnqueueTask(ctx, args) {
   try {
     const task = (0, import_daemon_core9.enqueueTask)(ctx.mesh.id, message, {
       taskMode,
+      ...input ? { input } : {},
       ...readonly2 ? { readonly: true } : {},
       requiredTags,
       dependsOn,
@@ -177810,6 +178401,7 @@ async function meshEnqueueBatch(ctx, args) {
       ...ref ? { ref } : {},
       message: v.message,
       taskMode: v.taskMode,
+      ...v.input ? { input: v.input } : {},
       ...v.readonly ? { readonly: true } : {},
       requiredTags: v.requiredTags,
       dependsOn: v.dependsOn,
@@ -178061,7 +178653,7 @@ async function meshViewQueue(ctx, args) {
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     const activeOnlyQueue = queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
-    const visibleQueue = compact ? compactQueueResult.rows : queue;
+    const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task) => (0, import_daemon_core12.summarizeQueueEntryInputForView)(task));
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
     const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
@@ -178663,7 +179255,7 @@ async function meshReviewInbox(ctx, args = {}) {
 }
 
 // src/tools/mesh-tools-magi.ts
-var import_daemon_core11 = __toESM(require_dist3());
+var import_daemon_core13 = __toESM(require_dist3());
 
 // src/tools/mesh-tools-magi-core.ts
 var MAGI_CLUSTER_JACCARD = 0.4;
@@ -179866,7 +180458,7 @@ function computeMagiCleanupTargets(replicaTasks) {
 function resolveMagiAutoCleanupMode(ctx, perCallOverride) {
   if (perCallOverride === true) return "stop_and_delete";
   if (perCallOverride === false) return "preserve";
-  return (0, import_daemon_core11.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
+  return (0, import_daemon_core13.resolveMagiSessionCleanupMode)(ctx.mesh?.policy?.magiSessionCleanup);
 }
 async function cleanupMagiAutoLaunchedSessions(ctx, args) {
   if (args.mode === "preserve") return null;
@@ -180461,7 +181053,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 }
 
 // src/tools/mesh-transcript-replica-read.ts
-var import_daemon_core12 = __toESM(require_dist3());
+var import_daemon_core14 = __toESM(require_dist3());
 function unwrap2(result) {
   if (result && typeof result === "object") {
     if (result.payload && typeof result.payload === "object") return result.payload;
@@ -180511,7 +181103,7 @@ async function readTranscriptReplicaForDisplay(transport, key) {
   }
   const snapshot = read.snapshot;
   return {
-    payload: (0, import_daemon_core12.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core14.mapTranscriptSnapshotToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),
@@ -180520,7 +181112,8 @@ async function readTranscriptReplicaForDisplay(transport, key) {
 }
 
 // src/tools/mesh-tools-session.ts
-var import_daemon_core13 = __toESM(require_dist3());
+var import_daemon_core15 = __toESM(require_dist3());
+var import_daemon_core16 = __toESM(require_dist3());
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -180729,12 +181322,30 @@ async function meshSendTask(ctx, args) {
       const cached2 = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ""));
       const taskId = (0, import_node_crypto.randomUUID)();
       const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+      const dispatchBody = (0, import_daemon_core16.resolveDispatchMessage)(
+        {
+          id: taskId,
+          message,
+          taskMode,
+          difficulty,
+          ...readonly2 ? { readonly: true } : {},
+          ...missionId ? { missionId } : {}
+        },
+        ctx.mesh.id,
+        node
+      );
+      const dispatchInput = taskInput && Array.isArray(taskInput.parts) ? {
+        ...taskInput,
+        parts: taskInput.parts.map(
+          (part) => part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? { ...part, text: appendWorkerProtocolFooter(part.text, { taskId, taskMode, difficulty, readonly: readonly2 }) } : part
+        )
+      } : taskInput;
       const result2 = await ipcDispatchToRemoteAgent(ctx, node, {
         session_id: args.session_id,
-        message,
+        message: dispatchBody,
         // MESH-IMAGE-DISPATCH: the remote P2P path carries the attachment too —
         // this is the leg that needs the transport chunking.
-        ...taskInput ? { input: taskInput } : {},
+        ...dispatchInput ? { input: dispatchInput } : {},
         providerType: cached2?.providerType,
         verifiedSession: explicitTargetSession,
         meshContext: {
@@ -180970,6 +181581,9 @@ async function meshSendTask(ctx, args) {
             targetSessionId: args.session_id,
             taskMode,
             difficulty,
+            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+            // direct dispatch below forwards — the claim dispatch delivers it.
+            ...taskInput ? { input: taskInput } : {},
             ...readonly2 ? { readonly: true } : {},
             ...missionId ? { missionId } : {},
             ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
@@ -181005,6 +181619,9 @@ async function meshSendTask(ctx, args) {
             targetSessionId: args.session_id,
             taskMode,
             difficulty,
+            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
+            // direct dispatch below forwards — the claim dispatch delivers it.
+            ...taskInput ? { input: taskInput } : {},
             ...readonly2 ? { readonly: true } : {},
             ...missionId ? { missionId } : {},
             ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
@@ -181073,18 +181690,36 @@ async function meshSendTask(ctx, args) {
         dispatchPreRecorded = (0, import_daemon_core9.getActiveDirectDispatches)(ctx.mesh.id).some((d) => d.taskId === taskId);
       } catch {
       }
+      const localDispatchBody = (0, import_daemon_core16.resolveDispatchMessage)(
+        {
+          id: taskId,
+          message,
+          taskMode,
+          difficulty,
+          ...readonly2 ? { readonly: true } : {},
+          ...missionId ? { missionId } : {}
+        },
+        ctx.mesh.id,
+        node
+      );
+      const localDispatchInput = taskInput && Array.isArray(taskInput.parts) ? {
+        ...taskInput,
+        parts: taskInput.parts.map(
+          (part) => part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? { ...part, text: appendWorkerProtocolFooter(part.text, { taskId, taskMode, difficulty, readonly: readonly2 }) } : part
+        )
+      } : taskInput;
       const dispatchResult = await commandForNode(ctx, node, "agent_command", {
         targetSessionId: args.session_id,
         agentType: resolvedProviderType,
         cliType: resolvedProviderType,
         providerType: resolvedProviderType,
         action: "send_chat",
-        message,
+        message: localDispatchBody,
         // MESH-IMAGE-DISPATCH: forward the multipart envelope so the worker's
         // provider instance receives structured parts instead of text-only. Spread
         // conditionally so a text-only dispatch sends the byte-identical payload it
         // sent before this change.
-        ...taskInput ? { input: taskInput } : {},
+        ...localDispatchInput ? { input: localDispatchInput } : {},
         // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
         dispatchSource: "mesh-tools-session:mesh_send_task:direct",
         meshContext: {
@@ -181177,6 +181812,8 @@ async function meshSendTask(ctx, args) {
       targetSessionId: args.session_id,
       taskMode,
       difficulty,
+      // MESH-IMAGE-DISPATCH: see the pinned-queue branches above.
+      ...taskInput ? { input: taskInput } : {},
       ...readonly2 ? { readonly: true } : {},
       ...missionId ? { missionId } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
@@ -181443,7 +182080,7 @@ async function meshLaunchSession(ctx, args) {
           supportedProviders: slotProviders
         }, null, 2);
       }
-      const explicitBlock = (0, import_daemon_core13.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+      const explicitBlock = (0, import_daemon_core15.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
       if (explicitBlock) {
         explicitTypeQuotaWarning = {
           quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly \u2014 the session may fail immediately if the provider rejects on quota.`,
@@ -181481,7 +182118,7 @@ async function meshLaunchSession(ctx, args) {
         failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
       }
       if (detectedCandidates.length) {
-        const ranked = (0, import_daemon_core13.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        const ranked = (0, import_daemon_core15.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
         if (ranked.clear.length) {
           resolvedProviderType = ranked.clear[0];
         } else {
@@ -182480,223 +183117,6 @@ async function meshRefineBatch(ctx, args = {}) {
   return JSON.stringify(result, null, 2);
 }
 
-// src/tools/worker-tools.ts
-function readWorkerCredentials(env2 = process.env) {
-  const bind = typeof env2.ADHDEV_WORKER_SESSION_BIND === "string" ? env2.ADHDEV_WORKER_SESSION_BIND.trim() : "";
-  const token = typeof env2.ADHDEV_WORKER_TASK_TOKEN === "string" ? env2.ADHDEV_WORKER_TASK_TOKEN.trim() : "";
-  return { ...bind ? { bind } : {}, ...token ? { token } : {} };
-}
-var BRANCH_STATES = [
-  "merged_to_main",
-  "pushed_feature_branch_needs_merge",
-  "blocked_review",
-  "cleanup_candidate",
-  "not_mergeable"
-];
-var REPORT_COMPLETION_TOOL = {
-  name: "report_completion",
-  description: "Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is finished, blocked, or has failed. Your `summary` is recorded verbatim \u2014 it is not scraped from your terminal \u2014 so write what the coordinator actually needs to know. You do not pass a task id: the daemon knows which task you hold.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      outcome: {
-        type: "string",
-        enum: ["completed", "blocked", "failed"],
-        description: "'completed' = the task is done. 'blocked' = you cannot proceed without something external (list it in `blockers`). 'failed' = you tried and it did not work."
-      },
-      summary: {
-        type: "string",
-        description: "What you did and what the result was, in your own words. This is the authoritative record of this task \u2014 prefer specifics (files, commands, findings) over restating the assignment."
-      },
-      handoff_notes: {
-        type: "object",
-        description: "Durable notes for whoever touches this code next \u2014 including the agent that resolves a merge conflict against your change. These are delivered automatically into related future tasks, so write for a reader who cannot ask you questions.",
-        properties: {
-          intent: {
-            type: "string",
-            description: "WHY you made this change \u2014 the part a diff cannot show. Required."
-          },
-          conflict_guidance: {
-            type: "string",
-            description: "If someone else changed the same code, how should the conflict be resolved? State which property of your change must survive."
-          },
-          touched_files: {
-            type: "array",
-            items: { type: "string" },
-            description: "Files you changed. Required \u2014 this is how your note is matched to future work on the same code. On a READ-ONLY task pass an empty array: it is the correct answer, and inventing a placeholder path to satisfy this field corrupts the matching key for everyone else."
-          },
-          follow_ups: {
-            type: "array",
-            items: { type: "string" },
-            description: "Work you deliberately did not do, that someone should pick up."
-          }
-        },
-        required: ["intent", "touched_files"]
-      },
-      touched_files: {
-        type: "array",
-        items: { type: "string" },
-        description: "Files this task changed."
-      },
-      branch_state: {
-        type: "string",
-        enum: BRANCH_STATES,
-        description: "Where you left the branch. A task on a non-main branch is not fully complete unless this names the follow-up state."
-      },
-      blockers: {
-        type: "array",
-        items: { type: "string" },
-        description: "What is blocking you. Expected when outcome is 'blocked'."
-      }
-    },
-    required: ["outcome", "summary"]
-  }
-};
-var PROGRESS_UPDATE_TOOL = {
-  name: "progress_update",
-  description: "Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator can see movement without interrupting you. Significant notes are forwarded to the coordinator; minor or closely-spaced ones are recorded but not forwarded, so report MILESTONES \u2014 a phase finishing, a blocker found, a long operation starting \u2014 rather than narrating each step. The response tells you which happened.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      note: {
-        type: "string",
-        description: "What you are doing or what you just learned. Write it for a coordinator who cannot see your screen: state the milestone and what it means for the task."
-      }
-    },
-    required: ["note"]
-  }
-};
-var PEER_CONTEXT_PULL_TOOL = {
-  name: "peer_context_pull",
-  description: "Read-only lookup of what sibling tasks in THIS mesh are doing or have left behind \u2014 their status and any handoff notes they recorded (design decision D). Does not include transcripts. This is a SUPPLEMENT: relevant handoff notes are already enclosed automatically in your task prompt when it was dispatched \u2014 call this when you want more than what was enclosed, e.g. before touching a file another agent might also be working on.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      scope: {
-        type: "string",
-        enum: ["mesh", "same_mission"],
-        description: "'mesh' (default) \u2014 every sibling task in this mesh. 'same_mission' \u2014 only tasks sharing your mission."
-      },
-      topic: {
-        type: "string",
-        description: "Optional filter: only return peers whose handoff note mentions this substring (case-insensitive)."
-      }
-    }
-  }
-};
-var ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
-function toDaemonReport(a) {
-  const notes = a.handoff_notes;
-  return {
-    outcome: a.outcome,
-    summary: a.summary,
-    ...a.touched_files !== void 0 ? { touchedFiles: a.touched_files } : {},
-    ...a.branch_state !== void 0 ? { branchState: a.branch_state } : {},
-    ...a.blockers !== void 0 ? { blockers: a.blockers } : {},
-    ...notes && typeof notes === "object" && !Array.isArray(notes) ? {
-      handoffNotes: {
-        ...notes.intent !== void 0 ? { intent: notes.intent } : {},
-        ...notes.conflict_guidance !== void 0 ? { conflictGuidance: notes.conflict_guidance } : {},
-        ...notes.touched_files !== void 0 ? { touchedFiles: notes.touched_files } : {},
-        ...notes.follow_ups !== void 0 ? { followUps: notes.follow_ups } : {}
-      }
-    } : {}
-  };
-}
-async function reportCompletion(transport, credentials, args) {
-  const result = await transport.command("worker_report_completion", {
-    ...credentials,
-    report: toDaemonReport(args)
-  });
-  if (result?.success === true) {
-    const lines = [
-      result.duplicate ? `Completion already recorded for task ${result.taskId} \u2014 this repeat was accepted as a duplicate.` : `Completion recorded for task ${result.taskId} (${result.outcome}).`
-    ];
-    if (result.handoffNoteRecorded) {
-      lines.push("Handoff note stored \u2014 it will be delivered to related future tasks automatically.");
-    } else if (result.handoffNoteError) {
-      lines.push(
-        `WARNING: your handoff note was NOT stored (${result.handoffNoteError}). The completion itself was recorded. Put anything the next agent must know into your final message instead \u2014 it will not be delivered automatically.`
-      );
-    }
-    return { text: lines.join("\n") };
-  }
-  if (result?.error === "invalid_report" && Array.isArray(result.validationErrors)) {
-    const details = result.validationErrors.map((e) => `  - ${e.field || "(root)"}: ${e.message}`).join("\n");
-    return {
-      text: `report_completion rejected \u2014 fix these and call again:
-${details}`,
-      isError: true
-    };
-  }
-  const reason = result?.error || "unknown_error";
-  const hint = result?.hint ? `
-${result.hint}` : "";
-  const detail = result?.detail ? `
-Detail: ${result.detail}` : "";
-  return { text: `report_completion refused (${reason}).${hint}${detail}`, isError: true };
-}
-async function progressUpdate(transport, credentials, args) {
-  const note = typeof args?.note === "string" ? args.note.trim() : "";
-  if (!note) return { text: "progress_update requires a non-empty `note`.", isError: true };
-  const result = await transport.command("worker_progress_update", { ...credentials, note });
-  if (result?.success === true) {
-    return {
-      text: result.surfacedToCoordinator ? `Progress noted for task ${result.taskId ?? "(unknown)"} and surfaced to the coordinator.` : `Progress noted for task ${result.taskId ?? "(unknown)"} (recorded; not surfaced to the coordinator \u2014 it was too close to your previous update or too brief to be a milestone).`
-    };
-  }
-  const detail = result?.detail ? `
-Detail: ${result.detail}` : "";
-  return {
-    text: `progress_update refused (${result?.error || "unknown_error"}).${detail}`,
-    isError: true
-  };
-}
-async function peerContextPull(transport, credentials, args) {
-  const scope = args?.scope === "same_mission" ? "same_mission" : void 0;
-  const topic = typeof args?.topic === "string" && args.topic.trim() ? args.topic.trim() : void 0;
-  const result = await transport.command("worker_peer_context_pull", {
-    ...credentials,
-    ...scope ? { scope } : {},
-    ...topic ? { topic } : {}
-  });
-  if (result?.success !== true) {
-    const reason = result?.error || "unknown_error";
-    const hint = result?.hint ? `
-${result.hint}` : "";
-    return { text: `peer_context_pull refused (${reason}).${hint}`, isError: true };
-  }
-  const peers = Array.isArray(result.peers) ? result.peers : [];
-  if (!peers.length) {
-    return { text: "No sibling task context found for this mesh (in this scope)." };
-  }
-  const lines = peers.map((p) => JSON.stringify(p));
-  const omitted = typeof result.omitted === "number" && result.omitted > 0 ? `
-(${result.omitted} further peer(s) omitted to fit the response \u2014 the most recently updated are shown.)` : "";
-  return { text: `${peers.length} sibling task(s) in scope '${result.scope}':
-${lines.join("\n")}${omitted}` };
-}
-async function drainMailbox(transport, credentials) {
-  try {
-    const result = await transport.command("worker_drain_mailbox", { ...credentials });
-    if (result?.success !== true) return null;
-    const messages = Array.isArray(result.messages) ? result.messages : [];
-    if (!messages.length) return null;
-    const heading = messages.length > 1 ? "Urgent messages from the coordinator" : "Urgent message from the coordinator";
-    const lines = messages.map((m, i) => `${i + 1}. ${typeof m?.text === "string" ? m.text : ""}`);
-    return `
-
----
-
-## ${heading}
-
-${lines.join("\n")}
-`;
-  } catch {
-    return null;
-  }
-}
-
 // src/help.ts
 var STANDARD_TOOLS = [
   "list_daemons",
@@ -182717,7 +183137,7 @@ var STANDARD_TOOLS = [
 ];
 function buildMcpHelpText() {
   const meshTools = ALL_MESH_TOOLS.map((tool) => tool.name);
-  const workerTools = ALL_WORKER_TOOLS.map((tool) => tool.name);
+  const workerTools = WORKER_TOOLS;
   return `
 ADHDev MCP Server
 
@@ -182745,7 +183165,7 @@ Environment variables:
 
 Standard tools:   ${STANDARD_TOOLS.join(", ")}
 Mesh tools:       ${meshTools.join(", ")}
-Worker tools:     ${workerTools.join(", ")}, git_status, git_log, git_diff
+Worker tools:     ${workerTools.join(", ")}
 `.trim();
 }
 
@@ -182803,8 +183223,8 @@ var import_node_os2 = __toESM(require("os"));
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_daemon_core14 = __toESM(require_dist3());
-var DEFAULT_PORT = import_daemon_core14.DEFAULT_STANDALONE_PORT;
+var import_daemon_core17 = __toESM(require_dist3());
+var DEFAULT_PORT = import_daemon_core17.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
 function describeFetchFailure(what, timeoutMs, error48) {
   const name = error48?.name;
@@ -183983,12 +184403,12 @@ var MESH_TOOL_BY_NAME = new Map(
   ALL_MESH_TOOLS.map((tool) => [tool.name, tool])
 );
 var MESH_ALIAS_TOOL = {
-  mesh_refine_config_schema: MESH_REFINE_CONFIG_TOOL,
-  mesh_validate_refine_config: MESH_REFINE_CONFIG_TOOL,
-  mesh_suggest_refine_config: MESH_REFINE_CONFIG_TOOL,
-  mesh_change_impact_config_schema: MESH_CHANGE_IMPACT_CONFIG_TOOL,
-  mesh_validate_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
-  mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+  mesh_refine_config_schema: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_validate_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_suggest_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ["mode"] },
+  mesh_change_impact_config_schema: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
+  mesh_validate_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
+  mesh_suggest_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ["mode"] },
   // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
   // the worker-MCP flag is on, so ListTools stays byte-identical when off —
   // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
@@ -183996,12 +184416,262 @@ var MESH_ALIAS_TOOL = {
   // names the tool explicitly, and the daemon-side handler still refuses the
   // call when the flag is off, so a harmless, always-present entry is simpler
   // than threading the flag through this file too.
-  mesh_notify_worker: MESH_NOTIFY_WORKER_TOOL
+  mesh_notify_worker: { schema: MESH_NOTIFY_WORKER_TOOL, injected: [] }
 };
-function rejectUnknownMeshToolArgs(name, args) {
-  const tool = MESH_TOOL_BY_NAME.get(name) ?? MESH_ALIAS_TOOL[name];
+function resolveMeshTool(name) {
+  const published = MESH_TOOL_BY_NAME.get(name);
+  if (published) return { schema: published, injected: [] };
+  return MESH_ALIAS_TOOL[name];
+}
+function isPresent(value) {
+  if (value === void 0 || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  return true;
+}
+function missingRequiredToolArgsError(toolName, schema2, args, injected = []) {
+  const required2 = (schema2?.required ?? []).filter((key) => !injected.includes(key));
+  if (required2.length === 0) return null;
+  const declared = Object.keys(schema2?.properties ?? {});
+  const missing = required2.filter((key) => {
+    const wanted = normalizeKey(key);
+    const aliases = declared.filter((candidate) => normalizeKey(candidate) === wanted);
+    const names = aliases.length > 0 ? aliases : [key];
+    return !names.some((candidate) => isPresent(args[candidate]));
+  });
+  if (missing.length === 0) return null;
+  return `Missing required parameter(s) for ${toolName}: ${missing.map((key) => `"${key}"`).join(", ")}. Required: ${required2.join(", ")}.`;
+}
+function validateMeshToolArgs(name, args) {
+  const tool = resolveMeshTool(name);
   if (!tool) return null;
-  return unknownToolArgsError(name, tool.inputSchema?.properties, args);
+  return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args) ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
+}
+
+// src/tools/worker-tools.ts
+function readWorkerCredentials(env2 = process.env) {
+  const bind = typeof env2.ADHDEV_WORKER_SESSION_BIND === "string" ? env2.ADHDEV_WORKER_SESSION_BIND.trim() : "";
+  const token = typeof env2.ADHDEV_WORKER_TASK_TOKEN === "string" ? env2.ADHDEV_WORKER_TASK_TOKEN.trim() : "";
+  return { ...bind ? { bind } : {}, ...token ? { token } : {} };
+}
+var REPORT_COMPLETION_TOOL = {
+  name: "report_completion",
+  description: "Report the structured outcome of the task you were dispatched to do. Call this ONCE when your work is finished, blocked, or has failed. Your `summary` is recorded verbatim \u2014 it is not scraped from your terminal \u2014 so write what the coordinator actually needs to know. You do not pass a task id: the daemon knows which task you hold.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      outcome: enumOf(
+        WORKER_REPORT_OUTCOMES,
+        "'completed' = the task is done. 'blocked' = you cannot proceed without something external (list it in `blockers`). 'failed' = you tried and it did not work."
+      ),
+      summary: {
+        type: "string",
+        description: "What you did and what the result was, in your own words. This is the authoritative record of this task \u2014 prefer specifics (files, commands, findings) over restating the assignment."
+      },
+      handoff_notes: {
+        type: "object",
+        description: "Durable notes for whoever touches this code next \u2014 including the agent that resolves a merge conflict against your change. These are delivered automatically into related future tasks, so write for a reader who cannot ask you questions.",
+        properties: {
+          intent: {
+            type: "string",
+            description: "WHY you made this change \u2014 the part a diff cannot show. Required."
+          },
+          conflict_guidance: {
+            type: "string",
+            description: "If someone else changed the same code, how should the conflict be resolved? State which property of your change must survive."
+          },
+          touched_files: {
+            type: "array",
+            items: { type: "string" },
+            description: "Files you changed. Required \u2014 this is how your note is matched to future work on the same code. On a READ-ONLY task pass an empty array: it is the correct answer, and inventing a placeholder path to satisfy this field corrupts the matching key for everyone else."
+          },
+          follow_ups: {
+            type: "array",
+            items: { type: "string" },
+            description: "Work you deliberately did not do, that someone should pick up."
+          }
+        },
+        required: ["intent", "touched_files"]
+      },
+      touched_files: {
+        type: "array",
+        items: { type: "string" },
+        description: "Files this task changed."
+      },
+      branch_state: enumOf(
+        WORKER_BRANCH_STATES,
+        "Where you left the branch. A task on a non-main branch is not fully complete unless this names the follow-up state."
+      ),
+      blockers: {
+        type: "array",
+        items: { type: "string" },
+        description: "What is blocking you. Expected when outcome is 'blocked'."
+      }
+    },
+    required: ["outcome", "summary"]
+  }
+};
+var PROGRESS_UPDATE_TOOL = {
+  name: "progress_update",
+  description: "Record a short progress note mid-task. Does not end the task. Use it on long work so the coordinator can see movement without interrupting you. Significant notes are forwarded to the coordinator; minor or closely-spaced ones are recorded but not forwarded, so report MILESTONES \u2014 a phase finishing, a blocker found, a long operation starting \u2014 rather than narrating each step. The response tells you which happened.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: {
+        type: "string",
+        description: "What you are doing or what you just learned. Write it for a coordinator who cannot see your screen: state the milestone and what it means for the task."
+      }
+    },
+    required: ["note"]
+  }
+};
+var PEER_CONTEXT_PULL_TOOL = {
+  name: "peer_context_pull",
+  description: "Read-only lookup of what sibling tasks in THIS mesh are doing or have left behind \u2014 their status and any handoff notes they recorded (design decision D). Does not include transcripts. This is a SUPPLEMENT: relevant handoff notes are already enclosed automatically in your task prompt when it was dispatched \u2014 call this when you want more than what was enclosed, e.g. before touching a file another agent might also be working on.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      scope: {
+        type: "string",
+        enum: ["mesh", "same_mission"],
+        description: "'mesh' (default) \u2014 every sibling task in this mesh. 'same_mission' \u2014 only tasks sharing your mission."
+      },
+      topic: {
+        type: "string",
+        description: "Optional filter: only return peers whose handoff note mentions this substring (case-insensitive)."
+      }
+    }
+  }
+};
+var ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
+var WORKER_GIT_TOOLS = annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL]);
+function resolveWorkerModeTools(candidates = [...ALL_WORKER_TOOLS, ...WORKER_GIT_TOOLS]) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const tool of candidates) {
+    if (byName.has(tool.name)) {
+      throw new Error(`worker mode: tool '${tool.name}' is defined twice`);
+    }
+    byName.set(tool.name, tool);
+  }
+  const contract = new Set(WORKER_TOOLS);
+  const missingSchema = WORKER_TOOLS.filter((name) => !byName.has(name));
+  const unlisted = [...byName.keys()].filter((name) => !contract.has(name));
+  if (missingSchema.length || unlisted.length) {
+    throw new Error(
+      `worker mode: tool schemas and WORKER_TOOLS (@adhdev/mesh-shared) disagree \u2014 missing schema for [${missingSchema.join(", ")}]; schema not in WORKER_TOOLS [${unlisted.join(", ")}]`
+    );
+  }
+  return WORKER_TOOLS.map((name) => byName.get(name));
+}
+function toDaemonReport(a) {
+  const notes = a.handoff_notes;
+  return {
+    outcome: a.outcome,
+    summary: a.summary,
+    ...a.touched_files !== void 0 ? { touchedFiles: a.touched_files } : {},
+    ...a.branch_state !== void 0 ? { branchState: a.branch_state } : {},
+    ...a.blockers !== void 0 ? { blockers: a.blockers } : {},
+    ...notes && typeof notes === "object" && !Array.isArray(notes) ? {
+      handoffNotes: {
+        ...notes.intent !== void 0 ? { intent: notes.intent } : {},
+        ...notes.conflict_guidance !== void 0 ? { conflictGuidance: notes.conflict_guidance } : {},
+        ...notes.touched_files !== void 0 ? { touchedFiles: notes.touched_files } : {},
+        ...notes.follow_ups !== void 0 ? { followUps: notes.follow_ups } : {}
+      }
+    } : {}
+  };
+}
+async function reportCompletion(transport, credentials, args) {
+  const result = await transport.command("worker_report_completion", {
+    ...credentials,
+    report: toDaemonReport(args)
+  });
+  if (result?.success === true) {
+    const lines = [
+      result.duplicate ? `Completion already recorded for task ${result.taskId} \u2014 this repeat was accepted as a duplicate.` : `Completion recorded for task ${result.taskId} (${result.outcome}).`
+    ];
+    if (result.handoffNoteRecorded) {
+      lines.push("Handoff note stored \u2014 it will be delivered to related future tasks automatically.");
+    } else if (result.handoffNoteError) {
+      lines.push(
+        `WARNING: your handoff note was NOT stored (${result.handoffNoteError}). The completion itself was recorded. Put anything the next agent must know into your final message instead \u2014 it will not be delivered automatically.`
+      );
+    }
+    return { text: lines.join("\n") };
+  }
+  if (result?.error === "invalid_report" && Array.isArray(result.validationErrors)) {
+    const details = result.validationErrors.map((e) => `  - ${e.field || "(root)"}: ${e.message}`).join("\n");
+    return {
+      text: `report_completion rejected \u2014 fix these and call again:
+${details}`,
+      isError: true
+    };
+  }
+  const reason = result?.error || "unknown_error";
+  const hint = result?.hint ? `
+${result.hint}` : "";
+  const detail = result?.detail ? `
+Detail: ${result.detail}` : "";
+  return { text: `report_completion refused (${reason}).${hint}${detail}`, isError: true };
+}
+async function progressUpdate(transport, credentials, args) {
+  const note = typeof args?.note === "string" ? args.note.trim() : "";
+  if (!note) return { text: "progress_update requires a non-empty `note`.", isError: true };
+  const result = await transport.command("worker_progress_update", { ...credentials, note });
+  if (result?.success === true) {
+    return {
+      text: result.surfacedToCoordinator ? `Progress noted for task ${result.taskId ?? "(unknown)"} and surfaced to the coordinator.` : `Progress noted for task ${result.taskId ?? "(unknown)"} (recorded; not surfaced to the coordinator \u2014 it was too close to your previous update or too brief to be a milestone).`
+    };
+  }
+  const detail = result?.detail ? `
+Detail: ${result.detail}` : "";
+  return {
+    text: `progress_update refused (${result?.error || "unknown_error"}).${detail}`,
+    isError: true
+  };
+}
+async function peerContextPull(transport, credentials, args) {
+  const scope = args?.scope === "same_mission" ? "same_mission" : void 0;
+  const topic = typeof args?.topic === "string" && args.topic.trim() ? args.topic.trim() : void 0;
+  const result = await transport.command("worker_peer_context_pull", {
+    ...credentials,
+    ...scope ? { scope } : {},
+    ...topic ? { topic } : {}
+  });
+  if (result?.success !== true) {
+    const reason = result?.error || "unknown_error";
+    const hint = result?.hint ? `
+${result.hint}` : "";
+    return { text: `peer_context_pull refused (${reason}).${hint}`, isError: true };
+  }
+  const peers = Array.isArray(result.peers) ? result.peers : [];
+  if (!peers.length) {
+    return { text: "No sibling task context found for this mesh (in this scope)." };
+  }
+  const lines = peers.map((p) => JSON.stringify(p));
+  const omitted = typeof result.omitted === "number" && result.omitted > 0 ? `
+(${result.omitted} further peer(s) omitted to fit the response \u2014 the most recently updated are shown.)` : "";
+  return { text: `${peers.length} sibling task(s) in scope '${result.scope}':
+${lines.join("\n")}${omitted}` };
+}
+async function drainMailbox(transport, credentials) {
+  try {
+    const result = await transport.command("worker_drain_mailbox", { ...credentials });
+    if (result?.success !== true) return null;
+    const messages = Array.isArray(result.messages) ? result.messages : [];
+    if (!messages.length) return null;
+    const heading = messages.length > 1 ? "Urgent messages from the coordinator" : "Urgent message from the coordinator";
+    const lines = messages.map((m, i) => `${i + 1}. ${typeof m?.text === "string" ? m.text : ""}`);
+    return `
+
+---
+
+## ${heading}
+
+${lines.join("\n")}
+`;
+  } catch {
+    return null;
+  }
 }
 
 // src/server.ts
@@ -184032,7 +184702,7 @@ async function startMcpServer(opts) {
       );
       process.exit(1);
     }
-    const workerTools = [...ALL_WORKER_TOOLS, ...annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL])];
+    const workerTools = resolveWorkerModeTools();
     const workerToolByName = new Map(
       workerTools.map((tool) => [tool.name, tool])
     );
@@ -184053,6 +184723,15 @@ async function startMcpServer(opts) {
       }
       return { ...response, content };
     }
+    const asResponse = (result) => ({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
+    const workerHandlers = {
+      report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a)),
+      progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a)),
+      peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
+      git_status: async (a) => asResponse({ text: await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format }) }),
+      git_log: async (a) => asResponse({ text: await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format }) }),
+      git_diff: async (a) => asResponse({ text: await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format }) })
+    };
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
@@ -184062,34 +184741,11 @@ async function startMcpServer(opts) {
         if (unknownArgsError) return withMailboxPiggyback({ content: [{ type: "text", text: unknownArgsError }], isError: true });
       }
       try {
-        switch (name) {
-          case "report_completion": {
-            const result = await reportCompletion(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
-          }
-          case "progress_update": {
-            const result = await progressUpdate(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
-          }
-          case "peer_context_pull": {
-            const result = await peerContextPull(transport, credentials, a);
-            return withMailboxPiggyback({ content: [{ type: "text", text: result.text }], ...result.isError ? { isError: true } : {} });
-          }
-          case "git_status": {
-            const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: "text", text }] });
-          }
-          case "git_log": {
-            const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: "text", text }] });
-          }
-          case "git_diff": {
-            const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format });
-            return withMailboxPiggyback({ content: [{ type: "text", text }] });
-          }
-          default:
-            return withMailboxPiggyback({ content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true });
+        const handler = Object.prototype.hasOwnProperty.call(workerHandlers, name) ? workerHandlers[name] : void 0;
+        if (!handler) {
+          return withMailboxPiggyback({ content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true });
         }
+        return withMailboxPiggyback(await handler(a));
       } catch (err) {
         return withMailboxPiggyback({ content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true });
       }
@@ -184189,7 +184845,7 @@ async function startMcpServer(opts) {
     server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
-      const unknownArgsError = rejectUnknownMeshToolArgs(name, a);
+      const unknownArgsError = validateMeshToolArgs(name, a);
       if (unknownArgsError) return { content: [{ type: "text", text: unknownArgsError }], isError: true };
       try {
         let text;

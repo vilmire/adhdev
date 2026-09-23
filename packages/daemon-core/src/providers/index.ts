@@ -10,7 +10,6 @@ export type {
   ReadChatResult,
   ReadChatTurnStatus,
   ChatMessage,
-  AgentStatus,
   ModalInfo,
   SendMessageResult,
   ListSessionsResult,

@@ -1,20 +1,7 @@
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
-import type { ManagedStatus, RecentSessionBucket } from '@adhdev/daemon-core'
+import { isDeadStatus, isWorkingStatus, type RecentSessionBucket } from '@adhdev/mesh-shared'
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
-
-/**
- * Wire-only legacy synonyms that `conversation.status` can carry but that
- * `normalizeManagedStatus` (daemon-core `status/normalize.ts`) does NOT fold
- * into `generating` — its `WORKING_STATUSES` set covers `streaming`/`loading`/
- * `thinking`/`active` but not these two ('no_progress' is the renamed form of
- * legacy 'long_generating'; both are stall-monitor labels, not reducer/FSM
- * output). Confirmed by direct probe against the built normalizer: both
- * currently resolve to `idle`, not `generating`. This alias step exists so
- * fixing the `finalizing`/`starting` blind spot does not regress these two —
- * they must keep counting as generating exactly as before this fix.
- */
-const LEGACY_GENERATING_STATUS_ALIASES: ReadonlySet<string> = new Set(['no_progress', 'long_generating'])
 
 export interface MobileConversationListItem {
     conversation: ActiveConversation
@@ -119,51 +106,18 @@ function normalizeInboxState(source: InboxSurfaceStateSource) {
     }
 }
 
-/**
- * Exhaustive classification of every `ManagedStatus` value into "is this
- * conversation actively working" (true) or not (false). Keyed as a `Record`
- * over the full `ManagedStatus` union so that TypeScript raises a compile
- * error here the moment a new status is added to the reducer's output type —
- * this is the "isGenerating doesn't know what the reducer emits" bug class
- * (`finalizing`/`starting` were silently missing from a hand-maintained list)
- * made structurally impossible to repeat silently.
- */
-const MANAGED_STATUS_IS_WORKING: Record<ManagedStatus, boolean> = {
-    idle: false,
-    generating: true,
-    starting: true,
-    finalizing: true,
-    waiting_approval: false,
-    waiting_choice: false,
-    error: false,
-    stopped: false,
-    panel_hidden: false,
-    not_monitored: false,
-    disconnected: false,
-}
-
-/**
- * G8-10: `error`/`stopped`/`disconnected` previously fell through to the same
- * render as a plain idle conversation — a session the agent gave up on looked
- * identical to one nobody has touched yet, with no visual signal to go check
- * it. These three ManagedStatus values are the ones that mean "this session
- * needs attention because something went wrong", as opposed to `idle` (needs
- * nothing) or `panel_hidden`/`not_monitored` (not an error, just not watched).
- */
-const MANAGED_STATUS_IS_ERRORED: ReadonlySet<ManagedStatus> = new Set(['error', 'stopped', 'disconnected'])
-
 export function getConversationViewStates(conversation: { status?: string, connectionState?: string }) {
     const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
-    // Route through the canonical normalizer for everything the reducer/FSM
-    // actually emits, so this file stays in sync with `ManagedStatus` by
-    // construction. The two legacy wire-only synonyms it does NOT cover are
-    // aliased first (see LEGACY_GENERATING_STATUS_ALIASES) so they keep
-    // resolving to `generating` as before.
-    const managedStatus = LEGACY_GENERATING_STATUS_ALIASES.has(conversation.status || '')
-        ? 'generating'
-        : normalizeManagedStatus(conversation.status)
-    const isGenerating = MANAGED_STATUS_IS_WORKING[managedStatus]
+    // "Working" is class `working` of the one status vocabulary (mesh-shared
+    // session-status.ts): `generating`/`starting`/`finalizing` plus every raw
+    // wire spelling the alias table folds into them (`streaming`, `no_progress`,
+    // `long_generating`, …). Deriving it — rather than keeping a hand-maintained
+    // list here — is what makes the "isGenerating doesn't know what the reducer
+    // emits" bug class structurally impossible: a new status is classified at
+    // its declaration, not at every consumer.
+    const isGenerating = isWorkingStatus(conversation.status)
+    const managedStatus = normalizeManagedStatus(conversation.status)
     const isWaiting = managedStatus === 'waiting_approval'
     // A parked AskUserQuestion picker is equally "agent idle, waiting on the
     // user", but it must stay distinguishable from an approval modal: surfaces
@@ -172,7 +126,11 @@ export function getConversationViewStates(conversation: { status?: string, conne
     // checkbox picker (see ApprovalBanner's MULTISELECT-REMOTE-DEADLOCK note).
     // Kept a separate flag so each consumer opts in deliberately.
     const isWaitingChoice = managedStatus === 'waiting_choice'
-    const isErrored = MANAGED_STATUS_IS_ERRORED.has(managedStatus)
+    // G8-10: class `dead` (`error`/`stopped`/`disconnected`) must not render like
+    // a plain idle conversation — a session the agent gave up on needs a visual
+    // signal to go check it, unlike `idle` (needs nothing) or
+    // `panel_hidden`/`not_monitored` (not an error, just not watched).
+    const isErrored = isDeadStatus(managedStatus)
     return { isReconnecting, isConnecting, isGenerating, isWaiting, isWaitingChoice, isErrored }
 }
 

@@ -9,6 +9,7 @@
 
 // ─── readChat() return value ───────────────────────────
 
+import type { SessionStatus } from '@adhdev/mesh-shared';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { ModelDiscoverySpec } from '../models/types.js';
 import type { ChatMessageKind } from './chat-message-normalization.js';
@@ -25,7 +26,12 @@ export interface ReadChatResult {
    */
   contractVersion?: import('./transcript-v2.js').ChatContractVersion;
   messages: ChatMessage[];
-  status: AgentStatus;
+  /**
+   * The one session status vocabulary (mesh-shared `session-status.ts`).
+   * Provider scripts may still emit raw spellings such as `streaming`; those
+   * are folded by `normalizeSessionStatus` at the consumer, never widened here.
+   */
+  status: SessionStatus;
   activeModal?: ModalInfo | null;
  /** IDE/Extension only: session info */
   id?: string;
@@ -76,14 +82,6 @@ import type {
   MessagePart,
 } from './io-contracts.js';
 export type { ChatMessage, InputEnvelope, InputPart, MessagePart };
-
-export type AgentStatus = 
-  | 'idle' 
-  | 'generating' 
-  | 'waiting_approval' 
-  | 'error' 
-  | 'panel_hidden'
-  | 'streaming';
 
 export interface ModalInfo {
   message: string;
@@ -353,6 +351,9 @@ export type ResolveActionResult = ResolveActionScriptClick | ResolveActionCoordi
 // ─── Provider Module type ────────────────────────
 
 export type ProviderCategory = 'cli' | 'ide' | 'extension' | 'acp';
+
+/** Categories a user can launch a session for — webview extensions are attached, never launched. */
+export type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
 
 /**
  * Type of object exported by module.exports in provider.js.

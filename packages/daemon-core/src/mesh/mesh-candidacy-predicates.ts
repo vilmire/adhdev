@@ -29,7 +29,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isDeadStatus, isReadyStatus } from '@adhdev/mesh-shared';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
@@ -63,23 +63,28 @@ export function isTerminalSessionStatus(status: string): boolean {
 // pinned target session is genuinely ready before overriding the coarse worktreeBootstrap
 // 'running' defer for that one session. Never returns true for 'starting' / 'waiting_approval' /
 // 'waiting_choice' / 'generating' / any other non-idle status — those still refuse the override.
+// Both predicates read the auto-approve-masked top-level status (and the chat lane),
+// exactly as before; only the vocabulary they compare against is now derived from
+// mesh-shared's session-status classes instead of being listed here.
 export function isIdleSessionState(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
-    if (isTerminalSessionStatus(status)) return false;
-    return status === 'idle' || state?.activeChat?.status === 'waiting_input';
+    // Mesh-record terminal spellings (failed/terminated/…) and vocabulary `dead`
+    // statuses are both "gone": never a candidate, whatever the chat lane says.
+    if (isTerminalSessionStatus(status) || isDeadStatus(status)) return false;
+    return isReadyStatus(status) || state?.activeChat?.status === 'waiting_input';
 }
 
 
 export function sessionStateLooksActive(state: any): boolean {
     const status = readNonEmptyString(state?.status).toLowerCase();
     const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
-    // 'long_generating' is retained as a legacy alias for the renamed 'no_progress' busy status.
-    // 'waiting_choice' is active for the same reason as 'waiting_approval': the node
-    // still owns a live turn parked on a human decision. Treating it as free makes
-    // the active-work gate pass and a SECOND session gets claimed for work already
-    // running here — the duplicate-dispatch hazard this predicate exists to prevent.
-    const active = new Set(['generating', 'streaming', 'no_progress', 'long_generating', 'working', 'starting', 'waiting_approval', 'waiting_choice']);
-    return active.has(status) || active.has(chatStatus);
+    // Busy = class `working` or `blocked`. `waiting_choice` is active for the same
+    // reason as `waiting_approval`: the node still owns a live turn parked on a human
+    // decision. Treating it as free makes the active-work gate pass and a SECOND
+    // session gets claimed for work already running here — the duplicate-dispatch
+    // hazard this predicate exists to prevent. Raw aliases (`streaming`,
+    // `no_progress`, `long_generating`, …) resolve through the shared alias table.
+    return isBusyStatus(status) || isBusyStatus(chatStatus);
 }
 
 /** @internal Split-visibility only: the auto-fast-forward module gates its ff on the
