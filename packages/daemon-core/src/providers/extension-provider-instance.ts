@@ -14,6 +14,13 @@ import type { ChatMessage } from '../types.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
+import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
+
+/** What an extension's events are enriched with from its parent IDE instance. */
+export interface ExtensionParentContext {
+    parentSessionId: string;
+    workspaceName?: string;
+}
 
 export class ExtensionProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -23,6 +30,9 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
     private events: ProviderEvent[] = [];
+    /** Lifecycle port (wiring-unification B2); null until boot wires it. */
+    private lifecyclePort: SessionEventPort | null = null;
+    private parentContext: (() => ExtensionParentContext) | null = null;
 
  // status
     private currentStatus: string = 'idle';
@@ -61,6 +71,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     async init(context: InstanceContext): Promise<void> {
         this.context = context;
         this.settings = context.settings || {};
+        if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
@@ -243,6 +254,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 this.generatingStartedAt = 0;
             }
             this.lastAgentStatus = agentStatus;
+            // Lifecycle port (B2): the committed edge, after its provider events.
+            emitStatusEdge(this.lifecyclePort, this.instanceId, previousStatus, agentStatus, 'ide_poll', this.type);
         }
 
         this.applyProviderResponse(data, {
@@ -262,6 +275,28 @@ export class ExtensionProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
+        // Lifecycle port (B2): deliver now instead of at the parent's next
+        // collectAllStates() drain. The buffer stays (legacy onEvent listeners);
+        // the enrichment mirrors ProviderInstanceManager's extension-child drain.
+        const parent = this.parentContext?.();
+        forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            ...event,
+            providerType: this.type,
+            instanceId: this.instanceId,
+            targetSessionId: this.instanceId,
+            workspaceName: parent?.workspaceName,
+            ...(parent ? { parentSessionId: parent.parentSessionId } : {}),
+        });
+    }
+
+    /**
+     * Attach (or detach with null) the lifecycle port. The owning IDE instance
+     * passes its parent context so immediate events carry the same
+     * parentSessionId / workspaceName the collectAllStates() drain adds.
+     */
+    setSessionEventPort(port: SessionEventPort | null, parentContext?: () => ExtensionParentContext): void {
+        this.lifecyclePort = port;
+        if (parentContext) this.parentContext = parentContext;
     }
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {

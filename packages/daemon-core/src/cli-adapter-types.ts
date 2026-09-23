@@ -8,6 +8,27 @@ import type { ChatMessage } from './types.js';
 import type { InteractivePrompt, InteractivePromptResponse } from './providers/types/interactive-prompt.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from './cli-adapters/provider-cli-shared.js';
 
+/**
+ * Why a CLI adapter poked its owner (wiring-unification B2). The adapter only
+ * says WHAT KIND of thing changed; the owning instance's status-transition tick
+ * is the single diff-and-emit point that decides whether a status / modal /
+ * prompt edge actually happened.
+ *
+ *   fsm_state        — the spec FSM emitted state_changed (state and/or modal)
+ *   pty_exit         — the PTY child exited (ordinary stopped transition)
+ *   provider_failure — an auth/billing failure was latched (status -> error)
+ *   prompt_captured  — an interactive prompt became held (TUI / stream-json / wire)
+ *   prompt_cleared   — the held prompt was answered or resolved
+ *   prompt_updated   — the held prompt changed in place (multiSelect upgrade)
+ */
+export type AdapterChangeCause =
+    | 'fsm_state'
+    | 'pty_exit'
+    | 'provider_failure'
+    | 'prompt_captured'
+    | 'prompt_cleared'
+    | 'prompt_updated';
+
 export interface CliAdapterStatus {
     status?: string;
     parsedStatus?: string;
@@ -228,6 +249,15 @@ export interface CliAdapter {
         | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'generating'; keys: MeshSendKeyName[]; hasDestructive: boolean; message?: string }
     >;
     setOnStatusChange(callback: () => void): void;
+    /**
+     * Cause-carrying variant of setOnStatusChange (wiring-unification B2). Every
+     * change the adapter would signal through setOnStatusChange also reaches this
+     * callback, with its cause. Optional: adapters without it are driven through
+     * setOnStatusChange and their ticks carry no adapter cause.
+     */
+    setOnChange?(callback: (cause: AdapterChangeCause) => void): void;
+    /** How the currently held interactive prompt was captured; null when none is held. */
+    getInteractivePromptTransport?(): 'tui' | 'stream-json' | 'wire' | null;
     updateRuntimeSettings?(settings: Record<string, unknown>): void;
     setCliScripts?(scripts: Record<string, unknown>): void;
     setServerConn?(serverConn: unknown): void;

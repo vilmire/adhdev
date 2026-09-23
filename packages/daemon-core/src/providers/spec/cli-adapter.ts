@@ -45,7 +45,7 @@ import {
     type InterruptCapability,
     type InterruptUnsupportedReason,
 } from './interrupt-capability.js';
-import type { CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
+import type { AdapterChangeCause, CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import type { SessionTermination } from '@adhdev/session-host-core';
@@ -57,8 +57,6 @@ import {
     type MeshSendKeyName,
 } from '../../cli-adapters/provider-cli-shared.js';
 import { LOG } from '../../logging/logger.js';
-import { publishSessionTermination } from '../../shared/session-termination-sink.js';
-import { publishProviderSignal } from '../../shared/provider-signal-sink.js';
 import type { SignalDetection } from './signal-rules.js';
 import {
     buildClaudeInteractiveTuiAnswerSteps,
@@ -92,6 +90,11 @@ import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provid
 import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 
 export { detectProviderFailure, type ProviderFailure };
+
+/** What the adapter reports on PTY death (replaces the deleted shared/session-termination-sink). */
+export interface SpecAdapterExitReport { termination?: SessionTermination; runtimeSettings: Readonly<Record<string, unknown>> }
+/** What the adapter reports on a matched signal rule (replaces the deleted shared/provider-signal-sink). */
+export interface SpecAdapterSignalReport { providerType: string; workspace: string; runtimeSettings: Readonly<Record<string, unknown>>; signal: SignalDetection }
 
 export class SpecCliAdapter implements CliAdapter {
     readonly cliType: string;
@@ -127,6 +130,9 @@ export class SpecCliAdapter implements CliAdapter {
     private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
+    private changeCallback: ((cause: AdapterChangeCause) => void) | null = null;
+    private exitCallback: ((report: SpecAdapterExitReport) => void) | null = null;
+    private signalCallback: ((report: SpecAdapterSignalReport) => void) | null = null;
     private approvalResolvedCallback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
     private activeInteractivePrompt: InteractivePrompt | null = null;
@@ -872,6 +878,26 @@ export class SpecCliAdapter implements CliAdapter {
         this.statusCallback = cb;
     }
 
+    setOnChange(cb: (cause: AdapterChangeCause) => void): void { this.changeCallback = cb; }
+
+    /** PTY death, reported AFTER the `pty_exit` status tick. The owning instance forwards it to `port.exited` (B4). */
+    setOnExit(cb: ((report: SpecAdapterExitReport) => void) | null): void { this.exitCallback = cb; }
+
+    /** A matched spec `signal_rules[]` detection. The owning instance forwards it to `port.signal` (B4). */
+    setOnSignal(cb: ((report: SpecAdapterSignalReport) => void) | null): void { this.signalCallback = cb; }
+
+    /** The one poke point (B2): the owner's status-transition tick diffs and emits; this only names the cause. */
+    private notifyChange(cause: AdapterChangeCause): void {
+        this.changeCallback?.(cause);
+        this.statusCallback?.();
+    }
+
+    getInteractivePromptTransport(): 'tui' | 'stream-json' | 'wire' | null {
+        if (!this.activeInteractivePrompt) return null;
+        // kimi_wire holds wire.jsonl / idle-selector prompts without stamping a transport.
+        return this.interactivePromptTransport ?? (this.interactivePromptScheme() === 'kimi_wire' ? 'wire' : 'tui');
+    }
+
     setOnPtyData(cb: (data: string) => void): void {
         this.ptyDataCallback = cb;
     }
@@ -993,7 +1019,7 @@ export class SpecCliAdapter implements CliAdapter {
                 await new Promise(resolve => setTimeout(resolve, 180));
             }
             this.activeInteractivePrompt = null;
-            this.statusCallback?.();
+            this.notifyChange('prompt_cleared');
             return;
         }
         // SILENT-SUCCESS DEFECT (2026-08-20): this used to `return` for any
@@ -1094,7 +1120,7 @@ export class SpecCliAdapter implements CliAdapter {
         }
         this.activeInteractivePrompt = null;
         this.interactivePromptTransport = null;
-        this.statusCallback?.();
+        this.notifyChange('prompt_cleared');
     }
 
     isApprovalRecentlyResolved(): boolean {
@@ -1314,7 +1340,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
                 this.maybeUpgradeClaudeTuiMultiSelect();
-                this.statusCallback?.();
+                this.notifyChange('fsm_state');
                 return;
             case 'pty_data':
                 this.observeProviderFailureOutput(ev.chunk);
@@ -1327,19 +1353,19 @@ export class SpecCliAdapter implements CliAdapter {
             case 'exit':
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
-                // This is the spec path's equivalent of the deleted legacy
-                // ProviderCliAdapter PTY onExit hook — the only point that sees
-                // the tombstone at all. It reports the death outward; the mesh
-                // side decides whether it earns a ledger row.
-                this.publishTerminationObservation(ev.termination);
                 // Some CLIs repaint the failure off-screen before exit. Re-run the
                 // classifier against the retained tail at the exit seam. The observer
-                // invokes statusCallback only when it discovers a new typed failure;
+                // signals a provider_failure change only when it discovers a new typed failure;
                 // otherwise this branch publishes the ordinary stopped transition.
-                if (!this.observeProviderFailureOutput('', ev.exit_code ?? undefined, ev)) this.statusCallback?.();
+                if (!this.observeProviderFailureOutput('', ev.exit_code ?? undefined, ev)) this.notifyChange('pty_exit');
+                // Then report the death (and its session-host tombstone) outward — the
+                // only point that sees the tombstone. The status edge above goes first so
+                // it still resolves against the registry entry the exit is about to remove;
+                // what the death MEANS (mesh ledger row, …) is decided by bus subscribers.
+                this.reportExit(ev.termination);
                 return;
             case 'signal_detected':
-                this.publishSignalObservation(ev.signal);
+                this.reportSignal(ev.signal);
                 return;
             case 'spec_error':
                 LOG.warn('SpecAdapter', `[${this.cliType}] spec reload error: ${ev.errors.join('; ')}`);
@@ -1350,56 +1376,29 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     /**
-     * Publish the session-host tombstone to the neutral termination seam.
-     *
-     * This layer deliberately does NOT decide what the death means or where it
-     * gets recorded — it only reports what it saw. Resolving the mesh binding and
-     * writing the ledger row belongs to the subscriber wired at daemon boot,
-     * because `providers/**` may not value-import `mesh/**` (enforced by
-     * scripts/check-import-boundaries.mjs). Forwarding `runtimeSettings` opaquely
-     * is what keeps this side mesh-unaware.
-     *
-     * `requestedStop` is intentionally NOT filtered here. The double-write guard
-     * (a host-requested stop already has an `operator_cleanup` row from the mesh
-     * cleanup path) lives with the writer in mesh-termination-bridge, so the
-     * policy has exactly one home and cannot drift between the two halves.
+     * Report the PTY death to the owning instance. This layer only reports what
+     * it saw; `requestedStop` is NOT filtered here — the double-write guard lives
+     * with the ledger writer (mesh-termination-bridge). `runtimeSettings` is
+     * forwarded opaquely so this side stays mesh-unaware (`providers/**` may not
+     * value-import `mesh/**`, scripts/check-import-boundaries.mjs).
      */
-    private publishTerminationObservation(termination?: SessionTermination): void {
-        if (!termination || !this.owningSessionId) return;
-        publishSessionTermination({
-            sessionId: this.owningSessionId,
-            providerType: this.cliType,
-            workspace: this.workingDir,
-            runtimeSettings: this.runtimeSettings,
-            termination,
-        });
+    private reportExit(termination?: SessionTermination): void {
+        if (!this.owningSessionId) return;
+        try {
+            this.exitCallback?.({ ...(termination ? { termination } : {}), runtimeSettings: this.runtimeSettings });
+        } catch (e: any) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] exit observer failed for ${this.owningSessionId}: ${e?.message || e}`);
+        }
     }
 
-    /**
-     * Publish a spec-declared screen signal to the neutral provider-signal seam.
-     *
-     * Same shape and same reasoning as publishTerminationObservation above: this
-     * layer reports WHAT IT SAW and resolves nothing. Deciding whether the
-     * session is mesh-bound and what to tell a coordinator belongs to the
-     * subscriber wired at daemon boot, because `providers/**` may not
-     * value-import `mesh/**` (scripts/check-import-boundaries.mjs). Forwarding
-     * `runtimeSettings` opaquely is what keeps this side mesh-unaware.
-     *
-     * A session with no owning session id is dropped: the consumer keys its
-     * notification on the session, so an unattributable signal has nowhere to go.
-     */
-    private publishSignalObservation(signal: SignalDetection): void {
+    /** Report a spec-declared screen signal; same reasoning as `reportExit`. Unattributable signals are dropped. */
+    private reportSignal(signal: SignalDetection): void {
         if (!this.owningSessionId) return;
-        publishProviderSignal({
-            sessionId: this.owningSessionId,
-            providerType: this.cliType,
-            workspace: this.workingDir,
-            ruleId: signal.ruleId,
-            kind: signal.kind,
-            params: signal.params,
-            detectedAt: signal.detectedAt,
-            runtimeSettings: this.runtimeSettings,
-        });
+        try {
+            this.signalCallback?.({ providerType: this.cliType, workspace: this.workingDir, runtimeSettings: this.runtimeSettings, signal });
+        } catch (e: any) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] signal observer failed for ${this.owningSessionId} (${signal.ruleId}): ${e?.message || e}`);
+        }
     }
 
     /** Auth/billing classification of PTY output. WHAT the daemon may do about a
@@ -1426,7 +1425,7 @@ export class SpecCliAdapter implements CliAdapter {
     private latchAuthBillingFailure(failure: ProviderFailure, context: string): void {
         this.providerFailure = failure;
         LOG.warn('SpecAdapter', authBillingLatchLogLine(this.cliType, failure, context));
-        this.statusCallback?.();
+        this.notifyChange('provider_failure');
     }
 
     /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
@@ -1439,7 +1438,7 @@ export class SpecCliAdapter implements CliAdapter {
             tail: this.failureOutputTail,
         });
         if (outcome.clearTail) this.failureOutputTail = '';
-        if (outcome.advisory) this.publishSignalObservation(outcome.advisory);
+        if (outcome.advisory) this.reportSignal(outcome.advisory);
         if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, 'exitCode=pending; confirmed on-screen at turn boundary');
     }
 
@@ -1487,7 +1486,7 @@ export class SpecCliAdapter implements CliAdapter {
             }
             if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
                 this.activeInteractivePrompt = prompt;
-                this.statusCallback?.();
+                this.notifyChange(prompt ? 'prompt_captured' : 'prompt_cleared');
             }
         } catch { /* fail open — keep the currently-held prompt */ }
     }
@@ -1508,7 +1507,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.activeInteractivePrompt = prompt;
                 this.interactivePromptTransport = 'stream-json';
                 this.interactivePromptLostAt = null;
-                this.statusCallback?.();
+                this.notifyChange('prompt_captured');
             } catch {
                 // PTY output is not guaranteed to be machine JSON.
             }
@@ -1689,7 +1688,7 @@ export class SpecCliAdapter implements CliAdapter {
         this.activeInteractivePrompt = null;
         this.interactivePromptTransport = null;
         this.interactivePromptLostAt = null;
-        this.statusCallback?.();
+        this.notifyChange('prompt_cleared');
         return 'cleared';
     }
 
@@ -1821,7 +1820,7 @@ export class SpecCliAdapter implements CliAdapter {
             this.activeInteractivePrompt = nativePrompt;
             this.interactivePromptTransport = 'tui';
             this.interactivePromptLostAt = null;
-            this.statusCallback?.();
+            this.notifyChange('prompt_captured');
             return;
         }
 
@@ -1843,7 +1842,7 @@ export class SpecCliAdapter implements CliAdapter {
             this.activeInteractivePrompt = prompt;
             this.interactivePromptTransport = 'tui';
             this.interactivePromptLostAt = null;
-            this.statusCallback?.();
+            this.notifyChange('prompt_captured');
             return;
         }
         // Owner is driving this picker from the terminal — stay hands-off. The
@@ -1909,7 +1908,7 @@ export class SpecCliAdapter implements CliAdapter {
             const focused = readFocusedClaudeTuiQuestion(screenText);
             if (!focused || !claudeTuiQuestionMatches(questions[0], focused) || !focused.multiSelect) return;
             questions[0].multiSelect = true;
-            this.statusCallback?.();
+            this.notifyChange('prompt_updated');
             return;
         }
 
@@ -1921,7 +1920,7 @@ export class SpecCliAdapter implements CliAdapter {
         const match = questions.find(q => claudeTuiQuestionMatches(q, focused));
         if (!match || match.multiSelect) return;
         match.multiSelect = true;
-        this.statusCallback?.();
+        this.notifyChange('prompt_updated');
     }
 
 
@@ -2150,7 +2149,7 @@ export class SpecCliAdapter implements CliAdapter {
                     this.activeInteractivePrompt = null;
                     this.interactivePromptTransport = null;
                     this.interactivePromptLostAt = null;
-                    this.statusCallback?.();
+                    this.notifyChange('prompt_cleared');
                     throw new SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
                 }
                 // Keys written, submission unconfirmed. Distinct error class so
@@ -2276,7 +2275,7 @@ export class SpecCliAdapter implements CliAdapter {
         this.activeInteractivePrompt = prompt;
         this.interactivePromptTransport = 'tui';
         this.interactivePromptLostAt = null;
-        this.statusCallback?.();
+        this.notifyChange('prompt_captured');
     }
 
     /** Record a failed multi-question capture against the prompt's nav-line

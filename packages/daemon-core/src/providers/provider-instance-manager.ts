@@ -11,6 +11,10 @@
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import type { ProviderCategory } from './contracts.js';
 import { LOG } from '../logging/logger.js';
+import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
+import type { SessionEventPort } from '../sessions/session-port.js';
+
+export type ProviderEventListener = (event: ProviderEvent & { providerType: string }) => void;
 
 function projectHotChatSessionStatesFromProviderState(state: ProviderState): HotChatSessionState[] {
     const project = (item: ProviderState): HotChatSessionState => ({
@@ -35,7 +39,8 @@ export class ProviderInstanceManager {
     private instances = new Map<string, ProviderInstance>();
     private tickTimer: NodeJS.Timeout | null = null;
     private tickInterval = 5_000; // default 5seconds
-    private eventListeners: ((event: ProviderEvent & { providerType: string }) => void)[] = [];
+    private bus: SessionLifecycleBus | null = null;
+    private sessionEventPort: SessionEventPort | null = null;
 
  // ─── Instance manage ──────────────────────────────
 
@@ -50,6 +55,7 @@ export class ProviderInstanceManager {
         this.instances.set(id, instance);
         await instance.init({
             ...context,
+            ...(this.sessionEventPort ? { lifecycle: this.sessionEventPort } : {}),
             emitProviderEvent: (event) => this.emitProviderEvent(instance.type, id, event),
         });
     }
@@ -117,25 +123,21 @@ export class ProviderInstanceManager {
  // ─── State collect ────────────────────────────────
 
  /**
- * all Instance's current status collect
- * + Propagate pending events to event listeners
+ * all Instance's current status collect. Provider events do not ride this
+ * drain any more: every instance delivers them through its lifecycle port at
+ * push time (wiring-unification B5).
  */
     collectAllStates(): ProviderState[] {
         const states: ProviderState[] = [];
         for (const [id, instance] of this.instances) {
             try {
                 const state = instance.getState();
-                states.push(state);
-                this.emitPendingEvents(instance.type, state);
-                if (state.category === 'ide') {
-                    for (const childState of state.extensions) {
-                        this.emitPendingEvents(childState.type, childState, {
-                            targetSessionId: childState.instanceId,
-                            workspaceName: state.workspace || undefined,
-                            parentSessionId: state.instanceId,
-                        });
-                    }
+                // Phase E: the registry-owned launch record rides the state (CLI / ACP only).
+                if (state.category === 'cli' || state.category === 'acp') {
+                    const launch = this.sessionEventPort?.launchRecord?.(state.instanceId);
+                    if (launch) state.launch = launch;
                 }
+                states.push(state);
             } catch (e) {
                 LOG.warn('InstanceMgr', `[InstanceManager] Failed to collect state from ${id}: ${(e as Error).message}`);
             }
@@ -245,11 +247,52 @@ export class ProviderInstanceManager {
 
  // ─── event ────────────────────────────────────
 
- /**
- * Register event listener (used for daemon status_event transmission)
- */
-    onEvent(listener: (event: ProviderEvent & { providerType: string }) => void): void {
-        this.eventListeners.push(listener);
+    /**
+     * @deprecated Wiring-unification B5 — every provider event consumer is a bus
+     * subscriber (`provider_event`). Kept only as a thin adapter over the bus for
+     * mesh-event-forwarding's bus-less test fallback; there is no listener array
+     * and no buffer drain behind it any more.
+     */
+    onEvent(listener: ProviderEventListener): () => void {
+        if (!this.bus) return () => {};
+        return this.bus.on('provider_event', (e) => listener(e.event), { name: 'instance-manager.onEvent' });
+    }
+
+    /**
+     * Forward every provider event to the lifecycle bus as the transitional
+     * `provider_event` (wiring-unification B1). Pass null to detach.
+     */
+    attachBus(bus: SessionLifecycleBus | null): void {
+        this.bus = bus;
+    }
+
+    /**
+     * Port injected as `InstanceContext.lifecycle` into instances added from now
+     * on, and handed to already-live instances through their optional setter.
+     */
+    setSessionEventPort(port: SessionEventPort | null): void {
+        this.sessionEventPort = port;
+        for (const [id, instance] of this.instances) {
+            try {
+                instance.setSessionEventPort?.(port);
+            } catch (e) {
+                LOG.warn('InstanceMgr', `[InstanceManager] setSessionEventPort failed for ${id}: ${(e as Error)?.message ?? e}`);
+            }
+        }
+    }
+
+    /**
+     * Publish one enriched provider event on the bus (the transitional
+     * `provider_event`). Every consumer is a bus subscriber since B5 — the
+     * status-event emitter, mesh forwarding, quota refresh, dev SSE — each
+     * isolated in its own try/catch by the bus itself.
+     */
+    private dispatchProviderEvent(payload: ProviderEvent & { providerType: string }): void {
+        if (!this.bus) return;
+        const sessionId = typeof payload.targetSessionId === 'string' && payload.targetSessionId
+            ? payload.targetSessionId
+            : String(payload.instanceId ?? '');
+        this.bus.emit({ kind: 'provider_event', sessionId, at: Date.now(), event: payload });
     }
 
     emitProviderEvent(providerType: string, instanceId: string, event: ProviderEvent): void {
@@ -263,28 +306,7 @@ export class ProviderInstanceManager {
                 ? event.targetSessionId
                 : instanceId,
         } as ProviderEvent & { providerType: string };
-        for (const listener of this.eventListeners) {
-            listener(payload);
-        }
-    }
-
-    private emitPendingEvents(
-        providerType: string,
-        state: ProviderState,
-        extra: Record<string, unknown> = {},
-    ): void {
-        for (const event of state.pendingEvents) {
-            for (const listener of this.eventListeners) {
-                listener({
-                    ...event,
-                    providerType,
-                    instanceId: state.instanceId,
-                    targetSessionId: state.instanceId,
-                    workspaceName: state.workspace || undefined,
-                    ...extra,
-                });
-            }
-        }
+        this.dispatchProviderEvent(payload);
     }
 
  /**
@@ -418,6 +440,5 @@ export class ProviderInstanceManager {
             try { instance.dispose(); } catch { }
         }
         this.instances.clear();
-        this.eventListeners = [];
     }
 }

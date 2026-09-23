@@ -7,8 +7,8 @@
  * SpecCliAdapter exit chain and prove the join still exists here.
  *
  * The join is deliberately indirect: `providers/**` may not value-import
- * `mesh/**` (scripts/check-import-boundaries.mjs), so the adapter publishes to a
- * neutral sink and the mesh bridge subscribes. These tests install the REAL
+ * `mesh/**` (scripts/check-import-boundaries.mjs), so the adapter reports to its
+ * instance → session port → registry → lifecycle bus, and the mesh bridge subscribes. These tests install the REAL
  * subscriber and assert against the REAL ledger rather than stubbing the seam —
  * a break anywhere along publish -> observe -> resolve binding -> write fails
  * here. (Mocking the writer would not work anyway: the subscriber calls it
@@ -43,10 +43,10 @@ vi.mock('../../../src/config/config.js', () => ({
 }));
 
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
-import {
-  installMeshTerminationObserver,
-  uninstallMeshTerminationObserver,
-} from '../../../src/mesh/mesh-termination-bridge.js';
+import { subscribeMeshTermination } from '../../../src/mesh/mesh-termination-bridge.js';
+import { createSessionLifecycleBus, type SessionLifecycleBus } from '../../../src/sessions/lifecycle-bus.js';
+import { createSessionEventPort } from '../../../src/sessions/session-port.js';
+import { SessionRegistry } from '../../../src/sessions/registry.js';
 import { appendLedgerEntry, readLedgerEntries } from '../../../src/mesh/mesh-ledger.js';
 
 const EXTERNAL_SIGTERM: SessionTermination = {
@@ -85,8 +85,11 @@ class DrivableFactory implements PtyTransportFactory {
   }
 }
 
-/** The seam is fire-and-forget; let the subscriber's async ledger write settle. */
-const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+/** The bus's async lane + the ledger's dynamic import: let both settle. */
+const flush = () => new Promise(resolve => setTimeout(resolve, 20));
+
+let bus: SessionLifecycleBus;
+let registry: SessionRegistry;
 
 function spawnMeshAdapter(settings: Record<string, unknown>, sessionId = 'sess_worker') {
   const factory = new DrivableFactory();
@@ -99,6 +102,13 @@ function spawnMeshAdapter(settings: Record<string, unknown>, sessionId = 'sess_w
     sessionId,
   );
   adapter.updateRuntimeSettings(settings);
+  // Exactly what CliProviderInstance.init wires (B4): the adapter's exit report
+  // goes to the session port, which turns it into registry.terminate('pty_exit').
+  const port = createSessionEventPort(bus, registry);
+  registry.register({
+    sessionId, parentSessionId: null, providerType: adapter.cliType, transport: 'pty', instanceKey: sessionId, workspace: '/tmp/project',
+  }, 'launch');
+  adapter.setOnExit(({ termination, runtimeSettings }) => port.exited(sessionId, termination, runtimeSettings));
   void adapter.spawn();
   return { adapter, pty: factory.last! };
 }
@@ -106,14 +116,18 @@ function spawnMeshAdapter(settings: Record<string, unknown>, sessionId = 'sess_w
 const stopEntries = (meshId: string) =>
   readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped');
 
+let unsubscribe: () => void = () => {};
 beforeEach(() => {
-  // Boot normally installs this; without it the adapter publishes into a void
-  // and every assertion below would vacuously "pass" as a no-write.
-  installMeshTerminationObserver();
+  // Boot subscribes this (S7); without it the exit reaches the bus with no
+  // listener and every assertion below would vacuously "pass" as a no-write.
+  bus = createSessionLifecycleBus();
+  registry = new SessionRegistry(bus);
+  unsubscribe = subscribeMeshTermination(bus);
 });
 
 afterEach(() => {
-  uninstallMeshTerminationObserver();
+  unsubscribe();
+  bus.close();
 });
 
 describe('SpecCliAdapter mesh termination ledger wiring', () => {

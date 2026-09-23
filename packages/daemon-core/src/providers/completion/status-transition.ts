@@ -40,6 +40,16 @@ import {
     STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
 } from '../cli-provider-instance-types.js';
 import { decideShortGenerationCompletion, resolveCompletionSettleDelayMs } from './completion-engine.js';
+import type { AdapterChangeCause } from '../../cli-adapter-types.js';
+import {
+    cliStatusCause,
+    emitModal,
+    emitPrompt,
+    emitStatusEdge,
+    modalFingerprint,
+    promptFingerprint,
+    type SessionEventPort,
+} from '../provider-event-port.js';
 
 /**
  * The surface of CliProviderInstance the transition tick reads/writes. All
@@ -56,7 +66,17 @@ export interface StatusTransitionHost {
     adapter: {
         getStatus(opts: { allowParse: boolean }): any;
         getScriptParsedStatus(): { messages?: unknown } | null | undefined;
+        getInteractivePromptTransport?(): 'tui' | 'stream-json' | 'wire' | null;
     };
+    /**
+     * Lifecycle emit surface (wiring-unification B2). Null until boot wires it;
+     * the tick is the single diff-and-emit point for status / modal / prompt.
+     */
+    lifecyclePort?: SessionEventPort | null;
+    /** Last emitted prompt fingerprint (promptId + multiSelect bits); '' = none. */
+    lastPromptFingerprint?: string;
+    /** Last emitted modal fingerprint (message + buttons); '' = none. */
+    lastModalFingerprint?: string;
     monitor: StatusMonitor;
     providerSessionId?: string;
 
@@ -123,7 +143,38 @@ export interface StatusTransitionHost {
     applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void;
 }
 
-export function runStatusTransitionTick(host: StatusTransitionHost): void {
+/**
+ * Modal and prompt edges for the lifecycle port. Diffed by fingerprint, so an
+ * adapter poke that re-renders the same prompt/modal never re-emits; a no-op
+ * without a port (the fingerprints then stay unset, so a port attached later
+ * sees the current prompt/modal on its first tick).
+ */
+function emitModalAndPromptEdges(
+    host: StatusTransitionHost,
+    visibleModal: { message?: unknown; buttons?: unknown } | null,
+    interactivePrompt: any,
+    status: string,
+): void {
+    const port = host.lifecyclePort;
+    if (!port) return;
+    const nextModalKey = modalFingerprint(visibleModal);
+    if (nextModalKey !== (host.lastModalFingerprint ?? '')) {
+        host.lastModalFingerprint = nextModalKey;
+        emitModal(port, host.instanceId, visibleModal
+            ? { id: host.instanceId, status, title: workingDirBasename(host.workingDir), activeModal: visibleModal }
+            : null);
+    }
+    const nextPromptKey = promptFingerprint(interactivePrompt);
+    if (nextPromptKey !== (host.lastPromptFingerprint ?? '')) {
+        host.lastPromptFingerprint = nextPromptKey;
+        const transport = interactivePrompt
+            ? (host.adapter.getInteractivePromptTransport?.() ?? 'tui')
+            : null;
+        emitPrompt(port, host.instanceId, interactivePrompt ?? null, transport);
+    }
+}
+
+export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause?: AdapterChangeCause | null): void {
     const now = Date.now();
     // Status-change handling is a hot path: PTY output can fire it many times
     // during long-running CLI sessions. Keep this path on adapter-owned light
@@ -193,6 +244,16 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
     const progressFingerprint = newStatus === 'generating'
         ? `scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}`
         : undefined;
+
+    // Lifecycle port (B2): modal/prompt edges first — they are what CAUSES a
+    // picker / approval status edge, so subscribers see them before it. The
+    // modal is the visible one (auto-approve masks it, as getSessionModalState does).
+    emitModalAndPromptEdges(
+        host,
+        autoApproveActive || autoApproveHoldIdle ? null : activeModal,
+        interactivePrompt,
+        newStatus,
+    );
 
     const previousStatus = host.lastStatus;
     if (newStatus !== host.lastStatus) {
@@ -693,6 +754,14 @@ export function runStatusTransitionTick(host: StatusTransitionHost): void {
             host.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
         }
         host.lastStatus = newStatus;
+        // Lifecycle port (B2): the edge is emitted where it is COMMITTED (the
+        // post-completion blip guard above returns without committing), after
+        // this edge's provider events, with the real prev/next.
+        emitStatusEdge(host.lifecyclePort, host.instanceId, previousStatus, newStatus, cliStatusCause({
+            questionPicker: isQuestionPicker,
+            autoApproveMasked: (autoApproveActive || autoApproveHoldIdle) && rawStatus !== 'generating',
+            adapterCause,
+        }), host.type);
     }
 
     // INTERACTIVE-QUESTION-EMIT: fire a coordinator/push-worthy notification when the

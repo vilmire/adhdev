@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureProviderSignalObserver } from '../../../src/shared/provider-signal-sink.js'
 import { SpecCliAdapter, detectProviderFailure } from '../../../src/providers/spec/cli-adapter.js'
+
+/**
+ * Collect signals in the shape the deleted provider-signal sink delivered: the
+ * CLI instance forwards the adapter's report to `port.signal(instanceId, …)`,
+ * and the adapter's owning session id IS that instance id.
+ */
+function captureSignals(adapter: any, signals: any[]): void {
+  adapter.setOnSignal((r: any) => {
+    signals.push({ sessionId: adapter.owningSessionId, providerType: r.providerType, workspace: r.workspace, runtimeSettings: r.runtimeSettings, ...r.signal })
+  })
+}
 
 describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
   it('classifies strong authentication and billing markers but not an ambiguous bare 403', () => {
@@ -180,18 +190,16 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       expect(adapter.statusCallback).not.toHaveBeenCalled()
     })
 
-    afterEach(() => configureProviderSignalObserver(null))
-
     // Owner decision 2026-09-21: a live match NEVER terminates a non-kimi
     // session — status 'error' is auto-cleaned by cli-manager within seconds.
     // The daemon logs and pages the coordinator; stopping is the coordinator's call.
     it('non-kimi: an on-screen banner at the turn boundary pages the coordinator and leaves the session running', () => {
       const signals: any[] = []
-      configureProviderSignalObserver((o) => { signals.push(o) })
       const adapter = make({
         driver: { snapshot: () => 'Login expired · Please run /login\n\n> \n' },
         latestState: { id: 'busy', label: 'Generating', title: null, status: 'generating' },
       })
+      captureSignals(adapter, signals)
       adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
       adapter.getStatus()
       expect(signals).toHaveLength(0) // mid-turn: deferred
@@ -228,11 +236,11 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     // would be told a session it just stopped is "left running".
     it('after the daemon requests shutdown nothing is paged or classified, even without a requestedStop tombstone', () => {
       const signals: any[] = []
-      configureProviderSignalObserver((o) => { signals.push(o) })
       const adapter = make({
         driver: { snapshot: () => 'Login expired · Please run /login\n', dispatch: vi.fn() },
         latestState: { id: 'idle', label: 'Ready', title: null, status: 'idle' },
       })
+      captureSignals(adapter, signals)
       adapter.handleEvent({ kind: 'pty_data', chunk: BANNER })
       adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
 
