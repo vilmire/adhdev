@@ -56,16 +56,15 @@ import {
     requestUsesGraphV2,
     patchGraphNodeAndRetry,
     MESH_NODE_PATCH_KEYS,
-    recordGraphGateClaimed,
-    recordGraphGateReleased,
-    recordGraphGateAbandoned,
-    recordGraphNodePatched,
     readString,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     triggerMeshQueueAndReport,
 } from './mesh-tools-internal.js';
 import type { MeshContext, MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from './mesh-tools-internal.js';
+// C-W9a: gate / node-patch provenance is written by the daemon's allow-listed
+// recorders (daemon-core's graph provenance module) over IPC — best-effort like before.
+import { graphAuditRecord } from '../ipc/turn-commands.js';
 
 // ── batch v2 request normalization (design :566-592) ─────────────────────────
 //
@@ -242,7 +241,7 @@ export async function meshGraphGateClaim(
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_claim');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_claim');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     if (!gateId) {
         return JSON.stringify({
@@ -283,7 +282,7 @@ export async function meshGraphGateClaim(
                 error: describeClaimRefusal(result.reason, result.gate?.state),
             });
         }
-        recordGraphGateClaimed(ctx.mesh.id, {
+        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_claimed', fields: {
             graphId: result.gate!.graphId,
             gateId,
             ref: result.gate!.ref,
@@ -293,7 +292,7 @@ export async function meshGraphGateClaim(
             leaseExpiresAt: result.leaseExpiresAt,
             ambiguousExternalOutcome: result.ambiguousExternalOutcome,
             previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId,
-        });
+        } }).catch(() => undefined);
         // G4: read-only convergence evidence — did the guarded work already land?
         // Runs AFTER the claim transaction committed, outside any DB lock; git
         // reachability against local origin/main, fail-soft to null. Evidence
@@ -383,7 +382,7 @@ export async function meshGraphGateRelease(
         patches?: Array<{ node?: string; base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown> }>;
     },
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_release');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_release');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     const fencingToken = readString(args.fencing_token) || readString(args.fencingToken);
     const leaseGeneration = readNumber(args.lease_generation ?? args.leaseGeneration);
@@ -427,7 +426,7 @@ export async function meshGraphGateRelease(
             ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
             ...(patches.length > 0 ? { patches } : {}),
         });
-        recordGraphGateReleased(ctx.mesh.id, {
+        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_released', fields: {
             graphId: result.gate!.graphId,
             gateId: gateId!,
             ref: result.gate!.ref,
@@ -437,7 +436,7 @@ export async function meshGraphGateRelease(
             releaseDigest: result.gate!.releaseEvidenceDigest,
             materializedNodeIds: result.materializedNodeIds,
             duplicate: result.duplicate,
-        });
+        } }).catch(() => undefined);
         // Newly materialized downstream rows are claimable now — nudge the queue so
         // an idle node picks them up without waiting for the next reconcile tick.
         const queueTrigger = result.materializedNodeIds.length > 0
@@ -540,7 +539,7 @@ export async function meshGraphGateAbandon(
         coordinator_session_id?: string; coordinatorSessionId?: string;
     },
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_abandon');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate_abandon');
     const gateId = readString(args.gate_id) || readString(args.gateId);
     const reason = readString(args.reason);
     const missing = [
@@ -579,7 +578,7 @@ export async function meshGraphGateAbandon(
         }
         const duplicate = result.reason === 'gate_already_abandoned';
         if (!duplicate) {
-            recordGraphGateAbandoned(ctx.mesh.id, {
+            await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_abandoned', fields: {
                 graphId: result.gate!.graphId,
                 gateId: gateId!,
                 ref: result.gate!.ref,
@@ -592,7 +591,7 @@ export async function meshGraphGateAbandon(
                 ...(args.force === true ? { force: true } : {}),
                 cancelledNodeIds: result.cancelledNodeIds,
                 ...(result.graphStatus ? { graphStatus: result.graphStatus } : {}),
-            });
+            } }).catch(() => undefined);
         }
         return JSON.stringify({
             success: true,
@@ -698,7 +697,7 @@ export async function meshGraphNodePatch(
         base_spec_patch?: Record<string, unknown>; baseSpecPatch?: Record<string, unknown>;
     },
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_node_patch');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_node_patch');
     const node = readString(args.node) || readString(args.node_id) || readString(args.nodeId) || readString(args.ref);
     const patch = (args.base_spec_patch ?? args.baseSpecPatch) as Record<string, unknown> | undefined;
     const missing = [
@@ -732,7 +731,7 @@ export async function meshGraphNodePatch(
             baseSpecPatch: patch!,
         });
         const recovered = result.outcome.kind === 'materialized';
-        recordGraphNodePatched(ctx.mesh.id, {
+        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'node_patched', fields: {
             graphId: result.graphId,
             nodeId: result.nodeId,
             ...(result.ref ? { ref: result.ref } : {}),
@@ -743,7 +742,7 @@ export async function meshGraphNodePatch(
             ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
             materializationVersion: result.materializationVersion,
             ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        });
+        } }).catch(() => undefined);
         // A recovered node is claimable now — nudge the queue rather than waiting
         // for the next reconcile tick, exactly as a gate release does.
         const queueTrigger = recovered ? await triggerMeshQueueAndReport(ctx) : undefined;
@@ -828,7 +827,7 @@ export async function meshGraphView(
         limit?: number;
     },
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_graph_view');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_view');
     try {
         await refreshMeshFromDaemon(ctx);
         const graphId = readString(args.graph_id) || readString(args.graphId);

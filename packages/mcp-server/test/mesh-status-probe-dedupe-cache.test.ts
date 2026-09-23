@@ -8,6 +8,7 @@ import {
 } from '../src/tools/mesh-tools-internal.js';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // AUDIT #7 / P7 (IPC load audit, 2026-09-23): mesh_status / mesh_view_queue /
 // mesh_list_pending_approvals each iterated every MESH NODE and probed
 // get_status_metadata per node, even though the probe is a DAEMON-WIDE
@@ -53,6 +54,7 @@ function buildTransport(onGetStatusMetadata: () => void) {
   };
   const transport: any = {
     command: async (command: string, _args?: any) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, _args ?? {} as Record<string, unknown>);
       calls.push({ kind: 'command', command });
       return respond(command);
     },
@@ -117,7 +119,8 @@ test('probeStatusMetadataForNode: a rejected probe is not cached — the next ca
   __resetStatusMetadataProbeCacheForTests();
   let attempt = 0;
   const transport: any = {
-    command: async (command: string) => {
+    command: async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
       if (command === 'get_status_metadata') {
         attempt += 1;
         if (attempt === 1) throw new Error('transient p2p relay timeout');
@@ -150,6 +153,7 @@ test('end-to-end mesh_status: N nodes sharing one daemon → exactly one get_sta
   ]);
   const { transport } = buildTransport(() => { probeCount += 1; });
   transport.command = async (command: string, _args?: any) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, _args ?? {} as Record<string, unknown>);
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_status_metadata') {
       probeCount += 1;

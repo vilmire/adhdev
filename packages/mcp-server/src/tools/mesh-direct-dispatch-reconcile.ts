@@ -122,7 +122,7 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
         const providerSessionId = readString(session?.providerSessionId)
             || readString(session?.activeChat?.providerSessionId)
             || readString(session?.settings?.providerSessionId)
-            || resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId)?.providerSessionId;
+            || (await resolveMeshSessionProviderMetadata(ctx, nodeId, sessionId))?.providerSessionId;
         attempted += 1;
         try {
             // ── §8 unit 8: replica hop (design §4 roster id 6) ──────────────

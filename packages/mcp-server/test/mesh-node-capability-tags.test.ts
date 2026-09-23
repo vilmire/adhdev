@@ -5,6 +5,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshListNodes, meshStatus } from '../src/tools/mesh-tools.js';
 import { buildMeshNodeCapabilityTags } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // (B) Capability tag visibility — mesh_list_nodes / mesh_status must surface the
 // computed capability tags a node can match against required_tags routing, so a
 // coordinator can see which tags are routable before authoring required_tags.
@@ -44,6 +45,7 @@ function makeMesh() {
 
 function stubGetMesh(transport: any, mesh: any) {
   transport.command = async (command: string, args: Record<string, unknown> = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'get_mesh') return { success: true, mesh: args.inlineMesh || mesh };
     // mesh_status probes git_status / get_status_metadata per node; return benign
     // empty results so the per-node entry assembly completes without a daemon.

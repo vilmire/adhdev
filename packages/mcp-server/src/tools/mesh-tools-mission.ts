@@ -2,49 +2,40 @@
 // Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
 // state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
 //
-// MIGRATION STATUS (wiring-unification Phase C, workstream C-W6 —
+// MIGRATION STATUS (wiring-unification Phase C, workstreams C-W6 and C-W9b —
 // docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph):
 // the mission-CRUD functions below (meshMissionUpsert / meshMissionUpsertBulk /
-// meshMissionList) now call `missionUpsert`/`missionQuery` over IPC
-// (`../ipc/turn-commands.js`) instead of the in-process `upsertMeshMission`/
-// `getMeshMission`/`listMeshMissionsForTool`. This is the file the C-W6 brief
-// and pre-work report both name as the one place mission CRUD's "no home in
-// the six commands" gap was closed (turn-ipc.ts's `mission_upsert`/
-// `mission_query` decision, 2026-09-23).
+// meshMissionList) now call `missionUpsert`/`missionQuery`/`missionListQuery`
+// over IPC (`../ipc/turn-commands.js`) instead of the in-process
+// `upsertMeshMission`/`getMeshMission`/`listMeshMissionsForTool`. meshTaskHistory
+// / meshLedgerQuery now call the C-W9b `ledger_query` command instead of the
+// in-process `readLedgerEntries`/`getLedgerSummary` (the gap this file's C-W6
+// header used to flag — `turn_query`'s shape had no free-form kind-list/node
+// filter, so `ledger_query` is a sibling command, not a `turn_query` widening).
 //
-// NOT migrated in this pass — each is either genuinely out of the 8-command
-// surface today or independently broken by concurrent C-W3/C-W4 deletions,
-// not something this file's migration should paper over with a guess:
+// NOT migrated in this pass:
 //   - meshRecordNote / meshForgetNote: write/tombstone `coordinator_operating_note`
 //     ledger entries carrying a free-text `text` field. That is CONTENT — it
 //     cannot go through `mesh_record`'s scalar ProjectedScalars allow-list.
 //     C-W8: routed over the dedicated `note_upsert` / `note_forget` local IPC
 //     commands (the 2026-09-24 decision) to the daemon's mesh_operating_notes.
-//   - meshReconcileLedger: P2P ledger-slice reconciliation
-//     (`readLedgerSliceFromStore`/`appendRemoteLedgerEntries`/
-//     `buildMeshLedgerReplicaEvidence`) — C7-6 parity-system territory, a
-//     different workstream. Left unchanged.
-//   - meshTaskHistory / meshLedgerQuery: general ledger browsing by arbitrary
-//     `kind`/`since`/`node` filters — `turn_query`'s shape
-//     (`{meshId, taskId?, attemptId?, sessionId?, state?, since?, tail?}`) has
-//     no free-form kind-list or node filter, so this is a real API mismatch,
-//     not a mechanical rename. Left on `readLedgerEntries` (still live).
+//   - meshReconcileLedger (C-W9a): the IMPORT half of P2P ledger reconciliation
+//     is retired — no `ledger_slice_query` / `ledger_append_remote` pair was
+//     built. Each daemon's records stay on that daemon; the fleet view is the
+//     replicated `mesh.<id>.events` topic; a peer's nested payload is read from
+//     the peer. The tool now queries every node's `get_mesh_ledger_slice` (the
+//     local node over its own transport too) and reports the evidence.
+//   - computeMeshTaskStats (meshTaskHistory's M7 per-task stats): a separate
+//     in-process ledger-scanning compute call, not part of any landed IPC
+//     command surface — REQUESTED EDIT, left unchanged (best-effort, does not
+//     block the entries/summary read it augments).
 
 import {
     MESH_MISSION_STATUSES,
-    appendLedgerEntry,
-    appendRemoteLedgerEntries,
-    buildMeshLedgerReconciliationEvidence,
-    buildMeshLedgerReplicaEvidence,
     commandForNode,
     computeMeshTaskStats,
     drainCoordinatorPendingEvents,
-    getLedgerSummary,
     isLocalControlPlaneNode,
-    listMeshMissionsForTool,
-    readLedgerEntries,
-    readLedgerSlice,
-    readLedgerSliceFromStore,
     readString,
     refreshMeshFromDaemon,
     slimLedgerPayload,
@@ -53,7 +44,8 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
-import { missionUpsert, missionQuery, noteForget, noteUpsert, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { ledgerQuery, missionListQuery, missionUpsert, missionQuery, noteForget, noteUpsert, recordLocal, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { buildMeshRecordReconciliationEvidence, buildMeshRecordReplicaEvidence } from './mesh-record-reconcile-evidence.js';
 import type { MeshMissionStatusValue } from '@adhdev/mesh-shared';
 
 export async function meshTaskHistory(
@@ -73,8 +65,15 @@ export async function meshTaskHistory(
     // explicit request (tail > 50) is clamped harder (20) than a modest one (30).
     const compactCap = requestedTail > 50 ? 20 : 30;
     const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
-    const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
-    const rawEntries = readLedgerEntries(mesh.id, { tail, kind });
+    const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim()] : undefined;
+    // C-W9b: was in-process `readLedgerEntries`/`getLedgerSummary`; now one
+    // `ledger_query` IPC round trip to the daemon that owns the ledger.
+    const { entries: rawEntries, summary: rawSummary } = await ledgerQuery(ctx.transport, {
+        meshId: mesh.id,
+        tail,
+        ...(kind ? { kind } : {}),
+        includeSummary: true,
+    });
     // Slim large payload fields so coordinator context stays lean. Verbose
     // returns the raw payloads untouched for full audit detail.
     const entries = compact
@@ -83,7 +82,7 @@ export async function meshTaskHistory(
             payload: e.payload ? slimLedgerPayload(e.payload) : e.payload,
         }))
         : rawEntries;
-    const summary = getLedgerSummary(mesh.id);
+    const summary = rawSummary;
     // M7: per-task time/attempt stats for tasks visible in the returned window.
     // Derived from ledger truth at query time; incomplete evidence is flagged,
     // never estimated.
@@ -128,8 +127,16 @@ export async function meshLedgerQuery(
     // compact task_history window since it isn't payload-heavy by default).
     const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 50;
     const tail = Math.min(requestedTail, 500);
-    const entries = readLedgerEntries(mesh.id, { tail, kind, since, node });
-    const summary = getLedgerSummary(mesh.id);
+    // C-W9b: was in-process `readLedgerEntries`/`getLedgerSummary`; now one
+    // `ledger_query` IPC round trip to the daemon that owns the ledger.
+    const { entries, summary } = await ledgerQuery(ctx.transport, {
+        meshId: mesh.id,
+        tail,
+        ...(kind ? { kind } : {}),
+        ...(since ? { since } : {}),
+        ...(node ? { node } : {}),
+        includeSummary: true,
+    });
     return JSON.stringify({
         meshId: mesh.id,
         query: {
@@ -275,7 +282,6 @@ export async function meshReconcileLedger(
         : null;
     const nodes = ctx.mesh.nodes.filter(node => !requestedNodeIds || requestedNodeIds.has(node.id));
     const replicas: any[] = [];
-    const shouldImport = args.import_entries !== false;
     const queryArgs = {
         meshId: ctx.mesh.id,
         ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
@@ -283,8 +289,19 @@ export async function meshReconcileLedger(
         ...(typeof args.since === 'string' && args.since.trim() ? { since: args.since.trim() } : {}),
     };
 
-    // OFFLINE-NODE-BLOCKING: the ledger fan-out issues one `get_mesh_ledger_slice` per
-    // node. Run them concurrently with per-node error isolation (Promise.allSettled) so a
+    const readSlice = (payload: any): any => {
+        if (payload?.success === false) {
+            throw new Error(payload.error || 'get_mesh_ledger_slice failed');
+        }
+        const slice = payload?.slice ?? payload;
+        if (slice?.protocol !== 'adhdev.mesh.ledger.slice.v1' || !Array.isArray(slice.entries)) {
+            throw new Error('daemon returned an invalid ledger slice payload');
+        }
+        return slice;
+    };
+
+    // OFFLINE-NODE-BLOCKING: the fan-out issues one `get_mesh_ledger_slice` per node.
+    // Run them concurrently with per-node error isolation (Promise.allSettled) so a
     // single dead node no longer serializes the rest, AND stamp the read-only slice probe
     // with the status-origin marker ({ statusProbe: true }) so the daemon-cloud relay grants
     // the SHORT connect-wait budget — an offline (powered-off) node is rejected in ~2s with
@@ -293,10 +310,10 @@ export async function meshReconcileLedger(
     const reconcileNode = async (node: (typeof nodes)[number]): Promise<any> => {
         try {
             if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
-                // G4: Use SQLite mesh_event_ledger (bounded slice) as the local P2P reconcile read path.
-                // readLedgerSlice (JSONL) is retained for per-daemon P2P export; coordinator local reads use SQLite.
-                const slice = readLedgerSliceFromStore(ctx.mesh.id, queryArgs);
-                return buildMeshLedgerReplicaEvidence({
+                // C-W9a: this daemon's own records, read over its local transport (the
+                // mcp-server never opens mesh-runtime.db itself).
+                const slice = readSlice(unwrapCommandPayload(await ctx.transport.command('get_mesh_ledger_slice', queryArgs)));
+                return buildMeshRecordReplicaEvidence({
                     nodeId: node.id,
                     daemonId: node.daemonId,
                     transport: 'local',
@@ -304,42 +321,16 @@ export async function meshReconcileLedger(
                     status: 'local',
                 });
             }
-
             const result = await commandForNode(ctx, node, 'get_mesh_ledger_slice', queryArgs, { statusProbe: true });
-            const payload = unwrapCommandPayload(result);
-            if (payload?.success === false) {
-                throw new Error(payload.error || 'remote get_mesh_ledger_slice failed');
-            }
-            const slice = payload?.slice ?? payload;
-            if (slice?.protocol !== 'adhdev.mesh.ledger.slice.v1' || !Array.isArray(slice.entries)) {
-                throw new Error('remote daemon returned an invalid ledger slice payload');
-            }
-            const importResult = shouldImport
-                ? appendRemoteLedgerEntries(ctx.mesh.id, slice.entries)
-                : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
-            if (shouldImport && importResult.accepted > 0) {
-                appendLedgerEntry(ctx.mesh.id, {
-                    kind: 'ledger_replicated',
-                    nodeId: node.id,
-                    payload: {
-                        protocol: 'adhdev.mesh.ledger.slice.v1',
-                        imported: importResult.accepted,
-                        skippedDuplicate: importResult.skippedDuplicate,
-                        rejectedInvalid: importResult.rejectedInvalid,
-                        nextAfterId: slice.cursor?.nextAfterId ?? null,
-                        via: 'p2p_datachannel',
-                    },
-                });
-            }
-            return buildMeshLedgerReplicaEvidence({
+            const slice = readSlice(unwrapCommandPayload(result));
+            return buildMeshRecordReplicaEvidence({
                 nodeId: node.id,
                 daemonId: node.daemonId,
                 transport: 'p2p_datachannel',
                 slice,
-                importResult,
             });
         } catch (e: any) {
-            return buildMeshLedgerReplicaEvidence({
+            return buildMeshRecordReplicaEvidence({
                 nodeId: node.id,
                 daemonId: node.daemonId,
                 transport: node.daemonId ? 'p2p_datachannel' : 'local',
@@ -357,7 +348,7 @@ export async function meshReconcileLedger(
             // reconcileNode swallows its own errors, so a rejection here is unexpected —
             // fall back to a failed-replica marker rather than dropping the node silently.
             const node = nodes[idx];
-            replicas.push(buildMeshLedgerReplicaEvidence({
+            replicas.push(buildMeshRecordReplicaEvidence({
                 nodeId: node.id,
                 daemonId: node.daemonId,
                 transport: node.daemonId ? 'p2p_datachannel' : 'local',
@@ -367,17 +358,26 @@ export async function meshReconcileLedger(
         }
     });
 
-    const evidence = buildMeshLedgerReconciliationEvidence(ctx.mesh.id, replicas);
-    appendLedgerEntry(ctx.mesh.id, {
-        kind: 'ledger_reconciled',
-        payload: {
-            protocol: evidence.protocol,
-            sourceOfTruth: evidence.sourceOfTruth,
-            totals: evidence.totals,
-            convergence: evidence.convergence,
-        },
-    });
-    return JSON.stringify({ success: true, evidence }, null, 2);
+    const evidence = buildMeshRecordReconciliationEvidence(ctx.mesh.id, replicas);
+    try {
+        await recordLocal(ctx.transport, {
+            meshId: ctx.mesh.id,
+            kind: 'ledger_reconciled',
+            payload: {
+                protocol: evidence.protocol,
+                sourceOfTruth: evidence.sourceOfTruth,
+                totals: evidence.totals,
+                convergence: evidence.convergence,
+            },
+        });
+    } catch { /* the evidence is the result; its record is best-effort */ }
+    return JSON.stringify({
+        success: true,
+        evidence,
+        ...(args.import_entries === true
+            ? { importRetired: true, note: 'import_entries is retired (C-W9a): records stay on the daemon that wrote them; read a peer\'s slice from that peer.' }
+            : {}),
+    }, null, 2);
 }
 
 function isMeshMissionStatusValue(value: string | undefined): value is MeshMissionStatusValue {
@@ -579,12 +579,17 @@ export async function meshMissionList(
         const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
             ? Math.floor(args.limit)
             : undefined;
-        const result = listMeshMissionsForTool(ctx.mesh.id, {
-            statuses,
+        // C-W9b: was in-process `listMeshMissionsForTool`; now the
+        // `mission_list_query` IPC round trip (additive sibling of
+        // `missionQuery` — see turn-ipc.ts's note on why this widened shape
+        // is its own command rather than a widened `mission_query`).
+        const result = await missionListQuery(ctx.transport, {
+            meshId: ctx.mesh.id,
+            ...(statuses ? { statuses: statuses as any } : {}),
             verbose,
             includeMagi,
             withStats,
-            limit,
+            ...(limit !== undefined ? { limit } : {}),
         });
         return JSON.stringify({
             success: true,
@@ -598,7 +603,7 @@ export async function meshMissionList(
             ...(result.historyFold ? { historyFold: result.historyFold } : {}),
         }, null, 2);
     } catch (e: any) {
-        return JSON.stringify({ success: false, error: e?.message || String(e) });
+        return JSON.stringify({ success: false, error: e?.message || String(e), ...(e instanceof TurnIpcCommandError ? { code: e.code } : {}) });
     }
 }
 

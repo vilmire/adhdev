@@ -13,13 +13,11 @@ import {
     buildBranchConvergence,
     buildCompactStaleDirectWorkSummary,
     buildCoordinatorP2pRelayFailure,
-    buildMeshActiveWork,
     buildMeshAsyncRefineJobs,
     buildMeshMagiActivity,
     compactMagiActivityGroup,
     summarizeMeshMagiActivity,
     buildMeshNodeProbeFreshness,
-    buildMeshSchedulingRuntime,
     getLastQuotaRanking,
     buildNodeCapabilityExposure,
     buildNodeMachineIdentity,
@@ -35,24 +33,20 @@ import {
     extractGitStatus,
     extractReporterNodeFactsQuota,
     extractSubmodules,
-    getActiveDirectDispatches,
     getLatestActiveLaunchFailure,
-    getLedgerSummary,
     summarizeMeshUsage,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     getNodeLaunchReadiness,
-    getQueue,
-    getSessionRecoveryContext,
     isGitStatusDirty,
     isNoteworthyCompactNode,
     pinnedRepresentativeNodeIds,
     minimalCompactNode,
-    readLedgerEntries,
     readNodeDaemonId,
     readNodeMachineId,
     readRelatedRepos,
     reconcileDirectDispatchesFromTranscriptEvidence,
+    readActiveWorkFromDaemon,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     summarizeBranchConvergence,
@@ -65,7 +59,8 @@ import type {
 // MESH-IMAGE-DISPATCH: view-surface projection — not (yet) re-exported through
 // mesh-tools-internal.ts, imported directly from the package like the other
 // daemon-core symbols mesh-tools-internal.ts itself imports.
-import { summarizeQueueEntryInputForView } from '@adhdev/daemon-core';
+import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
+import { activeWorkQuery, recoveryContextQuery } from '../ipc/turn-commands.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -110,7 +105,7 @@ export function summarizePendingEventProtocolMetrics(
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
-    const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_status');
+    const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_status');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
     // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe
@@ -122,7 +117,16 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
 
-    let ledgerSummary = getLedgerSummary(mesh.id);
+    // C-W9a: the record summary and the scheduling runtime are computed in the
+    // daemon (`active_work_query`) — the queue and the records never leave it.
+    const runtimeView = await activeWorkQuery(transport, {
+        meshId: mesh.id,
+        compute: false,
+        includeSummary: true,
+        includeSchedulingRuntime: true,
+        mesh: mesh as unknown as Record<string, unknown>,
+    });
+    let ledgerSummary = runtimeView.summary as unknown as MeshLedgerSummaryView;
 
     // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
     // global parallel caps + consumption, and per-node load / priority / provider caps
@@ -130,7 +134,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
     // the mesh config + a queue snapshot (read-only) — never drives a scheduling
     // decision, only exposes the picture the claim path acts on. Computed once so each
     // node entry below can attach its slice and the response can carry the mesh rollup.
-    const schedulingRuntime = buildMeshSchedulingRuntime(mesh, getQueue(mesh.id));
+    const schedulingRuntime = runtimeView.schedulingRuntime as unknown as MeshSchedulingRuntime;
     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
     // Probe all nodes in parallel — git_status + session collection per node are independent.
@@ -293,7 +297,9 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         });
 
         // Recovery Hints & Next-step reporting
-        const recoveryContext = getSessionRecoveryContext(mesh.id, { nodeId: node.id });
+        const recoveryContext = await recoveryContextQuery(transport, { meshId: mesh.id, nodeId: node.id })
+            .then((r) => r.context as unknown as SessionRecoveryContext)
+            .catch(() => ({ consecutiveNodeFailures: 0 } as SessionRecoveryContext));
         if (recoveryContext.consecutiveNodeFailures > 0) {
             entry.recoveryHints = {
                 consecutiveFailures: recoveryContext.consecutiveNodeFailures,
@@ -305,7 +311,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
             };
         }
 
-        const activeLaunchFailure = getLatestActiveLaunchFailure(mesh.id, node.id);
+        const activeLaunchFailure = await getLatestActiveLaunchFailure(ctx, node.id).catch(() => null);
         if (activeLaunchFailure && node.isLocalWorktree) {
             entry.health = 'degraded';
             entry.degradedReason = 'worktree_launch_failed';
@@ -420,25 +426,19 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         return entry;
     }));
 
-    let ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
-    let directDispatches = getActiveDirectDispatches(mesh.id);
-    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, directDispatches, ledgerEntries);
+    // C-W9a: active work is computed in the daemon over its queue, open direct
+    // dispatches and records (+ turn outcomes); the inputs come back only for the
+    // transcript-reconcile pass below. buildMeshActiveWork never reads `task.input`
+    // (MESH-IMAGE-DISPATCH), and no queue row reaches this response from here.
+    let activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true });
+    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, results, activeWorkView.directDispatches, activeWorkView.records);
     if (directReconciliation.reconciled > 0) {
-        ledgerEntries = readLedgerEntries(mesh.id, { tail: 200 });
-        directDispatches = getActiveDirectDispatches(mesh.id);
-        ledgerSummary = getLedgerSummary(mesh.id);
+        activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: results, recordTail: 200, includeInputs: true, includeSummary: true });
+        if (activeWorkView.summary) ledgerSummary = activeWorkView.summary as unknown as MeshLedgerSummaryView;
     }
-    const activeWorkEvidence = buildMeshActiveWork({
-        meshId: mesh.id,
-        // MESH-IMAGE-DISPATCH: mesh_status is a VIEW surface — strip any persisted
-        // input envelope (may carry base64 image data) before this queue snapshot
-        // feeds the response. buildMeshActiveWork never reads `task.input`, so this
-        // is a pure size/privacy trim with no effect on the derived records.
-        queue: getQueue(mesh.id).map(task => summarizeQueueEntryInputForView(task)),
-        ledgerEntries,
-        directDispatches,
-        nodes: results,
-    });
+    const activeWorkEvidence = activeWorkView.activeWork!;
+    // The record tail the refine-job and MAGI folds below read (the same window as before).
+    const ledgerEntries = activeWorkView.records;
 
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {

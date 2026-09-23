@@ -6,14 +6,11 @@ import {
     IpcTransport,
     SESSION_PROVIDER_METADATA_TTL_MS,
     annotateRapidReadChatAdvisory,
-    appendLedgerEntry,
     buildCoordinatorP2pRelayFailure,
     buildDirectTaskPayload,
     // GRAPH-MEASUREMENT-DIRECT — the direct dispatch decision record.
     normalizeOrchestrationDecision,
-    recordDirectDispatchDecision,
     MESH_UNSANCTIONED_DIRECT_HINT,
-    buildMeshActiveWork,
     collectPendingApprovals,
     buildMeshReadChatCacheFallback,
     buildMissingCoordinatorDaemonIdFailure,
@@ -26,19 +23,18 @@ import {
     commandForNode,
     compactChatPayload,
     drainCoordinatorPendingEvents,
-    enqueueTask,
     extractLaunchPayload,
     extractStatusMetadataSessions,
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
-    getActiveDirectDispatches,
     getMeshMission,
-    getQueue,
     getSessionMetadata,
     getWorktreeBootstrapLaunchBlock,
     hasRecentDuplicateDispatch,
     ipcDispatchToRemoteAgent,
     reconcileDirectDispatchesFromTranscriptEvidence,
+    readActiveWorkFromDaemon,
+    readQueueFromDaemon,
     recordMeshCoordinatorToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
@@ -53,14 +49,12 @@ import {
     missingProviderPriorityMessage,
     pruneStaleDirectDispatches,
     randomUUID,
-    readLedgerEntries,
     readProviderPriority,
     readSessionRecordId,
     readSpawnedSessionVisibility,
     readString,
     readTaskInput,
     type MeshTaskInput,
-    recordDirectDispatchTask,
     recordRecoverableLaunchFailure,
     refreshMeshFromDaemon,
     resolveCoordinatorDaemonId,
@@ -97,7 +91,8 @@ import { resolveDispatchMessage } from '@adhdev/daemon-core';
 // via IPC, instead of the legacy openTurnAttempt/recordTurnAck pair that
 // recordDirectDispatchTask used to trigger in-process. See the design's C2
 // paragraph and the C-W6c report's "direct dispatch end to end" deliverable.
-import { turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { directDispatchRecord, queueEnqueue, recordLocal, turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 
 
 /**
@@ -266,15 +261,19 @@ export async function meshPruneStaleDirect(
     const includeTerminal = args.include_terminal === true;
 
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-    const ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 500 });
-    const directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+    // C-W9a: the prune's inputs (records, open direct dispatches, queue) come from the
+    // daemon over IPC; the prune's decisions are unchanged.
+    const pruneInputs = await readActiveWorkFromDaemon(ctx, { compute: false, includeInputs: true, recordTail: 500 });
+    const ledgerEntries = pruneInputs.records;
+    const directDispatches = pruneInputs.directDispatches;
+    const pruneQueue = await readQueueFromDaemon(ctx);
 
     // Manual prune is immediate (minAgeMs omitted → 0). The same prune core powers the daemon
     // reconcile-loop auto-prune, which passes a conservative age gate. Keeping a single core
     // means the safety classification + audit-ledger behavior can never drift between the two.
     const result = await pruneStaleDirectDispatches({
         meshId: ctx.mesh.id,
-        queue: getQueue(ctx.mesh.id),
+        queue: pruneQueue,
         ledgerEntries,
         directDispatches,
         nodes: liveNodes,
@@ -527,7 +526,7 @@ export async function meshSendTask(
     // Avoid duplicate side effects when an MCP/tool call is interrupted after
     // the daemon already accepted the send and the coordinator retries the
     // exact same node/session/message immediately.
-    const duplicate = hasRecentDuplicateDispatch(ctx, args);
+    const duplicate = await hasRecentDuplicateDispatch(ctx, args);
     if (duplicate.duplicate) {
         return JSON.stringify({
             success: true,
@@ -549,7 +548,7 @@ export async function meshSendTask(
     try {
         // ── IpcTransport + remote node: direct P2P agent_command dispatch ──────
         //
-        // The local queue file (mesh-ledger/*.queue.json) is stored on THIS
+        // The local queue (the daemon's runtime store) is stored on THIS
         // machine and is inaccessible to the remote daemon.  Sending
         // trigger_mesh_queue to the remote daemon would always be a no-op
         // because it cannot read the queue.  Instead we relay agent_command
@@ -656,7 +655,7 @@ export async function meshSendTask(
                 });
                 try {
                     const providerType = result.providerType || cached?.providerType;
-                    appendLedgerEntry(ctx.mesh.id, {
+                    await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                         kind: 'task_dispatched',
                         nodeId: args.node_id,
                         sessionId: dispatchedSessionId,
@@ -678,33 +677,38 @@ export async function meshSendTask(
                     // the materialised row carries the turn-ledger attempt opened above
                     // (C-W8: the attempt, not this call, is what makes the completion
                     // reducer-authoritative). missionId only affects mission attribution.
-                    recordDirectDispatchTask(ctx.mesh.id, message, {
-                        id: taskId,
-                        ...(missionId ? { missionId } : {}),
-                        assignedNodeId: args.node_id,
-                        assignedSessionId: dispatchedSessionId,
-                        taskMode,
-                        difficulty,
-                        ...(readonly ? { readonly: true } : {}),
-                        dispatchedAt,
-                        ...(p2pAttemptRef ? { attemptId: p2pAttemptRef.attemptId } : {}),
-                    });
-                    // GRAPH-MEASUREMENT-DIRECT: written AFTER the dispatch is known to have
-                    // succeeded, mirroring recordSingleEnqueueDecision being written after the
-                    // insert — a failed dispatch must leave no decision row, or the adoption
-                    // ratio counts dispatches that never happened.
-                    recordDirectDispatchDecision(ctx.mesh.id, {
+                    // C-W9a: the task row and the decision record are written by the
+                    // daemon (`direct_dispatch_record`), each best-effort. GRAPH-MEASUREMENT-
+                    // DIRECT: written AFTER the dispatch is known to have succeeded, mirroring
+                    // the single-enqueue decision written after the insert — a failed dispatch
+                    // must leave no decision row, or the adoption ratio counts dispatches that
+                    // never happened.
+                    await directDispatchRecord(ctx.transport, {
+                        meshId: ctx.mesh.id,
                         taskId,
-                        via: 'p2p_direct',
-                        nodeId: args.node_id,
-                        ...(dispatchedSessionId ? { sessionId: dispatchedSessionId } : {}),
-                        ...(missionId ? { missionId } : {}),
-                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                        decision: orchestration.decision,
-                        ...(decisionMissing ? { decisionMissing: true } : {}),
-                        ...(orchestration.unsanctionedDirect
-                            ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
-                            : {}),
+                        message,
+                        task: {
+                            ...(missionId ? { missionId } : {}),
+                            assignedNodeId: args.node_id,
+                            assignedSessionId: dispatchedSessionId,
+                            taskMode,
+                            difficulty,
+                            ...(readonly ? { readonly: true } : {}),
+                            dispatchedAt,
+                            ...(p2pAttemptRef ? { attemptId: p2pAttemptRef.attemptId } : {}),
+                        },
+                        decision: {
+                            via: 'p2p_direct',
+                            nodeId: args.node_id,
+                            ...(dispatchedSessionId ? { sessionId: dispatchedSessionId } : {}),
+                            ...(missionId ? { missionId } : {}),
+                            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                            decision: orchestration.decision,
+                            ...(decisionMissing ? { decisionMissing: true } : {}),
+                            ...(orchestration.unsanctionedDirect
+                                ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
+                                : {}),
+                        } as Record<string, unknown>,
                     });
                 } catch { /* best-effort */ }
             } else {
@@ -913,7 +917,7 @@ export async function meshSendTask(
                     // to unwind the aborted turn and repaint an idle prompt, and only the
                     // FSM knows when that has actually happened. Reusing the funnel means
                     // no new injection path and no bypass of the PTY send gate.
-                    const interruptedTask = enqueueTask(ctx.mesh.id, message, {
+                    const interruptedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
                         targetNodeId: args.node_id,
                         targetSessionId: args.session_id,
                         taskMode,
@@ -924,7 +928,7 @@ export async function meshSendTask(
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    });
+                    } })).entry as unknown as MeshWorkQueueEntry);
                     return JSON.stringify({
                         success: true,
                         dispatched: false,
@@ -975,7 +979,7 @@ export async function meshSendTask(
                     // call tryAssignQueueTask the moment this session goes idle — no new dispatch
                     // path, no new idle-transition wiring, just reusing the funnel that already
                     // auto-flushes reliably.
-                    const queuedTask = enqueueTask(ctx.mesh.id, message, {
+                    const queuedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
                         targetNodeId: args.node_id,
                         targetSessionId: args.session_id,
                         taskMode,
@@ -986,7 +990,7 @@ export async function meshSendTask(
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    });
+                    } })).entry as unknown as MeshWorkQueueEntry);
                     return JSON.stringify({
                         success: true,
                         dispatched: false,
@@ -1034,7 +1038,7 @@ export async function meshSendTask(
             // sessionHasActiveAssignment=true at completion time, so the dedup gate is skipped
             // symmetrically with enqueue. On a dispatch failure below we roll the row back.
             try {
-                appendLedgerEntry(ctx.mesh.id, {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                     kind: 'task_dispatched',
                     nodeId: args.node_id,
                     sessionId: args.session_id,
@@ -1171,32 +1175,35 @@ export async function meshSendTask(
             // the sibling call site above. The turn attempt and the confirmed delivery
             // record must not depend on whether a mission was supplied.
             try {
-                recordDirectDispatchTask(ctx.mesh.id, message, {
-                    id: taskId,
-                    ...(missionId ? { missionId } : {}),
-                    assignedNodeId: args.node_id,
-                    assignedSessionId: args.session_id,
-                    taskMode,
-                    difficulty,
-                    ...(readonly ? { readonly: true } : {}),
-                    dispatchedAt,
-                    ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId } : {}),
-                });
                 // GRAPH-MEASUREMENT-DIRECT: after the inject was accepted — see the sibling
                 // call site on the p2p_direct path. The rejection branch above returns before
                 // reaching here, so a refused dispatch leaves no decision row.
-                recordDirectDispatchDecision(ctx.mesh.id, {
+                await directDispatchRecord(ctx.transport, {
+                    meshId: ctx.mesh.id,
                     taskId,
-                    via: 'local_direct',
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    ...(missionId ? { missionId } : {}),
-                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    decision: orchestration.decision,
-                    ...(decisionMissing ? { decisionMissing: true } : {}),
-                    ...(orchestration.unsanctionedDirect
-                        ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
-                        : {}),
+                    message,
+                    task: {
+                        ...(missionId ? { missionId } : {}),
+                        assignedNodeId: args.node_id,
+                        assignedSessionId: args.session_id,
+                        taskMode,
+                        difficulty,
+                        ...(readonly ? { readonly: true } : {}),
+                        dispatchedAt,
+                        ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId } : {}),
+                    },
+                    decision: {
+                        via: 'local_direct',
+                        nodeId: args.node_id,
+                        sessionId: args.session_id,
+                        ...(missionId ? { missionId } : {}),
+                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                        decision: orchestration.decision,
+                        ...(decisionMissing ? { decisionMissing: true } : {}),
+                        ...(orchestration.unsanctionedDirect
+                            ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
+                            : {}),
+                    } as Record<string, unknown>,
                 });
             } catch { /* best-effort */ }
             return JSON.stringify({
@@ -1229,7 +1236,7 @@ export async function meshSendTask(
         // targetCoordinatorSessionId is empty (mesh-queue-assignment.ts) and the completion
         // loses its session anchor — falling back to daemon-level fan-out across every local
         // coordinator instead of routing back to the coordinator session that issued the task.
-        const task = enqueueTask(ctx.mesh.id, message, {
+        const task = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,
             taskMode,
@@ -1239,7 +1246,7 @@ export async function meshSendTask(
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        });
+        } })).entry as unknown as MeshWorkQueueEntry);
 
         const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
@@ -1331,7 +1338,7 @@ export async function meshReadChat(
 ): Promise<string> {
     const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
     if (!node) {
-        return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
+        return JSON.stringify(await buildMissingNodeReadChatRecovery(ctx, args), null, 2);
     }
 
     // The drain marks rows `drained=1`. For an MCP-only coordinator (no live CLI
@@ -1342,7 +1349,7 @@ export async function meshReadChat(
     const pendingCoordinatorEvents = await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
     const withPending = (rendered: string): string => attachPendingCoordinatorEvents(rendered, pendingCoordinatorEvents);
 
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const cached = await resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
         ? args.provider_session_id.trim()
         : cached?.providerSessionId;
@@ -1384,7 +1391,7 @@ export async function meshReadChat(
         // hard-failed at the 30s timeout instead of surfacing the coordinator's cached
         // summary. See buildMeshReadChatCacheFallback.
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
-        return withPending(buildMeshReadChatCacheFallback(ctx, args, node, e));
+        return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
     }
     return withPending(renderMeshReadChatPayload(unwrapCommandPayload(result) as Record<string, any>, args, {
         fallbackReason: replicaFallbackReason,
@@ -1466,7 +1473,7 @@ export async function meshReadDebug(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const cached = await resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
         ? args.provider_session_id.trim()
         : cached?.providerSessionId;
@@ -1522,7 +1529,7 @@ export async function meshReadTerminal(
         }, null, 2);
     }
 
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const cached = await resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const result = await commandForNode(ctx, node, 'read_terminal', {
         sessionId: args.session_id,
         targetSessionId: args.session_id,
@@ -1593,9 +1600,9 @@ export async function meshSendKeys(
         .filter(Boolean);
     const hasDestructive = requestedKeys.some((k) => MESH_SEND_KEYS_DESTRUCTIVE.has(k));
     const auditKeys = requestedKeys.slice(0, 64);
-    const recordAudit = (result: string, extra: Record<string, unknown> = {}) => {
+    const recordAudit = async (result: string, extra: Record<string, unknown> = {}) => {
         try {
-            appendLedgerEntry(ctx.mesh.id, {
+            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                 kind: 'key_injection',
                 nodeId: args.node_id,
                 sessionId: args.session_id,
@@ -1613,7 +1620,7 @@ export async function meshSendKeys(
     if (hasDestructive) {
         const policyAllows = resolveAllowSendKeysDestructive(ctx.mesh.policy, node.policy);
         if (args.confirm_destructive !== true || !policyAllows) {
-            recordAudit('refused', { refused: 'destructive_gate', policyAllows });
+            await recordAudit('refused', { refused: 'destructive_gate', policyAllows });
             return JSON.stringify({
                 success: false,
                 error: 'destructive key (CTRL_C/ESC) requires BOTH confirm_destructive=true AND mesh policy allowSendKeysDestructive=true',
@@ -1624,7 +1631,7 @@ export async function meshSendKeys(
         }
     }
 
-    const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
+    const cached = await resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const result = await commandForNode(ctx, node, 'send_keys', {
         sessionId: args.session_id,
         targetSessionId: args.session_id,
@@ -1638,9 +1645,9 @@ export async function meshSendKeys(
     // Audit the daemon's verdict (injected / refused). The daemon result carries no
     // literal text either, so it is safe to reflect keys/result here.
     if (payload?.success === true) {
-        recordAudit('injected', { submits: payload.submits === true });
+        await recordAudit('injected', { submits: payload.submits === true });
     } else {
-        recordAudit('refused', { refused: readString(payload?.refused) || 'error' });
+        await recordAudit('refused', { refused: readString(payload?.refused) || 'error' });
     }
     return JSON.stringify(payload, null, 2);
 }
@@ -1936,12 +1943,12 @@ export async function meshLaunchSession(
                 }
             });
         } catch (e: any) {
-            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
+            return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
         }
         const launchPayload = extractLaunchPayload(result);
         if (launchPayload?.success === false || result?.success === false) {
             const launchError = new Error(launchPayload?.error || result?.error || 'launch_cli rejected the session launch');
-            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
+            return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
         }
         const runtimeSessionId = typeof launchPayload?.sessionId === 'string'
             ? launchPayload.sessionId
@@ -1968,7 +1975,7 @@ export async function meshLaunchSession(
         // daemon that neither appends nor sets the flag, so no launch goes unrecorded.
         if (launchPayload?.ledgerLaunchRecorded !== true) {
             try {
-                appendLedgerEntry(ctx.mesh.id, {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                     kind: 'session_launched',
                     nodeId: args.node_id,
                     sessionId: runtimeSessionId || undefined,
@@ -2067,7 +2074,7 @@ export async function meshListPendingApprovals(
     ctx: MeshContext,
     _args: Record<string, unknown> = {},
 ): Promise<string> {
-    recordMeshCoordinatorToolCall(ctx, 'mesh_list_pending_approvals');
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_list_pending_approvals');
     await refreshMeshFromDaemon(ctx);
 
     // Audit #7 (P7): shares the same probe cache/dedupe as mesh_status /
@@ -2075,21 +2082,14 @@ export async function meshListPendingApprovals(
     // get_status_metadata per daemon per call, reused across tools within the TTL.
     const probeOpts = _args?.refresh === true ? { refresh: true } : undefined;
     const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx, probeOpts);
-    let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
-    let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
-    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
+    // C-W9a: active work computed in the daemon (inputs returned for the reconcile pass).
+    let activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
+    const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
     if (directReconciliation.reconciled > 0) {
-        ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
-        directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+        activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200 });
     }
 
-    const activeWorkEvidence = buildMeshActiveWork({
-        meshId: ctx.mesh.id,
-        queue: getQueue(ctx.mesh.id),
-        ledgerEntries,
-        directDispatches,
-        nodes: liveNodes,
-    });
+    const activeWorkEvidence = activeWorkView.activeWork!;
 
     const approvals = collectPendingApprovals(activeWorkEvidence.activeWork);
 

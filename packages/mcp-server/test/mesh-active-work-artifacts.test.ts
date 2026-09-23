@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, loadConfig, notifyMeshCoordinator, readLedgerEntries, __writeTaskStatusForTests } from '@adhdev/daemon-core';
+import { buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, loadConfig, notifyMeshCoordinator, readLocalRecords, __writeTaskStatusForTests } from '@adhdev/daemon-core';
 import { answerTurnIpc, armTestTurnLedger, closeOpenTestAttempts, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
 
@@ -16,9 +16,10 @@ import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js'
 // the coordinator's localDaemonId so this delivery resolves as it does in production.
 const SELF_MACHINE_ID = loadConfig().machineId;
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { seedLocalRecord } from './helpers/local-records.js';
 // C-W8: a real in-process turn ledger answers the direct-dispatch turn IPC (the
 // attempt IS the pre-recorded dispatch; Stage 6 reads it). Armed once per file.
 armTestTurnLedger();
@@ -30,7 +31,7 @@ function cleanupMesh(meshId: string): void {
   // G2/G3: runtime reads are SQLite-primary — clear the runtime store rows too
   // (ledger entries and drained pending-event fingerprints), otherwise state
   // accumulates across runs and bleeds into assertions.
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
@@ -171,6 +172,7 @@ function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
   const calls: Array<{ daemonId?: string; command: string; args: Record<string, unknown> }> = [];
 
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command) && command !== 'turn_observe') return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') {
@@ -224,7 +226,7 @@ function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
 }
 
 async function seedDirectTranscriptDispatch(meshId: string, taskId: string): Promise<void> {
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_dispatched',
     nodeId: 'node-transcript',
     sessionId: 'sess-transcript',
@@ -447,7 +449,7 @@ test('mesh_status reports an idle direct dispatch\'s final transcript as ONE con
     // Content boundary: the summary text never crosses the evidence.
     assert.equal(JSON.stringify(observed).includes('Restored the approved file'), false);
     // The MCP wrote no terminal of its own.
-    assert.equal(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
+    assert.equal(readLocalRecords(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
 
     // A second poll over the SAME turn end re-sends the SAME eventId (the ledger
     // collapses it on its primary key) rather than a fresh evidence row per poll.
@@ -487,7 +489,7 @@ test('mesh_view_queue reports transcript-backed idle direct dispatch evidence th
     assert.equal(observed[0].kind, 'transcript_final');
     assert.equal(observed[0].taskId, taskId);
     assert.equal(JSON.stringify(observed).includes('Final investigation result'), false);
-    assert.equal(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
+    assert.equal(readLocalRecords(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
   } finally {
     cleanupMesh(meshId);
   }
@@ -506,7 +508,7 @@ test('mesh_view_queue refreshes live mesh sessions before classifying direct wor
   };
 
   try {
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_dispatched',
       nodeId: 'node-remote',
       sessionId: 'sess-direct',
@@ -539,7 +541,7 @@ test('active queue view keeps historical queue rows out while direct work is exp
     const failed = enqueueTask(meshId, 'failed queue task', { difficulty: 'medium' });
     __writeTaskStatusForTests(meshId, completed.id, 'completed');
     __writeTaskStatusForTests(meshId, failed.id, 'failed');
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_dispatched',
       nodeId: 'node-remote',
       sessionId: 'sess-direct',
@@ -586,7 +588,8 @@ test('stale direct ledger tasks are separated from active work when queue is emp
     }],
   };
   const transport = new IpcTransport() as any;
-  transport.command = async (command: string) => {
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     return { success: false };
@@ -600,21 +603,21 @@ test('stale direct ledger tasks are separated from active work when queue is emp
   const ctx = { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' };
 
   try {
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_dispatched',
       nodeId: 'node-live',
       sessionId: 'sess-missing',
       providerType: 'hermes-cli',
       payload: { taskId: 'direct-missing-session', message: 'old direct task', source: 'direct', via: 'p2p_direct' },
     });
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_approval_needed',
       nodeId: 'node-live',
       sessionId: 'sess-missing',
       providerType: 'hermes-cli',
       payload: { taskId: 'direct-missing-session' },
     });
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_dispatched',
       nodeId: 'node-removed-worktree',
       sessionId: 'sess-removed',
@@ -697,7 +700,8 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
     }],
   };
   const transport = new IpcTransport() as any;
-  transport.command = async (command: string) => {
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     return { success: false };
@@ -720,7 +724,7 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
     }
     // Seed 20 orphaned direct dispatches (node has no live sessions) -> staleDirectWork.
     for (let i = 0; i < 20; i++) {
-      appendLedgerEntry(meshId, {
+      seedLocalRecord(meshId, {
         kind: 'task_dispatched',
         nodeId: 'node-gone',
         sessionId: `sess-gone-${i}`,
@@ -783,10 +787,12 @@ test('mesh_task_history returns pending async refine failure events instead of d
   const ctx = {
     mesh,
     transport: {
-      command: async (command: string) => {
+      command: async (command: string, args: Record<string, unknown> = {}) => {
         if (command === 'get_pending_mesh_events') {
           return { success: true, events: drainPendingMeshCoordinatorEvents(meshId) };
         }
+        // C-W9b: meshTaskHistory now reads via the `ledger_query` IPC command.
+        if (isTurnIpcCommand(command)) return answerTurnIpc(command, args);
         return { success: false };
       },
     },
@@ -806,7 +812,7 @@ test('mesh_task_history returns pending async refine failure events instead of d
   };
 
   try {
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'task_failed',
       nodeId: 'node-refine',
       payload: {
@@ -869,7 +875,7 @@ test('mesh_enqueue_task enqueue-and-push remains queue-sourced active work', asy
 
     await new Promise(resolve => setImmediate(resolve));
 
-    const dispatch = readLedgerEntries(meshId).find(entry => entry.kind === 'task_dispatched' && entry.payload?.taskId === enqueued.taskId);
+    const dispatch = readLocalRecords(meshId).find(entry => entry.kind === 'task_dispatched' && entry.payload?.taskId === enqueued.taskId);
     assert.ok(dispatch, 'expected enqueue-and-push dispatch ledger row');
     assert.equal(dispatch.payload.source, 'queue');
     assert.equal(dispatch.payload.via, 'p2p_direct');
@@ -904,7 +910,8 @@ function createWorktreeRoutingCtx(meshId: string) {
       { id: 'node-wt-2', workspace: '/repo-wt-2', repoRoot: '/repo', daemonId: 'daemon-base', machineId: 'machine-base', isLocalWorktree: true, worktreeBranch: 'feat/b', clonedFromNodeId: 'node-base', userOverrides: {}, policy: {}, sessions: [] },
     ],
   };
-  transport.command = async (command: string) => {
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     return { success: true };

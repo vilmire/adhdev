@@ -26,8 +26,6 @@ import {
     canonicalDaemonId,
     daemonIdsEquivalent,
     meshNodeIdMatches,
-    appendLedgerEntry,
-    appendRemoteLedgerEntries,
     buildCompactStaleDirectWorkSummary,
     buildMeshActiveWork,
     collectPendingApprovals,
@@ -37,13 +35,10 @@ import {
     summarizeMeshMagiActivity,
     getMeshMagiActivityByGroup,
     MAGI_RAW_ANSWER_CAP,
-    buildMeshLedgerReconciliationEvidence,
-    buildMeshLedgerReplicaEvidence,
     buildMeshNodeProbeFreshness,
     buildMeshSchedulingRuntime,
     getLastQuotaRanking,
     buildP2pRelayFailurePayload,
-    cancelTask,
     classifyP2pRelayFailure,
     pruneStaleDirectDispatches,
     describeTaskDependencyState,
@@ -61,23 +56,11 @@ import {
     MeshGraphPlanError,
     buildMeshGraphViews,
     normalizeOrchestrationDecision,
-    recordGraphEnqueueCommitted,
-    recordGraphEnqueueValidationFailed,
-    recordGraphEnqueueRolledBack,
-    recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
-    recordDirectDispatchDecision,
     MESH_UNSANCTIONED_DIRECT_HINT,
     MESH_VALID_DIRECT_REASONS,
-    recordGraphGateClaimed,
-    recordGraphGateReleased,
-    recordGraphGateAbandoned,
-    recordGraphNodePatched,
     taskDependenciesSatisfied,
-    enqueueTask,
-    enqueueTaskGraph,
-    MESH_TASK_GRAPH_MAX_TASKS,
     computeMeshMissionStats,
     computeMeshTaskStats,
     getActiveMeshMissionSummaries,
@@ -88,13 +71,8 @@ import {
     listMeshMissionsForTool,
     MESH_MISSION_STATUSES,
     upsertMeshMission,
-    getActiveDirectDispatches,
-    getQueue,
-    getLedgerSummary,
     summarizeMeshUsage,
-    getSessionRecoveryContext,
     hasTrailingToolActivityAfterFinalAssistant,
-    recordDirectDispatchTask,
     isP2pRelayTransportFailure,
     nodeSatisfiesRequiredTags,
     normalizeMeshCapabilityTags,
@@ -102,12 +80,7 @@ import {
     providerPinsFromRequiredTags,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
-    readLedgerEntries,
     coordinatorIdentityFromEmitFields,
-    readLedgerSlice,
-    readLedgerSliceFromStore,
-    recordMeshToolCall,
-    requeueTask,
     resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
@@ -128,6 +101,8 @@ import {
     collectNodeSessionIds,
     unwrapCommandPayload,
 } from './mesh-session-helpers.js';
+import { activeWorkQuery, ledgerQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
+import type { buildMeshActiveWork as BuildMeshActiveWorkFn, DirectDispatchRecord, MeshLedgerEntry, MeshLedgerSummary, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import {
     ACTIVE_QUEUE_STATUSES,
     HISTORICAL_QUEUE_STATUSES,
@@ -306,8 +281,6 @@ export {
 } from './read-chat-polling-advisory.js';
 export {
     MESH_MISSION_STATUSES,
-    appendLedgerEntry,
-    appendRemoteLedgerEntries,
     buildCompactStaleDirectWorkSummary,
     buildMeshActiveWork,
     collectPendingApprovals,
@@ -316,14 +289,11 @@ export {
     summarizeMeshMagiActivity,
     getMeshMagiActivityByGroup,
     MAGI_RAW_ANSWER_CAP,
-    buildMeshLedgerReconciliationEvidence,
-    buildMeshLedgerReplicaEvidence,
     buildMeshNodeCapabilityTags,
     buildMeshNodeProbeFreshness,
     buildMeshSchedulingRuntime,
     getLastQuotaRanking,
     buildP2pRelayFailurePayload,
-    cancelTask,
     classifyP2pRelayFailure,
     computeMeshMissionStats,
     computeMeshTaskStats,
@@ -342,26 +312,12 @@ export {
     MeshGraphPlanError,
     buildMeshGraphViews,
     normalizeOrchestrationDecision,
-    recordGraphEnqueueCommitted,
-    recordGraphEnqueueValidationFailed,
-    recordGraphEnqueueRolledBack,
-    recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
-    recordDirectDispatchDecision,
     MESH_UNSANCTIONED_DIRECT_HINT,
     MESH_VALID_DIRECT_REASONS,
-    recordGraphGateClaimed,
-    recordGraphGateReleased,
-    recordGraphGateAbandoned,
-    recordGraphNodePatched,
     taskDependenciesSatisfied,
-    enqueueTask,
-    enqueueTaskGraph,
-    MESH_TASK_GRAPH_MAX_TASKS,
-    getActiveDirectDispatches,
     getActiveMeshMissionSummaries,
-    getLedgerSummary,
     summarizeMeshUsage,
     getMagiKindPanel,
     listMagiKindPanels,
@@ -372,8 +328,6 @@ export {
     getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
-    getQueue,
-    getSessionRecoveryContext,
     isP2pRelayTransportFailure,
     isWeakCompletionEvidence,
     listMeshMissionSummaries,
@@ -389,11 +343,6 @@ export {
     resolveNotBefore,
     meshTaskPriorityRank,
     pruneStaleDirectDispatches,
-    readLedgerEntries,
-    readLedgerSlice,
-    readLedgerSliceFromStore,
-    recordDirectDispatchTask,
-    requeueTask,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
     loadRepoMeshJsonConfig,
@@ -548,9 +497,10 @@ export interface MeshContext {
 }
 
 /**
- * MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): wraps recordMeshToolCall with the
- * only caller-identity signal this stdio MCP process has — whether it was launched
- * with ADHDEV_COORDINATOR_SESSION_ID (carried on ctx.coordinatorSessionId). Absent
+ * MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): wraps `toolCallRecord` (C-W9b IPC
+ * client, `../ipc/turn-commands.js`) with the only caller-identity signal this
+ * stdio MCP process has — whether it was launched with
+ * ADHDEV_COORDINATOR_SESSION_ID (carried on ctx.coordinatorSessionId). Absent
  * does NOT mean "this is a worker": a legacy or non-coordinator launch also has no
  * env var, so absence is recorded as 'unknown', never asserted as a worker identity.
  *
@@ -559,15 +509,27 @@ export interface MeshContext {
  * call — only to observe, post hoc, which calls came from a coordinator-launched
  * process. See CLAUDE.md M-WORKER-SCOPED-MCP-SURFACE for the investigation this
  * instrumentation feeds (whether worker MCP surfaces should be scoped down).
+ *
+ * C-W9b: was a synchronous in-process `recordMeshToolCall` call against
+ * mcp-server's own store handle; now an async `tool_call_record` IPC round trip
+ * to the daemon that owns the counter. Best-effort like `operator_status` — a
+ * transport failure must never block the tool call the rate check is merely
+ * advisory for, so it degrades to "not rate limited" rather than throwing.
  */
-export function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): MeshToolCallRateResult {
+export async function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): Promise<MeshToolCallRateResult> {
     const sessionId = ctx.coordinatorSessionId ?? null;
-    return recordMeshToolCall({
-        meshId: ctx.mesh.id,
-        tool,
-        sessionId,
-        callerRole: sessionId ? 'coordinator' : 'unknown',
-    });
+    try {
+        return await toolCallRecord(ctx.transport, {
+            meshId: ctx.mesh.id,
+            tool,
+            ...(sessionId ? { sessionId } : {}),
+            callerRole: sessionId ? 'coordinator' : 'unknown',
+        });
+    } catch {
+        // Fire-and-forget advisory — see doc comment. A daemon-less/overloaded
+        // transport must not turn an advisory rate check into a tool failure.
+        return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
+    }
 }
 
 export type MeshSessionProviderMetadata = {
@@ -855,11 +817,58 @@ export async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: stri
     return owned.node;
 }
 
-export function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): { duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' } {
+/** The active-work view `buildMeshActiveWork` produces (computed in the daemon — see readActiveWorkFromDaemon). */
+export type MeshActiveWorkEvidence = ReturnType<typeof BuildMeshActiveWorkFn>;
+
+/**
+ * C-W9a: the active-work view and/or its inputs, computed IN THE DAEMON over
+ * IPC (`active_work_query`) — the queue, the open direct dispatches and the
+ * daemon's records never leave it unless `includeInputs` asks for them (the
+ * transcript-reconcile pass and the stale-direct prune read them).
+ */
+export async function readActiveWorkFromDaemon(ctx: MeshContext, opts: {
+    nodes?: unknown[];
+    queue?: unknown[];
+    recordTail?: number;
+    includeTerminalDirect?: boolean;
+    compute?: boolean;
+    includeInputs?: boolean;
+    includeSummary?: boolean;
+}): Promise<{ activeWork?: MeshActiveWorkEvidence; records: MeshLedgerEntry[]; directDispatches: DirectDispatchRecord[]; summary?: MeshLedgerSummary }> {
+    const res = await activeWorkQuery(ctx.transport, {
+        meshId: ctx.mesh.id,
+        ...(opts.nodes ? { nodes: opts.nodes as Record<string, unknown>[] } : {}),
+        ...(opts.queue ? { queue: opts.queue as Record<string, unknown>[] } : {}),
+        ...(opts.recordTail !== undefined ? { recordTail: opts.recordTail } : {}),
+        ...(opts.includeTerminalDirect ? { includeTerminalDirect: true } : {}),
+        ...(opts.compute === false ? { compute: false } : {}),
+        ...(opts.includeInputs ? { includeInputs: true } : {}),
+        ...(opts.includeSummary ? { includeSummary: true } : {}),
+    });
+    return {
+        ...(res.activeWork ? { activeWork: res.activeWork as unknown as MeshActiveWorkEvidence } : {}),
+        records: (res.records ?? []) as unknown as MeshLedgerEntry[],
+        directDispatches: (res.directDispatches ?? []) as unknown as DirectDispatchRecord[],
+        ...(res.summary ? { summary: res.summary as unknown as MeshLedgerSummary } : {}),
+    };
+}
+
+/** C-W9a: the daemon's queue rows over IPC (`queue_query`), typed as the queue entry. */
+export async function readQueueFromDaemon(ctx: MeshContext, opts: { statuses?: string[]; view?: boolean } = {}): Promise<MeshWorkQueueEntry[]> {
+    const res = await queueQuery(ctx.transport, {
+        meshId: ctx.mesh.id,
+        ...(opts.statuses ? { statuses: opts.statuses } : {}),
+        ...(opts.view ? { view: true } : {}),
+    });
+    return res.entries as unknown as MeshWorkQueueEntry[];
+}
+
+export async function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): Promise<{ duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' }> {
     const now = Date.now();
     const normalizedMessage = args.message.trim();
 
-    for (const task of getQueue(ctx.mesh.id)) {
+    // C-W9a: the queue and the dispatch records are the daemon's — read over IPC.
+    for (const task of await readQueueFromDaemon(ctx)) {
         const timestamp = new Date(task.updatedAt || task.createdAt).getTime();
         if (!Number.isFinite(timestamp) || now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) continue;
         if (task.targetNodeId && task.targetNodeId !== args.node_id) continue;
@@ -870,7 +879,7 @@ export function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: st
         }
     }
 
-    const entries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         const timestamp = new Date(entry.timestamp).getTime();
@@ -921,8 +930,8 @@ export function buildMissionInactiveWarning(
     };
 }
 
-export function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Record<string, unknown> {
-    const entries = readLedgerEntries(ctx.mesh.id, { tail: 300 });
+export async function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Promise<Record<string, unknown>> {
+    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 300 });
     const relatedEntries = entries.filter(entry => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
     const completedEntries = relatedEntries.filter(entry => entry.kind === 'task_completed');
     const lastDispatch = [...relatedEntries].reverse().find(entry => entry.kind === 'task_dispatched');
@@ -1220,15 +1229,16 @@ export function buildRecoverableLaunchFailure(
     };
 }
 
-export function recordRecoverableLaunchFailure(
+export async function recordRecoverableLaunchFailure(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
     providerType: string | undefined,
     error: unknown,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
     const failure = buildRecoverableLaunchFailure(ctx, node, providerType, error);
     try {
-        appendLedgerEntry(ctx.mesh.id, {
+        await recordLocal(ctx.transport, {
+            meshId: ctx.mesh.id,
             kind: 'recovery_attempted',
             nodeId: node.id,
             providerType,
@@ -1241,8 +1251,8 @@ export function recordRecoverableLaunchFailure(
     return failure;
 }
 
-export function getLatestActiveLaunchFailure(meshId: string, nodeId: string): Record<string, unknown> | null {
-    const entries = readLedgerEntries(meshId, { tail: 200 });
+export async function getLatestActiveLaunchFailure(ctx: MeshContext, nodeId: string): Promise<Record<string, unknown> | null> {
+    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         if (entry.nodeId !== nodeId) continue;
@@ -1639,12 +1649,13 @@ export function rememberMeshSessionProviderMetadataFromEvent(event: any): void {
     });
 }
 
-export function resolveMeshSessionProviderMetadataFromLedger(
+export async function resolveMeshSessionProviderMetadataFromLedger(
     ctx: MeshContext,
     nodeId: string,
     runtimeSessionId: string,
-): MeshSessionProviderMetadata | undefined {
-    const entries = readLedgerEntries(ctx.mesh.id, { tail: 50 });
+): Promise<MeshSessionProviderMetadata | undefined> {
+    let entries: Awaited<ReturnType<typeof ledgerQuery>>['entries'] = [];
+    try { entries = (await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 50 })).entries; } catch { return undefined; }
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
@@ -1674,14 +1685,14 @@ export function resolveMeshSessionProviderMetadataFromLedger(
     return undefined;
 }
 
-export function resolveMeshSessionProviderMetadata(
+export async function resolveMeshSessionProviderMetadata(
     ctx: MeshContext,
     nodeId: string,
     runtimeSessionId: string,
-): MeshSessionProviderMetadata | undefined {
+): Promise<MeshSessionProviderMetadata | undefined> {
     const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
     if (cached?.providerType || cached?.providerSessionId) return cached;
-    const fromLedger = resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
+    const fromLedger = await resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
     if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
     return fromLedger;
 }
@@ -2071,12 +2082,13 @@ export function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCle
  * summary instead of a hard 30s timeout. Scans the most recent matching ledger entry for
  * the node+session.
  */
-export function resolveCachedMeshSessionPreviewFromLedger(
+export async function resolveCachedMeshSessionPreviewFromLedger(
     ctx: MeshContext,
     nodeId: string,
     sessionId: string,
-): { preview: string; role: 'assistant'; receivedAt: number; ledgerKind: string; timestamp: string } | undefined {
-    const entries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+): Promise<{ preview: string; role: 'assistant'; receivedAt: number; ledgerKind: string; timestamp: string } | undefined> {
+    let entries: Awaited<ReturnType<typeof ledgerQuery>>['entries'] = [];
+    try { entries = (await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 })).entries; } catch { return undefined; }
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const entry = entries[i];
         const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
@@ -2114,12 +2126,12 @@ export function resolveCachedMeshSessionPreviewFromLedger(
  * by policy). The full transcript still requires a live P2P read_chat; the fallback is
  * explicitly a stale point-in-time summary only.
  */
-export function buildMeshReadChatCacheFallback(
+export async function buildMeshReadChatCacheFallback(
     ctx: MeshContext,
     args: { node_id: string; session_id: string },
     node: LocalMeshNodeEntry,
     error: unknown,
-): string {
+): Promise<string> {
     const classification = classifyP2pRelayFailure(error, { command: 'read_chat', targetDaemonId: node.daemonId });
     const cause = classifyReadChatTransportCause(error);
     const errorMessage = error instanceof Error ? error.message : String(error ?? '');
@@ -2127,7 +2139,7 @@ export function buildMeshReadChatCacheFallback(
         ? 'the worker daemon is not currently connected over P2P (no live channel)'
         : 'the worker daemon is connected but saturated — it acknowledged the request but did not return the transcript within the deadline';
 
-    const cached = resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
+    const cached = await resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
     if (cached) {
         return JSON.stringify({
             success: true,

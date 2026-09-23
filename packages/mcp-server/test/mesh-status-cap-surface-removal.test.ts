@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // MESH-CAP-SURFACE-REMOVAL: the coordinator-facing `mesh_status` response used to
 // surface the mesh-wide global parallel-task cap (policy.maxParallelTasks,
 // scheduling.maxParallelTasks, scheduling.maxReadonlyParallelTasks,
@@ -35,7 +36,7 @@ function buildCtx(policyOverrides: Record<string, unknown> = {}) {
     return { success: true };
   };
   const transport: any = {};
-  transport.command = async (c: string, a?: any) => responder(c, a);
+  transport.command = async (c: string, a?: any) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {} as Record<string, unknown>); return responder(c, a); };
   transport.meshCommand = async (_d: string, c: string, a?: any) => responder(c, a);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } };
 }

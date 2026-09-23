@@ -5,10 +5,12 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshReadChat } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, getLedgerDir } from '@adhdev/daemon-core';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { getLedgerDir } from '@adhdev/daemon-core';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { seedLocalRecord } from './helpers/local-records.js';
 // mesh_read_chat used to hard-fail at the 30s P2P timeout against a saturated/unreachable
 // remote worker — even though the coordinator already holds the worker's latest assistant
 // text from the completion/status events it surfaced (the same data the mobile dashboard
@@ -18,7 +20,7 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 // reads and genuine (non-transport) errors keep their existing behavior.
 
 function cleanupMesh(meshId: string): void {
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
@@ -52,7 +54,8 @@ function createRemoteCtx(meshId: string, opts: { readChatError?: Error; readChat
     }],
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
@@ -81,7 +84,7 @@ function createRemoteCtx(meshId: string, opts: { readChatError?: Error; readChat
 }
 
 function seedCompletionSummary(meshId: string, summary: string): void {
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-remote',
     sessionId: 'sess-remote',

@@ -7,9 +7,10 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshSendTask } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, getQueue, claimNextTask } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // RC17-QUEUED-DELIVERY-STRANDED regression.
 //
 // Live evidence (/tmp/rc17-gate/audit-result.json): a mesh_send_task dispatch to a Codex
@@ -31,7 +32,7 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
@@ -75,6 +76,7 @@ function createLocalBusyCtx(meshId: string) {
   };
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };

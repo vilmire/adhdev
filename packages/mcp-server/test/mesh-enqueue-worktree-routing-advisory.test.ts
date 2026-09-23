@@ -8,6 +8,7 @@ import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { buildUntargetedCodeChangeWorktreeAdvisory } from '../src/tools/mesh-tools-queue.js';
 import { getQueue, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // WORKTREE-ROUTING-ADVISORY (b1) — tool-side companion to the coordinator prompt's
 // base-node boundary. An untargeted `code_change` is claimed by whichever node polls
 // first (in practice the base node), so general code work lands on a shared checkout
@@ -32,7 +33,7 @@ function nextMeshId(): string {
 
 function recordingTransport() {
   return {
-    command: async () => ({ success: true }),
+    command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
     getStatus: async () => ({ sessions: [] }),
   } as any;
 }

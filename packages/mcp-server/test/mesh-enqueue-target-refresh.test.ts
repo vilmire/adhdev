@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueBatch, meshEnqueueTask } from '../src/tools/mesh-tools.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 const NODE_BASE = 'node_base_stale_snapshot';
 const NODE_NEW = 'node_cloned_after_mcp_start';
 
@@ -42,6 +43,7 @@ function makeCtx(meshId: string) {
   const transport = {
     commands,
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       commands.push({ cmd, args });
       if (cmd === 'get_mesh') {
         return { success: true, mesh: { id: meshId, name: 't', nodes: [baseNode, newNode], updatedAt: '2026-08-22T00:00:00.000Z' } };

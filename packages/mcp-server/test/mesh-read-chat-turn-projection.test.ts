@@ -5,9 +5,10 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshReadChat } from '../src/tools/mesh-tools.js';
 import { readChat } from '../src/tools/read-chat.js';
 import { slimTurnPresentation, compactChatPayload } from '../src/tools/chat-compact.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // STAGE6-CANARY follow-up: the daemon's read_chat already attaches the
 // authoritative Stage 6 turn projection (`turn` block), but the MCP slim
 // (compact) response dropped it — mesh_read_chat showed no attemptId/turnStage
@@ -39,7 +40,7 @@ const TURN_BLOCK = {
 };
 
 function cleanupMesh(meshId: string): void {
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
 }
 
@@ -67,7 +68,8 @@ function createLocalCtx(meshId: string, readChatResult: unknown) {
       sessions: [{ id: 'sess-local', providerType: 'kimi', status: 'idle' }],
     }],
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
@@ -180,7 +182,8 @@ test('compactChatPayload without preserveTurn keeps the legacy shape (magi/revie
 
 test('local read_chat (json+compact) carries the same projection identity as the daemon', async () => {
   const transport = {
-    command: async (command: string) => {
+    command: async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
       if (command === 'read_chat') return REDUCER_READ_CHAT;
       throw new Error(`unexpected command: ${command}`);
     },

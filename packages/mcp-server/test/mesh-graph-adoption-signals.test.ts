@@ -9,8 +9,9 @@ import {
     meshGraphGateRelease,
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
-import { __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
+import { __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // GRAPH-ADOPTION signals — P2 (single-surface orchestration_decision) and
 // P3 (the materializedCount: 0 advisory).
 //
@@ -40,7 +41,7 @@ function nextMeshId(): string {
 
 function recordingLocalTransport() {
     return {
-        command: async () => ({ success: true }),
+        command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
         getStatus: async () => ({ sessions: [] }),
     } as any;
 }
@@ -57,7 +58,7 @@ function makeCtx(meshId: string, coordinatorSessionId = 'sess-coord') {
 }
 
 function singleDecisions(meshId: string) {
-    return readLedgerEntries(meshId, { kind: ['single_enqueue_decision'] } as any);
+    return readLocalRecords(meshId, { kind: ['single_enqueue_decision'] } as any);
 }
 
 // ── P2: the single tool accepts and records an orchestration_decision ─────────

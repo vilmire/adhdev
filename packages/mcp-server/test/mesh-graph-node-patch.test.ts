@@ -8,8 +8,9 @@ import {
     meshGraphView,
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
-import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
+import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // GRAPH-ORCHESTRATION — M-GRAPH-INPUTS-LATE-REJECT, part (b): the RECOVERY path.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -42,7 +43,7 @@ function nextMeshId(): string {
 
 function recordingLocalTransport() {
     return {
-        command: async () => ({ success: true }),
+        command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
         getStatus: async () => ({ sessions: [] }),
     } as any;
 }
@@ -373,7 +374,7 @@ test('node-patch: the mutation is AUDITED, recording patched key names but never
         },
     });
 
-    const entries = readLedgerEntries(meshId).filter((e: any) => e.kind === 'graph_node_patched');
+    const entries = readLocalRecords(meshId).filter((e: any) => e.kind === 'graph_node_patched');
     assert.equal(entries.length, 1, 'a spec mutation must leave an audit record');
     const payload = entries[0].payload as any;
     assert.deepEqual(payload.patchedKeys, ['inputs_from']);

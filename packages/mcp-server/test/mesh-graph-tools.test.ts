@@ -11,8 +11,9 @@ import {
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { getQueue, __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
+import { getQueue, __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // GRAPH-ORCHESTRATION Phase E — the MCP exposure of the phase-C2 gate contract
 // and the batch v2 plan surface.
 //
@@ -40,7 +41,8 @@ function recordingLocalTransport() {
     const commands: Array<{ cmd: string; args: any }> = [];
     return {
         commands,
-        command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+        command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         getStatus: async () => ({ sessions: [] }),
     } as any;
 }
@@ -51,7 +53,8 @@ function recordingIpcTransport() {
     const t = {
         commands,
         meshCommands,
-        command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+        command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         meshCommand: async (daemonId: string, cmd: string, args: any) => {
             meshCommands.push({ daemonId, cmd, args });
             return { success: true, sessions: [] };
@@ -504,7 +507,7 @@ test('E-4: a committed graph writes provenance with counts and digests — and n
     } as any));
     assert.equal(batch.success, true);
 
-    const entries = readLedgerEntries(meshId, { kind: ['graph_enqueue_committed'] } as any);
+    const entries = readLocalRecords(meshId, { kind: ['graph_enqueue_committed'] } as any);
     assert.equal(entries.length, 1, 'a committed graph must leave exactly one provenance entry');
     const payload = entries[0].payload as any;
     assert.equal(payload.graphId, batch.graphId);
@@ -540,12 +543,12 @@ test('E-4: gate claim and release are recorded; the release records the outcome,
         evidence: { note: evidenceSecret },
     });
 
-    const claimed = readLedgerEntries(meshId, { kind: ['graph_gate_claimed'] } as any);
+    const claimed = readLocalRecords(meshId, { kind: ['graph_gate_claimed'] } as any);
     assert.equal(claimed.length, 1);
     assert.equal((claimed[0].payload as any).gateId, gateId);
     assert.equal((claimed[0].payload as any).action, 'refinery');
 
-    const released = readLedgerEntries(meshId, { kind: ['graph_gate_released'] } as any);
+    const released = readLocalRecords(meshId, { kind: ['graph_gate_released'] } as any);
     assert.equal(released.length, 1);
     assert.equal((released[0].payload as any).outcome, 'passed');
     assert.ok((released[0].payload as any).releaseDigest, 'the evidence is recorded as a digest');
@@ -565,7 +568,7 @@ test('E-4: a rejected plan records a rollback entry and inserts nothing', async 
     assert.equal(res.success, false);
     assert.equal(getQueue(meshId).length, 0);
 
-    const rolledBack = readLedgerEntries(meshId, { kind: ['graph_enqueue_rolled_back'] } as any);
+    const rolledBack = readLocalRecords(meshId, { kind: ['graph_enqueue_rolled_back'] } as any);
     assert.equal(rolledBack.length, 1);
     assert.equal((rolledBack[0].payload as any).code, 'unknown_gate_ref');
 });
@@ -706,7 +709,7 @@ test('E-4: the abandon is recorded in the ledger, distinctly from a release', as
     __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     await meshGraphGateAbandon(ctx, { gate_id: batch.gates[0].gateId, reason: 'branch dropped' });
 
-    const kinds = readLedgerEntries(meshId, { limit: 200 }).map((e: any) => e.kind);
+    const kinds = readLocalRecords(meshId, { limit: 200 }).map((e: any) => e.kind);
     assert.ok(kinds.includes('graph_gate_abandoned'), 'the abandon must be auditable');
     // ★ It must NOT read as an approval in the audit trail.
     assert.ok(!kinds.includes('graph_gate_released'), 'an abandon must never be logged as a release');

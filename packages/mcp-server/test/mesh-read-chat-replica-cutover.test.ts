@@ -17,9 +17,10 @@ import test from 'node:test';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshReadChat } from '../src/tools/mesh-tools.js';
 import { readTranscriptReplicaForDisplay } from '../src/tools/mesh-transcript-replica-read.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 const SNAPSHOT = {
   schemaVersion: 1,
   sessionId: 'sess-remote',
@@ -57,7 +58,7 @@ const LIVE_READ_CHAT = {
 };
 
 function cleanupMesh(meshId: string): void {
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
 }
 
@@ -94,7 +95,8 @@ function createRemoteCtx(
       sessions: [{ id: 'sess-remote', providerType: 'claude-cli', status: 'idle' }],
     }],
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     calls.push(`local:${command}`);
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
@@ -250,7 +252,8 @@ test('a LOCAL node never attempts the replica hop — local read_chat semantics 
       sessions: [{ id: 'sess-local', providerType: 'claude-cli', status: 'idle' }],
     }],
   };
-  transport.command = async (command: string) => {
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     calls.push(command);
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
@@ -278,7 +281,8 @@ test('a LOCAL node never attempts the replica hop — local read_chat semantics 
 
 test('readTranscriptReplicaForDisplay refuses a structurally invalid snapshot rather than rendering it', async () => {
   const transport = {
-    async command(type: string) {
+    async command(type: string, __ipcArgs?: Record<string, unknown>) {
+    if (isTurnIpcCommand(type)) return answerTurnIpc(type, __ipcArgs ?? {});
       if (type === 'ensure_transcript_subscription') return { success: true, ready: true };
       // schemaVersion 1 but `messages` missing — a projection regression.
       const { messages, ...broken } = SNAPSHOT as any;

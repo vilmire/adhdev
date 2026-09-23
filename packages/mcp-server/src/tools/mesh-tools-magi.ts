@@ -14,14 +14,11 @@
 
 import {
     annotateQueueStaleness,
-    appendLedgerEntry,
     buildMeshNodeCapabilityTags,
     commandForNode,
     compactChatPayload,
-    enqueueTask,
     findOptionalNodeWithRefresh,
     getMeshMission,
-    getQueue,
     isWeakCompletionEvidence,
     isMeshNodeHealthLaunchable,
     resolveEffectiveMeshNodeHealth,
@@ -36,7 +33,6 @@ import {
     normalizeMeshCapabilityTags,
     randomUUID,
     readProviderPriority,
-    readLedgerEntries,
     readString,
     refreshMeshFromDaemon,
     resolveCoordinatorNode,
@@ -44,7 +40,11 @@ import {
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
     upsertMeshMission,
+    readQueueFromDaemon,
 } from './mesh-tools-internal.js';
+// C-W9a: MAGI's records (fan-out, synthesis) and replica queue rows are the daemon's — over IPC.
+import { ledgerQuery, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
+import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
@@ -672,9 +672,13 @@ export function buildMagiTaskPrompt(args: {
  * (see mesh-event-forwarding terminal payload). Best-effort: a missing/unreadable ledger
  * returns false so we never block collection on telemetry we cannot read.
  */
-function replicaCompletionIsWeak(meshId: string, taskId: string): boolean {
+async function replicaCompletionIsWeak(ctx: MeshContext, taskId: string): Promise<boolean> {
     try {
-        const entries = readLedgerEntries(meshId, { kind: ['task_completed'], tail: 200 });
+        // C-W9a: the daemon answers `task_completed` from the turn ledger's committed
+        // attempts (a weak commit carries evidenceLevel 'weak') plus any local
+        // completion record — the terminal truth since C, which the retired event
+        // ledger no longer saw.
+        const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ['task_completed'], tail: 200 });
         for (let i = entries.length - 1; i >= 0; i -= 1) {
             const entry = entries[i] as any;
             const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : undefined;
@@ -1009,7 +1013,8 @@ export async function meshMagiReview(
     const replicaRecords: Array<{ taskId: string; provider: string; targetNodeId?: string; requiredTags: string[] }> = [];
     for (const replica of plan.replicas) {
         try {
-            const task = enqueueTask(ctx.mesh.id, prompt, {
+            // C-W9a: the replica enqueue runs in the daemon (`queue_enqueue`).
+            const replicaOptions = {
                 readonly: true,
                 taskMode: 'live_debug_readonly',
                 // DIFFICULTY-REQUIRED (MAGI decision): a fixed 'freeform' sentinel, NOT an
@@ -1034,12 +1039,13 @@ export async function meshMagiReview(
                 ...(replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {}),
                 ...(replica.model ? { model: replica.model } : {}),
                 ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-            });
+            };
+            const task = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: prompt, options: replicaOptions })).entry as unknown as MeshWorkQueueEntry;
             replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });
         } catch (e: any) {
             // A single replica enqueue failure must not abort the quorum — record and continue.
             try {
-                appendLedgerEntry(ctx.mesh.id, {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                     kind: 'magi_replica_enqueue_failed' as any,
                     payload: { consensusGroupId, missionId: mission.id, provider: replica.provider, error: e?.message || String(e) },
                 });
@@ -1052,7 +1058,7 @@ export async function meshMagiReview(
 
     // deltaE: persist the fan-out so the group is visible in mesh_status (running) and
     // survives a coordinator restart even before any synthesis is collected.
-    persistMagiDispatched(ctx, {
+    await persistMagiDispatched(ctx, {
         consensusGroupId,
         missionId: mission.id,
         panel: panelName,
@@ -1144,7 +1150,7 @@ export async function meshMagiReview(
         : null;
 
     // deltaE: persist the synthesis (retrievable by consensusGroupId; folds into mesh_status).
-    persistMagiSynthesis(ctx, {
+    await persistMagiSynthesis(ctx, {
         consensusGroupId,
         missionId: mission.id,
         panel: panelName,
@@ -1159,7 +1165,7 @@ export async function meshMagiReview(
     // fan-out auto-launched, gated terminal. Re-read the replica tasks from the live queue
     // so we see their final assignedSessionId / autoLaunch.sessionId. Best-effort.
     const cleanupMode = resolveMagiAutoCleanupMode(ctx, args.auto_cleanup ?? args.autoCleanup);
-    const cleanupReplicaTasks = findMagiReplicaTasks(getQueue(ctx.mesh.id), consensusGroupId);
+    const cleanupReplicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
     const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
         replicaTasks: cleanupReplicaTasks,
         terminal: collected.terminal,
@@ -1221,9 +1227,9 @@ export async function meshMagiCollect(
     const explicitKind = args.task_kind ?? args.taskKind;
     const taskKind = explicitKind !== undefined
         ? normalizeMagiTaskKind(explicitKind)
-        : recoverMagiTaskKind(ctx, consensusGroupId);
+        : await recoverMagiTaskKind(ctx, consensusGroupId);
 
-    const replicaTasks = findMagiReplicaTasks(getQueue(ctx.mesh.id), consensusGroupId);
+    const replicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
     if (replicaTasks.length === 0) {
         return JSON.stringify({
             success: false,
@@ -1260,7 +1266,7 @@ export async function meshMagiCollect(
     // deltaE: persist the synthesis (panel/question are merged from the earlier
     // magi_dispatched entry by consensusGroupId, so they need not be re-derived here).
     const replicaMissionId = readString(replicaTasks[0]?.missionId);
-    persistMagiSynthesis(ctx, {
+    await persistMagiSynthesis(ctx, {
         consensusGroupId,
         missionId: replicaMissionId,
         staleReplicas: collected.staleCount,
@@ -1553,12 +1559,12 @@ export function classifyStaleReplicas(
  * before any synthesis is collected. Best-effort — a ledger write failure never aborts
  * the review.
  */
-function persistMagiDispatched(
+async function persistMagiDispatched(
     ctx: MeshContext,
     args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; replicaCount: number; taskKind?: MagiTaskKind },
-): void {
+): Promise<void> {
     try {
-        appendLedgerEntry(ctx.mesh.id, {
+        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
             kind: 'magi_dispatched',
             payload: {
                 source: 'magi',
@@ -1582,9 +1588,9 @@ function persistMagiDispatched(
  * hand). Defaults to claim_audit (the backward-compatible kind) when no entry / no kind
  * is recorded. Best-effort: an unreadable ledger returns the default.
  */
-function recoverMagiTaskKind(ctx: MeshContext, consensusGroupId: string): MagiTaskKind {
+async function recoverMagiTaskKind(ctx: MeshContext, consensusGroupId: string): Promise<MagiTaskKind> {
     try {
-        const entries = readLedgerEntries(ctx.mesh.id, { kind: ['magi_dispatched'], tail: 200 });
+        const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ['magi_dispatched'], tail: 200 });
         for (let i = entries.length - 1; i >= 0; i -= 1) {
             const payload = (entries[i] as any)?.payload;
             if (!payload || typeof payload !== 'object') continue;
@@ -1620,12 +1626,12 @@ function stripRawAnswers(synthesis: MagiSynthesis): MagiSynthesis {
  * synthesis is stored MINUS per-replica rawAnswer (the caller strips it to bound ledger
  * payload growth); mesh_status bounds it further on read. Best-effort.
  */
-function persistMagiSynthesis(
+async function persistMagiSynthesis(
     ctx: MeshContext,
     args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; staleReplicas?: number; synthesis: MagiSynthesis },
-): void {
+): Promise<void> {
     try {
-        appendLedgerEntry(ctx.mesh.id, {
+        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
             kind: 'magi_synthesis',
             payload: {
                 source: 'magi',
@@ -1784,7 +1790,7 @@ async function collectMagiResponses(
                 },
             });
             try {
-                appendLedgerEntry(ctx.mesh.id, {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                     kind: 'magi_replica_retry' as any,
                     payload: { taskId: task.id, kind, failReason },
                 });
@@ -1852,7 +1858,7 @@ async function collectMagiResponses(
                 action: 'approve',
             });
             try {
-                appendLedgerEntry(ctx.mesh.id, {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                     kind: 'magi_replica_auto_approved' as any,
                     payload: { taskId: task.id, nodeId: task.assignedNodeId, status },
                 });
@@ -1992,7 +1998,7 @@ async function collectMagiResponses(
         }
 
         if (kindResult.ok && kindResult.response) {
-            const weak = replicaCompletionIsWeak(ctx.mesh.id, taskId);
+            const weak = await replicaCompletionIsWeak(ctx, taskId);
             if (weak && !force) {
                 // Parseable but the completion evidence is weak — keep it as the deadline
                 // fallback and re-wait for a stronger/fuller final answer.
@@ -2047,7 +2053,7 @@ async function collectMagiResponses(
     // Poll until every replica reaches a final verdict, every still-outstanding replica is
     // detected STALE (dead assignment), or the deadline elapses.
     for (;;) {
-        const tasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+        const tasks = annotateQueueStaleness((await readQueueFromDaemon(ctx)).filter((t: any) => ids.has(t.id)), ctx.mesh);
         const allPresent = tasks.length === ids.size;
         const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
         const pastDeadline = Date.now() >= deadline;
@@ -2067,7 +2073,7 @@ async function collectMagiResponses(
     }
 
     // Final pass: force-finalize anything still outstanding now that the loop has ended.
-    const finalTasks = annotateQueueStaleness(getQueue(ctx.mesh.id).filter((t: any) => ids.has(t.id)), ctx.mesh);
+    const finalTasks = annotateQueueStaleness((await readQueueFromDaemon(ctx)).filter((t: any) => ids.has(t.id)), ctx.mesh);
     const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
     const presentIds = new Set(finalTasks.map((t: any) => t.id));
     for (const task of finalTasks as any[]) {

@@ -10,10 +10,11 @@ import {
 } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getLedgerDir, getMeshMission, __writeTaskStatusForTests, upsertMeshMission } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // ─── FIX#1 — collect cross-wire (tangle): shared-session fail-closed ────────────────────────
 
 test('FIX#1: two replicas on DISTINCT sessions are not flagged as shared', () => {
@@ -102,7 +103,7 @@ const MESH_ID = 'mesh-magi-autoclose-test';
 
 function cleanupMesh(meshId: string): void {
     __clearMeshQueueForTests(meshId);
-    __clearMeshLedgerForTests(meshId);
+    __clearLocalRecordsForTests(meshId);
     __clearMeshPendingEventsForTests(meshId);
     try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -125,7 +126,7 @@ function buildCtx(meshId: string) {
         return { success: true };
     };
     const transport: any = {};
-    transport.command = async (c: string) => responder(c);
+    transport.command = async (c: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, __ipcArgs ?? {}); return responder(c); };
     transport.meshCommand = async (_d: string, c: string) => responder(c);
     return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } as any };
 }

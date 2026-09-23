@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // REGRESSION: the daemon-core `mesh_status` command stamps a per-node
 // `dataFreshness` marker (live | self | cached | unreachable | …) via
 // finalizeMeshNodeStatus. But the COORDINATOR-FACING mesh_status MCP tool
@@ -45,7 +46,7 @@ function buildCtx() {
     return { success: true };
   };
   const transport: any = {};
-  transport.command = async (c: string, a?: any) => responder(c, a);
+  transport.command = async (c: string, a?: any) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {} as Record<string, unknown>); return responder(c, a); };
   transport.meshCommand = async (_d: string, c: string, a?: any) => responder(c, a);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } };
 }

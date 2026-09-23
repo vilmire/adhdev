@@ -5,6 +5,7 @@ import { collectLiveStatusProbe, extractUpgradeFailureSummary } from '../src/too
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 /**
  * mesh_status must surface a failed/rolled-back daemon upgrade.
  *
@@ -192,7 +193,7 @@ function buildStatusCtx(upgradeFailure: unknown) {
     return { success: true };
   };
   const transport: any = {};
-  transport.command = async (c: string) => responder(c);
+  transport.command = async (c: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, __ipcArgs ?? {}); return responder(c); };
   transport.meshCommand = async (_d: string, c: string) => responder(c);
   return { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' };
 }

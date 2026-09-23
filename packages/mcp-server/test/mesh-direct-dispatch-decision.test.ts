@@ -6,10 +6,10 @@ import { randomUUID } from 'node:crypto';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshSendTask, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { getLedgerDir, readLedgerEntries } from '@adhdev/daemon-core';
+import { getLedgerDir, readLocalRecords } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // GRAPH-MEASUREMENT-DIRECT — the direct dispatch surface's decision record.
@@ -36,7 +36,7 @@ const COORDINATOR_DAEMON = 'daemon-coordinator';
 
 function cleanupMesh(meshId: string): void {
     __clearMeshQueueForTests(meshId);
-    __clearMeshLedgerForTests(meshId);
+    __clearLocalRecordsForTests(meshId);
     __clearMeshPendingEventsForTests(meshId);
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
     for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
@@ -113,7 +113,7 @@ function createLocalIdleCtx(meshId: string, opts: { agentCommandSucceeds?: boole
 }
 
 function directDecisions(meshId: string) {
-    return readLedgerEntries(meshId, { kind: ['direct_dispatch_decision'] } as any);
+    return readLocalRecords(meshId, { kind: ['direct_dispatch_decision'] } as any);
 }
 
 async function sendTask(ctx: any, extra: Record<string, unknown> = {}) {

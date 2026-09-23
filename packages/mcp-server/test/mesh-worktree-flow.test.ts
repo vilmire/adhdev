@@ -6,9 +6,12 @@ import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { CANONICAL_MESH_TOOL_COUNT, appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
+import { CANONICAL_MESH_TOOL_COUNT, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests as clearPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
+import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { seedLocalRecord } from './helpers/local-records.js';
 // meshQueueRequeue delegates the requeue to the mesh-host daemon in IpcTransport mode so
 // the single-flight guard is co-located with dispatch (requeue_mesh_queue_task). This stub
 // emulates the daemon handler's contract with the same requeueTask call the real handler
@@ -35,6 +38,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
   const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     // trigger_mesh_queue (fired by the launch below) runs coordinator-local.
     if (command === 'trigger_mesh_queue') {
       localCalls.push({ command, args });
@@ -163,6 +167,7 @@ test('mesh_launch_session includes queue trigger claim state in the response', a
   };
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     // MESH-LAUNCH-DUP-GUARD probes live status before launch; no existing mesh session here.
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     calls.push({ command, args });
@@ -232,7 +237,8 @@ test('mesh_launch_session queue guidance tells caller to WAIT (not launch anothe
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'launch_cli') return { success: true, sessionId: 'session-worker-1' };
     if (command === 'trigger_mesh_queue') {
       return {
@@ -295,7 +301,8 @@ test('mesh_send_task queue response includes trigger claim state', async () => {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'trigger_mesh_queue') {
       return {
         success: true,
@@ -390,6 +397,7 @@ test('mesh_clone_node keeps cloned worktrees visible after list/status refresh b
   let localDaemonMesh = structuredClone(mesh);
 
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command !== 'get_mesh') {
       throw new Error(`unexpected direct command: ${command}`);
     }
@@ -474,6 +482,7 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
     ],
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command !== 'get_mesh') throw new Error(`unexpected direct command: ${command}`);
     return { success: true, mesh: args.inlineMesh || mesh };
   };
@@ -535,6 +544,7 @@ test('mesh_list_nodes treats configured local coordinator node as same-machine w
     ],
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command !== 'get_mesh') throw new Error(`unexpected direct command: ${command}`);
     return { success: true, mesh: args.inlineMesh || mesh };
   };
@@ -585,6 +595,7 @@ test('mesh_fast_forward_node includes node identity in local IPC command args fo
     }],
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'fast_forward_mesh_node') return { success: true, allowed: true, dryRun: true };
@@ -611,7 +622,8 @@ test('mesh_launch_session stamps delegated sessions hidden when mesh policy requ
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -659,7 +671,8 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -714,7 +727,8 @@ test('mesh_launch_session returns the existing mesh-owned worker session instead
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -788,7 +802,8 @@ test('mesh_launch_session force=true launches an additional session even when a 
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true, claimed: true } };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -836,7 +851,8 @@ test('mesh_launch_session fails closed for remote worker nodes when coordinator 
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   let meshCalls = 0;
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
@@ -904,7 +920,8 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -970,7 +987,8 @@ test('mesh_git_status preserves P2P relay recovery payload for coordinator feedb
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1023,7 +1041,8 @@ test('mesh_status preserves full git snapshot fields from the aggregate node sta
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     throw new Error(`unexpected direct command: ${command}`);
@@ -1131,7 +1150,8 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     throw new Error(`unexpected direct command: ${command}`);
@@ -1179,7 +1199,7 @@ test('mesh_task_history compact mode elides large nested payload evidence blobs 
     submoduleReachability: { ok: true, refs: Array.from({ length: 40 }, (_, i) => `ref-${i}-${'z'.repeat(50)}`) },
   };
 
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-worker',
     sessionId: 'session-worker',
@@ -1193,7 +1213,7 @@ test('mesh_task_history compact mode elides large nested payload evidence blobs 
       result: bigResult, // large nested → elided
     },
   });
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'node_removed',
     nodeId: 'node-worker',
     payload: {
@@ -1207,6 +1227,8 @@ test('mesh_task_history compact mode elides large nested payload evidence blobs 
   const ctx = {
     localDaemonId: 'daemon-coordinator',
     mesh: { id: meshId, name: 'Payload Cap Mesh', repoIdentity: 'example/repo', policy: {}, coordinator: {}, nodes: [] },
+    // C-W9b: meshTaskHistory now reads via the `ledger_query` IPC command.
+    transport: makeFakeTurnIpcTransport(),
   };
 
   try {
@@ -1283,7 +1305,8 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1358,7 +1381,8 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1437,7 +1461,8 @@ test('mesh_send_task self-heals a mesh-owned remote session missing the relay an
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1518,7 +1543,8 @@ test('mesh_send_task blocks a mesh-owned remote session missing the relay anchor
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1592,7 +1618,8 @@ test('mesh_send_task fails closed when explicitly targeting a remote session own
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1665,7 +1692,8 @@ test('mesh_send_task rejects remote coordinator session before worker relay disp
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1745,6 +1773,7 @@ test('mesh_remove_node falls back to local control-plane cleanup for degraded lo
     throw new Error("P2P DataChannel command 'remove_mesh_node' to daemon-remote timed out after 30s");
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     directCalls.push({ command, args });
     if (command === 'get_mesh') return ctx.mesh;
     if (command === 'remove_mesh_node') return { success: true, removed: true, worktreeCleanup: { skipped: true, reason: 'worktree_path_missing' } };
@@ -1875,6 +1904,7 @@ test('mesh_launch_session routes local worktree cloned from local source through
     throw new Error(`unexpected P2P relay for local worktree command: ${command}`);
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     directCalls.push({ command, args });
     if (command === 'launch_cli') {
       return { success: true, sessionId: (args as any).dir === '/repo-parent/.adhdev-worktrees/mesh/feat-a' ? 'session-a' : 'session-b' };
@@ -1938,7 +1968,8 @@ test('mesh_launch_session still does not use local fallback when non-local workt
     }
     throw new Error(`unexpected mesh command: ${command}`);
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'launch_cli') directLaunchCalls += 1;
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -1962,7 +1993,8 @@ test('mesh_checkpoint routes untracked checkpoint requests with the exact multiw
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -2027,6 +2059,7 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
   const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     // trigger_mesh_queue is coordinator-only and must run on the coordinator's
     // local IPC (transport.command), never relayed to the remote worker daemon.
     if (command === 'trigger_mesh_queue') {
@@ -2138,6 +2171,7 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
   const localCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     // trigger_mesh_queue runs on the coordinator-local IPC, not relayed to the worker.
     if (command === 'trigger_mesh_queue') {
       localCalls.push({ command, args });
@@ -2207,7 +2241,8 @@ test('mesh_status and mesh_list_nodes surface launch readiness when providerPrio
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -2263,7 +2298,8 @@ test('mesh_status surfaces branch convergence follow-up for clean non-main branc
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command, args = {}) => {
@@ -2339,7 +2375,8 @@ test('mesh_status and mesh_git_status request refreshed upstream truth and block
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -2399,7 +2436,8 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -2477,7 +2515,7 @@ test('mesh_read_chat resolves a completed Codex worker provider transcript inste
   const coordinatorSessionId = 'coordinator-root-runtime-session';
   const coordinatorProviderSessionId = '019e6dcc-9aae-7dc2-97bd-c5223e111199';
 
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-codex',
     sessionId: workerSessionId,
@@ -2487,7 +2525,7 @@ test('mesh_read_chat resolves a completed Codex worker provider transcript inste
       finalSummary: 'worker summary',
     },
   });
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-codex',
     sessionId: coordinatorSessionId,
@@ -2503,7 +2541,8 @@ test('mesh_read_chat resolves a completed Codex worker provider transcript inste
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (daemonId, command, args = {}) => {
@@ -2574,7 +2613,8 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command) => {
@@ -2643,14 +2683,14 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
 test('mesh_read_chat compact removed-node recovery returns ledger summary without duplicating it in messages', async () => {
   const meshId = `mesh-removed-summary-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const longSummary = `Recovered summary ${'x'.repeat(900)}`;
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-removed',
     sessionId: 'session-finished',
     providerType: 'hermes-cli',
     payload: { providerSessionId: 'provider-finished', finalSummary: longSummary },
   });
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'node_removed',
     nodeId: 'node-removed',
     payload: { sessionCleanupMode: 'stop_and_delete' },
@@ -2659,7 +2699,8 @@ test('mesh_read_chat compact removed-node recovery returns ledger summary withou
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') {
       return { success: true, mesh: { id: meshId, name: 'Removed Read', nodes: [], updatedAt: new Date().toISOString() } };
     }
@@ -2696,21 +2737,21 @@ test('mesh_read_chat compact removed-node recovery returns ledger summary withou
 
 test('mesh_read_chat returns recoverable completion context instead of throwing for removed node', async () => {
   const meshId = `mesh-removed-read-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'session_launched',
     nodeId: 'node-removed',
     sessionId: 'session-finished',
     providerType: 'hermes-cli',
     payload: { providerSessionId: 'provider-finished' },
   });
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'task_completed',
     nodeId: 'node-removed',
     sessionId: 'session-finished',
     providerType: 'hermes-cli',
     payload: { providerSessionId: 'provider-finished' },
   });
-  appendLedgerEntry(meshId, {
+  seedLocalRecord(meshId, {
     kind: 'node_removed',
     nodeId: 'node-removed',
     payload: { sessionCleanupMode: 'stop_and_delete' },
@@ -2719,7 +2760,8 @@ test('mesh_read_chat returns recoverable completion context instead of throwing 
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') {
       return { success: true, mesh: { id: meshId, name: 'Removed Read', nodes: [], updatedAt: new Date().toISOString() } };
     }
@@ -2758,7 +2800,8 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   let agentCommandCalls = 0;
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async (_daemonId, command) => {
@@ -2882,7 +2925,9 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
         userOverrides: {},
       }],
     },
-    transport: {} as any,
+    // C-W9a: only the daemon's store IPC answers; every other command fails like the
+    // bare `{}` transport this test used before (the live probe must not "succeed").
+    transport: { command: async (c: string, a?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {}); throw new Error(`no transport for ${c}`); } } as any,
     // Historical row arrays are the verbose payload; compact (default) drops them.
   } as any, { verbose: true }));
 
@@ -2932,7 +2977,9 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
         userOverrides: {},
       }],
     } : undefined,
-    transport: {} as any,
+    // C-W9a: only the daemon's store IPC answers; every other command fails like the
+    // bare `{}` transport this test used before (the live probe must not "succeed").
+    transport: { command: async (c: string, a?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {}); throw new Error(`no transport for ${c}`); } } as any,
   } as any, { status: ['failed', 'completed'], verbose: true }));
   assert.equal(filteredPayload.success, true);
   assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 1 });
@@ -2978,7 +3025,8 @@ test('mesh_view_queue: verified-live probe confirming session gone flags the row
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   // Local control-plane node ⇒ commandForNode routes through transport.command.
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -3034,7 +3082,8 @@ test('mesh_view_queue: a failed live probe must NOT be treated as evidence the s
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_status_metadata') throw new Error('simulated relay/offline-peer failure');
     throw new Error(`unexpected direct command: ${command}`);
   };
@@ -3132,7 +3181,8 @@ test('mesh_view_queue: startup race — a just-assigned task whose worker sessio
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     // Verified probe, but the new session genuinely hasn't shown up yet.
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     throw new Error(`unexpected direct command: ${command}`);
@@ -3183,7 +3233,8 @@ test('mesh_clone_node upserts clone returned through payload-wrapped live relay 
   };
 
   let daemonMeshNodes = [staleSourceNode];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') {
       return {
         success: true,
@@ -3285,6 +3336,7 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   const meshCommands: string[] = [];
   // Daemon has the new node in its cache (get_mesh returns it)
   transport.command = async (cmd, args = {}) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
     if (cmd === 'get_mesh') {
       return {
         success: true,
@@ -3392,7 +3444,8 @@ test('stale local worktree hits are revalidated against get_mesh before mesh_git
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const directCommands: string[] = [];
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     directCommands.push(command);
     if (command === 'get_mesh') {
       return {
@@ -3451,7 +3504,8 @@ test('stale local worktree hits are revalidated before mesh_read_chat falls back
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') {
       return {
         success: true,
@@ -3510,6 +3564,7 @@ test('mesh status and git status include explicitly configured related repo fres
   };
   const calls: Array<{ command: string; workspace?: unknown }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     calls.push({ command, workspace: args.workspace });
     if (command === 'get_mesh') {
       return { success: false };
@@ -3616,6 +3671,7 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   };
   const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command) && command !== 'turn_observe') return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     directCalls.push({ command, args });
     if (command === 'get_status_metadata') {
       return {
@@ -3720,6 +3776,7 @@ test('local IPC mesh_send_task rejects coordinator session as worker target', as
   };
   const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     directCalls.push({ command, args });
     if (command === 'get_status_metadata') {
       return {
@@ -3785,7 +3842,8 @@ test('local IPC mesh_send_task preserves retryable agent busy diagnostics from d
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -3860,6 +3918,7 @@ test('mesh queue management tools cancel and requeue stale assignments without d
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'trigger_mesh_queue') return { success: true };
     if (command === 'requeue_mesh_queue_task') return handleRequeueMeshQueueTask(args);
     throw new Error(`unexpected direct command: ${command}`);
@@ -3917,7 +3976,8 @@ test('local direct mesh_send_task rejects unmanaged session missing mesh delegat
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -3980,7 +4040,8 @@ test('local direct mesh_send_task rejects coordinator session as unsafe target',
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -4046,6 +4107,7 @@ test('local direct mesh_send_task allows proper mesh delegate session with meshN
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -4163,6 +4225,7 @@ test('mesh_refine_config dispatches each mode to the matching daemon-core refine
   };
   const issued: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     issued.push({ command, args });
     return { success: true, echoedCommand: command };
   };
@@ -4213,6 +4276,7 @@ test('hidden refine-config aliases forward to the unified handler with the corre
   };
   const issued: string[] = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     issued.push(command);
     return { success: true };
   };
@@ -4260,6 +4324,7 @@ test('mesh_change_impact_config dispatches each mode to the matching daemon-core
   };
   const issued: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     issued.push({ command, args });
     return { success: true, echoedCommand: command };
   };
@@ -4311,6 +4376,7 @@ test('hidden change-impact-config aliases forward to the unified handler with th
   };
   const issued: string[] = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     issued.push(command);
     return { success: true };
   };
@@ -4378,7 +4444,8 @@ test('mesh_status marks coordinator sessions for this mesh as self so the callin
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'git_status') {
@@ -4497,7 +4564,8 @@ test('mesh_status omits coordinatorSessions when no self coordinator session is 
     transport,
   };
 
-  transport.command = async (command) => {
+  transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
     if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'git_status') {
@@ -4539,7 +4607,8 @@ test('mesh_status compact payload does not grow O(nodes × sessions) when nodes 
       command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
       meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
     };
-    transport.command = async (command) => {
+    transport.command = async (command, __ipcArgs?: Record<string, unknown>) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {});
       if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
       if (command === 'get_pending_mesh_events') return { events: [] };
       if (command === 'git_status') {
@@ -4628,6 +4697,7 @@ test('mesh_queue_requeue passes the task target node as preferredNodeId to trigg
   };
   const triggerCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'trigger_mesh_queue') {
       triggerCalls.push({ command, args });
       return { success: true, trigger: { success: true, claimed: false } };
@@ -4682,6 +4752,7 @@ test('mesh_queue_requeue omits preferredNodeId when the task has no target node'
   };
   const triggerCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'trigger_mesh_queue') {
       triggerCalls.push({ command, args });
       return { success: true, trigger: { success: true, claimed: false } };
