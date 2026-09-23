@@ -76,6 +76,7 @@ import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } fr
 import { peekUnresolvedDelegateForwards } from '../../src/mesh/mesh-unresolved-forward-outbox.js'
 import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { LOG } from '../../src/logging/logger.js'
+import { hasWorkerProtocolFooter } from '@adhdev/mesh-shared'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating' | 'waiting_approval'; statusInstanceId?: string }) {
   let listener: ((event: any) => void) | undefined
@@ -3703,8 +3704,15 @@ describe('setupMeshEventForwarding', () => {
         targetSessionId: 'auto-session-1',
         cliType: 'hermes-cli',
         action: 'send_chat',
-        message: 'queued task',
+        // F1: the dispatched body now carries the worker protocol footer
+        // (resolveDispatchMessage) — assert the authored message is still the
+        // prefix and the footer marker is present, rather than exact equality.
+        message: expect.stringMatching(/^queued task/),
       }))
+      {
+        const call = cliManager.handleCliCommand.mock.calls.find((c: any[]) => c[0] === 'agent_command')
+        expect(hasWorkerProtocolFooter(call?.[1]?.message)).toBe(true)
+      }
       const [entry] = getQueue(meshId)
       expect(entry.status).toBe('assigned')
       expect(entry.assignedNodeId).toBe('node_child_1')
@@ -5417,11 +5425,20 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
       expect(afterB?.status).toBe('assigned')
       expect(afterB?.assignedSessionId).toBe('runtime-session-2')
       // Dispatch went through the normal send_chat path for session-2.
+      // F1: the dispatched body now carries the worker protocol footer
+      // (resolveDispatchMessage) — assert the authored message is still the
+      // prefix and the footer marker is present, rather than exact equality.
       expect(cliManager.handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
         targetSessionId: 'runtime-session-2',
         action: 'send_chat',
-        message: 'task B after A',
+        message: expect.stringMatching(/^task B after A/),
       }))
+      {
+        const call = cliManager.handleCliCommand.mock.calls.find(
+          (c: any[]) => c[0] === 'agent_command' && c[1]?.targetSessionId === 'runtime-session-2',
+        )
+        expect(hasWorkerProtocolFooter(call?.[1]?.message)).toBe(true)
+      }
     } finally {
       cleanupMeshFiles(meshId)
       meshConfigMocks.getMesh.mockReset()

@@ -46,6 +46,13 @@
  */
 
 import { randomUUID } from 'crypto';
+import {
+    WORKER_BRANCH_STATES,
+    WORKER_REPORT_OUTCOMES,
+    isWorkerReportOutcome,
+    type WorkerBranchState,
+    type WorkerReportOutcome,
+} from '@adhdev/mesh-shared';
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -59,20 +66,18 @@ import {
 
 // ─── Report shapes ──────────────────────────────────────────────────────
 
-export type WorkerReportOutcome = 'completed' | 'blocked' | 'failed';
-
 /**
- * Branch convergence state, mirroring the coordinator operating rule that every
- * touched branch must land in exactly one of these buckets before a task counts
- * as complete. Declared by the worker because the worker is the only party that
- * knows what it actually did with the branch.
+ * Outcome and branch-state vocabularies are declared ONCE in
+ * `@adhdev/mesh-shared` (mesh-vocabulary.ts) so the MCP tool schema, this
+ * validator and the coordinator prompt cannot drift apart. Re-exported under
+ * their historical names for existing consumers.
+ *
+ * `WorkerBranchState` mirrors the coordinator operating rule that every touched
+ * branch must land in exactly one bucket before a task counts as complete.
+ * Declared by the worker because the worker is the only party that knows what
+ * it actually did with the branch.
  */
-export type WorkerBranchState =
-    | 'merged_to_main'
-    | 'pushed_feature_branch_needs_merge'
-    | 'blocked_review'
-    | 'cleanup_candidate'
-    | 'not_mergeable';
+export { WORKER_BRANCH_STATES, type WorkerBranchState, type WorkerReportOutcome };
 
 export interface WorkerHandoffNotes {
     /** What the change was FOR — the thing a diff cannot say. */
@@ -91,14 +96,6 @@ export interface WorkerCompletionReport {
     branchState?: WorkerBranchState;
     blockers?: string[];
 }
-
-export const WORKER_BRANCH_STATES: readonly WorkerBranchState[] = [
-    'merged_to_main',
-    'pushed_feature_branch_needs_merge',
-    'blocked_review',
-    'cleanup_candidate',
-    'not_mergeable',
-];
 
 /**
  * Ledger event kinds this module writes. Free-form TEXT column, so no migration
@@ -157,8 +154,8 @@ export function validateWorkerCompletionReport(raw: unknown): {
     }
 
     const outcome = input.outcome;
-    if (outcome !== 'completed' && outcome !== 'blocked' && outcome !== 'failed') {
-        errors.push({ field: 'outcome', message: "outcome must be one of 'completed' | 'blocked' | 'failed'" });
+    if (!isWorkerReportOutcome(outcome)) {
+        errors.push({ field: 'outcome', message: `outcome must be one of ${WORKER_REPORT_OUTCOMES.map((o) => `'${o}'`).join(' | ')}` });
     }
 
     const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
