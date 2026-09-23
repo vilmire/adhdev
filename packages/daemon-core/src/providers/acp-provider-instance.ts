@@ -67,6 +67,7 @@ import {
 } from './chat-message-normalization.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
+import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
 
@@ -267,6 +268,8 @@ export class AcpProviderInstance implements ProviderInstance {
     private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
     private events: ProviderEvent[] = [];
+    /** Lifecycle port (wiring-unification B2); null until boot wires it. */
+    private lifecyclePort: SessionEventPort | null = null;
     private monitor: StatusMonitor;
 
  // Process
@@ -328,6 +331,7 @@ export class AcpProviderInstance implements ProviderInstance {
     async init(context: InstanceContext): Promise<void> {
         this.context = context;
         this.settings = context.settings || {};
+        if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
@@ -499,9 +503,31 @@ export class AcpProviderInstance implements ProviderInstance {
         const normalized = typeof value === 'string' ? value.trim() : '';
         if (normalized) {
             this.currentSelections[category] = normalized;
+            if (category === 'model') this.notifyModelObserved(normalized);
             return;
         }
         delete this.currentSelections[category];
+    }
+
+    /**
+     * Phase E: the agent's own report of which model it runs (config options,
+     * session/new result, prompt result) is an OBSERVATION for the session's
+     * launch record. The launcher installs the observer once the record exists
+     * (cli-manager), and the current value is reported immediately so the
+     * selection parsed during session start is not lost.
+     */
+    private modelObserver: ((model: string, observedAt: number) => void) | null = null;
+
+    setModelObserver(observer: ((model: string, observedAt: number) => void) | null): void {
+        this.modelObserver = observer;
+        const current = this.getCurrentSelection('model');
+        if (observer && current) this.notifyModelObserved(current);
+    }
+
+    private notifyModelObserved(model: string): void {
+        try {
+            this.modelObserver?.(model, Date.now());
+        } catch { /* observation bookkeeping must never break the ACP session */ }
     }
 
     private getSelectionControlValues(): Record<string, string> {
@@ -1596,7 +1622,10 @@ export class AcpProviderInstance implements ProviderInstance {
             } else if (newStatus === 'stopped') {
                 this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
             }
+            const previousStatus = this.lastStatus;
             this.lastStatus = newStatus;
+            // Lifecycle port (B2): the committed edge, after its provider events.
+            emitStatusEdge(this.lifecyclePort, this.instanceId, previousStatus, newStatus, 'acp_update', this.type);
         }
 
  // Monitor check
@@ -1610,6 +1639,21 @@ export class AcpProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
+        // Lifecycle port (B2): deliver now instead of at the next collectAllStates()
+        // drain. The buffer stays (legacy onEvent listeners still read the drain);
+        // the enrichment mirrors ProviderInstanceManager.emitPendingEvents.
+        forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            ...event,
+            providerType: this.type,
+            instanceId: this.instanceId,
+            targetSessionId: this.instanceId,
+            workspaceName: this.workingDir || undefined,
+        });
+    }
+
+    /** Attach (or detach with null) the lifecycle port (wiring-unification B2). */
+    setSessionEventPort(port: SessionEventPort | null): void {
+        this.lifecyclePort = port;
     }
 
     private appendSystemMessage(content: string, timestamp = Date.now()): void {

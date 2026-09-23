@@ -6,6 +6,7 @@ import type { ChatMessageKind } from '../providers/chat-message-normalization.js
 import type { ChatBubbleState } from '../types.js';
 import type { InteractivePrompt } from '../providers/types/interactive-prompt.js';
 import { sanitizeSpawnEnv } from './spawn-env.js';
+import type { CliAdapterStatus } from '../cli-adapter-types.js';
 
 export interface CliChatMessage {
     role: string;
@@ -24,62 +25,13 @@ export interface CliChatMessage {
     [key: string]: any;
 }
 
-export interface CliSessionStatus {
-    status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
-    messages: CliChatMessage[];
-    workingDir: string;
-    activeModal: { message: string; buttons: string[] } | null;
-    /**
-     * Monotonic counter identifying which approval *entry* the current modal
-     * belongs to. Bumped by the FSM on every fresh waiting_approval entry.
-     * Consumers (e.g. auto-approval) use it to distinguish a genuinely new
-     * approval from the same approval re-observed across TUI paint flaps —
-     * two distinct approvals can carry identical message/button text, so the
-     * seq is the only reliable discriminator.
-     */
-    approvalEntrySeq?: number;
-    /**
-     * The approval entry seq that the engine's last resolveModal() handled. When
-     * `lastResolvedEntrySeq >= approvalEntrySeq` (and approvalEntrySeq > 0) it is positive
-     * evidence that the current/latest approval entry was resolved through ADHDev (auto-approve
-     * fire, dashboard / mesh_approve, or dev-cli-debug — all route through resolveModal). The
-     * completion finalization gate uses this to avoid confirming a waiting_approval→idle
-     * transition for which no resolution actually occurred (a false idle: the spec's text-based
-     * approval→idle rule tripped while the modal is still on screen).
-     */
-    lastResolvedEntrySeq?: number;
-    activeInteractivePrompt?: InteractivePrompt | null;
-    pendingOutboundCount?: number;
-    errorMessage?: string;
-    errorReason?: string;
-    providerSessionId?: string;
-    /**
-     * Spec/FSM adapters only (SpecCliAdapter): true once the driver has observed
-     * its first non-initial idle state — the prompt is genuinely drawn. The
-     * legacy ProviderCliAdapter never sets it (undefined). CliProviderInstance
-     * uses it to re-arm the queue-claim agent:ready on the first genuine ready,
-     * independent of the boot-time starting→idle one-shot (which is consumed too
-     * early for specs whose initial state already reports status 'idle', e.g.
-     * antigravity-cli — without the re-arm the worker never claims its queued
-     * task and the coordinator relaunch-loops).
-     */
-    fsmReadySeen?: boolean;
-    /**
-     * Timestamp (ms) of the most recent raw PTY output chunk. Advances on every
-     * byte the process emits, including tool/build output that produces no
-     * parsed assistant text. Liveness watchdogs use this to distinguish a real
-     * stall (no output at all) from an active turn whose assistant buffer is
-     * momentarily static while a tool runs.
-     */
-    lastOutputAt?: number;
-    /**
-     * Timestamp (ms) of the most recent *visible* terminal screen change.
-     * Stricter than lastOutputAt — only advances when the rendered screen
-     * content actually differs, so repeated keepalive bytes do not register as
-     * progress. Preferred liveness signal for the no-progress watchdog.
-     */
-    lastScreenChangeAt?: number;
-}
+/**
+ * Legacy name for the one CLI adapter status contract. Wiring-unification A4
+ * carry-over: this used to be an independent fork of `CliAdapterStatus`
+ * (cli-adapter-types.ts) with its own status union; it now derives from it so
+ * the two can no longer drift.
+ */
+export type CliSessionStatus = CliAdapterStatus;
 
 export interface ParsedSession {
     status: string;

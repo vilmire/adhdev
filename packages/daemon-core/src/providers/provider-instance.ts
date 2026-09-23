@@ -13,6 +13,7 @@ import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMe
 import type { MessageInputSupport } from './provider-input-support.js';
 import type { ChatMessage } from '../types.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
+import type { SessionEventPort } from '../sessions/session-port.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
 
@@ -100,6 +101,11 @@ interface ProviderStateBase {
     providerControls?: ProviderControlSchema[];
     /** Flexible always-visible metadata for compact/live surfaces. */
     summaryMetadata?: ProviderSummaryMetadata;
+    /**
+     * Phase E launch provenance, stamped from the SessionRegistry by
+     * ProviderInstanceManager.collectAllStates (instances never set it).
+     */
+    launch?: import('../sessions/launch-record.js').SessionLaunchRecord;
 }
 
 /** IDE provider state */
@@ -190,6 +196,13 @@ export interface InstanceContext {
     settings: Record<string, any>;
  /** Immediate provider-originated status/event emission. Used to avoid waiting for status polling. */
     emitProviderEvent?: (event: ProviderEvent) => void;
+    /**
+     * Lifecycle emit surface (wiring-unification B1). Injected by the instance
+     * manager once boot has attached a port (`ProviderInstanceManager.setSessionEventPort`).
+     * Instances move their status/modal/prompt/signal/exit emission onto it in B2;
+     * until then it is optional and unused by the built-in instances.
+     */
+    lifecycle?: SessionEventPort;
 }
 
 export interface ProviderInstance {
@@ -200,6 +213,13 @@ export interface ProviderInstance {
 
  /** initialize */
     init(context: InstanceContext): Promise<void>;
+
+    /**
+     * Late attach / detach of the lifecycle port (wiring-unification B1) for an
+     * instance that was initialized before boot attached one. New instances get
+     * it through `InstanceContext.lifecycle`. Optional; implemented in B2.
+     */
+    setSessionEventPort?(port: SessionEventPort | null): void;
 
  /** Tick — periodic status refresh (IDE: readChat, Extension: stream collection) */
     onTick(): Promise<void>;

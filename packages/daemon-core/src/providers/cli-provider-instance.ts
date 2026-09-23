@@ -103,6 +103,8 @@ import type { EvidenceHost } from './completion/evidence.js';
 import * as stallRescue from './completion/stall-rescue.js';
 import type { StallRescueHost } from './completion/stall-rescue.js';
 import { runStatusTransitionTick, type StatusTransitionHost } from './completion/status-transition.js';
+import type { SessionEventPort } from './provider-event-port.js';
+import type { AdapterChangeCause } from '../cli-adapter-types.js';
 import {
     armCancelledCompletionRecheck,
     clearCancelledCompletionRecheck,
@@ -263,6 +265,10 @@ export class CliProviderInstance implements ProviderInstance {
     // with the same prompt do not re-fire. '' means no prompt is currently active
     // (cleared when the prompt is answered/gone).
     private lastInteractivePromptEventKey = '';
+    // Lifecycle port (wiring-unification B2) + the tick's diff state for it.
+    private lifecyclePort: SessionEventPort | null = null;
+    private lastPromptFingerprint = '';
+    private lastModalFingerprint = '';
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
     private lastAutoApprovalSignature = '';
@@ -430,6 +436,7 @@ export class CliProviderInstance implements ProviderInstance {
     async init(context: InstanceContext): Promise<void> {
         this.context = context;
         this.settings = context.settings || {};
+        if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
@@ -447,9 +454,25 @@ export class CliProviderInstance implements ProviderInstance {
             this.adapter.setOnPtyData(context.onPtyData);
         }
 
- // Emit event on status change
-        this.adapter.setOnStatusChange(() => {
-            this.detectStatusTransition();
+ // Emit event on status change. The cause-carrying hook (B2) replaces the
+ // cause-less one when the adapter has it — registering both would tick twice.
+        if (typeof this.adapter.setOnChange === 'function') {
+            this.adapter.setOnChange((cause) => this.detectStatusTransition(cause));
+        } else {
+            this.adapter.setOnStatusChange(() => {
+                this.detectStatusTransition();
+            });
+        }
+
+        // PTY death + screen signals → lifecycle port (wiring-unification B4; replaces
+        // the shared termination/signal sinks). `exited` routes through
+        // registry.terminate(id, 'pty_exit'), so a racing stop/auto-clean still yields
+        // exactly one `terminated`; mesh meaning is applied by bus subscribers.
+        this.adapter.setOnExit?.(({ termination, runtimeSettings }) => {
+            this.lifecyclePort?.exited(this.instanceId, termination, runtimeSettings);
+        });
+        this.adapter.setOnSignal?.(({ providerType, workspace, runtimeSettings, signal }) => {
+            this.lifecyclePort?.signal(this.instanceId, { providerType, workspace, runtimeSettings, signal });
         });
 
         // APPROVAL-LEVEL-RETRACTION: the adapter is the single point that knows a
@@ -2080,8 +2103,17 @@ export class CliProviderInstance implements ProviderInstance {
         return stallRescue.maybeSynthesizeStartupGraceCollapse(this as unknown as StallRescueHost, chatTitle, now, reason);
     }
 
-    private detectStatusTransition(): void {
-        runStatusTransitionTick(this as unknown as StatusTransitionHost);
+    private detectStatusTransition(cause?: AdapterChangeCause): void {
+        runStatusTransitionTick(this as unknown as StatusTransitionHost, cause);
+    }
+
+    /** Attach (or detach with null) the lifecycle port (wiring-unification B2). */
+    setSessionEventPort(port: SessionEventPort | null): void {
+        this.lifecyclePort = port;
+        if (!port) {
+            this.lastPromptFingerprint = '';
+            this.lastModalFingerprint = '';
+        }
     }
 
     private pushEvent(event: ProviderEvent): void {

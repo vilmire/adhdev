@@ -13,7 +13,8 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { flattenContent, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
-import { ExtensionProviderInstance } from './extension-provider-instance.js';
+import { ExtensionProviderInstance, type ExtensionParentContext } from './extension-provider-instance.js';
+import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -65,6 +66,8 @@ export class IdeProviderInstance implements ProviderInstance {
     private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
     private events: ProviderEvent[] = [];
+    /** Lifecycle port (wiring-unification B2); null until boot wires it. */
+    private lifecyclePort: SessionEventPort | null = null;
     private tickErrorCount = 0;
 
  // Cached status
@@ -102,6 +105,7 @@ export class IdeProviderInstance implements ProviderInstance {
     async init(context: InstanceContext): Promise<void> {
         this.context = context;
         this.settings = context.settings || {};
+        if (!this.lifecyclePort && context.lifecycle) this.setSessionEventPort(context.lifecycle);
  // Sync Monitor config
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
@@ -285,6 +289,7 @@ export class IdeProviderInstance implements ProviderInstance {
             settings: settings || {},
         });
         ext.onEvent('extension_connected', { ideType: this.type });
+        ext.setSessionEventPort(this.lifecyclePort, this.extensionParentContext);
         this.extensions.set(provider.type, ext);
         LOG.info('IdeInstance', `[IdeInstance:${this.type}] Extension added: ${provider.type}`);
     }
@@ -494,6 +499,8 @@ export class IdeProviderInstance implements ProviderInstance {
             }
 
             this.lastAgentStatuses.set(agentKey, agentStatus);
+            // Lifecycle port (B2): the committed edge, after its provider events.
+            emitStatusEdge(this.lifecyclePort, this.instanceId, lastStatus, agentStatus, 'ide_poll', this.type);
         }
 
         this.applyProviderResponse(chatData, {
@@ -520,7 +527,29 @@ export class IdeProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
+        // Lifecycle port (B2): deliver now instead of at the next collectAllStates()
+        // drain. The buffer stays (legacy onEvent listeners still read the drain);
+        // the enrichment mirrors ProviderInstanceManager.emitPendingEvents.
+        forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            ...event,
+            providerType: this.type,
+            instanceId: this.instanceId,
+            targetSessionId: this.instanceId,
+            workspaceName: this.workspace || undefined,
+        });
     }
+
+    /** Attach (or detach with null) the lifecycle port; child extensions follow. */
+    setSessionEventPort(port: SessionEventPort | null): void {
+        this.lifecyclePort = port;
+        for (const ext of this.extensions.values()) ext.setSessionEventPort(port, this.extensionParentContext);
+    }
+
+    /** Read lazily: the workspace is set after the extensions are added. */
+    private readonly extensionParentContext = (): ExtensionParentContext => ({
+        parentSessionId: this.instanceId,
+        workspaceName: this.workspace || undefined,
+    });
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
         if (!data || typeof data !== 'object') return;

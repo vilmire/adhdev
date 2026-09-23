@@ -36,7 +36,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProviderLoader } from '../../../src/providers/provider-loader.js';
 import { ProviderChannelStore } from '../../../src/providers/channel/store.js';
@@ -44,26 +44,9 @@ import { buildRepoTree, digestFor, makeRegistryRow, makeTmp, type FixtureProvide
 
 const PROVIDER_TYPE = 'race-cli';
 
-describe('daemon-lifecycle wiring — re-detect fires after first-sync activation', () => {
-  it('the maybeFirstSyncVerifiedChannel().then() callback re-detects when activated.length > 0', () => {
-    // The behavioral tests below prove registerToDetector() +
-    // refreshProviderAvailability() actually resolve enabled_unchecked ->
-    // detected at the provider-loader level. This test is the missing link:
-    // it proves boot/daemon-lifecycle.ts's real .then() callback — the only
-    // place that observes the sync landing during boot — actually calls
-    // them, so reverting the fix (removing the call site) is caught even
-    // though it doesn't change provider-loader.ts itself.
-    const source = readFileSync(join(import.meta.dirname, '../../../src/boot/daemon-lifecycle.ts'), 'utf-8');
-    const callback = source.match(/void providerLoader\.maybeFirstSyncVerifiedChannel\(\)\s*\.then\(async \(report\) => \{([\s\S]*?)\n {8}\}\)/);
-    expect(callback, 'maybeFirstSyncVerifiedChannel().then() callback not found').toBeTruthy();
-    const activatedBranch = callback![1].match(/report\.activated\.length > 0\) \{([\s\S]*?)\n {12}\}/);
-    expect(activatedBranch, 'activated.length > 0 branch not found').toBeTruthy();
-    const body = activatedBranch![1];
-    expect(body).toContain('providerLoader.registerToDetector()');
-    expect(body).toMatch(/await\s+refreshProviderAvailability\(\)/);
-    expect(body).toContain('config.onStatusChange?.()');
-  });
-});
+// The boot wiring half (re-detect after activation) is pinned behaviourally by
+// test/boot/channel-boot-sync.test.ts (runChannelBootSync) since
+// wiring-unification B4 moved it out of daemon-lifecycle.ts.
 
 type TestConfig = {
   machineProviders?: Record<string, {

@@ -28,6 +28,7 @@ import { getEffectDedupKey } from './cli-provider-effect-format.js';
 import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
 import { TERMINAL_MESH_EVENTS } from './cli-provider-instance-types.js';
 import type { CompletedDebouncePending } from './cli-provider-instance-types.js';
+import { forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 
 /** The narrow surface of CliProviderInstance the event path reads/writes. */
 export interface ProviderEventsHost {
@@ -38,6 +39,8 @@ provider: ProviderModule;
 providerSessionId?: string;
 settings: Record<string, any>;
 context: InstanceContext | null;
+/** Lifecycle port (wiring-unification B2); null until boot wires it. */
+lifecyclePort?: SessionEventPort | null;
 events: ProviderEvent[];
 adapter: Record<string, any>;
 appliedEffectKeys: Set<string>;
@@ -125,9 +128,17 @@ export function pushEvent(host: ProviderEventsHost, event: ProviderEvent): void 
         }
     }
     if (host.context?.emitProviderEvent) {
+        // Already immediate: the instance manager fans this out to its listeners
+        // and (once attached) to the lifecycle bus — no second port emission.
         host.context.emitProviderEvent(enrichedEvent);
     } else {
         host.events.push(enrichedEvent);
+        // No manager emitter: deliver through the port now (B2) instead of waiting
+        // for a collectAllStates() drain; the buffered copy is marked delivered.
+        forwardProviderEvent(host.lifecyclePort, String(enrichedEvent.targetSessionId || host.instanceId), enrichedEvent, {
+            ...enrichedEvent,
+            providerType: enrichedEvent.providerType as string,
+        });
     }
     // Auto-detach a direct-dispatch mesh assignment once the dispatched
     // task reaches a terminal state. Leaving meshNodeFor pinned would
