@@ -16,7 +16,7 @@ import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
 import { buildMeshRefineBatchDryRunResult } from '../mesh/mesh-refine-submodule-preflight.js';
 import { gitChildEnv } from '../git/git-locale.js';
@@ -588,7 +588,7 @@ export function queueRefineBatchJobEvent(self: DaemonCommandRouter,
             if (forwarded?.success === true) return;
             LOG.warn('Mesh', `[Refinery] Failed to forward async refine batch event ${event}: ${forwarded?.error || 'unknown error'}`);
         }
-        queuePendingMeshCoordinatorEvent(eventPayload);
+        notifyMeshCoordinator(eventPayload);
     }
 
 export async function appendRefineBatchJobLedger(self: DaemonCommandRouter, 

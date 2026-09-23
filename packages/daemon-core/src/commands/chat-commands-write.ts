@@ -12,6 +12,7 @@ import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approv
 import { LOG } from '../logging/logger.js';
 import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
 import { sendNowIntoAgentQueue, type QueueWritableAdapter } from './send-now-queued-write.js';
+import { readSendPolicy, readMessageId } from './command-args.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
     type RuntimeChatMessageMerger,
@@ -146,6 +147,15 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
     const dedupeKey = buildRecentSendKey(h, args, provider, buildSendInputSignature(input));
+    // Wiring-unification D3: `policy.mode` (D-web's typed dual-write) is read as
+    // the PRIMARY source, legacy `sendNow`/`interrupt`/`force`/`forceSend`
+    // booleans as fallback — see command-args.ts's header for why this changes
+    // no behaviour today (every current caller either omits `policy` or sends
+    // it in agreement with the booleans). `messageId` is threaded through to
+    // the two out-of-band helpers below for logging only; no dedupe/claim/ack
+    // behaviour changes from this pass — see those functions' own headers.
+    const sendPolicy = readSendPolicy(args);
+    const messageId = readMessageId(args);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         // Sending and transcript persistence are intentionally decoupled.
@@ -203,7 +213,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     }
                     const runtimeTarget = target as RuntimeChatMessageMerger;
                     if (typeof runtimeTarget.recordAcknowledgedUserInput === 'function') {
-                        runtimeTarget.recordAcknowledgedUserInput(input);
+                        runtimeTarget.recordAcknowledgedUserInput(input, messageId);
                     }
                     // Match text-only sends: accepted queue entries get a bubble,
                     // but must not be advertised as already submitted to the PTY.
@@ -234,8 +244,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 // were waiting for, which is precisely the outcome they avoided
                 // by not pressing stop. A refusal is reported, and the body stays
                 // queued for the ordinary drain.
-                if (args?.sendNow === true) {
-                    const queued = await sendNowIntoAgentQueue(adapter as unknown as QueueWritableAdapter, text);
+                if (sendPolicy.mode === 'send_now') {
+                    const queued = await sendNowIntoAgentQueue(adapter as unknown as QueueWritableAdapter, text, { messageId });
                     if (!queued.ok) {
                         return {
                             success: false,
@@ -264,7 +274,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                         if (target?.category === 'cli'
                             && target.type === adapter.cliType
                             && typeof target.recordAcknowledgedUserInput === 'function') {
-                            target.recordAcknowledgedUserInput(input);
+                            target.recordAcknowledgedUserInput(input, messageId);
                         }
                     }
                     return {
@@ -284,9 +294,9 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 // to the SAME interrupt path. There is deliberately no branch
                 // left that writes the body into a generating PTY (oss 6cca365b:
                 // the bytes are never consumed and the caller is told they were).
-                const wantsInterrupt = args?.interrupt === true || args?.force === true || args?.forceSend === true;
+                const wantsInterrupt = sendPolicy.mode === 'interrupt';
                 if (wantsInterrupt) {
-                    const outcome = await interruptAndDeliver(adapter as unknown as InterruptibleAdapter, text);
+                    const outcome = await interruptAndDeliver(adapter as unknown as InterruptibleAdapter, text, { messageId });
                     if (!outcome.ok) {
                         // The body was NOT written. Report failure rather than a
                         // phantom success so the pane keeps the bubble queued.
@@ -302,7 +312,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     if (target?.category === 'cli'
                         && target.type === adapter.cliType
                         && typeof target.recordAcknowledgedUserInput === 'function') {
-                        target.recordAcknowledgedUserInput(input);
+                        target.recordAcknowledgedUserInput(input, messageId);
                     }
                     return {
                         ..._logSendSuccess(`${transport}-adapter-interrupt`, adapter.cliType),
@@ -332,7 +342,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 if (target?.category === 'cli'
                     && target.type === adapter.cliType
                     && typeof target.recordAcknowledgedUserInput === 'function') {
-                    target.recordAcknowledgedUserInput(input);
+                    target.recordAcknowledgedUserInput(input, messageId);
                 }
                 if (queued) {
                     _log(`send queued (not yet submitted) for ${adapter.cliType}`);

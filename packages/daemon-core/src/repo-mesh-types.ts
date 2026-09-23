@@ -1756,6 +1756,13 @@ export interface RepoMeshStatus {
      */
     meshProtocolV2Counters?: MeshProtocolV2Counters;
     /**
+     * C7-5 freshness gate (wiring-unification C-W3): present while another
+     * writer's `mesh.<id>.events` entries have not replicated to this daemon
+     * (Beacon `staleness().behind`). Fleet-wide reads in this status are
+     * advisory until it clears. Computed per call, never cached.
+     */
+    replication?: 'pending';
+    /**
      * Live process-lifetime counters for the mesh_pending_events retention sweep
      * (age-based: drained rows >7d, undrained rows >30d). `undrainedExpired` is the
      * operational signal — every increment is a pending event that was queued for a

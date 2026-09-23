@@ -66,6 +66,7 @@
  *   comparing get_status_metadata's bootId before/after.
  */
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
@@ -407,11 +408,8 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         // Equivalent → local. _meshDirectDispatch prevents re-forwarding once the
         // call has landed on the owning daemon.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-        if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', {
-                ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
-                _meshDirectDispatch: true,
-            });
+        if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args));
             return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
         }
 

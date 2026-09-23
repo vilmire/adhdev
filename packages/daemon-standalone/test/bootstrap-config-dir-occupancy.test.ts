@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { SEQSCRIBE_DB_SUFFIX_ENV_VAR } from '@adhdev/daemon-core/config/config-dir'
 import { warnIfInheritedConfigDirIsOccupied } from '../src/bootstrap-config-dir'
 
 /** Fixture config dir, optionally occupied by a live-looking daemon pid file. */
@@ -100,6 +101,47 @@ test('stays silent when the operator opted in with ADHDEV_ALLOW_TRACK_MISMATCH=1
     )
     assert.equal(warned, false, 'the documented opt-in must silence the warning')
     assert.equal(captured.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C7-3: sets SEQSCRIBE_DB_SUFFIX_ENV_VAR when the inherited dir is occupied (seqscribe DB only, not the whole config dir)', () => {
+  const livePid = process.ppid
+  const dir = makeConfigDir({ name: 'daemon-19223.pid', pid: livePid })
+  try {
+    const env: NodeJS.ProcessEnv = { ADHDEV_CONFIG_DIR: dir }
+    const warned = warnIfInheritedConfigDirIsOccupied(dir, env, () => {})
+    assert.equal(warned, true)
+    assert.equal(typeof env[SEQSCRIBE_DB_SUFFIX_ENV_VAR], 'string')
+    assert.ok(env[SEQSCRIBE_DB_SUFFIX_ENV_VAR]!.length > 0)
+    // Still the SAME config dir — only the one filename is redirected, the
+    // rest of the shared dir (meshes.json etc.) is untouched by this fix.
+    assert.equal(env.ADHDEV_CONFIG_DIR, dir)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C7-3: does not set SEQSCRIBE_DB_SUFFIX_ENV_VAR when the inherited dir is NOT occupied', () => {
+  const dir = makeConfigDir()
+  try {
+    const env: NodeJS.ProcessEnv = { ADHDEV_CONFIG_DIR: dir }
+    const warned = warnIfInheritedConfigDirIsOccupied(dir, env, () => {})
+    assert.equal(warned, false)
+    assert.equal(env[SEQSCRIBE_DB_SUFFIX_ENV_VAR], undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C7-3: never overwrites an operator-supplied SEQSCRIBE_DB_SUFFIX_ENV_VAR', () => {
+  const livePid = process.ppid
+  const dir = makeConfigDir({ name: 'daemon-19223.pid', pid: livePid })
+  try {
+    const env: NodeJS.ProcessEnv = { ADHDEV_CONFIG_DIR: dir, [SEQSCRIBE_DB_SUFFIX_ENV_VAR]: 'operator-chosen' }
+    warnIfInheritedConfigDirIsOccupied(dir, env, () => {})
+    assert.equal(env[SEQSCRIBE_DB_SUFFIX_ENV_VAR], 'operator-chosen')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

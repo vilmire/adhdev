@@ -326,6 +326,18 @@ export async function interruptAndDeliver(
         /** SEND-NOW-SECOND-PRESS-KILL: minimum continuously-observed busy dwell
          *  before the second stop key may be written. See the constant. */
         minBusyDwellMs?: number;
+        /**
+         * Wiring-unification D3: the `OutboundMessage.messageId` this delivery
+         * belongs to, when the caller has one (D-web's dual-write, mesh-shared
+         * `mintMessageId`). Threaded through for LOGGING/telemetry only — it does
+         * NOT yet change dedupe, claim, or ack behaviour; this function's claim/
+         * interrupt/deliver sequence is unchanged. Stamping the produced ack
+         * message with `meta.sourceMessageId` is `recordAcknowledgedUserInput`'s
+         * job (`providers/cli-provider-runtime-messages.ts`, owned by C-W5 — see
+         * this repo's D-daemon REQUESTED EDITS) and is not done here; a caller
+         * that wants that stamp must apply it itself once that signature lands.
+         */
+        messageId?: string;
     },
 ): Promise<InterruptAndDeliverOutcome> {
     if (typeof adapter.interruptTurn !== 'function') {
@@ -443,7 +455,8 @@ export async function interruptAndDeliver(
         const queued = sendResult?.status === 'queued';
         LOG.info(
             'SendNow',
-            `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'} (claimed=${claimed})`,
+            `[${adapter.cliType}] interrupt(${interrupted.keyName}, ${interrupted.confidence}) → idle → ${queued ? 'requeued' : 'delivered'} (claimed=${claimed})`
+            + (options?.messageId ? ` messageId=${options.messageId}` : ''),
         );
         return {
             ok: true,

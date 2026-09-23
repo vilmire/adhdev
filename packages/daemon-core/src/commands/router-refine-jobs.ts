@@ -14,7 +14,7 @@
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
-import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import type { MeshRefineAsyncJobStatus, MeshRefineJobHandle } from '../mesh/mesh-refine-gates.js';
 
@@ -261,7 +261,7 @@ export function queueRefineJobEvent(self: DaemonCommandRouter, event: 'refine:ac
             if (forwarded?.success === true) return;
             LOG.warn('Mesh', `[Refinery] Failed to forward async refine event ${event}: ${forwarded?.error || 'unknown error'}`);
         }
-        queuePendingMeshCoordinatorEvent(eventPayload);
+        notifyMeshCoordinator(eventPayload);
     }
 
 export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'task_dispatched' | 'task_completed' | 'task_failed', handle: MeshRefineJobHandle, result?: Record<string, unknown>): Promise<void> {

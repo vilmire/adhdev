@@ -15,9 +15,9 @@ import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { resolveCoordinatorSelfIds, daemonIdListIncludes } from '../mesh/mesh-reconcile-identity.js';
-import { resolveTunedReconcileMs } from '../mesh/mesh-reconcile-acked-hold.js';
+import { resolveTunedReconcileMs } from '../mesh/mesh-tuned-env.js';
 import { fastForwardMeshNode } from '../mesh/mesh-fast-forward.js';
 import { assessRefineBaseDivergence } from '../mesh/mesh-refine-base-divergence.js';
 // ★B1: slow-gate progress notification (threshold + throttle live in the module).
@@ -971,7 +971,7 @@ export async function requestCoordinatorLocalCatchup(
     // Remote coordinator: queue a targeted pending marker for its reconcile loop / next
     // mesh-tool call to pick up and fast-forward locally (guarded, deferrable when busy).
     try {
-        queuePendingMeshCoordinatorEvent({
+        notifyMeshCoordinator({
             event: 'coordinator_catchup',
             meshId,
             nodeLabel: readStringValue(coordinatorBaseNode.id) || 'coordinator-base',

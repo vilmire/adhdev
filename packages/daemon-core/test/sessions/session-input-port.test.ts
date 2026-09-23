@@ -12,19 +12,23 @@ import { mintMessageId } from '@adhdev/mesh-shared'
 function makeTarget(overrides: Partial<SessionInputTarget> = {}): SessionInputTarget & {
   sendMessageCalls: { text: string; options?: { bracketedPaste?: boolean; claimKey?: string } }[]
   ackCalls: unknown[]
+  ackIds: Array<string | undefined>
 } {
   const sendMessageCalls: { text: string; options?: { bracketedPaste?: boolean; claimKey?: string } }[] = []
   const ackCalls: unknown[] = []
+  const ackIds: Array<string | undefined> = []
   return {
     sendMessageCalls,
     ackCalls,
+    ackIds,
     getStatus: () => ({ status: 'idle' }),
     async sendMessage(text, options) {
       sendMessageCalls.push({ text, options })
       return { status: 'delivered' }
     },
-    recordAcknowledgedUserInput(input) {
+    recordAcknowledgedUserInput(input, sourceMessageId) {
       ackCalls.push(input)
+      ackIds.push(sourceMessageId)
     },
     ...overrides,
   }
@@ -96,10 +100,13 @@ describe('SessionInputPort — policy.mode: send_now', () => {
   it('delivers via sendNowIntoAgentQueue and stamps the ack', async () => {
     const deps = makeDeps()
     const port = createLegacySessionInputPort(deps)
-    const outcome = await port.submit(makeMsg('s1', { mode: 'send_now' }))
+    const msg = makeMsg('s1', { mode: 'send_now' })
+    const outcome = await port.submit(msg)
     expect(outcome).toEqual({ kind: 'delivered' })
     expect(deps.sendNowIntoAgentQueue).toHaveBeenCalledTimes(1)
     expect(deps.target.ackCalls).toHaveLength(1)
+    // The ack carries the message's identity (meta.sourceMessageId downstream).
+    expect(deps.target.ackIds).toEqual([msg.messageId])
   })
 
   it('maps a platform_unsupported refusal through', async () => {

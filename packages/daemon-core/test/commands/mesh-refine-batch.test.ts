@@ -9,7 +9,7 @@ import { orderMeshRefineBatchNodes } from '../../src/mesh/mesh-refine-batch'
 import type { MeshRefineBatchNodeChangeArea } from '../../src/mesh/mesh-refine-batch'
 import { classifyBatchNodeConvergence } from '../../src/commands/router-refine'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
-import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events'
+import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 // ── Pure ordering unit tests (no git, no native bindings) ──────────────────
 

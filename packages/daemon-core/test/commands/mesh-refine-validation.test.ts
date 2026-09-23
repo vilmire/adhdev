@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
-import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, handleMeshForwardEvent, runMeshReconcileTick } from '../../src/mesh/mesh-events'
+import { handleMeshForwardEvent } from '../../src/mesh/mesh-events'
+import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
 
 /**
@@ -239,13 +240,13 @@ describe('refine_mesh_node validation gate', () => {
   })
 
   it('delivers async refine completion and failure as coordinator-visible system messages with duplicate suppression', async () => {
+    // C-W3: a refine terminal is a coordinator NOTICE (turn.notify); its text is
+    // rendered at deliver time by the same builder the helper uses here, and a
+    // re-emit of the same terminal collapses on the notice eventId.
     const meshId = `mesh-refine-delivery-${Date.now()}`
     const messages: string[] = []
     const components = createMeshEventComponents(meshId, messages)
 
-    // Queue-only delivery: handleMeshForwardEvent now ONLY persists to the pending
-    // queue (forwarded: 0). The reconcile tick drains + injects into the idle
-    // coordinator, which is what actually lands the system message in `messages`.
     const completed = handleMeshForwardEvent(components, {
       event: 'refine:completed',
       meshId,
@@ -261,23 +262,30 @@ describe('refine_mesh_node validation gate', () => {
         validationSummary: { status: 'passed' },
       },
     })
-    expect(completed).toMatchObject({ success: true, forwarded: 0 })
-    await runMeshReconcileTick(components)
-    expect(messages[0]).toContain('completed successfully')
-    expect(messages[0]).toContain('job_id=refine_job_delivery_completed')
-    expect(messages[0]).toContain('validation=passed')
+    expect(completed).toMatchObject({ success: true, notice: 'refine:completed' })
+    const first = drainPendingMeshCoordinatorEvents(meshId)
+    expect(first).toHaveLength(1)
+    expect(first[0]!.coordinatorMessage).toContain('completed successfully')
+    expect(first[0]!.coordinatorMessage).toContain('job_id=refine_job_delivery_completed')
+    expect(first[0]!.coordinatorMessage).toContain('validation=passed')
 
-    // Duplicate is suppressed at queue time → never queued → tick injects nothing new.
-    const duplicate = handleMeshForwardEvent(components, {
+    // The same terminal again collapses on its notice eventId → nothing new.
+    handleMeshForwardEvent(components, {
       event: 'refine:completed',
       meshId,
       nodeId: 'node-delivery',
+      workspace: '/tmp/node-delivery',
       jobId: 'refine_job_delivery_completed',
       status: 'completed',
+      result: {
+        success: true,
+        merged: true,
+        branch: 'feat/refine',
+        into: 'main',
+        validationSummary: { status: 'passed' },
+      },
     })
-    expect(duplicate).toMatchObject({ success: true, suppressed: true, duplicateRefineTerminalEvent: true })
-    await runMeshReconcileTick(components)
-    expect(messages).toHaveLength(1)
+    expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0)
 
     const failed = handleMeshForwardEvent(components, {
       event: 'refine:failed',
@@ -287,18 +295,12 @@ describe('refine_mesh_node validation gate', () => {
       status: 'failed',
       result: { success: false, code: 'validation_failed', error: 'validation failed' },
     })
-    expect(failed).toMatchObject({ success: true, forwarded: 0 })
-    await runMeshReconcileTick(components)
-    expect(messages[1]).toContain('failed')
-    expect(messages[1]).toContain('job_id=refine_job_delivery_failed')
-    expect(messages[1]).toContain('code=validation_failed')
-    // 90s like the other real-work cases in this file. `vi.setConfig` in
-    // beforeAll does not reliably reach tests that vitest has already
-    // collected, so this test silently kept the 30s default and timed out on
-    // CI under full-suite parallel load — it needs ~7s in isolation, so the
-    // budget is about scheduling contention, not about the test being slow.
-    // Raising it does not weaken anything: the assertions above are unchanged
-    // and a genuine hang still fails, just at 90s.
+    expect(failed).toMatchObject({ success: true, notice: 'refine:failed' })
+    const second = drainPendingMeshCoordinatorEvents(meshId)
+    expect(second[0]!.coordinatorMessage).toContain('failed')
+    expect(second[0]!.coordinatorMessage).toContain('job_id=refine_job_delivery_failed')
+    expect(second[0]!.coordinatorMessage).toContain('code=validation_failed')
+    expect(messages).toEqual([])
   }, 90000)
 
   it('buffers forwarded refine terminal events for MCP coordinators when no live CLI coordinator exists', () => {
@@ -319,7 +321,7 @@ describe('refine_mesh_node validation gate', () => {
         result: { success: true, merged: true, validationSummary: { status: 'passed' } },
       })
 
-      expect(forwarded).toMatchObject({ success: true, forwarded: 0 })
+      expect(forwarded).toMatchObject({ success: true, notice: 'refine:completed' })
       expect(messages).toEqual([])
       const pending = drainPendingMeshCoordinatorEvents(meshId)
       expect(pending).toHaveLength(1)
@@ -676,7 +678,8 @@ describe('refine_mesh_node validation gate', () => {
       // landing the coordinator-visible system message. (createMeshEventComponents
       // builds the same idle-coordinator-on-this-daemon shape the loop expects,
       // pushing injected text into the shared `messages` sink.)
-      await runMeshReconcileTick(createMeshEventComponents(mesh.id, messages))
+      // C-W3: the text the turn.deliver cursor submits is the deliver-time render.
+      messages.push(...drainPendingMeshCoordinatorEvents(mesh.id).map(e => e.coordinatorMessage))
       expect(messages.some(message =>
         message.includes(`job_id=${accepted.jobId}`)
         && message.includes('validation=passed')
@@ -782,7 +785,8 @@ describe('refine_mesh_node validation gate', () => {
         && (event.metadataEvent as any).jobId === accepted.jobId
       )).toBe(false)
       // ...then the reconcile tick drains + injects it into the idle coordinator.
-      await runMeshReconcileTick(createMeshEventComponents(mesh.id, messages))
+      // C-W3: the text the turn.deliver cursor submits is the deliver-time render.
+      messages.push(...drainPendingMeshCoordinatorEvents(mesh.id).map(e => e.coordinatorMessage))
       expect(messages.some(message =>
         message.includes(`job_id=${accepted.jobId}`)
         && message.includes('code=submodule_reachability_failed')

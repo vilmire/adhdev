@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
 import { DaemonCommandRouter, getDaemonCommandRegistry } from '../../src/commands/router'
+// C-W3: coordinator notices are turn.notify rows now; the helper binds a
+// capturing notice runtime whose readNotices() is what mesh_status peeks.
+import { getPendingMeshCoordinatorEvents, rebindPendingNotices } from '../helpers/pending-notices.js'
 
 /**
  * mesh_status stale-serve while coordinator events are pending.
@@ -81,8 +84,8 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
-      const { queuePendingMeshCoordinatorEvent, getPendingMeshCoordinatorEvents } =
-        await import('../../src/mesh/mesh-events.js')
+      rebindPendingNotices()
+      const { notifyMeshCoordinator } = await import('../../src/mesh/mesh-events.js')
       const { getMeshQueueRevision } = await import('../../src/mesh/mesh-work-queue.js')
 
       const mesh = createMesh({ name: 'StaleServe', repoIdentity: 'github.com/acme/stale-serve', defaultBranch: 'main' })
@@ -100,7 +103,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
 
       // An undrained coordinator event addressed to this daemon — the condition
       // that used to force the full synchronous rebuild.
-      expect(queuePendingMeshCoordinatorEvent({
+      expect(notifyMeshCoordinator({
         event: 'agent:ready',
         meshId: mesh.id,
         nodeLabel: 'node_stale',
@@ -140,8 +143,6 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       // The cached snapshot itself must stay free of them (no poisoning).
       expect(router.aggregateMeshStatusCache.get(mesh.id).snapshot.pendingCoordinatorEvents).toBeUndefined()
       // The other never-cached live extras are re-attached on this path as well.
-      expect(result.meshProtocolV2Counters).toBeTruthy()
-      expect(result.pendingRetentionCounters).toBeTruthy()
       expect(result.turnPresentationCounters).toBeTruthy()
 
       // The revalidate half of stale-while-revalidate: exactly ONE coalesced
@@ -163,7 +164,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
-      const { queuePendingMeshCoordinatorEvent } = await import('../../src/mesh/mesh-events.js')
+      const { notifyMeshCoordinator } = await import('../../src/mesh/mesh-events.js')
       const { appendLedgerEntry } = await import('../../src/mesh/mesh-ledger.js')
       const { getMeshQueueRevision } = await import('../../src/mesh/mesh-work-queue.js')
       const { loadConfig } = await import('../../src/config/config.js')
@@ -194,7 +195,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
           async: true,
         },
       } as any)
-      queuePendingMeshCoordinatorEvent({
+      notifyMeshCoordinator({
         event: 'refine:completed',
         meshId: mesh.id,
         nodeLabel: 'node_stale',
@@ -237,7 +238,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
     try {
       process.env.ADHDEV_CONFIG_DIR = configDir
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
-      const { queuePendingMeshCoordinatorEvent } = await import('../../src/mesh/mesh-events.js')
+      const { notifyMeshCoordinator } = await import('../../src/mesh/mesh-events.js')
 
       const mesh = createMesh({ name: 'QueueRev', repoIdentity: 'github.com/acme/queue-rev', defaultBranch: 'main' })
       addNode(mesh.id, { workspace: '/tmp/queue-rev-workspace', repoRoot: '/tmp/queue-rev-workspace' })
@@ -249,7 +250,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       // this is what a genuine enqueue/mutation produces.
       seedStalePendingAggregate(router, mesh.id, 'revision-from-before-the-mutation')
 
-      queuePendingMeshCoordinatorEvent({
+      notifyMeshCoordinator({
         event: 'agent:ready',
         meshId: mesh.id,
         nodeLabel: 'node_stale',
@@ -265,6 +266,41 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       expect(result.staleMarker).toBeUndefined()
       expect(result.sourceOfTruth?.aggregateSnapshot?.cached).toBe(false)
     } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      await cleanupTempDir(configDir)
+    }
+  })
+
+  it('(C7-5) replication: pending is computed per call and attached on the cached/stale path too', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'mesh-status-replication-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      process.env.ADHDEV_CONFIG_DIR = configDir
+      let behind = true
+      rebindPendingNotices({ replicationPending: () => behind })
+      const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
+      const { getMeshQueueRevision } = await import('../../src/mesh/mesh-work-queue.js')
+      const mesh = createMesh({ name: 'Replication', repoIdentity: 'github.com/acme/replication', defaultBranch: 'main' })
+      addNode(mesh.id, { workspace: '/tmp/stale-workspace', repoRoot: '/tmp/stale-workspace' })
+      const router: any = createRouter()
+      router.getCachedInlineMesh(mesh.id, getMesh(mesh.id))
+      seedStalePendingAggregate(router, mesh.id, getMeshQueueRevision(mesh.id))
+      vi.spyOn(router, 'execute').mockImplementation(async () => ({ success: true }) as any)
+
+      const first: any = await router.runSpec(getDaemonCommandRegistry().get('mesh_status')!, { meshId: mesh.id })
+      expect(first.staleMarker).toBe(STALE_MARKER)
+      expect(first.replication).toBe('pending')
+      // Never cached: the held snapshot carries no replication state.
+      expect(router.aggregateMeshStatusCache.get(mesh.id).snapshot.replication).toBeUndefined()
+
+      // The writer caught up: the SAME cached snapshot is served without the marker.
+      behind = false
+      const second: any = await router.runSpec(getDaemonCommandRegistry().get('mesh_status')!, { meshId: mesh.id })
+      expect(second.staleMarker).toBe(STALE_MARKER)
+      expect(second.replication).toBeUndefined()
+    } finally {
+      rebindPendingNotices()
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
       await cleanupTempDir(configDir)

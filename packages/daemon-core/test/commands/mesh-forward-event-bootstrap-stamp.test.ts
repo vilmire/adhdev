@@ -87,16 +87,16 @@ describe('MESH-FORWARD-EVENT-BOOTSTRAP-STAMP — remote daemon lacks the coordin
   })
   afterEach(() => { vi.clearAllMocks() })
 
-  it('red regression: handleMeshForwardEvent without a router stamp throws, leaving the coordinator gate stuck on running', async () => {
+  // C-W3: the historical red case (a stampless shim THREW) no longer
+  // reproduces — the notice path isolates the stamp. The failure is reported
+  // on the result and logged, and the gate-stuck symptom is covered by the
+  // green cases below (the handler binds the stamp).
+  it('a handler without a router stamp reports the stamp failure instead of throwing', async () => {
     const meshId = `mesh_red_${randomUUID().slice(0, 8)}`
     try {
-      // This is exactly the shape the old mesh_forward_event handler passed:
-      // only the instanceManager, no router. The forwarder then tries to call
-      // components.router.markWorktreeBootstrapTerminalState and fails.
       const components = { instanceManager: { getInstance: vi.fn(() => undefined) } } as any
-      expect(() => handleMeshForwardEvent(components, createStampArgs(meshId))).toThrow(
-        /Cannot read properties of undefined \(reading 'markWorktreeBootstrapTerminalState'\)|markWorktreeBootstrapTerminalState/,
-      )
+      const result = handleMeshForwardEvent(components, createStampArgs(meshId))
+      expect(result.error).toMatch(/markWorktreeBootstrapTerminalState/)
     } finally {
       cleanup(meshId)
     }

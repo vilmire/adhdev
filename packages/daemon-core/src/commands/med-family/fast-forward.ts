@@ -16,6 +16,7 @@ import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-sub
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 
 export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     mesh_init: async (ctx: MedFamilyContext, args: any) => {
@@ -102,12 +103,8 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             // machine's core must be treated as local (not remote) so it is not forwarded /
             // P2P self-dialed. Equivalent → local.
             const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-            if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', {
-                    ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
-                    workspace,
-                    _meshDirectDispatch: true,
-                });
+            if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'fast_forward_mesh_node', withMeshDirectDispatch(args, { workspace }));
                 return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
             const result = await (fastForwardMeshNode({
@@ -181,15 +178,13 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             // daemonIdsEquivalent: a legacy-form daemonId resolving to this machine's core
             // is local — execute locally instead of forwarding. Equivalent → local.
             const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
-            if (isRemote && ctx.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
+            if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
                 const callerCoordinatorDaemonId = typeof args?.coordinatorDaemonId === 'string' && args.coordinatorDaemonId.trim()
                     ? args.coordinatorDaemonId.trim()
                     : undefined;
-                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'refine_mesh_node', {
-                    ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
+                const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'refine_mesh_node', withMeshDirectDispatch(args, {
                     coordinatorDaemonId: callerCoordinatorDaemonId || selfDaemonId,
-                    _meshDirectDispatch: true,
-                });
+                }));
                 return (forwarded ?? { success: false, error: 'no response from remote node' }) as CommandRouterResult;
             }
         }

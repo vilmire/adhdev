@@ -52,12 +52,11 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { queueRefineJobEvent, queueRefineBatchJobEvent } from '../../src/commands/router-refine.js';
 import { handleMeshForwardEvent, buildRelayMetadataEvent } from '../../src/mesh/mesh-event-forwarding.js';
-import { buildForwardPayloadFromPending } from '../../src/mesh/mesh-remote-event-pull.js';
 import {
     getPendingMeshCoordinatorEvents,
     drainPendingMeshCoordinatorEvents,
     __clearMeshPendingEventsForTests,
-} from '../../src/mesh/mesh-events-pending.js';
+} from '../helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 // Minimal router facade: queueRefine*JobEvent only reads deps.instanceManager.
@@ -128,8 +127,6 @@ describe('RC32 Part B — refine terminal-event return path', () => {
         expect(visible.map(e => e.event)).toContain('refine:completed');
         const event = visible.find(e => e.event === 'refine:completed')!;
         expect(event.targetCoordinatorDaemonId).toBe(COORD_FULL);
-        expect(event.protocolVersion).toBe('2.0');
-        expect(daemonIdsEquivalent(event.intendedFor?.daemonId, COORD_MACH)).toBe(true);
 
         // The executing (worker) daemon's own drain must NOT see it — that exclusion
         // is the whole point of the unicast return path.
@@ -146,7 +143,6 @@ describe('RC32 Part B — refine terminal-event return path', () => {
         expect(visible.map(e => e.event)).toContain('refine:completed');
         const event = visible.find(e => e.event === 'refine:completed')!;
         expect(event.targetCoordinatorDaemonId).toBe(COORD_FULL);
-        expect(daemonIdsEquivalent(event.intendedFor?.daemonId, COORD_MACH)).toBe(true);
         expect(pendingRefineEvents(meshId, WORKER_MACH)).toHaveLength(0);
     });
 
@@ -171,24 +167,16 @@ describe('RC32 Part B — refine terminal-event return path', () => {
         expect(visible.map(e => e.event)).toContain('refine:failed');
         const event = visible.find(e => e.event === 'refine:failed')!;
         expect(event.targetCoordinatorDaemonId).toBe(COORD_FULL);
-        expect(daemonIdsEquivalent(event.intendedFor?.daemonId, COORD_MACH)).toBe(true);
         expect(pendingRefineEvents(meshId, WORKER_MACH)).toHaveLength(0);
     });
 
-    it('relay whitelist mirrors the daemon anchor (buildRelayMetadataEvent / buildForwardPayloadFromPending)', () => {
+    it('relay whitelist mirrors the daemon anchor (buildRelayMetadataEvent)', () => {
         // The flat relay payload → rebuilt metadataEvent mirror the receive side reads.
+        // (The remote-pull flatten half — buildForwardPayloadFromPending — was deleted
+        // with the pull path in wiring-unification C4: cross-machine delivery is topic
+        // replication now, so there is no pending-event flatten to pin.)
         const metadata = buildRelayMetadataEvent({ targetCoordinatorDaemonId: COORD_FULL });
         expect(metadata.targetCoordinatorDaemonId).toBe(COORD_FULL);
-
-        // The remote-pull flatten passes the pending event's top-level anchor through
-        // (it lives outside metadataEvent, so the metadata spread alone loses it).
-        const wire = buildForwardPayloadFromPending({
-            event: 'refine:completed',
-            meshId: 'mesh_rc32',
-            targetCoordinatorDaemonId: COORD_FULL,
-            metadataEvent: { jobId: 'job_x' },
-        });
-        expect(wire.targetCoordinatorDaemonId).toBe(COORD_FULL);
     });
 
     it('trim/held path: the correctly-targeted event is drained by its coordinator; the legacy self-fallback shape is not', () => {
@@ -197,8 +185,8 @@ describe('RC32 Part B — refine terminal-event return path', () => {
 
         // Fixed shape: handle carries the coordinator return address.
         queueRefineJobEvent(makeSelf(), 'refine:completed', makeSingleHandle(meshId, `job_fixed_${randomUUID().slice(0, 6)}`, COORD_FULL), { success: true });
-        // Legacy bug shape: no return address → stampPendingEventV2 self-fallback
-        // stamps the EXECUTING daemon's own id (the pre-RC32 mis-target).
+        // Legacy bug shape: no return address → the notifier addresses the
+        // EXECUTING daemon itself (the pre-RC32 mis-target).
         queueRefineJobEvent(makeSelf(), 'refine:failed', makeSingleHandle(meshId, `job_legacy_${randomUUID().slice(0, 6)}`), { success: false });
 
         // Coordinator drain recovers ONLY the correctly-targeted event — proving it
@@ -211,6 +199,6 @@ describe('RC32 Part B — refine terminal-event return path', () => {
         // (and what used to trim to held on the wrong daemon).
         const legacy = pendingRefineEvents(meshId, WORKER_MACH);
         expect(legacy.map(e => e.event)).toContain('refine:failed');
-        expect(daemonIdsEquivalent(legacy[0]?.targetCoordinatorDaemonId, WORKER_MACH)).toBe(true);
+        expect(legacy.find(e => e.event === 'refine:failed')?.targetCoordinatorDaemonId).toBeUndefined();
     });
 });

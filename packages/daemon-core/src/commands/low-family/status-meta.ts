@@ -14,7 +14,7 @@ import { getDaemonBuildInfo } from '../../build-info.js';
 import { TRACK } from '../../track-identity.js';
 import { getCoordinatorForSession, listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
 import { currentRefineExecutorBootId } from '../../mesh/mesh-refine-executor-liveness.js';
-import { readTerminalRedriveDiagnostics } from '../../mesh/mesh-terminal-redrive-diagnostics.js';
+import { meshNoticeRuntime } from '../../mesh/turn-ledger/deliver.js';
 // ★These two commands are the SWR read surfaces — the ONLY read path allowed to
 // schedule a background refresh (quota/refresh.ts readQuotaCacheWithRevalidate).
 // They qualify because they are on-demand and human-paced: a machine page load
@@ -115,22 +115,13 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
             // path. Raw numeric receive/comparison counters live alongside the
             // entries because no content or dynamic-key map is present.
             fleetStatusPeerView: ctx.deps.getFleetStatusPeerView?.() ?? null,
-            // Terminal-redrive health (see mesh-terminal-redrive-diagnostics.ts).
-            //
-            // ★ Stage 5c-1 replaced the two fields that used to sit here —
-            // `outbox` (turn-outbox backlog/enqueue state) and
-            // `outboxRedriveCoverage` (the redrive-vs-outbox subset join) — with
-            // this single one. Both of the old fields were reads of
-            // `mesh_turn_outbox`, and that table is gone; the coverage join in
-            // particular had the outbox as its DENOMINATOR, so it could not
-            // survive the removal as anything but a vacuous constant.
-            //
-            // What to watch now that redrive is the sole re-arm path:
-            // `quarantinedMeshCount` is the successor to the outbox's `failed`
-            // park. Non-zero means a mesh's cursor is held, which also pins the
-            // seqscribe archive floor open — so it costs storage, not just
-            // notification latency. It auto-resolves after the cooldown.
-            terminalRedrive: readTerminalRedriveDiagnostics(),
+            // Coordinator-notice delivery health (wiring-unification C7-4): the
+            // `turn.deliver` cursor's outcome counters — delivered / queued /
+            // deferred / escalated / suppressed / MCP-read, plus ingest and
+            // relay counts. Replaces the Stage 5a terminal-redrive diagnostics
+            // (the cursor IS redelivery; there is no quarantine left to watch).
+            // Counters only — no notice text, no topic names.
+            turnDelivery: meshNoticeRuntime.current()?.counters() ?? null,
         };
     },
 

@@ -24,7 +24,7 @@ export interface ApprovalSelectableInstance extends ProviderInstance {
 
 export interface RuntimeChatMessageMerger extends ProviderInstance {
     mergeRuntimeChatMessages?(messages: ChatMessage[]): ChatMessage[];
-    recordAcknowledgedUserInput?(input: InputEnvelope | string): void;
+    recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string): void;
 }
 
 export function getCurrentProviderType(h: CommandHelpers, fallback = ''): string {

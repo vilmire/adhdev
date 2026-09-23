@@ -41,6 +41,8 @@ export function formatLifecycleTraceLine(event: BusEvent): string {
             return `[bus] launch_updated session=${short(event.sessionId)} cause=${event.cause} model=${event.launch.model.source}`;
         case 'terminated':
             return `[bus] terminated session=${short(event.sessionId)} cause=${event.cause} provider=${event.providerType}`;
+        case 'turn':
+            return `[bus] turn session=${short(event.sessionId)} phase=${event.phase} attempt=${short(event.attemptId)} gen=${event.generation}${event.outcome ? ` outcome=${event.outcome}` : ''}${event.strength ? ` strength=${event.strength}` : ''}`;
         case 'provider_event':
             return `[bus] provider_event session=${short(event.sessionId)} event=${String((event.event as { event?: unknown }).event ?? 'unknown')}`;
         case 'daemon_facts':

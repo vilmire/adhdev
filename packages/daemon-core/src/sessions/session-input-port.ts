@@ -99,9 +99,9 @@ export interface SessionInputTarget {
      *  disposition is authoritative, exactly as it is today. */
     getStatus?(): { status?: string } | undefined
     /** TASKBUBBLE-DUP ack stamping — `cli-provider-runtime-messages.ts`
-     *  `recordAcknowledgedUserInput`. `sourceMessageId` is NOT a parameter this
-     *  function accepts today; see REQUESTED EDITS. */
-    recordAcknowledgedUserInput?(input: unknown): void
+     *  `recordAcknowledgedUserInput`; `sourceMessageId` lands on the ack's
+     *  `meta.sourceMessageId`. */
+    recordAcknowledgedUserInput?(input: unknown, sourceMessageId?: string): void
 }
 
 /** Everything `submit()` needs injected. Kept structural and minimal — see
@@ -314,13 +314,11 @@ export function createLegacySessionInputPort(deps: SessionInputPortDeps): Sessio
         }
     }
 
-    /** (d) messageId threading — see REQUESTED EDITS. `recordAcknowledgedUserInput`
-     *  does not yet accept a `sourceMessageId`, so today this only stamps the
-     *  ack content; the messageId association the brief's §4 describes is not
-     *  yet reachable through this signature. Best-effort + never throws. */
-    function stampAck(target: SessionInputTarget, _msg: OutboundMessage): void {
+    /** Stamp the runtime ack with the message's identity (`meta.sourceMessageId`).
+     *  Best-effort + never throws. */
+    function stampAck(target: SessionInputTarget, msg: OutboundMessage): void {
         try {
-            target.recordAcknowledgedUserInput?.(textFromInput(_msg.input))
+            target.recordAcknowledgedUserInput?.(textFromInput(msg.input), msg.messageId)
         } catch {
             /* ack stamping must never fail a submit */
         }
