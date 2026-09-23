@@ -136,7 +136,7 @@ mesh_enqueue_task  →  SQLite queue (pending)
 Four properties that shape everything else:
 
 1. **The coordinator routes, it doesn't implement.** It orchestrates mesh tools instead of reading and editing code itself, so its context stays small and its ownership survives daemon restarts.
-2. **Nothing polls.** A reconcile loop pushes completion, approval, and refine events into the coordinator's session. You wait on events; you don't ask for status in a loop.
+2. **Nothing polls.** Worker completion, approval, and refine reports are delivered straight into the coordinator's session as they happen — via a structured `report_completion` call, not a screen-scrape. You wait on events; you don't ask for status in a loop.
 3. **Git is the proof, not the agent's word.** "Done" is verified with real git state and commit checkpoints, not with a worker claiming success.
 4. **Ambiguity stops the pipeline.** The Refinery never force-pushes; anything it can't decide is held for a human instead of merged.
 
