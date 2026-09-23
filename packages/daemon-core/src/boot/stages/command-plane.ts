@@ -53,6 +53,9 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         cdpManagers: s4.cdpManagers,
         ideType: 'unknown',
         adapters: s4.cliManager.adapters,
+        // D2: the dashboard's send_chat / cancel_queued_chat share the daemon's ONE
+        // SessionInputService (and its messageId dedupe) with mesh dispatch + notices.
+        sessionInput: s4.cliManager.input,
         providerLoader,
         instanceManager: s4.instanceManager,
         sessionRegistry: s4.sessionRegistry,

@@ -8,8 +8,10 @@
 // Creation is additive and idempotent (`CREATE … IF NOT EXISTS`), run on every
 // store open, exactly like the rest of mesh-runtime-store-schema.ts. What is
 // NOT additive — folding the legacy tables in and dropping them — is the
-// one-way `migrate-v1.ts`, which is the only writer of `PRAGMA user_version`
-// (0 → 1; nothing in the tree used user_version before, C3 correction 2).
+// one-way `migrate-v1.ts` (0 → 1; nothing in the tree used user_version
+// before, C3 correction 2) and `migrate-v2.ts` (1 → 2, C-W8: drops the legacy
+// tables whose last writer was retired); they are the only writers of
+// `PRAGMA user_version`.
 //
 // Column deltas vs the design DDL, all content-free and each justified:
 //   turn_attempts.consume_profile / max_task_retries / last_liveness /
@@ -34,8 +36,14 @@
 
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 
-/** `PRAGMA user_version` once migrate-v1 has folded and dropped the legacy tables. */
-export const TURN_LEDGER_SCHEMA_VERSION = 1;
+/** `PRAGMA user_version` once migrate-v1 has folded (and dropped) the legacy tables. */
+export const TURN_LEDGER_V1 = 1;
+
+/**
+ * The current schema version: 2 once migrate-v2 has dropped the legacy tables
+ * whose last writer C-W8 retired (and folded post-v1 operating notes).
+ */
+export const TURN_LEDGER_SCHEMA_VERSION = 2;
 
 /** The legacy tables migrate-v1 folds and drops (C3 step 8). */
 export const LEGACY_TURN_TABLES = [
@@ -188,15 +196,20 @@ export const TURN_LEDGER_DDL = `
         category TEXT,
         tombstoned_at INTEGER,
         caller_session_id TEXT,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        -- C-W8: content-free lifecycle fields (pinned / expiresAt / supersedes /
+        -- subjectKey / sourceCoordinator / text-tombstone marker), JSON.
+        meta_json TEXT NOT NULL DEFAULT '{}'
     );
     CREATE INDEX IF NOT EXISTS ix_mesh_operating_notes_mesh
         ON mesh_operating_notes(mesh_id, created_at);
 `;
 
-/** Additive, idempotent: create every turn-ledger table and index. */
+/** Additive, idempotent: create every turn-ledger table and index (+ the C-W8 column add). */
 export function ensureTurnLedgerSchema(db: DatabaseHandle): void {
     db.exec(TURN_LEDGER_DDL);
+    const noteColumns = new Set((db.prepare(`PRAGMA table_info(mesh_operating_notes)`).all() as Array<{ name: string }>).map((c) => c.name));
+    if (!noteColumns.has('meta_json')) db.exec(`ALTER TABLE mesh_operating_notes ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'`);
 }
 
 export function readUserVersion(db: DatabaseHandle): number {

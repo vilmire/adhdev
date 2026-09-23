@@ -1,26 +1,14 @@
 // SIBLING-DISPATCH-ORPHAN regression suite.
 //
-// recordDirectDispatchTask materialises TWO rows for one direct dispatch: a QUEUE entry and
-// a `mesh_direct_dispatches` entry. Every queue-row abandonment path (cancelTask, requeueTask
-// incl. its dispatch-failure branch, reclaimStrandedAssignedTask) used to touch only the queue
-// row, orphaning the dispatch row forever:
-//
-//   - markStaleDirectDispatches sweeps ONLY status='dispatched', so an 'acked' row (the worker
-//     confirmed it started) had NO timeout sweeper at all — measured live at 12 days old; and
-//   - buildMeshActiveWork excludes CANCELLED queue rows from its dedupe set (mesh-active-work.ts
-//     :466/:528), so the orphan is not deduped against its sibling and is emitted as its own
-//     NON-TERMINAL activeWork row for a task that is already terminal.
-//
-// Net effect: an abandoned task keeps rendering as live work, forever. These tests pin BOTH
-// halves — the store row must leave the active set, and it must not surface as a live
-// activeWork row.
-//
-// On the rendered STATUS specifically: the `dbStatus === 'acked' ? 'generating' : 'assigned'`
-// fallback at :543 is the LAST term of an || chain, so it only shows through when neither the
-// turn-reducer overlay nor a live session status is present. With a turn attempt open (the
-// normal case for a dispatch that reached 'acked') the overlay wins and the orphan renders
-// 'failed'/turnStage 'cancelled' instead. These tests therefore assert the row's ABSENCE
-// rather than any one status string, which holds under every one of those branches.
+// A direct dispatch is TWO things: a QUEUE entry (recordDirectDispatchTask) and — since
+// C-W8 — its open `mesh_direct` turn-ledger attempt (formerly a `mesh_direct_dispatches`
+// row). Every queue-row abandonment path (cancelTask, requeueTask incl. its
+// dispatch-failure branch, the ledger reclaim) used to touch only the queue row, orphaning
+// the dispatch forever (measured live at 12 days old), and buildMeshActiveWork excludes
+// CANCELLED queue rows from its dedupe set, so the orphan surfaced as its own NON-TERMINAL
+// activeWork row. These tests pin BOTH halves — the dispatch must leave the active set
+// (its attempt is cancelled on the ledger), and it must not surface as live active work.
+// The row's ABSENCE is asserted rather than any one status string.
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
@@ -33,12 +21,13 @@ import {
     requeueTaskForLedgerReclaim,
     getQueue,
     getActiveDirectDispatches,
-    updateDirectDispatchStatus,
-    insertDirectDispatch,
     __clearMeshQueueForTests,
-    __clearDirectDispatchesForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
+import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 
@@ -46,27 +35,43 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
     const meshId = `test_mesh_sdo_${Date.now()}`;
     const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`);
     const nodeId = 'node_worker';
-    const sessionId = 'sess-worker-1';
+    // Unique per case: the store FILE survives __resetMeshRuntimeStoreForTests, and the
+    // ledger allows ≤1 open attempt per session, so a shared id would couple the cases.
+    let caseNo = 0;
+    let sessionId = 'sess-worker-0';
+
+    let ledger: TurnLedger;
 
     const reset = () => {
         __clearMeshQueueForTests(meshId);
-        // Must clear the dispatch table too: __clearMeshQueueForTests drops only the QUEUE,
-        // and the whole point of this suite is a row that outlives its queue sibling — so
-        // without this, one case's orphan leaks into the next and the negative cases below
-        // assert against another test's leftovers instead of their own condition.
-        __clearDirectDispatchesForTests(meshId);
         if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath);
     };
 
-    beforeEach(reset);
+    beforeEach(() => {
+        caseNo += 1;
+        sessionId = `sess-worker-${caseNo}`;
+        reset();
+        // A fresh store per case (the open attempts outlive __clearMeshQueueForTests), and
+        // the ledger this process's queue-side cancel reaches through the active slot.
+        __resetMeshRuntimeStoreForTests();
+        ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher() });
+        setActiveTurnLedger(ledger);
+    });
     afterEach(() => {
+        setActiveTurnLedger(null);
         reset();
         __resetMeshRuntimeStoreForTests();
     });
 
+    const evidence = (taskId: string, body: Record<string, unknown>) => ({
+        eventId: `${taskId}:${String(body.kind)}`, at: Date.now(), source: 'dispatch', sessionId, observedBy: 'dc',
+        attemptRef: { attemptId: `mesh_direct:${taskId}`, generation: 0 }, ...body,
+    }) as any;
+
     /**
-     * Reproduce the live shape: a direct dispatch that the worker ACKED (generating_started
-     * landed), i.e. the exact status that has no sweeper. Returns the task id.
+     * Reproduce the live shape: a direct dispatch whose worker STARTED the turn (the
+     * old 'acked' status that had no sweeper). The attempt is opened and driven on the
+     * real ledger. Returns the task id.
      */
     const dispatchAndAck = (taskId: string): string => {
         recordDirectDispatchTask(meshId, 'run the canary probes', {
@@ -74,21 +79,16 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
             assignedNodeId: nodeId,
             assignedSessionId: sessionId,
             difficulty: 'medium',
+            attemptId: `mesh_direct:${taskId}`,
         });
-        insertDirectDispatch(meshId, {
-            taskId,
-            nodeId,
-            sessionId,
-            providerType: 'kimi',
-            message: 'run the canary probes',
-            via: 'mesh_send_task',
-            dispatchedAt: new Date().toISOString(),
-        });
-        // The worker confirmed it started. 'acked' is the load-bearing status: it is the one
-        // markStaleDirectDispatches does NOT sweep (it filters status='dispatched'), so before
-        // this fix nothing in the system would ever collect the row.
-        updateDirectDispatchStatus(meshId, sessionId, 'acked', taskId);
-        expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).toContain(taskId);
+        ledger.observe({
+            eventId: taskId, at: Date.now(), source: 'dispatch', sessionId, taskId, observedBy: 'dc',
+            kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: taskId, meshId, nodeId, providerType: 'kimi-cli',
+        } as any);
+        ledger.observe(evidence(taskId, { kind: 'delivered', messageId: taskId, outcome: 'delivered', via: 'local' }));
+        ledger.observe(evidence(taskId, { kind: 'turn_started', retro: false, source: 'fsm_edge' }));
+        const active = getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
+        expect(active?.status).toBe('acked');
         return taskId;
     };
 
@@ -238,19 +238,25 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         )).toHaveLength(0);
     });
 
-    it('a dispatch row that already reached a terminal status is left alone (no double-record)', () => {
+    it('a dispatch that already reached a terminal outcome is left alone (no double-record)', () => {
         const taskId = dispatchAndAck('task-already-terminal-1');
-        updateDirectDispatchStatus(meshId, sessionId, 'completed', taskId);
+        ledger.observe(evidence(taskId, { kind: 'cancel', reason: 'operator_cancel', source: 'operator' }));
+        expect(getActiveDirectDispatches(meshId).find(d => d.taskId === taskId)).toBeUndefined();
 
         cancelTask(meshId, taskId, { reason: 'operator_cancel' });
 
-        // Already out of the active set by its own path — the flip must not rewrite a
-        // 'completed' row to 'stale', and no audit entry is warranted.
-        const raw = MeshRuntimeStore.getInstance()
-            .getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
-        expect(raw).toBeUndefined();
+        // Already out of the active set by its own path — no second cancel, no audit entry.
+        // The attempt keeps the outcome its own cancel wrote — the queue cancel did not re-close it.
+        expect(ledger.getAttempt(`mesh_direct:${taskId}`)?.terminal?.reason).toBe('operator_cancel');
         expect(readLedgerEntries(meshId).filter(e =>
             e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId,
         )).toHaveLength(0);
+    });
+
+    it('the sibling cancel is bookkeeping only: intentional_cleanup, no dispatch cancel against the session', () => {
+        const taskId = dispatchAndAck('task-cleanup-1');
+        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        const attempt = ledger.getAttempt(`mesh_direct:${taskId}`);
+        expect(attempt?.terminal).toMatchObject({ outcome: 'cancelled', reason: 'intentional_cleanup' });
     });
 });

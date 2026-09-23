@@ -21,10 +21,6 @@ vi.mock('../../src/config/config.js', () => ({
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { WalCheckpointScheduler } from '../../src/mesh/mesh-runtime-store-wal.js';
 import {
-    insertDirectDispatch,
-    getActiveDirectDispatches,
-    updateDirectDispatchStatus,
-    listDirectDispatchesForAutoPrune,
     getQueueHeads,
     getQueueEntryById,
     __replaceMeshQueueForTests,
@@ -82,33 +78,9 @@ describe('Phase P — IPC / event-loop load fixes', () => {
         try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
 
-    describe('audit #1 — auto-prune can idle', () => {
-        it('keeps rows that had a lifecycle update inside the age gate (fresh acked, old-dispatched-but-recently-acked)', () => {
-            const fresh = `task-fresh-${randomUUID().slice(0, 8)}`;
-            const reacked = `task-reacked-${randomUUID().slice(0, 8)}`;
-            insertDirectDispatch(meshId, { taskId: fresh, sessionId: 'sess-a', message: 'm', via: 'local_direct', dispatchedAt: new Date().toISOString() });
-            updateDirectDispatchStatus(meshId, 'sess-a', 'acked', fresh);
-            withClock(Date.now() - 3 * DAY_MS, () => {
-                insertDirectDispatch(meshId, { taskId: reacked, sessionId: 'sess-b', message: 'm', via: 'local_direct', dispatchedAt: new Date().toISOString() });
-            });
-            updateDirectDispatchStatus(meshId, 'sess-b', 'acked', reacked); // updated_at = now
-
-            const live = listDirectDispatchesForAutoPrune(meshId, DAY_MS);
-            expect(live.map(d => d.taskId).sort()).toEqual([fresh, reacked].sort());
-        });
-
-        it('a stale-marked row still accepts a late completion', () => {
-            const taskId = `task-late-${randomUUID().slice(0, 8)}`;
-            withClock(Date.now() - 2 * DAY_MS, () => {
-                insertDirectDispatch(meshId, { taskId, sessionId: 'sess-late', message: 'm', via: 'local_direct', dispatchedAt: new Date().toISOString() });
-            });
-            listDirectDispatchesForAutoPrune(meshId, DAY_MS);
-            updateDirectDispatchStatus(meshId, 'sess-late', 'completed', taskId);
-            const row = MeshRuntimeStore.getInstance().db
-                .prepare('SELECT status FROM mesh_direct_dispatches WHERE task_id = ?').get(taskId) as { status: string };
-            expect(row.status).toBe('completed');
-        });
-    });
+    // audit #1 (auto-prune idling on aged direct-dispatch rows) retired with the
+    // mesh_direct_dispatches table (C-W8): a direct dispatch is its open mesh_direct
+    // attempt, bounded by the ledger's hard_ceiling hold — there is no row to age out.
 
     describe('audit #2 — projection reads feed buildMeshActiveWork / buildMeshAsyncRefineJobs unchanged', () => {
         const ACTIVE_KINDS: MeshLedgerKind[] = [
@@ -323,7 +295,7 @@ describe('Phase P — IPC / event-loop load fixes', () => {
         it('writes never checkpoint synchronously', () => {
             const store = MeshRuntimeStore.getInstance() as any;
             const pragma = vi.spyOn(store.db, 'pragma');
-            for (let i = 0; i < 600; i++) store.recordCompletionFingerprint(meshId, `fp-${i}`, 60_000);
+            for (let i = 0; i < 600; i++) store.insertQueueEntry({ id: `t-wal-${i}`, meshId, message: "m", status: "pending", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
             expect(pragma.mock.calls.filter(c => String(c[0]).includes('wal_checkpoint'))).toEqual([]);
             pragma.mockRestore();
         });

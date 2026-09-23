@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import {
     isBlockedStatus,
     isBusyStatus,
@@ -7,7 +6,6 @@ import {
     normalizeSessionStatus,
     type MeshDeliveryMode,
 } from '@adhdev/mesh-shared';
-import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 /**
  * Possible delivery statuses for a session delivery record.
@@ -243,156 +241,8 @@ export function resolveDeliveryDecision(
     };
 }
 
-export interface SessionDeliveryRecord {
-    id: string;
-    meshId: string;
-    nodeId?: string;
-    sessionId?: string;
-    providerType?: string;
-    taskId?: string;
-    kind: MeshSessionDeliveryKind;
-    priority: number;
-    message: string;
-    status: MeshSessionDeliveryStatus;
-    deliverAfter?: string;
-    expiresAt?: string;
-    attemptCount: number;
-    sourceCoordinatorSessionId?: string;
-    sourceCoordinatorDaemonId?: string;
-    lastError?: string;
-    createdAt: string;
-    updatedAt: string;
-}
-
-/**
- * Create a delivery record in the store.
- */
-export function createSessionDelivery(opts: {
-    meshId: string;
-    nodeId?: string;
-    sessionId?: string;
-    providerType?: string;
-    taskId?: string;
-    kind: MeshSessionDeliveryKind;
-    message: string;
-    status: MeshSessionDeliveryStatus;
-    priority?: number;
-    deliverAfter?: string;
-    expiresAt?: string;
-    sourceCoordinatorSessionId?: string;
-    sourceCoordinatorDaemonId?: string;
-}): SessionDeliveryRecord {
-    const now = new Date().toISOString();
-    const id = randomUUID();
-    const record: SessionDeliveryRecord = {
-        id,
-        meshId: opts.meshId,
-        nodeId: opts.nodeId,
-        sessionId: opts.sessionId,
-        providerType: opts.providerType,
-        taskId: opts.taskId,
-        kind: opts.kind,
-        priority: opts.priority ?? 0,
-        message: opts.message,
-        status: opts.status,
-        deliverAfter: opts.deliverAfter,
-        expiresAt: opts.expiresAt,
-        attemptCount: 0,
-        sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId,
-        sourceCoordinatorDaemonId: opts.sourceCoordinatorDaemonId,
-        createdAt: now,
-        updatedAt: now,
-    };
-    MeshRuntimeStore.getInstance().insertSessionDelivery({
-        id,
-        meshId: opts.meshId,
-        nodeId: opts.nodeId,
-        sessionId: opts.sessionId,
-        providerType: opts.providerType,
-        taskId: opts.taskId,
-        kind: opts.kind,
-        priority: opts.priority ?? 0,
-        message: opts.message,
-        status: opts.status,
-        deliverAfter: opts.deliverAfter,
-        expiresAt: opts.expiresAt,
-        sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId,
-        sourceCoordinatorDaemonId: opts.sourceCoordinatorDaemonId,
-        createdAt: now,
-        updatedAt: now,
-    });
-    return record;
-}
-
-/**
- * Update the status of a delivery record.
- */
-export function updateSessionDeliveryStatus(
-    id: string,
-    status: MeshSessionDeliveryStatus,
-    opts?: { lastError?: string; incrementAttempt?: boolean },
-): void {
-    try {
-        MeshRuntimeStore.getInstance().updateSessionDeliveryStatus(id, status, opts);
-    } catch { /* best-effort */ }
-}
-
-/**
- * Get active (non-terminal) deliveries for a mesh, optionally filtered by session.
- */
-export function getActiveSessionDeliveries(meshId: string, sessionId?: string) {
-    try {
-        return MeshRuntimeStore.getInstance().getActiveSessionDeliveries(meshId, sessionId);
-    } catch {
-        return [];
-    }
-}
-
-/**
- * DELIVERED-NOT-CONSUMED-REDRIVE consume path. Advance a task's delivery record(s) to a
- * CONSUMED status ('acked'/'completed') by (mesh, session[, task]), INCLUDING rows already in
- * 'delivered' — unlike getActiveSessionDeliveries which excludes 'delivered'. The store's
- * monotonic guard only ever advances the row. Returns the number of rows advanced.
- */
-export function consumeSessionDelivery(
-    meshId: string,
-    sessionId: string,
-    status: 'acked' | 'completed',
-    taskId?: string,
-): number {
-    try {
-        return MeshRuntimeStore.getInstance().consumeSessionDelivery(meshId, sessionId, status, taskId);
-    } catch {
-        return 0;
-    }
-}
-
-// MESH-COMPLEXITY-AUDIT Part 8-2: the completion-conflict diagnostic
-// (recordCompletionConflict / getRecentCompletionConflicts, backed by
-// mesh_completion_conflicts) was dropped. It recorded WHICH task lost a
-// fingerprint-dedup collision but had no production reader and no role in the
-// no-loss delivery contract — the dedup DECISION lives entirely in the
-// fingerprint match in mesh-event-forwarding.ts, which is unchanged. Removing
-// the side-record does not alter any completion-delivery outcome.
-
-export function __clearSessionDeliveriesForTests(meshId: string): void {
-    MeshRuntimeStore.getInstance().deleteSessionDeliveries(meshId);
-}
-
-/**
- * Mark all active (queued/delivering/delivered/acked) deliveries for a session as completed or failed.
- * Called when a task's terminal status is confirmed so delivery records stay in sync.
- */
-export function markSessionDeliveriesTerminal(
-    meshId: string,
-    sessionId: string,
-    terminalStatus: 'completed' | 'failed',
-): void {
-    try {
-        // Route through markOpenSessionDeliveriesTerminal, which matches OPEN rows including
-        // 'delivered' — getActiveSessionDeliveries EXCLUDES 'delivered' and would silently
-        // leave the common (already-delivered) row un-terminated, keeping taskDeliveryConsumed()
-        // false and feeding the delivered_not_consumed_redrive false re-drive.
-        MeshRuntimeStore.getInstance().markOpenSessionDeliveriesTerminal(meshId, sessionId, terminalStatus);
-    } catch { /* best-effort */ }
-}
+// C-W8: the legacy session-delivery table CRUD that lived below (createSessionDelivery /
+// updateSessionDeliveryStatus / getActiveSessionDeliveries / consumeSessionDelivery /
+// markSessionDeliveriesTerminal) is retired with its table — a dispatch's delivery
+// lifecycle is the turn-ledger attempt's `delivered` / `consumed` evidence. What
+// remains is the pure delivery DECISION policy.

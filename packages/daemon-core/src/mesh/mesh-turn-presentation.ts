@@ -12,7 +12,7 @@
  * restarted or completed early.
  *
  * THE CONTRACT:
- *  - For a mesh-owned session with a current turn attempt (Stage 5 ledger), the
+ *  - For a mesh-owned session with a current turn attempt (turn ledger), the
  *    reducer projection is AUTHORITATIVE. Provider PTY/native transcript parsers
  *    still contribute message content and evidence proposals, but they MUST NOT
  *    independently override the projected execution state on any surface.
@@ -33,14 +33,92 @@
  * fallbacks are retired. Legacy NEVER writes authoritative state.
  */
 
-import { MeshRuntimeStore, type MeshTurnAttemptRow } from './mesh-runtime-store.js';
-import {
-    isTerminalTurnStage,
-    type TurnStage,
-    type TurnTerminalOutcome,
-} from './mesh-turn-ledger.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import type { TurnAttempt } from './turn-ledger/types.js';
 import { LOG } from '../logging/logger.js';
 import { normalizeManagedStatus, type ManagedStatus } from '../status/normalize.js';
+
+// ─── Presentation stages (the surface vocabulary) ───────────────────────────
+//
+// C-W8: the presentation reads the turn ledger (`turn_attempts`, C3) — the
+// legacy Stage 5 turn-attempt reducer is gone. The ledger's
+// `suspended` state splits back into the two surface stages by its
+// `suspension` column; every other state maps 1:1.
+
+export type TurnStage =
+    | 'accepted'
+    | 'delivered'
+    | 'consumed'
+    | 'generating'
+    | 'waiting_approval'
+    | 'waiting_choice'
+    | 'finalizing'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
+
+export type TurnTerminalOutcome = Extract<TurnStage, 'completed' | 'failed' | 'cancelled'>;
+
+const TURN_TERMINAL_STAGES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
+
+export function isTerminalTurnStage(stage: string): boolean {
+    return TURN_TERMINAL_STAGES.has(stage);
+}
+
+/**
+ * The attempt facts the presentation reads (ISO timestamps, the surface
+ * stage). Built from a ledger `TurnAttempt` + its `updated_at` stamp by
+ * {@link presentationRowFromAttempt}.
+ */
+export interface TurnPresentationRow {
+    attemptId: string;
+    meshId: string | null;
+    taskId: string | null;
+    /** 1-based attempt ordinal (ledger `attempt_no` + 1 — the graph output `attempt` field's convention). */
+    attemptSeq: number;
+    sessionId: string | null;
+    nodeId: string | null;
+    providerType: string | null;
+    stage: TurnStage;
+    acceptedAt: string | null;
+    deliveredAt: string | null;
+    consumedAt: string | null;
+    terminalOutcome: TurnTerminalOutcome | null;
+    terminalReason: string | null;
+    terminalAt: string | null;
+    updatedAt: string;
+}
+
+function isoOrNull(ms: number | null | undefined): string | null {
+    return typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/** Surface stage of a ledger attempt (`suspended` → approval / choice by its suspension). */
+export function surfaceStageOfAttempt(attempt: Pick<TurnAttempt, 'state' | 'suspension'>): TurnStage {
+    if (attempt.state === 'suspended') return attempt.suspension === 'choice' ? 'waiting_choice' : 'waiting_approval';
+    return attempt.state;
+}
+
+export function presentationRowFromAttempt(attempt: TurnAttempt, updatedAtMs: number): TurnPresentationRow {
+    const terminal = attempt.terminal;
+    return {
+        attemptId: attempt.attemptId,
+        meshId: attempt.meshId,
+        taskId: attempt.taskId,
+        attemptSeq: attempt.attemptNo + 1,
+        sessionId: attempt.sessionId || null,
+        nodeId: attempt.nodeId,
+        providerType: attempt.providerType,
+        stage: surfaceStageOfAttempt(attempt),
+        acceptedAt: isoOrNull(attempt.acceptedAt),
+        deliveredAt: isoOrNull(attempt.deliveredAt),
+        consumedAt: isoOrNull(attempt.consumedAt),
+        terminalOutcome: terminal ? terminal.outcome : null,
+        terminalReason: terminal ? terminal.reason : null,
+        terminalAt: terminal ? isoOrNull(terminal.at) : null,
+        updatedAt: new Date(updatedAtMs).toISOString(),
+    };
+}
 
 // ─── Public contract ─────────────────────────────────────────────────────────
 
@@ -163,15 +241,13 @@ function rawAgeMs(nowMs: number, iso: string | null): number | null {
  * STALE-ATTEMPT-AUTHORITY GATE — max age for an IN-FLIGHT (`generating` /
  * `consumed`) attempt row to keep authority over the provider FSM.
  *
- * WHY: an attempt row can be stranded nonterminal by an ordinary, non-exotic
- * path — the task completes normally, but its `mesh_queue` row is later removed
- * by retention prune. Neither reclaim path can then close it:
- * `reclaimOrphanedTurnAttempts` requires a HIGHER-seq sibling (a lone seq-0 row
- * has none) and `reclaimQueueTerminatedTurnAttempts` requires an EXISTS match
- * against `mesh_queue` (pruned → never matches). Both also run only once at
- * daemon boot, and the stall watchdog re-arms the anchor rather than closing it.
- * With no max-age anywhere, such a row pins its session to `generating` forever
- * on every surface even though PTY/adapter/parser all read `idle`.
+ * WHY: an attempt row can be stranded nonterminal (historically the legacy
+ * Stage 5 table, where a pruned `mesh_queue` row left no reclaim path able to
+ * close it). The turn ledger bounds every open attempt with a `hard_ceiling`
+ * hold and liveness probes (C4), so a stranded row is now a ledger bug rather
+ * than an ordinary path — but the presentation keeps this defensive max-age so
+ * such a bug can never pin a session to `generating` on every surface while
+ * PTY/adapter/parser all read `idle`.
  *
  * WHY A GATE AND NOT "DROP STAGE 6 AUTHORITY": the authority itself is load
  * bearing (see the file header) — a Kimi native transcript mid-turn or a Codex
@@ -212,7 +288,7 @@ const FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2_000;
  * to for longer than {@link STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS}, i.e. it is
  * an unreachable/stranded anchor rather than a live turn.
  */
-export function isStaleTurnAttemptAuthority(row: MeshTurnAttemptRow, nowMs: number): boolean {
+export function isStaleTurnAttemptAuthority(row: TurnPresentationRow, nowMs: number): boolean {
     if (!STALE_GATED_STAGES.has(row.stage)) return false;
     const age = rawAgeMs(nowMs, row.updatedAt ?? null);
     if (age === null) return false;
@@ -228,13 +304,13 @@ export function isStaleTurnAttemptAuthority(row: MeshTurnAttemptRow, nowMs: numb
 }
 
 /** Build the presentation from an attempt row (the reducer-authoritative branch). */
-export function presentationFromAttemptRow(row: MeshTurnAttemptRow, nowMs: number = Date.now()): SessionTurnPresentation {
-    const stage = row.stage as TurnStage;
+export function presentationFromAttemptRow(row: TurnPresentationRow, nowMs: number = Date.now()): SessionTurnPresentation {
+    const stage = row.stage;
     return {
         authority: 'turn_reducer',
         status: turnStageToSurfaceStatus(stage),
         stage,
-        terminalOutcome: (row.terminalOutcome as TurnTerminalOutcome | null) ?? null,
+        terminalOutcome: row.terminalOutcome ?? null,
         terminalReason: row.terminalReason ?? null,
         meshId: row.meshId,
         taskId: row.taskId,
@@ -270,17 +346,20 @@ export interface TurnAuthorityLookup {
  * restart gate). Returns null when no attempt exists — the ONLY condition under
  * which the provider FSM fallback governs.
  */
-export function resolveTurnAttemptRow(lookup: TurnAuthorityLookup): MeshTurnAttemptRow | null {
+export function resolveTurnAttemptRow(lookup: TurnAuthorityLookup): TurnPresentationRow | null {
     try {
-        const store = MeshRuntimeStore.getInstance();
+        const turns = MeshRuntimeStore.getInstance().turnStore();
         const meshId = typeof lookup.meshId === 'string' && lookup.meshId.trim() ? lookup.meshId.trim() : null;
         const taskId = typeof lookup.taskId === 'string' && lookup.taskId.trim() ? lookup.taskId.trim() : null;
         if (meshId && taskId) {
-            const row = store.getCurrentTurnAttempt(meshId, taskId);
-            if (row) return row;
+            const found = turns.findPresentationAttemptForTask(meshId, taskId);
+            if (found) return presentationRowFromAttempt(found.attempt, found.updatedAt);
         }
         const sessionId = typeof lookup.sessionId === 'string' && lookup.sessionId.trim() ? lookup.sessionId.trim() : null;
-        if (sessionId) return store.getLatestTurnAttemptForSession(sessionId);
+        if (sessionId) {
+            const found = turns.findPresentationAttemptForSession(sessionId);
+            return found ? presentationRowFromAttempt(found.attempt, found.updatedAt) : null;
+        }
         return null;
     } catch {
         // Store unavailable (e.g. better-sqlite3 load failure on a clean install):

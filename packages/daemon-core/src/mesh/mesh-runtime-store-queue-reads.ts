@@ -1,5 +1,6 @@
 /**
  * MeshRuntimeStore queue / direct-dispatch reads that avoid parsing row payloads.
+ * (C-W8: direct dispatches are read off the turn ledger's open `mesh_direct` attempts.)
  *
  * IPC load audit 2026-09-23 (Phase P). Queue payloads carry the whole task, including a
  * task `input` envelope (base64 image parts) for the row's 30-day life, so any read that
@@ -137,33 +138,72 @@ export function pruneTerminalQueueEntries(self: MeshRuntimeStore, olderThanMs: n
 }
 
 /**
- * IPC load audit #1: expire direct-dispatch rows that are still `dispatched`/`acked` but have
- * had no lifecycle update (ack / terminal) for `olderThanMs`. Such a row never resolves by
- * itself — the only live one in the audit had been `acked` since 2026-08-09 — yet it kept
- * the auto-prune loop from taking its O(1) "nothing active" exit, costing a status snapshot
- * per node plus a 64 MB ledger read every minute. Flipped to 'stale' (not deleted, not
- * completed/failed): stale says "will never resolve itself" without asserting an outcome,
- * and a late completion can still move it to completed. Returns the rows it flipped.
+ * One ACTIVE direct dispatch (C-W8: an open `mesh_direct` turn-ledger attempt —
+ * the retired legacy direct-dispatch table row's successor). `status` keeps the old
+ * vocabulary readers switch on: `dispatched` before the worker started the turn
+ * (accepted / delivered), `acked` after (consumed / generating / suspended /
+ * finalizing). A terminal attempt is not active, so neither appears here.
+ * `message` / `taskMode` come from the materialised queue row (absent in the
+ * short window before `recordDirectDispatchTask` lands it).
  */
-export function expireAgedDirectDispatches(
-    self: MeshRuntimeStore,
-    meshId: string,
-    olderThanMs: number,
-    nowMs: number = Date.now(),
-): Array<{ taskId: string; sessionId: string | null; status: string; updatedAt: string }> {
-    const cutoffIso = new Date(nowMs - Math.max(0, olderThanMs)).toISOString();
-    return self.transaction(() => {
-        const rows = self.db.prepare(
-            `SELECT task_id, session_id, status, updated_at FROM mesh_direct_dispatches
-             WHERE mesh_id = ? AND status IN ('dispatched', 'acked') AND updated_at < ?`
-        ).all(meshId, cutoffIso) as Array<{ task_id: string; session_id: string | null; status: string; updated_at: string }>;
-        if (rows.length === 0) return [];
-        const flip = self.db.prepare(
-            `UPDATE mesh_direct_dispatches SET status = 'stale', updated_at = ?
-             WHERE mesh_id = ? AND task_id = ? AND status IN ('dispatched', 'acked')`
-        );
-        const nowIso = new Date(nowMs).toISOString();
-        for (const row of rows) flip.run(nowIso, meshId, row.task_id);
-        return rows.map(r => ({ taskId: r.task_id, sessionId: r.session_id, status: r.status, updatedAt: r.updated_at }));
-    });
+export interface DirectDispatchView {
+    taskId: string;
+    meshId: string;
+    attemptId: string;
+    nodeId: string | null;
+    sessionId: string | null;
+    providerType: string | null;
+    message: string;
+    taskMode: string | null;
+    via: string;
+    status: 'dispatched' | 'acked';
+    dispatchedToIdleSession: boolean;
+    dispatchedAt: string;
+    updatedAt: string;
+}
+
+const PRE_TURN_STATES: ReadonlySet<string> = new Set(['accepted', 'delivered']);
+
+export function selectActiveDirectDispatches(self: MeshRuntimeStore, meshId: string): DirectDispatchView[] {
+    const rows = self.db.prepare(
+        `SELECT a.attempt_id, a.task_id, a.mesh_id, a.node_id, a.session_id, a.provider_type, a.via, a.state,
+                a.accepted_at, a.updated_at, json_extract(q.payload, '$.message') AS message, json_extract(q.payload, '$.taskMode') AS task_mode
+         FROM turn_attempts a LEFT JOIN mesh_queue q ON q.mesh_id = a.mesh_id AND q.id = a.task_id
+         WHERE a.scope = 'mesh_direct' AND a.mesh_id = ? AND a.task_id IS NOT NULL AND a.terminal_outcome IS NULL
+         ORDER BY a.accepted_at, a.attempt_id`
+    ).all(meshId) as Array<{
+        attempt_id: string; task_id: string; mesh_id: string; node_id: string | null; session_id: string | null; provider_type: string | null;
+        via: string | null; state: string; accepted_at: number; updated_at: number; message: string | null; task_mode: string | null;
+    }>;
+    return rows.map((r) => ({
+        taskId: r.task_id,
+        meshId: r.mesh_id,
+        attemptId: r.attempt_id,
+        nodeId: r.node_id,
+        sessionId: r.session_id || null,
+        providerType: r.provider_type,
+        message: typeof r.message === 'string' ? r.message : '',
+        taskMode: r.task_mode,
+        via: r.via ?? 'direct',
+        status: PRE_TURN_STATES.has(r.state) ? 'dispatched' : 'acked',
+        dispatchedToIdleSession: false,
+        dispatchedAt: new Date(r.accepted_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString(),
+    }));
+}
+
+/**
+ * MESH-DISPATCH-MISROUTE (fix 3, consumer residual): the task id of the ONE
+ * active direct dispatch a session holds — unambiguous by construction now (the
+ * ledger allows ≤1 open attempt per session), so a taskId-less lifecycle event
+ * resolves to it; null when the session holds none.
+ */
+export function selectSoleActiveDirectDispatchTaskId(self: MeshRuntimeStore, meshId: string, sessionId: string): string | null {
+    if (!sessionId) return null;
+    const row = self.db.prepare(
+        `SELECT task_id FROM turn_attempts
+         WHERE scope = 'mesh_direct' AND mesh_id = ? AND session_id = ? AND terminal_outcome IS NULL AND task_id IS NOT NULL`
+    ).get(meshId, sessionId) as { task_id: string } | undefined;
+    const taskId = typeof row?.task_id === 'string' ? row.task_id.trim() : '';
+    return taskId || null;
 }

@@ -50,6 +50,7 @@ import {
     WORKER_BRANCH_STATES,
     WORKER_REPORT_OUTCOMES,
     isWorkerReportOutcome,
+    sessionIdsEquivalent,
     type WorkerBranchState,
     type WorkerReportOutcome,
 } from '@adhdev/mesh-shared';
@@ -322,19 +323,18 @@ export interface PriorWorkerReport {
  */
 export function findPriorWorkerReport(meshId: string, taskId: string): PriorWorkerReport | null {
     if (!meshId || !taskId) return null;
-    let rows: ReturnType<MeshRuntimeStore['listTurnEventsForTask']>;
+    let rows: ReturnType<ReturnType<MeshRuntimeStore['turnStore']>['listWorkerEventsForTask']>;
     try {
-        rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(meshId, taskId);
+        rows = MeshRuntimeStore.getInstance().turnStore().listWorkerEventsForTask(meshId, taskId, WORKER_REPORT_EVENT_KIND);
     } catch {
         // A lookup failure must not turn into "no report" silently at a call
         // site that would then let the scrape win — callers treat null as
         // "unknown", and the scrape is still the documented fallback.
         return null;
     }
-    const row = rows.filter((r) => r.kind === WORKER_REPORT_EVENT_KIND).pop();
-    if (!row) return null;
-    let payload: { outcome?: unknown } = {};
-    try { payload = JSON.parse(row.payload) as { outcome?: unknown }; } catch { /* meta is advisory */ }
+    const row = rows.pop();
+    if (!row || !row.attemptId) return null;
+    const payload = row.payload as { outcome?: unknown };
     const outcome = payload.outcome === 'completed' || payload.outcome === 'blocked' || payload.outcome === 'failed'
         ? payload.outcome
         : 'completed';
@@ -344,7 +344,7 @@ export function findPriorWorkerReport(meshId: string, taskId: string): PriorWork
         attemptId: row.attemptId,
         outcome,
         ...(summary ? { summary } : {}),
-        recordedAt: row.recordedAt,
+        recordedAt: new Date(row.atMs).toISOString(),
     };
 }
 
@@ -445,6 +445,35 @@ function resolveCurrentTaskForSession(
     }
 }
 
+// ─── Ledger fence (C-W8) ────────────────────────────────────────────────
+
+/** `ok` = the report may commit; otherwise the typed causal refusal (the retired reducer's vocabulary). */
+export type WorkerReportFence = 'ok' | 'unknown_attempt' | 'stale_attempt' | 'session_mismatch' | 'already_terminal';
+
+/**
+ * The worker report's causal fence over the turn ledger's `turn_attempts`.
+ * Mirrors the retired Stage-5 `proposeTurnCompletion` checks: the attempt must
+ * exist for this task, be the task's CURRENT (highest attempt_no) attempt, belong
+ * to the reporting session, and — when the ledger already committed it — carry
+ * the same outcome (a same-outcome re-report is an idempotent `ok`).
+ */
+export function fenceWorkerReportOnLedger(
+    store: MeshRuntimeStore,
+    identity: { meshId: string; taskId: string; attemptId?: string; sessionId?: string },
+    terminalStatus: 'completed' | 'failed',
+): WorkerReportFence {
+    const turns = store.turnStore();
+    const current = turns.findLatestAttemptForTask(identity.meshId, identity.taskId);
+    // A token minted without an attempt id (pre-ledger path) speaks for the
+    // task's current attempt; one WITH an id must name exactly that attempt.
+    const attempt = identity.attemptId ? turns.getAttempt(identity.attemptId) : current;
+    if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId) return 'unknown_attempt';
+    if (current && current.attemptId !== attempt.attemptId) return 'stale_attempt';
+    if (identity.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity.sessionId, attempt.sessionId)) return 'session_mismatch';
+    if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return 'already_terminal';
+    return 'ok';
+}
+
 // ─── Report acceptance ──────────────────────────────────────────────────
 
 export type WorkerReportRefusal =
@@ -487,7 +516,7 @@ export type WorkerReportResult =
  * seqscribe node lives on the daemon and this module must stay callable from
  * tests and from a daemon with seqscribe disabled.
  *
- * ★The content never goes into `mesh_turn_events`: `safeEvidenceJson` flattens
+ * ★The content never goes into `turn_events`: `safeEvidenceJson` flattens
  * any object to the literal string '[object]', and more importantly the ledger
  * is the META index by design (§9.1) — ids, times, hashes, counts. Free-text
  * intent is content class and belongs in the content-class topic.
@@ -618,31 +647,46 @@ export function acceptWorkerCompletionReport(
         recordedAtMs: nowMs,
     });
 
+    // (1b) C-W8: the causal fence on the TURN LEDGER (the legacy Stage-5
+    // proposeTurnCompletion fence is retired). A report is a better SUMMARY,
+    // never a stronger claim on the attempt: it must name the task's CURRENT
+    // attempt, from that attempt's session, and may not flip an attempt the
+    // ledger already committed to a different outcome. An unknown attempt has
+    // no row to hang the evidence on, so it is refused before anything is written.
+    const terminalStatus = report.outcome === 'completed' ? 'completed' : 'failed';
+    let fence: WorkerReportFence;
+    try {
+        fence = fenceWorkerReportOnLedger(store, identity, terminalStatus);
+    } catch (e: any) {
+        return { accepted: false, refusal: 'rejected_by_reducer', detail: e?.message || String(e) };
+    }
+    if (fence === 'unknown_attempt') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
+
     // (2) Evidence row — content-free. The summary is NOT stored here; only its
     // length and the structured facts. The summary itself reaches the
     // coordinator through the completion envelope below.
-    let evidenceRecorded = !identity.attemptId;
-    if (identity.attemptId) {
+    const evidenceAttemptId = identity.attemptId
+        ?? store.turnStore().findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId;
+    let evidenceRecorded = !evidenceAttemptId;
+    if (evidenceAttemptId) {
         try {
-            evidenceRecorded = store.insertTurnEvent({
+            evidenceRecorded = store.turnStore().insertWorkerEvent({
                 eventId: randomUUID(),
-                meshId: identity.meshId,
-                attemptId: identity.attemptId,
-                taskId: identity.taskId,
+                attemptId: evidenceAttemptId,
+                sessionId: identity.sessionId ?? null,
                 kind: WORKER_REPORT_EVENT_KIND,
-                // UNIQUE(attempt_id, kind, dedupe_key) makes a re-call for the
-                // same outcome insert-once, matching the reducer's own idempotency.
+                // UNIQUE(attempt_id, generation, kind, dedupe_key) makes a re-call for
+                // the same outcome insert-once, matching the reducer's own idempotency.
                 dedupeKey: report.outcome,
-                payload: JSON.stringify({
+                payload: {
                     outcome: report.outcome,
                     summaryLength: report.summary.length,
                     touchedFileCount: report.touchedFiles?.length ?? 0,
                     blockerCount: report.blockers?.length ?? 0,
                     hasHandoffNotes: !!report.handoffNotes,
                     ...(report.branchState ? { branchState: report.branchState } : {}),
-                }),
-                occurredAtMs: nowMs,
-                recordedAt: nowIso,
+                },
+                atMs: nowMs,
             });
         } catch (e: any) {
             // ★F7: a throw here means the evidence row is GONE — the row that
@@ -687,7 +731,7 @@ export function acceptWorkerCompletionReport(
     // maps to 'failed' with a reason, because a blocked task genuinely did not
     // succeed and must not advance the graph as though it had. The blockers list
     // carries the why, and the coordinator reads it from the envelope.
-    const terminalStatus = report.outcome === 'completed' ? 'completed' : 'failed';
+    if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
     let commit: ReturnType<typeof commitTaskTerminalAndAdvanceGraph>;
     try {
         commit = commitTaskTerminalAndAdvanceGraph({
@@ -697,9 +741,8 @@ export function acceptWorkerCompletionReport(
             ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
             ...(identity.attemptId ? { attemptId: identity.attemptId } : {}),
             occurredAtMs: nowMs,
-            // ★A NEW proposal source. The reducer's causal checks apply to it
-            // exactly as they do to a provider event — a valid token does not
-            // buy an exemption from stale-attempt or session-mismatch.
+            // The causal checks ran above (fenceWorkerReportOnLedger) — a valid
+            // token buys no exemption from stale-attempt or session-mismatch.
             source: 'worker_tool_report',
             reason: report.outcome === 'blocked'
                 ? `worker_reported_blocked:${(report.blockers || []).length}`
@@ -727,9 +770,6 @@ export function acceptWorkerCompletionReport(
     }
 
     if (!commit.committed) {
-        if (commit.rejectionReason) {
-            return { accepted: false, refusal: 'rejected_by_reducer', detail: commit.rejectionReason };
-        }
         return { accepted: false, refusal: 'unknown_task', detail: `no queue row for task ${identity.taskId}` };
     }
 
@@ -791,18 +831,16 @@ export function acceptWorkerProgressUpdate(
     const nowMs = opts.nowMs ?? Date.now();
     let recorded = false;
     try {
-        recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
+        recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
             eventId: randomUUID(),
-            meshId: identity.meshId,
             attemptId: identity.attemptId,
-            taskId: identity.taskId,
+            sessionId: identity.sessionId ?? null,
             kind: WORKER_PROGRESS_EVENT_KIND,
             // Distinct per call — progress updates are a SEQUENCE, unlike the
             // completion report where the UNIQUE constraint provides idempotency.
             dedupeKey: `${nowMs}`,
-            payload: JSON.stringify({ noteLength: note.length }),
-            occurredAtMs: nowMs,
-            recordedAt: new Date(nowMs).toISOString(),
+            payload: { noteLength: note.length },
+            atMs: nowMs,
         });
     } catch (e: any) {
         LOG.error('WorkerReport', `Failed to record progress update for task ${identity.taskId}: ${e?.message || e}`);
@@ -811,6 +849,16 @@ export function acceptWorkerProgressUpdate(
             taskId: identity.taskId,
             refusal: 'storage_failed',
             detail: e?.message || String(e),
+        };
+    }
+    if (!recorded && !MeshRuntimeStore.getInstance().turnStore().getAttempt(identity.attemptId)) {
+        // The token names an attempt the turn ledger does not hold (C-W8: the
+        // row hangs off `turn_attempts`) — the same honest refusal as no attempt.
+        return {
+            accepted: false,
+            taskId: identity.taskId,
+            refusal: 'storage_failed',
+            detail: `task ${identity.taskId} has no active attempt to record progress against`,
         };
     }
     if (!recorded) {
@@ -975,23 +1023,21 @@ function recordHandoffNote(
     // meta-only rule.
     {
         try {
-            MeshRuntimeStore.getInstance().insertTurnEvent({
+            MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
                 eventId: randomUUID(),
-                meshId: identity.meshId,
                 attemptId: identity.attemptId,
-                taskId: identity.taskId,
+                sessionId: identity.sessionId ?? null,
                 kind: WORKER_HANDOFF_EVENT_KIND,
                 dedupeKey: '',
-                payload: JSON.stringify({
+                payload: {
                     touchedFiles: notes.touchedFiles,
                     intentLength: notes.intent.length,
                     hasConflictGuidance: !!notes.conflictGuidance,
                     followUpCount: notes.followUps?.length ?? 0,
                     ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
                     ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
-                }),
-                occurredAtMs: nowMs,
-                recordedAt: nowIso,
+                },
+                atMs: nowMs,
             });
         } catch (e: any) {
             LOG.error('WorkerReport', `Failed to index handoff note for task ${identity.taskId}: ${e?.message || e}`);

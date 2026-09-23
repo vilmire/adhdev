@@ -31,10 +31,9 @@ import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
 import { classifyMeshLaunchAxisSource } from '../sessions/launch-record.js';
 import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcement.js';
-import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode } from './mesh-auto-fast-forward.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
+import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, scoreSlotForTask, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent, recordClaimRefusal } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';

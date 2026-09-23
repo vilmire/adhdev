@@ -5,6 +5,8 @@
  * Wiring-unification Phase C, workstream C-W6
  * (docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph).
  *
+ * (C-W8: + `note_upsert` / `note_forget` — operating notes over local IPC.)
+ *
  * SCOPE: this file is the RESPONDER side. `mcp-server/src/ipc/turn-commands.ts`
  * (C-W6 pre-work, landed) is the CLIENT — it calls `transport.command(name,
  * args)` exactly like every other mesh tool. These specs are what answers
@@ -67,6 +69,8 @@ import {
     MAX_MESH_RECORD_STRING,
     decodeMissionQueryRequest,
     decodeMissionUpsertRequest,
+    decodeNoteForgetRequest,
+    decodeNoteUpsertRequest,
     decodeOperatorStatusRequest,
     decodeTurnCancelRequest,
     decodeTurnObserveRequest,
@@ -77,6 +81,8 @@ import {
     type MeshRecordResponse,
     type MissionQueryResponse,
     type MissionUpsertResponse,
+    type NoteForgetResponse,
+    type NoteUpsertResponse,
     type OperatorStatusResponse,
     type TurnCancelResponse,
     type TurnObserveResponse,
@@ -85,6 +91,7 @@ import {
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
+import { getActiveTurnLedger, setActiveTurnLedger } from '../../mesh/turn-ledger/active-ledger.js';
 import { meshRecordAppended } from '../../mesh/mesh-record.js';
 import type { MeshIndexView, MeshTopicIndex } from '../../mesh/mesh-topic-index.js';
 import {
@@ -94,10 +101,11 @@ import {
     type MeshMissionRecord,
 } from '../../mesh/mesh-missions.js';
 import { LOG } from '../../logging/logger.js';
+import { forgetOperatingNote, readOperatingNotes, recordOperatingNote } from '../../mesh/mesh-operating-notes.js';
+import { isWorkerMcpEnabled, mintWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
 
 // ─── late-binding slot (see file header) ────────────────────────────────────
 
-let ledgerSlot: TurnLedger | null = null;
 
 /** The `mesh_topic_index` reader behind `mesh_index_query` (bound with the ledger). */
 export interface TurnLedgerIpcIndex {
@@ -118,13 +126,15 @@ let indexSlot: TurnLedgerIpcIndex | null = null;
  * than holding a stale reference.
  */
 export function setActiveTurnLedgerForIpc(ledger: TurnLedger | null, index: TurnLedgerIpcIndex | null = null): void {
-    ledgerSlot = ledger;
+    // C-W8: the ledger lives in the process-wide slot (mesh/turn-ledger/
+    // runtime-ledger.ts) so mesh/ writers reach the same one; the index is IPC-only.
+    setActiveTurnLedger(ledger);
     indexSlot = ledger ? index : null;
 }
 
 /** Test-only accessor — mirrors the pattern other late-bound slots in this codebase use. */
 export function getActiveTurnLedgerForIpc(): TurnLedger | null {
-    return ledgerSlot;
+    return getActiveTurnLedger();
 }
 
 interface IpcErrorResult {
@@ -144,16 +154,47 @@ function badRequest(command: string): { success: false; error: string } {
 
 // ─── turn_observe ────────────────────────────────────────────────────────
 
+/**
+ * WORKER-MCP (design §9.2.1, "★함정"): a direct dispatch (`mesh_send_task`)
+ * bypasses the queue claim, whose seam mints the worker's task token. C-W8
+ * moves the direct arm's mint onto ATTEMPT CREATION here — the daemon that owns
+ * the ledger (and the in-memory token registry) — instead of the retired
+ * `recordDirectDispatchTask` → legacy `openTurnAttempt` block, which ran in the
+ * mcp-server process over IPC and so minted into the wrong process's registry.
+ * Only a freshly APPLIED `dispatch_accepted` of scope `mesh_direct` mints; a
+ * replay (`recorded`/`duplicate`) keeps the token already minted.
+ */
+function mintDirectDispatchWorkerToken(
+    evidence: TurnEvidence,
+    verdict: string,
+    attempt: { attemptId: string; meshId: string | null; taskId: string | null; sessionId: string; nodeId: string | null },
+): void {
+    if (evidence.kind !== 'dispatch_accepted' || evidence.scope !== 'mesh_direct' || verdict !== 'applied') return;
+    if (!isWorkerMcpEnabled() || !attempt.meshId || !attempt.taskId) return;
+    try {
+        mintWorkerTaskToken({
+            meshId: attempt.meshId,
+            taskId: attempt.taskId,
+            attemptId: attempt.attemptId,
+            ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
+            ...(attempt.nodeId ? { nodeId: attempt.nodeId } : {}),
+        });
+    } catch (e: any) {
+        LOG.warn('TurnLedgerIpc', `worker token mint failed for direct dispatch ${attempt.taskId}: ${e?.message ?? String(e)}`);
+    }
+}
+
 const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeTurnObserveRequest(args);
     if (!req) return badRequest('turn_observe');
-    const ledger = ledgerSlot;
+    const ledger = getActiveTurnLedger();
     if (!ledger) return unavailable('no active turn ledger (boot wiring pending — see file header)');
     try {
         const result = ledger.observe(req.evidence);
         if (!result.attempt) {
             return { success: false, error: 'turn_observe: evidence did not resolve to an attempt', code: 'ledger_not_owner' };
         }
+        mintDirectDispatchWorkerToken(req.evidence, result.verdict, result.attempt);
         const response: TurnObserveResponse = {
             verdict: result.verdict === 'duplicate' ? 'recorded' : result.verdict === 'forwarded' ? 'recorded' : result.verdict,
             attemptRef: { attemptId: result.attempt.attemptId, generation: result.attempt.generation },
@@ -203,7 +244,7 @@ const turnCancel: LowFamilyHandler = async (ctx: LowFamilyContext, args: any) =>
     if (!isCancelReason(req.reason)) {
         return { success: false, error: `turn_cancel: '${req.reason}' is not a valid cancel reason (expected one of ${CANCEL_REASONS.join(', ')})` };
     }
-    const ledger = ledgerSlot;
+    const ledger = getActiveTurnLedger();
     if (!ledger) return unavailable('no active turn ledger (boot wiring pending — see file header)');
     try {
         const attempt = req.attemptId
@@ -250,7 +291,7 @@ function findLatestAttemptForTask(ledger: TurnLedger, taskId: string) {
 const operatorStatus: LowFamilyHandler = async (ctx: LowFamilyContext, args: any) => {
     const req = decodeOperatorStatusRequest(args);
     if (!req) return badRequest('operator_status');
-    const ledger = ledgerSlot;
+    const ledger = getActiveTurnLedger();
     if (!ledger) return unavailable('no active turn ledger (boot wiring pending — see file header)');
     try {
         const attempt = findLatestAttemptForTask(ledger, req.taskId);
@@ -287,7 +328,7 @@ const operatorStatus: LowFamilyHandler = async (ctx: LowFamilyContext, args: any
 const turnQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeTurnQueryRequest(args);
     if (!req) return badRequest('turn_query');
-    const ledger = ledgerSlot;
+    const ledger = getActiveTurnLedger();
     if (!ledger) return unavailable('no active turn ledger (boot wiring pending — see file header)');
     try {
         const store = ledger.store as unknown as {
@@ -392,7 +433,7 @@ const meshIndexQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: an
     const req = decodeMeshIndexQueryRequest(args);
     if (!req) return badRequest('mesh_index_query');
     const slot = indexSlot;
-    if (!ledgerSlot || !slot) return { ...unavailable('no mesh_topic_index bound (boot wiring pending)'), rows: [] };
+    if (!getActiveTurnLedger() || !slot) return { ...unavailable('no mesh_topic_index bound (boot wiring pending)'), rows: [] };
     try {
         const scope = req.writer ?? 'fleet';
         const ownWriter = scope === 'own' ? slot.ownWriter() : null;
@@ -465,6 +506,46 @@ const missionQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     }
 };
 
+// ─── note_upsert / note_forget (C-W8) ─────────────────────────────────────
+
+const noteUpsert: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
+    const req = decodeNoteUpsertRequest(args);
+    if (!req) return badRequest('note_upsert');
+    try {
+        const before = new Set(readOperatingNotes(req.meshId).map((n) => n.id));
+        const note = recordOperatingNote(req.meshId, {
+            text: req.text,
+            ...(req.category ? { category: req.category } : {}),
+            ...(req.pinned ? { pinned: true } : {}),
+            ...(req.expiresAt ? { expiresAt: new Date(req.expiresAt).toISOString() } : {}),
+            ...(req.supersedes ? { supersedes: req.supersedes } : {}),
+            ...(req.subjectKey ? { subjectKey: req.subjectKey } : {}),
+            ...(req.sourceCoordinator ? { sourceCoordinator: req.sourceCoordinator, callerSessionId: req.sourceCoordinator } : {}),
+        });
+        const deduped = before.has(note.id);
+        const response: NoteUpsertResponse = { noteId: note.id, deduped, createdAt: note.payload.createdAt };
+        return { success: true, ...response };
+    } catch (e: any) {
+        return { success: false, error: e?.message ?? String(e) };
+    }
+};
+
+const noteForget: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
+    const req = decodeNoteForgetRequest(args);
+    if (!req) return badRequest('note_forget');
+    try {
+        const result = forgetOperatingNote(req.meshId, {
+            ...(req.noteId ? { noteId: req.noteId } : {}),
+            ...(req.text ? { text: req.text } : {}),
+            ...(req.reason ? { reason: req.reason } : {}),
+        });
+        const response: NoteForgetResponse = { matched: result.matched, tombstoneId: result.tombstoneId };
+        return { success: true, ...response };
+    } catch (e: any) {
+        return { success: false, error: e?.message ?? String(e) };
+    }
+};
+
 // ─── registration ────────────────────────────────────────────────────────
 
 export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
@@ -476,6 +557,8 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     mesh_index_query: meshIndexQuery,
     mission_upsert: missionUpsert,
     mission_query: missionQuery,
+    note_upsert: noteUpsert,
+    note_forget: noteForget,
 };
 
 export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandlers, {
@@ -487,4 +570,6 @@ export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandler
     mesh_index_query: { sources: ['ipc'] },
     mission_upsert: { sources: ['ipc'] },
     mission_query: { sources: ['ipc'] },
+    note_upsert: { sources: ['ipc'] },
+    note_forget: { sources: ['ipc'] },
 });

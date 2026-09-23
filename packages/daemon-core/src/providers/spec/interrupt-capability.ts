@@ -8,7 +8,7 @@
  * and yet the caller gets a success signal (see the NOTIF-SURFACE-LOCAL RCA in
  * mesh-reconcile-loop.ts). That is why the force-inject path was retired: the
  * `forceSendMessage` adapter method is gone entirely, and `force` now ALIASES to
- * the interrupt path below (commands/interrupt-and-deliver.ts) rather than
+ * the interrupt path below (sessions/session-input-service.ts, policy interrupt) rather than
  * meaning "write anyway".
  *
  * The only honest way to change a running session's trajectory is to INTERRUPT:

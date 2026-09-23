@@ -20,21 +20,25 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 
+import { appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
 import {
-    appendLedgerEntry,
-    readLedgerEntries,
-    readOperatingNotes,
-    tombstoneOperatingNote,
+    forgetOperatingNote as tombstoneOperatingNote,
     pruneOperatingNotes,
+    readOperatingNotes,
+    recordOperatingNote,
     OPERATING_NOTE_KEEP_LATEST,
-} from '../../src/mesh/mesh-ledger.js';
+} from '../../src/mesh/mesh-operating-notes.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
+// C-W8: operating notes live in `mesh_operating_notes` (mesh-operating-notes.ts),
+// not the event ledger. The growth-control contract below is unchanged.
 function recordNote(meshId: string, text: string) {
-    return appendLedgerEntry(meshId, {
-        kind: 'coordinator_operating_note',
-        payload: { text, createdAt: new Date().toISOString() },
-    });
+    return recordOperatingNote(meshId, { text });
+}
+
+/** Every stored note row (live + tombstoned), for the "what does the store hold" assertions. */
+function storedNotes(meshId: string) {
+    return MeshRuntimeStore.getInstance().turnStore().listOperatingNotes(meshId, { includeTombstoned: true }).filter((n) => !n.meta.textTombstone);
 }
 
 describe('operating-notes growth controls', () => {
@@ -56,7 +60,7 @@ describe('operating-notes growth controls', () => {
             const first = recordNote(meshId, 'always run scoped tests');
             for (let i = 0; i < 19; i++) recordNote(meshId, 'always run scoped tests');
 
-            const notes = readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] });
+            const notes = readOperatingNotes(meshId);
             expect(notes.length).toBe(1);
             // The returned entry for a duplicate is the original (same id).
             expect(notes[0].id).toBe(first.id);
@@ -65,7 +69,7 @@ describe('operating-notes growth controls', () => {
         it('dedupes on trimmed text so surrounding whitespace does not defeat it', () => {
             recordNote(meshId, 'lesson A');
             recordNote(meshId, '  lesson A  ');
-            const notes = readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] });
+            const notes = readOperatingNotes(meshId);
             expect(notes.length).toBe(1);
         });
 
@@ -73,7 +77,7 @@ describe('operating-notes growth controls', () => {
             recordNote(meshId, 'lesson A');
             recordNote(meshId, 'lesson B');
             recordNote(meshId, 'lesson A'); // dup of A
-            const notes = readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] });
+            const notes = readOperatingNotes(meshId);
             expect(notes.map(n => (n.payload as any).text).sort()).toEqual(['lesson A', 'lesson B']);
         });
 
@@ -111,15 +115,15 @@ describe('operating-notes growth controls', () => {
             expect(readOperatingNotes(meshId).map(n => (n.payload as any).text)).toEqual(['keep me']);
         });
 
-        it('preserves history — the note and tombstone remain in the raw ledger', () => {
-            const note = recordNote(meshId, 'to forget');
-            tombstoneOperatingNote(meshId, { noteId: note.id });
-            const raw = readLedgerEntries(meshId);
-            const kinds = raw.map(e => e.kind).sort();
-            expect(kinds).toContain('coordinator_operating_note_tombstone');
-            // readOperatingNotes hides it, but the raw entry still exists somewhere in history
-            // (unless already pruned — with a single note under the keep-latest bound it survives).
-            expect(raw.some(e => e.id === note.id) || raw.some(e => e.kind === 'coordinator_operating_note_tombstone')).toBe(true);
+        it('a text forget also retracts a note with that text recorded LATER (the old fingerprint tombstone)', () => {
+            tombstoneOperatingNote(meshId, { text: 'never again' });
+            recordNote(meshId, 'never again');
+            expect(readOperatingNotes(meshId).map(n => (n.payload as any).text)).not.toContain('never again');
+        });
+
+        it('notes are refused by the event ledger (they would be invisible there)', () => {
+            expect(() => appendLedgerEntry(meshId, { kind: 'coordinator_operating_note', payload: { text: 'x' } })).toThrow(/not a ledger kind/);
+            expect(readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] })).toEqual([]);
         });
 
         it('requires a target', () => {
@@ -134,10 +138,10 @@ describe('operating-notes growth controls', () => {
             const total = keep + 15;
             for (let i = 0; i < total; i++) recordNote(meshId, `lesson ${i}`);
 
-            const notes = readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] });
+            const notes = storedNotes(meshId);
             expect(notes.length).toBe(keep);
 
-            const texts = notes.map(n => (n.payload as any).text);
+            const texts = notes.map(n => n.text);
             // Oldest (lesson 0 .. lesson 14) pruned; freshest preserved including the very last.
             expect(texts).not.toContain('lesson 0');
             expect(texts).toContain(`lesson ${total - 1}`);
@@ -158,8 +162,7 @@ describe('operating-notes growth controls', () => {
 
             // Explicit prune with a tiny bound: tombstoned note must be gone regardless of order.
             pruneOperatingNotes(meshId, 100);
-            const raw = readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] });
-            expect(raw.some(e => e.id === note.id)).toBe(false);
+            expect(storedNotes(meshId).some(e => e.noteId === note.id)).toBe(false);
         });
 
         it('is a no-op below the keep-latest bound', () => {
@@ -167,7 +170,7 @@ describe('operating-notes growth controls', () => {
             recordNote(meshId, 'b');
             const removed = pruneOperatingNotes(meshId);
             expect(removed).toBe(0);
-            expect(readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] }).length).toBe(2);
+            expect(storedNotes(meshId).length).toBe(2);
         });
     });
 });

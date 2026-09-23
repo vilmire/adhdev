@@ -47,7 +47,7 @@ import { __resetTargetPinGeneratingCreditForTests } from '../../src/mesh/mesh-sk
 import { PARK_REASON_PIN_EXPIRED } from '../../src/mesh/mesh-task-parking.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
-import { getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests } from '../../src/mesh/mesh-turn-ledger.js'
+import { getTargetPinClearedMetrics, __resetTargetPinClearedMetricsForTests } from '../../src/mesh/mesh-task-parking.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 // THIS daemon's node (isLocalAutoLaunchNode resolves 'test-machine' as local when the
@@ -163,7 +163,7 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
 
   it('(b) STALE unobservable target (live REMOTE node, session not locally observable): the pin expires past the TTL and the task is PARKED — never silently re-homed, retry budget untouched', async () => {
     const meshId = `mesh_ttl_remote_${randomUUID().slice(0, 8)}`
-    __resetTurnLedgerMetricsForTests()
+    __resetTargetPinClearedMetricsForTests()
     try {
       setMesh(meshId)
       const components = createComponents([])
@@ -187,7 +187,7 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
       // No retry-budget cost — parking is a holding operation, not a retry.
       expect(after.requeueCount ?? 0).toBe(0)
       // Content-free metric for the transition.
-      expect(getTurnLedgerMetrics().targetPinClearedByReason[PARK_REASON_PIN_EXPIRED]).toBe(1)
+      expect(getTargetPinClearedMetrics()[PARK_REASON_PIN_EXPIRED]).toBe(1)
 
       // ★ THE REGRESSION THIS FILE NOW GUARDS: no silent succession. A parked task is
       // claimable by NOBODY — not another compatible session…
@@ -263,7 +263,7 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
 
   it('dead-target self-heal also records the content-free targetPinCleared metric', async () => {
     const meshId = `mesh_ttl_metric_${randomUUID().slice(0, 8)}`
-    __resetTurnLedgerMetricsForTests()
+    __resetTargetPinClearedMetricsForTests()
     try {
       setMesh(meshId)
       const components = createComponents([])
@@ -276,7 +276,7 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
       const after = task(meshId, t.id)!
       expect(after.targetSessionId).toBeUndefined()
       expect(after.requeueReason).toBe('dead_target_session_absent')
-      expect(getTurnLedgerMetrics().targetPinClearedByReason['dead_target_session_absent']).toBe(1)
+      expect(getTargetPinClearedMetrics()['dead_target_session_absent']).toBe(1)
     } finally {
       cleanup(meshId)
     }

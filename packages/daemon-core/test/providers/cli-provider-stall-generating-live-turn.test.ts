@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto'
 // terminal evidence and never re-reads the transcript.
 //
 // WHY THE PRE-EXISTING GUARD COULD NOT CATCH IT: the Stage 6 branch re-armed on
-// `now - attempt.updatedAt < threshold`, but `mesh_turn_attempts.updated_at` is a
+// `now - attempt.updatedAt < threshold`, but `turn_attempts.updated_at` (formerly `mesh_turn_attempts`) is a
 // STAGE-TRANSITION stamp. `generating` is written once (edge-triggered from
 // agent:generating_started) and nothing refreshes it while the agent works, so that
 // comparison is just "is the turn younger than the threshold" — true only in the
@@ -48,11 +48,7 @@ vi.mock('../../src/config/config.js', () => ({
 }))
 
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
-import {
-    openTurnAttempt,
-    recordTurnAck,
-    recordTurnStage,
-} from '../../src/mesh/mesh-turn-ledger.js'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import {
     resolveSessionTurnPresentation,
     STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS,
@@ -99,24 +95,15 @@ describe('stall watchdog — a generating attempt with an open adapter turn', ()
      * point: updated_at stays frozen at the turn start.
      *
      * Every writer takes `nowMs` — that is the knob that stamps `updated_at`.
-     * `occurredAtMs` is event-ordering provenance only (see mesh-turn-ledger.ts:802,
-     * `updatedAt: nowIso`), so seeding with it alone would leave the row stamped at
+     * (C-W8: `turn_attempts.updated_at`, stamped by `TurnStore.upsertAttempt(nowMs)`.)
+     * Seeding at real wall-clock instead would leave the row stamped at
      * real wall-clock while the watchdog is driven on the synthetic clock, and the
      * resulting NEGATIVE `now - updatedAt` would satisfy the pre-existing Stage 6
      * clock branch by accident — masking exactly what these tests must observe.
      */
     function seedGeneratingAttempt(startedAt: number): void {
-        openTurnAttempt({
-            meshId,
-            taskId,
-            dispatchNonce: seq,
-            sessionId,
-            providerType: 'codex-cli',
-            nowMs: startedAt,
-        })
-        recordTurnAck({ meshId, taskId, kind: 'delivered', sessionId, nowMs: startedAt })
-        recordTurnAck({ meshId, taskId, kind: 'consumed', sessionId, nowMs: startedAt })
-        recordTurnStage({ meshId, taskId, stage: 'generating', sessionId, nowMs: startedAt, occurredAtMs: startedAt })
+        // C-W8: seeded on the turn ledger (`turn_attempts`), the table Stage 6 reads.
+        seedMeshAttempt({ meshId, taskId, sessionId, providerType: 'codex-cli', stage: 'generating', nowMs: startedAt })
     }
 
     function makeInstance(opts: { lastOutputAt: number; turnActive: boolean; startedAt?: number }) {

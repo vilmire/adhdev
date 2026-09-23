@@ -82,7 +82,7 @@ export interface DeliverLog {
 
 const NOOP_LOG: DeliverLog = { info: () => {}, warn: () => {} };
 
-/** Minimal session-input surface (`sessions/session-input-port.ts` SessionInputPort). */
+/** Minimal session-input surface (`SessionInputPort`, sessions/session-input-service.ts). */
 export interface NoticeInputPort {
     submit(msg: OutboundMessage): Promise<SubmitOutcome>;
 }
@@ -132,7 +132,7 @@ function claimKey(writer: string, seq: number): string {
 // ─── 1. producer API: non-turn coordinator notices ─────────────────────────
 
 /**
- * A non-turn coordinator notice (the shape `queuePendingMeshCoordinatorEvent`
+ * A non-turn coordinator notice (the shape the retired `queuePendingMeshCoordinatorEvent`
  * accepted, minus the queue bookkeeping). `coordinatorMessage` / `metadataEvent`
  * are LOCAL content: they stay in `turn_events.payload_json.local` (or travel
  * on `mesh.<id>.handoff` for another daemon) and never reach the events topic.

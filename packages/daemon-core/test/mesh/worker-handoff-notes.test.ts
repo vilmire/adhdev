@@ -14,16 +14,17 @@ import {
 } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
+import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
 import { meshHandoffTopic, meshEventsTopic, baseTopicDefinitions } from '../../src/seqscribe/topics'
 
 // ★Each test gets its OWN mesh id AND attempt id namespace.
 //
-// The in-memory note text is reset per test, but mesh_turn_events rows live in
-// a process-wide SQLite store and insertTurnEvent is INSERT OR IGNORE. Two
-// details make naive reuse silently wrong:
+// The in-memory note text is reset per test, but the handoff index rows
+// (`turn_events`, C-W8) live in a process-wide SQLite store and are INSERT OR
+// IGNORE. Two details make naive reuse silently wrong:
 //   - a repeated eventId is ignored; and
-//   - the table's UNIQUE key is (attempt_id, kind, dedupe_key) — note it is NOT
-//     scoped by mesh_id, so varying only the mesh id is not enough.
+//   - the table's UNIQUE key is (attempt_id, generation, kind, dedupe_key) —
+//     NOT scoped by mesh_id, so varying only the mesh id is not enough.
 // Either way the second insert is dropped while the text store was cleared,
 // leaving a meta row with no text that selection correctly skips. Namespacing
 // both ids removes the whole class.
@@ -39,16 +40,14 @@ function seedNote(opts: {
 }): void {
   const recordedAtIso = new Date(opts.recordedAtMs ?? Date.now()).toISOString()
   // The ledger META row — the queryable index (content-free apart from paths).
-  MeshRuntimeStore.getInstance().insertTurnEvent({
+  seedWorkerEvent({
     eventId: `evt-${MESH}-${opts.taskId}`,
     meshId: MESH,
     attemptId: `attempt-${MESH}-${opts.taskId}`,
     taskId: opts.taskId,
     kind: WORKER_HANDOFF_EVENT_KIND,
-    dedupeKey: '',
-    payload: JSON.stringify({ touchedFiles: opts.files, intentLength: 10, hasConflictGuidance: !!opts.guidance, followUpCount: 0 }),
-    occurredAtMs: opts.recordedAtMs ?? Date.now(),
-    recordedAt: recordedAtIso,
+    payload: { touchedFiles: opts.files, intentLength: 10, hasConflictGuidance: !!opts.guidance, followUpCount: 0 },
+    atMs: opts.recordedAtMs ?? Date.now(),
   })
   // The TEXT — local mirror + (when configured) the content topic.
   storeHandoffNote({
@@ -199,11 +198,10 @@ describe('relevance selection', () => {
   it('skips a meta row whose text this daemon does not hold', () => {
     // A note that arrived as a peer's ledger row (or predates a restart) has
     // nothing to enclose.
-    MeshRuntimeStore.getInstance().insertTurnEvent({
+    seedWorkerEvent({
       eventId: `evt-orphan-${MESH}`, meshId: MESH, attemptId: `a-${MESH}`, taskId: 'tOrphan',
-      kind: WORKER_HANDOFF_EVENT_KIND, dedupeKey: '',
-      payload: JSON.stringify({ touchedFiles: ['src/a.ts'] }),
-      occurredAtMs: Date.now(), recordedAt: new Date().toISOString(),
+      kind: WORKER_HANDOFF_EVENT_KIND,
+      payload: { touchedFiles: ['src/a.ts'] },
     })
     const picked = selectRelevantHandoffNotes({ meshId: MESH, taskId: 'tNew', touchedFiles: ['src/a.ts'] })
     expect(picked).toEqual([])

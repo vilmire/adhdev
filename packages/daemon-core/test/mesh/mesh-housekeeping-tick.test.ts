@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     saga: vi.fn(async () => {}),
     trigger: vi.fn(async () => ({})),
     pendingCount: vi.fn(() => 0),
+    runtimeRetention: vi.fn(),
 }));
 
 vi.mock('../../src/config/config.js', () => ({ getMachineId: () => 'mach_self', getConfigDir: () => '/tmp/adhdev-hk-test', loadConfig: () => ({ machineId: 'mach_self' }), getMachineNickname: () => null }));
@@ -35,6 +36,7 @@ vi.mock('../../src/mesh/mesh-graph-workspace-ports.js', () => ({ createDefaultWo
 vi.mock('../../src/mesh/mesh-graph-provenance.js', () => ({ recordGraphGateExpired: vi.fn() }));
 vi.mock('../../src/mesh/mesh-events-coordinator.js', () => ({ triggerMeshQueue: mocks.trigger }));
 vi.mock('../../src/mesh/mesh-runtime-store.js', () => ({
+    pruneMeshRuntimeRetention: mocks.runtimeRetention,
     MeshRuntimeStore: {
         getInstance: () => ({
             graphStore: () => ({ listGatesByMesh: () => [] }),
@@ -109,6 +111,8 @@ describe('mesh housekeeping tick', () => {
         expect(mocks.disk).toHaveBeenCalledTimes(1);
         await runMeshHousekeepingTick(c, state, DISK_RETENTION_INTERVAL_MS);
         expect(mocks.disk).toHaveBeenCalledTimes(2);
+        // mesh-runtime.db row retention rides the same hourly cadence (C-W8 re-homed it).
+        expect(mocks.runtimeRetention).toHaveBeenCalledTimes(2);
     });
 
     it('a failing phase is isolated — the rest of the tick still runs', async () => {

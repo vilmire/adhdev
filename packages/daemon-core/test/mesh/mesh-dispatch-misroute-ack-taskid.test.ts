@@ -47,7 +47,8 @@ vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMock
 vi.mock('../../src/mesh/mesh-fast-forward.js', () => ({ fastForwardMeshNode: fastForwardMocks.fastForwardMeshNode }))
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, insertDirectDispatch, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, getActiveDirectDispatches } from '../../src/mesh/mesh-work-queue.js'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
 import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
@@ -105,10 +106,8 @@ describe('MESH-DISPATCH-MISROUTE fix 3 — getSoleActiveDirectDispatchTaskId (ru
     const meshId = `mesh_sole_one_${Date.now()}`
     try {
       mockMesh(meshId)
-      insertDirectDispatch(meshId, {
-        taskId: 'task_only', nodeId: 'node_child_1', sessionId: SESSION_ID,
-        providerType: 'codex-cli', message: 'm', via: 'local_direct', dispatchedAt: new Date().toISOString(),
-      })
+      // C-W8: the active direct dispatch is its open mesh_direct attempt.
+      seedMeshAttempt({ meshId, taskId: 'task_only', sessionId: SESSION_ID, nodeId: 'node_child_1', providerType: 'codex-cli', scope: 'mesh_direct', stage: 'delivered' })
       expect(MeshRuntimeStore.getInstance().getSoleActiveDirectDispatchTaskId(meshId, SESSION_ID)).toBe('task_only')
     } finally { cleanupMeshFiles(meshId) }
   })
@@ -121,19 +120,8 @@ describe('MESH-DISPATCH-MISROUTE fix 3 — getSoleActiveDirectDispatchTaskId (ru
     } finally { cleanupMeshFiles(meshId) }
   })
 
-  it('returns null with TWO active sibling dispatches (ambiguous owner)', () => {
-    const meshId = `mesh_sole_two_${Date.now()}`
-    try {
-      mockMesh(meshId)
-      for (const tid of ['task_a', 'task_b']) {
-        insertDirectDispatch(meshId, {
-          taskId: tid, nodeId: 'node_child_1', sessionId: SESSION_ID,
-          providerType: 'codex-cli', message: 'm', via: 'local_direct', dispatchedAt: new Date().toISOString(),
-        })
-      }
-      expect(MeshRuntimeStore.getInstance().getSoleActiveDirectDispatchTaskId(meshId, SESSION_ID)).toBeNull()
-    } finally { cleanupMeshFiles(meshId) }
-  })
+  // (C-W8) The "TWO active sibling dispatches on one session" case is unreachable now:
+  // the ledger allows ≤1 open attempt per session (ux_turn_attempts_open_session).
 })
 
 // C-W3: the forwarding-side 'acked' flips this file used to pin are gone —

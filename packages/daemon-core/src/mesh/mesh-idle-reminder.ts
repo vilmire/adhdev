@@ -32,7 +32,7 @@
  *
  *    DIRECT-SESSION-IDLE-BLINDSPOT: a session the owner starts directly (not via
  *    mesh_enqueue_task/mesh_send_task) never gets a `mesh_queue` or
- *    `mesh_direct_dispatches` row, so buildMeshActiveWork cannot see it — the mesh reads
+ *    the legacy direct-dispatch table row, so buildMeshActiveWork cannot see it — the mesh reads
  *    "no work in flight" while a direct session is still generating. Rather than adding a
  *    new remote RPC, this reuses `instanceManager.collectAllStates()` — the SAME
  *    synchronous, zero-RPC, in-process call the status-report path already makes every
@@ -76,6 +76,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import type { SessionInputPort } from '../sessions/session-input-service.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -88,7 +89,15 @@ import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-r
 import type { ProviderState } from '../providers/provider-instance.js';
 
 /** Coordinator instance the reminder is injected into (the idle CLI session). */
-type CoordinatorInstance = ReturnType<DaemonComponents['instanceManager']['getInstance']>;
+/**
+ * Where the reminder goes (D2, applied in C-W8): the coordinator session id and
+ * the daemon's ONE send funnel (`cliManager.input`), so the reminder shares the
+ * messageId dedupe with every other origin instead of a raw instance event.
+ */
+export interface IdleReminderTarget {
+    sessionId: string;
+    input: SessionInputPort;
+}
 
 /**
  * A local session's status is trusted for at most this long past its `lastUpdated`
@@ -205,20 +214,21 @@ export function buildIdleReminderMessage(missions: MeshMissionRecord[]): string 
 
 /**
  * Fire-and-forget idle-active-mission reminder. Call this at a coordinator idle edge
- * once the pending-event queue is empty (nothing else to inject). `coordinator` is the
- * idle CLI session to inject into; `policy` is the mesh's policy (for the opt-out flag).
+ * once the pending-event queue is empty (nothing else to inject). `coordinator` names
+ * the idle CLI session and the send funnel; `policy` is the mesh's policy (for the
+ * opt-out flag).
  *
- * Returns true iff a reminder was injected on this call.
+ * Resolves true iff a reminder was delivered (or queued) on this call.
  */
-export function maybeInjectIdleActiveMissionReminder(
+export async function maybeInjectIdleActiveMissionReminder(
     meshId: string,
-    coordinator: CoordinatorInstance,
+    coordinator: IdleReminderTarget | null | undefined,
     policy: RepoMeshPolicy | undefined,
     now: number = Date.now(),
     instanceManager?: DaemonComponents['instanceManager'],
     sharedLedgerSnapshot?: MeshActiveWorkLedgerSnapshot,
     nodes?: any[],
-): boolean {
+): Promise<boolean> {
     try {
         if (!coordinator) return false;
         // Opt-out: default is ON; only an explicit false disables it.
@@ -310,15 +320,23 @@ export function maybeInjectIdleActiveMissionReminder(
         if (!shouldFireIdleReminder(last, hash, now)) return false;
 
         const message = buildIdleReminderMessage(activeMissions);
-        coordinator.onEvent('send_message', {
-            input: { text: message, textFallback: message },
+        // D2: one message per (mesh, mission set) — a re-fired edge for the same set is
+        // the funnel's `duplicate`, never a second bubble. Always queued behind a turn.
+        const outcome = await coordinator.input.submit({
+            messageId: `reminder:${meshId}:${hash}`,
+            sessionId: coordinator.sessionId,
+            input: { parts: [{ type: 'text', text: message }], textFallback: message },
+            origin: 'mesh',
+            policy: { mode: 'queue' },
+            createdAt: now,
         });
-        // Mark AFTER a successful inject so a mid-inject throw retries next edge rather
-        // than silently swallowing the only reminder.
+        // Mark only a reminder that actually reached the session (delivered or parked in
+        // its queue); a refusal leaves the edge free to retry the reminder next time.
+        if (outcome.kind !== 'delivered' && outcome.kind !== 'queued') return false;
         store.setIdleReminderState(meshId, { emittedAt: now, missionSetHash: hash });
         LOG.info(
             'MeshIdleReminder',
-            `Injected idle reminder for mesh ${meshId} (${activeMissions.length} active mission(s), fully idle)`,
+            `${outcome.kind === 'queued' ? 'Queued' : 'Injected'} idle reminder for mesh ${meshId} (${activeMissions.length} active mission(s), fully idle)`,
         );
         return true;
     } catch (e: any) {

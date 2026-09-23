@@ -11,9 +11,7 @@ import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshLedgerKind } from './mesh-ledger.js';
-import { createSessionDelivery } from './mesh-delivery-policy.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-import { openTurnAttempt, recordTurnAck, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 // GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
 // updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
 import {
@@ -43,7 +41,6 @@ import {
 // (check:boundaries); a type import is the contract this field is typed against.
 import type { InputEnvelope } from '../providers/io-contracts.js';
 import { validateMeshTaskModeRequest, buildMeshTaskModeViolationError } from './mesh-task-mode-guardrail.js';
-import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import {
     PARK_REASON_PIN_EXPIRED,
     PARK_RETENTION_EXPIRED_REASON,
@@ -484,16 +481,12 @@ export interface MeshWorkQueueEntry {
      */
     dispatchNonce?: number;
     /**
-     * TURN-LEDGER (Stage 5): the opaque attempt identity of the CURRENT dispatch of
-     * this task — distinct from both the taskId and the monotonic dispatchNonce.
-     * Stamped when the dispatch opens its attempt (openTurnAttempt, seq = the
-     * post-bump dispatchNonce) and carried to the worker in meshContext.attemptId;
-     * the worker echoes it on its lifecycle events so every ACK/completion proposal
-     * correlates to (meshId, taskId, attemptId, coordinator identity, session). A
-     * reclaim/reassign closes this attempt and the re-dispatch opens a NEW one, so
-     * late old-attempt events are rejected by identity. Rides in the payload JSON
-     * (no column migration); absent on pre-Stage-5 rows → the reducer lazily opens
-     * a deterministic legacy attempt (never fabricating evidence) on first touch.
+     * The turn-ledger attempt id (`turn_attempts.attempt_id`, C3) of the CURRENT
+     * dispatch of this task — distinct from both the taskId and the monotonic
+     * dispatchNonce. Stamped when the dispatch opens its attempt (queue claim:
+     * `openOrResumeQueueAttempt`; direct dispatch: the caller's `dispatch_accepted`)
+     * and carried to the worker in meshContext.attemptId so its evidence correlates
+     * to (meshId, taskId, attemptId). Rides in the payload JSON (no column).
      */
     attemptId?: string;
     /**
@@ -891,7 +884,7 @@ export function enqueueTaskGraph(
  * entry so it is attributable to a mission.
  *
  * Direct dispatch normally bypasses the queue entirely — the task lives only in
- * the ledger + mesh_direct_dispatches table, neither of which carries a
+ * the ledger + the legacy direct-dispatch table, neither of which carries a
  * missionId, so {@link summarizeMissionTasks}/{@link computeMeshTaskStats}
  * (which both scan the queue for `task.missionId`) count it as 0. When a
  * mission is attached, we materialise the same queue entry shape an enqueued
@@ -906,26 +899,11 @@ export function enqueueTaskGraph(
  *
  * MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: `missionId` is deliberately OPTIONAL.
  * It once gated this whole function, because the function's only job was mission
- * ATTRIBUTION (the counts described above). Two things were later folded in that
- * have nothing to do with missions, and both silently inherited that gate:
- *
- *   1. openTurnAttempt/recordTurnAck — without an attempt, a completion event
- *      reaches proposeTurnCompletion with nothing to resolve, so
- *      ensureLegacyTurnAttempt mints a `legacy-<taskId>-0` row whose sessionId
- *      does not match the worker binding. The reducer then refuses the flip
- *      (stale_attempt / session_mismatch) and mesh-event-forwarding returns
- *      early, skipping updateSessionTaskStatus, updateDirectDispatchStatus and
- *      markSessionDeliveriesTerminal — the session stays `generating` forever.
- *   2. createSessionDelivery — the confirmed-delivery record that stops
- *      recoverStrandedAssignedDispatches from reclaiming an already-completed
- *      task (see the note at that call). Skipping it does not merely delay a
- *      status: on an unlucky interleaving the watchdog REDRIVES finished work.
- *
- * So a `mesh_send_task` without a mission lost both terminal-state convergence
- * and redrive protection. Opening the attempt is what makes every direct
- * dispatch reducer-authoritative from `accepted`, exactly like the queue path
- * (mesh-queue-assignment.ts openTurnAttempt), and it must not depend on whether
- * the caller happened to pass a mission.
+ * ATTRIBUTION. The delivery record and the attempt correlation below have nothing
+ * to do with missions and must not inherit that gate — a `mesh_send_task` without
+ * a mission once lost both terminal-state convergence and redrive protection.
+ * (C-W8: the attempt itself is the turn ledger's `mesh_direct` attempt, opened by
+ * the caller; see the note at the stamp below.)
  */
 export function recordDirectDispatchTask(
     meshId: string,
@@ -966,14 +944,14 @@ export function recordDirectDispatchTask(
     },
 ): MeshWorkQueueEntry | null {
     // A missing missionId only means "not attributable to a mission" — it must not
-    // skip the turn attempt or the delivery record (see the note above).
+    // skip the row or the attempt correlation (see the note above).
     const missionId = typeof opts.missionId === 'string' ? opts.missionId.trim() : '';
     const taskId = typeof opts.id === 'string' ? opts.id.trim() : '';
     if (!taskId) return null;
     // DELIVERY-MSG-GUARD (upstream defence): the direct-dispatch path materialises the
-    // same message-carrying queue entry AND writes a session delivery (createSessionDelivery
-    // below), so a blank/undefined message would hit the same NOT NULL crash. Normalise and
-    // hard-reject before we record anything — consistent with enqueueTask.
+    // same message-carrying queue entry, so a blank/undefined message would hit the same
+    // NOT NULL crash. Normalise and hard-reject before we record anything — consistent
+    // with enqueueTask.
     message = String(message ?? '').trim();
     if (!message) {
         throw new Error('mesh task message must be a non-empty string');
@@ -1010,76 +988,22 @@ export function recordDirectDispatchTask(
             updatedAt: now,
         };
         MeshRuntimeStore.getInstance().insertQueueEntry(entry);
-        // TURN-LEDGER (Stage 5): the direct dispatch was already confirmed handed to
-        // the transport (result.success) before this row materialised, so open the
-        // attempt at 'accepted' and immediately record the 'delivered' ACK — the same
-        // causal stage the 'delivered' delivery record below attests to. The attempt
-        // gives this task's completion an authoritative (taskId, attemptId, session)
-        // correlation instead of the session-scalar heuristic.
-        //
-        // C-W7 NOTE: mcp-server's `openDirectDispatchAttempt` (C-W6c) ALSO opens an
-        // attempt for this same dispatch on the NEW turn-ledger (`turn_observe` IPC,
-        // scope:'mesh_direct') and may pass its id as `opts.attemptId`. That new-ledger
-        // attempt is NOT a substitute for the one opened here: Stage 6 presentation
-        // (`mesh-turn-presentation.ts`, read by mesh-active-work/read_chat/session_status/
-        // dashboard/stall_watchdog/restart_gate — effectively every execution-status
-        // surface) is wired to THIS legacy Stage-5 table only, not the new ledger. Until
-        // that migration happens, this function must keep opening the legacy attempt or
-        // every one of those surfaces silently loses direct-dispatch coverage (verified:
-        // removing this made mesh-active-work.ts's turnOverlay disappear and the raw
-        // session-status point sample take over). `opts.attemptId`, if present, is stamped
-        // as a secondary/informational id only when the legacy open did not itself produce
-        // one (it always does) — kept for forward-compat with the eventual Stage 6 migration.
-        try {
-            entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
-            const { attempt } = openTurnAttempt({
-                meshId,
-                taskId,
-                dispatchNonce: entry.dispatchNonce,
-                nodeId: opts.assignedNodeId,
-                sessionId: opts.assignedSessionId,
-            });
-            entry.attemptId = attempt.attemptId;
+        // C2/C-W8: the attempt this dispatch delivers lives on the TURN LEDGER
+        // (`turn_attempts`, scope `mesh_direct`), opened by the caller before
+        // this runs (mcp-server `openDirectDispatchAttempt` → `turn_observe`
+        // `dispatch_accepted`). Stage 6 presentation reads that table, and the
+        // worker-MCP token is minted daemon-side when the ledger opens the
+        // attempt (turn-ledger-ipc `turn_observe`), so this row only carries the
+        // attempt id for correlation. Absent when the ledger could not open one —
+        // the row still materialises, uncorrelated.
+        if (opts.attemptId) {
+            entry.attemptId = opts.attemptId;
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-            recordTurnAck({ meshId, taskId, kind: 'delivered', attemptId: attempt.attemptId, sessionId: opts.assignedSessionId });
-            // WORKER-MCP (design §9.2.1, "★함정"): this path bypasses the queue
-            // claim, so a mint placed only at the claim seam would leave every
-            // `mesh_send_task --direct` worker tokenless — and once Phase B's
-            // verification is fail-closed, tokenless means the worker cannot
-            // report at all. Mint here too, off the SAME attempt this block just
-            // opened, so both arms bind identically.
-            if (isWorkerMcpEnabled()) {
-                mintWorkerTaskToken({
-                    meshId,
-                    taskId,
-                    attemptId: attempt.attemptId,
-                    ...(opts.assignedSessionId ? { sessionId: opts.assignedSessionId } : {}),
-                    ...(opts.assignedNodeId ? { nodeId: opts.assignedNodeId } : {}),
-                });
-            }
-        } catch { /* best-effort — the assigned row is already recorded */ }
-        // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) has
-        // already been handed to the transport by the time we materialise this assigned
-        // row — unlike a queue claim, there is no later delivery-confirmation write for
-        // it. Without a confirmed delivery record keyed by this taskId, the assigned-
-        // stranded watchdog (recoverStrandedAssignedDispatches → taskHasConfirmedDelivery)
-        // sees the row as never-confirmed after ASSIGNED_STRANDED_DEADLINE_MS and reclaims
-        // a task the worker already COMPLETED, dropping its agent:generating_completed
-        // (live PROBE-B repro: "never confirmed delivered → pending"). Record a confirmed
-        // delivery here so taskHasConfirmedDelivery() is true and the watchdog leaves the
-        // row to PHASE 4 completion reconcile. This point is only reached after the direct
-        // dispatch's result.success, so 'delivered' is the accurate state.
-        try {
-            createSessionDelivery({
-                meshId,
-                ...(opts.assignedNodeId ? { nodeId: opts.assignedNodeId } : {}),
-                ...(opts.assignedSessionId ? { sessionId: opts.assignedSessionId } : {}),
-                taskId,
-                kind: 'task',
-                message,
-                status: 'delivered',
-            });
-        } catch { /* best-effort — the assigned row is already recorded */ }
+        }
+        // (C-W8) The confirmed-delivery record is the turn ledger attempt's
+        // `delivered` evidence (mcp-server `recordDirectDispatchEvidence` after the
+        // transport confirmed the send) — the legacy session-delivery table row
+        // this block used to write is retired with its table.
         // NOTE (LEDGER-TASK-TRACEABILITY A): the direct-dispatch (mesh_send_task) path
         // appends its own task_dispatched ledger entry at the MCP layer (mesh-tools-session.ts
         // via buildDirectTaskPayload → routingDecision source:'direct') BEFORE calling this.
@@ -1109,43 +1033,6 @@ export function getQueueEntryById(meshId: string, taskId: string): MeshWorkQueue
  */
 export function getQueueHeads(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshQueueHead[] {
     return MeshRuntimeStore.getInstance().getQueueHeads(meshId, opts?.status?.length ? opts.status : undefined);
-}
-
-/**
- * The auto-prune's "anything to prune?" read (IPC load audit #1). First flips direct
- * dispatches that are still `dispatched`/`acked` but have had no lifecycle update for
- * `staleAfterMs` (the auto-prune age gate, 24 h) to 'stale', then returns what is still
- * active. Without the flip one row stuck in `acked` since 2026-08-09 kept the loop from
- * ever idling: every minute it probed every node for a status snapshot and read the
- * active-work ledger + whole queue. Each flip is logged and audited in the ledger.
- */
-export function listDirectDispatchesForAutoPrune(
-    meshId: string,
-    staleAfterMs: number,
-    nowMs: number = Date.now(),
-): DirectDispatchRecord[] {
-    try {
-        const store = MeshRuntimeStore.getInstance();
-        const expired = store.expireAgedDirectDispatches(meshId, staleAfterMs, nowMs);
-        if (expired.length > 0) {
-            LOG.info('MeshQueue', `Auto-prune: marked ${expired.length} direct dispatch row(s) stale for mesh ${meshId} after ${Math.round(staleAfterMs / 3_600_000)}h without a lifecycle update: ${expired.map(e => `${e.taskId} (${e.status} since ${e.updatedAt})`).join(', ')}`);
-            try {
-                appendLedgerEntry(meshId, {
-                    kind: 'direct_dispatch_pruned',
-                    payload: {
-                        source: 'daemon_reconcile_auto_prune_age_expiry',
-                        action: 'marked_stale',
-                        prunedCount: expired.length,
-                        taskIds: expired.map(e => e.taskId),
-                        reasons: ['no lifecycle update within the auto-prune age gate'],
-                    },
-                });
-            } catch { /* audit is best-effort */ }
-        }
-        return store.getActiveDirectDispatches(meshId);
-    } catch {
-        return [];
-    }
 }
 
 export function getMeshQueueRevision(meshId: string): string {
@@ -1458,7 +1345,7 @@ export function cancelTask(
         // exactly what the runner's replay fence expects for a first terminal.
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         // SIBLING-DISPATCH-ORPHAN: a direct-dispatched task carries a second row in
-        // mesh_direct_dispatches. Clearing the assignment above drops this task from every
+        // the legacy direct-dispatch table. Clearing the assignment above drops this task from every
         // queue-side counter, but that row would survive with status 'acked' — which
         // buildMeshActiveWork renders as `generating`, so the cancelled task would keep
         // showing up as live work with no sweeper to ever collect it.
@@ -2038,10 +1925,6 @@ export function __clearMeshQueueForTests(meshId: string): void {
     MeshRuntimeStore.getInstance().deleteQueue(meshId);
 }
 
-export function __clearDirectDispatchesForTests(meshId: string): void {
-    MeshRuntimeStore.getInstance().deleteDirectDispatches(meshId);
-}
-
 export function __resetMeshRuntimeStoreForTests(): void {
     MeshRuntimeStore.resetForTests();
 }
@@ -2050,12 +1933,8 @@ export function __resetMeshRuntimeStoreForTests(): void {
 // Moved to ./mesh-direct-dispatch.ts (FILE-SIZE-HEADROOM). Re-exported so every
 // existing `from './mesh-work-queue.js'` import keeps resolving.
 export {
-    insertDirectDispatch,
     getActiveDirectDispatches,
-    updateDirectDispatchStatus,
-    cleanupTerminalDirectDispatches,
-    markStaleDirectDispatches,
-    deleteDirectDispatchesByTaskId,
+    cancelDirectDispatchAttempts,
     recordMeshToolCall,
 } from './mesh-direct-dispatch.js';
 export type { DirectDispatchRecord, SiblingDispatchTerminalizeReason, MeshToolCallRateResult } from './mesh-direct-dispatch.js';

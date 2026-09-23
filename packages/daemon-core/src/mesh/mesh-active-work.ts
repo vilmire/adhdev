@@ -1,10 +1,9 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
-import { deleteDirectDispatchesByTaskId } from './mesh-work-queue.js';
+import { cancelDirectDispatchAttempts } from './mesh-work-queue.js';
 import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent } from '@adhdev/mesh-shared';
-import { resolveTurnAttemptRow, presentationFromAttemptRow } from './mesh-turn-presentation.js';
-import type { TurnStage } from './mesh-turn-ledger.js';
+import { resolveTurnAttemptRow, presentationFromAttemptRow, type TurnStage } from './mesh-turn-presentation.js';
 import { isWeakCompletionEvidence } from './mesh-events-utils.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
@@ -835,7 +834,9 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         for (const dispatch of opts.directDispatches) {
             if (queueTaskIds.has(dispatch.taskId)) continue; // already emitted as a queue row above
             const live = sessionStatusFromNodes(opts.nodes, dispatch.nodeId ?? undefined, dispatch.sessionId ?? undefined);
-            const dbStatus = dispatch.status; // 'dispatched' | 'acked' | 'completed' | 'failed' | 'stale'
+            // C-W8: the rows are OPEN mesh_direct attempts ('dispatched' | 'acked'); a
+            // caller-built record may still carry a terminal status (tests, remote shapes).
+            const dbStatus: string = dispatch.status;
             const isTerminal = dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'stale';
             // Stage 6: the reducer projection outranks the live point sample for
             // nonterminal direct dispatches (same authority as the queue path).
@@ -1029,6 +1030,13 @@ export interface PruneStaleDirectDispatchesOptions {
     /** Audit source string written into the direct_dispatch_pruned ledger payload. */
     source?: string;
     now?: number;
+    /**
+     * C-W8: how the prunable dispatches are closed (each is an open `mesh_direct`
+     * turn-ledger attempt; the ledger `cancel`s it). Defaults to this process's
+     * ledger (`cancelDirectDispatchAttempts`); the mcp-server passes a closure over
+     * the daemon's `turn_cancel` IPC. Resolves to how many were closed.
+     */
+    closeDispatches?: (taskIds: string[]) => Promise<number> | number;
 }
 
 /**
@@ -1036,8 +1044,8 @@ export interface PruneStaleDirectDispatchesOptions {
  * mutation (store-row delete + audit-ledger append) used by BOTH the manual MCP tool
  * (mesh_prune_stale_direct, minAgeMs=0) and the daemon reconcile loop's auto-prune
  * PHASE (minAgeMs > 0). Pure decision logic via buildMeshActiveWork + classifyStaleDirectForPrune;
- * the only side effects (on execute) are deleteDirectDispatchesByTaskId and a single
- * direct_dispatch_pruned ledger entry — never touching the append-only audit history of the
+ * the only side effects (on execute) are the ledger `cancel` of each pruned dispatch's
+ * `mesh_direct` attempt (C-W8) and a single direct_dispatch_pruned ledger entry — never touching the append-only audit history of the
  * pruned dispatches themselves.
  *
  * Safety rules (identical for manual + auto):
@@ -1049,10 +1057,10 @@ export interface PruneStaleDirectDispatchesOptions {
  *  - When minAgeMs > 0, a prunable orphan younger than the gate is held back (skippedTooYoung).
  *    This applies ONLY to the auto path; the manual path passes minAgeMs=0 (immediate).
  *
- * Idempotent: a deleted row no longer appears in getActiveDirectDispatches, so a second pass
+ * Idempotent: a cancelled attempt no longer appears in getActiveDirectDispatches, so a second pass
  * over the same orphan finds nothing to prune.
  */
-export function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatchesOptions): StaleDirectPruneResult {
+export async function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatchesOptions): Promise<StaleDirectPruneResult> {
     const now = opts.now ?? Date.now();
     const includeTerminal = opts.includeTerminal === true;
     const execute = opts.execute === true;
@@ -1113,7 +1121,10 @@ export function pruneStaleDirectDispatches(opts: PruneStaleDirectDispatchesOptio
 
     let prunedCount = 0;
     if (execute && prunable.length) {
-        prunedCount = deleteDirectDispatchesByTaskId(opts.meshId, prunable.map(r => r.taskId));
+        const taskIds = prunable.map(r => r.taskId);
+        prunedCount = await (opts.closeDispatches
+            ? opts.closeDispatches(taskIds)
+            : cancelDirectDispatchAttempts(opts.meshId, taskIds));
         appendLedgerEntry(opts.meshId, {
             kind: 'direct_dispatch_pruned',
             payload: {

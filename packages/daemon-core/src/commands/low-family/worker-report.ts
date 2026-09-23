@@ -8,7 +8,7 @@
  * The mcp-server process cannot do this work itself, for two independent
  * reasons, and both are structural rather than stylistic:
  *
- *  1. **The ledger.** `mesh_turn_events` and the turn reducer live in the
+ *  1. **The ledger.** `turn_events` and the turn reducer live in the
  *     daemon's SQLite store. Two processes writing terminal outcomes would mean
  *     two reducers, which is exactly the "two truths" the single-terminal-writer
  *     rule exists to prevent.

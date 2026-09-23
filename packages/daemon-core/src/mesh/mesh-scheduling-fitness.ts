@@ -622,7 +622,7 @@ export function sessionHasActiveAssignment(meshId: string, sessionId: string): b
     if (getQueue(meshId, { status: ['assigned'] as any }).some(task => sessionIdsEquivalent(task.assignedSessionId, sessionId))) {
         return true;
     }
-    // Direct dispatches (mesh_send_task) are tracked in mesh_direct_dispatches, not the
+    // Direct dispatches (mesh_send_task) are tracked as open mesh_direct attempts (formerly a legacy direct-dispatch table), not the
     // work queue. A session completing a still-active direct dispatch IS an active
     // assignment — without this, findRecentTerminalLedgerEvidence dedup wrongly suppresses
     // the canonical agent:generating_completed for direct-dispatch tasks (validation/general),

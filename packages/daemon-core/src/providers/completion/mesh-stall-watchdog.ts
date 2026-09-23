@@ -21,8 +21,7 @@
  *     missing completion emitted and the stall suppressed.
  */
 
-import { resolveSessionTurnPresentation } from '../../mesh/mesh-turn-presentation.js';
-import { isTerminalTurnStage } from '../../mesh/mesh-turn-ledger.js';
+import { resolveSessionTurnPresentation, isTerminalTurnStage } from '../../mesh/mesh-turn-presentation.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
 import { emitNoProgress } from '../turn-evidence-port.js';
@@ -164,7 +163,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     // no-progress kills work nobody had any reason to abandon.
     //
     // Why the existing Stage-6 branch below cannot cover this: it only engages
-    // when `authority === 'turn_reducer'`, i.e. when a `mesh_turn_attempts` row
+    // when `authority === 'turn_reducer'`, i.e. when a `turn_attempts` row
     // already says `waiting_approval`. That row is written from the ledger event
     // the DAEMON emits on entering the approval state — so in exactly the
     // situation this watchdog needs protection from (the approval was never
@@ -224,7 +223,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         //
         // Why the `updatedAt` comparison below could never have saved it — this is
         // the actual defect, and it is structural, not a tuning miss:
-        // `mesh_turn_attempts.updated_at` is a STAGE-TRANSITION timestamp, not a
+        // `turn_attempts.updated_at` is a STAGE-TRANSITION timestamp, not a
         // liveness timestamp. `generating` is written exactly once, edge-triggered
         // from agent:generating_started (mesh-event-forwarding.ts:1107); nothing
         // re-asserts it while the agent works, and there is no heartbeat column on
@@ -265,7 +264,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         }
         // CLOCK-LOWER-BOUND (2026-09-21): the freshness exemption below requires a
         // NON-NEGATIVE age. `updatedAt` is a foreign timestamp — an ISO string written
-        // into `mesh_turn_attempts` by whichever process/machine owned the turn — so it
+        // into `turn_attempts` by whichever process/machine owned the turn — so it
         // is not guaranteed to precede this daemon's `now` (clock skew between nodes, an
         // NTP step, a hand-edited/replicated row). Without a lower bound, a FUTURE
         // `updatedAt` makes `now - causalEvidenceMs` negative, the `< threshold`

@@ -20,13 +20,13 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { seedMeshAttempt, advanceSeededAttempt } from '../helpers/turn-attempt-seed.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 import {
-    insertDirectDispatch,
     getActiveDirectDispatches,
-    updateDirectDispatchStatus,
-    markStaleDirectDispatches,
-    cleanupTerminalDirectDispatches,
-    deleteDirectDispatchesByTaskId,
+    cancelDirectDispatchAttempts,
     __resetMeshRuntimeStoreForTests,
     enqueueTask,
     claimNextTask,
@@ -53,351 +53,89 @@ describe('mesh-runtime-store', () => {
         } catch { /* cleanup best-effort */ }
     });
 
-    describe('completion fingerprints', () => {
+    describe('store file migration', () => {
         it('migrates an existing beads.db file to mesh-runtime.db on first open', () => {
             const Database = runtimeRequire('better-sqlite3') as any;
             const ledgerDir = join(testConfigDir, 'mesh-ledger');
             mkdirSync(ledgerDir, { recursive: true });
             const legacyDbPath = join(ledgerDir, 'beads.db');
             const nextDbPath = join(ledgerDir, 'mesh-runtime.db');
-            const fingerprint = `legacy-fp-${randomUUID()}`;
 
             const legacyDb = new Database(legacyDbPath);
-            legacyDb.exec(`
-                CREATE TABLE mesh_completion_fingerprints (
-                    fingerprint TEXT PRIMARY KEY,
-                    expires_at INTEGER NOT NULL
-                );
-            `);
-            legacyDb.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
-                .run(fingerprint, Date.now() + 60_000);
+            legacyDb.exec(`CREATE TABLE legacy_probe (id TEXT PRIMARY KEY);`);
+            legacyDb.prepare('INSERT INTO legacy_probe (id) VALUES (?)').run('carried');
             legacyDb.close();
 
-            const db = MeshRuntimeStore.getInstance();
+            const db = MeshRuntimeStore.getInstance() as any;
             expect(existsSync(legacyDbPath)).toBe(false);
             expect(existsSync(nextDbPath)).toBe(true);
-            // The legacy row had no '::' in its fingerprint, so the isolation migration
-            // backfills mesh_id to '' — query under that scope.
-            expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
-        });
-
-        it('hasCompletionFingerprint returns false for unknown fingerprint', () => {
-            const db = MeshRuntimeStore.getInstance();
-            expect(db.hasCompletionFingerprint('mesh-x', 'unknown-fingerprint-xyz')).toBe(false);
-        });
-
-        it('recordCompletionFingerprint and hasCompletionFingerprint round-trip', () => {
-            const db = MeshRuntimeStore.getInstance();
-            const fp = `fp-valid-${randomUUID()}`;
-            db.recordCompletionFingerprint('mesh-rt', fp, 60_000); // 60s TTL — valid
-            expect(db.hasCompletionFingerprint('mesh-rt', fp)).toBe(true);
-
-            // Expired fingerprint: ttlMs = -1000 means expires_at = now - 1000 (already in the past)
-            const expiredFp = `fp-expired-${randomUUID()}`;
-            db.recordCompletionFingerprint('mesh-rt', expiredFp, -1000);
-            // The SELECT filters WHERE expires_at > now, so expired entry returns false
-            expect(db.hasCompletionFingerprint('mesh-rt', expiredFp)).toBe(false);
-        });
-
-        it('fingerprintSweepCounter clears expired entries every 100 reads', () => {
-            const db = MeshRuntimeStore.getInstance();
-            const fp = `fp-sweep-${randomUUID()}`;
-
-            // Record a fingerprint that is already expired (negative TTL)
-            db.recordCompletionFingerprint('mesh-sweep', fp, -1000);
-
-            // Call hasCompletionFingerprint 100 times.
-            // Each call: returns false (expired) but the 100th call triggers sweepExpiredFingerprints().
-            // The first 99 reads increment the counter but don't sweep.
-            // The 100th read resets the counter to 0 and runs DELETE WHERE expires_at <= now.
-            for (let i = 0; i < 100; i++) {
-                expect(db.hasCompletionFingerprint('mesh-sweep', fp)).toBe(false);
-            }
-
-            // After the sweep, the expired row is gone. Verify by recording a fresh valid fingerprint
-            // and checking a subsequent sweepExpiredFingerprints() doesn't touch it.
-            const validFp = `fp-valid-after-sweep-${randomUUID()}`;
-            db.recordCompletionFingerprint('mesh-sweep', validFp, 60_000);
-            db.sweepExpiredFingerprints();
-            expect(db.hasCompletionFingerprint('mesh-sweep', validFp)).toBe(true);
+            // The file itself moved (rows included) — C-W8 retired the fingerprint table
+            // this test used to probe with, so it probes a table of its own.
+            expect(db.db.prepare('SELECT id FROM legacy_probe').get()).toEqual({ id: 'carried' });
         });
     });
 
-    describe('insertDirectDispatch and getActiveDirectDispatches lifecycle', () => {
-        it('insert → get → update to completed lifecycle', () => {
-            const meshId = `mesh-lifecycle-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-${randomUUID()}`;
+    // C-W8: a direct dispatch IS its open `mesh_direct` turn-ledger attempt; the
+    // retired mesh_direct_dispatches table (insert / status flips / stale sweeps /
+    // deletes) and its suites are gone. These pin the read that replaced it.
+    describe('direct dispatches read off open mesh_direct attempts (C-W8)', () => {
+        const direct = (meshId: string, taskId: string, sessionId: string, stage: Parameters<typeof seedMeshAttempt>[0]['stage'] = 'delivered', nowMs?: number) =>
+            seedMeshAttempt({ meshId, taskId, sessionId, scope: 'mesh_direct', nodeId: 'node-d', providerType: 'claude-cli', stage, ...(nowMs !== undefined ? { nowMs } : {}) });
 
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                nodeId: 'node-1',
-                sessionId,
-                message: 'do something',
-                via: 'p2p',
-                dispatchedAt: new Date().toISOString(),
-            });
-
-            // Should appear in active dispatches
-            let active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].sessionId).toBe(sessionId);
-            expect(active[0].status).toBe('dispatched');
-
-            // Update to acked — still active (acked = session started generating)
-            updateDirectDispatchStatus(meshId, sessionId, 'acked');
-            active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].status).toBe('acked');
-
-            // Update to completed — no longer active
-            updateDirectDispatchStatus(meshId, sessionId, 'completed');
-            active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(0);
-        });
-    });
-
-    describe('CANON-B: updateDirectDispatchStatus taskId-targeted status flips', () => {
-        // A single session can host several sequential direct dispatches (re-dispatch / nudge).
-        // mesh_direct_dispatches is keyed by task_id (PK), but flipping status by session_id
-        // alone hits EVERY non-terminal row for the session — flipping a sibling's row and
-        // stranding the task whose event actually fired. Targeting by taskId fixes that.
-        it('flips only the matching task_id row when a taskId is given, leaving the sibling active', () => {
-            const meshId = `mesh-canonb-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-shared-${randomUUID()}`;
-            const taskA = `task-a-${randomUUID()}`;
-            const taskB = `task-b-${randomUUID()}`;
-
-            // Two dispatches to the SAME session: A dispatched earlier, B the re-dispatch.
-            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
-            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            // B's generating_started acks ONLY B; A must stay 'dispatched'.
-            updateDirectDispatchStatus(meshId, sessionId, 'acked', taskB);
-
-            const db = MeshRuntimeStore.getInstance();
-            const all = db.getActiveDirectDispatches(meshId);
-            const rowA = all.find(d => d.taskId === taskA);
-            const rowB = all.find(d => d.taskId === taskB);
-            expect(rowA?.status).toBe('dispatched');
-            expect(rowB?.status).toBe('acked');
-        });
-
-        it('completing one task_id leaves a sibling dispatch on the same session active (no collateral terminal)', () => {
-            const meshId = `mesh-canonb-complete-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-shared-${randomUUID()}`;
-            const taskA = `task-a-${randomUUID()}`;
-            const taskB = `task-b-${randomUUID()}`;
-
-            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
-            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            // A completes (echoing taskA). B is still a live dispatch and must remain active.
-            updateDirectDispatchStatus(meshId, sessionId, 'completed', taskA);
-
-            const active = getActiveDirectDispatches(meshId);
-            expect(active.map(d => d.taskId)).toContain(taskB);
-            expect(active.find(d => d.taskId === taskA)).toBeUndefined();
-        });
-
-        it('documents the bug-prone legacy path: a session-only flip (no taskId) terminates every active dispatch on the session', () => {
-            const meshId = `mesh-canonb-legacy-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-shared-${randomUUID()}`;
-            const taskA = `task-a-${randomUUID()}`;
-            const taskB = `task-b-${randomUUID()}`;
-
-            insertDirectDispatch(meshId, { taskId: taskA, sessionId, message: 'task-a', via: 'p2p', dispatchedAt: new Date(Date.now() - 1000).toISOString() });
-            insertDirectDispatch(meshId, { taskId: taskB, sessionId, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            // Legacy/relayed event with no taskId — session_id fallback flips BOTH rows. This is
-            // the hazard CANON-B avoids whenever the firing event carries a taskId.
-            updateDirectDispatchStatus(meshId, sessionId, 'completed');
-
-            expect(getActiveDirectDispatches(meshId)).toHaveLength(0);
-        });
-    });
-
-    describe('markStaleDirectDispatches', () => {
-        it('default threshold is 60 minutes: marks 61-min-old dispatched entries as stale', () => {
-            const meshId = `mesh-stale-default-${randomUUID().slice(0, 8)}`;
-            const oldSessionId = `sess-old-${randomUUID()}`;
-            const recentSessionId = `sess-recent-${randomUUID()}`;
-
-            // 61 minutes ago — should be marked stale with default 60-min threshold
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: oldSessionId,
-                message: 'old task',
-                via: 'p2p',
-                dispatchedAt: new Date(Date.now() - 61 * 60 * 1000).toISOString(),
-            });
-
-            // Mark stale with default threshold (no second argument = 60 min)
-            markStaleDirectDispatches(meshId);
-
-            // The 61-min-old entry should be excluded from active dispatches (status = 'stale')
-            const active = getActiveDirectDispatches(meshId);
-            expect(active.find(d => d.sessionId === oldSessionId)).toBeUndefined();
-
-            // 59 minutes ago — should NOT be marked stale with default 60-min threshold
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: recentSessionId,
-                message: 'recent task',
-                via: 'p2p',
-                dispatchedAt: new Date(Date.now() - 59 * 60 * 1000).toISOString(),
-            });
-
-            markStaleDirectDispatches(meshId);
-
-            const activeAfter = getActiveDirectDispatches(meshId);
-            expect(activeAfter.find(d => d.sessionId === recentSessionId)).toBeDefined();
-        });
-
-        it('does NOT mark acked dispatches as stale', () => {
-            const meshId = `mesh-stale-acked-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-acked-${randomUUID()}`;
-
-            // Insert a very old dispatch (2 hours ago)
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId,
-                message: 'acked task',
-                via: 'p2p',
-                dispatchedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-            });
-
-            // Update to acked (session started generating — not stale)
-            updateDirectDispatchStatus(meshId, sessionId, 'acked');
-
-            // markStaleDirectDispatches only targets status = 'dispatched', not 'acked'
-            markStaleDirectDispatches(meshId);
-
-            // The acked entry should still be in active dispatches
-            const active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].sessionId).toBe(sessionId);
-            expect(active[0].status).toBe('acked');
-        });
-    });
-
-    describe('cleanupTerminalDirectDispatches', () => {
-        it('removes old completed and failed entries', () => {
-            const meshId = `mesh-cleanup-${randomUUID().slice(0, 8)}`;
-            const completedSessionId = `sess-completed-${randomUUID()}`;
-            const failedSessionId = `sess-failed-${randomUUID()}`;
-
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: completedSessionId,
-                message: 'completed task',
-                via: 'p2p',
-                dispatchedAt: new Date().toISOString(),
-            });
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: failedSessionId,
-                message: 'failed task',
-                via: 'p2p',
-                dispatchedAt: new Date().toISOString(),
-            });
-
-            updateDirectDispatchStatus(meshId, completedSessionId, 'completed');
-            updateDirectDispatchStatus(meshId, failedSessionId, 'failed');
-
-            // olderThanMs = 0 means any terminal entry updated before now-0ms = now,
-            // so all terminal entries are eligible for cleanup
-            cleanupTerminalDirectDispatches(0);
-
-            // Active dispatches only shows non-terminal entries
-            const active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(0);
-
-            // Confirm via direct DB access that rows are gone
-            const db = MeshRuntimeStore.getInstance();
-            const all = db.getActiveDirectDispatches(meshId);
-            expect(all).toHaveLength(0);
-        });
-    });
-
-    describe('deleteDirectDispatchesByTaskId', () => {
-        it('deletes only the named taskIds and leaves the rest, returning the deleted count', () => {
-            const meshId = `mesh-prune-${randomUUID().slice(0, 8)}`;
+        it('lists open mesh_direct attempts with the queue message; maps pre-turn to dispatched, started to acked', () => {
+            const meshId = `mesh-dd-${randomUUID().slice(0, 8)}`;
             const t1 = randomUUID();
             const t2 = randomUUID();
-            const t3 = randomUUID();
-            insertDirectDispatch(meshId, { taskId: t1, sessionId: `s-${t1}`, message: 'orphan-1', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshId, { taskId: t2, sessionId: `s-${t2}`, message: 'orphan-2', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshId, { taskId: t3, sessionId: `s-${t3}`, message: 'keep-me', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            const deleted = deleteDirectDispatchesByTaskId(meshId, [t1, t2]);
-            expect(deleted).toBe(2);
-
+            recordDirectDispatchTask(meshId, 'first task body', { id: t1, assignedNodeId: 'node-d', assignedSessionId: 's1', taskMode: 'code_change', difficulty: 'medium' });
+            direct(meshId, t1, 's1', 'delivered', Date.now() - 1000);
+            direct(meshId, t2, 's2', 'generating');
             const active = getActiveDirectDispatches(meshId);
-            const remaining = active.map(d => d.taskId);
-            expect(remaining).toEqual([t3]);
+            expect(active.map((d) => [d.taskId, d.status])).toEqual([[t1, 'dispatched'], [t2, 'acked']]);
+            expect(active[0]).toMatchObject({ meshId, nodeId: 'node-d', sessionId: 's1', providerType: 'claude-cli', message: 'first task body', taskMode: 'code_change' });
+            // No queue row yet (the short pre-materialisation window): an empty message, never a throw.
+            expect(active[1].message).toBe('');
         });
 
-        it('is a no-op for an empty taskId list', () => {
-            const meshId = `mesh-prune-empty-${randomUUID().slice(0, 8)}`;
-            const t1 = randomUUID();
-            insertDirectDispatch(meshId, { taskId: t1, sessionId: `s-${t1}`, message: 'keep', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            expect(deleteDirectDispatchesByTaskId(meshId, [])).toBe(0);
-            expect(getActiveDirectDispatches(meshId)).toHaveLength(1);
+        it('excludes terminal attempts, non-direct scopes and other meshes', () => {
+            const meshId = `mesh-dd-${randomUUID().slice(0, 8)}`;
+            const other = `mesh-dd-${randomUUID().slice(0, 8)}`;
+            const done = direct(meshId, randomUUID(), 's-done', 'generating');
+            advanceSeededAttempt(done.attemptId, 'completed');
+            seedMeshAttempt({ meshId, taskId: randomUUID(), sessionId: 's-queue', scope: 'mesh_queue', stage: 'generating' });
+            direct(other, randomUUID(), 's-other', 'generating');
+            const keep = direct(meshId, randomUUID(), 's-keep', 'consumed');
+            expect(getActiveDirectDispatches(meshId).map((d) => d.taskId)).toEqual([keep.taskId]);
+            expect(getActiveDirectDispatches(other)).toHaveLength(1);
         });
 
-        it('does not delete rows belonging to a different mesh', () => {
-            const meshA = `mesh-a-${randomUUID().slice(0, 8)}`;
-            const meshB = `mesh-b-${randomUUID().slice(0, 8)}`;
-            const shared = randomUUID();
-            insertDirectDispatch(meshA, { taskId: shared, sessionId: `s-${shared}`, message: 'a', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshB, { taskId: randomUUID(), sessionId: `s-${randomUUID()}`, message: 'b', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            // Deleting meshA's taskId scoped to meshB must affect nothing.
-            expect(deleteDirectDispatchesByTaskId(meshB, [shared])).toBe(0);
-            expect(getActiveDirectDispatches(meshA)).toHaveLength(1);
-            expect(getActiveDirectDispatches(meshB)).toHaveLength(1);
-        });
-    });
-
-    describe('multiple dispatches per mesh', () => {
-        it('getActiveDirectDispatches returns all non-terminal entries for a mesh', () => {
-            const meshId = `mesh-multi-${randomUUID().slice(0, 8)}`;
-            const s1 = `sess-a-${randomUUID()}`;
-            const s2 = `sess-b-${randomUUID()}`;
-            const s3 = `sess-c-${randomUUID()}`;
-
-            insertDirectDispatch(meshId, { taskId: randomUUID(), sessionId: s1, message: 'task-1', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshId, { taskId: randomUUID(), sessionId: s2, message: 'task-2', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshId, { taskId: randomUUID(), sessionId: s3, message: 'task-3', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            updateDirectDispatchStatus(meshId, s3, 'completed');
-
-            const active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(2);
-            const sessionIds = active.map(d => d.sessionId);
-            expect(sessionIds).toContain(s1);
-            expect(sessionIds).toContain(s2);
-            expect(sessionIds).not.toContain(s3);
+        it('resolves the ONE active direct task a session holds (taskId-less event fallback)', () => {
+            const meshId = `mesh-dd-${randomUUID().slice(0, 8)}`;
+            const a = direct(meshId, randomUUID(), 's-sole', 'generating');
+            const store = MeshRuntimeStore.getInstance();
+            expect(store.getSoleActiveDirectDispatchTaskId(meshId, 's-sole')).toBe(a.taskId);
+            expect(store.getSoleActiveDirectDispatchTaskId(meshId, 's-none')).toBeNull();
+            advanceSeededAttempt(a.attemptId, 'cancelled');
+            expect(store.getSoleActiveDirectDispatchTaskId(meshId, 's-sole')).toBeNull();
         });
 
-        it('dispatches for different meshes do not interfere', () => {
-            const meshA = `mesh-a-${randomUUID().slice(0, 8)}`;
-            const meshB = `mesh-b-${randomUUID().slice(0, 8)}`;
-            const sA = `sess-a-${randomUUID()}`;
-            const sB = `sess-b-${randomUUID()}`;
-
-            insertDirectDispatch(meshA, { taskId: randomUUID(), sessionId: sA, message: 'task-a', via: 'p2p', dispatchedAt: new Date().toISOString() });
-            insertDirectDispatch(meshB, { taskId: randomUUID(), sessionId: sB, message: 'task-b', via: 'p2p', dispatchedAt: new Date().toISOString() });
-
-            const activeA = getActiveDirectDispatches(meshA);
-            const activeB = getActiveDirectDispatches(meshB);
-
-            expect(activeA).toHaveLength(1);
-            expect(activeA[0].sessionId).toBe(sA);
-
-            expect(activeB).toHaveLength(1);
-            expect(activeB[0].sessionId).toBe(sB);
+        it('cancelDirectDispatchAttempts closes the attempt on this process\'s ledger (no ledger → 0)', () => {
+            const meshId = `mesh-dd-${randomUUID().slice(0, 8)}`;
+            const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher() });
+            const taskId = randomUUID();
+            ledger.observe({
+                eventId: `open-${taskId}`, at: Date.now(), source: 'dispatch', sessionId: 's-c', taskId, observedBy: 'dc',
+                kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: taskId, meshId, nodeId: 'node-d',
+            } as any);
+            expect(getActiveDirectDispatches(meshId).map((d) => d.taskId)).toEqual([taskId]);
+            expect(cancelDirectDispatchAttempts(meshId, [taskId])).toBe(0); // no ledger bound
+            setActiveTurnLedger(ledger);
+            try {
+                expect(cancelDirectDispatchAttempts(meshId, [taskId])).toBe(1);
+                expect(getActiveDirectDispatches(meshId)).toHaveLength(0);
+                expect(cancelDirectDispatchAttempts(meshId, [taskId])).toBe(0); // idempotent
+            } finally {
+                setActiveTurnLedger(null);
+            }
         });
     });
 
@@ -1059,220 +797,6 @@ describe('mesh-runtime-store', () => {
         });
     });
 
-    // ── Phase A0: Direct Dispatch / Delivery Baseline Tests ─────────────────
-    // These tests fix the existing happy-path behavior and confirm key invariants
-    // for stale-direct-work separation and duplicate completion dedup.
-
-    describe('Phase A0: direct dispatch delivery baseline', () => {
-        afterEach(() => {
-            __resetMeshRuntimeStoreForTests();
-        });
-
-        it('A0.1 — idle direct dispatch reaches dispatched → acked → completed', () => {
-            const meshId = `mesh-a0-happy-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-a0-${randomUUID().slice(0, 8)}`;
-
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId,
-                message: 'task for idle session',
-                via: 'local_direct',
-                dispatchedAt: new Date().toISOString(),
-                dispatchedToIdleSession: true,
-            });
-
-            let active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].status).toBe('dispatched');
-            expect(active[0].dispatchedToIdleSession).toBe(true);
-
-            updateDirectDispatchStatus(meshId, sessionId, 'acked');
-            active = getActiveDirectDispatches(meshId);
-            expect(active[0].status).toBe('acked');
-
-            updateDirectDispatchStatus(meshId, sessionId, 'completed');
-            active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(0);
-        });
-
-        it('A0.2 — stale direct dispatch (61 min old) is marked stale and excluded from active', () => {
-            const meshId = `mesh-a0-stale-${randomUUID().slice(0, 8)}`;
-            const staleId = `sess-stale-${randomUUID().slice(0, 8)}`;
-            const freshId = `sess-fresh-${randomUUID().slice(0, 8)}`;
-
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: staleId,
-                message: 'old task',
-                via: 'local_direct',
-                dispatchedAt: new Date(Date.now() - 61 * 60 * 1000).toISOString(),
-            });
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: freshId,
-                message: 'fresh task',
-                via: 'local_direct',
-                dispatchedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-            });
-
-            markStaleDirectDispatches(meshId);
-
-            const active = getActiveDirectDispatches(meshId);
-            // Stale entry should be excluded from active (status = 'stale')
-            expect(active.find(d => d.sessionId === staleId)).toBeUndefined();
-            // Fresh entry should still be active
-            expect(active.find(d => d.sessionId === freshId)).toBeDefined();
-        });
-
-        it('A0.3 — stale direct dispatch does NOT mix into active queue count', () => {
-            const meshId = `mesh-a0-count-${randomUUID().slice(0, 8)}`;
-            const staleId = `sess-stale-count-${randomUUID().slice(0, 8)}`;
-
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId: staleId,
-                message: 'stale work',
-                via: 'local_direct',
-                dispatchedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
-            });
-
-            markStaleDirectDispatches(meshId);
-
-            // Stale dispatch should not appear in active dispatches
-            const active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(0);
-        });
-
-        it('A0.4 — duplicate completion for same session does not create second active entry', () => {
-            const meshId = `mesh-a0-dedup-${randomUUID().slice(0, 8)}`;
-            const sessionId = `sess-dedup-${randomUUID().slice(0, 8)}`;
-
-            insertDirectDispatch(meshId, {
-                taskId: randomUUID(),
-                sessionId,
-                message: 'dedup task',
-                via: 'local_direct',
-                dispatchedAt: new Date().toISOString(),
-            });
-
-            // First completion
-            updateDirectDispatchStatus(meshId, sessionId, 'completed');
-            // Second completion attempt (same session) — must not re-activate
-            updateDirectDispatchStatus(meshId, sessionId, 'completed');
-
-            const active = getActiveDirectDispatches(meshId);
-            expect(active).toHaveLength(0);
-        });
-    });
-
-    // ── Phase A1: session_delivery table tests ───────────────────────────────
-
-    describe('Phase A1: mesh_session_delivery table', () => {
-        afterEach(() => {
-            __resetMeshRuntimeStoreForTests();
-        });
-
-        it('insertSessionDelivery persists and getActiveSessionDeliveries returns it', () => {
-            const meshId = `mesh-sdel-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const now = new Date().toISOString();
-            db.insertSessionDelivery({
-                id,
-                meshId,
-                nodeId: 'node-1',
-                sessionId: 'sess-1',
-                providerType: 'claude-cli',
-                taskId: randomUUID(),
-                kind: 'task',
-                priority: 1,
-                message: 'delivery message',
-                status: 'queued',
-                createdAt: now,
-                updatedAt: now,
-            });
-
-            const active = db.getActiveSessionDeliveries(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].id).toBe(id);
-            expect(active[0].status).toBe('queued');
-            expect(active[0].sessionId).toBe('sess-1');
-        });
-
-        it('MESH-DELIVERY-MESSAGE-NOTNULL: an undefined message does not throw and stores as empty string', () => {
-            // A re-dispatch / reclaim / idle-assign path can reach insertSessionDelivery with an
-            // undefined message (a claimed task whose payload predates the message field). The
-            // `message` column is NOT NULL, so a bare bind threw 'NOT NULL constraint failed' —
-            // and because this insert runs inside triggerMeshQueue it took down the entire queue
-            // drain (fresh enqueue, pending-claim recovery, idle-assign, MAGI replica launch),
-            // stranding all delegation. The insert must coerce an absent message to '' and persist.
-            const meshId = `mesh-sdel-nomsg-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const now = new Date().toISOString();
-            expect(() => db.insertSessionDelivery({
-                id,
-                meshId,
-                kind: 'task',
-                // message intentionally omitted — undefined at the call site.
-                message: undefined as unknown as string,
-                status: 'queued',
-                createdAt: now,
-                updatedAt: now,
-            })).not.toThrow();
-
-            const active = db.getActiveSessionDeliveries(meshId);
-            expect(active).toHaveLength(1);
-            expect(active[0].id).toBe(id);
-            expect(active[0].message).toBe('');
-        });
-
-        it('updateSessionDeliveryStatus transitions to terminal and removes from active list', () => {
-            const meshId = `mesh-sdel-update-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const now = new Date().toISOString();
-            db.insertSessionDelivery({ id, meshId, kind: 'task', message: 'msg', status: 'queued', createdAt: now, updatedAt: now });
-
-            db.updateSessionDeliveryStatus(id, 'completed');
-
-            const active = db.getActiveSessionDeliveries(meshId);
-            expect(active).toHaveLength(0);
-        });
-
-        it('expired deliveries do not appear in active list', () => {
-            const meshId = `mesh-sdel-expire-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const now = new Date().toISOString();
-            const alreadyExpired = new Date(Date.now() - 1000).toISOString();
-            db.insertSessionDelivery({ id, meshId, kind: 'task', message: 'expired', status: 'queued', expiresAt: alreadyExpired, createdAt: now, updatedAt: now });
-
-            const active = db.getActiveSessionDeliveries(meshId);
-            expect(active.find(d => d.id === id)).toBeUndefined();
-        });
-
-        it('delivery for different mesh does not appear in other mesh active list', () => {
-            const meshA = `mesh-sdel-a-${randomUUID().slice(0, 8)}`;
-            const meshB = `mesh-sdel-b-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const now = new Date().toISOString();
-            db.insertSessionDelivery({ id: randomUUID(), meshId: meshA, kind: 'task', message: 'a', status: 'queued', createdAt: now, updatedAt: now });
-            db.insertSessionDelivery({ id: randomUUID(), meshId: meshB, kind: 'task', message: 'b', status: 'queued', createdAt: now, updatedAt: now });
-
-            expect(db.getActiveSessionDeliveries(meshA)).toHaveLength(1);
-            expect(db.getActiveSessionDeliveries(meshB)).toHaveLength(1);
-        });
-    });
-
-    // MESH-COMPLEXITY-AUDIT Part 8-2: the Phase A6 mesh_completion_conflicts
-    // table tests were removed with the table. It was a write-only fingerprint-
-    // collision diagnostic with no production reader and no no-loss role; the
-    // dedup DECISION it observed is covered by the completion-dedup tests and is
-    // unchanged. The table is now dropped in migrateMeshIsolationColumns step 6.
-
-    // ── Phase E1: queue retry cap ────────────────────────────────────────────
-
     describe('Phase E1: queue retry cap', () => {
         afterEach(() => {
             __resetMeshRuntimeStoreForTests();
@@ -1504,7 +1028,7 @@ describe('mesh-runtime-store', () => {
             const db = MeshRuntimeStore.getInstance() as any;
             const walBefore = db.walWriteCounter;
             const toolBefore = db.toolCallLogCounter;
-            db.recordCompletionFingerprint('mesh-wal', `fp-f3-${randomUUID()}`, 60_000); // calls maybeCheckpointWal
+            db.insertQueueEntry({ id: `t-f3-${randomUUID()}`, meshId: 'mesh-wal', message: 'm', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); // calls maybeCheckpointWal
             expect(db.walWriteCounter).toBe(walBefore + 1);      // WAL counter advanced
             expect(db.toolCallLogCounter).toBe(toolBefore);      // tool-log cadence untouched
         });
@@ -1565,164 +1089,6 @@ describe('mesh-runtime-store', () => {
             expect(rows.some(s => s.sessionId === 'sess-stuck')).toBe(false)
         })
 
-        it('mesh_completion_fingerprints: a completion in mesh A does NOT suppress dedup in mesh B', () => {
-            const db = MeshRuntimeStore.getInstance();
-            // Same fingerprint body recorded under mesh A only.
-            const fp = `${MESH_A}::agent:generating_completed::sess-x::claude-cli::ps-1::9000::`;
-            db.recordCompletionFingerprint(MESH_A, fp, 60_000);
-
-            // Mesh A sees it (its own dedup gate fires)...
-            expect(db.hasCompletionFingerprint(MESH_A, fp)).toBe(true);
-            // ...but mesh B must NOT: a cross-mesh suppression would drop mesh B's real
-            // completion notification (a completion-loss class bug).
-            expect(db.hasCompletionFingerprint(MESH_B, fp)).toBe(false);
-        });
-
-        it('legacy fingerprints (no mesh_id) backfill mesh_id from the \'::\'-prefixed fingerprint string', () => {
-            const Database = runtimeRequire('better-sqlite3') as any;
-            const ledgerDir = join(testConfigDir, 'mesh-ledger');
-            mkdirSync(ledgerDir, { recursive: true });
-            const dbPath = join(ledgerDir, 'mesh-runtime.db');
-            const fp = `${MESH_A}::agent:ready::sess-legacy::claude-cli::::8000::`;
-
-            // Pre-isolation schema: mesh_completion_fingerprints WITHOUT mesh_id.
-            const legacy = new Database(dbPath);
-            legacy.exec(`
-                CREATE TABLE mesh_completion_fingerprints (
-                    fingerprint TEXT PRIMARY KEY,
-                    expires_at INTEGER NOT NULL
-                );
-            `);
-            legacy.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
-                .run(fp, Date.now() + 60_000);
-            legacy.close();
-
-            // Opening the store runs migrateMeshIsolationColumns → ADD COLUMN + backfill.
-            const db = MeshRuntimeStore.getInstance();
-            // Backfilled mesh_id == the fingerprint's first '::' segment == MESH_A.
-            expect(db.hasCompletionFingerprint(MESH_A, fp)).toBe(true);
-            // And it is NOT visible to a different mesh.
-            expect(db.hasCompletionFingerprint(MESH_B, fp)).toBe(false);
-        });
-    });
-
-    // R2 / NOTIF-DROP: a mission-attributed DIRECT dispatch (mesh_send_task) must record
-    // a confirmed delivery so the assigned-stranded watchdog does not reclaim a task the
-    // worker already completed and drop its completion notification. Live PROBE-B repro:
-    // the second direct dispatch to a reused session was reclaimed "never confirmed
-    // delivered → pending" after 5 min, dropping agent:generating_completed.
-    describe('direct dispatch confirmed delivery (NOTIF-DROP / R2)', () => {
-        const MESH = 'mesh_direct_delivery';
-        const MISSION = 'mission_xyz';
-
-        beforeEach(() => {
-            __resetMeshRuntimeStoreForTests();
-            __clearMeshQueueForTests(MESH);
-        });
-
-        it('recordDirectDispatchTask materialises a confirmed delivery → taskHasConfirmedDelivery is true', () => {
-            const taskId = randomUUID();
-            const entry = recordDirectDispatchTask(MESH, 'echo probe', {
-                id: taskId,
-                missionId: MISSION,
-                assignedNodeId: 'node_w',
-                assignedSessionId: 'sess_w',
-                dispatchedAt: new Date().toISOString(),
-                difficulty: 'medium',
-            });
-            expect(entry).not.toBeNull();
-            expect(entry?.status).toBe('assigned');
-            // The watchdog gate: a confirmed delivery row keyed by this taskId must exist,
-            // otherwise recoverStrandedAssignedDispatches reclaims the completed task.
-            const store = MeshRuntimeStore.getInstance();
-            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
-        });
-
-        it('records a confirmed delivery even with no missionId (redrive protection)', () => {
-            // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: this previously asserted the
-            // opposite — no missionId meant no delivery row, so
-            // recoverStrandedAssignedDispatches could reclaim and REDRIVE a task the
-            // worker had already completed. Redrive protection must not depend on
-            // whether the caller supplied a mission.
-            const taskId = randomUUID();
-            const entry = recordDirectDispatchTask(MESH, 'echo probe', {
-                id: taskId,
-                missionId: '',
-                assignedNodeId: 'node_w',
-                assignedSessionId: 'sess_w',
-                difficulty: 'medium',
-            });
-            expect(entry).not.toBeNull();
-            const store = MeshRuntimeStore.getInstance();
-            expect(store.taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
-        });
-    });
-
-    // T2 (B2b): acked-hold persistence accessors (mesh_inflight_hold table).
-    describe('inflight-hold accessors (T2 / B2b)', () => {
-        it('upsert then get round-trips every field', () => {
-            const store = MeshRuntimeStore.getInstance();
-            store.upsertInflightHold({
-                taskId: 'task-hold-1',
-                meshId: 'mesh-hold',
-                holdReason: 'live',
-                firstIdleSinceAck: 1_700_000_000_000,
-                readFailureCount: 2,
-            });
-            const row = store.getInflightHold('task-hold-1');
-            expect(row).toBeTruthy();
-            expect(row?.taskId).toBe('task-hold-1');
-            expect(row?.meshId).toBe('mesh-hold');
-            expect(row?.holdReason).toBe('live');
-            expect(row?.firstIdleSinceAck).toBe(1_700_000_000_000);
-            expect(row?.readFailureCount).toBe(2);
-            expect(typeof row?.heldAt).toBe('number');
-            expect(typeof row?.updatedAt).toBe('number');
-        });
-
-        it('getInflightHold returns null for an unknown task', () => {
-            expect(MeshRuntimeStore.getInstance().getInflightHold('never-held')).toBeNull();
-        });
-
-        it('upsert preserves held_at but overwrites the mutable fields on conflict', () => {
-            const store = MeshRuntimeStore.getInstance();
-            store.upsertInflightHold({ taskId: 't-conflict', meshId: 'm', holdReason: 'unconfirmed', readFailureCount: 1 });
-            const first = store.getInflightHold('t-conflict');
-            const heldAt = first!.heldAt;
-            expect(first?.holdReason).toBe('unconfirmed');
-            // Re-upsert with new state — held_at is immutable, the rest is overwritten.
-            store.upsertInflightHold({ taskId: 't-conflict', meshId: 'm', holdReason: 'live', firstIdleSinceAck: 42, readFailureCount: 0 });
-            const second = store.getInflightHold('t-conflict');
-            expect(second?.heldAt).toBe(heldAt); // preserved
-            expect(second?.holdReason).toBe('live'); // overwritten
-            expect(second?.firstIdleSinceAck).toBe(42);
-            expect(second?.readFailureCount).toBe(0);
-        });
-
-        it('firstIdleSinceAck round-trips NULL when omitted (streak not anchored)', () => {
-            const store = MeshRuntimeStore.getInstance();
-            store.upsertInflightHold({ taskId: 't-null-idle', meshId: 'm', holdReason: 'live', readFailureCount: 0 });
-            expect(store.getInflightHold('t-null-idle')?.firstIdleSinceAck).toBeNull();
-        });
-
-        it('listInflightHoldsByMesh returns only the given mesh rows', () => {
-            const store = MeshRuntimeStore.getInstance();
-            store.upsertInflightHold({ taskId: 'a', meshId: 'mesh-A', holdReason: 'live', readFailureCount: 0 });
-            store.upsertInflightHold({ taskId: 'b', meshId: 'mesh-A', holdReason: 'live', readFailureCount: 0 });
-            store.upsertInflightHold({ taskId: 'c', meshId: 'mesh-B', holdReason: 'live', readFailureCount: 0 });
-            const a = store.listInflightHoldsByMesh('mesh-A').map(r => r.taskId).sort();
-            expect(a).toEqual(['a', 'b']);
-            expect(store.listInflightHoldsByMesh('mesh-B').map(r => r.taskId)).toEqual(['c']);
-            expect(store.listInflightHoldsByMesh('mesh-none')).toEqual([]);
-        });
-
-        it('deleteInflightHold removes the row', () => {
-            const store = MeshRuntimeStore.getInstance();
-            store.upsertInflightHold({ taskId: 't-del', meshId: 'm', holdReason: 'live', readFailureCount: 0 });
-            expect(store.getInflightHold('t-del')).toBeTruthy();
-            store.deleteInflightHold('t-del');
-            expect(store.getInflightHold('t-del')).toBeNull();
-        });
     });
 
     // ── MESH-COMPLEXITY-AUDIT Part 8-1: legacy mesh_direct_delivered_events DROP ──
@@ -1927,7 +1293,7 @@ describe('mesh-runtime-store', () => {
 
         it('never deletes the canonical mesh-ledger store file', () => {
             const db = MeshRuntimeStore.getInstance();
-            db.recordCompletionFingerprint('mesh-canonical', `fp-${randomUUID()}`, 60_000);
+            db.insertQueueEntry({ id: `t-canon-${randomUUID()}`, meshId: 'mesh-canonical', message: 'm', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } as any);
             const canonicalPath = join(testConfigDir, 'mesh-ledger', 'mesh-runtime.db');
             expect(existsSync(canonicalPath)).toBe(true);
             // Re-resolve the path (which runs cleanup) by re-opening a fresh instance.

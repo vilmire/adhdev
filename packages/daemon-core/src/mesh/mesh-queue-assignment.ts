@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { getMachineId } from '../config/config.js';
@@ -7,7 +8,6 @@ import { appendLedgerEntry } from './mesh-ledger.js';
 import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, getQueueHeads, requeueTask, applyDispatchFailureBackoff } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
-import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-trace.js';
@@ -571,18 +571,11 @@ function deliverTaskToSession(
     ctx: DeliverTaskContext,
     warmup?: { daemonId: string; getConnection?: (daemonId: string) => Record<string, unknown> | null },
 ): void {
-    const delivery = createSessionDelivery({
-        meshId: ctx.meshId,
-        nodeId: ctx.nodeId,
-        sessionId: ctx.sessionId,
-        providerType: ctx.providerType,
-        taskId: ctx.task.id,
-        kind: 'task',
-        message: ctx.task.message,
-        status: 'delivering',
-        ...(ctx.sourceCoordinatorSessionId ? { sourceCoordinatorSessionId: ctx.sourceCoordinatorSessionId } : {}),
-        ...(ctx.sourceCoordinatorDaemonId ? { sourceCoordinatorDaemonId: ctx.sourceCoordinatorDaemonId } : {}),
-    });
+    // C-W8: the delivery lifecycle lives on the turn ledger attempt (`delivered`
+    // / `duplicate_dispatch_refusal` / `dispatch_failed` evidence below); the
+    // legacy session-delivery table row is retired. The id survives only as
+    // this dispatch's correlation key (evidence event ids, ledger payloads).
+    const delivery = { id: `dlv-${randomUUID()}` };
 
     // LEDGER-TASK-TRACEABILITY (A): record the dispatch — the single funnel every
     // queue-claim dispatch (local + remote) flows through — so mesh_task_history and the
@@ -633,7 +626,6 @@ function deliverTaskToSession(
     guarded.then((res: any) => {
         if (timer) clearTimeout(timer);
         const isQueued = res && typeof res === 'object' && res.status === 'queued';
-        updateSessionDeliveryStatus(delivery.id, isQueued ? 'queued' : 'delivered');
         // TURN-LEDGER (C2): the transport confirm IS the delivered evidence (R2
         // binds the attempt to this session and arms await_consume / await_turn).
         // A QUEUED result is a positive receipt too — the adapter buffered the
@@ -678,10 +670,6 @@ function deliverTaskToSession(
             // live session is ALREADY working this exact task — the prompt was taken
             // up. Not a dispatch failure: the task stays assigned.
             LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned${ctx.attemptRef ? `; attempt ${ctx.attemptRef.attemptId} rebinds to that session` : ''}.`);
-            // DUP-REFUSAL-IS-CONSUMPTION (delivery-row half): 'acked', not 'delivered'
-            // — the two CONSUMED statuses are acked/completed, and 'delivered' is one
-            // rank short of proving the consumption this refusal already proved.
-            updateSessionDeliveryStatus(delivery.id, 'acked');
             // DUP-REFUSAL-IS-CONSUMPTION (attempt half, C2): duplicate_dispatch_refusal
             // naming THIS attempt as the holder → R25 rebinds the attempt to the
             // holder session AND marks it consumed in one reducer step (the old
@@ -719,7 +707,6 @@ function deliverTaskToSession(
         // tick delivers fine. Return it to 'pending' and record a retryable dispatch_failed
         // ledger entry so the reconcile loop re-dispatches it. Identical for both transports.
         LOG.error('MeshQueue', `Failed to dispatch task via ${ctx.transport} to node ${ctx.nodeId}: ${e?.message}`);
-        updateSessionDeliveryStatus(delivery.id, 'failed', { lastError: e?.message, incrementAttempt: true });
         // The dispatch failed — the task is no longer in-flight (it returns to pending
         // for a clean re-dispatch). Clear the single-flight mark so a legitimate
         // requeue/re-claim is not blocked as if a worker were still generating.
@@ -1350,6 +1337,12 @@ export function tryAssignQueueTask(
                     // (mesh-tools-session mesh_send_task). Spread conditionally so a
                     // text-only task sends the byte-identical payload it always did.
                     ...(task.input ? { input: task.input } : {}),
+                    // D2 (SessionInputService): the dispatch's stable identity — the turn
+                    // ledger's `task:<id>:n<nonce>` — so a same-nonce redelivery is ONE
+                    // message to the worker's funnel; always queued behind a busy turn.
+                    messageId: dispatchMessageId(task),
+                    policy: { mode: 'queue' },
+                    origin: 'mesh',
                     // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
                     dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:remote',
                     meshContext: {
@@ -1455,6 +1448,10 @@ export function tryAssignQueueTask(
             message: dispatchMessage,
             // MESH-IMAGE-DISPATCH: same envelope forwarding as the remote arm.
             ...(task.input ? { input: task.input } : {}),
+            // D2: same dispatch identity + policy as the remote arm.
+            messageId: dispatchMessageId(task),
+            policy: { mode: 'queue' },
+            origin: 'mesh',
             // DISPATCH-SOURCE-TRACE: call-site tag echoed in the daemon log.
             dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:local',
             meshContext: {

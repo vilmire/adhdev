@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isNoteExpired,
   OPERATING_NOTE_CATEGORY_TTL_DAYS,
-} from '../../src/mesh/mesh-ledger.js'
+} from '../../src/mesh/mesh-operating-notes.js'
 import {
   selectOperatingNotesForPrompt,
   buildCoordinatorSystemPrompt,

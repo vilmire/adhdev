@@ -77,6 +77,16 @@ describe('CliProviderInstance recordAcknowledgedUserInput dedup', () => {
     expect(withoutId.message.meta.sourceMessageId).toBeUndefined()
   })
 
+  it('D2: keyed by messageId when present — same text under two ids is two turns; the same id twice is one', () => {
+    const instance = makeInstance()
+    instance.recordAcknowledgedUserInput('continue', 'msg_one')
+    instance.recordAcknowledgedUserInput('continue', 'msg_two')
+    instance.recordAcknowledgedUserInput('continue', 'msg_two')
+    const bubbles = userBubbles(instance)
+    expect(bubbles).toHaveLength(2)
+    expect(bubbles.map((b) => b.message.meta.sourceMessageId)).toEqual(['msg_one', 'msg_two'])
+  })
+
   it('records distinct bubbles for distinct content within the window', () => {
     const instance = makeInstance()
 

@@ -19,24 +19,22 @@ import { resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch'
 import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
+import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
 
-// Own mesh id per test: mesh_turn_events is process-wide and INSERT OR IGNORE
-// keyed on (attempt_id, kind, dedupe_key) — see worker-handoff-notes.test.ts.
+// Own mesh id per test: the handoff index (`turn_events`) is process-wide and
+// INSERT OR IGNORE — see worker-handoff-notes.test.ts.
 let MESH = 'mesh_dispatch_footer'
 let meshSeq = 0
 
 function seedNote(taskId: string, files: string[], intent: string): void {
   const recordedAtIso = new Date().toISOString()
-  MeshRuntimeStore.getInstance().insertTurnEvent({
+  seedWorkerEvent({
     eventId: `evt-${MESH}-${taskId}`,
     meshId: MESH,
     attemptId: `attempt-${MESH}-${taskId}`,
     taskId,
     kind: WORKER_HANDOFF_EVENT_KIND,
-    dedupeKey: '',
-    payload: JSON.stringify({ touchedFiles: files, intentLength: intent.length, hasConflictGuidance: false, followUpCount: 0 }),
-    occurredAtMs: Date.now(),
-    recordedAt: recordedAtIso,
+    payload: { touchedFiles: files, intentLength: intent.length, hasConflictGuidance: false, followUpCount: 0 },
   })
   storeHandoffNote({
     meshId: MESH,

@@ -28,7 +28,6 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
-import * as legacyTurnLedger from '../../src/mesh/mesh-turn-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
@@ -61,7 +60,6 @@ describe('runtime ledger over mesh-runtime.db', () => {
     it('a worker report commits the attempt AND the queue row + output version in one txn, without the legacy reducer', () => {
         const mesh = meshId();
         try {
-            const spy = vi.spyOn(legacyTurnLedger, 'proposeTurnCompletion');
             const { task, store, ledger, ref } = setup(mesh);
             const result = ledger.observe(
                 evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { ...ref, source: 'worker_tool' }),
@@ -73,7 +71,6 @@ describe('runtime ledger over mesh-runtime.db', () => {
             expect(output).toMatchObject({ version: 1, attempt: 1, status: 'completed' });
             expect(JSON.parse(output!.envelopeJson)).toMatchObject({ worker_result: { decision: 'ok' } });
             expect(store.turnStore().listEvents(ref.attemptRef.attemptId).filter((e) => e.kind === 'committed')).toHaveLength(1);
-            expect(spy).not.toHaveBeenCalled();
         } finally {
             __clearMeshQueueForTests(mesh);
         }
@@ -111,20 +108,26 @@ describe('runtime ledger over mesh-runtime.db', () => {
     });
 });
 
-describe('boot migration on the live store (C integration)', () => {
-    it('leaves the migrating boot with the legacy tables recreated EMPTY — the state every later open has — so remaining legacy writers do not throw until a restart', () => {
+describe('boot migration on the live store (C integration, C-W8 v2)', () => {
+    it('v1 recreates only the still-live event ledger; v2 then drops every retired legacy table for good (user_version 2)', () => {
         const mesh = meshId();
         const store = MeshRuntimeStore.getInstance();
+        const exists = (t: string) => !!store.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
         const report = store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null });
         expect(report.skipped).toBe(false);
-        expect(report.droppedTables).toEqual(expect.arrayContaining(['mesh_session_delivery', 'mesh_event_ledger']));
-        const exists = (t: string) => !!store.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
-        expect(exists('mesh_session_delivery')).toBe(true);
+        // The event ledger's writers are still live, so this boot gets it back EMPTY…
         expect(exists('mesh_event_ledger')).toBe(true);
-        // A remaining writer works in the same boot.
         store.appendLedgerEntry({ id: randomUUID(), meshId: mesh, timestamp: new Date().toISOString(), kind: 'task_dispatched' });
         expect(store.readLedgerEntriesOrdered(mesh)).toHaveLength(1);
-        // Idempotent: the second run is a no-op at user_version 1.
+        // …while the tables whose writers C-W8 retired are no longer created at all.
+        for (const t of ['mesh_session_delivery', 'mesh_direct_dispatches', 'mesh_turn_attempts', 'mesh_pending_events', 'mesh_inflight_hold', 'mesh_completion_fingerprints']) {
+            expect(exists(t), t).toBe(false);
+        }
+        // Idempotent: v1 is a no-op at user_version ≥ 1.
         expect(store.runTurnLedgerMigrationV1({ ownerDaemonId: 'dc', exportPath: null }).skipped).toBe(true);
+        const v2 = store.runTurnLedgerMigrationV2({ exportPath: null });
+        expect(v2.skipped).toBe(false);
+        expect(store.db.pragma('user_version', { simple: true })).toBe(2);
+        expect(store.runTurnLedgerMigrationV2({ exportPath: null }).skipped).toBe(true);
     });
 });

@@ -335,7 +335,7 @@ export { loadRepoSettings } from './config/repo-settings.js';
 export type { RepoSettings, LoadRepoSettingsOptions } from './config/repo-settings.js';
 
 // ── Mesh Task Ledger ──
-export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, isIntentionalCleanupStopEntry, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT, tombstoneOperatingNote, readOperatingNotes, pruneOperatingNotes, isOperatingNoteTombstoned, OPERATING_NOTE_KIND, OPERATING_NOTE_TOMBSTONE_KIND, OPERATING_NOTE_DEDUPE_WINDOW, OPERATING_NOTE_KEEP_LATEST } from './mesh/mesh-ledger.js';
+export { appendLedgerEntry, appendRemoteLedgerEntries, buildTaskCompletionEvidence, isIntentionalCleanupStopEntry, normalizeMeshWorkerResult, readLedgerEntries, readLedgerSlice, readLedgerSliceFromStore, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, ledgerEntryTaskId, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
 export { isMeshTestPollution, isSyntheticTestMeshId, isSyntheticTestCoordinatorSession } from './mesh/mesh-test-pollution.js';
 export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext, MeshTaskCompletionEvidence, MeshWorkerResultArtifact, MeshProcessArtifact, MeshValidationResultArtifact } from './mesh/mesh-ledger.js';
 export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, MAX_SESSIONS_PER_MESH, USAGE_MAX_AGE_MS } from './mesh/mesh-usage-store.js';
@@ -359,7 +359,7 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, terminalizeSiblingDispatch, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
+export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, getActiveDirectDispatches, terminalizeSiblingDispatch, cancelDirectDispatchAttempts, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
@@ -532,7 +532,7 @@ export { buildMeshHostRequiredFailure, createDefaultMeshHostMetadata, isMeshHost
 // Wiring-unification C-W3: the pending-events queue and its drains are gone —
 // coordinator notices are `turn.notify` entries delivered by the turn.deliver
 // cursor; an MCP-only coordinator reads them over IPC (`get_pending_mesh_events`).
-export { triggerMeshQueue, queuePendingMeshCoordinatorEvent, notifyMeshCoordinator } from './mesh/mesh-events.js';
+export { triggerMeshQueue, notifyMeshCoordinator } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 export {
   createCoordinatorNotifier,
@@ -596,11 +596,11 @@ export type { CoordinatorIdentity } from './mesh/contracts.js';
 export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary, isWeakCompletionEvidence } from './mesh/mesh-events-utils.js';
 
 // ── Mesh Delivery Policy ──
-export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE } from './mesh/mesh-delivery-policy.js';
+export { resolveDeliveryDecision, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE } from './mesh/mesh-delivery-policy.js';
 export type { MeshDeliveryMode } from './mesh/mesh-delivery-policy.js';
 export { resolveInterruptCapability, CTRL_C, ESC, STOP_CONTROL_ID } from './providers/spec/interrupt-capability.js';
 export type { InterruptCapability, InterruptUnsupportedReason } from './providers/spec/interrupt-capability.js';
-export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';
+export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult } from './mesh/mesh-delivery-policy.js';
 
 // ── Mesh P2P Relay Failure Classification ──
 export {
@@ -1236,6 +1236,27 @@ export { TURN_LEDGER_SCHEMA_VERSION, LEGACY_TURN_TABLES } from './mesh/turn-ledg
 export { projectTurnWireEvent, turnWireEventName, TURN_WIRE_EVENT_NAMES, type TurnWireEvent } from './mesh/turn-ledger/bus-projection.js';
 export type { TurnLedgerPorts, TurnTxnHost, CancelDispatchRequest, TurnCompletionEnvelope } from './mesh/turn-ledger/effects.js';
 export { createMeshRuntimeTurnLedger } from './mesh/turn-ledger/runtime-ledger.js';
+export { migrateTurnLedgerV2, formatTurnLedgerMigrationV2Line, V2_RETIRED_TABLES, type TurnLedgerMigrationV2Report } from './mesh/turn-ledger/migrate-v2.js';
+// C-W8: the process's active ledger slot + the daemon-side turn IPC responders
+// (an mcp-server test process arms an in-process ledger and answers its fake
+// transport's turn_observe / turn_cancel through the real handlers).
+export { getActiveTurnLedger } from './mesh/turn-ledger/active-ledger.js';
+export { setActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from './commands/low-family/turn-ledger-ipc.js';
+// C-W8: operating notes on mesh_operating_notes (the ledger no longer holds them).
+export {
+  readOperatingNotes,
+  recordOperatingNote,
+  forgetOperatingNote,
+  pruneOperatingNotes,
+  isNoteExpired,
+  resolveNoteExpiry,
+  OPERATING_NOTE_KIND,
+  OPERATING_NOTE_DEDUPE_WINDOW,
+  OPERATING_NOTE_KEEP_LATEST,
+  OPERATING_NOTE_CATEGORY_TTL_DAYS,
+  type OperatingNoteEntry,
+  type RecordOperatingNoteInput,
+} from './mesh/mesh-operating-notes.js';
 // C4 (C-W4): the one turn-lifecycle timer — started by boot/stages/loops.ts.
 export {
   createTurnScheduler,
@@ -1453,3 +1474,6 @@ export type { LifecycleTraceLog } from './sessions/lifecycle-trace.js';
 // (hosts forwarding a mesh command to themselves use the writer too).
 export { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './commands/command-args.js';
 export type { MeshDirectDispatchArgs } from './commands/command-args.js';
+// Wiring-unification D2 — the one send funnel (`DaemonCliManager.input`).
+export { createSessionInputService, BUSY_DECISION } from './sessions/session-input-service.js';
+export type { SessionInputService, SessionInputTarget } from './sessions/session-input-service.js';

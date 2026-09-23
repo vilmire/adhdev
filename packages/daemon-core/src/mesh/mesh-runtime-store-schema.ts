@@ -58,42 +58,10 @@ export function migrate(self: MeshRuntimeStore): void {
         CREATE INDEX IF NOT EXISTS idx_mesh_queue_status_updated
             ON mesh_queue(status, updated_at);
 
-        -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
-        -- also carries meshId as its first '::'-joined segment (see
-        -- buildMeshCompletionFingerprint) — that string-prefix defense is kept; this
-        -- column makes cross-mesh suppression impossible even if the string format
-        -- drifts or two meshes ever collide on a fingerprint body.
-        CREATE TABLE IF NOT EXISTS mesh_completion_fingerprints (
-            fingerprint TEXT PRIMARY KEY,
-            expires_at INTEGER NOT NULL,
-            mesh_id TEXT NOT NULL DEFAULT ''
-        );
-        -- NOTE: the (mesh_id, fingerprint) index is created in migrateMeshIsolationColumns,
-        -- NOT here. A pre-isolation DB still has the legacy table (CREATE IF NOT EXISTS is a
-        -- no-op), so referencing mesh_id in an index before the ALTER ADD COLUMN runs would
-        -- fail with "no such column". The migration adds the column then the index.
-
-        CREATE TABLE IF NOT EXISTS mesh_direct_dispatches (
-            task_id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            node_id TEXT,
-            session_id TEXT,
-            provider_type TEXT,
-            message TEXT NOT NULL,
-            -- MESH-IMAGE-DISPATCH: serialized multipart input envelope (JSON) that
-            -- accompanied the message, or NULL for an ordinary text-only dispatch.
-            -- Nullable and additive so pre-existing rows read back exactly as before.
-            input TEXT,
-            task_mode TEXT,
-            via TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'dispatched',
-            dispatched_to_idle_session INTEGER NOT NULL DEFAULT 0,
-            dispatched_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_direct_dispatches_mesh_session
-            ON mesh_direct_dispatches(mesh_id, session_id, status);
+        -- C-W8: the legacy completion-fingerprint, direct-dispatch, session-delivery,
+        -- pending-event and inflight-hold tables and the legacy turn tables are no
+        -- longer created: their last writers are retired and
+        -- turn-ledger/migrate-v2.ts drops them from existing DBs.
 
         -- MESH-ISOLATION-LEAK: mesh_id is part of the PK so a nodeId shared across two
         -- meshes (same machine in multiple repos) keeps a separate idle-session row per
@@ -108,38 +76,6 @@ export function migrate(self: MeshRuntimeStore): void {
             metadata TEXT,
             PRIMARY KEY (mesh_id, node_id, session_id)
         );
-
-        CREATE TABLE IF NOT EXISTS mesh_session_delivery (
-            id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            node_id TEXT,
-            session_id TEXT,
-            provider_type TEXT,
-            task_id TEXT,
-            kind TEXT NOT NULL,
-            priority INTEGER NOT NULL DEFAULT 0,
-            message TEXT NOT NULL,
-            -- MESH-IMAGE-DISPATCH: see mesh_direct_dispatches.input — same nullable
-            -- serialized multipart envelope, so a queued delivery can carry an
-            -- attachment through to the moment the session goes idle.
-            input TEXT,
-            status TEXT NOT NULL DEFAULT 'queued',
-            deliver_after TEXT,
-            expires_at TEXT,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            source_coordinator_session_id TEXT,
-            source_coordinator_daemon_id TEXT,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_mesh_status
-            ON mesh_session_delivery(mesh_id, status, created_at);
-        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_session
-            ON mesh_session_delivery(mesh_id, session_id, status);
-        CREATE INDEX IF NOT EXISTS idx_mesh_session_delivery_task
-            ON mesh_session_delivery(mesh_id, task_id);
 
         -- MESH-COMPLEXITY-AUDIT Part 8-2: mesh_completion_conflicts removed
         -- (write-only fingerprint-collision diagnostic, no production reader,
@@ -181,45 +117,6 @@ export function migrate(self: MeshRuntimeStore): void {
         CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
             ON mesh_event_ledger(mesh_id, session_id, timestamp);
 
-        -- G3: Pending coordinator event inbox — replaces <meshId>.pending-events.jsonl.
-        -- Coordinator drains this table on get_pending_mesh_events, then deletes drained rows.
-        CREATE TABLE IF NOT EXISTS mesh_pending_events (
-            id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            coordinator_daemon_id TEXT,
-            event TEXT NOT NULL,
-            payload TEXT NOT NULL DEFAULT '{}',
-            fingerprint TEXT,
-            queued_at INTEGER NOT NULL,
-            drained INTEGER NOT NULL DEFAULT 0,
-            drained_at INTEGER,
-            -- v2 protocol envelope (B2a). All nullable so pre-v2 rows and events
-            -- emitted before a coordinator identity is known coexist as v1. The
-            -- authoritative copy of each also rides inside the payload column; these
-            -- columns exist for queryable idempotency (event_id) and scope-based drain
-            -- filtering without JSON-parsing every row. dispatched_by / intended_for
-            -- hold the JSON-serialized CoordinatorIdentity.
-            protocol_version TEXT,
-            event_id TEXT,
-            scope TEXT,
-            dispatched_by TEXT,
-            intended_for TEXT,
-            -- REFINE-EVENT-SESSION-SCOPED-UNICAST: WHO consumed this row. The ledger
-            -- previously recorded only THAT an event was drained, never by which
-            -- coordinator identity — so a mis-delivered unicast (a sibling session
-            -- consuming another coordinator's event) left no evidence and had to be
-            -- inferred. Written at drain time as the JSON-serialized drainer
-            -- CoordinatorIdentity. NULL on rows drained before this column existed
-            -- and on any drain whose caller passed no identity (daemon-level drain).
-            drained_by TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_mesh_drained
-            ON mesh_pending_events(mesh_id, drained, queued_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_pending_events_fingerprint
-            ON mesh_pending_events(mesh_id, fingerprint)
-            WHERE fingerprint IS NOT NULL;
-
         -- M3: persistent mission records. Plans live in the system, not in the
         -- coordinator LLM's context. Progress is derived from task statuses at
         -- query time (mission_id on queue tasks) — never stored here.
@@ -257,144 +154,10 @@ export function migrate(self: MeshRuntimeStore): void {
             cursor INTEGER NOT NULL DEFAULT 0
         );
 
-        -- T2 (B2b): persistent acked-hold state for in-flight direct dispatches.
-        -- The reconcile loop's PHASE-4 acked-hold (death-consequence counter,
-        -- fast-track idle streak, live-confirmed flag) used to live only in a
-        -- process-local Map (mesh-reconcile-loop.ts inFlightAckedHoldState), so a
-        -- daemon restart lost it — re-opening the door to the duplicate-emit / drop
-        -- window that the PHASE-4 transcript synth backstop then had to correct after
-        -- the fact. Persisting it lets the state survive a restart: the loop
-        -- rehydrates the Map from this table on first touch and stays read-through /
-        -- write-through against it thereafter. Keyed by task_id (one hold per
-        -- in-flight dispatch); mesh_id is carried for per-mesh listing / prune.
-        --   hold_reason         — 'live' once a conclusive read confirmed the session
-        --                         reachable since the ack, else 'unconfirmed' (drives
-        --                         the death-backstop's liveConfirmedSinceAck gate).
-        --   held_at             — ms epoch the hold row was first created.
-        --   first_idle_since_ack — ms epoch of the FIRST tick in the current continuous
-        --                         idle-with-final-assistant run (fast-track streak); NULL
-        --                         when the streak is broken / not yet started.
-        --   read_failure_count  — consecutive read_chat failures since the last
-        --                         conclusive read (death backstop (a)).
-        CREATE TABLE IF NOT EXISTS mesh_inflight_hold (
-            task_id TEXT PRIMARY KEY,
-            mesh_id TEXT,
-            hold_reason TEXT,
-            held_at INTEGER,
-            first_idle_since_ack INTEGER,
-            read_failure_count INTEGER,
-            updated_at INTEGER
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_inflight_hold_mesh
-            ON mesh_inflight_hold(mesh_id);
-
-        -- TURN-LEDGER (Stage 5): the authoritative causal turn transaction per task
-        -- ATTEMPT. One row per (mesh_id, task_id, attempt_seq); attempt_seq is the
-        -- dispatch nonce the attempt was opened under (monotonic per task), so a
-        -- reclaim/re-dispatch opens a NEW attempt row while late events against the
-        -- old attempt are rejected by identity, never applied. The stage column is a
-        -- monotonic causal FSM (accepted → delivered → consumed → generating →
-        -- [waiting_approval|waiting_choice] → finalizing → terminal); terminal_outcome
-        -- is committed at most once via a conditional UPDATE (exactly-once logical
-        -- completion). JSONL/ledger tables remain audit/export only — THIS table is
-        -- the single mutable source of truth for turn state.
-        CREATE TABLE IF NOT EXISTS mesh_turn_attempts (
-            attempt_id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            task_id TEXT NOT NULL,
-            attempt_seq INTEGER NOT NULL,
-            node_id TEXT,
-            session_id TEXT,
-            provider_type TEXT,
-            coordinator_daemon_id TEXT,
-            coordinator_session_id TEXT,
-            dispatch_nonce INTEGER,
-            stage TEXT NOT NULL DEFAULT 'accepted',
-            redrive_count INTEGER NOT NULL DEFAULT 0,
-            lease_deadline_ms INTEGER,
-            accepted_at TEXT,
-            delivered_at TEXT,
-            consumed_at TEXT,
-            terminal_outcome TEXT,
-            terminal_reason TEXT,
-            terminal_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE (mesh_id, task_id, attempt_seq)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_task
-            ON mesh_turn_attempts(mesh_id, task_id, attempt_seq);
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_session
-            ON mesh_turn_attempts(mesh_id, session_id);
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_attempts_stage
-            ON mesh_turn_attempts(mesh_id, stage);
-
-        -- TURN-LEDGER (Stage 5): append-only, idempotency-keyed causal event log per
-        -- attempt. UNIQUE(attempt_id, kind, dedupe_key) makes repeated/reordered ACKs
-        -- and duplicate completion proposals insert-once (INSERT OR IGNORE → the
-        -- reducer reads the existing row and treats the re-arrival as a duplicate).
-        CREATE TABLE IF NOT EXISTS mesh_turn_events (
-            event_id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            attempt_id TEXT NOT NULL,
-            task_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            dedupe_key TEXT NOT NULL DEFAULT '',
-            payload TEXT NOT NULL DEFAULT '{}',
-            occurred_at_ms INTEGER,
-            recorded_at TEXT NOT NULL,
-            UNIQUE (attempt_id, kind, dedupe_key)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_task
-            ON mesh_turn_events(mesh_id, task_id, kind);
-
-        -- WORKER-MCP (design §5): by-kind probes; see mesh-turn-event-queries.ts.
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_events_kind
-            ON mesh_turn_events(mesh_id, kind, recorded_at);
-
-        -- ★ Stage 5c-1: mesh_turn_outbox was defined here. It is no longer
-        -- created; existing DBs have it dropped by migrateMeshIsolationColumns
-        -- step 9. The re-drive guarantee it carried is now the seqscribe
-        -- redrive consumer's durable cursor (mesh-terminal-redrive.ts).
-
-        -- TURN-LEDGER (Stage 5): durable HELD SUSPENSIONS. A waiting_approval /
-        -- waiting_choice edge can legitimately arrive BEFORE the consumed ACK
-        -- (a fast picker fires ahead of the generating_started processing, whose
-        -- attempt-resolution preamble defers the consumed write). The causal FSM
-        -- rightly refuses accepted/delivered → waiting_*; instead of dropping the
-        -- edge, the reducer holds it here — attempt/session/epoch-scoped and
-        -- content-free — insert-once via hold_id (<attempt_id>:<stage>). The
-        -- consumed commit applies the hold through the SAME FSM in the same
-        -- transaction; the restart reconcile drain covers a crash between hold
-        -- and consumed; terminal commits resolve held rows as dropped so a held
-        -- picker can never resurrect a finished/reassigned attempt.
-        CREATE TABLE IF NOT EXISTS mesh_turn_held_suspensions (
-            hold_id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            attempt_id TEXT NOT NULL,
-            task_id TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            session_id TEXT,
-            dispatch_nonce INTEGER,
-            occurred_at_ms INTEGER,
-            recorded_at TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'held',
-            resolution TEXT,
-            resolved_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_mesh
-            ON mesh_turn_held_suspensions(mesh_id, status);
-        CREATE INDEX IF NOT EXISTS idx_mesh_turn_held_suspensions_attempt
-            ON mesh_turn_held_suspensions(attempt_id, status);
-
         -- WORKER-MCP (design §5, decision C) — handoff note TEXT.
         --
-        -- ★Why a table and not the mesh_turn_events payload: that payload is the
-        -- META index and is content-free by design §9.1 (it stores the intent's
+        -- ★Why a table and not the meta index row's payload (turn_events since
+        -- C-W8): that payload is content-free by design §9.1 (it stores the intent's
         -- LENGTH, never its text). The text lived only in an in-process Map, so
         -- its real lifetime was "until the daemon restarts" while its index row
         -- lived 30 days — and selectRelevantHandoffNotes skips any index row whose
@@ -450,26 +213,9 @@ export function tableColumns(self: MeshRuntimeStore, table: string): Set<string>
  */
 export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
     try {
-        // 1. mesh_completion_fingerprints: ADD COLUMN + backfill mesh_id from the
-        //    fingerprint string's first '::'-joined segment (buildMeshCompletionFingerprint
-        //    prefixes meshId). A row whose fingerprint has no '::' (legacy/foreign format)
-        //    backfills to '' — still strictly tighter than the prior global query.
-        const fpCols = tableColumns(self, 'mesh_completion_fingerprints');
-        if (!fpCols.has('mesh_id')) {
-            self.db.exec(`ALTER TABLE mesh_completion_fingerprints ADD COLUMN mesh_id TEXT NOT NULL DEFAULT ''`);
-            self.db.exec(`
-                UPDATE mesh_completion_fingerprints
-                SET mesh_id = substr(fingerprint, 1, instr(fingerprint, '::') - 1)
-                WHERE instr(fingerprint, '::') > 0 AND mesh_id = ''
-            `);
-        }
-        // The mesh_id column is now guaranteed to exist (fresh DB had it from CREATE TABLE,
-        // legacy DB just got it via ALTER). Create the index unconditionally — IF NOT EXISTS
-        // makes it a no-op once present.
-        self.db.exec(`
-            CREATE INDEX IF NOT EXISTS idx_mesh_completion_fingerprints_mesh
-                ON mesh_completion_fingerprints(mesh_id, fingerprint)
-        `);
+        // 1. (C-W8) The legacy completion-fingerprint table isolation column migration is
+        //    gone with the table — no reader or writer is left, and migrate-v2 drops
+        //    it from existing DBs.
 
         // 2. remote_idle_sessions: the mesh_id is part of the PRIMARY KEY, which SQLite
         //    cannot add via ALTER. The rows are ephemeral — sessions re-register on the
@@ -508,45 +254,11 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
             self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
         }
 
-        // 4. mesh_pending_events v2 envelope columns (B2a). A pre-v2 DB has the
-        //    table (CREATE IF NOT EXISTS is a no-op) without these columns, so add
-        //    each missing one. All nullable — legacy rows read back as v1 events
-        //    (protocol_version NULL) with no reader change. Idempotent: the column
-        //    check short-circuits once present, and every ADD COLUMN is guarded.
-        //    `drained_by` (REFINE-EVENT-SESSION-SCOPED-UNICAST) joins the same
-        //    additive-nullable set: existing rows read back NULL, meaning "drained
-        //    before drainer attribution existed / drained without an identity" — it is
-        //    never interpreted as an identity, only rendered as unknown.
-        const pendingCols = tableColumns(self, 'mesh_pending_events');
-        for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for', 'drained_by'] as const) {
-            if (!pendingCols.has(col)) {
-                self.db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
-            }
-        }
-        // 4b. MESH-IMAGE-DISPATCH: `input` on the two dispatch/delivery tables. An
-        //     existing DB already has both tables, so the CREATE TABLE IF NOT EXISTS
-        //     above is a no-op there and the new column must be ALTERed in — otherwise
-        //     every insert carrying an attachment fails with "no such column: input" on
-        //     precisely the installs that have been running longest. Nullable and
-        //     additive: legacy rows read back NULL, which means "text-only dispatch",
-        //     exactly what they were.
-        const directDispatchCols = tableColumns(self, 'mesh_direct_dispatches');
-        if (!directDispatchCols.has('input')) {
-            self.db.exec(`ALTER TABLE mesh_direct_dispatches ADD COLUMN input TEXT`);
-        }
-        const sessionDeliveryCols = tableColumns(self, 'mesh_session_delivery');
-        if (!sessionDeliveryCols.has('input')) {
-            self.db.exec(`ALTER TABLE mesh_session_delivery ADD COLUMN input TEXT`);
-        }
-
-        // Idempotency index on event_id (partial: only stamped v2 rows). Created
-        // unconditionally — IF NOT EXISTS makes it a no-op once present, and the
-        // event_id column is guaranteed to exist by the loop above.
-        self.db.exec(`
-            CREATE INDEX IF NOT EXISTS idx_mesh_pending_events_event_id
-                ON mesh_pending_events(mesh_id, event_id)
-                WHERE event_id IS NOT NULL
-        `);
+        // 4 / 4b. (C-W8) The legacy pending-event inbox envelope columns and the `input`
+        //    column on the legacy direct-dispatch table / the legacy session-delivery table went with those
+        //    tables' retired writers. An existing DB keeps them only until
+        //    migrate-v2 drops the tables (the v1 fold and the legacy pending-events
+        //    JSONL import read them with SELECT * / tolerate a missing column).
 
         // 5. MESH-COMPLEXITY-AUDIT Part 8-1: drop the legacy mesh_direct_delivered_events
         //    table. It backed the retired R3 "direct-delivered" dedup marker

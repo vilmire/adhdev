@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { listLocalCoordinatorSessions, resolveCoordinatorInputTarget } from '../../src/mesh/mesh-event-forwarding.js'
+import { listLocalCoordinatorSessions } from '../../src/mesh/mesh-event-forwarding.js'
 
 // The turn.deliver consumer's routing snapshot (C-W3): this daemon's CLI
 // coordinator sessions of a mesh, idle decided on the RAW adapter turn-state
@@ -59,16 +59,6 @@ describe('listLocalCoordinatorSessions — raw turn-state', () => {
     })
 })
 
-describe('resolveCoordinatorInputTarget', () => {
-    it('submits through the instance send_message (chat bookkeeping + FIFO), never a force write', async () => {
-        const coord = instance({ meshCoordinatorFor: 'm1', status: 'generating', drain: 'generating' })
-        const target = resolveCoordinatorInputTarget(components([coord]), 'coord-1')!
-        expect(await target.sendMessage('hello')).toEqual({ status: 'queued' })
-        expect(coord.sent).toEqual([{ event: 'send_message', data: { input: { text: 'hello', textFallback: 'hello' } } }])
-        expect(coord.sent[0].data.force).toBeUndefined()
-    })
-
-    it('an unknown session resolves to null (the port refuses no_target)', () => {
-        expect(resolveCoordinatorInputTarget(components([]), 'gone')).toBeNull()
-    })
-})
+// (D2 → C-W8) resolveCoordinatorInputTarget is gone: notices submit through the
+// daemon's one SessionInputService (`cliManager.input`), pinned by
+// test/sessions/session-input-service.test.ts.

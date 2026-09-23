@@ -50,6 +50,8 @@ function fakeComponents(settingsBySession: Record<string, Record<string, unknown
     const components = {
         bus: createSessionLifecycleBus(),
         instanceManager,
+        // D2 (C-W8): notices submit through the daemon's one SessionInputService.
+        cliManager: { input: { submit: async () => ({ kind: 'delivered' }) } },
         seqscribe: null,
         statusInstanceId: 'daemon_wiring',
     } as any;
