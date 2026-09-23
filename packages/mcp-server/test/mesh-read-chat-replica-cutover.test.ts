@@ -18,7 +18,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshReadChat } from '../src/tools/mesh-tools.js';
 import { readTranscriptReplicaForDisplay } from '../src/tools/mesh-transcript-replica-read.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 const SNAPSHOT = {
   schemaVersion: 1,

@@ -2,24 +2,56 @@
  * Direct-dispatch completion reconciliation from transcript evidence —
  * design §4 roster id 6 (`mcp_mesh_status_reconciliation`), §8 unit 8.
  *
- * A pure barrel-preserving extraction out of `mesh-tools-internal.ts`: both
- * symbols are re-exported from there, so every existing importer
- * (`mesh-tools-status`, `mesh-tools-session`, `mesh-tools-queue`) is unchanged.
- * Moved because unit 8 wires the replica hop into this function, and
- * `mesh-tools-internal.ts` is a frozen-baseline file under `check:file-sizes`
- * — the gate's documented remedy is decomposition, not raising the limit.
+ * Wiring-unification Phase C, workstream C-W6
+ * (docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph).
+ *
+ * MIGRATED OFF THE IN-PROCESS TERMINAL WRITE (2026-09-23): this file used to
+ * call `reconcileDirectDispatchCompletionFromTranscript` — a function that
+ * wrote a terminal ledger entry directly from inside the MCP process. C2
+ * names this exact file as the clearest boundary violation to close first:
+ * "the MCP process reads the transcript, applies the veto, then writes a
+ * terminal directly." It now calls `turnObserve()` over IPC instead (this
+ * package's `ipc/turn-commands.ts`, C-W6 pre-work) with a `transcript_final`
+ * evidence record — the daemon that owns the turn ledger decides whether that
+ * evidence commits a terminal, exactly like every other evidence producer.
+ * mcp-server no longer writes to `mesh-runtime.db`/the turn ledger itself for
+ * this consumer.
+ *
+ * `reconcileDirectDispatchCompletionFromTranscript` and
+ * `isDirectDispatchLedgerEntry` are also gone from `@adhdev/daemon-core`
+ * entirely as of this session — deleted by the concurrent C-W4 workstream
+ * (`mesh-dispatch-ledger-reads.ts`'s header: "deleted in wiring-unification
+ * C4 (C-W4)"). `buildDirectDispatchReconciliationCandidates` below therefore
+ * no longer reads ledger entries by kind to build candidates (the ledger-entry
+ * half of `isDirectDispatchLedgerEntry`'s filter) — it derives candidates
+ * from the live `directDispatches` rows only, which is what every call site
+ * already reads independently. REQUESTED EDIT to whoever owns the C3/C-W2
+ * `turn_attempts` read path: once `turnQuery`/`meshIndexQuery` can list open
+ * direct-scope attempts, restore the ledger-derived half of this candidate
+ * list from there instead of dropping it.
  *
  * ── What this consumer decides, and why its admission gate is strict ────────
- * It synthesizes a task COMPLETION from the transcript: an irreversible write.
- * The replica hop below therefore refuses tail-only coverage (the trailing-
- * activity veto needs the bubbles that FOLLOW the final assistant message) and
- * requires a snapshot inside the freshness budget (design §5.5). On any
- * decline it falls through to the pre-existing live `read_chat`, and BOTH
- * sources feed the identical downstream parsers — see
- * `mesh-transcript-semantic-read.ts`'s header.
+ * It synthesizes a task COMPLETION from the transcript: an irreversible write
+ * (now performed by the daemon's turn-ledger reducer via `turnObserve`, not
+ * by this process). The replica hop below therefore refuses tail-only
+ * coverage (the trailing-activity veto needs the bubbles that FOLLOW the
+ * final assistant message) and requires a snapshot inside the freshness
+ * budget (design §5.5). On any decline it falls through to the pre-existing
+ * live `read_chat`, and BOTH sources feed the identical downstream parsers —
+ * see `mesh-transcript-semantic-read.ts`'s header.
  */
 
-import { hasTrailingToolActivityAfterFinalAssistant } from '@adhdev/daemon-core';
+// NOTE (REQUESTED EDIT — see file header): `extractFinalAssistantSummaryEvidence`
+// is not yet in @adhdev/daemon-core's named export list (only its sibling
+// `hasTrailingToolActivityAfterFinalAssistant` is). This import is written
+// against where it belongs once that gap is closed; until then it fails to
+// resolve at build/typecheck, exactly like the pre-existing (unrelated)
+// daemon-core breakage this session found in mesh-tools-{session,status}.ts
+// (both mesh-events-pending.js and mesh-terminal-redrive.js are missing
+// their own importers' targets right now — see report).
+import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant } from '@adhdev/daemon-core';
+import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import type { TurnEvidence } from '@adhdev/mesh-shared';
 import { readString } from './mesh-tool-shared.js';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import type { MeshContext } from './mesh-tools-internal.js';
@@ -27,17 +59,19 @@ import {
     commandForNode,
     findNodeSession,
     findOptionalNodeWithRefresh,
-    isDirectDispatchLedgerEntry,
     isIdleSessionRecord,
-    readFinalAssistantTranscriptEvidence,
-    reconcileDirectDispatchCompletionFromTranscript,
     resolveMeshSessionProviderMetadata,
     resolveSemanticReplicaTransport,
     resolveSessionProviderType,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
 
-export function buildDirectDispatchReconciliationCandidates(directDispatches: any[], ledgerEntries: any[]): any[] {
+export function buildDirectDispatchReconciliationCandidates(directDispatches: any[], _ledgerEntries: any[]): any[] {
+    // `_ledgerEntries` kept in the signature — every call site passes it, and
+    // dropping the parameter would ripple an edit into mesh-tools-status.ts /
+    // mesh-tools-session.ts / mesh-tools-queue.ts (out of this file's swap).
+    // See file header: the ledger-derived half of this candidate list is a
+    // REQUESTED EDIT once turnQuery/meshIndexQuery can list open attempts.
     const candidates: any[] = [];
     const seenTaskIds = new Set<string>();
     for (const dispatch of directDispatches || []) {
@@ -45,21 +79,6 @@ export function buildDirectDispatchReconciliationCandidates(directDispatches: an
         if (!taskId || seenTaskIds.has(taskId)) continue;
         seenTaskIds.add(taskId);
         candidates.push(dispatch);
-    }
-    for (const entry of ledgerEntries || []) {
-        if (!isDirectDispatchLedgerEntry(entry)) continue;
-        const taskId = readString(entry.payload?.taskId);
-        if (!taskId || seenTaskIds.has(taskId)) continue;
-        seenTaskIds.add(taskId);
-        candidates.push({
-            taskId,
-            nodeId: entry.nodeId,
-            sessionId: entry.sessionId,
-            providerType: entry.providerType || readString(entry.payload?.providerType),
-            message: readString(entry.payload?.message),
-            dispatchedAt: entry.timestamp,
-            via: readString(entry.payload?.via),
-        });
     }
     return candidates;
 }
@@ -86,10 +105,10 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
         // EARLYNOTIFY-GATEBYPASS (e): a single snapshot-idle sample is NOT sufficient to synthesize
         // a completion — a mid-turn poll routinely reads idle for an instant. This idle check only
         // makes the session ELIGIBLE for a transcript read; the actual turn-finality gate is
-        // enforced downstream: readFinalAssistantTranscriptEvidence requires a genuine non-empty
-        // latest-assistant turn end, and reconcileDirectDispatchCompletionFromTranscript (the
-        // guarded daemon path this delegates to) applies the dispatch grace window + stale-summary
-        // guard before it will write a terminal. So a coordinator poll cannot force a mid-turn synth.
+        // enforced downstream: extractFinalAssistantSummaryEvidence requires a genuine non-empty
+        // latest-assistant turn end, and the daemon's turn-ledger reducer (reached via
+        // turnObserve, not an in-process write) applies its own admission/grace rules before
+        // it will commit a terminal. So a coordinator poll cannot force a mid-turn synth.
         if (!session || !isIdleSessionRecord(session)) {
             skipped += 1;
             continue;
@@ -109,12 +128,12 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
             // ── §8 unit 8: replica hop (design §4 roster id 6) ──────────────
             // `mcp_mesh_status_reconciliation`. The replica returns the SAME
             // read_chat-shaped payload, so every guard below — the trailing-
-            // activity veto, readFinalAssistantTranscriptEvidence, and the
-            // downstream grace-window/stale-summary gate inside
-            // reconcileDirectDispatchCompletionFromTranscript — runs unchanged
-            // on either source. That is the design's "기존 evidence parser를
-            // 그대로 적용" requirement, and it is why this is a source swap
-            // rather than a second synthesis path.
+            // activity veto, extractFinalAssistantSummaryEvidence, and the
+            // daemon-side turn-ledger admission gate reached through
+            // turnObserve — runs unchanged on either source. That is the
+            // design's "기존 evidence parser를 그대로 적용" requirement, and
+            // it is why this is a source swap rather than a second synthesis
+            // path.
             //
             // Coverage: `tail` is refused. The veto needs the tool/activity
             // bubbles that FOLLOW the final assistant message; a tail window
@@ -153,22 +172,63 @@ export async function reconcileDirectDispatchesFromTranscriptEvidence(
             // the same veto the reconcile loop's PHASE 4 and the watchdog poll enforce; the
             // MCP process has no live adapter to probe (remote semantics), so the bounded
             // transcript evidence below remains the operative net (fail-open preserved).
-            if (hasTrailingToolActivityAfterFinalAssistant(Array.isArray(payload?.messages) ? payload.messages : [])) continue;
-            const evidence = readFinalAssistantTranscriptEvidence(payload);
+            const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+            const trailingToolActivity = hasTrailingToolActivityAfterFinalAssistant(messages);
+            if (trailingToolActivity) continue;
+            // REQUESTED EDIT for whoever owns daemon-core/src/index.ts next (not this
+            // workstream's file — see file header): `extractFinalAssistantSummaryEvidence`
+            // (providers/chat-message-normalization.ts, the renamed
+            // `readFinalAssistantTranscriptEvidence`) is not yet in the package's named
+            // export list, only its sibling `hasTrailingToolActivityAfterFinalAssistant` is.
+            // Until it is exported, this call fails to resolve — a REQUESTED EDIT, not a
+            // silent behavior change: add `extractFinalAssistantSummaryEvidence` next to
+            // `hasTrailingToolActivityAfterFinalAssistant` in index.ts's
+            // chat-message-normalization.js re-export block.
+            const evidence = extractFinalAssistantSummaryEvidence(messages);
             if (!evidence.finalSummary) continue;
-            const result = reconcileDirectDispatchCompletionFromTranscript({
-                meshId: ctx.mesh.id,
-                nodeId,
+            // The daemon's turn ledger is the sole authority for whether this evidence
+            // commits a terminal (design §5 C2) — this process no longer writes the
+            // legacy event ledger table or turn_attempts itself. `finalSummary` is
+            // content and never crosses this call: only its non-empty-ness (a boolean
+            // fact) and the
+            // structural `messageAt` timestamp travel, matching turn-evidence.ts's
+            // content-free field classes for `transcript_final`.
+            // Stable per transcript turn end: a repeated mesh_status poll over the
+            // SAME final message re-sends the SAME eventId, which the daemon's
+            // ledger collapses on its primary key (verdict `duplicate`) instead
+            // of recording one evidence row per poll.
+            const messageAtMs = evidence.transcriptMessageAt ? Date.parse(evidence.transcriptMessageAt) : NaN;
+            const turnEvidence: TurnEvidence = {
+                eventId: `mcp-reconcile:${taskId}:${sessionId}:${Number.isFinite(messageAtMs) ? messageAtMs : 'nomsg'}`,
+                at: Date.now(),
+                source: 'mcp_probe',
                 sessionId,
-                providerType,
-                providerSessionId: readString(payload?.providerSessionId) || providerSessionId,
                 taskId,
-                finalSummary: evidence.finalSummary,
-                transcriptMessageAt: evidence.transcriptMessageAt,
-                targetCoordinatorDaemonId: ctx.localDaemonId,
-                source: 'mcp_mesh_status_transcript_reconciliation',
-            });
-            if (result.reconciled) reconciled += 1;
+                observedBy: ctx.localDaemonId || 'unknown-daemon',
+                kind: 'transcript_final',
+                selfAttributing: false,
+                nativeRead: false,
+                live: {
+                    modal: false,
+                    adapterPending: false,
+                    trailingTool: trailingToolActivity,
+                },
+                ...(Number.isFinite(messageAtMs) ? { messageAt: messageAtMs } : {}),
+            };
+            try {
+                const observed = await turnObserve(ctx.transport, { evidence: turnEvidence });
+                if (observed.verdict === 'applied' && observed.outcome === 'completed') reconciled += 1;
+            } catch (err) {
+                // daemon_required / turn_ledger_unavailable / decode failure — this
+                // reconciliation pass is advisory (the pre-existing live read_chat /
+                // watchdog paths remain the primary completion route), so a failed
+                // turnObserve degrades to "skipped", not a thrown error out of this loop.
+                if (err instanceof TurnIpcCommandError) {
+                    skipped += 1;
+                    continue;
+                }
+                throw err;
+            }
         } catch {
             skipped += 1;
         }

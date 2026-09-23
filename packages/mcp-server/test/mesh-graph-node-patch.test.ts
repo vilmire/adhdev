@@ -8,7 +8,7 @@ import {
     meshGraphView,
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
-import { getQueue, updateTaskStatus, readLedgerEntries } from '@adhdev/daemon-core';
+import { getQueue, updateTaskStatus, __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
 
 // GRAPH-ORCHESTRATION — M-GRAPH-INPUTS-LATE-REJECT, part (b): the RECOVERY path.
 //
@@ -81,7 +81,7 @@ async function enqueueBindingBatch(ctx: any, select: string) {
 
 /** Complete `produce` with an envelope that has `rootCause` but NOT `wrongField`. */
 function completeProducer(meshId: string, taskId: string) {
-    updateTaskStatus(meshId, taskId, 'completed', {
+    __writeTaskStatusForTests(meshId, taskId, 'completed', {
         envelope: { workerResult: { rootCause: 'the real field' } },
     } as any);
 }

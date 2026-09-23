@@ -7,7 +7,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshFastForwardNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, meshRefineConfig, meshChangeImpactConfig, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { CANONICAL_MESH_TOOL_COUNT, appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue, requeueTask } from '@adhdev/daemon-core';
-import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
+import { __clearMeshPendingEventsForTests as clearPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
 
 // meshQueueRequeue delegates the requeue to the mesh-host daemon in IpcTransport mode so
 // the single-flight guard is co-located with dispatch (requeue_mesh_queue_task). This stub
@@ -1155,87 +1155,12 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
   assert.match(nodeStatus.noFallbackReason, /no cloud\/WS relay fallback/i);
 });
 
-test('mesh_task_history backfills remote pending completion events into the coordinator ledger', async () => {
-  clearPendingMeshCoordinatorEvents();
-  const meshId = `mesh-task-history-backfill-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const transport = new IpcTransport() as IpcTransport & {
-    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
-  };
-  let remoteDrained = false;
-  const localComponents = {
-    instanceManager: {
-      getByCategory: () => [],
-    },
-  } as any;
-  const ctx = {
-    localDaemonId: 'daemon-coordinator',
-    mesh: {
-      id: meshId,
-      name: 'Task History Backfill Mesh',
-      repoIdentity: 'example/repo',
-      policy: {},
-      coordinator: {},
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      nodes: [{
-        id: 'node-remote-worker',
-        workspace: '/repo-remote',
-        repoRoot: '/repo-remote',
-        daemonId: 'daemon-remote',
-        userOverrides: {},
-        policy: { providerPriority: ['hermes-cli'] },
-      }],
-    },
-    transport,
-  };
-
-  transport.command = async (command, args = {}) => {
-    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
-    if (command === 'get_pending_mesh_events') {
-      return { events: drainPendingMeshCoordinatorEvents() };
-    }
-    if (command === 'mesh_forward_event') {
-      return handleMeshForwardEvent(localComponents, args as Record<string, unknown>);
-    }
-    throw new Error(`unexpected direct command: ${command}`);
-  };
-  transport.meshCommand = async (_daemonId, command) => {
-    if (command === 'get_pending_mesh_events') {
-      if (remoteDrained) return { events: [] };
-      remoteDrained = true;
-      return {
-        events: [{
-          event: 'agent:generating_completed',
-          meshId,
-          nodeId: 'node-remote-worker',
-          workspace: '/repo-remote',
-          metadataEvent: {
-            targetSessionId: 'session-remote',
-            providerType: 'hermes-cli',
-            providerSessionId: 'provider-remote',
-            finalSummary: 'done',
-          },
-        }],
-      };
-    }
-    throw new Error(`unexpected mesh command: ${command}`);
-  };
-
-  try {
-    const history = JSON.parse(await meshTaskHistory(ctx as any, { tail: 10 }));
-    const completion = history.entries.find((entry: any) => entry.kind === 'task_completed' && entry.sessionId === 'session-remote');
-    assert.ok(completion, 'expected task_completed entry after remote pending-event drain');
-    assert.equal(completion.nodeId, 'node-remote-worker');
-    assert.equal(completion.providerType, 'hermes-cli');
-    assert.equal(completion.payload.event, 'agent:generating_completed');
-    assert.equal(completion.payload.providerSessionId, 'provider-remote');
-    assert.equal(completion.payload.finalSummary, 'done');
-    assert.equal(history.summary.taskCompleted >= 1, true);
-  } finally {
-    clearPendingMeshCoordinatorEvents();
-  }
-});
+// 'mesh_task_history backfills remote pending completion events into the coordinator
+// ledger' retired with the remote pending-event pull (wiring-unification C-W3): a
+// worker's completion reaches the coordinator as `turn.evidence` on the replicated
+// `mesh.<id>.events` topic, ingested by the coordinator daemon's `turn.ingest`
+// cursor — never by an MCP-side pull + re-forward (pinned in daemon-core
+// test/seqscribe/mesh-turn-consumer.test.ts, 7-hop remote path).
 
 test('mesh_task_history compact mode elides large nested payload evidence blobs but keeps them in verbose', async () => {
   clearPendingMeshCoordinatorEvents();
@@ -3711,6 +3636,14 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
       }
       return { success: true };
     }
+    // C-W6c: the direct-dispatch write path now opens a turn_observe attempt via
+    // IPC before the inject (best-effort — see openDirectDispatchAttempt). This
+    // fixture has no turn ledger responder, so it answers as the real daemon
+    // would when the ledger is unarmed: a structured rejection, not a throw that
+    // would look like "no daemon reachable" to the client's classifier.
+    if (command === 'turn_observe') {
+      return { success: false, error: 'turn ledger unavailable: no active turn ledger (test fixture)', code: 'turn_ledger_unavailable' };
+    }
     throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
@@ -3745,15 +3678,26 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   const result = JSON.parse(text);
   assert.equal(result.success, true);
   assert.equal(result.dispatched, true);
-  assert.equal(directCalls.length, 2);
+  // C-W6c: get_status_metadata, then a best-effort turn_observe(dispatch_accepted)
+  // opened BEFORE the inject (so its attemptRef can be threaded into meshContext),
+  // then the agent_command inject itself — 3 calls total. This fixture's
+  // turn_observe answers turn_ledger_unavailable (no attemptRef), so the
+  // post-inject turn_observe(delivered) short-circuits (nothing to attach the
+  // delivery to) and is never sent — matching openDirectDispatchAttempt/
+  // observeDirectDispatchOutcome's contract that a null attemptRef is a no-op.
+  // Filter to agent_command specifically rather than index into the raw list,
+  // so a future turn_observe addition doesn't reshuffle indices.
+  assert.equal(directCalls.length, 3);
   assert.equal(directCalls[0].command, 'get_status_metadata');
-  assert.equal(directCalls[1].command, 'agent_command');
-  assert.equal(directCalls[1].args.targetSessionId, 'session-hermes');
-  assert.equal(directCalls[1].args.agentType, 'hermes-cli');
-  assert.equal(directCalls[1].args.cliType, 'hermes-cli');
-  assert.equal(directCalls[1].args.action, 'send_chat');
-  assert.equal(stripWorkerProtocolFooter(directCalls[1].args.message), 'run targeted task');
-  assert.ok(hasWorkerProtocolFooter(directCalls[1].args.message), 'direct local dispatch carries the worker protocol footer');
+  assert.equal(directCalls.filter(c => c.command === 'turn_observe').length, 1);
+  const agentCommandCall = directCalls.find(c => c.command === 'agent_command');
+  assert.ok(agentCommandCall, 'agent_command was dispatched');
+  assert.equal(agentCommandCall.args.targetSessionId, 'session-hermes');
+  assert.equal(agentCommandCall.args.agentType, 'hermes-cli');
+  assert.equal(agentCommandCall.args.cliType, 'hermes-cli');
+  assert.equal(agentCommandCall.args.action, 'send_chat');
+  assert.equal(stripWorkerProtocolFooter(agentCommandCall.args.message), 'run targeted task');
+  assert.ok(hasWorkerProtocolFooter(agentCommandCall.args.message), 'direct local dispatch carries the worker protocol footer');
 
   // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT (oss a79686f2): recordDirectDispatchTask now
   // runs for every direct dispatch, not just mission-attributed ones, so it materialises
@@ -4170,7 +4114,6 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   assert.equal(ALL_MESH_TOOLS.length, CANONICAL_MESH_TOOL_COUNT);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_record_note'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_reconcile_ledger'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_requeue_held_events'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_init'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_restart_daemon'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_review_inbox'));

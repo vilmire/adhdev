@@ -8,10 +8,10 @@ import {
     sessionSharedWithAnotherReplica,
     synthesizeMagiResponses,
 } from '../src/tools/mesh-tools.js';
-import { enqueueTask, getLedgerDir, getMeshMission, updateTaskStatus, upsertMeshMission } from '@adhdev/daemon-core';
+import { enqueueTask, getLedgerDir, getMeshMission, __writeTaskStatusForTests, upsertMeshMission } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
 // ─── FIX#1 — collect cross-wire (tangle): shared-session fail-closed ────────────────────────
@@ -140,7 +140,7 @@ function seedTerminalReplicas(meshId: string, groupId: string, missionId: string
             id: `${groupId}-${r}`, readonly: true, taskMode: 'live_debug_readonly', consensusGroupId: groupId, missionId,
             difficulty: 'medium',
         } as any);
-        updateTaskStatus(meshId, t.id, 'completed');
+        __writeTaskStatusForTests(meshId, t.id, 'completed');
     }
 }
 

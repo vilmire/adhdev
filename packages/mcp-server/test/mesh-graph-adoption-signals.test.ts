@@ -9,7 +9,7 @@ import {
     meshGraphGateRelease,
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
-import { updateTaskStatus, readLedgerEntries } from '@adhdev/daemon-core';
+import { __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
 
 // GRAPH-ADOPTION signals — P2 (single-surface orchestration_decision) and
 // P3 (the materializedCount: 0 advisory).
@@ -234,7 +234,7 @@ test('P3: a gate nothing depends on, released while work remains, gets the no-do
         gates: [{ ref: 'approve', action: 'approval', depends_on: ['build'] }],
     } as any));
     assert.equal(batch.success, true);
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const rel = await claimAndRelease(ctx, batch.gates[0].gateId, 'k-orphan');
     assert.equal(rel.success, true);
@@ -254,7 +254,7 @@ test('P3: a TERMINAL gate that completes the graph is NOT flagged', async () => 
         gates: [{ ref: 'signoff', action: 'approval', depends_on: ['build'] }],
     } as any));
     assert.equal(batch.success, true);
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const rel = await claimAndRelease(ctx, batch.gates[0].gateId, 'k-terminal');
     assert.equal(rel.success, true);
@@ -277,7 +277,7 @@ test('P3: a gate that DOES open downstream work reports the count and no advisor
         gates: [{ ref: 'land', action: 'refinery', depends_on: ['build'] }],
     } as any));
     assert.equal(batch.success, true);
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const rel = await claimAndRelease(ctx, batch.gates[0].gateId, 'k-real');
     assert.equal(rel.success, true);
@@ -293,7 +293,7 @@ test('P3: a replayed release is a no-op success and carries no advisory', async 
         tasks: [{ ref: 'build', message: 'build the thing', difficulty: 'easy' }],
         gates: [{ ref: 'signoff', action: 'approval', depends_on: ['build'] }],
     } as any));
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     const gateId = batch.gates[0].gateId;
 
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));

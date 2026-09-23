@@ -27,7 +27,6 @@ import {
     compactChatPayload,
     deleteDirectDispatchesByTaskId,
     drainCoordinatorPendingEvents,
-    drainPendingMeshCoordinatorEvents,
     enqueueTask,
     extractLaunchPayload,
     extractStatusMetadataSessions,
@@ -97,6 +96,11 @@ import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/dae
 // (yet) re-exported through mesh-tools-internal.ts, imported directly like the
 // quota-gate symbols above.
 import { resolveDispatchMessage } from '@adhdev/daemon-core';
+// C-W6c: direct-dispatch bookkeeping now drives the NEW turn ledger (C1 reducer)
+// via IPC, instead of the legacy openTurnAttempt/recordTurnAck pair that
+// recordDirectDispatchTask used to trigger in-process. See the design's C2
+// paragraph and the C-W6c report's "direct dispatch end to end" deliverable.
+import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 
 
 /**
@@ -142,6 +146,105 @@ export function computeIdleDispatchAckRisk(
         dispatchAcknowledgementRiskReason: 'idle_dispatch_prerecord_failed',
         dispatchAcknowledgementNote: `Session '${sessionId}' was idle at dispatch time and the dispatch row could not be pre-recorded, so its completion may be deduplicated as a prior turn and lost. Use mesh_status to verify; if the session remains idle or the completion never lands, launch a fresh session and retry.`,
     };
+}
+
+/**
+ * C-W6c: open a `mesh_direct` attempt in the NEW turn ledger (C1 reducer) for a
+ * direct dispatch, mirroring what `recordDirectDispatchTask`'s in-process
+ * `openTurnAttempt`/`recordTurnAck` used to do for the LEGACY ledger
+ * (`mesh-turn-ledger.ts`). Both ledgers are bookkeeping-only here — neither
+ * call touches the actual transport delivery (`ipcDispatchToRemoteAgent` /
+ * `agent_command`), which happens independently around this helper.
+ *
+ * Returns the `attemptRef` on success (embed in `meshContext` so worker
+ * evidence — a remote daemon's forwarded completion, or this daemon's own
+ * transcript reconcile — carries a resolvable attempt reference), or `null`
+ * on any turn-ledger failure (best-effort: a direct dispatch must not be
+ * blocked by the new ledger being mid-boot/unavailable — see the C-W6c
+ * report's "Runnable?" section, this path is additive, not load-bearing yet).
+ */
+async function openDirectDispatchAttempt(
+    ctx: MeshContext,
+    opts: { taskId: string; nodeId?: string; sessionId: string; providerType?: string },
+): Promise<{ attemptId: string; generation: number } | null> {
+    try {
+        const accepted = await turnObserve(ctx.transport, {
+            evidence: {
+                eventId: opts.taskId,
+                at: Date.now(),
+                source: 'dispatch',
+                sessionId: opts.sessionId,
+                taskId: opts.taskId,
+                observedBy: ctx.localDaemonId ?? 'mcp-server',
+                kind: 'dispatch_accepted',
+                scope: 'mesh_direct',
+                messageId: opts.taskId,
+                meshId: ctx.mesh.id,
+                ...(opts.nodeId ? { nodeId: opts.nodeId } : {}),
+                ...(opts.providerType ? { providerType: opts.providerType } : {}),
+            },
+        });
+        return accepted.attemptRef;
+    } catch (e) {
+        LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, 'dispatch_accepted');
+        return null;
+    }
+}
+
+/**
+ * C-W6c: record a `delivered` or `dispatch_failed` evidence for a direct
+ * dispatch's attempt (best-effort — see openDirectDispatchAttempt's note).
+ * Called AFTER the transport actually confirmed/refused the send, exactly
+ * the causal stage the legacy `recordTurnAck({kind:'delivered'})` used to
+ * attest to.
+ */
+async function observeDirectDispatchOutcome(
+    ctx: MeshContext,
+    attemptRef: { attemptId: string; generation: number } | null,
+    opts: { taskId: string; sessionId: string }
+        & ({ outcome: 'delivered'; via: 'local' | 'p2p' } | { outcome: 'dispatch_failed'; workerAbsent: boolean }),
+): Promise<void> {
+    if (!attemptRef) return;
+    try {
+        if (opts.outcome === 'delivered') {
+            await turnObserve(ctx.transport, {
+                evidence: {
+                    eventId: `${opts.taskId}:delivered`,
+                    at: Date.now(),
+                    source: 'dispatch',
+                    sessionId: opts.sessionId,
+                    attemptRef,
+                    observedBy: ctx.localDaemonId ?? 'mcp-server',
+                    kind: 'delivered',
+                    messageId: opts.taskId,
+                    outcome: 'delivered',
+                    via: opts.via,
+                },
+            });
+        } else {
+            await turnObserve(ctx.transport, {
+                evidence: {
+                    eventId: `${opts.taskId}:dispatch_failed`,
+                    at: Date.now(),
+                    source: 'dispatch',
+                    sessionId: opts.sessionId,
+                    attemptRef,
+                    observedBy: ctx.localDaemonId ?? 'mcp-server',
+                    kind: 'dispatch_failed',
+                    workerAbsent: opts.workerAbsent,
+                    reason: 'rejected_by_worker',
+                },
+            });
+        }
+    } catch (e) {
+        LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, opts.outcome);
+    }
+}
+
+/** Best-effort diagnostic — never thrown, matches the file's existing `/* best-effort *\/` convention. */
+function LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e: unknown, stage: string): void {
+    const detail = e instanceof TurnIpcCommandError ? `${e.code}: ${e.message}` : String((e as Error)?.message ?? e);
+    process.stderr.write(`[adhdev-mesh] direct-dispatch turnObserve(${stage}) failed (best-effort, dispatch continues): ${detail}\n`);
 }
 
 export async function meshPruneStaleDirect(
@@ -474,6 +577,24 @@ export async function meshSendTask(
                     ),
                 }
                 : taskInput;
+            // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the
+            // send, so its attemptRef can be embedded in meshContext — the remote
+            // daemon's cli-manager.ts already reads meshContext.attemptId/
+            // attemptGeneration and echoes them onto the worker's turn evidence
+            // (command-args.ts MeshCommandContext). Without this, a remote worker's
+            // forwarded evidence carries no attempt reference and the new ledger
+            // never resolves it. sessionId is unknown before the send for a
+            // sessionless dispatch, so fall back to taskId (same fallback the
+            // legacy ledger's session-scalar heuristic already uses elsewhere in
+            // this file) — the reducer keys dispatch_accepted's attempt off
+          // `${scope}:${eventId}`, not off sessionId, so this is only an
+            // envelope-required placeholder.
+            const p2pAttemptRef = await openDirectDispatchAttempt(ctx, {
+                taskId,
+                nodeId: args.node_id,
+                sessionId: args.session_id || taskId,
+                providerType: cached?.providerType,
+            });
             const result = await ipcDispatchToRemoteAgent(ctx, node, {
                 session_id: args.session_id,
                 message: dispatchBody,
@@ -491,6 +612,10 @@ export async function meshSendTask(
                     // routes back to THIS coordinator session (multi-coordinator). Survives the
                     // P2P dispatch to the remote worker, which echoes it on its completion event.
                     ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                    // C-W6c: thread the new-ledger attempt ref through so the worker's
+                    // evidence (forwarded completion, session_error, etc.) resolves to
+                    // THIS attempt instead of arriving attempt-less.
+                    ...(p2pAttemptRef ? { attemptId: p2pAttemptRef.attemptId, attemptGeneration: p2pAttemptRef.generation } : {}),
                 },
             });
             if (result.success) {
@@ -507,6 +632,14 @@ export async function meshSendTask(
                     : result.sessionId;
                 const dispatchedSessionId = args.session_id || resultSessionId;
                 const dispatchedAt = new Date().toISOString();
+                // C-W6c: record the delivery outcome against the attempt opened before
+                // the send (additive to the legacy attempt recordDirectDispatchTask
+                // still opens below — that one is NOT removed: it also creates the
+                // queue row and mints the worker-MCP token, neither of which the new
+                // ledger replaces yet). Best-effort: see the helper's doc comment.
+                await observeDirectDispatchOutcome(ctx, p2pAttemptRef, {
+                    taskId, sessionId: dispatchedSessionId || taskId, outcome: 'delivered', via: 'p2p',
+                });
                 try {
                     const providerType = result.providerType || cached?.providerType;
                     appendLedgerEntry(ctx.mesh.id, {
@@ -572,6 +705,13 @@ export async function meshSendTask(
                             : {}),
                     });
                 } catch { /* best-effort */ }
+            } else {
+                // C-W6c: the transport refused/failed the P2P relay — record
+                // dispatch_failed against the attempt opened before the send so the
+                // new ledger reclaims it (R24) instead of leaving an orphaned 'A' state.
+                await observeDirectDispatchOutcome(ctx, p2pAttemptRef, {
+                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent: false,
+                });
             }
             const returnedSessionId = result.sessionId
                 && result.providerType
@@ -973,6 +1113,18 @@ export async function meshSendTask(
                     ),
                 }
                 : taskInput;
+            // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the
+            // inject, mirroring the "pre-record before agent_command" ordering this
+            // whole block already uses for CANON-A — the new ledger needs the same
+            // ordering guarantee for the same reason (a fast completion racing ahead
+            // of the attempt row). Threaded into meshContext below so cli-manager.ts
+            // echoes it onto this worker's own turn evidence (plain-session lane).
+            const localAttemptRef = await openDirectDispatchAttempt(ctx, {
+                taskId,
+                nodeId: args.node_id,
+                sessionId: args.session_id || taskId,
+                providerType: resolvedProviderType,
+            });
             const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
                 targetSessionId: args.session_id,
                 agentType: resolvedProviderType,
@@ -994,6 +1146,8 @@ export async function meshSendTask(
                     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                     // (3) Originating coordinator session anchor — see the remote-dispatch path above.
                     ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                    // C-W6c: see the identical note on the remote-dispatch arm above.
+                    ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId, attemptGeneration: localAttemptRef.generation } : {}),
                 },
             });
             const dispatchPayload = unwrapCommandPayload(dispatchResult);
@@ -1004,6 +1158,11 @@ export async function meshSendTask(
                 // leaving it would mask a genuinely-unrelated later idle as an active assignment.
                 try { deleteDirectDispatchesByTaskId(ctx.mesh.id, [taskId]); } catch { /* best-effort */ }
                 dispatchPreRecorded = false;
+                // C-W6c: reclaim the new-ledger attempt too (R24) — the inject was
+                // refused, so there is no worker to eventually deliver/complete it.
+                await observeDirectDispatchOutcome(ctx, localAttemptRef, {
+                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent: false,
+                });
                 const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
                 return JSON.stringify({
                     ...(source && typeof source === 'object' ? source : {}),
@@ -1013,6 +1172,11 @@ export async function meshSendTask(
                     error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
                 });
             }
+            // C-W6c: the inject was accepted — record the delivery against the
+            // attempt opened before the send.
+            await observeDirectDispatchOutcome(ctx, localAttemptRef, {
+                taskId, sessionId: args.session_id || taskId, outcome: 'delivered', via: 'local',
+            });
             // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: unconditional — see the note at
             // the sibling call site above. The turn attempt and the confirmed delivery
             // record must not depend on whether a mission was supplied.
@@ -1103,7 +1267,7 @@ export async function meshSendTask(
         const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
         // Also drain any pending coordinator events so the caller sees them inline
-        const pendingEvents = drainPendingMeshCoordinatorEvents(ctx.mesh.id, ctx.localDaemonId);
+        const pendingEvents = await drainCoordinatorPendingEvents(ctx);
 
         const result: Record<string, unknown> = {
             success: true,

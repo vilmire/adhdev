@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask, meshStatus, meshTaskHistory, meshViewQueue } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordinatorEvents, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, loadConfig, queuePendingMeshCoordinatorEvent, readLedgerEntries, updateTaskStatus } from '@adhdev/daemon-core';
+import { appendLedgerEntry, buildTaskCompletionEvidence, enqueueTask, getLedgerDir, getQueue, insertDirectDispatch, loadConfig, queuePendingMeshCoordinatorEvent, readLedgerEntries, __writeTaskStatusForTests } from '@adhdev/daemon-core';
+import { drainPendingMeshCoordinatorEvents } from './helpers/pending-notices.js';
 
 // The stdio MCP coordinator runs on its own daemon/machine, so a self-fallback (ownerless)
 // terminal broadcast — a refine:* event queued with no coordinator identity — is stamped
@@ -15,7 +16,7 @@ import { appendLedgerEntry, buildTaskCompletionEvidence, drainPendingMeshCoordin
 const SELF_MACHINE_ID = loadConfig().machineId;
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { recordTurnAck, recordTurnStage } from '../../daemon-core/src/mesh/mesh-turn-ledger.js';
 
 function cleanupMesh(meshId: string): void {
@@ -68,11 +69,28 @@ function createRemoteCtx(meshId: string) {
   };
   const calls: Array<{ daemonId?: string; command: string; args: Record<string, unknown> }> = [];
 
+  // Per-attempt state so repeated turn_observe calls (dispatch_accepted then
+  // delivered) return a consistent, advancing attemptRef the way the real
+  // daemon's turn ledger would, rather than a fresh id on every call.
+  let directAttempt: { attemptId: string; generation: number } | null = null;
+
   transport.command = async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
+    // C-W6c/C-W7: mesh_send_task's direct-dispatch arm opens (dispatch_accepted)
+    // and then ACKs (delivered) a turn attempt via turn_observe before recording
+    // the queue row — mesh-active-work.ts's reducer-projection overlay depends on
+    // this attempt existing, so the fixture must answer it like the real daemon.
+    if (command === 'turn_observe') {
+      const evidence = (args as any)?.evidence ?? {};
+      if (evidence.kind === 'dispatch_accepted') {
+        directAttempt = { attemptId: 'att-direct-remote', generation: 0 };
+        return { success: true, verdict: 'applied', attemptRef: directAttempt };
+      }
+      return { success: true, verdict: 'applied', attemptRef: directAttempt ?? { attemptId: 'att-direct-remote', generation: 0 } };
+    }
     if (command === 'get_status_metadata') {
       return {
         success: true,
@@ -164,9 +182,13 @@ function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
     calls.push({ command, args });
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'get_pending_mesh_events') {
-      return { success: true, events: drainPendingMeshCoordinatorEvents(meshId, 'daemon-coordinator') };
+      return { success: true, events: drainPendingMeshCoordinatorEvents(meshId) };
     }
     if (command === 'mesh_forward_event') return { success: true, forwarded: 0 };
+    // C2: the MCP reports transcript evidence; the daemon's ledger decides.
+    if (command === 'turn_observe') {
+      return { success: true, verdict: 'applied', attemptRef: { attemptId: 'att-direct', generation: 0 }, outcome: 'completed' };
+    }
     if (command === 'get_status_metadata') {
       return { success: true, status: { sessions: mesh.nodes[0].sessions } };
     }
@@ -400,7 +422,16 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
   }
 });
 
-test('mesh_status reconciles idle direct dispatch completion from final transcript JSON exactly once', async () => {
+// C2 (wiring-unification): the MCP no longer WRITES a terminal for a transcript-
+// backed idle direct dispatch (it used to append task_completed + queue a
+// pending notice in its own process). It reports ONE `turn_observe`
+// transcript_final{source:'mcp_probe'} per transcript turn end — content-free —
+// and the daemon's turn ledger is the sole authority for the commit.
+function turnObserveCalls(calls: Array<{ command: string; args: Record<string, unknown> }>): any[] {
+  return calls.filter(call => call.command === 'turn_observe').map(call => (call.args as any).evidence);
+}
+
+test('mesh_status reports an idle direct dispatch\'s final transcript as ONE content-free turn_observe(transcript_final, mcp_probe) — never an in-process terminal write', async () => {
   const meshId = 'mesh-direct-transcript-status-completion-test';
   cleanupMesh(meshId);
   const taskId = 'direct-transcript-status-task';
@@ -422,36 +453,32 @@ test('mesh_status reconciles idle direct dispatch completion from final transcri
   try {
     seedDirectTranscriptDispatch(meshId, taskId);
 
-    const status = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true }));
+    await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true });
     assert.equal(calls.some(call => call.command === 'read_chat'), true);
-    assert.equal(calls.some(call =>
-      call.command === 'get_pending_mesh_events'
-      && call.args.coordinatorDaemonId === 'daemon-coordinator'
-    ), true);
-    assert.equal(status.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
-    assert.equal(status.activeWork.some((entry: any) => entry.taskId === taskId), false);
-    assert.equal(status.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
-    assert.equal(status.activeWorkSummary.staleDirectUnacknowledgedCount, undefined);
-    assert.equal(status.ledgerSummary.taskCompleted, 1);
-    assert.equal(status.pendingCoordinatorEvents.length, 1);
-    assert.equal(status.pendingCoordinatorEvents[0].event, 'agent:generating_completed');
-    assert.equal(status.pendingCoordinatorEvents[0].metadataEvent.taskId, taskId);
+    const observed = turnObserveCalls(calls);
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].kind, 'transcript_final');
+    assert.equal(observed[0].source, 'mcp_probe');
+    assert.equal(observed[0].taskId, taskId);
+    assert.equal(observed[0].sessionId, 'sess-transcript');
+    assert.equal(observed[0].live.trailingTool, false);
+    // Content boundary: the summary text never crosses the evidence.
+    assert.equal(JSON.stringify(observed).includes('Restored the approved file'), false);
+    // The MCP wrote no terminal of its own.
+    assert.equal(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
 
-    const entriesAfterFirstStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
-    assert.equal(entriesAfterFirstStatus.length, 1);
-    assert.equal(entriesAfterFirstStatus[0].payload?.evidence?.workerResult?.source, 'final_summary_json');
-
-    const secondStatus = JSON.parse(await meshStatus(ctx as any, { includeTerminalDirectWork: true }));
-    const entriesAfterSecondStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
-    assert.equal(entriesAfterSecondStatus.length, 1);
-    assert.equal(secondStatus.pendingCoordinatorEvents, undefined);
-    assert.equal(secondStatus.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
+    // A second poll over the SAME turn end re-sends the SAME eventId (the ledger
+    // collapses it on its primary key) rather than a fresh evidence row per poll.
+    await meshStatus(ctx as any, { includeTerminalDirectWork: true });
+    const observedAgain = turnObserveCalls(calls);
+    assert.equal(observedAgain.length, 2);
+    assert.equal(observedAgain[1].eventId, observedAgain[0].eventId);
   } finally {
     cleanupMesh(meshId);
   }
 });
 
-test('mesh_view_queue reconciles transcript-backed idle direct dispatch before stale unacknowledged classification', async () => {
+test('mesh_view_queue reports transcript-backed idle direct dispatch evidence through turn_observe before classifying', async () => {
   const meshId = 'mesh-direct-transcript-view-queue-completion-test';
   cleanupMesh(meshId);
   const taskId = 'direct-transcript-view-queue-task';
@@ -467,25 +494,18 @@ test('mesh_view_queue reconciles transcript-backed idle direct dispatch before s
     }),
     '```',
   ].join('\n');
-  const { ctx } = createIdleTranscriptCtx(meshId, finalSummary);
+  const { ctx, calls } = createIdleTranscriptCtx(meshId, finalSummary);
 
   try {
     seedDirectTranscriptDispatch(meshId, taskId);
 
-    const activeView = JSON.parse(await meshViewQueue(ctx as any, { view: 'active', verbose: true }));
-    assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
-    assert.equal(activeView.activeWork.some((entry: any) => entry.taskId === taskId), false);
-    assert.equal(activeView.activeWorkSummary.staleDirectUnacknowledgedCount, undefined);
-
-    const terminalEntries = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
-    assert.equal(terminalEntries.length, 1);
-
-    const detailedStatus = JSON.parse(await meshStatus(ctx as any, { includeStaleDirectWorkDetails: true, includeTerminalDirectWork: true }));
-    assert.equal(detailedStatus.staleDirectWork.some((entry: any) => entry.taskId === taskId), false);
-    assert.equal(detailedStatus.terminalDirectWork.some((entry: any) => entry.taskId === taskId && entry.terminalKind === 'task_completed'), true);
-
-    const terminalEntriesAfterStatus = readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed' && entry.payload?.taskId === taskId);
-    assert.equal(terminalEntriesAfterStatus.length, 1);
+    await meshViewQueue(ctx as any, { view: 'active', verbose: true });
+    const observed = turnObserveCalls(calls);
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].kind, 'transcript_final');
+    assert.equal(observed[0].taskId, taskId);
+    assert.equal(JSON.stringify(observed).includes('Final investigation result'), false);
+    assert.equal(readLedgerEntries(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
   } finally {
     cleanupMesh(meshId);
   }
@@ -535,8 +555,8 @@ test('active queue view keeps historical queue rows out while direct work is exp
     const pending = enqueueTask(meshId, 'pending queue task', { difficulty: 'medium' });
     const completed = enqueueTask(meshId, 'completed queue task', { difficulty: 'medium' });
     const failed = enqueueTask(meshId, 'failed queue task', { difficulty: 'medium' });
-    updateTaskStatus(meshId, completed.id, 'completed');
-    updateTaskStatus(meshId, failed.id, 'failed');
+    __writeTaskStatusForTests(meshId, completed.id, 'completed');
+    __writeTaskStatusForTests(meshId, failed.id, 'failed');
     appendLedgerEntry(meshId, {
       kind: 'task_dispatched',
       nodeId: 'node-remote',
@@ -714,7 +734,7 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
     const pending = enqueueTask(meshId, 'the only active pending task', { difficulty: 'medium' });
     for (let i = 0; i < 40; i++) {
       const t = enqueueTask(meshId, `historical task ${i} with a reasonably long descriptive title to add payload weight`, { difficulty: 'medium' });
-      updateTaskStatus(meshId, t.id, i % 2 === 0 ? 'completed' : 'failed');
+      __writeTaskStatusForTests(meshId, t.id, i % 2 === 0 ? 'completed' : 'failed');
     }
     // Seed 20 orphaned direct dispatches (node has no live sessions) -> staleDirectWork.
     for (let i = 0; i < 20; i++) {
@@ -783,7 +803,6 @@ test('mesh_task_history returns pending async refine failure events instead of d
     transport: {
       command: async (command: string) => {
         if (command === 'get_pending_mesh_events') {
-          const { drainPendingMeshCoordinatorEvents } = await import('@adhdev/daemon-core');
           return { success: true, events: drainPendingMeshCoordinatorEvents(meshId) };
         }
         return { success: false };

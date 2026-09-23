@@ -4,11 +4,22 @@ import test from 'node:test';
 import { upsertMeshMission, getMeshMission, getMeshMissions } from '@adhdev/daemon-core';
 import { meshMissionUpsert } from '../src/tools/mesh-tools.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
+import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 
+// C-W6 MIGRATION (2026-09-23): meshMissionUpsert now calls missionUpsert/
+// missionQuery over IPC (../ipc/turn-commands.js) instead of the in-process
+// upsertMeshMission/getMeshMission directly — see mesh-tools-mission.ts's
+// file-header migration-status note. `ctx.transport` must therefore be a real
+// (fake) CommandTransport that actually answers `mission_upsert`/
+// `mission_query`, not the `{}` placeholder this test used before the
+// migration (the tool never read `.transport` when it called the store
+// in-process, so an empty object was harmless — it is not harmless now).
+// upsertMeshMission/getMeshMission/getMeshMissions (direct daemon-core
+// imports, above) are kept in this file ONLY for setup/assertion against the
+// same underlying mission table the fake transport's handler writes to —
+// they are not what meshMissionUpsert calls anymore.
 function buildCtx(meshId: string): any {
-    // meshMissionUpsert only reads ctx.mesh.id (single + bulk paths operate on the
-    // file-backed mission store directly), so a minimal mesh is enough.
-    return { mesh: { id: meshId }, transport: {}, localDaemonId: 'daemon-A', localMachineId: 'machine-A' };
+    return { mesh: { id: meshId }, transport: makeFakeTurnIpcTransport(), localDaemonId: 'daemon-A', localMachineId: 'machine-A' };
 }
 
 function cleanup(meshId: string): void {

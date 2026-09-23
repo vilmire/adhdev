@@ -75,7 +75,6 @@ import {
     recordGraphGateAbandoned,
     recordGraphNodePatched,
     taskDependenciesSatisfied,
-    drainPendingMeshCoordinatorEvents,
     enqueueTask,
     enqueueTaskGraph,
     MESH_TASK_GRAPH_MAX_TASKS,
@@ -109,10 +108,8 @@ import {
     coordinatorIdentityFromEmitFields,
     readLedgerSlice,
     readLedgerSliceFromStore,
-    reconcileDirectDispatchCompletionFromTranscript,
     recordMeshToolCall,
     requeueTask,
-    requeueHeldMeshCoordinatorEvents,
     resolveMeshSurfacedSessionPreview,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
@@ -219,7 +216,6 @@ export {
     MESH_RECORD_NOTE_TOOL,
     MESH_FORGET_NOTE_TOOL,
     MESH_RECONCILE_LEDGER_TOOL,
-    MESH_REQUEUE_HELD_EVENTS_TOOL,
     MESH_PRUNE_STALE_DIRECT_TOOL,
     MESH_REFINE_NODE_TOOL,
     MESH_REFINE_BATCH_TOOL,
@@ -363,7 +359,6 @@ export {
     recordGraphGateAbandoned,
     recordGraphNodePatched,
     taskDependenciesSatisfied,
-    drainPendingMeshCoordinatorEvents,
     enqueueTask,
     enqueueTaskGraph,
     MESH_TASK_GRAPH_MAX_TASKS,
@@ -402,10 +397,8 @@ export {
     readLedgerEntries,
     readLedgerSlice,
     readLedgerSliceFromStore,
-    reconcileDirectDispatchCompletionFromTranscript,
     recordDirectDispatchTask,
     requeueTask,
-    requeueHeldMeshCoordinatorEvents,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
     loadRepoMeshJsonConfig,
@@ -552,22 +545,12 @@ export interface MeshContext {
      */
     coordinatorSessionId?: string;
     /**
-     * T6 (B3c): the mesh-protocol-v2 enforce/backstop counters snapshot ridden on the
-     * most recent local get_pending_mesh_events drain response (set by
-     * drainCoordinatorPendingEvents). Lets a pure stdio MCP coordinator surface the
-     * enforce state + quarantine / last-resort-backstop tallies in mesh_status without
-     * a second daemon round-trip. Absent on version-skewed daemons that don't ride it.
+     * `'pending'` when the most recent inbox read (drainCoordinatorPendingEvents)
+     * reported that another writer's `mesh.<id>.events` entries have not replicated
+     * to this daemon yet (Beacon staleness) — i.e. the inbox may be incomplete.
+     * Surfaced by mesh_status as `replication: 'pending'`.
      */
-    lastMeshProtocolV2Counters?: MeshProtocolV2CountersSnapshot;
-    /**
-     * Pending-event retention sweep counters ridden on the most recent local
-     * get_pending_mesh_events drain response (set by drainCoordinatorPendingEvents),
-     * same rationale as lastMeshProtocolV2Counters above. `undrainedExpired` non-zero
-     * means the sweep deleted events that were never delivered — mirrored to the
-     * ledger as event_held (reason: pending_retention_expired), recoverable via
-     * mesh_requeue_held_events. Absent on version-skewed daemons that don't ride it.
-     */
-    lastPendingRetentionCounters?: MeshPendingRetentionCountersSnapshot;
+    lastNoticeReplication?: 'pending';
 }
 
 /**
@@ -591,23 +574,6 @@ export function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: string): M
         sessionId,
         callerRole: sessionId ? 'coordinator' : 'unknown',
     });
-}
-
-/** T6 (B3c) live v2 enforce/observability counters snapshot (mirrors the daemon-core
- *  RepoMeshStatus.meshProtocolV2Counters shape). Structural type — no daemon-core import. */
-export interface MeshProtocolV2CountersSnapshot {
-    enforce: boolean;
-    drain: Record<string, number>;
-    backstop: Record<string, number>;
-}
-
-/** Pending-event retention sweep counters snapshot (mirrors the daemon-core
- *  RepoMeshStatus.pendingRetentionCounters shape). Structural type — no daemon-core import. */
-export interface MeshPendingRetentionCountersSnapshot {
-    drainedExpired: number;
-    undrainedExpired: number;
-    undrainedExpiredMirrorFailed: number;
-    sweepsNoop: number;
 }
 
 export type MeshSessionProviderMetadata = {
@@ -2025,150 +1991,52 @@ export function resolveSemanticReplicaTransport(
 }
 
 
+/**
+ * The MCP coordinator's inbox read (wiring-unification C2 / C-W3).
+ *
+ * Coordinator notices are durable `turn_events` rows (`turn.notify`) on the
+ * daemon; this is ONE `get_pending_mesh_events` read over the MCP's own
+ * transport (IPC or the standalone HTTP API — never an in-process store read:
+ * mcp-server may not touch mesh-runtime.db, check:boundaries C8). The daemon
+ * claims what it returns, so the tool RESULT is the delivery surface — the
+ * events are never re-forwarded (`mesh_forward_event` would only re-notify),
+ * and there is no remote pull: a notice written on another machine reaches
+ * this daemon by `mesh.<id>.events` topic replication and is delivered by its
+ * `turn.deliver` cursor.
+ *
+ * When this daemon hosts an injectable CLI coordinator the cursor owns
+ * delivery; `selfCoordinatorInboxRead` tells the daemon the caller IS that
+ * coordinator reading its own inbox, so surfacing here is lossless.
+ * `opts.nodeIds` is accepted for call-site compatibility (it scoped the retired
+ * remote pull) and ignored.
+ */
 export async function drainCoordinatorPendingEvents(
     ctx: MeshContext,
-    opts?: { nodeIds?: string[] },
+    _opts?: { nodeIds?: string[] },
 ): Promise<any[]> {
-    const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
     const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
-
-    if (ctx.transport instanceof IpcTransport) {
-        const transport = ctx.transport;
-        const surfacedEvents: any[] = [];
-        const coordinatorDaemonId = readString(ctx.localDaemonId);
-        const pendingEventArgs = {
-            meshId: ctx.mesh.id,
-            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-        };
-        // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): this LOCAL drain is the coordinator
-        // reading its OWN inbox — the drained events return in this tool call's RESULT and are
-        // surfaced to the LLM directly (a lossless data-queue surface), so the daemon must NOT
-        // hold it while the local CLI coordinator is busy. Scoped to the local drain only; the
-        // remote-node pulls below keep the default (reconcile-owned) delivery.
-        const localPendingEventArgs = { ...pendingEventArgs, selfCoordinatorInboxRead: true };
-
-        // Drain THIS daemon's local pending queue and route each event to its delivery surface.
-        //
-        // NOTIF-DROP (drain-without-inject) fix: when this daemon has NO live CLI coordinator
-        // for the mesh (a pure stdio MCP/LLM coordinator), the MCP tool result is the ONLY
-        // surface. Re-forwarding the event via mesh_forward_event then just RE-QUEUES it
-        // (injectMeshSystemMessage has no live CLI session to inject into), so the completion
-        // loops in the queue at drained=0 and never reaches the LLM — the exact single-event
-        // loss observed for a daemon_reconcile_transcript_completion consumed while the
-        // coordinator was busy. In that case we surface the drained events to the LLM directly
-        // (the event's coordinator-side state — task_completed ledger etc. — was already applied
-        // when it was first queued, so skipping the redundant re-forward loses nothing).
-        //
-        // When a live CLI coordinator DOES exist, the reconcile loop owns PTY delivery, so keep
-        // the existing forward path (and only surface as a fallback when the forward itself
-        // throws). hasLiveCliCoordinator rides the get_pending_mesh_events response for exactly
-        // this decision. The remote-node pull below is unchanged — its forward re-homes a remote
-        // worker's event into the local queue, which the second local drain then surfaces.
-        const drainLocalToSurface = async (): Promise<void> => {
-            const raw = await transport.command('get_pending_mesh_events', localPendingEventArgs) as any;
-            const payloadRaw = unwrapCommandPayload(raw);
-            // T6 (B3c): capture the enforce/backstop counters the daemon rode on this
-            // local drain so mesh_status can surface them (see MeshContext).
-            const counters = payloadRaw?.meshProtocolV2Counters ?? raw?.meshProtocolV2Counters;
-            if (counters && typeof counters === 'object') {
-                ctx.lastMeshProtocolV2Counters = counters as MeshProtocolV2CountersSnapshot;
-            }
-            // Same relay for the pending-event retention sweep counters (see MeshContext).
-            const retentionCounters = payloadRaw?.pendingRetentionCounters ?? raw?.pendingRetentionCounters;
-            if (retentionCounters && typeof retentionCounters === 'object') {
-                ctx.lastPendingRetentionCounters = retentionCounters as MeshPendingRetentionCountersSnapshot;
-            }
-            const hasLiveCliCoordinator = payloadRaw?.hasLiveCliCoordinator === true
-                || raw?.hasLiveCliCoordinator === true;
-            // SELF-COORDINATOR INBOX LEVEL-DRAIN (Defect 2): the daemon relaxed the busy-coordinator
-            // hold because this is the self-coordinator's own inbox read, and it flagged the events
-            // as surfaced through THIS tool result. Surface them directly to the LLM — do NOT
-            // re-forward into the (busy) live PTY (the lossy drain-without-inject path). Without the
-            // flag, delivery is unchanged: forward when a live CLI coordinator owns PTY delivery.
-            const surfacedForSelfCoordinator = payloadRaw?.surfacedForSelfCoordinator === true
-                || raw?.surfacedForSelfCoordinator === true;
-            const localEvents = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
-            for (const event of localEvents) {
-                const payload = buildMeshForwardPayloadFromPendingEvent(event);
-                if (!payload.event || !payload.meshId) continue;
-                if (!hasLiveCliCoordinator || surfacedForSelfCoordinator) {
-                    // Pure-MCP coordinator, OR the self-coordinator's own busy inbox read: the LLM
-                    // tool result is the surface. Do NOT re-forward (that re-queues with no free PTY
-                    // → the drain-without-inject loop / the ~59s self-coordinator strand).
-                    rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                    surfacedEvents.push(event);
-                    continue;
-                }
-                let injected = false;
-                try {
-                    await transport.command('mesh_forward_event', payload);
-                    injected = true;
-                } catch { /* best-effort */ }
-                rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                if (!injected) surfacedEvents.push(event);
-            }
-        };
-
-        try {
-            await drainLocalToSurface();
-        } catch {
-            // Non-fatal: pending events are best-effort.
-        }
-
-        for (const node of ctx.mesh.nodes) {
-            if (!node.daemonId || isLocalControlPlaneNode(ctx, node)) continue;
-            if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
-
-            try {
-                const remoteEvents = normalizePendingMeshCoordinatorEvents(
-                    await transport.meshCommand(node.daemonId, 'get_pending_mesh_events', pendingEventArgs),
-                ).filter(matchesCurrentMesh);
-                if (remoteEvents.length === 0) continue;
-
-                for (const event of remoteEvents) {
-                    const payload = buildMeshForwardPayloadFromPendingEvent(event);
-                    if (!payload.event || !payload.meshId) continue;
-                    await transport.command('mesh_forward_event', payload);
-                    rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: payload });
-                }
-            } catch {
-                // Non-fatal: remote pending-event recovery is best-effort.
-            }
-        }
-
-        try {
-            await drainLocalToSurface();
-        } catch {
-            // Non-fatal: pending events are best-effort.
-        }
-
-        return surfacedEvents;
+    const coordinatorDaemonId = readString(ctx.localDaemonId);
+    const args = {
+        meshId: ctx.mesh.id,
+        ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
+        selfCoordinatorInboxRead: true,
+        // COORD-EVENT-MISROUTE: a sibling coordinator session's unicast notice
+        // on the same daemon is not surfaced to this one.
+        ...(ctx.coordinatorSessionId ? { sessionId: ctx.coordinatorSessionId } : {}),
+    };
+    let raw: any;
+    try {
+        raw = await ctx.transport.command('get_pending_mesh_events', args);
+    } catch {
+        return []; // Non-fatal: the notices stay undelivered rows; the next read / the cursor gets them.
     }
-
-    // (B3) Pass localDaemonId so unicast events targeted at other
-    // coordinators are skipped (and requeued) instead of being silently
-    // consumed by this MCP. drainPendingMeshCoordinatorEvents already
-    // accepts the second arg in the base; we were the missing wiring.
-    //
-    // COORD-EVENT-MISROUTE (defense-in-depth, session filter): thread THIS coordinator's own
-    // sessionId into the drainer identity so identityDeliversTo can exclude a SIBLING coordinator
-    // session's unicast completion on the same daemon (contracts.ts identityDeliversTo compares
-    // sessions only when BOTH the event's intendedFor AND the drainer name one). Without a session
-    // in the drainer identity the filter is inert and a daemon-level drain sweeps every local
-    // coordinator's events. Regression-0: when coordinatorSessionId is empty (single-coordinator /
-    // legacy) the drainer stays session-less → daemon-level delivery is unchanged; and a broadcast
-    // event is delivered regardless (shouldDeliverPendingEventToCoordinator → true for broadcast),
-    // so this only narrows genuine per-session unicast, never suppresses a broadcast.
-    const drainerIdentity = coordinatorIdentityFromEmitFields({
-        daemonId: ctx.localDaemonId,
-        sessionId: ctx.coordinatorSessionId,
-    });
-    const events = (drainPendingMeshCoordinatorEvents(
-        ctx.mesh.id,
-        ctx.localDaemonId,
-        drainerIdentity ? { drainerIdentity } : undefined,
-    ) as any[]).filter(matchesCurrentMesh);
-    events.forEach(rememberMeshSessionProviderMetadataFromEvent);
+    const payload = unwrapCommandPayload(raw);
+    const replication = payload?.replication ?? raw?.replication;
+    ctx.lastNoticeReplication = replication === 'pending' ? 'pending' : undefined;
+    const events = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
+    for (const event of events) {
+        rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: buildMeshForwardPayloadFromPendingEvent(event) });
+    }
     return events;
 }
 

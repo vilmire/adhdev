@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { meshLedgerQuery } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, getLedgerDir, loadConfig } from '@adhdev/daemon-core';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 const SELF_MACHINE_ID = loadConfig().machineId;
 

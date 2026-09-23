@@ -8,7 +8,7 @@ import { meshSendTask } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, getQueue } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // End-to-end coverage for the mesh_send_task delivery_mode:'interrupt' branch in
 // mesh-tools-session.ts (axis A of M-INPUT-DELIVERY-MODE-AND-QUEUE). The unit

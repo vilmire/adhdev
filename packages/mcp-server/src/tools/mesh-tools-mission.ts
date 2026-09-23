@@ -1,6 +1,38 @@
 // Mesh tool implementations — mission domain.
 // Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
 // state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+//
+// MIGRATION STATUS (wiring-unification Phase C, workstream C-W6 —
+// docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph):
+// the mission-CRUD functions below (meshMissionUpsert / meshMissionUpsertBulk /
+// meshMissionList) now call `missionUpsert`/`missionQuery` over IPC
+// (`../ipc/turn-commands.js`) instead of the in-process `upsertMeshMission`/
+// `getMeshMission`/`listMeshMissionsForTool`. This is the file the C-W6 brief
+// and pre-work report both name as the one place mission CRUD's "no home in
+// the six commands" gap was closed (turn-ipc.ts's `mission_upsert`/
+// `mission_query` decision, 2026-09-23).
+//
+// NOT migrated in this pass — each is either genuinely out of the 8-command
+// surface today or independently broken by concurrent C-W3/C-W4 deletions,
+// not something this file's migration should paper over with a guess:
+//   - meshRecordNote / meshForgetNote: write/tombstone `coordinator_operating_note`
+//     ledger entries carrying a free-text `text` field. That is CONTENT — it
+//     cannot go through `mesh_record`'s scalar ProjectedScalars allow-list (see
+//     turn-ipc.ts's file header) and has no IPC command of its own yet. A
+//     REQUESTED EDIT for the owner: route operating notes through
+//     `mesh.<id>.handoff` (C10-1's precedent for free-text mission/graph state)
+//     with a dedicated IPC command, or an explicit decision to keep this one
+//     in-process as a deliberate carve-out. Left calling `appendLedgerEntry`/
+//     `tombstoneOperatingNote` (still live daemon-core exports) unchanged.
+//   - meshReconcileLedger: P2P ledger-slice reconciliation
+//     (`readLedgerSliceFromStore`/`appendRemoteLedgerEntries`/
+//     `buildMeshLedgerReplicaEvidence`) — C7-6 parity-system territory, a
+//     different workstream. Left unchanged.
+//   - meshTaskHistory / meshLedgerQuery: general ledger browsing by arbitrary
+//     `kind`/`since`/`node` filters — `turn_query`'s shape
+//     (`{meshId, taskId?, attemptId?, sessionId?, state?, since?, tail?}`) has
+//     no free-form kind-list or node filter, so this is a real API mismatch,
+//     not a mechanical rename. Left on `readLedgerEntries` (still live).
 
 import {
     MESH_MISSION_STATUSES,
@@ -16,19 +48,18 @@ import {
     listMeshMissionsForTool,
     readLedgerEntries,
     readLedgerSlice,
-    getMeshMission,
     readLedgerSliceFromStore,
     readString,
     refreshMeshFromDaemon,
-    requeueHeldMeshCoordinatorEvents,
     slimLedgerPayload,
     tombstoneOperatingNote,
     unwrapCommandPayload,
-    upsertMeshMission,
 } from './mesh-tools-internal.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
+import { missionUpsert, missionQuery, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import type { MeshMissionStatusValue } from '@adhdev/mesh-shared';
 
 export async function meshTaskHistory(
     ctx: MeshContext,
@@ -348,33 +379,23 @@ export async function meshReconcileLedger(
     return JSON.stringify({ success: true, evidence }, null, 2);
 }
 
-export async function meshRequeueHeldEvents(
-    ctx: MeshContext,
-    args: { filter?: { task_id?: string; taskId?: string; node_id?: string; nodeId?: string; event?: string; reason?: string; since?: string } },
-): Promise<string> {
-    const { mesh } = ctx;
-    const raw = args.filter && typeof args.filter === 'object' ? args.filter : undefined;
-    const filter = raw
-        ? {
-            ...(readString(raw.task_id) || readString(raw.taskId) ? { taskId: (readString(raw.task_id) || readString(raw.taskId)) } : {}),
-            ...(readString(raw.node_id) || readString(raw.nodeId) ? { nodeId: (readString(raw.node_id) || readString(raw.nodeId)) } : {}),
-            ...(readString(raw.event) ? { event: readString(raw.event) } : {}),
-            ...(readString(raw.reason) ? { reason: readString(raw.reason) } : {}),
-            ...(readString(raw.since) ? { since: readString(raw.since) } : {}),
-        }
+function isMeshMissionStatusValue(value: string | undefined): value is MeshMissionStatusValue {
+    return value !== undefined && (MESH_MISSION_STATUSES as readonly string[]).includes(value);
+}
+
+/** Maps a thrown TurnIpcCommandError (daemon_required / turn_ledger_unavailable / ledger_not_owner) onto this tool's JSON error shape. */
+function missionIpcErrorResult(e: unknown): { success: false; code?: string; error: string } {
+    const message = (e as any)?.message || String(e);
+    // A domain refusal the daemon's mission store raised (it reaches the client
+    // as the IPC error's message, under the transport fallback code) wins over
+    // the transport code: `mission_not_found` is actionable, `turn_ledger_unavailable` is not.
+    const domainCode = message.includes('mission_title_required') ? 'mission_title_required'
+        : message.includes('invalid_mission_status') ? 'invalid_mission_status'
+        : message.includes('mission_not_found') ? 'mission_not_found'
         : undefined;
-
-    const result = requeueHeldMeshCoordinatorEvents(mesh.id, filter && Object.keys(filter).length > 0 ? filter : undefined);
-
-    const note = result.matched === 0
-        ? 'No recoverable held events matched. Nothing to requeue.'
-        : `${result.requeued} held event(s) restored to the pending queue`
-            + (result.dedupSuppressed > 0 ? ` (${result.dedupSuppressed} collapsed onto still-live duplicates)` : '')
-            + (result.alreadyRequeued > 0 ? `; ${result.alreadyRequeued} already recovered by a prior pass` : '')
-            + (result.unrecoverable > 0 ? `; ${result.unrecoverable} had no restorable original event` : '')
-            + '. A coordinator will drain them on its next poll.';
-
-    return JSON.stringify({ success: true, ...result, note }, null, 2);
+    if (domainCode) return { success: false, code: domainCode, error: message };
+    if (e instanceof TurnIpcCommandError) return { success: false, code: e.code, error: message };
+    return { success: false, error: message };
 }
 
 export async function meshMissionUpsert(
@@ -383,7 +404,7 @@ export async function meshMissionUpsert(
 ): Promise<string> {
     // Bulk mode: mission_ids[] + status applies one status to many missions (stale
     // cleanup). Takes precedence over the single mission_id path. title/goal are ignored;
-    // each mission keeps its own title (upsertMeshMission needs a non-empty title, so we
+    // each mission keeps its own title (missionUpsert needs a non-empty title, so we
     // re-supply the existing one per mission).
     const bulkIds = normalizeMissionIdList(args.mission_ids ?? args.missionIds);
     if (bulkIds.length > 0) {
@@ -399,11 +420,20 @@ export async function meshMissionUpsert(
                 error: 'mission_title_required: single-mission upsert needs a non-empty title. For a bulk status transition pass mission_ids (array) + status instead.',
             });
         }
-        const mission = upsertMeshMission(ctx.mesh.id, {
+        const statusArg = readString(args.status) || undefined;
+        if (statusArg !== undefined && !isMeshMissionStatusValue(statusArg)) {
+            return JSON.stringify({
+                success: false,
+                code: 'invalid_mission_status',
+                error: `invalid_mission_status: '${statusArg}' (valid: ${MESH_MISSION_STATUSES.join(', ')})`,
+            });
+        }
+        const { mission } = await missionUpsert(ctx.transport, {
+            meshId: ctx.mesh.id,
             id: readString(args.mission_id) || readString(args.missionId) || undefined,
             title,
             goal: typeof args.goal === 'string' ? args.goal : undefined,
-            status: readString(args.status) || undefined,
+            status: statusArg,
         });
         return JSON.stringify({
             success: true,
@@ -411,12 +441,7 @@ export async function meshMissionUpsert(
             nextAction: 'Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission.',
         });
     } catch (e: any) {
-        const message = e?.message || String(e);
-        const code = message.includes('mission_title_required') ? 'mission_title_required'
-            : message.includes('invalid_mission_status') ? 'invalid_mission_status'
-            : message.includes('mission_not_found') ? 'mission_not_found'
-            : undefined;
-        return JSON.stringify({ success: false, ...(code ? { code } : {}), error: message });
+        return JSON.stringify(missionIpcErrorResult(e));
     }
 }
 
@@ -435,9 +460,9 @@ function normalizeMissionIdList(value: unknown): string[] {
  * G3 (step ②) — bulk mission status transition. Applies `status` to every id in
  * `missionIds`, returning a per-mission result so a partial failure (unknown id,
  * invalid status) never silently drops the rest. Each mission keeps its own title —
- * upsertMeshMission requires a non-empty title, so we look up the existing record and
- * re-supply its title while changing only the status. Primary use: the one-time cleanup
- * of accumulated stale missions.
+ * `missionUpsert` requires a non-empty title, so we look up the existing record (via
+ * `missionQuery`) and re-supply its title while changing only the status. Primary use:
+ * the one-time cleanup of accumulated stale missions.
  */
 async function meshMissionUpsertBulk(
     ctx: MeshContext,
@@ -451,22 +476,47 @@ async function meshMissionUpsertBulk(
             error: 'bulk mission upsert (mission_ids) requires a status to apply to every listed mission.',
         });
     }
-    const results = missionIds.map((id) => {
+    if (!isMeshMissionStatusValue(status)) {
+        // Per-mission results (the pre-IPC shape): every listed mission is
+        // reported as refused with the same code, and nothing is written.
+        const error = `invalid_mission_status: '${status}' (valid: ${MESH_MISSION_STATUSES.join(', ')})`;
+        const results = missionIds.map((id) => ({ id, ok: false, code: 'invalid_mission_status', error }));
+        return JSON.stringify({
+            success: false,
+            mode: 'bulk',
+            code: 'invalid_mission_status',
+            error,
+            requestedStatus: status,
+            applied: 0,
+            failed: results.length,
+            results,
+        });
+    }
+    // One missionQuery(id) + one missionUpsert per id — same two IPC round trips
+    // per mission the in-process version did as two function calls; run serially
+    // (not Promise.all) so a slow daemon-side write can't reorder onto a stale
+    // read for a later id in the same batch.
+    const results: Array<{ id: string; ok: boolean; status?: string; error?: string; code?: string }> = [];
+    for (const id of missionIds) {
         try {
-            const existing = getMeshMission(ctx.mesh.id, id);
-            if (!existing) return { id, ok: false, error: 'mission_not_found' };
-            const updated = upsertMeshMission(ctx.mesh.id, {
+            const { missions } = await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id });
+            const existing = missions[0];
+            if (!existing) {
+                results.push({ id, ok: false, error: 'mission_not_found' });
+                continue;
+            }
+            const { mission: updated } = await missionUpsert(ctx.transport, {
+                meshId: ctx.mesh.id,
                 id,
                 title: existing.title,
                 status,
             });
-            return { id, ok: true, status: updated.status };
+            results.push({ id, ok: true, status: updated.status });
         } catch (e: any) {
-            const message = e?.message || String(e);
-            const code = message.includes('invalid_mission_status') ? 'invalid_mission_status' : undefined;
-            return { id, ok: false, error: message, ...(code ? { code } : {}) };
+            const errResult = missionIpcErrorResult(e);
+            results.push({ id, ok: false, error: errResult.error, ...(errResult.code ? { code: errResult.code } : {}) });
         }
-    });
+    }
     const applied = results.filter(r => r.ok).length;
     const failed = results.length - applied;
     return JSON.stringify({
@@ -482,6 +532,16 @@ async function meshMissionUpsertBulk(
     });
 }
 
+// NOT migrated to `missionQuery` (see file-header migration-status note):
+// `missionQuery`'s landed response is `{missions: MeshMissionRecordWire[]}`
+// only — no `verbose`/`includeMagi`/`withStats`/`limit`/`truncated`/
+// `overflowIds`/`historyFold`, all of which `listMeshMissionsForTool` (still a
+// live daemon-core export) computes today. Widening `missionQuery`'s wire
+// contract is a mesh-shared change outside a same-file swap and would touch
+// an already-tested, already-landed contract other callers may rely on — a
+// REQUESTED EDIT for the mesh-shared/turn-ipc.ts owner, not something to
+// guess at here. Left on the in-process read; only the write path
+// (meshMissionUpsert/meshMissionUpsertBulk, above) moved.
 export async function meshMissionList(
     ctx: MeshContext,
     args: {

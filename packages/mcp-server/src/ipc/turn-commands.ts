@@ -43,15 +43,22 @@ import {
 import {
     decodeMeshIndexQueryResponse,
     decodeMeshRecordResponse,
+    decodeMissionQueryResponse,
+    decodeMissionUpsertResponse,
     decodeOperatorStatusResponse,
     decodeTurnCancelResponse,
     decodeTurnObserveResponse,
     decodeTurnQueryResponse,
+    isTurnIpcErrorCode,
     TURN_IPC_PROTOCOL_VERSION,
     type MeshIndexQueryRequest,
     type MeshIndexQueryResponse,
     type MeshRecordRequest,
     type MeshRecordResponse,
+    type MissionQueryRequest,
+    type MissionQueryResponse,
+    type MissionUpsertRequest,
+    type MissionUpsertResponse,
     type OperatorStatusRequest,
     type OperatorStatusResponse,
     type TurnCancelRequest,
@@ -145,6 +152,39 @@ export function classifyTransportFailure(command: TurnIpcCommand, error: unknown
 
 // ─── generic dispatch ────────────────────────────────────────────────────────
 
+/**
+ * BUGFIX (found during C-W6 migration, 2026-09-23): every daemon-side handler
+ * in `turn-ledger-ipc.ts` (the responder, landed alongside this client) returns
+ * `{success: true, ...response}` or `{success: false, error, code?}` — the same
+ * envelope every other `CommandTransport.command()` verb in this codebase
+ * returns (`unwrapCommandPayload` exists precisely because callers routinely
+ * see this shape). The wire-contract decoders in `@adhdev/mesh-shared`
+ * (`isMissionUpsertResponse` etc.) use `hasOnlyKeys` and therefore reject the
+ * envelope outright — `decodeMissionUpsertResponse({success:true, mission})`
+ * returns `null` even for a perfectly well-formed daemon response. This
+ * function strips the envelope BEFORE handing the inner value to the
+ * contract's decoder, and turns a `{success:false}` envelope into a typed
+ * `TurnIpcCommandError` carrying the daemon's own `code` when it supplied one
+ * (falling back to `turn_ledger_unavailable`, matching `classifyTransportFailure`'s
+ * own default) instead of masking it as a generic decode failure.
+ */
+function unwrapEnvelope(raw: unknown): { ok: true; value: unknown } | { ok: false; error: string; code?: TurnIpcErrorCode } {
+    if (raw !== null && typeof raw === 'object' && 'success' in (raw as Record<string, unknown>)) {
+        const { success, error, code, ...rest } = raw as { success: unknown; error?: unknown; code?: unknown; [k: string]: unknown };
+        if (success === false) {
+            return {
+                ok: false,
+                error: typeof error === 'string' ? error : 'command rejected (no error message)',
+                ...(typeof code === 'string' && isTurnIpcErrorCode(code) ? { code } : {}),
+            };
+        }
+        return { ok: true, value: rest };
+    }
+    // No `success` key at all — pass the raw value through unchanged (defensive:
+    // a future responder that returns the bare response shape directly still works).
+    return { ok: true, value: raw };
+}
+
 async function dispatch<Req extends { v: typeof TURN_IPC_PROTOCOL_VERSION }, Res>(
     transport: CommandTransport,
     command: TurnIpcCommand,
@@ -157,7 +197,11 @@ async function dispatch<Req extends { v: typeof TURN_IPC_PROTOCOL_VERSION }, Res
     } catch (error) {
         throw classifyTransportFailure(command, error);
     }
-    const decoded = decodeResponse(raw);
+    const unwrapped = unwrapEnvelope(raw);
+    if (!unwrapped.ok) {
+        throw new TurnIpcCommandError(unwrapped.code ?? 'turn_ledger_unavailable', command, unwrapped.error);
+    }
+    const decoded = decodeResponse(unwrapped.value);
     if (decoded === null) {
         throw new TurnIpcCommandError(
             'turn_ledger_unavailable',
@@ -216,4 +260,26 @@ export async function meshIndexQuery(
     args: Omit<MeshIndexQueryRequest, 'v'>,
 ): Promise<MeshIndexQueryResponse> {
     return dispatch(transport, 'mesh_index_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMeshIndexQueryResponse);
+}
+
+/**
+ * Create/update a mission (replaces the in-process `upsertMeshMission`). Added
+ * during C-W6 (was missing from the C-W6 pre-work client — turn-ipc.ts's wire
+ * contract already had `mission_upsert`/`mission_query` from the 2026-09-23
+ * "missions have no home in the six commands" decision, but no wrapper
+ * function called them yet).
+ */
+export async function missionUpsert(
+    transport: CommandTransport,
+    args: Omit<MissionUpsertRequest, 'v'>,
+): Promise<MissionUpsertResponse> {
+    return dispatch(transport, 'mission_upsert', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionUpsertResponse);
+}
+
+/** List/read missions for a mesh (replaces the in-process `getMeshMissions`/`getMeshMission`). */
+export async function missionQuery(
+    transport: CommandTransport,
+    args: Omit<MissionQueryRequest, 'v'>,
+): Promise<MissionQueryResponse> {
+    return dispatch(transport, 'mission_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionQueryResponse);
 }

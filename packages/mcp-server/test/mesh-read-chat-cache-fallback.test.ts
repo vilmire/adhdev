@@ -7,7 +7,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshReadChat } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, getLedgerDir } from '@adhdev/daemon-core';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // mesh_read_chat used to hard-fail at the 30s P2P timeout against a saturated/unreachable
 // remote worker — even though the coordinator already holds the worker's latest assistant

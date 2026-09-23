@@ -197,7 +197,7 @@ test('purely local reads are not marked open-world', () => {
 test('additive writes explicitly opt out of the destructive default', () => {
   // MCP defaults destructiveHint to true for a non-read-only tool, so these
   // must state false rather than omit it.
-  for (const name of ['mesh_requeue_held_events', 'mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_record_note', 'mesh_node_slots_set', 'git_checkpoint']) {
+  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_record_note', 'mesh_node_slots_set', 'git_checkpoint']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} writes`);

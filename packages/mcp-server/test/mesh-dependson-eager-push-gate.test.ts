@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { enqueueTask, getQueue, updateTaskStatus, getLedgerDir } from '@adhdev/daemon-core';
+import { enqueueTask, getQueue, __writeTaskStatusForTests, getLedgerDir } from '@adhdev/daemon-core';
 
 // DEPENDSON-GATE-SYMMETRY — mcp-server Fix A.
 //   The cloud "enqueue-and-push" path (IpcTransport) eagerly P2P-dispatches a freshly
@@ -112,7 +112,7 @@ test('Fix A: a task whose dependency is COMPLETED is eager-pushed (gate opens)',
   const meshId = nextMeshId();
   const dep = enqueueTask(meshId, 'prerequisite done', { difficulty: 'medium' });
   // Drive the dep to a terminal completed state through the host queue API.
-  updateTaskStatus(meshId, dep.id, 'completed');
+  __writeTaskStatusForTests(meshId, dep.id, 'completed');
   assert.equal(getQueue(meshId).find(t => t.id === dep.id)?.status, 'completed');
 
   const transport = recordingIpcTransport();
