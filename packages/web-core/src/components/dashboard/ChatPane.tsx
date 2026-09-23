@@ -141,7 +141,7 @@ export function buildBusyChatInputStatusMessage(
     if (conversation.status === 'no_progress' || conversation.status === 'long_generating') {
         return t('chatPane.busyNoProgress')
     }
-    if (conversation.status === 'generating' || conversation.status === 'streaming') {
+    if (conversation.status === 'generating') {
         return t('chatPane.busyGenerating')
     }
     if (conversation.status === 'waiting_approval' && (!conversation.modalButtons || conversation.modalButtons.length === 0)) {
@@ -687,7 +687,7 @@ export default function ChatPane({
                 </div>
             );
         }
-        if (viewStates.isGenerating || activeConv.status === 'streaming') {
+        if (viewStates.isGenerating) {
             setIsLoadingMore(false);
         }
         if (activeConv.status === 'not_monitored' && canOpenPanel) {

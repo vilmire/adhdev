@@ -10,6 +10,7 @@
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import type { DaemonData } from '../types'
+import { normalizeIncomingSessionStatus } from './session-status-ingest'
 import {
     mergeSessionEntrySummary,
     type ExistingSessionLike,
@@ -253,7 +254,7 @@ export function statusPayloadToEntries(
             sessionCapabilities: mergedSession.capabilities,
             type: mergedSession.providerType,
             agentType: mergedSession.providerType,
-            status: mergedSession.status || 'running',
+            status: normalizeIncomingSessionStatus(mergedSession.status) || 'generating',
             daemonId,
             instanceId: scopeSessionInstanceId(daemonId, session.id),
             cliName: mergedSession.providerName || mergedSession.providerType,
@@ -307,7 +308,7 @@ export function statusPayloadToEntries(
             sessionCapabilities: mergedSession.capabilities,
             type: mergedSession.providerType,
             agentType: mergedSession.providerType,
-            status: mergedSession.status || 'running',
+            status: normalizeIncomingSessionStatus(mergedSession.status) || 'generating',
             daemonId,
             instanceId: scopeSessionInstanceId(daemonId, session.id),
             cliName: mergedSession.providerName || mergedSession.providerType,

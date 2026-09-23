@@ -1,4 +1,5 @@
 import type { GitCompactSummary } from '@adhdev/daemon-core'
+import { isWorkingStatus } from '@adhdev/mesh-shared'
 import type { ActiveConversation, DashboardMessage } from './types'
 
 export interface BuildGitSystemBubbleOptions {
@@ -24,9 +25,7 @@ function isGitWorkspace(conversation: Pick<ActiveConversation, 'workspacePath' |
 }
 
 function isWorkingConversation(conversation: Pick<ActiveConversation, 'status' | 'inboxBucket'>): boolean {
-    return conversation.status === 'generating'
-        || conversation.status === 'streaming'
-        || conversation.status === 'working'
+    return isWorkingStatus(conversation.status)
         || conversation.inboxBucket === 'working'
 }
 
