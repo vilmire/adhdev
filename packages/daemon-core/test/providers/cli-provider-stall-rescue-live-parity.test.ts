@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // MID-TURN-LIVE-STATE parity on the stall-rescue emit paths (M1-deletion
 // prerequisite — docs/design/2026-08-17-mesh-hold-absorption.md).
@@ -59,17 +60,20 @@ describe('stall-rescue MID-TURN-LIVE-STATE parity vetoes', () => {
     if (opts.terminalMarker !== undefined) {
       instance.nativeTurnTerminalMarker = () => opts.terminalMarker
     }
-    return { instance, emitted }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
+    return { instance, emitted, evidence }
   }
 
   it('control: with no live pending evidence the idle rescue still emits', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       finalSummary: 'done: implemented and committed',
       liveEvidence: { pending: false },
     })
     expect(instance.tryReconcileTranscriptCompletionForStall('idle')).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
   })
 
   it('vetoes the idle rescue while a modal is parked (kind=modal)', () => {
@@ -91,12 +95,12 @@ describe('stall-rescue MID-TURN-LIVE-STATE parity vetoes', () => {
   })
 
   it('does NOT veto on kind=adapter — that axis stays owned by hasAdapterPendingResponse', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       finalSummary: 'done: implemented and committed',
       liveEvidence: { pending: true, kind: 'adapter' },
     })
     expect(instance.tryReconcileTranscriptCompletionForStall('idle')).toBe(true)
-    expect(emitted).toHaveLength(1)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
   })
 
   it('vetoes the wedged-generating admission when a modal is parked over the wedge', () => {
@@ -111,14 +115,14 @@ describe('stall-rescue MID-TURN-LIVE-STATE parity vetoes', () => {
   })
 
   it('wedged-generating control: adapter-pending alone still reconciles once the marker proves the turn ended', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       finalSummary: 'done: implemented and committed',
       terminalMarker: { status: 'completed' },
       adapterWaiting: true,
       liveEvidence: { pending: true, kind: 'adapter' },
     })
     expect(instance.tryReconcileTranscriptCompletionForStall('generating')).toBe(true)
-    expect(emitted).toHaveLength(1)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
   })
 })
 

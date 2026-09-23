@@ -128,8 +128,14 @@ describe('status_event — chatTitle/finalSummary must stay off the server wire'
     const CHAT_TITLE = 'Refactor the billing module'
     const FINAL_SUMMARY = 'I removed the retry loop and updated 3 call sites.'
 
+    // agent:generating_completed / agent:stopped are turn-sourced only since the
+    // wiring-unification C-W5 follow-up (status/status-event.ts's
+    // TURN_SOURCED_WIRE_NAMES guard) — projectServerStatusEvent now returns null
+    // for them regardless of payload, so they can no longer carry a leak on this
+    // path. agent:waiting_approval stays a live provider_event name and exercises
+    // the exact same allow-list machinery this test is pinning.
     const COMPLETED_EVENT = {
-        event: 'agent:generating_completed',
+        event: 'agent:waiting_approval',
         targetSessionId: 'sess-1',
         providerType: 'claude-cli',
         duration: 12,
@@ -155,10 +161,15 @@ describe('status_event — chatTitle/finalSummary must stay off the server wire'
         // the completion push and its webhook depend on these fields.
         const payload = projectServerStatusEvent(COMPLETED_EVENT)!
 
-        expect(payload.event).toBe('agent:generating_completed')
+        expect(payload.event).toBe('agent:waiting_approval')
         expect(payload.targetSessionId).toBe('sess-1')
         expect(payload.providerType).toBe('claude-cli')
         expect(payload.duration).toBe(12)
+    })
+
+    it('★agent:generating_completed / agent:stopped are turn-sourced only: projectServerStatusEvent drops them even when constructed directly (not just when they arrive via provider_event)', () => {
+        expect(projectServerStatusEvent({ event: 'agent:generating_completed', targetSessionId: 'sess-1', chatTitle: CHAT_TITLE })).toBeNull()
+        expect(projectServerStatusEvent({ event: 'agent:stopped', targetSessionId: 'sess-1' })).toBeNull()
     })
 
     it('★drops provider:* events wholesale — they carry arbitrary UI text', () => {

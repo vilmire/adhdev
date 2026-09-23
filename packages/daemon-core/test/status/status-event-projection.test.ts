@@ -122,7 +122,7 @@ describe('createStatusEventEmitter — turn bus subscription', () => {
         const bus = createSessionLifecycleBus();
         const dashboard: any[] = [];
         const server: any[] = [];
-        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p), turnCommits: true });
+        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p) });
         bus.emit({ kind: 'turn', at: 55, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 1, outcome: 'completed', strength: 'genuine' } as any);
         expect(dashboard).toHaveLength(1);
         expect(server).toHaveLength(1);
@@ -133,12 +133,12 @@ describe('createStatusEventEmitter — turn bus subscription', () => {
     it('a non-committed turn phase (started/suspended/resumed/progress) sends nothing', () => {
         const bus = createSessionLifecycleBus();
         const dashboard: any[] = [];
-        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), turnCommits: true });
+        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p) });
         bus.emit({ kind: 'turn', at: 1, phase: 'started', sessionId: 's1', attemptId: 'a1', generation: 0 } as any);
         expect(dashboard).toHaveLength(0);
     });
 
-    it('★off by default: while providers still emit the legacy completion event, a committed turn is NOT sent again (no double push)', () => {
+    it('★no double push: a producer that still puts the legacy name on provider_event (mesh-event-forwarding / quota refresh consumers) never causes a SECOND status_event for the same turn — projectServerStatusEvent drops it, the turn leg is the only source', () => {
         const bus = createSessionLifecycleBus();
         const dashboard: any[] = [];
         const server: any[] = [];
@@ -150,12 +150,20 @@ describe('createStatusEventEmitter — turn bus subscription', () => {
         expect(server).toHaveLength(1);
     });
 
+    it('turnCommits: false opts back into the pre-C-W5 behaviour (test-only escape hatch)', () => {
+        const bus = createSessionLifecycleBus();
+        const dashboard: any[] = [];
+        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), turnCommits: false });
+        bus.emit({ kind: 'turn', at: 1, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
+        expect(dashboard).toHaveLength(0);
+    });
+
     it('unsubscribe stops BOTH the provider_event and the turn subscriptions', () => {
         const bus = createSessionLifecycleBus();
         const dashboard: any[] = [];
-        const off = createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), turnCommits: true });
+        const off = createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p) });
         off();
-        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed' } as any });
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:waiting_approval' } as any });
         bus.emit({ kind: 'turn', at: 0, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
         expect(dashboard).toHaveLength(0);
     });
@@ -189,10 +197,24 @@ describe('createStatusEventEmitter', () => {
             sendDashboard: () => { throw new Error('peer gone'); },
             sendServer: (p) => server.push(p),
         });
-        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed' } as any });
+        // agent:generating_completed/agent:stopped are turn-sourced only (see the
+        // describe block above) — use a name that legitimately still travels on
+        // provider_event to exercise this leg.
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:waiting_approval' } as any });
         expect(server).toHaveLength(1);
         off();
-        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed' } as any });
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:waiting_approval' } as any });
         expect(server).toHaveLength(1);
+    });
+
+    it('agent:generating_completed / agent:stopped on provider_event are dropped — turn-sourced only', () => {
+        const bus = createSessionLifecycleBus();
+        const dashboard: any[] = [];
+        const server: any[] = [];
+        createStatusEventEmitter(bus, { sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p) });
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed', targetSessionId: 's1' } as any });
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:stopped', targetSessionId: 's1' } as any });
+        expect(dashboard).toHaveLength(0);
+        expect(server).toHaveLength(0);
     });
 });

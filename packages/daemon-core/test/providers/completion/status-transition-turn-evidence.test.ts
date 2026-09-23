@@ -1,10 +1,16 @@
 /**
  * status-transition.ts's turn-evidence producer sites (wiring-unification
- * C5/C-W5, phase-C-W5 brief §1 rows for status-transition.ts). Pins: every
- * site submits evidence THROUGH the port (guarded, no verdict) alongside its
- * unchanged provider-event push; a null port is a pure no-op for the evidence
- * path; session_error's reason classifies into the closed SESSION_ERROR_REASONS
- * enum rather than carrying the adapter's free-text reason.
+ * C5/C-W5/C-W5c, phase-C-W5 brief §1 rows for status-transition.ts). Pins:
+ * every site submits evidence THROUGH the port (guarded, no verdict); the
+ * `waiting_approval` arm still pushes its `agent:waiting_approval`
+ * provider-event ALONGSIDE the evidence (unaffected by C-W5c — only the
+ * `agent:generating_completed`/`agent:stopped` COMPLETION literals were
+ * deleted), while the `error`/`stopped` arms construct NO legacy wire event
+ * any more — text (error message, diagnostic reason) rides
+ * `envelope.finalSummary`/`envelope.notice` instead; a null port is a pure
+ * no-op for the evidence path; session_error's reason classifies into the
+ * closed SESSION_ERROR_REASONS enum rather than carrying the adapter's
+ * free-text reason.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { runStatusTransitionTick, type StatusTransitionHost } from '../../../src/providers/completion/status-transition.js';
@@ -103,9 +109,10 @@ describe('runStatusTransitionTick — turn-evidence emission', () => {
         expect(ev!.attemptRef).toEqual({ attemptId: 'attempt_1', generation: 0 });
     });
 
-    it('generating→error submits session_error classified into the closed enum, never the free-text reason', () => {
+    it('generating→error submits session_error classified into the closed enum, never the free-text reason; C-W5c: no legacy agent:stopped wire literal, error text rides envelope.finalSummary/notice instead', () => {
+        const observedOpts: any[] = [];
         const observed: TurnEvidence[] = [];
-        const port = createTurnEvidencePort({ observe: (e) => { observed.push(e); } });
+        const port = createTurnEvidencePort({ observe: (e, opts) => { observed.push(e); observedOpts.push(opts); } });
         const { host, pushed } = makeHost({
             lastStatus: 'generating', rawStatus: 'error', turnEvidencePort: port,
             errorMessage: 'some free-text banner the agent printed', errorReason: 'auth_failed',
@@ -113,12 +120,17 @@ describe('runStatusTransitionTick — turn-evidence emission', () => {
 
         runStatusTransitionTick(host);
 
-        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(true);
-        const ev = observed.find((e) => e.kind === 'session_error') as Extract<TurnEvidence, { kind: 'session_error' }> | undefined;
+        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(false);
+        const idx = observed.findIndex((e) => e.kind === 'session_error');
+        const ev = observed[idx] as Extract<TurnEvidence, { kind: 'session_error' }> | undefined;
         expect(ev).toBeDefined();
         expect(ev!.reason).toBe('auth_failed');
         // Content-free: no free-text field anywhere on the evidence object.
         expect(Object.values(ev as object)).not.toContain('some free-text banner the agent printed');
+        // The text still reaches the coordinator — just via the LOCAL envelope
+        // opt, never the deleted wire literal.
+        expect(observedOpts[idx]?.envelope?.finalSummary).toBe('some free-text banner the agent printed');
+        expect(observedOpts[idx]?.envelope?.notice?.errorMessage).toBe('some free-text banner the agent printed');
     });
 
     it('an unrecognized errorReason classifies to "unknown", never leaking the raw string', () => {
@@ -135,30 +147,28 @@ describe('runStatusTransitionTick — turn-evidence emission', () => {
         expect(ev!.reason).toBe('unknown');
     });
 
-    it('generating→stopped submits process_exit{exitCode:null} (unexplained death convention)', () => {
+    it('generating→stopped submits process_exit{exitCode:null} (unexplained death convention); C-W5c: no legacy agent:stopped wire literal', () => {
         const observed: TurnEvidence[] = [];
         const port = createTurnEvidencePort({ observe: (e) => { observed.push(e); } });
         const { host, pushed } = makeHost({ lastStatus: 'generating', rawStatus: 'stopped', turnEvidencePort: port });
 
         runStatusTransitionTick(host);
 
-        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(true);
+        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(false);
         const ev = observed.find((e) => e.kind === 'process_exit') as Extract<TurnEvidence, { kind: 'process_exit' }> | undefined;
         expect(ev).toBeDefined();
         expect(ev!.exitCode).toBeNull();
     });
 
-    it('a null turnEvidencePort is a pure no-op for the evidence path — the provider-event push is unaffected', () => {
-        const { host, pushed } = makeHost({ lastStatus: 'generating', rawStatus: 'stopped', turnEvidencePort: null });
+    it('a null turnEvidencePort is a pure no-op — runStatusTransitionTick never throws', () => {
+        const { host } = makeHost({ lastStatus: 'generating', rawStatus: 'stopped', turnEvidencePort: null });
         expect(() => runStatusTransitionTick(host)).not.toThrow();
-        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(true);
     });
 
-    it('a throwing sink never breaks the tick — the provider-event push still lands', () => {
+    it('a throwing sink never breaks the tick', () => {
         const port = createTurnEvidencePort({ observe: () => { throw new Error('ledger unavailable'); } });
-        const { host, pushed } = makeHost({ lastStatus: 'generating', rawStatus: 'stopped', turnEvidencePort: port });
+        const { host } = makeHost({ lastStatus: 'generating', rawStatus: 'stopped', turnEvidencePort: port });
         expect(() => runStatusTransitionTick(host)).not.toThrow();
-        expect(pushed.some((e: any) => e.event === 'agent:stopped')).toBe(true);
     });
 
     it('ordering property: a sequence of evidence submitted across one turn (suspension then process_exit) has non-decreasing `at` and a CONSISTENT sessionId/attemptRef throughout', () => {

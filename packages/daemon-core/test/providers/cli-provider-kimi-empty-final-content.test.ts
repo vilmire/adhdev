@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // KIMI-EMPTY-FINAL-CONTENT (rc.23 live repro): a kimi coverage task emitted
 // agent:generating_completed via the CLEAN finalization path (getCompletedFinalizationBlock
@@ -266,7 +267,12 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
 
     instance.pushEvent = (e: any) => { emitted.push(e) }
     instance.scheduleCompletedDebounceFlush = () => { /* no-op: test asserts the immediate outcome */ }
-    return { instance, emitted }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    const evidenceOpts: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
+    return { instance, emitted, evidence, evidenceOpts }
   }
 
   const FINAL_ANSWER = 'Coverage inventory complete: 42 files, 3 gaps found (see matrix above).'
@@ -279,65 +285,53 @@ describe('CliProviderInstance — kimi end-to-end clean completion (flushComplet
     { role: 'assistant', content: FINAL_ANSWER, timestamp: TURN_START + 335_000 },
   ]
 
-  it('REGRESSION (fails pre-fix): emits generating_completed with the REAL final content, not an empty bubble, even when the independent second read races empty', () => {
-    const { instance, emitted } = makeKimiFlush({
+  it('REGRESSION (fails pre-fix): emits turn_end evidence with the REAL final content on the envelope, not an empty bubble, even when the independent second read races empty; C-W5c: no legacy agent:generating_completed wire literal', () => {
+    const { instance, evidence, evidenceOpts } = makeKimiFlush({
       provingMessages: PROVING_MESSAGES,
       secondReadMessages: [], // the race: second read finds nothing in-turn yet
     })
 
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = evidence.filter((e) => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).toBe(FINAL_ANSWER)
-    expect(completions[0].finalSummary).not.toBe('')
-    expect(completions[0].evidenceLevel).toBe('reported')
-    expect(completions[0].completionDiagnostic).toMatchObject({
-      cleanPath: true,
-      evidenceWeak: false,
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(FINAL_ANSWER)
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).not.toBe('')
+    expect(completions[0].strength).toBe('genuine')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
       finalAssistantPresent: true,
-      finalAssistantEvidenceSource: 'external-native',
-      transcriptEvidence: {
-        version: 1,
-        kind: 'final_assistant',
-        cleanPath: true,
-        weak: false,
-        authorityClass: 'native-source',
-        timing: 'floor',
-        finalContentLength: FINAL_ANSWER.length,
-        taskId: 'task-1',
-        attemptId: 'attempt-1',
-        dispatchNonce: 7,
-        sessionId: 'sess-kimi',
-      },
+      evidenceLevel: 'reported',
     })
     expect(instance.completedDebouncePending).toBeNull()
   })
 
   it('a duplicate flush call after the pending was cleared does not re-emit (exactly-once completion preserved)', () => {
-    const { instance, emitted } = makeKimiFlush({
+    const { instance, evidence } = makeKimiFlush({
       provingMessages: PROVING_MESSAGES,
       secondReadMessages: [],
     })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
 
     instance.flushCompletedDebounceIfFinalized()
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
 
     // pending is now null; a second flush call (e.g. a stray timer fire) must be a no-op.
     instance.flushCompletedDebounceIfFinalized()
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
   })
 
   it('when both reads agree (no race), content is emitted exactly as before — no behavior change on the happy path', () => {
-    const { instance, emitted } = makeKimiFlush({
+    const { instance, evidence, evidenceOpts } = makeKimiFlush({
       provingMessages: PROVING_MESSAGES,
       secondReadMessages: PROVING_MESSAGES,
     })
 
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = evidence.filter((e) => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).toBe(FINAL_ANSWER)
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(FINAL_ANSWER)
   })
 })

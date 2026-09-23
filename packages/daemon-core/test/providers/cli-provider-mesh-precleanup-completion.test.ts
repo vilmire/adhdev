@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // KIMI-MESH-COMPLETION-EMIT (axis 2): flushMeshCompletionBeforeCleanup(). A mesh
 // DELEGATED worker whose PTY exits (e.g. killed by a false stall) AFTER finishing
@@ -43,13 +44,18 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     // Stub the turn-scoped final-summary resolution (the real path reads the native
     // transcript; the evidence GATE is what we exercise here, not the parser).
     instance.completionFinalSummary = () => opts.finalSummary
-    return { instance, emitted, adapter }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    const evidenceOpts: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
+    return { instance, emitted, evidence, evidenceOpts, adapter }
   }
 
   const meshSettings = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-1' }
 
   it('emits a completion when a mesh worker finished (transcript evidence) but never emitted one', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
       turnStartedAt: 3_000, // turn started AFTER injection → injected task genuinely ran
@@ -57,11 +63,14 @@ describe('CliProviderInstance.flushMeshCompletionBeforeCleanup', () => {
     })
     const result = instance.flushMeshCompletionBeforeCleanup()
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
-    expect(emitted[0].taskId).toBe('task-1')
-    expect(emitted[0].finalSummary).toBe('done: committed and pushed')
-    expect(emitted[0].evidenceLevel).toBe('reported')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(turnEnds[0].taskId).toBe('task-1')
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: committed and pushed')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.evidenceLevel).toBe('reported')
     // Double-emit guard is now armed for this task. A transcript-evidence emit is
     // GENUINE (weak=false) → single-shot, and it carries the busyEpoch snapshot.
     expect(instance.lastEmittedCompletion).toEqual({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // TRANSCRIPT-COMPLETION-STALL-RESCUE (P2 of the transcript-authority unification):
 // tryReconcileTranscriptCompletionForStall(). Historically two class-enumerated
@@ -48,7 +49,12 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     // Stub the turn-scoped final-summary resolution (the real path reads the
     // class-appropriate transcript; the evidence GATE is what we exercise here).
     instance.completionFinalSummary = () => opts.finalSummary
-    return { instance, emitted, adapter }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    const evidenceOpts: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
+    return { instance, emitted, evidence, evidenceOpts, adapter }
   }
 
   const purePtyProvider = {
@@ -73,7 +79,7 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
   const meshSettings = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-1' }
 
   it('emits the missing completion (and returns true) for a finished pure-PTY idle worker', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: purePtyProvider,
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
@@ -82,17 +88,20 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     })
     const result = instance.tryReconcileTranscriptCompletionForStall('idle')
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
-    expect(emitted[0].taskId).toBe('task-1')
-    expect(emitted[0].finalSummary).toBe('done: committed and pushed')
-    expect(emitted[0].evidenceLevel).toBe('reported')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(turnEnds[0].taskId).toBe('task-1')
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: committed and pushed')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.evidenceLevel).toBe('reported')
     // Telemetry keeps the historical per-class source string.
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
   })
 
   it('emits the missing completion (and returns true) for a finished native-source idle worker', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: nativeSourceProvider,
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
@@ -101,10 +110,11 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     })
     const result = instance.tryReconcileTranscriptCompletionForStall('idle')
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
-    expect(emitted[0].finalSummary).toBe('done: implemented and committed')
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: implemented and committed')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_native_source_transcript_completion' })
   })
 
   it('returns false (real stall fires) for a daemon-owned provider — the only excluded class', () => {
@@ -203,7 +213,7 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
   }
 
   it('native-source: emits from the signal verdict, payload extracted from the SAME messages (legacy path NOT consulted)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: nativeSourceProvider,
       settings: meshSettings,
       // Realistic ms-scale timestamps: readChatMessageTimestampMs treats
@@ -220,11 +230,14 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     }
     const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
-    expect(emitted[0].finalSummary).toBe('done: implemented and committed')
-    expect(emitted[0].evidenceLevel).toBe('reported')
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: implemented and committed')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.evidenceLevel).toBe('reported')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_native_source_transcript_completion' })
   })
 
   it('native-source: returns false when final_assistant_present is not true (mid-turn / wedge)', () => {
@@ -261,7 +274,7 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
   })
 
   it('native-source: fails open to the legacy evidence path when the snapshot is unavailable', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: nativeSourceProvider,
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
@@ -271,13 +284,15 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     const transcriptSignals = { snapshot: unavailableSnapshot, messages: null }
     const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].finalSummary).toBe('done: recovered by the legacy read')
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: recovered by the legacy read')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_native_source_transcript_completion' })
   })
 
   it('pure-PTY: keeps the PTY-parse evidence path even when a snapshot slot is passed (no native signal exists)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: purePtyProvider,
       settings: meshSettings,
       meshTaskInjectedAt: 2_000,
@@ -289,9 +304,11 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     const transcriptSignals = { snapshot: makeAvailableSnapshot(false), messages: [] }
     const result = instance.tryReconcileTranscriptCompletionForStall('idle', transcriptSignals)
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].finalSummary).toBe('done: committed and pushed')
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: committed and pushed')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_pure_pty_transcript_completion' })
   })
 })
 })

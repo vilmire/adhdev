@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance, getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 import { minimalSpecPath } from '../helpers/minimal-spec.js';
 
 function providerNativeHistoryScripts(readMessages: () => Array<Record<string, unknown>> | null) {
@@ -584,6 +585,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       } as any, '/tmp/project') as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
@@ -613,7 +618,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(3000)
 
-      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
 
       parsed = {
         status: 'idle',
@@ -626,7 +631,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       }
       vi.advanceTimersByTime(1000)
 
-      expect(events.map((event) => event.event)).toContain('agent:generating_completed')
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
@@ -743,6 +748,11 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       }) as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      const evidenceOpts: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
@@ -763,7 +773,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(35_000)
 
-      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
 
       nativeMessages = [
         ...nativeMessages,
@@ -771,10 +781,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       ]
       vi.advanceTimersByTime(1000)
 
-      const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toMatchObject({
-        finalSummary: 'I choose rock. You win.',
-      })
+      const completions = evidence.filter((e) => e.kind === 'turn_end')
+      expect(completions).toHaveLength(1)
+      const idx = evidence.indexOf(completions[0])
+      expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('I choose rock. You win.')
     } finally {
       vi.useRealTimers()
     }
@@ -812,6 +822,11 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       }) as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      const evidenceOpts: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
@@ -839,7 +854,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.advanceTimersByTime(1000)
       instance.detectStatusTransition()
       vi.advanceTimersByTime(3000)
-      expect(events.find((event) => event.event === 'agent:generating_completed')).toBeUndefined()
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
       expect(instance.getState().status).toBe('generating')
 
       // Now the FSM settles idle — completion fires, finalSummary comes from the
@@ -849,9 +864,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(3000)
 
-      const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toBeDefined()
-      expect(completed.finalSummary).toBe('README updated.')
+      const completions = evidence.filter((e) => e.kind === 'turn_end')
+      expect(completions).toHaveLength(1)
+      const idx = evidence.indexOf(completions[0])
+      expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('README updated.')
       expect(instance.getState().status).toBe('idle')
       expect(instance.getState().activeChat.status).toBe('idle')
     } finally {
@@ -883,6 +899,11 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       }) as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      const evidenceOpts: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
       instance.settings = {
@@ -912,19 +933,21 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       // transcript never finalizes its assistant turn no longer HOLDS for the 30s finalization
       // timeout. The block carries allowTimeout (isTranscriptEvidenceGate), so the worker's idle
       // notification is decoupled from the transcript evidence and emitted immediately — marked
-      // weak (decoupledImmediateEmit=true, finalAssistantPresent=false). It fires after the
+      // weak (strength:'weak', finalAssistantPresent:false on the envelope). It fires after the
       // 4000ms settle window, NOT the COMPLETED_FINALIZATION_MAX_WAIT_MS timeout, so
-      // emittedAfterFinalizationTimeout is false.
-      const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toMatchObject({
-        completionDiagnostic: {
-          emittedAfterFinalizationTimeout: false,
-          decoupledImmediateEmit: true,
-          blockReason: 'missing_final_assistant',
-          providerSessionId: '019ea42e-f1f8-7cb1-82fe-0b3b3f2ccc46',
-          finalAssistantPresent: false,
-          finalAssistantEvidenceSource: 'external-native',
-        },
+      // afterFinalizationTimeout is false.
+      // C-W5c: the completion signal is the port's turn_end evidence (the
+      // legacy agent:generating_completed wire literal is gone).
+      const completions = evidence.filter((e) => e.kind === 'turn_end')
+      expect(completions).toHaveLength(1)
+      const idx = evidence.indexOf(completions[0])
+      expect(completions[0].afterFinalizationTimeout).toBeUndefined() // not after the finalization timeout
+      expect(completions[0]).toMatchObject({
+        blockReason: 'missing_final_assistant',
+        strength: 'weak',
+      })
+      expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
+        finalAssistantPresent: false,
       })
     } finally {
       vi.useRealTimers()
@@ -943,6 +966,11 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       } as any, '/tmp/project') as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      const evidenceOpts: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
       instance.providerSessionId = 'provider-history-1'
@@ -970,15 +998,17 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       instance.detectStatusTransition()
       vi.advanceTimersByTime(30_000)
 
-      const completed = events.find((event) => event.event === 'agent:generating_completed')
-      expect(completed).toMatchObject({
-        completionDiagnostic: {
-          emittedAfterFinalizationTimeout: true,
-          blockReason: 'missing_final_assistant',
-          providerSessionId: 'provider-history-1',
-          parsedStatus: 'idle',
-          finalAssistantPresent: false,
-        },
+      // C-W5c: the completion signal is the port's turn_end evidence (the
+      // legacy agent:generating_completed wire literal is gone).
+      const completions = evidence.filter((e) => e.kind === 'turn_end')
+      expect(completions).toHaveLength(1)
+      const idx = evidence.indexOf(completions[0])
+      expect(completions[0]).toMatchObject({
+        afterFinalizationTimeout: true,
+        blockReason: 'missing_final_assistant',
+      })
+      expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
+        finalAssistantPresent: false,
       })
     } finally {
       vi.useRealTimers()
@@ -1043,6 +1073,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       } as any, '/tmp/project') as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
@@ -1068,12 +1102,12 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       status = 'idle'
       instance.detectStatusTransition()
       vi.advanceTimersByTime(30_000)
-      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(0)
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
 
       parsedStatus = 'idle'
       vi.advanceTimersByTime(1000)
 
-      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
@@ -1096,6 +1130,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
         launchedByCoordinator: true,
       }
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
       instance.settings = meshSettings
@@ -1163,7 +1201,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.advanceTimersByTime(5000)
 
       expect(events.filter((event) => event.event === 'agent:waiting_approval')).toHaveLength(1)
-      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
       expect(instance.getState().settings).toEqual(meshSettings)
     } finally {
       vi.useRealTimers()
@@ -1182,6 +1220,10 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       } as any, '/tmp/project') as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       instance.lastStatus = 'idle'
 
@@ -1221,7 +1263,7 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.advanceTimersByTime(3000)
 
       expect(events.filter((event) => event.event === 'agent:waiting_approval')).toHaveLength(1)
-      expect(events.filter((event) => event.event === 'agent:generating_completed')).toHaveLength(1)
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
@@ -1463,6 +1505,10 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
       } as any, '/tmp/project') as any
       const events: any[] = []
       instance.pushEvent = (event: any) => events.push(event)
+      // C-W5c: the completion signal is the port's turn_end evidence now — the
+      // legacy agent:generating_completed wire literal is gone.
+      const evidence: any[] = []
+      instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
       instance.historyWriter = { appendNewMessages: vi.fn() }
       // Manually advance to idle (past startup)
       instance.lastStatus = 'idle'
@@ -1492,7 +1538,7 @@ describe('CliProviderInstance — startup-phase spurious completion suppression'
       instance.detectStatusTransition()
       vi.advanceTimersByTime(5000)
 
-      expect(events.map((event: any) => event.event)).toContain('agent:generating_completed')
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }

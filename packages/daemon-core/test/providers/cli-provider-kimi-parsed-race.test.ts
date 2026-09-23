@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import { PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS } from '../../src/providers/cli-provider-instance-types.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // TX-FSM Stage 2.1 — KIMI-PARSED-RACE.
 //
@@ -133,17 +134,22 @@ function makeKimiFlush(opts: {
 
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
   return {
     instance,
     emitted,
+    evidence,
     reScheduled,
     setLastOutputAt: (value: number) => { lastOutputAt = value },
     setTranscriptAgeMs: (value: number | null) => { transcriptAgeMs = value },
   }
 }
 
-function completedEvents(emitted: any[]) {
-  return emitted.filter(e => e.event === 'agent:generating_completed')
+function completedEvents(evidence: any[]) {
+  return evidence.filter(e => e.kind === 'turn_end')
 }
 
 describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-FSM Stage 2.1)', () => {
@@ -152,7 +158,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     // (the tool.call has not landed in the transcript) and the PTY printed something moments
     // ago (spinner repaint) — no structural veto is possible yet, so the quiet-dwell mirror
     // must be the one holding this.
-    const { instance, emitted, reScheduled } = makeKimiFlush({
+    const { instance, evidence, reScheduled } = makeKimiFlush({
       parsedMessages: [assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000)],
       externalMessages: [assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000)],
       lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
@@ -161,7 +167,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(emitted)).toHaveLength(0)
+    expect(completedEvents(evidence)).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(reScheduled.length).toBeGreaterThan(0)
   })
@@ -170,7 +176,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     // The tool call has now been recorded in the (post-fix) tool-aware native transcript —
     // definitive structural proof the bubble was narration, not a final answer. The PTY is
     // long quiet here (past the dwell) to prove the VETO — not the dwell — is what holds.
-    const { instance, emitted, reScheduled } = makeKimiFlush({
+    const { instance, evidence, reScheduled } = makeKimiFlush({
       parsedMessages: [assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000)],
       externalMessages: [
         assistantMsg("Actually, I can't confirm that yet", TURN_START + 6_000),
@@ -182,13 +188,13 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(emitted)).toHaveLength(0)
+    expect(completedEvents(evidence)).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(reScheduled.length).toBeGreaterThan(0)
   })
 
   it('(3) true final answer + transcript quiet emits despite a recent cosmetic PTY redraw', () => {
-    const { instance, emitted } = makeKimiFlush({
+    const { instance, evidence } = makeKimiFlush({
       parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
       externalMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
       lastOutputAt: Date.now(),
@@ -197,7 +203,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(emitted)).toHaveLength(1)
+    expect(completedEvents(evidence)).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 
@@ -211,7 +217,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(h.instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(h.emitted)).toHaveLength(0)
+    expect(completedEvents(h.evidence)).toHaveLength(0)
     expect(h.instance.completedDebouncePending?.loggedBlockReason)
       .toBe('native_source_final_assistant_quiet_dwell')
     expect(h.reScheduled.length).toBeGreaterThan(0)
@@ -222,7 +228,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     h.setTranscriptAgeMs(PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 1)
     ;(h.instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(h.emitted)).toHaveLength(1)
+    expect(completedEvents(h.evidence)).toHaveLength(1)
     expect(h.instance.completedDebouncePending).toBeNull()
   })
 
@@ -230,7 +236,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     // Signal-absence fail-open: the native transcript is simply not resolvable yet (no
     // session pinned / file not written). The provider's own (pre-Stage-2.1) parsed evidence
     // must still be trusted rather than reporting present:false forever.
-    const { instance, emitted } = makeKimiFlush({
+    const { instance, evidence } = makeKimiFlush({
       parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
       externalMessages: null,
       lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
@@ -238,7 +244,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(emitted)).toHaveLength(1)
+    expect(completedEvents(evidence)).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 
@@ -248,7 +254,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     // silently do nothing — a genuinely answerless turn still force-emits at the existing 30s
     // cap (exercised by cli-provider-canon-c-min-elapsed-floor.test.ts); here we just pin that
     // it HOLDS (does not emit) on the very first poll rather than wedging OR falsely emitting.
-    const { instance, emitted, reScheduled } = makeKimiFlush({
+    const { instance, evidence, reScheduled } = makeKimiFlush({
       parsedMessages: [],
       externalMessages: null,
       lastOutputAt: Date.now() - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 5_000),
@@ -256,7 +262,7 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(completedEvents(emitted)).toHaveLength(0)
+    expect(completedEvents(evidence)).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(reScheduled.length).toBeGreaterThan(0)
   })
@@ -303,12 +309,16 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     instance.lastVisibleAssistantSummaryDetail = () => ({ content: '', timestampMs: undefined })
     instance.pushEvent = (e: any) => { emitted.push(e) }
     instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     // Unchanged pre-Stage-2.1 behaviour for a non-canary provider: the parsed scrape's
     // "present" verdict short-circuits and fires immediately, exactly as before.
-    expect(completedEvents(emitted)).toHaveLength(1)
+    expect(completedEvents(evidence)).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 })

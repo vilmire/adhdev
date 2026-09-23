@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 import {
   clearDebugTrace,
   configureDebugTraceStore,
@@ -82,8 +83,12 @@ function makeInstance(opts: {
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
   instance.readExternalCompletionMessages = () => parsedMessages
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
-  return { instance, emitted, reScheduled }
+  return { instance, emitted, evidence, reScheduled }
 }
 
 function armedPending(overrides: Record<string, unknown> = {}) {
@@ -161,7 +166,7 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
 
   // ── t3: genuine completion still fires exactly once ─────────────────────────
   it('t3: a genuinely-finished turn (idle, no pending, fresh final assistant) fires exactly once', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       pending: armedPending(),
       busyEpoch: 7,
       adapter: {
@@ -172,15 +177,17 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter(e => e.event === 'agent:generating_completed')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const completions = evidence.filter(e => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
     // Clean fire — no weak blockReason.
-    expect(completions[0].completionDiagnostic?.blockReason).toBeUndefined()
+    expect(completions[0].blockReason).toBeUndefined()
     expect(instance.completedDebouncePending).toBeNull()
   })
 
   it('t3-approval: an approval-resolved turn that is genuinely done (not pending, evidence present) still fires', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       pending: armedPending({ previousStatus: 'waiting_approval' }),
       busyEpoch: 7,
       adapter: {
@@ -191,7 +198,7 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
-    expect(emitted.filter(e => e.event === 'agent:generating_completed')).toHaveLength(1)
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 })
@@ -219,14 +226,14 @@ describe('COMPLETION-EARLYNOTIFY trace hooks', () => {
   })
 
   it('t4a: a clean fire records a completion-gate "fire" trace (session-keyed, content-free)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       pending: armedPending(),
       busyEpoch: 7,
       adapter: { lastOutputAt: TURN_START + 4_900 },
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
-    expect(emitted.filter(e => e.event === 'agent:generating_completed')).toHaveLength(1)
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
 
     const fires = getRecentDebugTrace({ category: 'completion-gate' }).filter(t => t.stage === 'fire')
     expect(fires.length).toBe(1)

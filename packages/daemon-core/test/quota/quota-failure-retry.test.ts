@@ -210,8 +210,9 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
 
         const bus = createSessionLifecycleBus()
-        const handle = setupQuotaEventRefresh({ bus })
-        bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event: { event: 'agent:generating_completed', providerType: 'antigravity-cli' } as any })
+        const instanceManager = { getInstance: (_id: string) => ({ getState: () => ({ type: 'antigravity-cli' }) }) }
+        const handle = setupQuotaEventRefresh({ bus, instanceManager })
+        bus.emit({ kind: 'turn', at: Date.now(), phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any)
         await new Promise(r => setTimeout(r, 20))
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
         handle.stop()
@@ -425,24 +426,51 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
     })
 })
 
-describe('event-driven refresh (agent:generating_completed, agent:stopped)', () => {
+describe('event-driven refresh (turn ledger commits — wiring-unification C-W5 follow-up)', () => {
     function makeEventSource() {
-        // Provider events reach quota refresh as the bus's `provider_event` (B5).
+        // Turn commits reach quota refresh as the bus's `turn{phase:'committed'}`
+        // (wiring-unification C1/C5); providerType is resolved via instanceManager
+        // from the committing sessionId, not carried on the bus event.
         const bus = createSessionLifecycleBus()
+        const providerTypeBySession = new Map<string, string>()
+        let genSeq = 0
+        const instanceManager = {
+            getInstance(sessionId: string) {
+                const type = providerTypeBySession.get(sessionId)
+                if (!type) return undefined
+                return { getState: () => ({ type }) }
+            },
+        }
         return {
             bus,
-            emit(event: any) { bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event }) },
+            instanceManager,
+            registerSession(sessionId: string, providerType: string) { providerTypeBySession.set(sessionId, providerType) },
+            /** `outcome` mirrors the old event name: undefined/'completed' ↔ 'agent:generating_completed', 'failed'/'cancelled' ↔ 'agent:stopped'. */
+            emitCommit(sessionId: string, providerType: string | undefined, outcome: 'completed' | 'failed' | 'cancelled' = 'completed') {
+                if (providerType) providerTypeBySession.set(sessionId, providerType)
+                genSeq += 1
+                bus.emit({
+                    kind: 'turn', at: Date.now(), phase: 'committed',
+                    sessionId, attemptId: `a${genSeq}`, generation: 0,
+                    outcome, strength: outcome === 'completed' ? 'genuine' : undefined,
+                } as any)
+            },
+            /** A non-committed phase, or an unresolvable session — must never trigger a refresh. */
+            emitNonCommit(sessionId: string, phase: 'started' | 'suspended' | 'resumed' | 'progress' = 'started') {
+                genSeq += 1
+                bus.emit({ kind: 'turn', at: Date.now(), phase, sessionId, attemptId: `a${genSeq}`, generation: 0 } as any)
+            },
         }
     }
 
     it('refreshes ONLY the provider whose agent just finished a turn', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ bus: source.bus })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager })
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
 
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
@@ -455,21 +483,21 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { bus: source.bus },
+            { bus: source.bus, instanceManager: source.instanceManager },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         now += 10_000
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         now += 10_000
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
 
         now += 61_000 // past the debounce window
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         await vi.waitFor(() => expect(fetchKimiQuota).toHaveBeenCalledTimes(2))
         handle.stop()
     })
@@ -477,12 +505,12 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
     it('never refetches a provider disabled on this machine', async () => {
         const source = makeEventSource()
         const providerLoader = { isMachineProviderEnabled: (type: string) => type !== 'kimi' }
-        const handle = setupQuotaEventRefresh({ bus: source.bus, providerLoader })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager, providerLoader })
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
-        source.emit({ event: 'agent:generating_completed', providerType: 'claude-cli' })
+        source.emitCommit('s1', 'kimi')
+        source.emitCommit('s2', 'claude-cli')
         await vi.waitFor(() => expect(readQuotaCache()?.['claude-cli']?.status).toBe('ok'))
 
         expect(fetchKimiQuota).not.toHaveBeenCalled()
@@ -490,14 +518,16 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
         handle.stop()
     })
 
-    it('ignores non-completion events and providers without a quota fetcher', async () => {
+    it('ignores non-committed turn phases and sessions without a resolvable quota-fetching provider', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ bus: source.bus })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager })
 
-        source.emit({ event: 'agent:ready', providerType: 'kimi' })
-        source.emit({ event: 'agent:generating_started', providerType: 'kimi' })
-        source.emit({ event: 'agent:generating_completed', providerType: 'cursor' }) // no quota fetcher shipped
-        source.emit({ event: 'agent:generating_completed' }) // no providerType at all
+        source.registerSession('s1', 'kimi')
+        source.emitNonCommit('s1', 'started')
+        source.emitNonCommit('s1', 'suspended')
+        source.registerSession('s2', 'cursor') // no quota fetcher shipped
+        source.emitCommit('s2', 'cursor')
+        source.emitCommit('s3', undefined) // unregistered session — providerType unresolvable
         await new Promise(r => setTimeout(r, 20))
 
         expect(fetchKimiQuota).not.toHaveBeenCalled()
@@ -508,11 +538,11 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
 
     it('stop() disarms the listener', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ bus: source.bus })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         handle.stop()
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi')
         await new Promise(r => setTimeout(r, 20))
 
         expect(fetchKimiQuota).not.toHaveBeenCalled()
@@ -522,73 +552,74 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
     // agent:stopped with generating_completed never firing at all. The
     // event-driven path never armed, so quota rode the 15-minute cadence and a
     // routing decision minutes later used a stale cached value. This is the
-    // reproduction of that exact gap.
-    it('refreshes on agent:stopped — the session-died-without-completing case', async () => {
+    // reproduction of that exact gap, now on the turn ledger's own outcomes
+    // ('failed'/'cancelled' ↔ the old 'agent:stopped').
+    it('refreshes on a failed/cancelled commit — the session-died-without-completing case', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ bus: source.bus })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:ready', providerType: 'kimi' })
-        source.emit({ event: 'agent:generating_started', providerType: 'kimi' })
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.registerSession('s1', 'kimi')
+        source.emitNonCommit('s1', 'started')
+        source.emitCommit('s1', 'kimi', 'failed')
         await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
 
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
         handle.stop()
     })
 
-    it('debounces agent:stopped the same as agent:generating_completed — repeated manual stops do not hammer the fetcher', async () => {
+    it('debounces failed/cancelled commits the same as completions — repeated manual stops do not hammer the fetcher', async () => {
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { bus: source.bus },
+            { bus: source.bus, instanceManager: source.instanceManager },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         now += 5_000
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         now += 5_000
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         await vi.waitFor(() => expect(readQuotaCache()?.['kimi']?.status).toBe('ok'))
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
 
         now += 61_000 // past the debounce window
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         await vi.waitFor(() => expect(fetchKimiQuota).toHaveBeenCalledTimes(2))
         handle.stop()
     })
 
-    it('shares the debounce window across agent:stopped and agent:generating_completed for the same provider', async () => {
+    it('shares the debounce window across completed and failed/cancelled commits for the same provider', async () => {
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { bus: source.bus },
+            { bus: source.bus, instanceManager: source.instanceManager },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'completed')
         await vi.waitFor(() => expect(fetchKimiQuota).toHaveBeenCalledTimes(1))
 
         now += 5_000
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         await new Promise(r => setTimeout(r, 20))
 
-        // Same provider, still inside the 60s debounce window: the stop event
-        // must not trigger a second fetch on top of the completion's.
+        // Same provider, still inside the 60s debounce window: the second
+        // commit must not trigger a second fetch on top of the first's.
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
         handle.stop()
     })
 
-    it('never refetches a provider disabled on this machine on agent:stopped', async () => {
+    it('never refetches a provider disabled on this machine on a failed/cancelled commit', async () => {
         const source = makeEventSource()
         const providerLoader = { isMachineProviderEnabled: (type: string) => type !== 'kimi' }
-        const handle = setupQuotaEventRefresh({ bus: source.bus, providerLoader })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager, providerLoader })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
-        source.emit({ event: 'agent:stopped', providerType: 'kimi' })
+        source.emitCommit('s1', 'kimi', 'failed')
         await new Promise(r => setTimeout(r, 20))
 
         expect(fetchKimiQuota).not.toHaveBeenCalled()

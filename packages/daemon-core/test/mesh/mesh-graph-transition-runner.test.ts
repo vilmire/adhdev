@@ -1022,13 +1022,21 @@ describe('structural pins — the choke point cannot be silently bypassed', () =
     });
 
     it('the native completion path hands its envelope to the choke point', () => {
-        // C-W3: the completion is turn_end evidence; its envelope rides
-        // ledger.observe(evidence, { envelope }) into the commit's graph_advance
-        // (runtime-ledger meshRuntimeTxnHost → applyTaskTerminalInTxn), which is
-        // the choke point that persists the output version in the SAME txn.
-        const src = read('mesh-event-forwarding.ts');
-        expect(src).toMatch(/kind: 'turn_end'[\s\S]*?envelope: \{[\s\S]*?finalSummary/);
-        expect(src).toMatch(/\.\.\.\(built\.envelope \? \{ envelope: built\.envelope \} : \{\}\)/);
+        // C-W3/C-W5c: the completion is turn_end evidence; its envelope rides
+        // port.observe(evidence, { envelope }) -> ledger.observe(evidence,
+        // { envelope }) into the commit's graph_advance (runtime-ledger
+        // meshRuntimeTxnHost → applyTaskTerminalInTxn), which is the choke
+        // point that persists the output version in the SAME txn. C-W5c moved
+        // the producer from mesh-event-forwarding.ts's (deleted)
+        // buildProviderEvidence to providers/completion/completion-flush.ts's
+        // emitTurnEnd call — the SOLE chokepoint now.
+        const flushSrc = fs.readFileSync(path.join(MESH_SRC_DIR, '../providers/completion/completion-flush.ts'), 'utf8');
+        expect(flushSrc).toMatch(/emitTurnEnd\(host\.turnEvidencePort[\s\S]*?envelope: \{[\s\S]*?finalSummary/);
+        expect(flushSrc).toMatch(/workerResult/);
+        const portSrc = fs.readFileSync(path.join(MESH_SRC_DIR, '../providers/turn-evidence-port.ts'), 'utf8');
+        // The port's observe() forwards opts.envelope straight into deps.observe
+        // (the ledger-backed sink wired at boot), never dropping it.
+        expect(portSrc).toMatch(/const envelope = callerOpts\?\.envelope/);
         expect(read('turn-ledger/runtime-ledger.ts')).toMatch(/graphAdvance\(effect, ctx\)[\s\S]*?envelope: ctx\.envelope/);
     });
 

@@ -812,16 +812,12 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             host.completedDebouncePending = null;
             host.errorMessage = adapterStatus.errorMessage || host.errorMessage;
             host.errorReason = (adapterStatus.errorReason as ProviderErrorReason) || host.errorReason;
-            host.pushEvent({
-                event: 'agent:stopped',
-                chatTitle,
-                timestamp: now,
-                finalSummary: adapterStatus.errorMessage || adapterStatus.errorReason || 'Provider reported an error',
-                completionDiagnostic: {
-                    reason: adapterStatus.errorReason || 'provider_error',
-                    errorMessage: adapterStatus.errorMessage || undefined,
-                },
-            });
+            // C-W5c: the legacy `agent:stopped` wire literal is gone — the port
+            // is the sole producer now. `envelope` carries the same error text
+            // (`finalSummary`/`notice.errorMessage`) the deleted wire event used
+            // to carry, so `renderStopped` (turn-ledger/format.ts) reproduces
+            // the identical coordinator text via the evidence row's local
+            // payload or a handoff ref (see `TURN_EVIDENCE_HANDOFF_KIND`).
             if (host.turnEvidencePort) {
                 emitSessionError(host.turnEvidencePort, {
                     sessionId: host.instanceId,
@@ -830,6 +826,13 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     attemptRef: host.currentAttemptRef?.() ?? undefined,
                     at: now,
                     reason: classifySessionErrorReason(host.errorReason),
+                    envelope: {
+                        finalSummary: adapterStatus.errorMessage || adapterStatus.errorReason || 'Provider reported an error',
+                        notice: {
+                            ...(adapterStatus.errorMessage ? { errorMessage: adapterStatus.errorMessage } : {}),
+                            completionMetadata: { diagnosticReason: adapterStatus.errorReason || 'provider_error' },
+                        },
+                    },
                 });
             }
         } else if (newStatus === 'stopped') {
@@ -838,7 +841,8 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             host.generatingDebouncePending = null;
             if (host.completedDebounceTimer) { clearTimeout(host.completedDebounceTimer); host.completedDebounceTimer = null; }
             host.completedDebouncePending = null;
-            host.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
+            // C-W5c: no legacy `agent:stopped` wire literal — process_exit
+            // carries no text of its own (a bare stop has none to carry).
             if (host.turnEvidencePort) {
                 emitProcessExit(host.turnEvidencePort, {
                     sessionId: host.instanceId,

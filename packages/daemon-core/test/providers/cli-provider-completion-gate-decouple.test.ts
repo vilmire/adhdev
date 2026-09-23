@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // CANON-C (completion-gate decouple): for a native-source provider (claude-cli owns its
 // chat history externally), the worker FSM reaches idle BEFORE the append-only transcript's
@@ -71,32 +72,37 @@ function makeFlushInstance(opts: {
 
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, opts: any) => { evidence.push(e); evidenceOpts.push(opts); } })
 
-  return { instance, events, rescheduleCalls }
+  return { instance, events, evidence, evidenceOpts, rescheduleCalls }
 }
 
 describe('CliProviderInstance — CANON-C completion-gate decouple', () => {
-  it('emits agent:generating_completed IMMEDIATELY (no 30s hold) when the FSM is idle but the transcript is unwritten', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({ evidencePresent: false })
+  it('emits turn_end evidence IMMEDIATELY (no 30s hold) when the FSM is idle but the transcript is unwritten; C-W5c: no legacy agent:generating_completed wire literal', () => {
+    const { instance, events, evidence, rescheduleCalls } = makeFlushInstance({ evidencePresent: false })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     // The completion fired on the FIRST flush — it was not deferred to the 30s timeout.
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
-    // Marked weak so CANON-B's buildPendingEventFingerprint / isFalseIdleCompletion treat it
-    // as a tentative false-idle (the direct dispatch stays active for the transcript reconcile).
-    expect(events[0].completionDiagnostic.blockReason).toBe('missing_final_assistant')
-    expect(events[0].completionDiagnostic.finalAssistantPresent).toBe(false)
-    expect(events[0].completionDiagnostic.decoupledImmediateEmit).toBe(true)
-    expect(events[0].completionDiagnostic.emittedAfterFinalizationTimeout).toBe(false)
+    expect(events).toHaveLength(0)
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    // Marked weak (blockReason present) so the reducer treats it as a tentative
+    // false-idle (the direct dispatch stays active for the transcript reconcile).
+    expect(turnEnds[0].strength).toBe('weak')
+    expect(turnEnds[0].blockReason).toBe('missing_final_assistant')
+    expect(turnEnds[0].afterFinalizationTimeout).toBeUndefined()
     // The pending debounce is cleared — the session is idle, the notification is out.
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 
-  it('still emits a GENUINE completion carrying the transcript-derived finalSummary once the transcript is present', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+  it('still emits a GENUINE completion carrying the transcript-derived finalSummary on the envelope once the transcript is present', () => {
+    const { instance, events, evidence, evidenceOpts, rescheduleCalls } = makeFlushInstance({
       evidencePresent: true,
       finalSummary: 'Refactored auth; 3 files changed; tests pass.',
     })
@@ -104,26 +110,26 @@ describe('CliProviderInstance — CANON-C completion-gate decouple', () => {
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
-    // Enriched summary survives — the transcript path is the source of truth for the summary.
-    expect(events[0].finalSummary).toBe('Refactored auth; 3 files changed; tests pass.')
-    // A genuine completion carries the clean, strong transcript contract and
-    // no missing-final-assistant weakness marker.
-    expect(events[0].completionDiagnostic.blockReason).toBeUndefined()
-    expect(events[0].completionDiagnostic.finalAssistantPresent).toBe(true)
-    expect(events[0].completionDiagnostic.cleanPath).toBe(true)
-    expect(events[0].completionDiagnostic.evidenceWeak).toBe(false)
+    expect(events).toHaveLength(0)
+    const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    // Enriched summary survives — the transcript path is the source of truth for
+    // the summary; it rides the LOCAL envelope opt (content-free evidence body).
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('Refactored auth; 3 files changed; tests pass.')
+    // A genuine completion carries strength genuine and no missing-final-assistant
+    // weakness marker.
+    expect(evidence[idx].strength).toBe('genuine')
+    expect(evidence[idx].blockReason).toBeUndefined()
   })
 
   it('does NOT decouple for a NON-mesh session: the transcript-evidence gate still holds (allowTimeout disarmed)', () => {
     // Without mesh context, allowMissingAssistantTimeout is false → the missing_final_assistant
     // block is a plain terminal hold, preserving the interactive (non-delegated) behavior.
-    const { instance, events, rescheduleCalls } = makeFlushInstance({ evidencePresent: false, meshContext: false })
+    const { instance, evidence, rescheduleCalls } = makeFlushInstance({ evidencePresent: false, meshContext: false })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(events).toHaveLength(0)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
     expect(rescheduleCalls.length).toBeGreaterThan(0) // held, will retry
   })
 })

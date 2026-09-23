@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // DEFECT 1 (FALSE-IDLE premature completion): a momentary busy→idle blip inside an
 // inter-approval valley (auto-approved tool turns) triggered a `generating_completed` emit
@@ -63,8 +64,13 @@ function makeFlushInstance(opts: {
   // readExternalCompletionMessages falls back to the parsed messages so the turn-boundary
   // gate is exercised against a single, controllable message set.
   instance.readExternalCompletionMessages = () => opts.parsedMessages
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
 
-  return { instance, emitted, reScheduled }
+  return { instance, emitted, evidence, evidenceOpts, reScheduled }
 }
 
 function assistantMsg(text: string, timestampMs: number) {
@@ -122,7 +128,7 @@ describe('CliProviderInstance — FALSE-IDLE continuity + turn-boundary guard (D
   it('EMITS normally for a genuinely-idle-through-settle turn with a FRESH final assistant', () => {
     // Continuous idle (epoch unchanged, no new output) AND the final assistant post-dates the
     // turn start → a real completion.
-    const { instance, emitted } = makeFlushInstance({
+    const { instance, evidence } = makeFlushInstance({
       pending: armedPending(),
       parsedMessages: [assistantMsg('the real turn result', TURN_START + 6_000)],
       currentBusyEpoch: 7,
@@ -131,7 +137,9 @@ describe('CliProviderInstance — FALSE-IDLE continuity + turn-boundary guard (D
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter(e => e.event === 'agent:generating_completed')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const completions = evidence.filter(e => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
@@ -143,7 +151,7 @@ describe('CliProviderInstance — FALSE-IDLE continuity + turn-boundary guard (D
     // the completion WEAK (missing_final_assistant) and its turn-scoped finalSummary excludes the
     // stale bubble (so the reconcile loop later upgrades it once a real in-turn bubble lands).
     const now = Date.now()
-    const { instance, emitted } = makeFlushInstance({
+    const { instance, evidence, evidenceOpts } = makeFlushInstance({
       pending: armedPending({ firstObservedAt: now }),
       parsedMessages: [assistantMsg('stale mid-turn summary', TURN_START - 2_000)],
       currentBusyEpoch: 7,
@@ -152,17 +160,15 @@ describe('CliProviderInstance — FALSE-IDLE continuity + turn-boundary guard (D
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
     // No CLEAN (finalized) completion: the stale bubble was rejected by the turn-boundary gate.
-    const cleanCompletions = emitted.filter(e =>
-      e.event === 'agent:generating_completed'
-      && (!e.completionDiagnostic || !e.completionDiagnostic.blockReason))
+    const cleanCompletions = evidence.filter(e => e.kind === 'turn_end' && !e.blockReason)
     expect(cleanCompletions).toHaveLength(0)
     // A WEAK completion is emitted instead, flagged missing_final_assistant — proving the stale
     // bubble did NOT satisfy the gate — and it never carries the stale summary text.
-    const weak = emitted.filter(e =>
-      e.event === 'agent:generating_completed'
-      && e.completionDiagnostic?.blockReason === 'missing_final_assistant')
-    expect(weak).toHaveLength(1)
-    expect(weak[0].finalSummary || '').not.toContain('stale mid-turn summary')
+    const weakIdx = evidence.findIndex(e => e.kind === 'turn_end' && e.blockReason === 'missing_final_assistant')
+    expect(weakIdx).toBeGreaterThanOrEqual(0)
+    expect(evidenceOpts[weakIdx]?.envelope?.finalSummary || '').not.toContain('stale mid-turn summary')
   })
 })

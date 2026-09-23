@@ -543,6 +543,18 @@ describe('cloud status seqscribe boundary', () => {
                 since: 1_700_000_555_000,
                 uptimeMs: 7_200_000,
             },
+            // G2 transcript-transport selection + zombie-recovery counters
+            // (RCA `scratchpad/transcript-handshake-rca.md` finding #5).
+            // Local-only for the dedup reason (raw monotonic counters) AND,
+            // per `stats.ts`'s doc comment, because `replicaSelected`/
+            // `legacySelected` are session-transport-routing counts that have
+            // not had the explicit content-boundary review a bucketed backlog
+            // size gets — this test IS that review, and it says: still local.
+            transcriptTransportSelection: {
+                replicaSelected: 42,
+                legacySelected: 5,
+                zombieRecovered: 2,
+            },
         } as any);
 
         expect(payload.seqscribe).toEqual(healthy);
@@ -554,6 +566,7 @@ describe('cloud status seqscribe boundary', () => {
             'readRouting',
             'transcriptParityDetail',
             'transcriptLatencyDetail',
+            'transcriptTransportSelection',
         ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
         }

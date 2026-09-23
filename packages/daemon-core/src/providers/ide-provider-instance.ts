@@ -504,12 +504,14 @@ export class IdeProviderInstance implements ProviderInstance {
                     });
                 }
             } else if (agentStatus === 'idle' && (lastStatus === 'generating' || lastStatus === 'waiting_approval')) {
-                const startedAt = this.generatingStartedAt.get(agentKey);
-                const duration = startedAt ? Math.round((now - startedAt) / 1000) : 0;
-                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, ideType: this.type, finalSummary: extractFinalSummaryFromMessages(chatData?.messages) });
+                // C-W5c: no legacy `agent:generating_completed` wire literal —
+                // the port is the sole producer; `envelope.finalSummary` carries
+                // the same text the deleted wire event used to carry.
                 if (this.turnEvidencePort) {
+                    const finalSummary = extractFinalSummaryFromMessages(chatData?.messages);
                     emitTurnEnd(this.turnEvidencePort, {
                         sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, strength: 'genuine',
+                        ...(finalSummary ? { envelope: { finalSummary } } : {}),
                     });
                 }
                 this.generatingStartedAt.delete(agentKey);
