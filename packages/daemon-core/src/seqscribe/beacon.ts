@@ -597,6 +597,11 @@ export function armBeacon(
     // the first successful GET — which `computeBeaconDiagnostics` reports as
     // `stale: true`, not as an empty-but-fresh board.
     let lastBoard: BeaconBoardSnapshot | null = null;
+    // Last (peers, topics) shape reported at INFO, so a steady-state fleet logs
+    // once per shape rather than once per GET (~every 7.8s — see the log-volume
+    // note on `doGet` below). `null` until the first GET, so that first report
+    // always fires regardless of what it says.
+    let lastReportedShape: { peers: number; topics: number } | null = null;
 
     /** Project, send, count. Shared by the library's push and `pushNow`. */
     const doPut = async (rawReport: unknown): Promise<void> => {
@@ -748,10 +753,26 @@ export function armBeacon(
             topicScope: [...lastScope],
             capturedAt: Date.now(),
         };
-        LOG.info(
+        // Per-request line, DEBUG only: every GET fires on a steady ~7.8s poll
+        // cadence, which measured 20.5% of all preview daemon log lines at INFO
+        // (2026-09-23 usage audit). The daemon log stays informative about
+        // Beacon without that volume via the state-change line below.
+        LOG.debug(
             'Seqscribe',
             `beacon get writer=${handle.writerId} peers=${clean.length} topics=${lastScope.length}`,
         );
+        const shape = { peers: clean.length, topics: lastScope.length };
+        if (
+            !lastReportedShape
+            || lastReportedShape.peers !== shape.peers
+            || lastReportedShape.topics !== shape.topics
+        ) {
+            lastReportedShape = shape;
+            LOG.info(
+                'Seqscribe',
+                `beacon board changed writer=${handle.writerId} peers=${shape.peers} topics=${shape.topics}`,
+            );
+        }
         return clean;
     };
 

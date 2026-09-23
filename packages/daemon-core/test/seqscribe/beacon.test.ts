@@ -42,7 +42,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOG } from '../../src/logging/logger.js';
 import {
     armBeacon,
     assertNoPlaintextHintTopics,
@@ -447,6 +448,72 @@ describe('armBeacon — lifecycle against a real node', () => {
         expect(latest.node).toBe(node.writerId);
 
         beacon!.stop();
+    });
+
+    it('★log volume (2026-09-23 usage audit): per-GET line is DEBUG, board-shape change is INFO', async () => {
+        // The per-request `beacon get` line at INFO measured 20.5% of all
+        // preview daemon log lines (one GET every ~7.8s). It must not log at
+        // INFO on a steady-state fetch; an operator still needs to see the
+        // board's shape change, so that stays at INFO, once per change.
+        const opts: { board: unknown[] } = { board: [] };
+        const fake = makeFakeTransport(opts);
+        const node = open();
+
+        const infoSpy = vi.spyOn(LOG, 'info');
+        const debugSpy = vi.spyOn(LOG, 'debug');
+        try {
+            const beacon = armBeacon(node, fake.transport, { env: {} });
+            await settle();
+            infoSpy.mockClear();
+            debugSpy.mockClear();
+
+            // Steady state: same empty board, no peer/topic count change.
+            await beacon!.pushNow();
+            await beacon!.pushNow();
+
+            const steadyStateGetInfoLines = infoSpy.mock.calls.filter(
+                (call) => typeof call[1] === 'string' && call[1].includes('beacon get'),
+            );
+            expect(steadyStateGetInfoLines).toEqual([]);
+            const steadyStateGetDebugLines = debugSpy.mock.calls.filter(
+                (call) => typeof call[1] === 'string' && call[1].includes('beacon get'),
+            );
+            expect(steadyStateGetDebugLines.length).toBeGreaterThanOrEqual(2);
+
+            // A real shape change (a peer report appears) must still surface at
+            // INFO, exactly once for the transition.
+            opts.board = [
+                {
+                    node: 'adhdev-peershapechange01',
+                    at: '2026-09-23T00:00:00.000Z',
+                    vectors: {
+                        [FLEET_STATUS_TOPIC]: {
+                            writers: { 'adhdev-peershapechange01': { contig: 1, chain: CHAIN_A } },
+                        },
+                    },
+                },
+            ];
+            infoSpy.mockClear();
+            await beacon!.pushNow();
+            const changeInfoLines = infoSpy.mock.calls.filter(
+                (call) => typeof call[1] === 'string' && call[1].includes('beacon board changed'),
+            );
+            expect(changeInfoLines.length).toBe(1);
+            expect(changeInfoLines[0]![1]).toContain('peers=1');
+
+            // Same shape again: no repeat INFO line.
+            infoSpy.mockClear();
+            await beacon!.pushNow();
+            const repeatInfoLines = infoSpy.mock.calls.filter(
+                (call) => typeof call[1] === 'string' && call[1].includes('beacon board changed'),
+            );
+            expect(repeatInfoLines).toEqual([]);
+
+            beacon!.stop();
+        } finally {
+            infoSpy.mockRestore();
+            debugSpy.mockRestore();
+        }
     });
 
     it('pushNow() after stop is a no-op, and a failing transport does not throw out of it', async () => {

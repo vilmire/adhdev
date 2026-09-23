@@ -31,6 +31,13 @@ export interface SessionRuntimeTarget {
 }
 
 export class SessionRegistry {
+    private transcriptTopicRelease: ((rawSessionId: string) => void) | null = null;
+
+    /** Hook installed at boot once the seqscribe transcript claim registry exists. */
+    setTranscriptTopicRelease(release: ((rawSessionId: string) => void) | null): void {
+        this.transcriptTopicRelease = release;
+    }
+
     private readonly bySessionId = new Map<string, SessionRuntimeTarget>();
     private readonly byManagerKey = new Map<string, Set<string>>();
     private readonly byInstanceKey = new Map<string, Set<string>>();
@@ -81,6 +88,7 @@ export class SessionRegistry {
         if (!target) return;
         this.bySessionId.delete(sessionId);
         stopTranscriptStatPolling(sessionId);
+        try { this.transcriptTopicRelease?.(sessionId); } catch { /* claim release is best-effort */ }
         if (target.cdpManagerKey) this.removeIndex(this.byManagerKey, target.cdpManagerKey, sessionId);
         if (target.instanceKey) this.removeIndex(this.byInstanceKey, target.instanceKey, sessionId);
         if (target.parentSessionId) this.removeIndex(this.byParentSessionId, target.parentSessionId, sessionId);

@@ -228,6 +228,22 @@ export function getTotalQuarantineSkips(): number {
 }
 
 /**
+ * Cumulative entries skipped (not re-armed) across every mesh because they
+ * were non-terminal or otherwise unusable — see the `skipped` return in
+ * `consumeRedriveEntry`. Distinct from `getTotalQuarantineSkips`: this counts
+ * entries that were never eligible for redrive at all, that one counts
+ * eligible entries withheld because the mesh was quarantined.
+ *
+ * Feeds `SeqscribeStatusSummary.terminalRedrive.skipped` (2026-09-23 usage
+ * audit finding #1).
+ */
+export function getTotalRedriveSkipped(): number {
+    let total = 0;
+    for (const s of state.values()) total += s.skipped;
+    return total;
+}
+
+/**
  * Total entries this process has handed to the pending queue across every
  * mesh, since boot (or the last test reset). Feeds the 5a-3 coverage metric:
  * the outbox's own `delivered` counter (mesh-turn-ledger.ts) is likewise a
@@ -285,6 +301,9 @@ export interface RedriveProjectedEntry {
     providerType?: string | null;
     taskId?: string | null;
     payload: Record<string, string | number | boolean>;
+    /** Seqscribe writer/seq of the raw log entry — see mesh-terminal-redrive-consumer.ts. */
+    writer?: string;
+    seq?: number;
 }
 
 /**
@@ -371,11 +390,26 @@ export function consumeRedriveEntry(
 
     if (isMeshQuarantined(meshId, nowMs)) {
         s.quarantineSkips++;
+        // ★ Stage 5c-1 removed the turn outbox this message used to point at
+        // ("the legacy outbox drain remains the redelivery path"). That path no
+        // longer exists — redrive is the SOLE re-arm path (see the module
+        // header) — so while quarantined, THIS terminal notification has no
+        // other re-arm route. Recovery is the auto-resolving half-open probe
+        // below: `QUARANTINE_COOLDOWN_MS` after the failure that tripped
+        // quarantine, the next entry on this topic gets a real attempt again,
+        // with no operator action required. This is a coordinator-visible
+        // alert (WARN, not INFO): a still-quarantined mesh after the cooldown
+        // means the underlying pending-queue failure the probe hit is still
+        // live, and every entry until then is silently unrepresented at the
+        // coordinator (2026-09-23 usage audit finding #2).
         LOG.warn(
             'MeshRedrive',
             `mesh=${meshId} redrive quarantined (consecutiveFailures=${s.consecutiveFailures}) — `
             + `skip-and-advance entry=${entry.id} to release the §7.6 archive floor; `
-            + 'the legacy outbox drain remains the redelivery path for this terminal while quarantined',
+            + `no other redelivery path exists for this terminal while quarantined — `
+            + `the next entry after the ${QUARANTINE_COOLDOWN_MS}ms cooldown gets an automatic retry `
+            + `(half-open probe); if quarantine persists across probes, the underlying pending-queue `
+            + 'failure needs investigation',
         );
         return 'quarantined';
     }
@@ -409,9 +443,23 @@ export function consumeRedriveEntry(
     // denominator (`mesh_turn_outbox`) no longer exists — so it was a bounded but
     // real per-process retention with no remaining reader. `s.injected` remains:
     // the aggregate count is what the health surface reports.
-    LOG.debug(
+    //
+    // ★ INFO, not DEBUG (2026-09-23 usage audit finding #1): this leg
+    // redelivered 35 of 295 completion/stop notifications since 09-16 with
+    // literally no trace but a `source` field buried in the resulting
+    // pending-event payload. "Why it was missing" is, structurally, always
+    // the same answer here — the primary delivery path (mesh-events-stale /
+    // the original commit-time enqueue) never reached the coordinator before
+    // this consumer observed the terminal on the replica — so that reason is
+    // stated once in the message rather than re-derived per call; the
+    // (writer, seq) coordinate is what lets an operator locate the exact
+    // replica position this redelivery came from.
+    LOG.info(
         'MeshRedrive',
-        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} — dedup collapses it onto the original if already delivered`,
+        `redelivered terminal ${entry.ledgerKind} mesh=${meshId} task=${injection.metadataEvent.taskId} `
+        + `event=${injection.event} writer=${entry.writer ?? 'unknown'} seq=${entry.seq ?? 'unknown'} — `
+        + 'the original delivery was not observed by this consumer before the terminal reached the replica; '
+        + 'dedup collapses this onto the original if it was actually delivered',
     );
     return 'injected';
 }

@@ -109,8 +109,12 @@ import {
     REDRIVE_CONSUMER,
     REDRIVE_ENV,
     consumeRedriveEntry,
+    getTotalQuarantineSkips,
+    getTotalRedriveInjected,
+    getTotalRedriveSkipped,
     isTerminalRedriveEnabled,
 } from '../mesh/mesh-terminal-redrive.js';
+import { releaseSessionTranscriptTopic } from '../seqscribe/transcript-activation.js';
 import {
     activeTranscriptProjectionService,
     configureTranscriptProjection,
@@ -838,6 +842,14 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
                     // reason is the only surface that says WHICH readiness
                     // condition is holding a mesh on the ledger.
                     readRouting: meshReadRoutingCounters(),
+                    // Terminal-notification redelivery through the seqscribe consumer
+                    // (P-δ, 2026-09-23): load-bearing (35 of 295 completions on preview
+                    // were redelivered) and previously invisible. Raw local counters.
+                    terminalRedrive: {
+                        redelivered: getTotalRedriveInjected(),
+                        skipped: getTotalRedriveSkipped(),
+                        quarantined: getTotalQuarantineSkips(),
+                    },
                     // Transcript trigger attribution + daemon-side stage
                     // latencies. Local-only for the same reason as readRouting
                     // directly above — raw counters and raw millisecond
@@ -1111,6 +1123,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         if (components.seqscribeNode) {
             const node = components.seqscribeNode;
             const transcriptClaims = new TranscriptTopicClaimRegistry();
+            // Release the in-memory transcript-topic claim when a session is forgotten,
+            // so a later session may reuse a colliding sanitized topic segment (the
+            // durable sq_writers row has no GC primitive in the library yet).
+            sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionTranscriptTopic(transcriptClaims, rawSessionId));
             components.transcriptReplicaStore = new TranscriptReplicaStore(node, transcriptClaims);
             const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
             configureTranscriptProjection({
