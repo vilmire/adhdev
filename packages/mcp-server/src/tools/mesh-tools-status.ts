@@ -407,6 +407,10 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
                         ...(typeof s.muted === 'boolean' ? { muted: s.muted } : {}),
                         ...(typeof s.settings?.userHidden === 'boolean' ? { userHidden: s.settings.userHidden } : {}),
                         ...(typeof s.settings?.userMuted === 'boolean' ? { userMuted: s.settings.userMuted } : {}),
+                        // Phase E launch provenance: which model / thinking level the
+                        // session runs and where the model came from (user pick, mesh
+                        // slot, task override, provider default, …).
+                        ...slimSessionLaunchFields(s),
                     };
                 })
                 // Exclude sessions with no resolvable id (malformed or custom provider response).
@@ -1058,4 +1062,25 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             userOverrides: n.userOverrides,
         })),
     }, null, 2);
+}
+
+/**
+ * Phase E: the launch fields `mesh_status` reports per session. The daemon's
+ * status builders already derive `model` / `modelSource` / `thinkingLevel` from
+ * the session's launch record, so this only type-checks and copies them (an
+ * older daemon simply omits them). The full record stays out of the coordinator
+ * context — it is P2P / dashboard material.
+ */
+export function slimSessionLaunchFields(session: unknown): { model?: string; modelSource?: string; thinkingLevel?: string } {
+    if (!session || typeof session !== 'object') return {};
+    const s = session as Record<string, unknown>;
+    const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+    const model = text(s.model);
+    const modelSource = text(s.modelSource);
+    const thinkingLevel = text(s.thinkingLevel);
+    return {
+        ...(model ? { model } : {}),
+        ...(modelSource ? { modelSource } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+    };
 }

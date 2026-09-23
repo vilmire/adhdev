@@ -1193,7 +1193,13 @@ export async function meshReadChat(
         return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
     }
 
-    await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
+    // The drain marks rows `drained=1`. For an MCP-only coordinator (no live CLI
+    // to inject into) the drained completions are the coordinator's ONLY copy, so
+    // discarding the result here consumed them unseen (found by the 2026-09-23
+    // C-W3 delivery audit). Attach them to every return path, as mesh_status does.
+    // Phase C replaces this piggyback with the IPC `turn.notify` read + ack.
+    const pendingCoordinatorEvents = await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
+    const withPending = (rendered: string): string => attachPendingCoordinatorEvents(rendered, pendingCoordinatorEvents);
 
     const cached = resolveMeshSessionProviderMetadata(ctx, args.node_id, args.session_id);
     const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
@@ -1214,7 +1220,7 @@ export async function meshReadChat(
             rawSessionId: args.session_id,
         });
         if (replica.payload) {
-            return renderMeshReadChatPayload(replica.payload, args);
+            return withPending(renderMeshReadChatPayload(replica.payload, args));
         }
         replicaFallbackReason = replica.fallbackReason;
     }
@@ -1237,11 +1243,23 @@ export async function meshReadChat(
         // hard-failed at the 30s timeout instead of surfacing the coordinator's cached
         // summary. See buildMeshReadChatCacheFallback.
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
-        return buildMeshReadChatCacheFallback(ctx, args, node, e);
+        return withPending(buildMeshReadChatCacheFallback(ctx, args, node, e));
     }
-    return renderMeshReadChatPayload(unwrapCommandPayload(result) as Record<string, any>, args, {
+    return withPending(renderMeshReadChatPayload(unwrapCommandPayload(result) as Record<string, any>, args, {
         fallbackReason: replicaFallbackReason,
-    });
+    }));
+}
+
+/** Merge drained coordinator events into a JSON tool result (no-op when empty or non-JSON). */
+function attachPendingCoordinatorEvents(rendered: string, events: any[]): string {
+    if (!Array.isArray(events) || events.length === 0) return rendered;
+    try {
+        const parsed = JSON.parse(rendered);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return rendered;
+        return JSON.stringify({ ...parsed, pendingCoordinatorEvents: events }, null, 2);
+    } catch {
+        return rendered;
+    }
 }
 
 /**
