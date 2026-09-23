@@ -24,12 +24,34 @@ export interface HostMemorySnapshot {
     availableMem: number;
 }
 
+// Audit 2(d) (IPC load audit, 2026-09-23): this module previously spawned
+// `vm_stat` on a fixed 3s interval, unconditionally, for as long as any status
+// snapshot had ever been built — about 28,800 spawns/day regardless of how
+// often a status was actually read. Status is built roughly every 30s (idle)
+// or 5s (generating) — see CLAUDE.md's timing table — so a 3s refresh cadence
+// bought no additional freshness a caller could ever observe; it only spent
+// process-spawn overhead. REFRESH_INTERVAL_MS now matches the slower (idle)
+// status cadence: a reading served to a status build is at most one interval
+// stale, same order of magnitude as before, at 1/10th the spawn rate.
+const REFRESH_INTERVAL_MS = 30_000;
+
 let cachedDarwinAvail: number | null = null;
 let darwinMemoryInterval: NodeJS.Timeout | null = null;
+// Guards against overlapping spawns: `vm_stat` normally returns in well under
+// a second, but a wedged/loaded host could still have a prior invocation
+// in flight when the next timer tick fires. Skipping the tick in that case
+// keeps this at "at most one in-flight vm_stat" instead of piling up
+// concurrent child processes.
+let updateInFlight = false;
 
-async function updateDarwinMemoryCache() {
+async function updateDarwinMemoryCache(): Promise<void> {
     if (os.platform() !== 'darwin') return;
+    if (updateInFlight) return;
+    updateInFlight = true;
     try {
+        // execAsync is already non-blocking (child_process.exec + a Promise
+        // wrapper) — the event loop is never blocked waiting on this, only this
+        // module's own cached value is stale until it resolves.
         const { stdout } = await execAsync('vm_stat', {
             encoding: 'utf-8',
             timeout: 4000,
@@ -58,13 +80,20 @@ async function updateDarwinMemoryCache() {
         cachedDarwinAvail = Number.isFinite(bytes) && bytes >= 0 ? Math.min(bytes, os.totalmem()) : null;
     } catch {
         // silently fallback
+    } finally {
+        updateInFlight = false;
     }
 }
 
 export function getHostMemorySnapshot(): HostMemorySnapshot {
     if (os.platform() === 'darwin' && !darwinMemoryInterval) {
-        updateDarwinMemoryCache();
-        darwinMemoryInterval = setInterval(updateDarwinMemoryCache, 3000);
+        // Fire-and-forget: getHostMemorySnapshot is a synchronous read of
+        // whatever is already cached (starts null — first caller sees freeMem
+        // as a fallback below, same as any platform without the darwin branch).
+        // The update itself is scheduled, never awaited here, so this stays a
+        // synchronous, non-blocking call from the caller's point of view.
+        void updateDarwinMemoryCache();
+        darwinMemoryInterval = setInterval(() => { void updateDarwinMemoryCache(); }, REFRESH_INTERVAL_MS);
         darwinMemoryInterval.unref();
     }
 
@@ -79,4 +108,14 @@ export function getHostMemorySnapshot(): HostMemorySnapshot {
         freeMem,
         availableMem,
     };
+}
+
+/** Test-only: reset the module-level cache/timer/in-flight state between isolated test cases. */
+export function __resetHostMemoryStateForTests(): void {
+    if (darwinMemoryInterval) {
+        clearInterval(darwinMemoryInterval);
+        darwinMemoryInterval = null;
+    }
+    cachedDarwinAvail = null;
+    updateInFlight = false;
 }

@@ -1176,11 +1176,15 @@ export async function meshEnqueueBatch(
 
 export async function meshViewQueue(
     ctx: MeshContext,
-    args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean },
+    args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean; refresh?: boolean },
 ): Promise<string> {
     const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
+    // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe when
+    // the caller explicitly asks for a fresh read (see mesh_status's identical
+    // probeOpts — mesh-tools-internal.ts probeStatusMetadataForNode).
+    const probeOpts = args.refresh === true ? { refresh: true } : undefined;
     try {
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
@@ -1202,7 +1206,7 @@ export async function meshViewQueue(
         // The verified variant's node shape is a superset of the plain one (adds
         // __liveProbeVerified; sessions merge identically), so it's reused below for
         // dispatch reconciliation / active-work evidence instead of probing twice.
-        const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx);
+        const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx, probeOpts);
         const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const summary = buildQueueStatusSummary(fullQueue);

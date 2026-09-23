@@ -1911,7 +1911,11 @@ export async function meshListPendingApprovals(
     recordMeshCoordinatorToolCall(ctx, 'mesh_list_pending_approvals');
     await refreshMeshFromDaemon(ctx);
 
-    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+    // Audit #7 (P7): shares the same probe cache/dedupe as mesh_status /
+    // mesh_view_queue (mesh-tools-internal.ts probeStatusMetadataForNode) — one
+    // get_status_metadata per daemon per call, reused across tools within the TTL.
+    const probeOpts = _args?.refresh === true ? { refresh: true } : undefined;
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx, probeOpts);
     let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
     let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
     const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);

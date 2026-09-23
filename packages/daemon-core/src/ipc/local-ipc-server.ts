@@ -20,7 +20,8 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { LOG, getLogLevel } from '../logging/logger.js';
-import { DAEMON_WS_PATH } from '../ipc-protocol.js';
+import { DAEMON_WS_PATH, IPC_MAX_PAYLOAD_BYTES } from '../ipc-protocol.js';
+import { IpcConnectionLoadGuard } from './ipc-load-guards.js';
 
 /** Parameters passed to `handleCommand` for each incoming ext:command frame. */
 export interface IpcCommandContext {
@@ -123,6 +124,10 @@ export function buildIpcStatusHttpResponse(
 export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<LocalIpcServerHandle> {
     const logCategory = opts.logCategory || 'IPC';
     const clients = new Set<WebSocket>();
+    // Audit #12: one load guard PER CONNECTION (in-flight cap + probe-verb token
+    // bucket) — see ipc-load-guards.ts. Created on connect, discarded on close so
+    // a reconnecting client always starts with a clean budget.
+    const loadGuards = new WeakMap<WebSocket, IpcConnectionLoadGuard>();
     let httpServer: HttpServer | null = null;
     let wss: WebSocketServer | null = null;
     let listening = false;
@@ -145,7 +150,10 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
         res.end(body);
     });
 
-    wss = new WebSocketServer({ noServer: true });
+    // Audit #12: the `ws` library default maxPayload is 100 MiB — down to 32 MiB,
+    // see IPC_MAX_PAYLOAD_BYTES for the reasoning (largest legitimate frame is far
+    // smaller; this only bounds a runaway/misbehaving local sender).
+    wss = new WebSocketServer({ noServer: true, maxPayload: IPC_MAX_PAYLOAD_BYTES });
     wss.on('connection', (ws) => handleConnection(ws));
 
     httpServer.on('upgrade', (req: IncomingMessage, socket, head) => {
@@ -162,6 +170,7 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
 
     function handleConnection(ws: WebSocket): void {
         clients.add(ws);
+        loadGuards.set(ws, new IpcConnectionLoadGuard());
         sendWelcome(ws);
         opts.onClientConnected?.(ws);
 
@@ -170,10 +179,12 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
         });
         ws.on('close', () => {
             clients.delete(ws);
+            loadGuards.delete(ws);
             opts.onClientDisconnected?.(ws);
         });
         ws.on('error', () => {
             clients.delete(ws);
+            loadGuards.delete(ws);
             opts.onClientDisconnected?.(ws);
         });
     }
@@ -220,7 +231,30 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
             return;
         }
 
+        // Audit #12: per-connection in-flight cap + probe-verb token bucket,
+        // checked BEFORE the handler runs. A rejection is a structured
+        // ext:command_result (ipc_busy / rate_limited), never a silent drop or an
+        // unstructured error string, so a well-behaved client (the MCP IpcTransport)
+        // can distinguish "the daemon is overloaded, back off" from "the command
+        // itself failed" and — for rate_limited — read retryAfterMs to pace itself.
+        const guard = loadGuards.get(ws);
         const handlerStartedAt = Date.now();
+        const rejection = guard?.tryAcquire(command, handlerStartedAt) ?? null;
+        if (rejection) {
+            const responseBody = JSON.stringify({
+                type: 'ext:command_result',
+                payload: {
+                    requestId,
+                    success: false,
+                    error: rejection.error,
+                    code: rejection.code,
+                    ...(rejection.retryAfterMs !== undefined ? { retryAfterMs: rejection.retryAfterMs } : {}),
+                },
+            });
+            writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+            return;
+        }
+
         try {
             const result = await opts.handleCommand({ command, args, requestId, ws });
             const responseBody = JSON.stringify({
@@ -244,6 +278,8 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
                 },
             });
             writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+        } finally {
+            guard?.release();
         }
     }
 
