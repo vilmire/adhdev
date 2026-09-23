@@ -110,6 +110,33 @@ function echoContentMatchesTarget(content: unknown, target: string): boolean {
 }
 
 /**
+ * Fast path for the `messageId`-based match below: does this live message
+ * carry `meta.sourceMessageId` naming the given pending entry?
+ *
+ * ★ (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Before
+ * this, matching was TEXT-ONLY, deliberately, per this file's own comment:
+ * "the client cannot know the id the daemon will mint". That is no longer
+ * true — `recordAcknowledgedUserInput` is now called with the SAME
+ * `OutboundMessage.messageId` the web side minted (once D-daemon's
+ * `SessionInputService` lands; see this workstream's REQUESTED EDITS), so a
+ * daemon build past that point CAN stamp the ack with `meta.sourceMessageId`.
+ * A daemon build that has not picked this up yet never sets the field, so
+ * `message.meta` is simply absent here and every caller falls through to the
+ * text match unchanged — this is additive, not a replacement.
+ */
+function echoMatchesByMessageId(message: DashboardMessage, pendingId: string | undefined): boolean {
+    if (!pendingId) return false
+    const meta = (message as { meta?: { sourceMessageId?: unknown } }).meta
+    return typeof meta?.sourceMessageId === 'string' && meta.sourceMessageId === pendingId
+}
+
+/** Does this live message carry ANY `meta.sourceMessageId` (matched against some pending entry or not)? Used to exclude id-tagged echoes from the content-count budget pool — see `retirePendingLocalMessages`. */
+function hasSourceMessageId(message: DashboardMessage): boolean {
+    const meta = (message as { meta?: { sourceMessageId?: unknown } }).meta
+    return typeof meta?.sourceMessageId === 'string' && meta.sourceMessageId.length > 0
+}
+
+/**
  * ★ DUPLICATE PREVENTION — the whole risk of the optimistic bubble.
  *
  * The daemon ALREADY renders the owner's bubble: `recordAcknowledgedUserInput`
@@ -118,10 +145,16 @@ function echoContentMatchesTarget(content: unknown, target: string): boolean {
  * *stand-in* for that echo, never an addition to it — if both rendered, the
  * owner would see their message twice, which is worse than seeing it late.
  *
- * The match is on trimmed CONTENT and role, deliberately, not on an id: the
- * client cannot know the id the daemon will mint, and the daemon's own 60s
- * dedup window (USER_INPUT_ACK_DEDUP_WINDOW_MS) is likewise content-keyed, so
- * content is the only identity the two sides share.
+ * ★ (Phase D-web) Matches by `messageId` FIRST when the live message carries
+ * `meta.sourceMessageId` (see `echoMatchesByMessageId`) — an exact identity
+ * match needs no text/image-token normalization at all. Falls back to the
+ * TRIMMED-CONTENT match below for a daemon build that has not stamped the id
+ * yet: this fallback is TEMPORARY and is deleted in the same "cut compat"
+ * step that removes `SendChatCommandPayload`'s legacy `message?` field
+ * (phase-D-plan.md §7.1 step 12) once every daemon in the fleet stamps
+ * `sourceMessageId`. Until then, content is the identity the two sides share,
+ * and the daemon's own 60s dedup window (USER_INPUT_ACK_DEDUP_WINDOW_MS) is
+ * likewise content-keyed.
  *
  * Suppression is one-directional and conservative: ANY matching user bubble in
  * the live tail retires the pending one. A false match (the owner sent the same
@@ -138,6 +171,7 @@ export function hasEchoedPendingMessage(
     for (let i = liveMessages.length - 1; i >= 0; i -= 1) {
         const message = liveMessages[i]
         if (String(message.role || '').toLowerCase() !== 'user') continue
+        if (echoMatchesByMessageId(message, pending.id)) return true
         if (echoContentMatchesTarget(message.content, target)) return true
     }
     return false
@@ -254,6 +288,18 @@ export function retirePendingLocalMessages(
     let markedStale = 0
     let changed = false
 
+    // (Phase D-web) Live messages carrying `meta.sourceMessageId` are claimed
+    // by EXACT IDENTITY below, never by the content-count budget — so they are
+    // excluded from the pool `countEchoedMessages` draws from. Without this, an
+    // id-tagged echo would BOTH retire its own entry via the id fast path AND
+    // still be counted toward a same-text sibling's content budget, retiring
+    // two pending entries for one live echo (the same over-retirement bug the
+    // per-body echo budget was originally built to prevent — see
+    // `countEchoedMessages`'s own doc comment).
+    const contentBudgetMessages = liveMessages.some(message => hasSourceMessageId(message))
+        ? liveMessages.filter(message => !hasSourceMessageId(message))
+        : liveMessages
+
     for (const entry of pending) {
         const target = entry.content.trim()
         if (!target) {
@@ -263,8 +309,18 @@ export function retirePendingLocalMessages(
             changed = true
             continue
         }
+        // (Phase D-web) messageId fast path — see `echoMatchesByMessageId`'s doc
+        // comment. Checked BEFORE the content-budget lookup and does not consume
+        // budget from it: an id match is exact identity, not a text-count guess,
+        // so it must never be confused with — or steal budget from — a same-text
+        // sibling entry that has not been echoed yet.
+        if (liveMessages.some(message => echoMatchesByMessageId(message, entry.id))) {
+            retiredByEcho += 1
+            changed = true
+            continue
+        }
         if (!echoBudget.has(target)) {
-            echoBudget.set(target, countEchoedMessages(liveMessages, target))
+            echoBudget.set(target, countEchoedMessages(contentBudgetMessages, target))
         }
         const remaining = echoBudget.get(target) || 0
         if (remaining > 0) {

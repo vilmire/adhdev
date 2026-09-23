@@ -71,6 +71,10 @@ interface DashboardNewSessionDialogProps {
             cliArgs?: string[]
             initialModel?: string | null
             initialThinkingLevel?: string | null
+            /** Phase E: where initialModel came from (sent only with a value). */
+            modelSource?: LaunchValueSource
+            /** Phase E: where initialThinkingLevel came from (sent only with a value). */
+            thinkingLevelSource?: LaunchValueSource
             settings?: {
                 autoApprove?: boolean
                 autoApproveMode?: string
@@ -85,6 +89,8 @@ interface DashboardNewSessionDialogProps {
         opts?: {
             initialModel?: string | null
             initialThinkingLevel?: string | null
+            modelSource?: LaunchValueSource
+            thinkingLevelSource?: LaunchValueSource
             settings?: { autoApprove?: boolean; autoApproveMode?: string }
         },
     ) => Promise<LaunchResult>
@@ -169,6 +175,36 @@ const REMEMBER_SCOPE_DIALOG = 'new-session-dialog'
 const REMEMBER_SCOPE_WORKSPACE = 'new-session-workspace'
 const REMEMBER_SCOPE_MESH = 'new-session-mesh'
 
+/**
+ * Phase E launch provenance for the model / thinking-level fields: where the
+ * value in the field came from. Sent to the daemon as `modelSource` /
+ * `thinkingLevelSource` (mesh-shared `ModelAxisSource` members), only alongside
+ * a non-empty value — an empty field means "provider default", which the daemon
+ * resolves and labels itself.
+ */
+export type LaunchValueSource = 'user' | 'remembered'
+
+interface LaunchValueChoice {
+    value: string
+    source: LaunchValueSource | null
+}
+
+const EMPTY_LAUNCH_VALUE_CHOICE: LaunchValueChoice = { value: '', source: null }
+
+function toLaunchValueChoice(value: string, source: LaunchValueSource): LaunchValueChoice {
+    return value ? { value, source } : EMPTY_LAUNCH_VALUE_CHOICE
+}
+
+function launchValueSources(
+    model: LaunchValueChoice,
+    thinking: LaunchValueChoice,
+): { modelSource?: LaunchValueSource; thinkingLevelSource?: LaunchValueSource } {
+    return {
+        ...(model.value.trim() && model.source ? { modelSource: model.source } : {}),
+        ...(thinking.value.trim() && thinking.source ? { thinkingLevelSource: thinking.source } : {}),
+    }
+}
+
 function isRememberedLaunchKind(value: string | undefined): value is LaunchKind {
     return value === 'cli' || value === 'ide' || value === 'acp'
 }
@@ -241,8 +277,22 @@ export default function DashboardNewSessionDialog({
     const [selectedAutoApproveModeId, setSelectedAutoApproveModeId] = useState('')
     const [pendingDangerousMode, setPendingDangerousMode] = useState<AutoApproveMode | null>(null)
     // Brain-routing overrides for this session: model + thinking level, best-effort.
-    const [initialModel, setInitialModel] = useState('')
-    const [initialThinkingLevel, setInitialThinkingLevel] = useState('')
+    // Phase E: each value carries WHERE it came from — a pick in this dialog
+    // ('user') or the one-shot restore of the last launch ('remembered') — and is
+    // sent as modelSource / thinkingLevelSource so the daemon's launch record can
+    // tell them apart. Every write goes through setModelWithSource /
+    // setThinkingWithSource, so a new programmatic setter cannot silently
+    // mislabel a restored value as a user pick.
+    const [modelChoice, setModelChoice] = useState<LaunchValueChoice>(EMPTY_LAUNCH_VALUE_CHOICE)
+    const [thinkingChoice, setThinkingChoice] = useState<LaunchValueChoice>(EMPTY_LAUNCH_VALUE_CHOICE)
+    const initialModel = modelChoice.value
+    const initialThinkingLevel = thinkingChoice.value
+    const setModelWithSource = useCallback((value: string, source: LaunchValueSource) => {
+        setModelChoice(toLaunchValueChoice(value, source))
+    }, [])
+    const setThinkingWithSource = useCallback((value: string, source: LaunchValueSource) => {
+        setThinkingChoice(toLaunchValueChoice(value, source))
+    }, [])
     // When true, the model field is a free-text input (user picked "Custom…" in the
     // model dropdown) instead of a select of the provider's suggested models.
     const [modelIsCustom, setModelIsCustom] = useState(false)
@@ -494,8 +544,8 @@ export default function DashboardNewSessionDialog({
             setLegacyAutoApprove(false)
             setSelectedAutoApproveModeId('')
             setPendingDangerousMode(null)
-            setInitialModel('')
-            setInitialThinkingLevel('')
+            setModelWithSource('', 'user')
+            setThinkingWithSource('', 'user')
             setModelIsCustom(false)
             setSelectedResumeSessionId('')
             setSavedSessions([])
@@ -609,10 +659,10 @@ export default function DashboardNewSessionDialog({
     // Reset the brain-routing overrides when the provider changes — a model/thinking
     // value from one provider (e.g. codex gpt-5.5) is meaningless for another (claude).
     useEffect(() => {
-        setInitialModel('')
-        setInitialThinkingLevel('')
+        setModelWithSource('', 'user')
+        setThinkingWithSource('', 'user')
         setModelIsCustom(false)
-    }, [selectedTarget])
+    }, [selectedTarget, setModelWithSource, setThinkingWithSource])
 
     // A dangerous registry default must never become active merely because its
     // manifest was downloaded. Provider changes reset to a non-dangerous default;
@@ -647,11 +697,11 @@ export default function DashboardNewSessionDialog({
             if (modelOptionsForTarget.length > 0 && !modelOptionsForTarget.includes(rememberedModel)) {
                 setModelIsCustom(true)
             }
-            setInitialModel(rememberedModel)
+            setModelWithSource(rememberedModel, 'remembered')
         }
         const rememberedThinking = values.thinkingLevel || ''
         if (rememberedThinking && thinkingLevelOptionsForTarget.includes(rememberedThinking)) {
-            setInitialThinkingLevel(rememberedThinking)
+            setThinkingWithSource(rememberedThinking, 'remembered')
         }
         const rememberedAutoApproveModeId = values.autoApproveModeId || ''
         if (rememberedAutoApproveModeId && autoApproveModes) {
@@ -660,7 +710,7 @@ export default function DashboardNewSessionDialog({
                 setSelectedAutoApproveModeId(rememberedMode.id)
             }
         }
-    }, [autoApproveModes, autoApproveModesFingerprint, modelOptionsForTarget, remembered, selectedTarget, thinkingLevelOptionsForTarget, workspaceMode])
+    }, [autoApproveModes, autoApproveModesFingerprint, modelOptionsForTarget, remembered, selectedTarget, setModelWithSource, setThinkingWithSource, thinkingLevelOptionsForTarget, workspaceMode])
 
     const requestAutoApproveMode = useCallback((mode: AutoApproveMode) => {
         if (deriveAutoApproveModeRisk(mode) === 'dangerous') {
@@ -902,6 +952,7 @@ export default function DashboardNewSessionDialog({
             const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget, {
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
+                ...launchValueSources(modelChoice, thinkingChoice),
                 settings: launchAutoApproveSettings,
             })
             setBusy(false)
@@ -948,6 +999,7 @@ export default function DashboardNewSessionDialog({
                 cliArgs: parsedArgs,
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
+                ...launchValueSources(modelChoice, thinkingChoice),
                 settings: launchAutoApproveSettings,
             })
         setBusy(false)
@@ -980,6 +1032,8 @@ export default function DashboardNewSessionDialog({
         launchArgs,
         initialModel,
         initialThinkingLevel,
+        modelChoice,
+        thinkingChoice,
         launchAutoApproveSettings,
         loadRecentArgs,
         onClose,
@@ -1345,14 +1399,15 @@ export default function DashboardNewSessionDialog({
                                     <label className="flex flex-col gap-1">
                                         <span className="text-2xs text-text-muted">{t('newSession.model')}</span>
                                         {modelOptionsForTarget.length > 0 && !modelIsCustom ? (
+                                            <>
                                             <select
                                                 value={modelOptionsForTarget.includes(initialModel) ? initialModel : ''}
                                                 onChange={(event) => {
                                                     if (event.target.value === '__custom__') {
                                                         setModelIsCustom(true)
-                                                        setInitialModel('')
+                                                        setModelWithSource('', 'user')
                                                     } else {
-                                                        setInitialModel(event.target.value)
+                                                        setModelWithSource(event.target.value, 'user')
                                                     }
                                                 }}
                                                 className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
@@ -1362,12 +1417,21 @@ export default function DashboardNewSessionDialog({
                                                 {modelOptionsForTarget.map((m: string) => <option key={m} value={m}>{m}</option>)}
                                                 <option value="__custom__">{t('newSession.custom')}</option>
                                             </select>
+                                            {/* Phase E: what "provider default" resolves to — the daemon records
+                                                the same value (discovery models[0], else the manifest's first
+                                                option), which is exactly this list's head. */}
+                                            {!initialModel.trim() && (
+                                                <span className="text-2xs text-text-muted" data-testid="new-session-default-model">
+                                                    {t('newSession.defaultResolvesTo', { model: modelOptionsForTarget[0], defaultValue: 'Default resolves to {{model}}' })}
+                                                </span>
+                                            )}
+                                            </>
                                         ) : (
                                             <>
                                                 <input
                                                     type="text"
                                                     value={initialModel}
-                                                    onChange={(event) => setInitialModel(event.target.value)}
+                                                    onChange={(event) => setModelWithSource(event.target.value, 'user')}
                                                     placeholder={t('newSession.typeModelName')}
                                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                                     disabled={busy}
@@ -1377,7 +1441,7 @@ export default function DashboardNewSessionDialog({
                                                     <button
                                                         type="button"
                                                         className="self-start text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0"
-                                                        onClick={() => { setModelIsCustom(false); setInitialModel('') }}
+                                                        onClick={() => { setModelIsCustom(false); setModelWithSource('', 'user') }}
                                                         disabled={busy}
                                                     >
                                                         {t('newSession.backToModelList')}
@@ -1390,7 +1454,7 @@ export default function DashboardNewSessionDialog({
                                         <span className="text-2xs text-text-muted">{t('newSession.thinkingLevel')}</span>
                                         <select
                                             value={initialThinkingLevel}
-                                            onChange={(event) => setInitialThinkingLevel(event.target.value)}
+                                            onChange={(event) => setThinkingWithSource(event.target.value, 'user')}
                                             className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                             disabled={busy}
                                         >

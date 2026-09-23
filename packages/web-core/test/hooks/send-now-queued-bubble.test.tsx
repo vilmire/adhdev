@@ -246,3 +246,93 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         h.unmount()
     })
 })
+
+/**
+ * (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Send
+ * now must resubmit the SAME `OutboundMessage` — same `messageId`, same body
+ * — under a different policy, not a fresh logical send. Both facts are wire
+ * fields now: `messageId` (identity) and `policy` (admission mode), carried
+ * alongside the legacy `sendNow`/`interrupt` booleans the current daemon
+ * still reads (see `buildSendChatPayload`'s doc comment for why both exist).
+ *
+ * 5-step gate check performed on this test (revert-and-confirm-red, per the
+ * repo's gate-authoring checklist): reverting `handleSendNowQueued`'s
+ * `buildSendChatPayload(targetId, message, pending.input, ...)` call back to
+ * a fresh `buildInputEnvelope(message, undefined)` (i.e. re-deriving a
+ * text-only body instead of passing the parked `pending.input` through)
+ * turns this test red — confirmed locally before restoring the fix.
+ */
+describe('SEND-NOW — same OutboundMessage identity and body (Phase D-web)', () => {
+    it('★ resubmits the SAME messageId used by the original parked send', async () => {
+        const send = vi.fn()
+            .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
+        const h = await withParkedBubble(send)
+        const originalMessageId = (send.mock.calls[0][2] as any).messageId
+        expect(originalMessageId).toEqual(expect.any(String))
+        expect(originalMessageId.length).toBeGreaterThan(0)
+
+        await act(async () => { await h.get().handleSendNowQueued() })
+
+        const resendMessageId = (send.mock.calls[1][2] as any).messageId
+        expect(resendMessageId).toBe(originalMessageId)
+        // And it matches the bubble's own id — the local store, the wire field,
+        // and the resubmit are all keyed by the exact same value.
+        expect(resendMessageId).toBe(h.get().pendingLocalMessage.id)
+        h.unmount()
+    })
+
+    it('★ carries policy.mode "send_now" on the resubmit and "queue" on the original', async () => {
+        const send = vi.fn()
+            .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
+        const h = await withParkedBubble(send)
+
+        await act(async () => { await h.get().handleSendNowQueued() })
+
+        expect((send.mock.calls[0][2] as any).policy).toEqual({ mode: 'queue' })
+        expect((send.mock.calls[1][2] as any).policy).toEqual({ mode: 'send_now' })
+        h.unmount()
+    })
+
+    it('★ THE REGRESSION THIS PHASE CLOSES: an image attachment survives a Send-now resubmit', async () => {
+        // Historical bug (phase-D-plan.md §6.3, "triple-bubble" class, observed
+        // live 2026-09-23): a structured image send parks the BUILT prompt, but
+        // the old text-keyed resend re-derived a TEXT-ONLY body from the draft
+        // string alone — the image was silently dropped on Send-now, and the
+        // agent received two disjoint turns for what the owner saw as one press.
+        const send = vi.fn()
+            .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
+        const h = renderHarness(send)
+
+        const attachment = { mimeType: 'image/png', data: 'YWJjZGVm', name: 'shot.png', previewUrl: 'data:image/png;base64,YWJjZGVm' }
+        await act(async () => { await h.get().handleSendChat('see this', [attachment]) })
+        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'see this', queued: true })
+
+        const originalInput = (send.mock.calls[0][2] as any).input
+        expect(originalInput.parts.some((p: any) => p.type === 'image' && p.data === 'YWJjZGVm')).toBe(true)
+
+        await act(async () => { await h.get().handleSendNowQueued() })
+
+        // The resubmit must carry the SAME structured input, image included —
+        // not a fresh text-only envelope derived from the draft string.
+        const resendInput = (send.mock.calls[1][2] as any).input
+        expect(resendInput).toBeDefined()
+        expect(resendInput.parts.some((p: any) => p.type === 'image' && p.data === 'YWJjZGVm')).toBe(true)
+        expect(resendInput.parts.some((p: any) => p.type === 'text' && p.text === 'see this')).toBe(true)
+        h.unmount()
+    })
+
+    it('a text-only parked entry resubmits with no `input` field (no spurious envelope wrapper)', async () => {
+        const send = vi.fn()
+            .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
+            .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
+        const h = await withParkedBubble(send)
+
+        await act(async () => { await h.get().handleSendNowQueued() })
+
+        expect((send.mock.calls[1][2] as any).input).toBeUndefined()
+        h.unmount()
+    })
+})

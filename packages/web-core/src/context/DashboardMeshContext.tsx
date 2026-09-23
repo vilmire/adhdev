@@ -42,6 +42,9 @@ export interface DashboardMeshOverrides {
         opts?: {
             initialModel?: string | null
             initialThinkingLevel?: string | null
+            /** Phase E: where the model / thinking value came from — forwarded to launch_mesh_coordinator. */
+            modelSource?: 'user' | 'remembered'
+            thinkingLevelSource?: 'user' | 'remembered'
             settings?: { autoApprove?: boolean; autoApproveMode?: string }
         },
     ) => Promise<LaunchResult>

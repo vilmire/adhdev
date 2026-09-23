@@ -288,7 +288,18 @@
         "questionPending": "QUESTION WAITING",
         "answerQuestion": "Answer the question"
     },
+    "chatControls": {
+        "launchModelChanged": "{{from}} → {{to}} (changed)",
+        "launchModelSource": {
+          "user": "chosen",
+          "remembered": "remembered",
+          "mesh_slot": "mesh slot",
+          "task_override": "task override",
+          "provider_default": "default"
+        }
+    },
     "newSession": {
+        "defaultResolvesTo": "Default resolves to {{model}}",
         "title": "Start session",
         "close": "Close new session dialog",
         "category": "Category",

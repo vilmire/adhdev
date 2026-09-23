@@ -288,7 +288,18 @@
         "questionPending": "질문 대기 중",
         "answerQuestion": "질문에 답하기"
     },
+    "chatControls": {
+        "launchModelChanged": "{{from}} → {{to}} (변경됨)",
+        "launchModelSource": {
+          "user": "선택함",
+          "remembered": "기억된 값",
+          "mesh_slot": "메시 슬롯",
+          "task_override": "태스크 지정",
+          "provider_default": "기본값"
+        }
+    },
     "newSession": {
+        "defaultResolvesTo": "기본값은 {{model}}로 해석됩니다",
         "title": "세션 시작",
         "close": "새 세션 대화상자 닫기",
         "category": "카테고리",

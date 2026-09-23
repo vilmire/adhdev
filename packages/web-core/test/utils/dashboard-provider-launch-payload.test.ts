@@ -12,6 +12,7 @@ describe('dashboard provider launch payload', () => {
       workspaceId: 'workspace-1',
       cliArgs: ['--profile', 'test'],
       settings: { autoApproveMode: 'caution' },
+      launchedBy: 'dashboard',
     })
   })
 

@@ -288,7 +288,18 @@
         "questionPending": "質問の回答待ち",
         "answerQuestion": "質問に回答する"
     },
+    "chatControls": {
+        "launchModelChanged": "{{from}} → {{to}}（変更済み）",
+        "launchModelSource": {
+          "user": "選択",
+          "remembered": "記憶された値",
+          "mesh_slot": "メッシュスロット",
+          "task_override": "タスク指定",
+          "provider_default": "デフォルト"
+        }
+    },
     "newSession": {
+        "defaultResolvesTo": "デフォルトは {{model}} になります",
         "title": "セッションを開始",
         "close": "新規セッションダイアログを閉じる",
         "category": "カテゴリ",
