@@ -139,10 +139,19 @@ export const TURN_REASONS = [
 ] as const
 export type TurnReason = typeof TURN_REASONS[number]
 
-/** What a `turn.notify` entry tells a coordinator. */
+/**
+ * What a `turn.notify` entry tells a coordinator.
+ *
+ * `late_completion` (C1 R27, owner revision 2026-09-23): a superseded
+ * generation finished while the current one was already running; the
+ * coordinator decides whether to salvage it (the entry carries the g−1
+ * summary as its append `ref`). `mesh_event`: a non-turn coordinator notice
+ * (refine terminal, worktree bootstrap, …) whose text lives only in the
+ * owner's local `turn_events.payload_json` and is rendered at deliver time.
+ */
 export const NOTIFY_KINDS = [
     'completed', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'approval_resolved',
-    'candidate', 'no_progress', 'progress',
+    'candidate', 'no_progress', 'progress', 'late_completion', 'mesh_event',
 ] as const
 export type NotifyKind = typeof NOTIFY_KINDS[number]
 

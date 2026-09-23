@@ -18,7 +18,19 @@
  *   - `renderCoordinatorWorkerSection()` — the matching paragraph the
  *     coordinator prompt carries, so the coordinator expects structured reports
  *     and stops polling for them.
+ *
+ * Wiring-unification Phase H2 adds an optional mission-brief block: when a
+ * dispatched task belongs to a mission that carries a `MissionBrief`
+ * (`./mission-brief.ts`), `renderWorkerProtocolFooter` renders it ABOVE the
+ * `WORKER_PROTOCOL_FOOTER_MARKER` line. This is deliberate placement, not an
+ * accident of insertion order: `hasWorkerProtocolFooter` / `stripWorkerProtocolFooter`
+ * both key off the marker line alone, so a body with a brief block strips
+ * identically to one without — the brief is authored content from the
+ * coordinator's point of view (like the task message itself), never part of
+ * the protocol contract the marker demarcates.
  */
+
+import { renderMissionBriefBlock, type MissionBrief } from './mission-brief'
 
 export const WORKER_TOOLS = [
     'report_completion',
@@ -47,6 +59,8 @@ export interface WorkerProtocolFooterInput {
     readonly?: boolean
     /** Number of handoff notes enclosed above the footer, when any. */
     enclosedHandoffNotes?: number
+    /** H2: the owning mission's brief, when this task belongs to one. Rendered above the marker line — see module doc. */
+    missionBrief?: MissionBrief
 }
 
 export function hasWorkerProtocolFooter(body: string): boolean {
@@ -59,7 +73,8 @@ export function hasWorkerProtocolFooter(body: string): boolean {
  * the worker does not go looking for coordinator tools.
  */
 export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}): string {
-    const lines: string[] = [WORKER_PROTOCOL_FOOTER_MARKER]
+    const briefBlock = input.missionBrief ? renderMissionBriefBlock(input.missionBrief) : null
+    const lines: string[] = briefBlock ? [briefBlock, '', WORKER_PROTOCOL_FOOTER_MARKER] : [WORKER_PROTOCOL_FOOTER_MARKER]
     const scope: string[] = []
     if (input.taskId) scope.push(`task ${input.taskId}`)
     if (input.taskMode) scope.push(`mode ${input.taskMode}`)
@@ -122,5 +137,6 @@ export function renderCoordinatorWorkerSection(): string {
         '- `progress_update` from a worker arrives as a lightweight progress note. Do NOT poll `mesh_status`, `mesh_view_queue` or `mesh_read_chat` to check on a running worker; completion, progress, blocked and failure all arrive as events.',
         '- To reach a busy worker mid-task use `mesh_notify_worker`: the memo is delivered on the worker\'s next tool call (or when it becomes idle). A worker that reports `blocked` is asking you for a decision — answer it with `mesh_send_task` to the same session.',
         '- `mesh_status` is for node health and capacity before delegating, never for progress.',
+        '- A `code_change` task\'s declared `owned_paths` (H1) is enforced at claim time: a second `code_change` task whose `owned_paths` overlaps an already-claimed task\'s is refused rather than silently racing it. A worker\'s `report_completion.touched_files` is compared against its own task\'s declaration afterward and any mismatch is surfaced back to you as evidence — it is never a validation failure, since a worker often cannot know its exact final file list at enqueue time.',
     ].join('\n')
 }
