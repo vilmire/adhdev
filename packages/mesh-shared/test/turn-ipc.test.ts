@@ -9,6 +9,10 @@ import {
     decodeMeshIndexQueryResponse,
     decodeMeshRecordRequest,
     decodeMeshRecordResponse,
+    decodeMissionQueryRequest,
+    decodeMissionQueryResponse,
+    decodeMissionUpsertRequest,
+    decodeMissionUpsertResponse,
     decodeOperatorStatusRequest,
     decodeOperatorStatusResponse,
     decodeTurnCancelRequest,
@@ -39,14 +43,20 @@ const evidence = {
 } as const
 
 describe('turn-ipc — command registry', () => {
-    it('declares exactly six commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(6)
+    // C-W6 (2026-09-23): mission_upsert/mission_query added per the design
+    // doc's "Decision" note — missions carry free-text goal/title that
+    // cannot fit mesh_record's ProjectedScalars allow-list (see this file's
+    // section header comment). Six became eight; the deliberate-update
+    // pattern is the same one C-W2's report used for its own count changes.
+    it('declares exactly eight commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(8)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
-            'mesh_index_query', 'mesh_record', 'operator_status', 'turn_cancel', 'turn_observe', 'turn_query',
+            'mesh_index_query', 'mesh_record', 'mission_query', 'mission_upsert',
+            'operator_status', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the six names', () => {
+    it('isTurnIpcCommand accepts only the eight names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -247,6 +257,75 @@ describe('mesh_index_query', () => {
             rows: [{ writer: 'w1', seq: 1, meshId: 'm1', eventId: 'ev-1', kind: 'adhdev.mesh.ledger', atMs: 1000, payload: { note: { text: 'sentinel free text' } } }],
         }
         expect(decodeMeshIndexQueryResponse(res)).toBeNull()
+    })
+})
+
+// mission_upsert / mission_query (added 2026-09-23 — see the file's section
+// header comment above their definitions for why free text is fine here,
+// unlike every other command in this file).
+describe('mission_upsert', () => {
+    it('decodes a create request (no id)', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 'Ship C-W6', goal: 'Move MCP off direct DB access' }
+        expect(decodeMissionUpsertRequest(req)).toEqual(req)
+    })
+
+    it('decodes an update request (id present)', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', id: 'mission-1', title: 'Ship C-W6', status: 'active' as const }
+        expect(decodeMissionUpsertRequest(req)).toEqual(req)
+    })
+
+    it('rejects an empty/whitespace-only title', () => {
+        expect(decodeMissionUpsertRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: '' })).toBeNull()
+        expect(decodeMissionUpsertRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: '   ' })).toBeNull()
+    })
+
+    it('rejects an unknown status value', () => {
+        expect(decodeMissionUpsertRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't', status: 'in_progress' })).toBeNull()
+    })
+
+    it('rejects an unknown source value', () => {
+        expect(decodeMissionUpsertRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', title: 't', source: 'user' })).toBeNull()
+    })
+
+    it('decodes the response, round-tripping a long free-text goal (local IPC, not the mesh_record boundary)', () => {
+        const longGoal = 'x'.repeat(500) // over MAX_MESH_RECORD_STRING on purpose — this command is NOT scalar-length-bounded
+        const res = { mission: { id: 'mission-1', meshId: 'm1', title: 't', goal: longGoal, status: 'active' as const } }
+        expect(decodeMissionUpsertResponse(res)).toEqual(res)
+    })
+
+    it('rejects a response mission missing a required field', () => {
+        expect(decodeMissionUpsertResponse({ mission: { id: 'mission-1', meshId: 'm1', title: 't', status: 'active' } })).toBeNull()
+    })
+})
+
+describe('mission_query', () => {
+    it('decodes a request with no filters (every status)', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1' }
+        expect(decodeMissionQueryRequest(req)).toEqual(req)
+    })
+
+    it('decodes a request filtered by statuses', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', statuses: ['active', 'paused'] as const }
+        expect(decodeMissionQueryRequest(req)).toEqual(req)
+    })
+
+    it('decodes a single-mission lookup by id', () => {
+        const req = { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', id: 'mission-1' }
+        expect(decodeMissionQueryRequest(req)).toEqual(req)
+    })
+
+    it('rejects an empty statuses array (meaningless filter, likely a caller bug)', () => {
+        expect(decodeMissionQueryRequest({ v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', statuses: [] })).toBeNull()
+    })
+
+    it('decodes a response with multiple missions', () => {
+        const res = {
+            missions: [
+                { id: 'mission-1', meshId: 'm1', title: 't1', goal: '', status: 'active' as const },
+                { id: 'mission-2', meshId: 'm1', title: 't2', goal: 'g2', status: 'completed' as const, source: 'magi' as const },
+            ],
+        }
+        expect(decodeMissionQueryResponse(res)).toEqual(res)
     })
 })
 

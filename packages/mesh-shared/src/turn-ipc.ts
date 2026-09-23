@@ -554,6 +554,134 @@ export function decodeMeshIndexQueryResponse(value: unknown): MeshIndexQueryResp
     return isMeshIndexQueryResponse(value) ? value : null
 }
 
+// ─── mission_upsert / mission_query ────────────────────────────────────────
+//
+// Decision (2026-09-23, design doc §5 C2 update): missions and graph gates
+// have no home in the original six commands — `upsertMeshMission`/
+// `listMeshMissionsForTool` write/read structured state with a free-text
+// `goal`/`title` that cannot fit `mesh_record`'s scalar `ProjectedScalars`
+// allow-list (§ "MESH_RECORD_PAYLOAD_KEYS" above has no text field, on
+// purpose). Two more commands, not a widened allow-list:
+//
+//   - mission_upsert — create/update a mission (mesh-missions.ts
+//     `upsertMeshMission`'s shape).
+//   - mission_query  — list missions for a mesh, optionally filtered by
+//     status (`getMeshMissions`'s shape).
+//
+// WHY FREE TEXT IS FINE HERE, UNLIKE mesh_record's payload: this is LOCAL
+// IPC between mcp-server and the daemon that owns the mission table — both
+// processes run on the operator's own machine. The content boundary this
+// program protects is "the SERVER never receives chat content" (CLAUDE.md);
+// IPC between two local processes was never inside that boundary, the same
+// way a direct in-process function call wasn't. Cross-machine mission text
+// (a worker learning about a mission a coordinator defined) travels as a
+// `mesh.<id>.handoff` ref per C10-1's precedent — mission_upsert/query never
+// themselves cross a machine boundary.
+
+export const MESH_MISSION_STATUSES = ['active', 'paused', 'completed', 'abandoned'] as const
+export type MeshMissionStatusValue = typeof MESH_MISSION_STATUSES[number]
+export const isMeshMissionStatusValue = makeGuard(MESH_MISSION_STATUSES)
+
+export const MESH_MISSION_SOURCES = ['magi', 'coordinator'] as const
+export type MeshMissionSourceValue = typeof MESH_MISSION_SOURCES[number]
+export const isMeshMissionSourceValue = makeGuard(MESH_MISSION_SOURCES)
+
+export interface MissionUpsertRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Omitted = create a new mission; present = update (must resolve to an existing mission — see mesh-missions.ts MISSION-UPSERT-SILENT-CREATE). */
+    id?: string
+    title: string
+    /** Free text — see file-header note on why this is fine over local IPC. */
+    goal?: string
+    status?: MeshMissionStatusValue
+    source?: MeshMissionSourceValue
+}
+
+export interface MeshMissionRecordWire {
+    id: string
+    meshId: string
+    title: string
+    goal: string
+    status: MeshMissionStatusValue
+    source?: MeshMissionSourceValue
+}
+
+export interface MissionUpsertResponse {
+    mission: MeshMissionRecordWire
+}
+
+function isMeshMissionRecordWire(value: unknown): value is MeshMissionRecordWire {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'meshId', 'title', 'goal', 'status', 'source'])) return false
+    if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
+    if (typeof value.title !== 'string' || typeof value.goal !== 'string') return false
+    if (!isMeshMissionStatusValue(value.status)) return false
+    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
+    return true
+}
+
+export function isMissionUpsertRequest(value: unknown): value is MissionUpsertRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'source'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (value.id !== undefined && !isEvidenceIdentifier(value.id)) return false
+    if (typeof value.title !== 'string' || value.title.trim().length === 0) return false
+    if (value.goal !== undefined && typeof value.goal !== 'string') return false
+    if (value.status !== undefined && !isMeshMissionStatusValue(value.status)) return false
+    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
+    return true
+}
+
+export function decodeMissionUpsertRequest(value: unknown): MissionUpsertRequest | null {
+    return isMissionUpsertRequest(value) ? value : null
+}
+
+export function isMissionUpsertResponse(value: unknown): value is MissionUpsertResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['mission']) && isMeshMissionRecordWire(value.mission)
+}
+
+export function decodeMissionUpsertResponse(value: unknown): MissionUpsertResponse | null {
+    return isMissionUpsertResponse(value) ? value : null
+}
+
+export interface MissionQueryRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Omitted = every status. */
+    statuses?: readonly MeshMissionStatusValue[]
+    /** Single-mission lookup (mesh-missions.ts `getMeshMission`'s shape) — mutually exclusive with `statuses`. */
+    id?: string
+}
+
+export interface MissionQueryResponse {
+    missions: readonly MeshMissionRecordWire[]
+}
+
+export function isMissionQueryRequest(value: unknown): value is MissionQueryRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'id'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (value.id !== undefined && !isEvidenceIdentifier(value.id)) return false
+    if (value.statuses !== undefined) {
+        if (!Array.isArray(value.statuses) || value.statuses.length === 0) return false
+        if (!value.statuses.every(isMeshMissionStatusValue)) return false
+    }
+    return true
+}
+
+export function decodeMissionQueryRequest(value: unknown): MissionQueryRequest | null {
+    return isMissionQueryRequest(value) ? value : null
+}
+
+export function isMissionQueryResponse(value: unknown): value is MissionQueryResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['missions'])
+        && Array.isArray(value.missions) && value.missions.every(isMeshMissionRecordWire)
+}
+
+export function decodeMissionQueryResponse(value: unknown): MissionQueryResponse | null {
+    return isMissionQueryResponse(value) ? value : null
+}
+
 // ─── command registry ───────────────────────────────────────────────────────
 
 /** The complete, closed set of IPC command names this contract defines. */
@@ -564,6 +692,8 @@ export const TURN_IPC_COMMANDS = [
     'operator_status',
     'turn_query',
     'mesh_index_query',
+    'mission_upsert',
+    'mission_query',
 ] as const
 export type TurnIpcCommand = typeof TURN_IPC_COMMANDS[number]
 export const isTurnIpcCommand = makeGuard(TURN_IPC_COMMANDS)
@@ -576,6 +706,8 @@ export interface TurnIpcRequestByCommand {
     operator_status: OperatorStatusRequest
     turn_query: TurnQueryRequest
     mesh_index_query: MeshIndexQueryRequest
+    mission_upsert: MissionUpsertRequest
+    mission_query: MissionQueryRequest
 }
 
 /** Response type keyed by command name — for a generically-typed dispatcher on either end. */
@@ -585,6 +717,8 @@ export interface TurnIpcResponseByCommand {
     turn_cancel: TurnCancelResponse
     operator_status: OperatorStatusResponse
     turn_query: TurnQueryResponse
+    mission_upsert: MissionUpsertResponse
+    mission_query: MissionQueryResponse
     mesh_index_query: MeshIndexQueryResponse
 }
 
