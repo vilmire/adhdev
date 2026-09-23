@@ -13,7 +13,29 @@ const repoRoot = path.resolve(__dirname, '..');
 const pidFile = path.join(repoRoot, '.adhdev-dev-pids.json');
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const daemonCoreDistEntry = path.join(repoRoot, 'packages/daemon-core/dist/index.js');
-const sessionHostPidFile = path.join(os.homedir(), '.adhdev', 'adhdev-standalone-session-host.pid');
+
+// Config-dir isolation for this dev runner.
+//
+// `daemon-standalone/src/bootstrap-config-dir.ts` defaults the daemon's own
+// ADHDEV_CONFIG_DIR to `~/.adhdev-standalone` when unset, but this runner
+// hardcoded the stale-session-host cleanup path at `~/.adhdev` — a directory
+// the standalone daemon no longer writes to — so `stopStaleSessionHost()` was
+// a permanent no-op. Resolving one dir here and exporting it to every child
+// makes the runner, the daemon and the session-host agree, and prints it so the
+// isolation is visible. A caller-provided ADHDEV_CONFIG_DIR is honoured as-is
+// (same contract as pinStandaloneConfigDir()). Pure function so it can be unit
+// tested by import, like scripts/test/deploy-restart-verify.test.mjs does.
+export function resolveDevConfigDir(env = process.env, homeDir = os.homedir()) {
+  const override = typeof env.ADHDEV_CONFIG_DIR === 'string' ? env.ADHDEV_CONFIG_DIR.trim() : '';
+  return override || path.join(homeDir, '.adhdev-standalone-dev');
+}
+
+const configDirExplicit = typeof process.env.ADHDEV_CONFIG_DIR === 'string' && process.env.ADHDEV_CONFIG_DIR.trim() !== '';
+const resolvedConfigDir = resolveDevConfigDir();
+if (!configDirExplicit) {
+  fs.mkdirSync(resolvedConfigDir, { recursive: true });
+}
+const sessionHostPidFile = path.join(resolvedConfigDir, 'adhdev-standalone-session-host.pid');
 
 // daemon-standalone imports `@adhdev/daemon-core` whose package.json points at
 // dist/. tsx running the standalone src/ does NOT re-transpile daemon-core —
@@ -189,7 +211,7 @@ function startChild(spec) {
   // cover the realistic attack surface; the eval-block was extra hardening
   // that turned out to break critical infrastructure. Do not re-introduce
   // without first migrating ajv to ajv-standalone (precompiled validators).
-  const env = { ...process.env };
+  const env = { ...process.env, ADHDEV_CONFIG_DIR: resolvedConfigDir };
   const child = spawn(npmCmd, spec.args, {
     cwd: repoRoot,
     env,
@@ -307,6 +329,7 @@ function watchDaemonCoreDist() {
 }
 
 async function main() {
+  log(`[dev] config dir: ${resolvedConfigDir} (set ADHDEV_CONFIG_DIR to override)`);
   await cleanupPreviousRun();
 
   // ALWAYS prebuild daemon-core. The tsup --watch process below clears dist/

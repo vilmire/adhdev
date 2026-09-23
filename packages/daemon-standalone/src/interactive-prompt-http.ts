@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import type { InteractivePrompt, InteractivePromptResponse } from '@adhdev/daemon-core';
+import type { DaemonHostRuntime, InteractivePrompt, InteractivePromptResponse } from '@adhdev/daemon-core';
 import { isLoopbackRequest } from './raw-terminal-http.js';
 
 export interface InteractivePromptHttpService {
@@ -103,4 +103,55 @@ export async function handleInteractivePromptHttpRequest(options: {
     writeJson(res, errorStatus(error), { error: message });
     return true;
   }
+}
+
+/**
+ * The router-backed service (wiring-unification B5, checklist item 4).
+ *
+ * Before B5 `resolvePrompt` called the instance directly, so a stale answer (a
+ * promptId the session no longer holds — e.g. an old dashboard tab after a
+ * daemon rebind) was silently applied or dropped. It now executes
+ * `interactive_prompt_response` through the host runtime, which reaches the
+ * same handler the mesh path uses: its STALE-PROMPT-ANSWER guard rejects a
+ * mismatched promptId (HTTP 400 via `errorStatus`), it forwards a session this
+ * daemon does not own, and the command gets the router's command log +
+ * `command_executed` (fast flush of the dashboard).
+ *
+ * Session ids resolve through the registry's alias index (id or
+ * provider-native session id); the old fuzzy scan of every instance state is
+ * kept only as a last resort for an `activeChat.id` match.
+ */
+export function createRouterInteractivePromptService(host: DaemonHostRuntime): InteractivePromptHttpService {
+  const { components } = host.runtime;
+  const findState = (sessionId: string): Record<string, any> | null => {
+    const resolved = components.sessionRegistry.resolveAlias(sessionId);
+    const direct = resolved ? components.instanceManager.getInstance(resolved) : components.instanceManager.getInstance(sessionId);
+    if (direct) {
+      try { return direct.getState() as unknown as Record<string, any>; } catch { return null; }
+    }
+    const match = components.instanceManager.collectAllStates().find((state: any) => state?.activeChat?.id === sessionId);
+    return (match as unknown as Record<string, any>) ?? null;
+  };
+  const resolveSessionId = (sessionId: string): string | null => {
+    const resolved = components.sessionRegistry.resolveAlias(sessionId);
+    if (resolved) return resolved;
+    if (components.instanceManager.getInstance(sessionId)) return sessionId;
+    const state = findState(sessionId);
+    return typeof state?.instanceId === 'string' ? state.instanceId : null;
+  };
+  return {
+    getPrompt: async (sessionId) => {
+      const state = findState(sessionId);
+      return (state?.activeInteractivePrompt || state?.activeChat?.activeInteractivePrompt || null) as InteractivePrompt | null;
+    },
+    resolvePrompt: async (sessionId, response) => {
+      const targetSessionId = resolveSessionId(sessionId);
+      if (!targetSessionId) throw new Error(`Unknown session: ${sessionId}`);
+      const result = await host.execute('interactive_prompt_response', { targetSessionId, response }, 'standalone');
+      if (result.success === false) {
+        const error = typeof result.error === 'string' && result.error ? result.error : 'interactive prompt response failed';
+        throw new Error(/No running instance/i.test(error) ? `Unknown session: ${sessionId}` : error);
+      }
+    },
+  };
 }

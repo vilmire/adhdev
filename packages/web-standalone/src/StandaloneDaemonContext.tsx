@@ -12,10 +12,12 @@ import {
     applyRouteTarget,
     subscriptionManager,
     statusPayloadToEntries,
+    eventManager,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
 import type { StandaloneWsStatusPayload, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneConnectionManager } from './connection-manager'
+import { routeStandaloneStatusEvent } from './standalone-status-event'
 
 import { getStandaloneToken } from './standalone-auth-client'
 
@@ -38,6 +40,8 @@ let _reqCounter = 0
 const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>()
 let _screenshotTimer: any = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
+/** The daemon id the last `status` frame named — stamped onto `status_event` payloads. */
+let _lastStatusDaemonId: string | null = null
 
 function logStandaloneStatusDebug(event: string, payload: Record<string, unknown>) {
     if (typeof window === 'undefined') return
@@ -308,6 +312,9 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
+                    // Toasts / approval modals (B5): same projection web-cloud gets over P2P.
+                    if (routeStandaloneStatusEvent(msg, _lastStatusDaemonId, eventManager)) return
+
                     if (msg.type === 'topic_update') {
                         const update = msg.update as TopicUpdateEnvelope | undefined
                         if (update) subscriptionManager.publish(update)
@@ -320,6 +327,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
 
                         const { injectEntries, markLoaded, getIdes } = actionsRef.current
                         const daemonId = statusData.instanceId || 'standalone'
+                        _lastStatusDaemonId = daemonId
                         const existingDaemon = getIdes().find(entry => entry.id === daemonId)
 
                         const adapter = getOrCreateWsAdapter(daemonId)
