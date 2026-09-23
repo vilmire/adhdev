@@ -14,6 +14,7 @@ import type {
     ProviderControlSchema,
 } from '@adhdev/daemon-core';
 import { useTranslation } from 'react-i18next';
+import { isWorkingStatus } from '@adhdev/mesh-shared';
 import { useTransport } from '../../context/TransportContext';
 import { eventManager } from '../../managers/EventManager';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
@@ -196,22 +197,17 @@ export function shouldHideBarControl(
  */
 function fsmStateIdsForStatus(status: string | undefined): string[] | undefined {
     if (!status) return undefined;
+    // statusForState maps the 'busy'/'generating' FSM state → 'generating'.
+    // The dashboard surfaces several generating-flavoured statuses (mesh-shared's
+    // 'working' class — canonical members plus pre-unification aliases like
+    // 'streaming'/'running'/'initializing' still emitted by an older fleet
+    // daemon); all of them mean the agent is mid-turn (FSM 'busy'). Checked
+    // via isWorkingStatus (ingestion should already have normalized the value,
+    // but this stays defense-in-depth for any raw status that slips through).
+    if (isWorkingStatus(status)) return ['busy', 'generating', 'starting'];
     switch (status) {
         case 'idle':
             return ['idle'];
-        // statusForState maps the 'busy'/'generating' FSM state → 'generating'.
-        // The dashboard surfaces several generating-flavoured statuses; all of
-        // them mean the agent is mid-turn (FSM 'busy').
-        case 'generating':
-        case 'streaming':
-        case 'working':
-        case 'starting':
-        case 'no_progress':
-        case 'long_generating':
-        // Stage 6: finalizing is mid-turn (the reducer is committing terminal
-        // evidence) — controls stay gated as busy until the terminal commit.
-        case 'finalizing':
-            return ['busy', 'generating', 'starting'];
         case 'waiting_approval':
         case 'approval':
             return ['approval'];

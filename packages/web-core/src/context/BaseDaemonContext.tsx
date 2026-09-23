@@ -19,6 +19,7 @@ import type { ModelAxisSource, SessionLaunchRecord } from '@adhdev/mesh-shared'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData } from '../utils/session-entry-merge'
+import { normalizeIncomingSessionStatus } from '../utils/session-status-ingest'
 import { reconcileIdes, daemonArraysEqual } from './ides-reconcile'
 import { hydrateInteractivePromptIntoIdes } from './hydrate-interactive-prompt'
 
@@ -256,9 +257,15 @@ function launchFieldsOf(session: CompactSessionViewEntry): Pick<CompactSessionVi
 
 function normalizeCompactSession(session: CompactSessionViewEntry): SessionEntry {
     const rawStatus = session.status
+    // Ingestion-point normalization (wiring-unification A1 follow-up): the
+    // compact wire may come from an older fleet daemon (or UserSessionDO's
+    // stored projection of one) still emitting pre-unification spellings
+    // (`running`, `streaming`, `initializing`, …) — normalize once here so
+    // downstream consumers compare against the canonical vocabulary only.
+    // An unrecognized non-'online' spelling passes through unchanged.
     const normalizedStatus: SessionEntry['status'] = !rawStatus || rawStatus === 'online'
         ? 'idle'
-        : rawStatus
+        : normalizeIncomingSessionStatus(rawStatus)
 
     return {
         id: session.id,
@@ -384,7 +391,10 @@ export function expandCompactDaemons(
                 transport: cli.transport,
                 type: cli.providerType,
                 agentType: cli.providerType,
-                status: cli.status || 'online',
+                // Ingestion-point normalization (wiring-unification A1 follow-up):
+                // see normalizeCompactSession — same fleet-compat reasoning applies
+                // to top-level CLI session entries, which bypass that helper.
+                status: normalizeIncomingSessionStatus(cli.status) || 'online',
                 daemonId: d.id,
                 ...(cli.ownerDaemonId && { ownerDaemonId: cli.ownerDaemonId }),
                 ...(cli.ownerMachineName && { ownerMachineName: cli.ownerMachineName }),
@@ -433,7 +443,10 @@ export function expandCompactDaemons(
                 transport: acp.transport,
                 type: acp.providerType,
                 agentType: acp.providerType,
-                status: acp.status || 'online',
+                // Ingestion-point normalization (wiring-unification A1 follow-up):
+                // see normalizeCompactSession — same fleet-compat reasoning applies
+                // to top-level ACP session entries, which bypass that helper.
+                status: normalizeIncomingSessionStatus(acp.status) || 'online',
                 daemonId: d.id,
                 ...(acp.ownerDaemonId && { ownerDaemonId: acp.ownerDaemonId }),
                 ...(acp.ownerMachineName && { ownerMachineName: acp.ownerMachineName }),

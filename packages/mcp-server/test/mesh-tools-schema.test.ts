@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
-import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_PLAN_ONBOARDING_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_PLAN_ONBOARDING_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_REQUEUE_HELD_EVENTS_TOOL, MESH_SEND_TASK_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tools.js';
+import { MESH_ENQUEUE_BATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
 
 test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {
   const published = ALL_MESH_TOOLS.map(tool => tool.name).sort();
@@ -118,4 +119,54 @@ test('mesh session cleanup tools expose explicit manual cleanup and remove-node 
 
   assert.equal(MESH_REMOVE_NODE_TOOL.inputSchema.properties.session_cleanup_mode.enum.includes('preserve'), true);
   assert.match(MESH_REMOVE_NODE_TOOL.description, /sessionCleanupOnNodeRemove/);
+});
+
+// ─── H1 (path ownership) + H2 (mission brief) schema-only additions ───
+// (wiring-unification Phase H, docs/design/2026-09-23-wiring-unification.md §7c)
+
+test('mesh_enqueue_task schema exposes owned_paths and its camelCase alias, both optional', () => {
+  const props = MESH_ENQUEUE_TASK_TOOL.inputSchema.properties as any;
+  assert.equal(props.owned_paths.type, 'array');
+  assert.equal(props.owned_paths.items.type, 'string');
+  assert.equal(props.ownedPaths.type, 'array');
+  assert.equal(props.ownedPaths.items.type, 'string');
+  assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.required.includes('owned_paths'), false);
+  assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.required.includes('ownedPaths'), false);
+  assert.match(props.owned_paths.description, /code_change/);
+  assert.match(props.owned_paths.description, /owned_paths_conflict/);
+});
+
+test('mesh_enqueue_batch per-task schema exposes owned_paths and its camelCase alias', () => {
+  const itemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties;
+  assert.equal(itemProps.owned_paths.type, 'array');
+  assert.equal(itemProps.owned_paths.items.type, 'string');
+  assert.equal(itemProps.ownedPaths.type, 'array');
+  assert.equal(itemProps.ownedPaths.items.type, 'string');
+  // Per-task required list is unchanged (still message + difficulty only).
+  assert.deepEqual(MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties.tasks.items.required, ['message', 'difficulty']);
+});
+
+test('mesh_send_task schema exposes owned_paths and its camelCase alias, required list unchanged', () => {
+  const props = MESH_SEND_TASK_TOOL.inputSchema.properties as any;
+  assert.equal(props.owned_paths.type, 'array');
+  assert.equal(props.owned_paths.items.type, 'string');
+  assert.equal(props.ownedPaths.type, 'array');
+  // node_id/message/difficulty stays the required set — owned_paths never becomes mandatory.
+  assert.deepEqual(MESH_SEND_TASK_TOOL.inputSchema.required, ['node_id', 'message', 'difficulty']);
+});
+
+test('mesh_mission_upsert schema exposes an optional structured brief object with the H2 fields', () => {
+  const brief = (MESH_MISSION_UPSERT_TOOL.inputSchema.properties as any).brief;
+  assert.equal(brief.type, 'object');
+  assert.equal(brief.properties.goal.type, 'string');
+  assert.equal(brief.properties.constraints.type, 'array');
+  assert.equal(brief.properties.constraints.items.type, 'string');
+  assert.equal(brief.properties.doneCriteria.type, 'array');
+  assert.equal(brief.properties.handoffNotes.type, 'array');
+  assert.equal(brief.properties.ownedPaths.type, 'array');
+  // brief is optional at the tool level — mesh_mission_upsert's required list stays [].
+  assert.deepEqual(MESH_MISSION_UPSERT_TOOL.inputSchema.required, []);
+  // brief.goal is documented as required-for-storage in prose (not JSON-schema `required`,
+  // since normalizeMissionBrief treats a goal-less object as "no brief" rather than erroring).
+  assert.match(brief.description, /goal \(required/);
 });

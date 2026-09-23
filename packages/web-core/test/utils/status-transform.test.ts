@@ -323,6 +323,50 @@ describe('statusPayloadToEntries', () => {
         })
     });
 
+    it('normalizes pre-unification status aliases from an old-fleet daemon at ingestion (wiring-unification A1)', () => {
+        // The cloud dashboard also talks to fleet daemons running an older
+        // daemon-core build that has not adopted mesh-shared's canonical
+        // SessionStatus vocabulary. statusPayloadToEntries is one of the
+        // choke points that must fold those raw wire spellings onto the
+        // canonical set so every web-core consumer can compare against
+        // `generating`/`starting`/… only.
+        const streamingCli = createSession({
+            id: 'cli-streaming',
+            providerType: 'codex',
+            providerName: 'Codex',
+            status: 'streaming' as SessionEntry['status'],
+        });
+        const initializingAcp = createSession({
+            id: 'acp-initializing',
+            transport: 'acp',
+            providerType: 'claude-code',
+            providerName: 'Claude Code',
+            status: 'initializing' as SessionEntry['status'],
+        });
+        const unknownCli = createSession({
+            id: 'cli-unknown-alias',
+            providerType: 'codex',
+            providerName: 'Codex',
+            status: 'some_future_status' as SessionEntry['status'],
+        });
+
+        const entries = statusPayloadToEntries(createPayload({
+            sessions: [streamingCli, initializingAcp, unknownCli],
+        }), {
+            daemonId: 'fleet-old',
+        });
+
+        const cliEntry = entries.find(e => e.id === 'fleet-old:cli:cli-streaming');
+        const acpEntry = entries.find(e => e.id === 'fleet-old:acp:acp-initializing');
+        const unknownEntry = entries.find(e => e.id === 'fleet-old:cli:cli-unknown-alias');
+
+        expect(cliEntry?.status).toBe('generating');
+        expect(acpEntry?.status).toBe('starting');
+        // An unrecognized spelling passes through unchanged (fail-open, not
+        // coerced to a guessed status).
+        expect(unknownEntry?.status).toBe('some_future_status');
+    })
+
     it('marks only explicit session arrays as authoritative for session deletion', () => {
         const withSessions = statusPayloadToEntries(createPayload({ sessions: [] }), {
             daemonId: 'machine-authority',
@@ -405,14 +449,18 @@ describe('statusPayloadToEntries', () => {
         expect(entries[1]).toMatchObject({ id: 'machine-2:ide:ide-2', status: 'detected', workspace: null });
         expect(entries[2]).toMatchObject({
             id: 'machine-2:cli:cli-2',
-            status: 'running',
+            // Fallback for an empty/missing status is now the CANONICAL
+            // 'generating' spelling, not the pre-unification alias 'running'
+            // (wiring-unification A1 follow-up — ingestion normalizes to the
+            // mesh-shared SessionStatus vocabulary).
+            status: 'generating',
             workspace: '',
         });
         expect(entries[2].runtimeWriteOwner ?? null).toBe(null);
         expect(entries[2].runtimeAttachedClients ?? []).toEqual([]);
         expect(entries[3]).toMatchObject({
             id: 'machine-2:acp:acp-2',
-            status: 'running',
+            status: 'generating',
             workspace: '',
         });
         expect(entries[3].runtimeWriteOwner ?? null).toBe(null);

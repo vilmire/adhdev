@@ -1221,4 +1221,99 @@ describe('expandCompactDaemons', () => {
     const reconciled = reconcileIdes([], previous)
     expect(reconciled.find((entry) => entry.id === 'machine-gone:cli:cli-1')).toBeFalsy()
   })
+
+  it('normalizes pre-unification status aliases at ingestion (wiring-unification A1)', () => {
+    // The compact WS wire can come from an older fleet daemon (or
+    // UserSessionDO's stored projection of one) still emitting
+    // pre-unification spellings. Both the top-level CLI/ACP entries and a
+    // child session (routed through normalizeCompactSession) must land on
+    // the canonical mesh-shared vocabulary.
+    const result = expandCompactDaemons([
+      {
+        id: 'machine-old-fleet',
+        type: 'adhdev-daemon',
+        timestamp: 100,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'codex',
+            providerName: 'Codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'running',
+            title: 'Codex',
+            workspace: '/repo',
+          },
+          {
+            id: 'acp-1',
+            parentId: null,
+            providerType: 'claude-code',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'acp',
+            status: 'waiting',
+            title: 'Claude Code',
+            workspace: '/repo',
+          },
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Cursor',
+            workspace: '/repo',
+          },
+          {
+            id: 'agent-child',
+            parentId: 'ide-1',
+            providerType: 'codex',
+            providerName: 'Codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'initializing',
+            title: 'Child agent',
+            workspace: '/repo',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[])
+
+    const cliEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:cli:cli-1')
+    const acpEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:acp:acp-1')
+    const ideEntry = result.entries.find((entry) => entry.id === 'machine-old-fleet:ide:ide-1')
+
+    expect(cliEntry?.status).toBe('generating')
+    expect(acpEntry?.status).toBe('waiting_approval')
+    expect(ideEntry?.childSessions?.[0]).toMatchObject({ id: 'agent-child', status: 'starting' })
+  })
+
+  it('passes an unrecognized status spelling through unchanged rather than guessing', () => {
+    const result = expandCompactDaemons([
+      {
+        id: 'machine-unknown-status',
+        type: 'adhdev-daemon',
+        timestamp: 100,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'codex',
+            providerName: 'Codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'some_future_status',
+            title: 'Codex',
+            workspace: '/repo',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[])
+
+    const cliEntry = result.entries.find((entry) => entry.id === 'machine-unknown-status:cli:cli-1')
+    expect(cliEntry?.status).toBe('some_future_status')
+  })
 })
