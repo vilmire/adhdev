@@ -219,6 +219,80 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
     })
 })
 
+/**
+ * (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) A live
+ * message carrying `meta.sourceMessageId` matches by EXACT IDENTITY, skipping
+ * the trimmed-content/image-token normalization entirely. A daemon build that
+ * has not stamped the id yet (pre D-daemon) falls through to the unchanged
+ * text match — both paths are exercised here so neither regresses the other.
+ */
+describe('(d) echo retirement by messageId, with a text-match fallback', () => {
+    function ackWithId(content: string, sourceMessageId: string) {
+        return { id: `ack-${sourceMessageId}`, role: 'user', kind: 'standard', content, meta: { sourceMessageId } }
+    }
+
+    it('★ retires by messageId even when the live text differs from the pending content', () => {
+        // A daemon build past D-daemon may render the ack with provider-specific
+        // decoration (e.g. an image chip prefix outside the known token set) —
+        // messageId identity must not depend on the text matching at all.
+        const entries = [{ id: 'msg_abc', content: 'original body', sentAt: 1_000 }]
+        const result = retirePendingLocalMessages(
+            entries,
+            [ackWithId('completely different rendering', 'msg_abc')],
+            2_000,
+        )
+        expect(result.changed).toBe(true)
+        expect(result.retiredByEcho).toBe(1)
+        expect(result.entries).toHaveLength(0)
+    })
+
+    it('does not let a messageId match steal echo budget from a same-text sibling', () => {
+        // Two entries share identical text; one is retired by an exact id match,
+        // the other must still need its OWN text echo — the id match must not
+        // consume the shared content-keyed budget.
+        const entries = [
+            { id: 'msg_1', content: 'continue', sentAt: 1_000 },
+            { id: 'msg_2', content: 'continue', sentAt: 2_000 },
+        ]
+        const result = retirePendingLocalMessages(
+            entries,
+            [ackWithId('continue', 'msg_1')],
+            3_000,
+        )
+        expect(result.retiredByEcho).toBe(1)
+        expect(result.entries.map(e => e.id)).toEqual(['msg_2'])
+    })
+
+    it('falls back to the text match when no live message carries sourceMessageId (pre-D-daemon fleet)', () => {
+        const entries = [{ id: 'msg_xyz', content: 'legacy ack path', sentAt: 1_000 }]
+        const result = retirePendingLocalMessages(
+            entries,
+            [userEcho('legacy ack path')],
+            2_000,
+        )
+        expect(result.retiredByEcho).toBe(1)
+        expect(result.entries).toHaveLength(0)
+    })
+
+    it('a sourceMessageId naming a DIFFERENT pending entry does not fall through to a text match', () => {
+        // Once a live message carries a sourceMessageId at all, it is claimed by
+        // IDENTITY, not by content — so an id tagged for `msg_other` must not
+        // ALSO retire `msg_this` via the text-match fallback just because the
+        // text happens to match. Falling through here would let one real echo
+        // retire two unrelated pending entries (the exact over-retirement class
+        // `hasSourceMessageId`'s content-budget exclusion exists to prevent).
+        const entries = [{ id: 'msg_this', content: 'stays parked', sentAt: 1_000 }]
+        const result = retirePendingLocalMessages(
+            entries,
+            [ackWithId('stays parked', 'msg_other')],
+            2_000,
+        )
+        expect(result.changed).toBe(false)
+        expect(result.retiredByEcho).toBe(0)
+        expect(result.entries).toHaveLength(1)
+    })
+})
+
 describe('(b) age cutoff — a body stops claiming it is still on its way', () => {
     it('★ marks an entry stale past the threshold instead of pinning it forever', () => {
         const sentAt = 1_000_000

@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
-import ChatControlsSection from './ChatControlsSection';
+import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
 import SessionInfoButton from './SessionInfoButton';
@@ -273,6 +273,11 @@ export default function ChatPane({
     const controlsContext = useMemo(
         () => getConversationControlsContext(activeConv, ideEntry),
         [activeConv, ideEntry],
+    )
+    // Phase E: the session's model / source chip.
+    const launchSurface = useMemo(
+        () => readSessionLaunchSurface(controlsContext.targetEntry),
+        [controlsContext.targetEntry],
     )
     const visibleBarControls = useMemo(
         () => getVisibleBarControls(controlsContext.targetEntry?.providerControls, {
@@ -876,6 +881,7 @@ export default function ChatPane({
                 coordinatorHint={getCoordinatorRoutingHint(activeConv)}
                 isActive={isInputActive}
                 isCliTerminal={controlsContext.isCliTerminal}
+                launchSurface={launchSurface}
             />
             {!controlsContext.isCliTerminal && (
                 <ChatInputBar

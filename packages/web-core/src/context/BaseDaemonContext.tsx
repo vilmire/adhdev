@@ -15,6 +15,7 @@ import type { InteractivePrompt } from '../interactive-prompt/types'
 // Type-only: web-core must never VALUE-import the daemon-core barrel (it would
 // drag Node builtins into the browser bundle).
 import type { CompactSessionEntry as CoreCompactSessionEntry } from '@adhdev/daemon-core'
+import type { ModelAxisSource, SessionLaunchRecord } from '@adhdev/mesh-shared'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData } from '../utils/session-entry-merge'
@@ -204,6 +205,16 @@ export type CompactSessionViewEntry =
         ownerDaemonId?: string
         /** True owning-machine display name fallback when the owning daemon is not aggregated. */
         ownerMachineName?: string
+        /**
+         * Phase E launch provenance. `launch` (the full record) and
+         * `thinkingLevel` arrive over P2P only; `model` / `modelSource` also ride
+         * the server projection, so a cloud dashboard can show the model before
+         * P2P connects.
+         */
+        launch?: SessionLaunchRecord
+        model?: string
+        modelSource?: ModelAxisSource
+        thinkingLevel?: string
     }
 
 export interface CompactDaemon {
@@ -233,6 +244,16 @@ export interface CompactDaemon {
     sessions?: CompactSessionViewEntry[]
 }
 
+/** Phase E launch fields, copied only when present (never overwrite with undefined). */
+function launchFieldsOf(session: CompactSessionViewEntry): Pick<CompactSessionViewEntry, 'launch' | 'model' | 'modelSource' | 'thinkingLevel'> {
+    return {
+        ...(session.launch !== undefined && { launch: session.launch }),
+        ...(session.model !== undefined && { model: session.model }),
+        ...(session.modelSource !== undefined && { modelSource: session.modelSource }),
+        ...(session.thinkingLevel !== undefined && { thinkingLevel: session.thinkingLevel }),
+    }
+}
+
 function normalizeCompactSession(session: CompactSessionViewEntry): SessionEntry {
     const rawStatus = session.status
     const normalizedStatus: SessionEntry['status'] = !rawStatus || rawStatus === 'online'
@@ -254,6 +275,7 @@ function normalizeCompactSession(session: CompactSessionViewEntry): SessionEntry
         capabilities: [],
         cdpConnected: session.cdpConnected,
         summaryMetadata: session.summaryMetadata,
+        ...launchFieldsOf(session),
         completionMarker: session.completionMarker,
         seenCompletionMarker: session.seenCompletionMarker,
         activeInteractivePrompt: session.activeInteractivePrompt ?? null,
@@ -394,6 +416,7 @@ export function expandCompactDaemons(
                 ...(cli.controlValues !== undefined && { controlValues: cli.controlValues }),
                 ...(cli.providerControls !== undefined && { providerControls: cli.providerControls }),
                 summaryMetadata: cli.summaryMetadata,
+                ...launchFieldsOf(cli),
                 timestamp: ts,
                 _isCli: true,
             })
@@ -442,6 +465,7 @@ export function expandCompactDaemons(
                 ...(acp.controlValues !== undefined && { controlValues: acp.controlValues }),
                 ...(acp.providerControls !== undefined && { providerControls: acp.providerControls }),
                 summaryMetadata: acp.summaryMetadata,
+                ...launchFieldsOf(acp),
                 timestamp: ts,
                 _isAcp: true,
             })

@@ -24,8 +24,10 @@ import {
     writePendingQueuedMessages,
     prunePendingQueuedMessages,
     PENDING_QUEUED_MESSAGE_MAX_AGE_MS,
+    PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES,
     MAX_PENDING_QUEUED_MESSAGES,
     type PendingQueuedMessage,
+    type PendingInputEnvelope,
 } from '../../src/utils/pendingQueuedMessages'
 
 const KEY = 'daemon-1::session-a'
@@ -36,6 +38,7 @@ function entry(overrides: Partial<PendingQueuedMessage> = {}): PendingQueuedMess
         content: overrides.content ?? 'hello',
         sentAt: overrides.sentAt ?? Date.now(),
         queued: overrides.queued,
+        ...(overrides.input ? { input: overrides.input } : {}),
     }
 }
 
@@ -185,5 +188,93 @@ describe('pending queued messages — durable across an app restart', () => {
 
         const raw = JSON.parse(window.localStorage.getItem('adhdev-pending-queued-messages-v1') || '{}')
         expect(raw.byKey?.[KEY]).toBeUndefined()
+    })
+})
+
+/**
+ * (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D4) The
+ * `input` field — the full structured body, attachments included — added
+ * alongside `content` so send-now can resubmit the EXACT same body rather
+ * than a text-only reconstruction. `content` and `id` are untouched by this
+ * addition (every test above still exercises the pre-D4 shape verbatim,
+ * because `content` stays the primary field other, unowned consumers read).
+ */
+describe('pending queued messages — structured `input` (attachments)', () => {
+    function imageEnvelope(dataLength: number, extra: Partial<PendingInputEnvelope> = {}): PendingInputEnvelope {
+        return {
+            parts: [
+                { type: 'image', mimeType: 'image/png', data: 'x'.repeat(dataLength), alt: 'shot.png' },
+                { type: 'text', text: 'caption' },
+            ],
+            textFallback: 'caption',
+            ...extra,
+        }
+    }
+
+    it('round-trips an envelope with an attachment under the size cap', () => {
+        const withImage = entry({ content: 'caption', sentAt: 1_000, input: imageEnvelope(1_000) })
+        writePendingQueuedMessages(KEY, [withImage], 1_000)
+
+        const restored = readPendingQueuedMessages(KEY, 1_000)
+        expect(restored).toHaveLength(1)
+        expect(restored[0].input?.textFallback).toBe('caption')
+        const imagePart = restored[0].input?.parts.find(p => p.type === 'image')
+        expect(imagePart?.data).toHaveLength(1_000)
+        expect(imagePart?.mimeType).toBe('image/png')
+        expect(restored[0].input?.omitted).toBeUndefined()
+    })
+
+    it('omits attachment `data` once the entry crosses PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES, keeping a marker', () => {
+        const overCap = entry({
+            content: 'caption',
+            sentAt: 1_000,
+            input: imageEnvelope(PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES + 1),
+        })
+        writePendingQueuedMessages(KEY, [overCap], 1_000)
+
+        const restored = readPendingQueuedMessages(KEY, 1_000)[0]
+        const imagePart = restored.input?.parts.find(p => p.type === 'image')
+        // The identity of the part (type/mimeType) survives so a restored row can
+        // still say "you sent an image here" — only the payload is dropped.
+        expect(imagePart?.type).toBe('image')
+        expect(imagePart?.mimeType).toBe('image/png')
+        expect(imagePart?.data).toBeUndefined()
+        expect(restored.input?.omitted).toEqual({ omitted: true, partTypes: ['image'] })
+        // The text part is cheap and always kept — display/matching must not degrade.
+        expect(restored.input?.parts.find(p => p.type === 'text')?.text).toBe('caption')
+        expect(restored.content).toBe('caption')
+    })
+
+    it('a text-only entry never carries `input` — no envelope wrapper for the common case', () => {
+        writePendingQueuedMessages(KEY, [entry({ content: 'plain text', sentAt: 1_000 })], 1_000)
+        expect(readPendingQueuedMessages(KEY, 1_000)[0].input).toBeUndefined()
+    })
+
+    it('migrates a pre-D4 entry (no `input` key at all) without throwing, `content` intact', () => {
+        // Simulates a store written by a build before this field existed: the
+        // raw JSON has no `input` property, not merely `input: undefined`.
+        window.localStorage.setItem('adhdev-pending-queued-messages-v1', JSON.stringify({
+            byKey: {
+                [KEY]: [{ id: 'legacy-1', content: 'old-format body', sentAt: 1_000, queued: true }],
+            },
+        }))
+
+        const restored = readPendingQueuedMessages(KEY, 1_000)
+        expect(restored).toHaveLength(1)
+        expect(restored[0].content).toBe('old-format body')
+        expect(restored[0].input).toBeUndefined()
+        expect(restored[0].queued).toBe(true)
+    })
+
+    it('a malformed `input` (not an envelope shape) degrades to no `input`, not a throw', () => {
+        window.localStorage.setItem('adhdev-pending-queued-messages-v1', JSON.stringify({
+            byKey: {
+                [KEY]: [{ id: 'bad-1', content: 'still readable', sentAt: 1_000, input: { parts: 'not-an-array' } }],
+            },
+        }))
+
+        const restored = readPendingQueuedMessages(KEY, 1_000)
+        expect(restored[0].content).toBe('still readable')
+        expect(restored[0].input).toBeUndefined()
     })
 })

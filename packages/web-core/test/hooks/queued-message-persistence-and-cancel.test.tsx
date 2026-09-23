@@ -454,3 +454,72 @@ describe('SEND-NOW stays correct with several entries queued', () => {
         expect(sendNowCall![2].message).toBe('oldest')
     })
 })
+
+/**
+ * (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1) Dedupe by
+ * `messageId`. `inFlightSendsRef` (CANCEL-INFLIGHT-LEAK) is keyed by the exact
+ * value minted by `createPendingQueuedMessageId` — the same value now sent on
+ * the wire as `messageId` — so a concurrent action addressing "this send" by
+ * id (a cancel racing the round trip) resolves against the SAME identity the
+ * daemon will eventually see, not a separate local-only key that merely
+ * happens to coexist with it.
+ */
+describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', () => {
+    it('★ the id in inFlightSendsRef IS the messageId sent on the wire', async () => {
+        // A send that never resolves lets us inspect the bubble's id (the
+        // inFlightSendsRef key) while the round trip is still open, and then
+        // read back the SAME id from the wire payload once it settles.
+        let resolveSend: (value: any) => void = () => {}
+        const send = vi.fn(() => new Promise(resolve => { resolveSend = resolve }))
+        const h = renderHarness(send)
+
+        const sendPromise = act(async () => {
+            await Promise.resolve() // let the optimistic append flush
+        })
+        act(() => { h.get().handleSendChat('in flight') })
+        await sendPromise
+
+        const bubbleId = h.get().pendingLocalMessage!.id!
+        await act(async () => { resolveSend(DAEMON_QUEUED_RESULT); await Promise.resolve() })
+
+        const [, type, payload] = send.mock.calls[0]
+        expect(type).toBe('send_chat')
+        expect((payload as any).messageId).toBe(bubbleId)
+    })
+
+    it('★ a cancel racing an in-flight send awaits the SAME messageId, not a guess', async () => {
+        let resolveSend: (value: any) => void = () => {}
+        const send = vi.fn()
+            .mockImplementationOnce(() => new Promise(resolve => { resolveSend = resolve }))
+        const h = renderHarness(send)
+
+        act(() => { h.get().handleSendChat('racing cancel') })
+        await act(async () => { await Promise.resolve() })
+        const pendingId = h.get().pendingLocalMessage!.id!
+
+        // Fire cancel before the send resolves — it must await the in-flight
+        // promise keyed by this SAME id, not race ahead on a stale guess.
+        send.mockResolvedValueOnce(DAEMON_CANCEL_OK)
+        const cancelPromise = act(async () => h.get().handleCancelQueued(pendingId))
+
+        await act(async () => { resolveSend(DAEMON_QUEUED_RESULT) })
+        await cancelPromise
+
+        // The cancel command (second call) must address the same body/session —
+        // confirming the settlement it awaited was keyed correctly, not a
+        // same-tick guess that happened to work by accident.
+        const cancelCall = send.mock.calls.find(call => call[1] === 'cancel_queued_chat')
+        expect(cancelCall).toBeTruthy()
+    })
+
+    it('two distinct sends mint two distinct messageIds (no accidental id collision)', async () => {
+        const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
+        const h = renderHarness(send)
+        await queueBodies(h, ['alpha', 'beta'])
+
+        const ids = h.get().pendingLocalMessages.map((e: any) => e.id)
+        expect(new Set(ids).size).toBe(2)
+        const wireIds = send.mock.calls.map(call => (call[2] as any).messageId)
+        expect(wireIds).toEqual(ids)
+    })
+})

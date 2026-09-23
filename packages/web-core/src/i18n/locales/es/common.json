@@ -288,7 +288,18 @@
         "questionPending": "PREGUNTA PENDIENTE",
         "answerQuestion": "Responder la pregunta"
     },
+    "chatControls": {
+        "launchModelChanged": "{{from}} → {{to}} (cambiado)",
+        "launchModelSource": {
+          "user": "elegido",
+          "remembered": "recordado",
+          "mesh_slot": "slot de malla",
+          "task_override": "anulación de tarea",
+          "provider_default": "por defecto"
+        }
+    },
     "newSession": {
+        "defaultResolvesTo": "El valor por defecto se resuelve a {{model}}",
         "title": "Iniciar sesión",
         "close": "Cerrar el diálogo de nueva sesión",
         "category": "Categoría",

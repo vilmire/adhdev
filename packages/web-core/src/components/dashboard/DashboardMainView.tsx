@@ -144,6 +144,9 @@ interface DashboardMainViewProps {
             cliArgs?: string[]
             initialModel?: string | null
             initialThinkingLevel?: string | null
+            /** Phase E: where initialModel / initialThinkingLevel came from (dialog pick vs. restored). */
+            modelSource?: 'user' | 'remembered'
+            thinkingLevelSource?: 'user' | 'remembered'
             settings?: {
                 autoApprove?: boolean
                 autoApproveMode?: string
@@ -155,7 +158,12 @@ interface DashboardMainViewProps {
         machineId: string,
         meshId: string,
         cliType: string,
-        opts?: { initialModel?: string | null; initialThinkingLevel?: string | null },
+        opts?: {
+            initialModel?: string | null
+            initialThinkingLevel?: string | null
+            modelSource?: 'user' | 'remembered'
+            thinkingLevelSource?: 'user' | 'remembered'
+        },
     ) => Promise<LaunchResult>
     onListMachineSavedSessions: (machineId: string, providerType: string) => Promise<Array<{
         id: string

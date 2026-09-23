@@ -14,7 +14,9 @@ import {
     writePendingQueuedMessages,
     MAX_PENDING_QUEUED_MESSAGES,
     type PendingQueuedMessage,
+    type PendingInputEnvelope,
 } from '../utils/pendingQueuedMessages'
+import type { SendPolicy } from '@adhdev/mesh-shared'
 
 /**
  * The full conversation-command surface, passed to render sites as ONE required
@@ -301,18 +303,74 @@ function awaitSendSettlement(
 }
 
 /**
+ * Build a structured `InputEnvelope`-shaped body from a message + attachments,
+ * matching the daemon's `normalizeInputEnvelope` contract. Shared by the fresh
+ * send path (`handleSendChat`) and by the pending-store writer, so the SAME
+ * shape is what gets persisted, what gets sent, and — on send-now — what gets
+ * resubmitted (see `pendingQueuedMessages.ts`'s `PendingInputEnvelope`, a
+ * capped/persistable projection of this).
+ */
+function buildInputEnvelope(message: string, attachments: ImageAttachment[] | undefined): PendingInputEnvelope | undefined {
+    if (!attachments || attachments.length === 0) return undefined
+    const parts: PendingInputEnvelope['parts'] = attachments.map((att) => ({
+        type: 'image',
+        mimeType: att.mimeType,
+        data: att.data,
+        alt: att.name,
+    }))
+    if (message) parts.push({ type: 'text', text: message })
+    return { parts, textFallback: message }
+}
+
+/**
+ * Map the UI's `sendNow`/`interrupt` intent onto Phase D's closed `SendPolicy`
+ * union (`@adhdev/mesh-shared`). See `buildSendChatPayload` for why `sendNow`
+ * wins when both are set.
+ */
+function toSendPolicy(options: { interrupt?: boolean; sendNow?: boolean }): SendPolicy {
+    if (options.sendNow) return { mode: 'send_now' }
+    if (options.interrupt) return { mode: 'interrupt' }
+    return { mode: 'queue' }
+}
+
+/**
  * Build the payload for a send_chat command.
- * When attachments are present, build a structured InputEnvelope so the daemon
- * can route image data to the correct provider input path.
- * Falls back to the plain {message} shape for text-only sends.
+ *
+ * ★ (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Every
+ * send now carries `messageId` and `policy` — the typed identity/admission
+ * fields `OutboundMessage` names — ALONGSIDE the legacy `sendNow`/`interrupt`
+ * booleans. The daemon this ships against today (pre Phase D-daemon) still
+ * only reads the booleans (`chat-commands-write.ts:237,287` read
+ * `args.sendNow`/`args.interrupt`/`args.force`/`args.forceSend` directly) and
+ * silently ignores unrecognized top-level fields — `normalizeInputEnvelope`
+ * only ever looks at `input`/`parts`/`prompt`, confirmed read-only against
+ * `oss/packages/daemon-core/src/providers/io-contracts.ts` — so this is
+ * additive, not a breaking change to the wire shape. The booleans are deleted
+ * only once D-daemon lands and reads `policy` instead (see this workstream's
+ * REQUESTED EDITS).
+ *
+ * `messageId` is the SAME id used for the entry's optimistic local bubble and
+ * its `pendingQueuedMessages` row (§4.2 of the plan) — minted once, passed
+ * through unchanged, never re-derived — so identity survives the whole round
+ * trip.
+ *
+ * ★ Takes an already-built `envelope` rather than re-deriving one from
+ * `message`/`attachments`, specifically so a send-now resubmit
+ * (`handleSendNowQueued`) can pass the ORIGINAL parked envelope straight
+ * through — including any image parts. Re-deriving from `message` alone on
+ * resubmit is the exact "triple-bubble" regression the design doc's D section
+ * exists to close (phase-D-plan.md §6.3): an image send that parks, then gets
+ * Send-Now'd, must carry the SAME body, not a text-only reconstruction of it.
  */
 function buildSendChatPayload(
+    messageId: string,
     message: string,
-    attachments: ImageAttachment[] | undefined,
+    envelope: PendingInputEnvelope | undefined,
     activeConv: ActiveConversation,
     options: { interrupt?: boolean; sendNow?: boolean } = {},
 ): Record<string, unknown> {
     const providerArgs = getProviderArgs(activeConv)
+    const policy = toSendPolicy(options)
     // ★ SEND-NOW-AGENT-QUEUE and `interrupt` are mutually exclusive flags, not
     // two spellings of one intent: `sendNow` preserves the turn in flight and
     // hands the body to the agent's own input queue, `interrupt` destroys that
@@ -322,27 +380,18 @@ function buildSendChatPayload(
     const modeArgs = options.sendNow
         ? { sendNow: true }
         : (options.interrupt ? { interrupt: true } : {})
-    if (!attachments || attachments.length === 0) {
-        return { message, ...modeArgs, ...providerArgs }
-    }
-
-    // Structured input envelope — matches daemon's normalizeInputEnvelope contract
-    const parts: unknown[] = attachments.map((att) => ({
-        type: 'image',
-        mimeType: att.mimeType,
-        data: att.data,
-        alt: att.name,
-    }))
-    if (message) {
-        parts.push({ type: 'text', text: message })
+    if (!envelope) {
+        return { message, messageId, policy, ...modeArgs, ...providerArgs }
     }
 
     return {
         message,          // kept for backward-compat with older daemons
+        messageId,
         input: {
-            parts,
-            textFallback: message,
+            parts: envelope.parts,
+            textFallback: envelope.textFallback,
         },
+        policy,
         ...modeArgs,
         ...providerArgs,
     }
@@ -377,6 +426,18 @@ export function useDashboardConversationCommands({
      * arriving mid-round-trip can await the real outcome instead of guessing
      * from a `queued` flag that has not been written yet. Entries are deleted as
      * they settle, so this holds only genuinely open sends.
+     *
+     * ★ (Phase D-web) This map's key IS `OutboundMessage.messageId` — the same
+     * id `createPendingQueuedMessageId` mints and `buildSendChatPayload` puts on
+     * the wire — not a separate local identity that happens to coexist with it.
+     * A concurrent double-submit for the SAME `messageId` (e.g. two clicks
+     * racing before `sendInFlightRef` latches) therefore already dedupes here:
+     * the second caller would see an entry already present for that id. Actual
+     * SEND suppression on genuine double-invocation still relies on
+     * `sendInFlightRef`'s synchronous latch above (checked before this map is
+     * ever touched) — see phase-D-plan.md §7.3 risk 1 for why `messageId`
+     * identity alone cannot cover the double-click case (two distinct clicks
+     * mint two distinct ids by design).
      */
     const inFlightSendsRef = useRef<Map<string, Promise<SendSettlement>>>(new Map())
 
@@ -510,7 +571,15 @@ export function useDashboardConversationCommands({
         // ★ APPEND, not replace. The previous single-slot assignment dropped an
         // already-waiting bubble the moment a second message was sent, even
         // though the daemon had both parked in its FIFO.
+        //
+        // ★ (Phase D-web) `pendingId` IS the `OutboundMessage.messageId` — minted
+        // once, here, and reused unchanged as: the local bubble's id, the
+        // pending-store row's id, the wire `messageId` in `buildSendChatPayload`,
+        // and (on Send now) the resubmit id. See `pendingQueuedMessages.ts`'s
+        // `createPendingQueuedMessageId` doc for the correction to its old
+        // "the daemon never sees it" claim.
         const pendingId = createPendingQueuedMessageId(now)
+        const inputEnvelope = buildInputEnvelope(message, attachments)
         // (CANCEL-INFLIGHT-LEAK) Publish this send's outcome BEFORE awaiting it,
         // so a cancel pressed during the round trip has something to await. It
         // is resolved exactly once, in the finally below.
@@ -521,7 +590,7 @@ export function useDashboardConversationCommands({
         let sendSettlement: SendSettlement = 'not-parked'
         updatePendingMessages(prev => [
             ...prev,
-            { id: pendingId, content: message, sentAt: now },
+            { id: pendingId, content: message, sentAt: now, ...(inputEnvelope ? { input: inputEnvelope } : {}) },
         ].slice(-MAX_PENDING_QUEUED_MESSAGES))
 
         try {
@@ -536,7 +605,7 @@ export function useDashboardConversationCommands({
                 return false
             }
 
-            const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(message, attachments, activeConv))
+            const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(pendingId, message, inputEnvelope, activeConv))
             const res = unwrapCommandResult(raw)
 
             if (res?.deduplicated) {
@@ -677,10 +746,17 @@ export function useDashboardConversationCommands({
             // that is the whole feature — so the dedup guard that protects
             // against double-typing would suppress every send-now if applied,
             // and clearing it would let a subsequent retry double-park.
+            //
+            // ★ (Phase D-web) SAME `messageId` (`targetId`), SAME `pending.input`
+            // envelope — this is a RESUBMIT of the original `OutboundMessage`
+            // under a different `policy`, not a new logical send. Passing
+            // `pending.input` (rather than re-deriving from `message` alone)
+            // is what keeps an attachment attached across send-now; see
+            // `buildSendChatPayload`'s doc comment for the regression this closes.
             const raw = await sendDaemonCommand(
                 routeTarget,
                 'send_chat',
-                buildSendChatPayload(message, undefined, activeConv, { sendNow: true }),
+                buildSendChatPayload(targetId, message, pending.input, activeConv, { sendNow: true }),
             )
             const res = unwrapCommandResult(raw)
 

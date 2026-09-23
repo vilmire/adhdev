@@ -222,6 +222,11 @@ export interface BaseDaemonData {
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
     muted?: boolean;
+    /** Phase E launch provenance (mirrors SessionEntry.launch / model / modelSource / thinkingLevel). */
+    launch?: import('@adhdev/mesh-shared').SessionLaunchRecord;
+    model?: string;
+    modelSource?: import('@adhdev/mesh-shared').ModelAxisSource;
+    thinkingLevel?: string;
     lastMessagePreview?: string;
     lastMessageRole?: string;
     lastMessageAt?: number;

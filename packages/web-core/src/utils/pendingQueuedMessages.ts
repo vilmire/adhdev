@@ -25,9 +25,71 @@
  *
  * ★ Why not sessionStorage: the reported case is closing and reopening the app,
  * which is exactly what sessionStorage does not survive.
+ *
+ * ─── Wiring-unification Phase D-web (docs/design/2026-09-23-wiring-unification.md
+ * §6 D4) ───
+ *
+ * `id` is now the literal `OutboundMessage.messageId` sent over the wire (see
+ * `@adhdev/mesh-shared`'s `outbound-message.ts`), not a purely local key — a
+ * comment further down used to say "it is never sent anywhere and the daemon
+ * never sees it"; that is corrected where it appears below.
+ *
+ * `content` stays the primary field (every existing consumer outside this
+ * workstream — `PendingQueueStrip.tsx`, the bubble renderers — reads it
+ * directly and is out of scope here). `input`, added below, is the richer
+ * `InputEnvelope` (attachments included) that `send-now` needs to resubmit
+ * the EXACT same body policy `queue`→`send_now` requires (§4.3 of the plan):
+ * re-deriving a structured envelope from `content` alone would lose any
+ * attachment, which is the "triple-bubble" class of bug the design doc's D
+ * section exists to close. `content` and `input.textFallback` are kept equal
+ * by construction (`sanitizeEntries` below derives one from the other).
  */
 
 const PENDING_QUEUED_MESSAGES_KEY = 'adhdev-pending-queued-messages-v1'
+
+/**
+ * Cap on how many bytes of attachment `data` (base64) one entry may carry in
+ * the persisted `input.parts`. localStorage is typically quota-limited to a
+ * few MB per origin shared across every key this app uses, and an owner
+ * queuing several image sends to a busy agent could otherwise blow that
+ * quota silently (writes are best-effort — see `writeStore` — so the failure
+ * mode would be "the store silently stops updating", not a visible error).
+ *
+ * Beyond this cap the entry's `input` keeps its text parts (cheap, and
+ * needed for `content`/display) but drops attachment `data`, replacing each
+ * oversized part with `{omitted: true, partTypes}` (see `OmittedInputParts`)
+ * so a restart still shows the truth: "you sent an image here, it was too
+ * large to keep across a reload, send-now will fall back to text-only for
+ * this entry until it is naturally retired by echo or staleness."
+ */
+export const PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES = 256 * 1024
+
+/** One non-text input part, reduced to what fits under the size cap. */
+export interface PendingInputPart {
+    type: string
+    text?: string
+    mimeType?: string
+    uri?: string
+    /** base64 payload — present only when the whole entry is under the cap. */
+    data?: string
+    alt?: string
+}
+
+/**
+ * The structured body of a pending entry. Optional on `PendingQueuedMessage`
+ * so an entry restored from a pre-D4 store (which only ever wrote `content`)
+ * still reads correctly — see `sanitizeEntries`'s migration branch.
+ */
+export interface PendingInputEnvelope {
+    parts: PendingInputPart[]
+    textFallback: string
+    /**
+     * Present only when one or more attachment parts were dropped for size.
+     * `partTypes` names what was omitted (e.g. `['image']`) so a restored
+     * row can say what it lost instead of silently rendering as text-only.
+     */
+    omitted?: { omitted: true; partTypes: string[] }
+}
 
 /**
  * Per-conversation cap. The daemon's own FIFO is unbounded, but a runaway local
@@ -73,6 +135,17 @@ export interface PendingQueuedMessage {
     id: string
     /** Exact text submitted — used to render, to match the echo, and to cancel. */
     content: string
+    /**
+     * (Phase D-web) The full structured body, attachments included, when the
+     * send carried one. Optional — a text-only send has no reason to carry a
+     * second copy of `content` wrapped in an envelope, and a row restored
+     * from a pre-D4 store never had one. When present, `input.textFallback`
+     * always equals `content` (kept in sync by `sanitizeEntries`); send-now
+     * (§4.3) resubmits `input` when present, `content` otherwise — so an
+     * old-format restored row degrades to a text-only resend rather than
+     * failing outright.
+     */
+    input?: PendingInputEnvelope
     /** `Date.now()` at submit. Orders the queue (FIFO) and bounds its lifetime. */
     sentAt: number
     /** True once the daemon answered `queued` (parked, not yet written to the PTY). */
@@ -140,6 +213,90 @@ function writeStore(store: PendingQueuedMessagesStore): void {
 }
 
 /**
+ * Reduce a candidate `input` envelope to what is safe to persist: text parts
+ * pass through unchanged (cheap, and needed for display/matching), and
+ * attachment `data` is kept only while the running byte total across the
+ * entry's parts stays under `PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES`. Once
+ * the cap is crossed, every remaining non-text part is replaced by a bare
+ * `{type, mimeType?}` marker and the envelope is flagged `omitted` so a
+ * restored row can say what it lost instead of silently degrading.
+ *
+ * Returns `undefined` for anything that does not look like an envelope at
+ * all (`sanitizeEntries` falls back to deriving a text-only one from
+ * `content` in that case — the pre-D4 migration path).
+ */
+function capPendingInputEnvelope(raw: unknown, fallbackText: string): PendingInputEnvelope | undefined {
+    if (!raw || typeof raw !== 'object') return undefined
+    const candidate = raw as { parts?: unknown; textFallback?: unknown; omitted?: unknown }
+    if (!Array.isArray(candidate.parts)) return undefined
+
+    let usedBytes = 0
+    // ★ IDEMPOTENCY: this function runs on every read AND every write (both go
+    // through `sanitizeEntries`), so an entry already capped on a previous pass
+    // arrives here with its oversized parts' `data` already stripped. Without
+    // seeding from an existing `omitted` marker, the second pass would see
+    // "no data on this part" and take the harmless-looking `!data` branch,
+    // silently DROPPING the marker it had just set — the restored row would
+    // then claim nothing was ever omitted, which is a lie the owner has no way
+    // to detect. Carrying the prior marker's `partTypes` forward makes the
+    // capping stable under repeated application.
+    const omittedTypes = new Set<string>(
+        candidate.omitted && typeof candidate.omitted === 'object' && Array.isArray((candidate.omitted as { partTypes?: unknown }).partTypes)
+            ? ((candidate.omitted as { partTypes: unknown[] }).partTypes.filter((t): t is string => typeof t === 'string'))
+            : [],
+    )
+    const parts: PendingInputPart[] = []
+    for (const rawPart of candidate.parts) {
+        if (!rawPart || typeof rawPart !== 'object') continue
+        const part = rawPart as Record<string, unknown>
+        const type = typeof part.type === 'string' ? part.type : ''
+        if (!type) continue
+        if (type === 'text') {
+            parts.push({ type: 'text', text: typeof part.text === 'string' ? part.text : '' })
+            continue
+        }
+        const data = typeof part.data === 'string' ? part.data : undefined
+        const dataBytes = data ? data.length : 0
+        if (data && usedBytes + dataBytes <= PENDING_QUEUED_MESSAGE_MAX_INPUT_BYTES) {
+            usedBytes += dataBytes
+            parts.push({
+                type,
+                mimeType: typeof part.mimeType === 'string' ? part.mimeType : undefined,
+                uri: typeof part.uri === 'string' ? part.uri : undefined,
+                data,
+                alt: typeof part.alt === 'string' ? part.alt : undefined,
+            })
+            continue
+        }
+        // Over budget (or the part carried a `uri` instead of inline `data`,
+        // which is small and fine to keep, minus the payload we cannot afford):
+        // keep the part's identity, drop the payload.
+        if (!data) {
+            parts.push({
+                type,
+                mimeType: typeof part.mimeType === 'string' ? part.mimeType : undefined,
+                uri: typeof part.uri === 'string' ? part.uri : undefined,
+                alt: typeof part.alt === 'string' ? part.alt : undefined,
+            })
+            continue
+        }
+        omittedTypes.add(type)
+        parts.push({
+            type,
+            mimeType: typeof part.mimeType === 'string' ? part.mimeType : undefined,
+            alt: typeof part.alt === 'string' ? part.alt : undefined,
+        })
+    }
+
+    const textFallback = typeof candidate.textFallback === 'string' ? candidate.textFallback : fallbackText
+    return {
+        parts,
+        textFallback,
+        ...(omittedTypes.size > 0 ? { omitted: { omitted: true, partTypes: [...omittedTypes] } } : {}),
+    }
+}
+
+/**
  * Drop malformed and expired rows.
  *
  * Applied on every read as well as every write, so a store written by an older
@@ -174,7 +331,26 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
         // freshly "waiting to send" and then correcting itself once a transcript
         // arrives (which, for a torn-down session, it may never do).
         const stale = candidate.stale === true || (now - sentAt > PENDING_QUEUED_MESSAGE_STALE_AFTER_MS)
-        entries.push({ entry: { id, content, sentAt, queued: candidate.queued === true, settled: true, stale }, index })
+        // (Phase D-web migration) An entry written by a pre-D4 build has only
+        // ever had `content` — no `input` key exists in its stored JSON. Cap
+        // whatever IS present; `capPendingInputEnvelope` returns `undefined`
+        // for a missing/malformed `input`, and the field is simply omitted —
+        // that IS the migration, not a separate code path, because a missing
+        // `input` was already the documented "degrade to text-only" case
+        // (§4.1's `PendingQueuedMessage.input` doc comment).
+        const input = capPendingInputEnvelope(candidate.input, content)
+        entries.push({
+            entry: {
+                id,
+                content,
+                sentAt,
+                queued: candidate.queued === true,
+                settled: true,
+                stale,
+                ...(input ? { input } : {}),
+            },
+            index,
+        })
         index += 1
     }
     // FIFO: oldest first, matching the daemon's own drain order so the rendered
@@ -193,9 +369,17 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
 /**
  * Mint an entry id.
  *
- * `crypto.randomUUID` where available; otherwise a timestamp+counter fallback,
- * because the id only has to be unique within one browser's store — it is never
- * sent anywhere and the daemon never sees it.
+ * `crypto.randomUUID` where available; otherwise a timestamp+counter fallback.
+ *
+ * ★ (Phase D-web, 2026-09-23) CORRECTION to this comment's previous claim: this
+ * id is no longer purely local. `useDashboardConversationCommands.ts` passes it
+ * as the `send_chat` command's `messageId` field — the same identifier
+ * `@adhdev/mesh-shared`'s `OutboundMessage.messageId` names — so the daemon
+ * DOES see it now, and it is what a daemon build past Phase D-daemon will use
+ * to key its own send queue instead of matching by text. It still only has to
+ * be unique within one browser tab's store, which `crypto.randomUUID` and the
+ * fallback both satisfy; nothing about minting changed, only what happens to
+ * the value afterward.
  */
 let idCounter = 0
 export function createPendingQueuedMessageId(now: number = Date.now()): string {

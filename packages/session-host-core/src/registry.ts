@@ -274,7 +274,20 @@ export class SessionHostRegistry {
       writeOwner: record.writeOwner ? { ...record.writeOwner } : null,
       attachedClients: record.attachedClients.map(client => ({ ...client })),
       buffer: { ...record.buffer },
-      meta: { ...record.meta },
+      // Deep: meta carries nested records (e.g. the daemon's `launchRecord`,
+      // wiring-unification Phase E), and a caller mutating a returned record
+      // must never reach into the registry's own copy.
+      meta: cloneMeta(record.meta),
     };
+  }
+}
+
+function cloneMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!meta) return {};
+  try {
+    return structuredClone(meta);
+  } catch {
+    // A non-cloneable value (function, class instance) — keep the old shallow copy.
+    return { ...meta };
   }
 }

@@ -98,6 +98,11 @@ export function mergeSessionEntrySummary(
     controlValues: session.controlValues ?? existingEntry?.controlValues,
     providerControls: session.providerControls ?? existingEntry?.providerControls,
     summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,
+    // Phase E launch provenance — kept across partial merges like the other identity fields.
+    launch: session.launch ?? existingEntry?.launch,
+    model: session.model ?? existingEntry?.model,
+    modelSource: session.modelSource ?? existingEntry?.modelSource,
+    thinkingLevel: session.thinkingLevel ?? existingEntry?.thinkingLevel,
     runtimeWriteOwner: session.runtimeWriteOwner ?? existingEntry?.runtimeWriteOwner,
     runtimeAttachedClients: session.runtimeAttachedClients ?? existingEntry?.runtimeAttachedClients,
     lastMessagePreview: session.lastMessagePreview ?? existingEntry?.lastMessagePreview,

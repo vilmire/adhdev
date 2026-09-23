@@ -288,7 +288,18 @@
         "questionPending": "等待回答问题",
         "answerQuestion": "回答问题"
     },
+    "chatControls": {
+        "launchModelChanged": "{{from}} → {{to}}（已更改）",
+        "launchModelSource": {
+          "user": "已选择",
+          "remembered": "已记住",
+          "mesh_slot": "网格槽位",
+          "task_override": "任务指定",
+          "provider_default": "默认"
+        }
+    },
     "newSession": {
+        "defaultResolvesTo": "默认将解析为 {{model}}",
         "title": "开始会话",
         "close": "关闭新建会话对话框",
         "category": "类别",

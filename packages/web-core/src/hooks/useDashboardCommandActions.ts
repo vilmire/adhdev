@@ -42,6 +42,9 @@ export interface LaunchProviderOptions {
   cliArgs?: string[]
   initialModel?: string | null
   initialThinkingLevel?: string | null
+  /** Phase E: where initialModel / initialThinkingLevel came from (dialog pick vs. restored). */
+  modelSource?: 'user' | 'remembered'
+  thinkingLevelSource?: 'user' | 'remembered'
   settings?: {
     autoApprove?: boolean
     autoApproveMode?: string
@@ -60,6 +63,10 @@ export function buildDashboardProviderLaunchPayload(
   if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
   if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
   if (opts?.initialThinkingLevel?.trim()) payload.initialThinkingLevel = opts.initialThinkingLevel.trim()
+  // Phase E launch provenance: a dashboard launch, and where each value came from.
+  payload.launchedBy = 'dashboard'
+  if (payload.initialModel && opts?.modelSource) payload.modelSource = opts.modelSource
+  if (payload.initialThinkingLevel && opts?.thinkingLevelSource) payload.thinkingLevelSource = opts.thinkingLevelSource
   if (opts?.settings) payload.settings = opts.settings
   return payload
 }
@@ -67,6 +74,8 @@ export function buildDashboardProviderLaunchPayload(
 export interface MeshCoordinatorLaunchOptions {
   initialModel?: string | null
   initialThinkingLevel?: string | null
+  modelSource?: 'user' | 'remembered'
+  thinkingLevelSource?: 'user' | 'remembered'
   settings?: { autoApprove?: boolean; autoApproveMode?: string }
 }
 
@@ -81,6 +90,9 @@ export function buildMeshCoordinatorLaunchPayload(
   const initialThinkingLevel = opts?.initialThinkingLevel?.trim()
   if (initialModel) payload.initialModel = initialModel
   if (initialThinkingLevel) payload.initialThinkingLevel = initialThinkingLevel
+  // Phase E: forwarded to launch_cli by launch_mesh_coordinator (absent → 'user').
+  if (initialModel && opts?.modelSource) payload.modelSource = opts.modelSource
+  if (initialThinkingLevel && opts?.thinkingLevelSource) payload.thinkingLevelSource = opts.thinkingLevelSource
   if (opts?.settings?.autoApproveMode) payload.autoApproveMode = opts.settings.autoApproveMode
   else if (typeof opts?.settings?.autoApprove === 'boolean') payload.autoApprove = opts.settings.autoApprove
   return payload
