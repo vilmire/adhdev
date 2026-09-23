@@ -158,12 +158,40 @@ export type SendRefusal =
     | 'duplicate_dispatch'
     | 'internal_error'
 
-/** The one closed outcome shape every caller receives from `submit()`. */
+/**
+ * Which write path carried a delivered/queued message (Phase D2, additive
+ * detail — callers branch on `kind`; `route` only refines the report):
+ *
+ *   `pty`         — the ordinary composer write (or the driver FIFO for `queued`);
+ *   `agent_queue` — the POSIX split write the CLI's OWN input queue takes while
+ *                   a turn is generating (`send_now`). Written, not yet answered;
+ *   `interrupt`   — the turn in flight was stopped first, then this body was
+ *                   written (or re-parked) as a new turn;
+ *   `acp`         — handed to an ACP agent's `session/prompt`.
+ */
+export type SubmitRoute = 'pty' | 'agent_queue' | 'interrupt' | 'acp'
+
+/** The stop key pressed by an `interrupt` submit (logs / operator display). */
+export interface SubmitInterruptDetail {
+    keyName: string
+    /** 'declared' = spec-declared stop key whose busy→idle effect was never observed live. */
+    confidence: 'proven' | 'declared'
+}
+
+/**
+ * The one closed outcome shape every caller receives from `submit()`.
+ *
+ * The optional fields are additive DETAIL (Phase D2): `route`/`interrupt` say
+ * how a message was written, `message` is a human-readable refusal line and
+ * `restored` says whether a parked body that an out-of-band submit had claimed
+ * is back in the driver queue (`false` = nothing holds it any more). None of
+ * them changes what `kind` means.
+ */
 export type SubmitOutcome =
-    | { kind: 'delivered' }
-    | { kind: 'queued'; position: number }
+    | { kind: 'delivered'; route?: SubmitRoute; interrupt?: SubmitInterruptDetail }
+    | { kind: 'queued'; position: number; route?: SubmitRoute; interrupt?: SubmitInterruptDetail }
     | { kind: 'duplicate'; of: string /* messageId */ }
-    | { kind: 'refused'; reason: SendRefusal }
+    | { kind: 'refused'; reason: SendRefusal; message?: string; restored?: boolean }
 
 /**
  * The one send-side unit crossing every transport. `messageId` is minted at

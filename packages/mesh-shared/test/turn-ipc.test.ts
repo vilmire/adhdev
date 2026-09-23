@@ -3,6 +3,10 @@ import {
     MAX_MESH_RECORD_STRING,
     MESH_RECORD_PAYLOAD_KEYS,
     TURN_IPC_COMMANDS,
+    decodeNoteForgetRequest,
+    decodeNoteForgetResponse,
+    decodeNoteUpsertRequest,
+    decodeNoteUpsertResponse,
     TURN_IPC_ERROR_CODES,
     TURN_IPC_PROTOCOL_VERSION,
     decodeMeshIndexQueryRequest,
@@ -48,15 +52,18 @@ describe('turn-ipc — command registry', () => {
     // cannot fit mesh_record's ProjectedScalars allow-list (see this file's
     // section header comment). Six became eight; the deliberate-update
     // pattern is the same one C-W2's report used for its own count changes.
-    it('declares exactly eight commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(8)
+    // C-W8: note_upsert/note_forget added per the 2026-09-24 C-W6b decision —
+    // operating-note text is free text like a mission goal (local IPC only).
+    it('declares exactly ten commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(10)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
             'mesh_index_query', 'mesh_record', 'mission_query', 'mission_upsert',
+            'note_forget', 'note_upsert',
             'operator_status', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the eight names', () => {
+    it('isTurnIpcCommand accepts only the ten names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -339,5 +346,25 @@ describe('content-boundary sentinel — a "summary" field is rejected everywhere
 
     it('mesh_record: a sentinel-valued unknown key is rejected by the payload allow-list', () => {
         expect(isMeshRecordPayload({ progressNote: SENTINEL })).toBe(false)
+    })
+})
+
+describe('turn-ipc — note_upsert / note_forget (C-W8)', () => {
+    it('accepts a full note and refuses unknown keys, an empty text or a bad category', () => {
+        const ok = { v: 1, meshId: 'm1', text: 'lesson', category: 'recovery_lesson', pinned: true, expiresAt: '2026-10-01T00:00:00.000Z', subjectKey: 'k', sourceCoordinator: 'coord' }
+        expect(decodeNoteUpsertRequest(ok)).toEqual(ok)
+        expect(decodeNoteUpsertRequest({ ...ok, extra: 1 })).toBeNull()
+        expect(decodeNoteUpsertRequest({ ...ok, text: '   ' })).toBeNull()
+        expect(decodeNoteUpsertRequest({ ...ok, category: 'gossip' })).toBeNull()
+        expect(decodeNoteUpsertRequest({ ...ok, expiresAt: 'not-a-date' })).toBeNull()
+        expect(decodeNoteUpsertResponse({ noteId: 'n1', deduped: false, createdAt: 'x' })).not.toBeNull()
+    })
+
+    it('a forget needs a noteId or a text target', () => {
+        expect(decodeNoteForgetRequest({ v: 1, meshId: 'm1', noteId: 'n1' })).not.toBeNull()
+        expect(decodeNoteForgetRequest({ v: 1, meshId: 'm1', text: 'lesson', reason: 'obsolete' })).not.toBeNull()
+        expect(decodeNoteForgetRequest({ v: 1, meshId: 'm1' })).toBeNull()
+        expect(decodeNoteForgetResponse({ matched: 2, tombstoneId: 't1' })).not.toBeNull()
+        expect(decodeNoteForgetResponse({ matched: -1, tombstoneId: 't1' })).toBeNull()
     })
 })
