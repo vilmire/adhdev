@@ -2,14 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 
-// PTY-SUBMIT-IDEMPOTENCY: the guard in DaemonCliManager.agentCommand
-// ('agent_command' → send_chat) must suppress a machine-driven redelivery of the
-// SAME mesh task (same session + taskId + identical content) BEFORE the second
-// PTY write, while never blocking a legitimate resend (new taskId, same-task
-// follow-up delta, post-window re-issue, retry after a failed submit, forceSend).
+// PTY-SUBMIT-IDEMPOTENCY, wiring-unification D2: a mesh `agent_command` send_chat
+// is submitted through SessionInputService under a messageId — the dispatcher's
+// own, or, when it sent none, the turn ledger's dispatch identity
+// `task:<taskId>:n<dispatchNonce>`. The ONE messageId dedupe suppresses a
+// machine-driven redelivery of the SAME dispatch BEFORE the second PTY write,
+// while never blocking a legitimate resend (new taskId, a reclaim's bumped nonce,
+// a caller-supplied new messageId, post-window re-issue, retry after a failure).
 
 function createManager(adapterStatus = 'idle') {
-  const sendMessage = vi.fn(async () => {})
+  const sendMessage = vi.fn(async (_text: string, _opts?: unknown) => (
+    adapterStatus === 'idle' ? { status: 'delivered' as const } : { status: 'queued' as const, position: 1 }
+  ))
+  const fifo = new Set<string>()
   const adapter = {
     cliType: 'hermes-cli',
     cliName: 'Hermes Agent',
@@ -25,6 +30,7 @@ function createManager(adapterStatus = 'idle') {
       return { ok: true as const, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared' as const }
     }),
     getStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
+    hasQueuedSend: (id: string) => fifo.has(id),
     getScriptParsedStatus: vi.fn(() => ({ status: adapterStatus, activeModal: null, messages: [] })),
     getPartialResponse: vi.fn(() => ''),
     shutdown: vi.fn(),
@@ -47,7 +53,7 @@ function createManager(adapterStatus = 'idle') {
   return { manager, adapter, sendMessage }
 }
 
-function dispatch(manager: DaemonCliManager, opts: { message: string; taskId?: string; force?: boolean }) {
+function dispatch(manager: DaemonCliManager, opts: { message: string; taskId?: string; nonce?: number; force?: boolean; messageId?: string }) {
   return manager.agentCommand({
     targetSessionId: 'session-1',
     agentType: 'hermes-cli',
@@ -55,7 +61,8 @@ function dispatch(manager: DaemonCliManager, opts: { message: string; taskId?: s
     action: 'send_chat',
     message: opts.message,
     ...(opts.force ? { force: true } : {}),
-    ...(opts.taskId ? { meshContext: { meshId: 'mesh-1', taskId: opts.taskId } } : {}),
+    ...(opts.messageId ? { messageId: opts.messageId } : {}),
+    ...(opts.taskId ? { meshContext: { meshId: 'mesh-1', taskId: opts.taskId, ...(opts.nonce !== undefined ? { dispatchNonce: opts.nonce } : {}) } } : {}),
   })
 }
 
@@ -64,7 +71,7 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     vi.useRealTimers()
   })
 
-  it('suppresses a redelivered dispatch (same session + taskId + content) before the second PTY write', async () => {
+  it('suppresses a redelivered dispatch (same taskId + nonce → same messageId) before the second PTY write', async () => {
     const { manager, sendMessage } = createManager()
 
     const first = await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
@@ -73,8 +80,9 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     // carries the SAME taskId and byte-identical prompt.
     const second = await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
 
-    expect(second).toMatchObject({ success: true, duplicateSuppressed: true })
+    expect(second).toMatchObject({ success: true, duplicateSuppressed: true, messageId: 'task:task-1:n0' })
     expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(sendMessage.mock.calls[0][1]).toMatchObject({ messageId: 'task:task-1:n0' })
   })
 
   it('suppresses the redelivery while the first submission is still buffered (busy adapter)', async () => {
@@ -98,11 +106,21 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     expect(sendMessage).toHaveBeenCalledTimes(2)
   })
 
-  it('LEGITIMATE RESEND: a same-task follow-up delta (same taskId, different content) is never blocked', async () => {
+  it('LEGITIMATE RESEND: a reclaim redispatch (same taskId, bumped nonce) is never blocked', async () => {
+    const { manager, sendMessage } = createManager()
+
+    await dispatch(manager, { message: 'do the thing', taskId: 'task-1', nonce: 1 })
+    const redispatch = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', nonce: 2 })
+
+    expect((redispatch as any).duplicateSuppressed).toBeUndefined()
+    expect(sendMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('LEGITIMATE RESEND: a same-task follow-up under its OWN messageId is never blocked', async () => {
     const { manager, sendMessage } = createManager()
 
     await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
-    const delta = await dispatch(manager, { message: 'do the thing, but use pnpm', taskId: 'task-1' })
+    const delta = await dispatch(manager, { message: 'do the thing, but use pnpm', taskId: 'task-1', messageId: 'msg_follow_up' })
 
     expect((delta as any).duplicateSuppressed).toBeUndefined()
     expect(sendMessage).toHaveBeenCalledTimes(2)
@@ -113,8 +131,8 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     const { manager, sendMessage } = createManager()
 
     await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
-    // Beyond MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS (300s) a same-text re-issue is a
-    // genuinely new turn, not a redelivery.
+    // Beyond DEDUPE_WINDOW_MS (300s) a same-id re-issue of a body that is no
+    // longer parked is a genuinely new turn, not a redelivery.
     vi.setSystemTime(Date.now() + 301_000)
     const late = await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
 
@@ -134,14 +152,20 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     expect(sendMessage).toHaveBeenCalledTimes(2)
   })
 
-  it('LEGITIMATE RESEND: forceSend bypasses the guard (explicit operator intent)', async () => {
-    const { manager, adapter } = createManager()
+  it('legacy force maps to policy interrupt — but it is still ONE message: the same dispatch identity is not re-sent', async () => {
+    const { manager, adapter, sendMessage } = createManager()
 
     await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
-    const forced = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true })
+    const forcedSame = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true })
+    expect(forcedSame).toMatchObject({ success: true, duplicateSuppressed: true })
+    expect(adapter.interruptTurn).not.toHaveBeenCalled()
 
-    expect(forced).toMatchObject({ success: true, forceSent: true, interrupted: true })
+    // Explicit operator intent is expressed with a NEW messageId.
+    ;(adapter as any).getStatus.mockReturnValueOnce({ status: 'generating', activeModal: null, messages: [] })
+    const forcedNew = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true, messageId: 'msg_operator' })
+    expect(forcedNew).toMatchObject({ success: true, interrupted: true })
     expect(adapter.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(sendMessage).toHaveBeenCalledTimes(2)
   })
 
   it('ad-hoc chat without meshContext is never guarded (no taskId → no suppression)', async () => {

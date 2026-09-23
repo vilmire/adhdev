@@ -1,6 +1,9 @@
 /**
- * SEND-NOW end-to-end regression, against a REAL SpecCliAdapter driving a REAL
- * FsmDriver over a fake PTY — deliberately not a stubbed adapter.
+ * `policy: interrupt` end-to-end regression — SessionInputService (wiring-
+ * unification D2) against a REAL SpecCliAdapter driving a REAL FsmDriver over
+ * a fake PTY — deliberately not a stubbed adapter. (Ported from the deleted
+ * commands/interrupt-and-deliver.ts suite: the sequence now lives in the
+ * service; every property below is unchanged except where noted ★D2.)
  *
  * A stub can be made to satisfy any ordering the implementation happens to
  * produce, which is exactly how the retired `forceSendMessage` path passed its
@@ -8,7 +11,7 @@
  * property of the live wiring:
  *
  *   1. While the session is GENERATING, the body is never written to the PTY.
- *   2. `interruptAndDeliver` writes the provider's stop key FIRST.
+ *   2. the interrupt submit writes the provider's stop key FIRST.
  *   3. The body is written only AFTER the FSM has observed busy→idle.
  *
  * The fake PTY records every byte in order, so the assertions are made against
@@ -20,7 +23,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { SpecCliAdapter } from '../../src/providers/spec/cli-adapter.js';
 import { CTRL_C } from '../../src/providers/spec/interrupt-capability.js';
-import { interruptAndDeliver, waitForIdleAfterInterrupt } from '../../src/commands/interrupt-and-deliver.js';
+import { waitForIdleAfterInterrupt } from '../../src/sessions/session-input-interrupt.js';
+import { createSessionInputService, type SessionInputService } from '../../src/sessions/session-input-service.js';
+import { buildSessionInputTarget, type SessionInputAdapterLike } from '../../src/sessions/session-input-target.js';
+import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../src/cli-adapters/pty-transport.js';
@@ -93,6 +99,40 @@ function writeSpec(spec: Record<string, unknown>): string {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+const services = new WeakMap<object, SessionInputService>();
+let idCounter = 0;
+
+/** One service per adapter, so a queued submit and the later interrupt share the dedupe/FIFO identity. */
+function serviceFor(adapter: object, tuning?: { timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number; minBusyDwellMs?: number }): SessionInputService {
+    if (tuning) {
+        return createSessionInputService({ resolveSession: () => buildSessionInputTarget({ adapter: adapter as SessionInputAdapterLike }), interrupt: tuning });
+    }
+    let svc = services.get(adapter);
+    if (!svc) {
+        svc = createSessionInputService({ resolveSession: () => buildSessionInputTarget({ adapter: adapter as SessionInputAdapterLike }) });
+        services.set(adapter, svc);
+    }
+    return svc;
+}
+
+function textMessage(text: string, mode: 'queue' | 'interrupt', messageId: string) {
+    return { messageId, sessionId: 's1', input: { parts: [{ type: 'text' as const, text }], textFallback: text }, origin: 'dashboard' as const, policy: { mode }, createdAt: Date.now() };
+}
+
+/** The legacy outcome shape the assertions below were written against. */
+function legacy(outcome: SubmitOutcome) {
+    if (outcome.kind === 'refused') return { ok: false as const, reason: outcome.reason as string, message: outcome.message || '', restored: outcome.restored };
+    if (outcome.kind === 'duplicate') return { ok: false as const, reason: 'duplicate', message: '' };
+    return { ok: true as const, delivered: outcome.kind === 'delivered', queued: outcome.kind === 'queued' };
+}
+
+/** Interrupt-submit `text` (under `messageId`, default a fresh one) through the service. */
+async function interruptVia(adapter: object, text: string, tuning?: { timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number; minBusyDwellMs?: number; messageId?: string }) {
+    const { messageId, ...rest } = tuning ?? {};
+    const svc = tuning && Object.keys(rest).length > 0 ? serviceFor(adapter, rest) : serviceFor(adapter);
+    return legacy(await svc.submit(textMessage(text, 'interrupt', messageId ?? `msg_fresh_${++idCounter}`)));
+}
+
 async function makeRunningAdapter() {
     const factory = new DrivableFactory();
     const adapter = new SpecCliAdapter(
@@ -112,7 +152,7 @@ async function makeRunningAdapter() {
     return { adapter, pty };
 }
 
-describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
+describe('SessionInputService policy:interrupt against a real SpecCliAdapter', () => {
     it('writes the stop key BEFORE the body, and the body only after busy→idle', async () => {
         const { adapter, pty } = await makeRunningAdapter();
         try {
@@ -134,7 +174,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                 return false;
             })();
 
-            const outcome = await interruptAndDeliver(adapter as never, 'send this now');
+            const outcome = await interruptVia(adapter, 'send this now');
             expect(await settle).toBe(true);
             expect(outcome.ok).toBe(true);
 
@@ -169,10 +209,10 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
             await sleep(300);
 
             const before = pty.writes.length;
-            const outcome = await interruptAndDeliver(adapter as never, 'must not be written');
+            const outcome = await interruptVia(adapter, 'must not be written');
 
             expect(outcome.ok).toBe(false);
-            if (!outcome.ok) expect(outcome.reason).toBe('stop_keys_empty');
+            if (!outcome.ok) expect(outcome.reason).toBe('interrupt_refused'); // ★D2: stop_keys_empty → the closed SendRefusal
             // The whole point: an unsupported interrupt must not fall back to
             // writing the body into a generating PTY.
             expect(pty.writes.slice(before).join('')).not.toContain('must not be written');
@@ -186,7 +226,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
         try {
             const before = pty.writes.length;
             // No idle frame is ever fed, so the FSM stays in `generating`.
-            const outcome = await interruptAndDeliver(adapter as never, 'never delivered', {
+            const outcome = await interruptVia(adapter, 'never delivered', {
                 timeoutMs: 300,
                 pollMs: 30,
             });
@@ -206,13 +246,13 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
     // "Send now" is pressed on a bubble that is ALREADY queued in the driver
     // FIFO, so the driver would drain that copy on the next idle frame. These
     // two tests pin the invariant that fixes the live 2026-09-07 defect:
-    // whatever interruptAndDeliver reports is the whole truth about that body.
+    // whatever the interrupt submit reports is the whole truth about that body.
     describe('with the same body already queued in the driver FIFO', () => {
         /** Queue `text` the way an ordinary send does while the session is busy,
          *  and assert it really was parked rather than written. */
         async function queueWhileBusy(adapter: SpecCliAdapter, text: string) {
-            const disposition = await adapter.sendMessage(text);
-            expect(disposition).toEqual({ status: 'queued' });
+            const outcome = await serviceFor(adapter).submit(textMessage(text, 'queue', `msg_${text}`));
+            expect(outcome.kind).toBe('queued');
         }
 
         // ── SEND-NOW-WRONG-ITEM ───────────────────────────────────────────
@@ -221,7 +261,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
         //
         // The dashboard addresses the entry by id and the daemon claims it by
         // text, so both ends were already per-item. The wrong body was sent by
-        // the DRIVER, not by either of them: interruptAndDeliver's step 0
+        // the DRIVER, not by either of them: the interrupt's claim
         // removes only the pressed body, leaving the other one in the FIFO, and
         // the FSM evaluation loop calls drainPendingSends() on the very frame it
         // reaches idle — before the interrupt caller's poll observes the same
@@ -248,7 +288,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                 })();
 
                 // Press Send now on the SECOND entry.
-                const outcome = await interruptAndDeliver(adapter as never, second);
+                const outcome = await interruptVia(adapter, second, { messageId: `msg_${second}` });
                 expect(await settle).toBe(true);
                 expect(outcome.ok).toBe(true);
                 if (outcome.ok) expect(outcome.delivered).toBe(true);
@@ -299,7 +339,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                     return false;
                 })();
 
-                const outcome = await interruptAndDeliver(adapter as never, second);
+                const outcome = await interruptVia(adapter, second, { messageId: `msg_${second}` });
                 expect(await settle).toBe(true);
                 expect(outcome.ok).toBe(true);
 
@@ -330,33 +370,38 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
             }
         }, 25_000);
 
-        it('does not double-send: on idle_timeout the queued copy is NOT drained later', async () => {
+        // ★D2: on idle_timeout the claimed copy is RESTORED (restored:true) rather
+        // than dropped. The original "retry is safe" worry is gone — a retry of
+        // the same messageId finds it still parked (a promotion) or already
+        // written (duplicate) — and restoring means the body the owner pressed
+        // is still delivered once the agent settles, instead of being lost.
+        it('does not double-send: on idle_timeout the claimed copy is restored and drains EXACTLY once', async () => {
             const { adapter, pty } = await makeRunningAdapter();
             try {
                 const body = 'steer the agent here';
                 await queueWhileBusy(adapter, body);
                 const before = pty.writes.length;
 
-                // Never leaves `generating` within the window, so the interrupt
-                // observation times out — the exact live shape.
-                const outcome = await interruptAndDeliver(adapter as never, body, {
-                    timeoutMs: 300,
-                    pollMs: 30,
-                });
+                const outcome = await interruptVia(adapter, body, { timeoutMs: 300, pollMs: 30, messageId: `msg_${body}` });
                 expect(outcome.ok).toBe(false);
-                if (!outcome.ok) expect(outcome.reason).toBe('idle_timeout');
-                // ★ The report must be truthful: nothing sent, retry is safe.
-                if (!outcome.ok) expect(outcome.message).not.toContain('still queued');
+                if (!outcome.ok) {
+                    expect(outcome.reason).toBe('idle_timeout');
+                    expect(outcome.restored).toBe(true);
+                }
 
-                // Now let the CLI settle. Before the fix this is where
-                // `draining queued send` wrote the body the caller was just told
-                // had NOT been delivered.
+                // A retry of the SAME messageId while the copy is still parked
+                // is a promotion, never a second body.
+                expect(adapter.hasQueuedSend(`msg_${body}`)).toBe(true);
+
                 pty.feed('\n>\n? for shortcuts');
                 await sleep(800);
 
-                const written = pty.writes.slice(before).join('');
-                expect(written).toContain(CTRL_C);
-                expect(written).not.toContain(body);
+                const written = pty.writes.slice(before);
+                expect(written.join('')).toContain(CTRL_C);
+                expect(written.filter(w => w.includes(body))).toHaveLength(1);
+                // And once drained, the same id is a duplicate — not re-sent.
+                const again = await serviceFor(adapter).submit(textMessage(body, 'queue', `msg_${body}`));
+                expect(again.kind).toBe('duplicate');
             } finally {
                 adapter.shutdown();
             }
@@ -380,7 +425,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                     return false;
                 })();
 
-                const outcome = await interruptAndDeliver(adapter as never, body);
+                const outcome = await interruptVia(adapter, body, { messageId: `msg_${body}` });
                 expect(await settle).toBe(true);
                 expect(outcome.ok).toBe(true);
                 if (outcome.ok) expect(outcome.delivered).toBe(true);
@@ -407,7 +452,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
         const { adapter, pty } = await makeRunningAdapter();
         try {
             const before = pty.writes.length;
-            await interruptAndDeliver(adapter as never, 'body', {
+            await interruptVia(adapter, 'body', {
                 timeoutMs: 600,
                 pollMs: 30,
                 secondPressAfterMs: 100,
@@ -434,7 +479,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                     await sleep(5);
                 }
             })();
-            await interruptAndDeliver(adapter as never, 'body', { pollMs: 20, secondPressAfterMs: 400 });
+            await interruptVia(adapter, 'body', { pollMs: 20, secondPressAfterMs: 400 });
             await settle;
             await sleep(600);
             expect(pty.writes.slice(before).filter(w => w === CTRL_C).length).toBe(1);
@@ -568,7 +613,7 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
                 }),
             };
 
-            const outcome = await interruptAndDeliver(adapter as never, 'body', {
+            const outcome = await interruptVia(adapter, 'body', {
                 timeoutMs: 2_000,
                 pollMs: 30,
             });
@@ -598,6 +643,29 @@ describe('SEND-NOW: interruptAndDeliver against a real SpecCliAdapter', () => {
             expect(secondPresses).toBe(0);
         }, 15_000);
     });
+
+    it('policy queue on a BUSY session: parked under its messageId, delivered on the idle edge EXACTLY once', async () => {
+        const { adapter, pty } = await makeRunningAdapter();
+        try {
+            const svc = serviceFor(adapter);
+            const before = pty.writes.length;
+            const first = await svc.submit(textMessage('parked until idle', 'queue', 'msg_idle_edge'));
+            expect(first).toEqual({ kind: 'queued', position: 1, route: 'pty' });
+            expect(pty.writes.slice(before).join('')).not.toContain('parked until idle');
+            // A redelivery while parked (another origin, same id) is absorbed.
+            expect(await svc.submit({ ...textMessage('parked until idle', 'queue', 'msg_idle_edge'), origin: 'mesh' }))
+                .toEqual({ kind: 'duplicate', of: 'msg_idle_edge' });
+
+            pty.feed('\n>\n? for shortcuts');
+            await sleep(900);
+            expect(pty.writes.slice(before).filter(w => w.includes('parked until idle'))).toHaveLength(1);
+            expect(adapter.hasQueuedSend('msg_idle_edge')).toBe(false);
+            // After the drain: still one message.
+            expect(await svc.submit(textMessage('parked until idle', 'queue', 'msg_idle_edge'))).toEqual({ kind: 'duplicate', of: 'msg_idle_edge' });
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
 
     it('waitForIdleAfterInterrupt resolves once the real adapter reports idle', async () => {
         const { adapter, pty } = await makeRunningAdapter();

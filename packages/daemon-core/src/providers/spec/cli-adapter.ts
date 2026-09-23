@@ -27,7 +27,7 @@ import {
     claudeAskUserQuestionPromptsMatch,
     readClaudeToolResultIds,
 } from './claude-tui-helpers.js';
-import { FsmDriver, type DashboardEvent, type ISpecDriver, type QueuedWriteOutcome } from './fsm-driver.js';
+import { FsmDriver, type ClaimedQueuedSend, type DashboardEvent, type ISpecDriver, type QueuedWriteOutcome } from './fsm-driver.js';
 import {
     openPickerAndListChoices,
     selectPickerChoice,
@@ -332,66 +332,30 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     /**
-     * FORCE-NO-OP (2026-09-13): `opts.force` is ACCEPTED AND DELIBERATELY IGNORED
-     * on this path, and that is the correct behaviour — not an oversight.
+     * The ordinary send: write now when the FSM is idle, else park in the driver
+     * FIFO under `messageId`. Returns the driver's disposition UNMAPPED
+     * (wiring-unification D2) — the old `'duplicate' → 'delivered'` fold is gone
+     * with the 60 s content gate that produced it; redelivery is absorbed once,
+     * by `messageId`, in sessions/session-input-service.ts.
      *
-     * `force` is a legacy flag from the retired `ProviderCliAdapter` engine, where
-     * it meant "raw-write into the PTY even while the session is generating". That
-     * force-inject was removed as a data-loss path (a body written into a
-     * generating claude-cli PTY is not consumed as a turn), and the removal is
-     * load-bearing — see `injectPendingIntoCoordinator` in
-     * mesh/mesh-reconcile-coordinator-drain.ts ("force-inject-into-generating stays
-     * intentionally removed") and the F3 note in mesh/mesh-event-forwarding.ts.
-     *
-     * Since the legacy engine was deleted (oss 48e5ed1a) SpecCliAdapter is the only
-     * live CLI engine, so every remaining `force: true` caller has been a silent
-     * no-op: the body takes the ordinary disposition path below and is parked in the
-     * driver FIFO whenever the machine is not idle. It was named `_opts` here, which
-     * read as "intentionally unused" and hid that the mesh force callers were not
-     * getting what their call sites claimed.
-     *
-     * The flag is kept in the signature (rather than deleted) because it is part of
-     * the shared `CliInstanceAdapter` contract that non-spec adapters also implement.
-     * Callers that need a body to reach a BUSY session must use one of the two
-     * supported routes instead:
-     *   - `sendMessage` (this method) → adapter FIFO, surfaced at the next turn
-     *     boundary. This is the "next-turn-queue" delivery mode.
-     *   - `sendMessageDuringGeneration` → the POSIX-only split write that the CLI's
-     *     own input queue takes. This is the "mid-generation-split" delivery mode.
+     * FORCE-NO-OP: `opts.force` is accepted for the shared `CliAdapter` contract
+     * and deliberately ignored — force-inject-into-generating was retired as a
+     * data-loss path (oss 6cca365b); a busy session is reached only through
+     * `sendMessageDuringGeneration` (split write) or `interruptTurn`.
      */
-    async sendMessage(text: string, _opts?: { force?: boolean; bracketedPaste?: boolean; claimKey?: string }): Promise<{ status: 'queued' | 'delivered' } | void> {
-        // Content-free at info — the prompt body is user data. `force` is logged so a
-        // caller still passing it can see, in the log, that it changed nothing here.
-        if (_opts?.force === true) {
-            LOG.debug(
-                'SpecAdapter',
-                `[${this.cliType}] sendMessage received force:true — ignored by design `
-                + '(force-inject-into-generating is retired); body takes the ordinary FIFO path',
-            );
-        }
-        LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length})`);
+    async sendMessage(text: string, opts?: { force?: boolean; bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position: number } | { status: 'delivered' } | void> {
+        LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ''})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
-        // QUEUED-SEND-LOSS: honour the `{status}` contract this signature has
-        // always declared. It was previously unfulfilled — the dispatch was
-        // fire-and-forget and the method returned undefined — so every caller
-        // treated a body merely parked in the driver's in-memory FIFO as sent.
-        if (typeof this.driver.sendMessageWithDisposition === 'function') {
-            const disposition = this.driver.sendMessageWithDisposition(text, _opts?.bracketedPaste, _opts?.claimKey);
-            if (disposition.status === 'queued') {
-                LOG.info(
-                    'SpecAdapter',
-                    `[${this.cliType}] send QUEUED not submitted — ${disposition.reason} `
-                    + `(len=${text.length}, queueDepth=${disposition.queueDepth})`,
-                );
-                return { status: 'queued' };
-            }
-            // A duplicate resend was deliberately suppressed mid-delivery: the
-            // original body is already on its way, so the caller's send is
-            // accounted for. Reporting it as delivered matches the pre-existing
-            // behaviour of this path.
-            return { status: 'delivered' };
+        if (typeof this.driver.sendMessageWithDisposition !== 'function') {
+            this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: opts?.bracketedPaste });
+            return;
         }
-        this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: _opts?.bracketedPaste });
+        const disposition = this.driver.sendMessageWithDisposition(text, opts?.bracketedPaste, opts?.messageId);
+        if (disposition.status === 'queued') {
+            LOG.info('SpecAdapter', `[${this.cliType}] send QUEUED not submitted — ${disposition.reason} (len=${text.length}, queueDepth=${disposition.queueDepth})`);
+            return { status: 'queued', position: disposition.queueDepth };
+        }
+        return { status: 'delivered' };
     }
 
     /**
@@ -436,30 +400,10 @@ export class SpecCliAdapter implements CliAdapter {
         return this.driver.supportsMidGenerationQueue() === true;
     }
 
-    /**
-     * SEND-NOW-DOUBLE-SEND: take every queued copy of `text` out of the driver
-     * FIFO so this caller becomes its only delivery route. See
-     * ISpecDriver.claimQueuedSends for why the interrupt path needs it.
-     */
-    claimQueuedSends(text: string): number {
-        if (typeof this.driver.claimQueuedSends !== 'function') return 0;
-        return this.driver.claimQueuedSends(text);
-    }
-
-    /**
-     * SEND-NOW-DOUBLE-SEND (image bodies): claim queued entries by built body
-     * text OR claimKey and return them, so the caller delivers the parked body
-     * itself. See ISpecDriver.claimQueuedSendEntries.
-     */
-    claimQueuedSendEntries(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[] {
-        if (typeof this.driver.claimQueuedSendEntries !== 'function') {
-            // Legacy driver: fall back to the count-only claim so the guard still
-            // holds for plain-text bodies; the caller gets no entry to deliver and
-            // keeps using its own text.
-            return Array.from({ length: this.claimQueuedSends(text) }, () => ({ text }));
-        }
-        return this.driver.claimQueuedSendEntries(text);
-    }
+    /** D2 messageId-keyed FIFO access (see ISpecDriver.claimQueuedSend). */
+    hasQueuedSend(messageId: string): boolean { return this.driver.hasQueuedSend?.(messageId) === true; }
+    claimQueuedSend(messageId: string): ClaimedQueuedSend | null { return this.driver.claimQueuedSend?.(messageId) ?? null; }
+    restoreQueuedSend(claimed: ClaimedQueuedSend): void { this.driver.restoreQueuedSend?.(claimed); }
 
     /**
      * SEND-NOW-WRONG-ITEM: hold the driver's FIFO drain so this caller owns the

@@ -1,7 +1,8 @@
 /**
- * SEND-NOW-AGENT-QUEUE regression, against a REAL SpecCliAdapter driving a REAL
- * FsmDriver over a fake PTY — deliberately not a stubbed adapter, for the same
- * reason interrupt-and-deliver-real-adapter.test.ts is not: a stub can be made
+ * SEND-NOW-AGENT-QUEUE regression — `policy: send_now` through SessionInputService
+ * (wiring-unification D2) against a REAL SpecCliAdapter driving a REAL FsmDriver
+ * over a fake PTY — deliberately not a stubbed adapter, for the same reason
+ * session-input-interrupt-real-adapter.test.ts is not: a stub can be made
  * to satisfy whatever ordering the implementation happens to produce, which is
  * how the retired `forceSendMessage` passed its tests for months.
  *
@@ -25,7 +26,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { SpecCliAdapter } from '../../src/providers/spec/cli-adapter.js';
 import { CTRL_C } from '../../src/providers/spec/interrupt-capability.js';
-import { sendNowIntoAgentQueue } from '../../src/commands/send-now-queued-write.js';
+import { createSessionInputService, type SessionInputTarget } from '../../src/sessions/session-input-service.js';
+import { buildSessionInputTarget, type SessionInputAdapterLike } from '../../src/sessions/session-input-target.js';
+import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../src/cli-adapters/pty-transport.js';
@@ -102,6 +105,29 @@ function writeSpec(spec: Record<string, unknown>): string {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+let idCounter = 0;
+
+/** The legacy result shape the assertions below were written against. */
+function legacy(outcome: SubmitOutcome) {
+    if (outcome.kind === 'refused') return { ok: false as const, reason: outcome.reason as string, restored: outcome.restored };
+    if (outcome.kind === 'duplicate') return { ok: false as const, reason: 'duplicate', restored: true };
+    return { ok: true as const, route: outcome.kind === 'delivered' ? outcome.route : undefined, kind: outcome.kind };
+}
+
+/** Submit `text` with policy send_now (under `messageId`, default fresh) against `target`. */
+async function sendNowVia(adapterOrTarget: object, text: string, messageId?: string, raw = false) {
+    const target = raw ? adapterOrTarget as SessionInputTarget : buildSessionInputTarget({ adapter: adapterOrTarget as SessionInputAdapterLike });
+    const svc = createSessionInputService({ resolveSession: () => target });
+    return legacy(await svc.submit({
+        messageId: messageId ?? `msg_fresh_${++idCounter}`,
+        sessionId: 's1',
+        input: { parts: [{ type: 'text', text }], textFallback: text },
+        origin: 'dashboard',
+        policy: { mode: 'send_now' },
+        createdAt: Date.now(),
+    }));
+}
+
 async function makeGeneratingAdapter() {
     const factory = new DrivableFactory();
     const adapter = new SpecCliAdapter(writeSpec(queueableSpec()), os.tmpdir(), [], {}, factory);
@@ -126,7 +152,7 @@ describe('SEND-NOW-AGENT-QUEUE: split write into a generating session', () => {
             expect(adapter.getStatus().status).toBe('generating');
             const before = pty.writes.length;
 
-            const result = await sendNowIntoAgentQueue(adapter as never, 'queue this mid turn');
+            const result = await sendNowVia(adapter, 'queue this mid turn');
             expect(result.ok).toBe(true);
 
             // The submit key is scheduled after MID_GENERATION_SUBMIT_MIN_GAP_MS
@@ -175,7 +201,7 @@ describe('SEND-NOW-AGENT-QUEUE: split write into a generating session', () => {
             vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
 
             const before = pty.writes.length;
-            const result = await sendNowIntoAgentQueue(adapter as never, 'must not be written on win32');
+            const result = await sendNowVia(adapter, 'must not be written on win32');
 
             expect(result.ok).toBe(false);
             if (!result.ok) expect(result.reason).toBe('platform_unsupported');
@@ -190,7 +216,10 @@ describe('SEND-NOW-AGENT-QUEUE: split write into a generating session', () => {
         }
     }, 15_000);
 
-    it('refuses at an IDLE session — the ordinary send path is strictly better there', async () => {
+    // ★D2 (BUSY_DECISION send_now × ready → write): at an IDLE prompt there is
+    // no turn to queue behind, so send_now is an ordinary turn — never the
+    // split write, and no longer a refusal the owner has to retry.
+    it('at an IDLE session send_now is an ordinary turn, not the split write', async () => {
         const { adapter, pty } = await makeGeneratingAdapter();
         try {
             pty.feed('\n>\n? for shortcuts');
@@ -198,51 +227,43 @@ describe('SEND-NOW-AGENT-QUEUE: split write into a generating session', () => {
             expect(adapter.getStatus().status).toBe('idle');
 
             const before = pty.writes.length;
-            const result = await sendNowIntoAgentQueue(adapter as never, 'not while idle');
+            const result = await sendNowVia(adapter, 'answered now');
 
-            expect(result.ok).toBe(false);
-            if (!result.ok) expect(result.reason).toBe('not_generating');
+            expect(result.ok).toBe(true);
+            if (result.ok) expect(result.route).toBe('pty');
 
             await sleep(900);
-            expect(pty.writes.slice(before).map(w => w.data).join('')).not.toContain('not while idle');
+            expect(pty.writes.slice(before).map(w => w.data).join('')).toContain('answered now');
         } finally {
             adapter.shutdown();
         }
     }, 15_000);
 });
 
-describe('SEND-NOW-DOUBLE-SEND: image bodies claim by claimKey and deliver the PARKED body (IMAGE-TRIPLE-BUBBLE ④)', () => {
+describe('SEND-NOW-DOUBLE-SEND: a parked image body is claimed by messageId and delivered as PARKED (IMAGE-TRIPLE-BUBBLE ④)', () => {
     /**
      * Live defect (2026-09-23): an image send parks the BUILT prompt
-     * ("<path>\n<text>") while the dashboard presses Send now with only the raw
-     * text. The text-keyed claim found nothing → the split write delivered the
-     * raw text AND the idle drain later delivered the parked prompt: one press,
-     * two agent turns (17:24:08 text-only + 17:24:21 image turn, separate
-     * assistant responses each).
+     * ("<path>\n<text>") while the dashboard presses Send now. The old text-keyed
+     * claim found nothing → the split write delivered the raw text AND the idle
+     * drain later delivered the parked prompt: one press, two agent turns. With
+     * D2 the parked entry is keyed by the messageId the press resubmits.
      */
     it('★ one press → exactly ONE delivery, of the parked image body', async () => {
         const { adapter, pty } = await makeGeneratingAdapter();
         try {
             const builtBody = '/tmp/adhdev-input-media/img-abc.png\ncheck this shot';
-            // The structured send parked earlier, while generating — with its
-            // claimKey (the raw dashboard text), as cli-provider-instance now sends.
-            const parked = await adapter.sendMessage(builtBody, { bracketedPaste: true, claimKey: 'check this shot' });
-            expect(parked).toEqual({ status: 'queued' });
+            const parked = await adapter.sendMessage(builtBody, { bracketedPaste: true, messageId: 'msg_img_1' });
+            expect(parked).toEqual({ status: 'queued', position: 1 });
 
-            // Send now arrives with ONLY the raw text.
-            const result = await sendNowIntoAgentQueue(adapter as never, 'check this shot');
+            // Send now arrives with the SAME messageId (and only the raw text in hand).
+            const result = await sendNowVia(adapter, 'check this shot', 'msg_img_1');
             expect(result.ok).toBe(true);
-            if (result.ok) expect(result.claimed).toBe(1);
+            if (result.ok) expect(result.route).toBe('agent_queue');
 
             await sleep(900);
-            // The split write delivered the PARKED body — attachment path intact —
-            // not the bare text.
-            const bodyWrites = pty.writes.filter(w => w.data === builtBody);
-            expect(bodyWrites).toHaveLength(1);
+            expect(pty.writes.filter(w => w.data === builtBody)).toHaveLength(1);
             expect(pty.writes.some(w => w.data === 'check this shot')).toBe(false);
 
-            // Regression: the turn ends → the idle drain must have NOTHING left to
-            // redeliver. Under the broken claim this is where the second turn came from.
             pty.feed('\n>\n? for shortcuts');
             await sleep(600);
             expect(pty.writes.filter(w => w.data === builtBody)).toHaveLength(1);
@@ -251,35 +272,27 @@ describe('SEND-NOW-DOUBLE-SEND: image bodies claim by claimKey and deliver the P
         }
     }, 15_000);
 
-    it('★ a refused write re-parks the body WITH its claimKey, so it stays claimable and drains once', async () => {
+    it('★ a refused write restores the body IN PLACE under its messageId, so it stays claimable and drains once', async () => {
         const { adapter, pty } = await makeGeneratingAdapter();
         try {
             const builtBody = '/tmp/adhdev-input-media/img-def.png\nlook';
-            await adapter.sendMessage(builtBody, { bracketedPaste: true, claimKey: 'look' });
+            await adapter.sendMessage('ahead of it', { messageId: 'msg_ahead' });
+            await adapter.sendMessage(builtBody, { bracketedPaste: true, messageId: 'msg_img_2' });
 
-            // Force the refusal AFTER the claim: platform gate reads at call time.
             vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-            const refused = await sendNowIntoAgentQueue(adapter as never, 'look');
+            const refused = await sendNowVia(adapter, 'look', 'msg_img_2');
             expect(refused.ok).toBe(false);
-            if (!refused.ok) expect(refused.restored).toBe(true);
+            if (!refused.ok) {
+                expect(refused.reason).toBe('platform_unsupported');
+                expect(refused.restored).toBe(true);
+            }
             vi.restoreAllMocks();
 
-            // Still claimable by the raw text — the restore preserved the claimKey.
-            const entries = adapter.claimQueuedSendEntries('look');
-            expect(entries).toHaveLength(1);
-            expect(entries[0].text).toBe(builtBody);
-            expect(entries[0].claimKey).toBe('look');
-        } finally {
-            adapter.shutdown();
-        }
-    }, 15_000);
-
-    it('cancel-by-raw-text now finds a parked image body too (same claim primitive)', async () => {
-        const { adapter } = await makeGeneratingAdapter();
-        try {
-            await adapter.sendMessage('/tmp/img.png\nnever mind', { bracketedPaste: true, claimKey: 'never mind' });
-            expect(adapter.claimQueuedSends('never mind')).toBe(1);
-            expect(adapter.claimQueuedSends('never mind')).toBe(0);
+            // Same position, same body, same paste flag.
+            const claimed = adapter.claimQueuedSend('msg_img_2');
+            expect(claimed?.index).toBe(1);
+            expect(claimed?.entry).toEqual({ messageId: 'msg_img_2', text: builtBody, bracketedPaste: true });
+            void pty;
         } finally {
             adapter.shutdown();
         }
@@ -402,7 +415,7 @@ describe('SEND-NOW-PASTE-LOSS: the mid-generation write honours bracketedPaste (
         const { adapter, pty } = await generatingAdapterWithSpec(true);
         try {
             // Parked while generating → delivered by drainPendingSends at idle.
-            expect(await adapter.sendMessage(IMG_BODY, { bracketedPaste: true })).toEqual({ status: 'queued' });
+            expect(await adapter.sendMessage(IMG_BODY, { bracketedPaste: true })).toEqual({ status: 'queued', position: 1 });
             const before = pty.writes.length;
 
             pty.feed('\n>\n? for shortcuts');
@@ -418,75 +431,55 @@ describe('SEND-NOW-PASTE-LOSS: the mid-generation write honours bracketedPaste (
 });
 
 describe('SEND-NOW-AGENT-QUEUE: claim / restore bookkeeping', () => {
-    /** Adapter double for the bookkeeping properties, which are about what this
-     *  module does AROUND the write and are not observable at the PTY. */
-    function fakeAdapter(outcome: { accepted: true } | { accepted: false; reason: string }) {
+    /** Target double for the bookkeeping properties, which are about what the
+     *  service does AROUND the write and are not observable at the PTY. */
+    function fakeTarget(outcome: { accepted: true } | { accepted: false; reason: string }) {
         const calls: string[] = [];
-        return {
-            calls,
-            cliType: 'claude-cli',
-            claimQueuedSends(_text: string): number { calls.push('claim'); return 2; },
-            sendMessageDuringGeneration(_text: string) { calls.push('write'); return outcome as never; },
-            async sendMessage(_text: string) { calls.push('restore'); return { status: 'queued' as const }; },
+        const target: SessionInputTarget = {
+            getStatus: () => ({ status: 'generating' }),
+            hasQueuedSend: () => true,
+            claimQueuedSend(messageId) { calls.push('claim'); return { entry: { messageId, text: 'BUILT-IMG-BODY', bracketedPaste: true }, index: 2 }; },
+            sendMessageDuringGeneration(text) { calls.push(`write:${text}`); return outcome; },
+            restoreQueuedSend(claimed) { calls.push(`restore@${claimed.index}`); },
+            async sendMessage() { calls.push('send'); return { status: 'queued' as const }; },
         };
+        return { calls, target };
     }
 
-    it('★ claims the parked copies BEFORE writing, so the body is delivered exactly once', async () => {
-        const adapter = fakeAdapter({ accepted: true });
-        const result = await sendNowIntoAgentQueue(adapter as never, 'body');
+    it('★ claims the parked body BEFORE writing, and writes the PARKED body', async () => {
+        const { calls, target } = fakeTarget({ accepted: true });
+        const result = await sendNowVia(target, 'raw text', 'msg_parked', true);
 
         expect(result.ok).toBe(true);
-        if (result.ok) expect(result.claimed).toBe(2);
         // Order matters: claiming AFTER the write would leave a window in which
         // the driver's idle drain could also deliver the same body.
-        expect(adapter.calls).toEqual(['claim', 'write']);
+        expect(calls).toEqual(['claim', 'write:BUILT-IMG-BODY']);
     });
 
-    it('★ restores the claimed body when the write is refused, so nothing is silently lost', async () => {
-        const adapter = fakeAdapter({ accepted: false, reason: 'send_in_flight' });
-        const result = await sendNowIntoAgentQueue(adapter as never, 'body');
+    it('★ restores the claimed body in place when the write is refused, so nothing is silently lost', async () => {
+        const { calls, target } = fakeTarget({ accepted: false, reason: 'send_in_flight' });
+        const result = await sendNowVia(target, 'raw text', 'msg_parked', true);
 
         expect(result.ok).toBe(false);
         if (!result.ok) {
             expect(result.reason).toBe('send_in_flight');
             expect(result.restored).toBe(true);
         }
-        expect(adapter.calls).toEqual(['claim', 'write', 'restore']);
+        expect(calls).toEqual(['claim', 'write:BUILT-IMG-BODY', 'restore@2']);
     });
 
-    it('★ delivers the claimed ENTRY body and restores it with claimKey on refusal (entry-returning claim)', async () => {
-        const written: string[] = [];
-        const restored: Array<{ text: string; opts?: Record<string, unknown> }> = [];
-        const adapter = {
-            cliType: 'claude-cli',
-            claimQueuedSendEntries(_text: string) {
-                return [{ text: 'BUILT-IMG-BODY', bracketedPaste: true, claimKey: 'raw text' }];
-            },
-            sendMessageDuringGeneration(text: string) { written.push(text); return { accepted: false, reason: 'send_in_flight' } as never; },
-            async sendMessage(text: string, opts?: Record<string, unknown>) { restored.push({ text, opts }); return { status: 'queued' as const }; },
-        };
-        const result = await sendNowIntoAgentQueue(adapter as never, 'raw text');
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) expect(result.restored).toBe(true);
-        // The write attempt used the PARKED body, not the raw text…
-        expect(written).toEqual(['BUILT-IMG-BODY']);
-        // …and the restore re-parked that same body with its claimKey intact.
-        expect(restored).toEqual([{ text: 'BUILT-IMG-BODY', opts: { bracketedPaste: true, claimKey: 'raw text' } }]);
-    });
-
-    it('reports not_supported (and writes nothing) for a driver without the split write', async () => {
+    it('reports not_supported (and claims nothing) for a target without the split write', async () => {
         const calls: string[] = [];
-        const adapter = {
-            cliType: 'legacy-cli',
-            claimQueuedSends(_t: string) { calls.push('claim'); return 1; },
-            async sendMessage(_t: string) { calls.push('restore'); return { status: 'queued' as const }; },
+        const target: SessionInputTarget = {
+            getStatus: () => ({ status: 'generating' }),
+            hasQueuedSend: () => true,
+            claimQueuedSend() { calls.push('claim'); return null; },
+            async sendMessage() { calls.push('send'); return { status: 'queued' as const }; },
         };
-        const result = await sendNowIntoAgentQueue(adapter as never, 'body');
+        const result = await sendNowVia(target, 'body', 'msg_parked', true);
 
         expect(result.ok).toBe(false);
         if (!result.ok) expect(result.reason).toBe('not_supported');
-        // Nothing was claimed, so there is nothing to put back.
         expect(calls).toEqual([]);
     });
 });

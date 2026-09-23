@@ -105,7 +105,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true })
-    expect(worktree.sendMessage).toHaveBeenCalledWith('worktree work')
+    expect(worktree.sendMessage).toHaveBeenCalledWith('worktree work', expect.objectContaining({ messageId: expect.any(String) }))
     expect(base.sendMessage).not.toHaveBeenCalled()
   })
 
@@ -122,7 +122,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true })
-    expect(worktree.sendMessage).toHaveBeenCalledWith('worktree work via workspace')
+    expect(worktree.sendMessage).toHaveBeenCalledWith('worktree work via workspace', expect.objectContaining({ messageId: expect.any(String) }))
     expect(base.sendMessage).not.toHaveBeenCalled()
   })
 
@@ -152,7 +152,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true })
-    expect(base.sendMessage).toHaveBeenCalledWith('base work')
+    expect(base.sendMessage).toHaveBeenCalledWith('base work', expect.objectContaining({ messageId: expect.any(String) }))
     expect(worktree.sendMessage).not.toHaveBeenCalled()
   })
 
@@ -169,7 +169,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true })
-    expect(base.sendMessage).toHaveBeenCalledWith('explicit base')
+    expect(base.sendMessage).toHaveBeenCalledWith('explicit base', expect.objectContaining({ messageId: expect.any(String) }))
     expect(worktree.sendMessage).not.toHaveBeenCalled()
   })
 
@@ -218,6 +218,6 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true })
-    expect(base.sendMessage).toHaveBeenCalledWith('plain task')
+    expect(base.sendMessage).toHaveBeenCalledWith('plain task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 })

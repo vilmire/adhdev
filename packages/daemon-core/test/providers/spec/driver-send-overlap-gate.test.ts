@@ -10,14 +10,16 @@
  * Root cause: handleSendMessage gated only on `readySeenOnce`, a ONE-SHOT latch.
  * After the machine had been ready once, every later send went to the PTY without
  * consulting the live FSM state, so a resend arriving mid-turn was written on top
- * of a still-generating turn. The pre-write dedup gate in chat-commands-write.ts
- * spans 1.2s and the only 60s dedup runs AFTER the write (it collapses the display
- * bubble, not the PTY write) — the observed 8.5s gap fell in the hole between.
+ * of a still-generating turn.
  *
- * These tests assert the two halves of the fix:
+ * These tests assert the driver half of the fix:
  *   1. a send arriving while the machine is generating is NOT written to the PTY,
  *      and is drained once the machine returns to idle;
- *   2. a redelivery of the same text in the 1.2s..60s hole is written ONCE.
+ *   2. the parked body carries its `messageId` (wiring-unification D2), which is
+ *      what the ONE dedupe upstream (sessions/session-input-service.ts) checks a
+ *      redelivery against — the driver itself no longer drops a body by content
+ *      (the 60 s content-hash gate is deleted; test/sessions/session-input-
+ *      service.test.ts pins the redelivery-written-once guarantee end to end).
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
@@ -162,31 +164,33 @@ describe('FsmDriver -- send overlap gate', () => {
         }
     });
 
-    it('writes a redelivered identical body only once when it lands in the 1.2s..60s dedup hole', async () => {
+    it('parks a mid-turn body under its messageId and drains it exactly once', async () => {
         const { driver, pty } = makeDriver();
         try {
             await reachReady(pty);
 
             const body = 'REDELIVERED-TASK-BODY';
-            driver.dispatch({ kind: 'send_message', text: body });
+            expect(driver.sendMessageWithDisposition(body, false, 'msg_first')).toEqual({ status: 'delivered' });
             await sleep(600);
 
             // The agent picks the turn up.
             pty.feed(BUSY_FRAME);
             await sleep(300);
 
-            // Redelivery well past the 1.2s pre-write window in
-            // chat-commands-write.ts but well inside the 60s post-write bubble
-            // dedup — exactly where the live duplicate landed (8.5s).
-            driver.dispatch({ kind: 'send_message', text: body });
+            // A second body arrives mid-turn: parked under ITS id, never written now.
+            const parked = driver.sendMessageWithDisposition(body, false, 'msg_second');
+            expect(parked.status).toBe('queued');
+            expect(driver.hasQueuedSend('msg_second')).toBe(true);
+            expect(driver.queuedMessageIds()).toEqual(['msg_second']);
             await sleep(500);
+            expect(pty.writes.join('').split(body).length - 1).toBe(1);
 
-            // Turn completes; the queue drains. The duplicate must NOT reappear.
+            // Turn completes; the queue drains that one parked body once.
             pty.feed(IDLE_FRAME);
             await sleep(900);
 
-            const occurrences = pty.writes.join('').split(body).length - 1;
-            expect(occurrences).toBe(1);
+            expect(driver.hasQueuedSend('msg_second')).toBe(false);
+            expect(pty.writes.join('').split(body).length - 1).toBe(2);
         } finally {
             driver.shutdown();
         }

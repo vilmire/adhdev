@@ -46,7 +46,7 @@ import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
 // modal-press refusal below can never disagree with the structured answer path
 // about whether a picker is multi-select.
 import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
-import { SendSubmitEngine } from './send-submit-engine.js';
+import { SendSubmitEngine, type ClaimedQueuedSend } from './send-submit-engine.js';
 import { applyPreLaunchTrust } from './pre-launch-trust.js';
 import { applyKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { applyGrokWorkspaceTrust } from '../grok-workspace-trust.js';
@@ -166,39 +166,27 @@ export interface ISpecDriver {
      * a body still sitting in memory use this instead. Optional so test doubles
      * implementing ISpecDriver need not provide it.
      */
-    sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition;
+    sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition;
     /**
-     * SEND-NOW-DOUBLE-SEND: remove every queued copy of `text` from the
-     * pendingSends FIFO and report how many were taken out, so exactly ONE
-     * path can still write that body.
-     *
-     * Exists because the interrupt path (commands/interrupt-and-deliver.ts) is a
-     * second delivery route for a body the driver may ALREADY hold queued: the
-     * dashboard's "Send now" is pressed on a bubble that got there by being
-     * queued in the first place. Measured live (2026-09-07): interruptAndDeliver
-     * timed out waiting for busy→idle and reported "not delivered, still
-     * queued", and 995ms later drainPendingSends wrote that very body — the
-     * caller was told to retry a message that had in fact been sent.
-     *
-     * Claiming the body up front makes the two routes one: whatever
-     * interruptAndDeliver reports is the whole truth about that text. Optional
-     * so test doubles implementing ISpecDriver need not provide it.
+     * Wiring-unification D2 — the FIFO is keyed by `OutboundMessage.messageId`
+     * (see SendSubmitEngine.QueuedSendEntry). `claimQueuedSend` takes the body
+     * parked under that id out of the FIFO and returns it, so exactly ONE route
+     * (send-now / interrupt / cancel) can still write it — the SEND-NOW-DOUBLE-
+     * SEND guard, measured live 2026-09-07 (an interrupt timed out, reported
+     * "not delivered", and the idle drain wrote the same body 995 ms later).
+     * `restoreQueuedSend` puts a claimed entry back in place after a refused
+     * write. All optional so test doubles implementing ISpecDriver need not
+     * provide them.
      */
-    claimQueuedSends?(text: string): number;
-    /**
-     * SEND-NOW-DOUBLE-SEND (image bodies): like claimQueuedSends, but matches a
-     * queued entry by its built body text OR its `claimKey` (the raw dashboard
-     * text a structured image prompt was built from) and RETURNS the removed
-     * entries, so the claimer can deliver the parked body itself instead of the
-     * raw text — which would silently drop the attachment. See
-     * SendSubmitEngine.claimQueuedSendEntries. Optional for test doubles.
-     */
-    claimQueuedSendEntries?(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[];
+    hasQueuedSend?(messageId: string): boolean;
+    queuedMessageIds?(): string[];
+    claimQueuedSend?(messageId: string): ClaimedQueuedSend | null;
+    restoreQueuedSend?(claimed: ClaimedQueuedSend): void;
     /**
      * SEND-NOW-WRONG-ITEM: suspend the autonomous pendingSends drain for up to
      * `ttlMs`, so an out-of-band caller owns the next write to the PTY.
      *
-     * Exists because claiming the pressed body (claimQueuedSends) is not enough
+     * Exists because claiming the pressed body (claimQueuedSend) is not enough
      * when the FIFO holds OTHER entries. The interrupt path reaches idle by
      * design, and `drainPendingSends()` runs on the same FSM frame that observes
      * idle — strictly before the caller's own poll sees it. So the leftover
@@ -439,6 +427,7 @@ export {
     MID_GENERATION_SUBMIT_MIN_GAP_MS,
 } from './submit-policy.js';
 export type { QueuedWriteOutcome, QueuedWriteRefusal, SendDisposition } from './submit-policy.js';
+export type { ClaimedQueuedSend, QueuedSendEntry } from './send-submit-engine.js';
 export {
     SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS,
     VERIFIED_SUBMIT_MIN_CHARS,
@@ -852,8 +841,8 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
-    sendMessageWithDisposition(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition {
-        return this.sends.handleSendMessage(text, bracketedPaste, claimKey);
+    sendMessageWithDisposition(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition {
+        return this.sends.handleSendMessage(text, bracketedPaste, messageId);
     }
 
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
@@ -876,15 +865,11 @@ export class FsmDriver implements ISpecDriver {
         this.sends.releaseDrain();
     }
 
-    /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
-    claimQueuedSends(text: string): number {
-        return this.sends.claimQueuedSends(text);
-    }
-
-    /** SEND-NOW-DOUBLE-SEND (image bodies): see ISpecDriver.claimQueuedSendEntries. */
-    claimQueuedSendEntries(text: string): { text: string; bracketedPaste?: boolean; claimKey?: string }[] {
-        return this.sends.claimQueuedSendEntries(text);
-    }
+    /** D2 messageId-keyed FIFO access — see ISpecDriver.claimQueuedSend. */
+    hasQueuedSend(messageId: string): boolean { return this.sends.hasQueuedSend(messageId); }
+    queuedMessageIds(): string[] { return this.sends.queuedMessageIds(); }
+    claimQueuedSend(messageId: string): ClaimedQueuedSend | null { return this.sends.claimQueuedSend(messageId); }
+    restoreQueuedSend(claimed: ClaimedQueuedSend): void { this.sends.restoreQueuedSend(claimed); }
 
     /** Forward runtime metadata to the terminal transport so mesh binding
      *  fields (meshNodeId / meshNodeFor / workspaceLabel / lifecycle) reach

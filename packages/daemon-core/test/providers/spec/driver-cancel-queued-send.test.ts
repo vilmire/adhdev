@@ -3,7 +3,7 @@
  *
  * ★ Why this file exists next to test/commands/cancel-queued-chat.test.ts.
  *
- * That file stubs `claimQueuedSends` with a vi.fn, so it proves the command
+ * That file stubs the claim, so it proves the command
  * plumbing and nothing about the queue. The live defect the owner reported —
  * "cancelled a message, sent another one, and the cancelled one went too" —
  * is a property of the FIFO itself: which entries survive a claim, and what
@@ -143,16 +143,16 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
             await startTurn(pty);
 
             // Both queue: the machine is generating.
-            driver.dispatch({ kind: 'send_message', text: 'KEEP-THIS-ONE' });
-            driver.dispatch({ kind: 'send_message', text: 'CANCEL-THIS-ONE' });
+            driver.sendMessageWithDisposition('KEEP-THIS-ONE', false, 'msg_KEEP-THIS-ONE');
+            driver.sendMessageWithDisposition('CANCEL-THIS-ONE', false, 'msg_CANCEL-THIS-ONE');
             await sleep(300);
             expect(pty.writes.join('')).not.toContain('CANCEL-THIS-ONE');
 
             // The owner cancels the second bubble.
-            expect(driver.claimQueuedSends('CANCEL-THIS-ONE')).toBe(1);
+            expect(driver.claimQueuedSend('msg_CANCEL-THIS-ONE')).not.toBeNull();
 
             // ...then types a new message while still generating.
-            driver.dispatch({ kind: 'send_message', text: 'TYPED-AFTER-CANCEL' });
+            driver.sendMessageWithDisposition('TYPED-AFTER-CANCEL', false, 'msg_TYPED-AFTER-CANCEL');
             await sleep(200);
 
             // The turn ends and the queue drains, one body per turn cycle.
@@ -181,11 +181,11 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
             await sleep(500);
             await startTurn(pty);
 
-            driver.dispatch({ kind: 'send_message', text: 'HEAD-CANCELLED' });
-            driver.dispatch({ kind: 'send_message', text: 'TAIL-SURVIVES' });
+            driver.sendMessageWithDisposition('HEAD-CANCELLED', false, 'msg_HEAD-CANCELLED');
+            driver.sendMessageWithDisposition('TAIL-SURVIVES', false, 'msg_TAIL-SURVIVES');
             await sleep(300);
 
-            expect(driver.claimQueuedSends('HEAD-CANCELLED')).toBe(1);
+            expect(driver.claimQueuedSend('msg_HEAD-CANCELLED')).not.toBeNull();
 
             pty.feed(IDLE_FRAME);
             await sleep(1_200);
@@ -199,10 +199,9 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
     });
 
     it('★ two identical queued bodies: cancelling once removes exactly one copy', async () => {
-        // Content-keyed removal is the only identity this path has. The owner
-        // queueing "continue" twice and cancelling one must keep the other —
-        // a filter that dropped every match would lose a body the owner still
-        // wants, which is the same class of silent loss in the other direction.
+        // Removal is by messageId (wiring-unification D2) — the owner queueing
+        // "continue" twice and cancelling one keeps the other EXACTLY, where the
+        // old content-keyed filter could only guess which copy was meant.
         const { driver, pty } = makeDriver();
         try {
             await reachReady(pty);
@@ -210,11 +209,13 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
             await sleep(500);
             await startTurn(pty);
 
-            driver.dispatch({ kind: 'send_message', text: 'continue' });
-            driver.dispatch({ kind: 'send_message', text: 'continue' });
+            driver.sendMessageWithDisposition('continue', false, 'msg_continue_1');
+            driver.sendMessageWithDisposition('continue', false, 'msg_continue_2');
             await sleep(300);
 
-            const claimed = driver.claimQueuedSends('continue');
+            const claimed = driver.claimQueuedSend('msg_continue_2') ? 1 : 0;
+            expect(claimed).toBe(1);
+            expect(driver.hasQueuedSend('msg_continue_1')).toBe(true);
 
             pty.feed(IDLE_FRAME);
             await sleep(600);
@@ -231,7 +232,7 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
 
     it('reports 0 — and delivers the body — when the queue already drained', async () => {
         // The race the UI must not hide: the owner presses cancel just after the
-        // agent went idle and took the message. `claimQueuedSends` reporting 0 is
+        // agent went idle and took the message. `claimQueuedSend` returning null is
         // what tells the dashboard to KEEP the bubble instead of lying about it.
         const { driver, pty } = makeDriver();
         try {
@@ -240,7 +241,7 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
             await sleep(500);
             await startTurn(pty);
 
-            driver.dispatch({ kind: 'send_message', text: 'ALREADY-GONE' });
+            driver.sendMessageWithDisposition('ALREADY-GONE', false, 'msg_ALREADY-GONE');
             await sleep(300);
 
             // Queue drains before the owner's cancel arrives.
@@ -248,7 +249,7 @@ describe('FsmDriver — a cancelled queued body never reaches the PTY', () => {
             await sleep(1_200);
             expect(pty.writes.join('')).toContain('ALREADY-GONE');
 
-            expect(driver.claimQueuedSends('ALREADY-GONE')).toBe(0);
+            expect(driver.claimQueuedSend('msg_ALREADY-GONE')).toBeNull();
         } finally {
             driver.shutdown();
         }

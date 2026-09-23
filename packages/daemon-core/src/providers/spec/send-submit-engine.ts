@@ -6,8 +6,8 @@
  * `fsm-driver.ts` crossed the 2,400-line file-size gate. This block is the
  * natural seam: everything here answers one question — "this body needs to
  * reach the CLI's composer; when and how is it written?" — and it is almost
- * entirely self-contained. It owns all eleven pieces of send state (the
- * pendingSends FIFO, the in-flight latch, the duplicate-gate hashes, the drain
+ * entirely self-contained. It owns every piece of send state (the
+ * pendingSends FIFO keyed by `messageId`, the in-flight latch, the drain
  * reservation, and every write/submit timer) and borrows only a small read-only
  * view of the driver (see DriverHost).
  *
@@ -55,8 +55,6 @@ import {
     type QueuedWriteOutcome,
 } from './submit-policy.js';
 import {
-    hashSendText,
-    DUPLICATE_RESEND_WINDOW_MS,
     SEND_IN_FLIGHT_MAX_MS,
     WIN32_SUBMIT_RESEND_GAP_MS,
     WIN32_SUBMIT_MAX_RESENDS,
@@ -82,11 +80,9 @@ import type { SendDisposition } from './submit-policy.js';
 // Root cause: handleSendMessage gated only on `readySeenOnce`, a ONE-SHOT latch.
 // Once the machine had ever been ready, EVERY later send went straight to the PTY
 // without consulting the current FSM state — so a resend landing mid-turn was
-// written on top of a `generating` turn. The pre-write duplicate gate that should
-// have absorbed the resend (isRecentDuplicateSend in chat-commands-write.ts) has a
-// 1.2s window, and the only 60s-window dedup (recordAcknowledgedUserInput) runs
-// AFTER the PTY write and merely collapses the display bubble. The observed 8.5s
-// gap falls in the hole between the two.
+// written on top of a `generating` turn. (The redelivery itself is now absorbed
+// upstream by `messageId` — sessions/session-input-service.ts — the one dedupe
+// that replaced the 1.2 s / 60 s content windows this note used to describe.)
 //
 // The fix is state-gated serialization, mirroring what the legacy
 // provider-cli-adapter already does with pendingOutboundQueue + ptyWriteChain:
@@ -138,24 +134,32 @@ export interface DriverHost {
 }
 
 /**
- * A body parked in the FIFO. `bracketedPaste` rides along so a queued image
- * prompt keeps its paste-wrapped delivery when drained later.
+ * A body parked in the FIFO, keyed by the `OutboundMessage.messageId` it was
+ * submitted under (wiring-unification D2). `text` is the BUILT body the driver
+ * will write (for an image send: "<materialized path>\n<text>"), and
+ * `bracketedPaste` rides along so a queued image prompt keeps its paste-wrapped
+ * delivery when drained later.
  *
- * (SEND-NOW-DOUBLE-SEND, image bodies) `claimKey` is the SECOND identity of a
- * structured send: the raw dashboard text (`InputEnvelope.textFallback`) the
- * body was built FROM. A structured image send parks the BUILT prompt
- * ("<materialized path>\n<text>"), but every out-of-band caller — send-now,
- * cancel, interrupt — only ever knows the raw text the owner typed, so a claim
- * keyed on `text` alone could never find the parked image body. That broken
- * claim disarmed the double-send guard: the send-now split write delivered the
- * raw text AND the idle drain later delivered the parked image prompt, one
- * owner press → two agent turns (observed live 2026-09-23). The claim below
- * matches EITHER identity, exactly — never a substring.
+ * ★ The id is the ONLY identity. Before D2 the FIFO was keyed by text plus a
+ * second `claimKey` (the raw dashboard text an image prompt was built from),
+ * because every out-of-band caller — send-now, cancel, interrupt — only knew
+ * the text the owner typed; a structured body whose claim could not match
+ * produced one press → two agent turns (observed live 2026-09-23). Claims are
+ * now exact `messageId` lookups, so no caller recovers identity from content.
+ * A send that arrives WITHOUT an id (a provider script's `send_message`, a dev
+ * tool) is parked under a driver-minted `anon:<n>` id nothing outside can
+ * claim — exactly the old behaviour for an unclaimable body.
  */
 export interface QueuedSendEntry {
+    messageId: string;
     text: string;
     bracketedPaste?: boolean;
-    claimKey?: string;
+}
+
+/** A claimed entry plus where it sat, so a refused out-of-band write can put it back in place. */
+export interface ClaimedQueuedSend {
+    entry: QueuedSendEntry;
+    index: number;
 }
 
 export class SendSubmitEngine {
@@ -171,9 +175,8 @@ export class SendSubmitEngine {
     /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
      *  suspended, or 0 when it is free to run. See reserveDrain(). */
     private drainReservedUntil = 0;
-    /** Content hash → wall-clock of the last PTY write, for the pre-write
-     *  duplicate gate (see isDuplicateResend). */
-    private recentSendHashes = new Map<string, number>();
+    /** Counter for driver-minted ids of sends that arrived without one. */
+    private anonymousSendCounter = 0;
     /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
      *  a torn-down driver never writes a queued body into a dead PTY. */
     private pendingSendDrainTimer: ReturnType<typeof setTimeout> | null = null;
@@ -229,24 +232,18 @@ export class SendSubmitEngine {
         // body's unconsumed composer line braids the two, which is the same
         // defect whether or not the agent is generating.
         if (this.isSendInFlight()) return { accepted: false, reason: 'send_in_flight' };
-        if (this.isDuplicateResend(text)) {
-            LOG.info('FsmDriver', `[${this.host.specTag()}] mid-generation send suppressed — duplicate resend (len=${text.length})`);
-            return { accepted: false, reason: 'duplicate' };
-        }
 
         LOG.info(
             'FsmDriver',
             `[${this.host.specTag()}] mid-generation split write — agent input queue (len=${text.length})`,
         );
-        // ★ The duplicate-gate record is written, but the in-flight latch is NOT
-        // taken. `sendInFlight` means "the composer holds a body whose submit the
+        // ★ The in-flight latch is NOT taken. `sendInFlight` means "the composer holds a body whose submit the
         // FSM has not yet confirmed by LEAVING idle" — and this session is not at
         // idle and will not become idle on account of this write. Taking the latch
         // would therefore hold it until its SEND_IN_FLIGHT_MAX_MS self-expiry and
         // stall the ordinary FIFO drain for that whole window, blocking the very
         // queue the owner is trying to get ahead of. drainPendingSends' own
         // `status !== 'idle'` gate already prevents a concurrent write here.
-        this.recentSendHashes.set(hashSendText(text), Date.now());
         this.actuallySendMessage(text, bracketedPaste, { midGeneration: true });
         return { accepted: true };
     }
@@ -283,44 +280,50 @@ export class SendSubmitEngine {
         return true;
     }
 
-    /** SEND-NOW-DOUBLE-SEND: see ISpecDriver.claimQueuedSends. */
-    claimQueuedSends(text: string): number {
-        return this.claimQueuedSendEntries(text).length;
+    /** True while a body submitted under `messageId` is still parked in the FIFO. */
+    hasQueuedSend(messageId: string): boolean {
+        return this.pendingSends.some(s => s.messageId === messageId);
+    }
+
+    /** The parked ids, oldest first — the FIFO order the idle drain will follow. */
+    queuedMessageIds(): string[] {
+        return this.pendingSends.map(s => s.messageId);
     }
 
     /**
-     * SEND-NOW-DOUBLE-SEND: remove every queued body whose text OR claimKey (the
-     * raw source text a structured image prompt was built from — see
-     * QueuedSendEntry) exactly equals `text`, and RETURN the removed entries.
-     *
-     * Returning the entries is the point: a claimer that then delivers its own
-     * raw `text` would silently drop the attachment the parked body carried, so
-     * the out-of-band routes (send-now, interrupt) deliver the claimed entry's
-     * ACTUAL body instead.
+     * SEND-NOW-DOUBLE-SEND: take the body parked under `messageId` out of the
+     * FIFO so the out-of-band caller (send-now, interrupt, cancel) becomes its
+     * ONLY delivery route, and return it — the claimer writes the entry's own
+     * built body, so an attachment reference survives. `null` when nothing is
+     * parked under that id (never parked, or already drained).
      */
-    claimQueuedSendEntries(text: string): QueuedSendEntry[] {
-        if (this.pendingSends.length === 0) return [];
-        const claimedEntries: QueuedSendEntry[] = [];
-        this.pendingSends = this.pendingSends.filter(s => {
-            const matches = s.text === text || s.claimKey === text;
-            if (matches) claimedEntries.push(s);
-            return !matches;
-        });
-        if (claimedEntries.length > 0) {
-            // Also clear the pre-write duplicate gate for every claimed BODY (the
-            // built prompt text may differ from the claim text). The claimer is
-            // about to re-send the same body, and isDuplicateResend would
-            // otherwise suppress it as a redelivery of the copy we just removed —
-            // turning the claim into silent data loss instead of a fix.
-            this.recentSendHashes.delete(hashSendText(text));
-            for (const entry of claimedEntries) this.recentSendHashes.delete(hashSendText(entry.text));
-            LOG.info(
-                'FsmDriver',
-                `[${this.host.specTag()}] claimed ${claimedEntries.length} queued send(s) for out-of-band delivery `
-                + `(len=${text.length}, remaining=${this.pendingSends.length})`,
-            );
-        }
-        return claimedEntries;
+    claimQueuedSend(messageId: string): ClaimedQueuedSend | null {
+        const index = this.pendingSends.findIndex(s => s.messageId === messageId);
+        if (index < 0) return null;
+        const [entry] = this.pendingSends.splice(index, 1);
+        LOG.info(
+            'FsmDriver',
+            `[${this.host.specTag()}] claimed queued send ${messageId} for out-of-band delivery `
+            + `(len=${entry.text.length}, position=${index + 1}, remaining=${this.pendingSends.length})`,
+        );
+        return { entry, index };
+    }
+
+    /**
+     * Put a claimed entry back where it was, after an out-of-band write was
+     * refused and nothing was written. Then drain: the refusal is often "the
+     * session is no longer generating", i.e. it is idle NOW and the frame that
+     * would have drained the FIFO has already passed.
+     */
+    restoreQueuedSend(claimed: ClaimedQueuedSend): void {
+        if (this.hasQueuedSend(claimed.entry.messageId)) return;
+        const index = Math.max(0, Math.min(claimed.index, this.pendingSends.length));
+        this.pendingSends.splice(index, 0, claimed.entry);
+        LOG.info(
+            'FsmDriver',
+            `[${this.host.specTag()}] restored queued send ${claimed.entry.messageId} at position ${index + 1} (queued=${this.pendingSends.length})`,
+        );
+        this.drainPendingSends();
     }
 
     /**
@@ -335,17 +338,13 @@ export class SendSubmitEngine {
      * on top of a still-generating turn, braiding the two bodies in the composer
      * (see the SEND-OVERLAP note above the constants).
      */
-    handleSendMessage(text: string, bracketedPaste?: boolean, claimKey?: string): SendDisposition {
-        // A resend of text we are already in the middle of delivering is dropped
-        // outright rather than queued: queueing it would just submit the same
-        // prompt a second time once the turn ends, which is the duplicate-bubble
-        // symptom in a slower disguise.
-        if (this.isDuplicateResend(text)) {
-            LOG.info('FsmDriver', `[${this.host.specTag()}] send suppressed — duplicate resend within ${DUPLICATE_RESEND_WINDOW_MS}ms (len=${text.length})`);
-            return { status: 'duplicate' };
-        }
+    handleSendMessage(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition {
+        // Redelivery of the SAME message is absorbed upstream by its messageId
+        // (sessions/session-input-service.ts) — this gate decides only WHEN the
+        // body may be written, never WHETHER it is a duplicate.
         if (!this.canSendNow()) {
-            this.pendingSends.push({ text, bracketedPaste, claimKey });
+            const id = messageId || `anon:${++this.anonymousSendCounter}`;
+            this.pendingSends.push({ messageId: id, text, bracketedPaste });
             const reason = this.sendBlockedReason();
             LOG.info(
                 'FsmDriver',
@@ -383,36 +382,10 @@ export class SendSubmitEngine {
         return true;
     }
 
-    /**
-     * Pre-write duplicate gate. Suppresses a repeat of text that was written to
-     * the PTY within DUPLICATE_RESEND_WINDOW_MS *while that text is still being
-     * processed* — i.e. a send is in flight or the machine has not returned to
-     * idle. A genuine repeat typed at an idle prompt is NOT suppressed: sending
-     * "continue" twice in a row is ordinary use, and silently swallowing the
-     * second one would be a worse defect than the one being fixed.
-     */
-    private isDuplicateResend(text: string): boolean {
-        const now = Date.now();
-        const key = hashSendText(text);
-        for (const [candidate, at] of this.recentSendHashes) {
-            if (now - at > DUPLICATE_RESEND_WINDOW_MS) this.recentSendHashes.delete(candidate);
-        }
-        const previous = this.recentSendHashes.get(key);
-        if (previous === undefined) return false;
-        if (now - previous > DUPLICATE_RESEND_WINDOW_MS) return false;
-        // Same text, inside the window. Only a collision with work still in
-        // progress is a redelivery; at a settled idle prompt it is a new turn.
-        const stillProcessing = this.isSendInFlight()
-            || this.host.currentStatus() !== 'idle'
-            || this.pendingSends.length > 0;
-        return stillProcessing;
-    }
-
-    /** Mark a send as in flight, record it for the duplicate gate, and write it. */
+    /** Mark a send as in flight and write it. */
     private beginSend(text: string, bracketedPaste?: boolean): void {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
-        this.recentSendHashes.set(hashSendText(text), this.sendInFlightAt);
         this.actuallySendMessage(text, bracketedPaste);
     }
 

@@ -121,7 +121,7 @@ describe('FORCE-NO-OP: SpecCliAdapter.sendMessage ignores `force`', () => {
 
         // The whole point: force did NOT buy a bypass. Nothing reached the PTY.
         expect(pty.writes.length).toBe(writesBefore);
-        expect(result).toEqual({ status: 'queued' });
+        expect(result).toEqual({ status: 'queued', position: 1 });
 
         adapter.shutdown();
     });
