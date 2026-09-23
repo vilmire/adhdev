@@ -21,7 +21,7 @@ import { daemonIdsEquivalent, sessionIdsEquivalent, isMeshTaskDifficulty, type M
 import { EventEmitter } from 'events';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getLedgerDir, getLedgerPath, getRotatedPath, getArchivePath, getRotatedArchivePath, getArchivedTerminalKeysPath } from './mesh-ledger-paths.js';
-import { ledgerEntryTaskId, getCachedRawEntries, getCachedFilteredRawEntries, readLedgerFile, liveCacheEntry, recordLedgerAppend, invalidateLedgerCache, clearLedgerImportFlag } from './mesh-ledger-read-cache.js';
+import { ledgerEntryTaskId, getCachedRawEntries, getCachedFilteredRawEntries, readLedgerFile, liveCacheEntry, recordLedgerAppend, invalidateLedgerCache, clearLedgerImportFlag, ensureLedgerImported, type LedgerPayloadProjection } from './mesh-ledger-read-cache.js';
 import { LOG } from '../logging/logger.js';
 // Phase 2 Stage 2 dual-write shadow. Direction is mesh/ → seqscribe/, which
 // check:boundaries allows (the forbidden edge is seqscribe/ → mesh/, which is
@@ -1542,10 +1542,11 @@ export function __clearMeshLedgerForTests(meshId: string): void {
  * storing it as if it were the full raw set would corrupt every later read. Cold
  * unfiltered reads still go through getCachedRawEntries and do populate it.
  *
- * `tail` is NOT pushed down. A bare `tail` means "last N of every kind" but the
- * caller may also have passed `node`, which is filtered in JS afterwards — pushing
- * the LIMIT down first would take the last N rows and then shrink them further,
- * returning fewer than N. Ordering and count semantics stay exactly as before.
+ * `tail` IS pushed down (IPC load audit #3: a `tail: 20` dashboard read used to load
+ * and parse all 19k rows, ~0.4 s, to keep the last 20) — except when the caller also
+ * passed `node`, which is filtered in JS afterwards: pushing the LIMIT down first would
+ * take the last N rows and then shrink them further, returning fewer than N. The SQL
+ * tail applies after the since/kind filters, exactly like the JS slice below.
  */
 function readRawEntriesForOpts(meshId: string, opts?: ReadLedgerOptions): MeshLedgerEntry[] {
     const cached = liveCacheEntry(meshId);
@@ -1553,12 +1554,15 @@ function readRawEntriesForOpts(meshId: string, opts?: ReadLedgerOptions): MeshLe
 
     const hasSince = typeof opts?.since === 'string' && !Number.isNaN(new Date(opts.since).getTime());
     const kinds = opts?.kind?.length ? opts.kind : undefined;
-    if (!hasSince && !kinds) return getCachedRawEntries(meshId);
+    const hasNodeFilter = typeof opts?.node === 'string' && opts.node.trim().length > 0;
+    const tail = !hasNodeFilter && typeof opts?.tail === 'number' && opts.tail >= 1 ? Math.floor(opts.tail) : undefined;
+    if (!hasSince && !kinds && !tail) return getCachedRawEntries(meshId);
 
     try {
         return getCachedFilteredRawEntries(meshId, {
             ...(hasSince ? { since: opts!.since } : {}),
             ...(kinds ? { kinds } : {}),
+            ...(tail ? { tail } : {}),
         });
     } catch {
         // Store unavailable — fall back to the full-read path (which itself falls
@@ -1629,6 +1633,94 @@ export function readLedgerEntriesByKind(meshId: string, kinds: MeshLedgerKind[],
         return entries.slice(-cap);
     }
     return entries;
+}
+
+/**
+ * Payload fields buildMeshActiveWork (mesh-active-work.ts) reads from ledger entries:
+ * buildMeshActiveWorkLedgerSnapshot / hasTerminalLedgerAuthorityForTask /
+ * directDispatchTaskId (taskId), isDirectDispatch (source, via),
+ * buildLedgerDirectDispatchRecord (dispatchedToIdleSession, message, summary,
+ * providerType, taskTitle, taskSummary, taskMode) and isWeakCompletionEvidence
+ * (evidenceLevel, reviewRecommended, completionDiagnostic.*). Adding a payload read
+ * there means adding its path here — the projection test pins the two against real
+ * builder output.
+ */
+export const ACTIVE_WORK_LEDGER_PROJECTION: LedgerPayloadProjection = {
+    name: 'active_work',
+    paths: [
+        '$.taskId',
+        '$.source',
+        '$.via',
+        '$.dispatchedToIdleSession',
+        '$.message',
+        '$.summary',
+        '$.providerType',
+        '$.taskTitle',
+        '$.taskSummary',
+        '$.taskMode',
+        '$.evidenceLevel',
+        '$.reviewRecommended',
+        '$.completionDiagnostic.finalAssistantPresent',
+        '$.completionDiagnostic.transcriptFinalAssistantPresent',
+        '$.completionDiagnostic.blockReason',
+    ],
+};
+
+/** Payload fields buildMeshAsyncRefineJobs (mesh-refine-status.ts) reads from ledger entries. */
+export const REFINE_JOB_LEDGER_PROJECTION: LedgerPayloadProjection = {
+    name: 'refine_jobs',
+    paths: [
+        '$.taskId',
+        '$.source',
+        '$.refineJob',
+        '$.retryOfJobId',
+        '$.result.branch',
+        '$.result.into',
+        '$.result.finalBranchConvergenceState.branch',
+        '$.result.finalBranchConvergenceState.baseBranch',
+        '$.finalBranchConvergenceState.branch',
+        '$.finalBranchConvergenceState.baseBranch',
+    ],
+};
+
+/** The refine-job lifecycle kinds buildMeshAsyncRefineJobs folds. */
+export const REFINE_JOB_LEDGER_KINDS: MeshLedgerKind[] = ['task_dispatched', 'task_completed', 'task_failed'];
+
+/**
+ * Kind-filtered read that returns entries carrying only `projection.paths` of their
+ * payload (IPC load audit #2). Same kind-first semantics as readLedgerEntriesByKind
+ * (LEDGER-KIND-TAIL-BLINDSPOT), same order. A warm full-ledger cache is served as-is
+ * (its entries carry full payloads, a superset of the projection). Store failure falls
+ * back to the full read.
+ */
+function readLedgerEntriesProjected(meshId: string, kinds: MeshLedgerKind[], projection: LedgerPayloadProjection): MeshLedgerEntry[] {
+    const cached = liveCacheEntry(meshId);
+    if (cached) {
+        const kindSet = new Set<string>(kinds);
+        return cached.entries.filter(e => kindSet.has(e.kind));
+    }
+    try {
+        return getCachedFilteredRawEntries(meshId, { kinds, projection });
+    } catch {
+        return readLedgerEntriesByKind(meshId, kinds);
+    }
+}
+
+/**
+ * Active-work evidence read for buildMeshActiveWork (auto-prune, idle reminder,
+ * notification status line). Entries carry only ACTIVE_WORK_LEDGER_PROJECTION's payload
+ * fields — do not hand them to a consumer that reads other payload fields.
+ */
+export function readActiveWorkLedgerEntries(meshId: string, kinds: MeshLedgerKind[]): MeshLedgerEntry[] {
+    return readLedgerEntriesProjected(meshId, kinds, ACTIVE_WORK_LEDGER_PROJECTION);
+}
+
+/**
+ * Refine-job lifecycle read for buildMeshAsyncRefineJobs. Entries carry only
+ * REFINE_JOB_LEDGER_PROJECTION's payload fields.
+ */
+export function readRefineJobLedgerEntries(meshId: string): MeshLedgerEntry[] {
+    return readLedgerEntriesProjected(meshId, REFINE_JOB_LEDGER_KINDS, REFINE_JOB_LEDGER_PROJECTION);
 }
 
 /**
@@ -1751,7 +1843,64 @@ export function readLedgerSliceFromStore(meshId: string, opts?: ReadLedgerSliceO
  * Get a summary of mesh activity from the ledger.
  */
 export function getLedgerSummary(meshId: string): MeshLedgerSummary {
-    return buildLedgerSummary(meshId, getCachedRawEntries(meshId));
+    const cached = liveCacheEntry(meshId);
+    if (cached) return buildLedgerSummary(meshId, cached.entries);
+    try {
+        return buildLedgerSummaryFromStore(meshId);
+    } catch {
+        return buildLedgerSummary(meshId, getCachedRawEntries(meshId));
+    }
+}
+
+/** Payload fields isIntentionalCleanupStopEntry reads. */
+const CLEANUP_STOP_PROJECTION: LedgerPayloadProjection = {
+    name: 'cleanup_stop',
+    paths: ['$.intentional', '$.reason', '$.intentionalStopReason', '$.source'],
+};
+
+/**
+ * IPC load audit #3: the same summary as buildLedgerSummary, without loading the
+ * ledger — per-kind COUNT/MAX from the kind index, plus a projection read of the
+ * task_failed / task_stalled rows (the only kinds whose count depends on payload:
+ * operator-cleanup stops are excluded, and recent failures are time-windowed).
+ */
+function buildLedgerSummaryFromStore(meshId: string): MeshLedgerSummary {
+    const store = MeshRuntimeStore.getInstance();
+    ensureLedgerImported(store, meshId);
+    const counts = new Map<string, number>();
+    let total = 0;
+    let lastActivityAt: string | null = null;
+    for (const row of store.readLedgerKindCounts(meshId)) {
+        counts.set(row.kind, row.count);
+        total += row.count;
+        if (row.lastTimestamp && (lastActivityAt === null || row.lastTimestamp > lastActivityAt)) lastActivityAt = row.lastTimestamp;
+    }
+    const archived = readArchivedCounts(meshId);
+    const recentFailureCutoff = Date.now() - RECENT_FAILURE_WINDOW_MS;
+    let taskFailed = 0;
+    let taskStalled = 0;
+    let recentFailures = 0;
+    const failureRows = (counts.get('task_failed') || counts.get('task_stalled'))
+        ? store.readLedgerEntryHeads(meshId, { kinds: ['task_failed', 'task_stalled'], payloadPaths: CLEANUP_STOP_PROJECTION.paths })
+        : [];
+    for (const row of failureRows) {
+        if (isIntentionalCleanupStopEntry(row)) continue;
+        if (row.kind === 'task_stalled') { taskStalled++; continue; }
+        taskFailed++;
+        if (new Date(row.timestamp).getTime() >= recentFailureCutoff) recentFailures++;
+    }
+    return {
+        meshId,
+        totalEntries: total + archived.totalArchived,
+        taskDispatched: counts.get('task_dispatched') ?? 0,
+        taskCompleted: archived.taskCompleted + (counts.get('task_completed') ?? 0),
+        taskFailed: archived.taskFailed + taskFailed,
+        taskStalled: archived.taskStalled + taskStalled,
+        sessionLaunched: counts.get('session_launched') ?? 0,
+        checkpointCreated: counts.get('checkpoint_created') ?? 0,
+        lastActivityAt: total > 0 ? lastActivityAt : null,
+        recentFailures,
+    };
 }
 
 // ─── Recovery Context ───────────────────────────

@@ -126,26 +126,55 @@ export function ensureLedgerImported(store: MeshRuntimeStore, meshId: string): v
     } catch { /* import is best-effort; reads fall back to JSONL on store failure */ }
 }
 
+/**
+ * A named payload projection for kind-filtered reads that only need a few payload fields
+ * (IPC load audit #2). `name` keys the filtered-read cache; `paths` are JSON paths.
+ * Entries read through a projection carry ONLY those payload fields — a consumer that
+ * reads any other payload field must use the full read instead.
+ */
+export interface LedgerPayloadProjection {
+    name: string;
+    paths: readonly string[];
+}
+
+type StoreLedgerRow = { id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown };
+
+function toLedgerEntry(r: StoreLedgerRow): MeshLedgerEntry {
+    const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>;
+    // LEDGER-TASK-TRACEABILITY (B): prefer the column, fall back to payload.taskId
+    // for legacy rows written before the column existed (back-compat join).
+    const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? undefined, payload });
+    return {
+        id: r.id,
+        meshId: r.meshId,
+        timestamp: r.timestamp,
+        kind: r.kind as MeshLedgerKind,
+        ...(r.nodeId ? { nodeId: r.nodeId } : {}),
+        ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+        ...(r.providerType ? { providerType: r.providerType } : {}),
+        ...(taskId ? { taskId } : {}),
+        payload,
+    };
+}
+
+/** Kind-filtered projection read from SQLite (see MeshRuntimeStore.readLedgerEntryHeads). */
+export function readLedgerHeadsFromStore(
+    meshId: string,
+    opts: { kinds: string[]; since?: string; projection: LedgerPayloadProjection },
+): MeshLedgerEntry[] {
+    const store = MeshRuntimeStore.getInstance();
+    ensureLedgerImported(store, meshId);
+    return store.readLedgerEntryHeads(meshId, {
+        kinds: opts.kinds,
+        ...(opts.since ? { since: opts.since } : {}),
+        payloadPaths: opts.projection.paths,
+    }).map(toLedgerEntry);
+}
+
 export function readLedgerFromStore(meshId: string, opts?: { since?: string; kinds?: string[]; tail?: number }): MeshLedgerEntry[] {
     const store = MeshRuntimeStore.getInstance();
     ensureLedgerImported(store, meshId);
-    return store.readLedgerEntriesOrdered(meshId, opts).map(r => {
-        const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, unknown>;
-        // LEDGER-TASK-TRACEABILITY (B): prefer the column, fall back to payload.taskId
-        // for legacy rows written before the column existed (back-compat join).
-        const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? undefined, payload });
-        return {
-            id: r.id,
-            meshId: r.meshId,
-            timestamp: r.timestamp,
-            kind: r.kind as MeshLedgerKind,
-            ...(r.nodeId ? { nodeId: r.nodeId } : {}),
-            ...(r.sessionId ? { sessionId: r.sessionId } : {}),
-            ...(r.providerType ? { providerType: r.providerType } : {}),
-            ...(taskId ? { taskId } : {}),
-            payload,
-        };
-    });
+    return store.readLedgerEntriesOrdered(meshId, opts).map(toLedgerEntry);
 }
 
 // ─── Full-scan observability (LEDGER-READ-AMPLIFICATION) ────────────────────
@@ -262,9 +291,20 @@ export function getCachedRawEntries(meshId: string): MeshLedgerEntry[] {
  * so sorting and de-duplicating prevents argument order (or duplicates) from
  * creating distinct cache entries.
  */
-function filteredLedgerCacheKey(opts: { since?: string; kinds?: string[] }): string {
+function filteredLedgerCacheKey(opts: FilteredLedgerReadOptions): string {
     const kinds = opts.kinds ? [...new Set(opts.kinds)].sort() : [];
-    return JSON.stringify([opts.since ?? null, kinds]);
+    return JSON.stringify([opts.since ?? null, kinds, opts.tail ?? null, opts.projection?.name ?? null]);
+}
+
+/**
+ * A bounded SQL read: `since`/`kinds` filters, an optional newest-N `tail` (applied in SQL,
+ * after the filters), or a payload `projection` (kind-filtered, never combined with tail).
+ */
+export interface FilteredLedgerReadOptions {
+    since?: string;
+    kinds?: string[];
+    tail?: number;
+    projection?: LedgerPayloadProjection;
 }
 
 /**
@@ -274,7 +314,7 @@ function filteredLedgerCacheKey(opts: { since?: string; kinds?: string[] }): str
  */
 export function getCachedFilteredRawEntries(
     meshId: string,
-    opts: { since?: string; kinds?: string[] },
+    opts: FilteredLedgerReadOptions,
 ): MeshLedgerEntry[] {
     const key = filteredLedgerCacheKey(opts);
     let meshCache = filteredLedgerReadCache.get(meshId);
@@ -291,7 +331,13 @@ export function getCachedFilteredRawEntries(
     const cached = meshCache?.get(key);
     if (cached) return cached.entries;
 
-    const entries = readLedgerFromStore(meshId, opts);
+    const entries = opts.projection && opts.kinds?.length
+        ? readLedgerHeadsFromStore(meshId, { kinds: opts.kinds, ...(opts.since ? { since: opts.since } : {}), projection: opts.projection })
+        : readLedgerFromStore(meshId, {
+            ...(opts.since ? { since: opts.since } : {}),
+            ...(opts.kinds?.length ? { kinds: opts.kinds } : {}),
+            ...(opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}),
+        });
     recordLedgerPushdownScan(entries.length);
     const targetCache = meshCache ?? new Map<string, { entries: MeshLedgerEntry[]; cachedAt: number }>();
     targetCache.set(key, { entries, cachedAt: Date.now() });

@@ -36,7 +36,7 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
-import { getQueue } from './mesh-work-queue.js';
+import { getQueue, getQueueEntryById } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
@@ -308,7 +308,7 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     if (args.status === 'completed' && readNonEmptyString(args.sessionId)) return false;
     let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
     try {
-        existing = getQueue(meshId).find(t => t.id === taskId)?.autoLaunch;
+        existing = getQueueEntryById(meshId, taskId)?.autoLaunch;
     } catch {
         return false; // never let the guard itself break the write path
     }

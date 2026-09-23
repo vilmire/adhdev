@@ -1,5 +1,5 @@
 import { LOG } from '../logging/logger.js';
-import { getQueue, recordTaskAutoLaunch, type MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { getQueueEntryById, recordTaskAutoLaunch, type MeshWorkQueueEntry } from './mesh-work-queue.js';
 // One-way import: mesh-autolaunch-integrity deliberately imports nothing from this module
 // (its old isDifficultyFloorWaitReason dependency moved here with the wait-clock guard),
 // so this edge cannot cycle.
@@ -142,7 +142,7 @@ export function resetDifficultyFloorReportsForTests(): void {
 export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: string, taskId: string, status: string): boolean {
     if (status !== 'skipped') return false;
     let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
-    try { existing = getQueue(meshId).find(t => t.id === taskId)?.autoLaunch; } catch { return false; }
+    try { existing = getQueueEntryById(meshId, taskId)?.autoLaunch; } catch { return false; }
     return existing?.status === 'skipped' && isDifficultyFloorWaitReason(existing.reason);
 }
 
@@ -172,7 +172,7 @@ export function handleDifficultyFloorSkip(args: {
     coordinatorDaemonId?: string;
 }): void {
     let previousTask: MeshWorkQueueEntry | undefined;
-    try { previousTask = getQueue(args.meshId).find(task => task.id === args.taskId); } catch { /* best-effort */ }
+    try { previousTask = getQueueEntryById(args.meshId, args.taskId) ?? undefined; } catch { /* best-effort */ }
     if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
     const continuing = previousTask?.autoLaunch?.status === 'skipped'
         && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
@@ -201,7 +201,7 @@ export function handleDifficultyFloorSkip(args: {
     const reportKey = `${args.meshId}:${args.taskId}`;
     if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
 
-    const task = previousTask ?? getQueue(args.meshId).find(candidate => candidate.id === args.taskId);
+    const task = previousTask ?? getQueueEntryById(args.meshId, args.taskId) ?? undefined;
     const difficulty = task?.difficulty || args.reason.split(':')[1] || 'classified';
     const waitedMinutes = Math.round(waitedMs / 60_000);
     // The capacity reasons and the difficulty-floor reasons need different advice: a busy

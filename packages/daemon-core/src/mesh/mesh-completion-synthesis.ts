@@ -22,8 +22,8 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../shared/mesh-event-trace.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { daemonIdListIncludes } from './mesh-reconcile-identity.js';
-import { getActiveDirectDispatches, getQueue, updateDirectDispatchStatus } from './mesh-work-queue.js';
-import { readLedgerEntriesByKind, appendLedgerEntry } from './mesh-ledger.js';
+import { getActiveDirectDispatches, getQueue, updateDirectDispatchStatus, listDirectDispatchesForAutoPrune } from './mesh-work-queue.js';
+import { readActiveWorkLedgerEntries, appendLedgerEntry } from './mesh-ledger.js';
 import { buildMeshActiveWorkLedgerSnapshot, pruneStaleDirectDispatches } from './mesh-active-work.js';
 import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
 import { reconcileDirectDispatchCompletionFromTranscript, resolveLiveTurnPendingEvidence } from './mesh-events-stale.js';
@@ -846,11 +846,13 @@ export async function autoPruneStaleDirectDispatches(
     minAgeMs: number,
     sharedLedgerSnapshot?: MeshActiveWorkLedgerSnapshot,
 ): Promise<MeshActiveWorkLedgerSnapshot | undefined> {
-    const directDispatches = getActiveDirectDispatches(mesh.id);
+    // Rows with no lifecycle update for the age gate are flipped to stale first, so a
+    // dead row cannot keep this exit from firing (IPC load audit #1).
+    const directDispatches = listDirectDispatchesForAutoPrune(mesh.id, minAgeMs);
     if (directDispatches.length === 0) return undefined; // nothing dispatched → nothing to prune
 
     const liveNodes = await collectLiveNodesWithSessions(components, mesh, selfIds, localDaemonId);
-    const ledgerSnapshot = sharedLedgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(readLedgerEntriesByKind(mesh.id, [
+    const ledgerSnapshot = sharedLedgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(readActiveWorkLedgerEntries(mesh.id, [
         'task_dispatched',
         'task_completed',
         'task_failed',

@@ -4,6 +4,9 @@ import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
 import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshClaimRefusal } from './mesh-runtime-store.js';
+import type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
+import type { DirectDispatchRecord } from './mesh-direct-dispatch.js';
+export type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
 import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
@@ -1064,6 +1067,59 @@ export function recordDirectDispatchTask(
  */
 export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshWorkQueueEntry[] {
     return MeshRuntimeStore.getInstance().getQueueEntries(meshId, opts?.status?.length ? opts.status : undefined);
+}
+
+/**
+ * One queue row by id, or null. Use this instead of `getQueue(meshId).find(t => t.id === id)`,
+ * which parses every row of the mesh (5.6 MB on the preview daemon; IPC load audit #10).
+ */
+export function getQueueEntryById(meshId: string, taskId: string): MeshWorkQueueEntry | null {
+    return MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+}
+
+/**
+ * Column-only queue rows (id / status / assigned node+session), optionally by status —
+ * for counting and before/after status diffs without parsing payloads (IPC load audit #10).
+ */
+export function getQueueHeads(meshId: string, opts?: { status?: MeshTaskStatus[] }): MeshQueueHead[] {
+    return MeshRuntimeStore.getInstance().getQueueHeads(meshId, opts?.status?.length ? opts.status : undefined);
+}
+
+/**
+ * The auto-prune's "anything to prune?" read (IPC load audit #1). First flips direct
+ * dispatches that are still `dispatched`/`acked` but have had no lifecycle update for
+ * `staleAfterMs` (the auto-prune age gate, 24 h) to 'stale', then returns what is still
+ * active. Without the flip one row stuck in `acked` since 2026-08-09 kept the loop from
+ * ever idling: every minute it probed every node for a status snapshot and read the
+ * active-work ledger + whole queue. Each flip is logged and audited in the ledger.
+ */
+export function listDirectDispatchesForAutoPrune(
+    meshId: string,
+    staleAfterMs: number,
+    nowMs: number = Date.now(),
+): DirectDispatchRecord[] {
+    try {
+        const store = MeshRuntimeStore.getInstance();
+        const expired = store.expireAgedDirectDispatches(meshId, staleAfterMs, nowMs);
+        if (expired.length > 0) {
+            LOG.info('MeshQueue', `Auto-prune: marked ${expired.length} direct dispatch row(s) stale for mesh ${meshId} after ${Math.round(staleAfterMs / 3_600_000)}h without a lifecycle update: ${expired.map(e => `${e.taskId} (${e.status} since ${e.updatedAt})`).join(', ')}`);
+            try {
+                appendLedgerEntry(meshId, {
+                    kind: 'direct_dispatch_pruned',
+                    payload: {
+                        source: 'daemon_reconcile_auto_prune_age_expiry',
+                        action: 'marked_stale',
+                        prunedCount: expired.length,
+                        taskIds: expired.map(e => e.taskId),
+                        reasons: ['no lifecycle update within the auto-prune age gate'],
+                    },
+                });
+            } catch { /* audit is best-effort */ }
+        }
+        return store.getActiveDirectDispatches(meshId);
+    } catch {
+        return [];
+    }
 }
 
 export function getMeshQueueRevision(meshId: string): string {

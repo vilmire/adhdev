@@ -40094,7 +40094,7 @@ var require_dist3 = __commonJS({
       argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
       buildMagiPanelProposal: () => buildMagiPanelProposal2,
       buildSlotProposal: () => buildSlotProposal2,
-      canonicalDaemonId: () => canonicalDaemonId2,
+      canonicalDaemonId: () => canonicalDaemonId3,
       classifySessionStatus: () => classifySessionStatus,
       compareSemver: () => compareSemver,
       daemonIdsEquivalent: () => daemonIdsEquivalent4,
@@ -40491,7 +40491,7 @@ var require_dist3 = __commonJS({
       }
       return trimmed;
     }
-    function canonicalDaemonId2(id) {
+    function canonicalDaemonId3(id) {
       const core2 = machineCoreFromDaemonId(id);
       if (!core2) return void 0;
       if (!core2.startsWith("mach_")) return core2;
@@ -43957,11 +43957,29 @@ ${renderWorkerProtocolFooter2(input)}`;
     });
     var DEFAULT_DAEMON_PORT;
     var DAEMON_WS_PATH;
+    var IPC_MAX_PAYLOAD_BYTES;
+    var IPC_MAX_INFLIGHT_PER_CONNECTION;
+    var IPC_BUSY_ERROR_CODE;
+    var IPC_PROBE_RATE_LIMIT_WINDOW_MS;
+    var IPC_PROBE_RATE_LIMIT_MAX_CALLS;
+    var IPC_RATE_LIMITED_ERROR_CODE;
+    var IPC_PROBE_RATE_LIMITED_COMMANDS;
     var init_ipc_protocol = __esm2({
       "src/ipc-protocol.ts"() {
         "use strict";
         DEFAULT_DAEMON_PORT = 19222;
         DAEMON_WS_PATH = "/ipc";
+        IPC_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
+        IPC_MAX_INFLIGHT_PER_CONNECTION = 32;
+        IPC_BUSY_ERROR_CODE = "ipc_busy";
+        IPC_PROBE_RATE_LIMIT_WINDOW_MS = 1e4;
+        IPC_PROBE_RATE_LIMIT_MAX_CALLS = 20;
+        IPC_RATE_LIMITED_ERROR_CODE = "rate_limited";
+        IPC_PROBE_RATE_LIMITED_COMMANDS = [
+          "get_status_metadata",
+          "mesh_status",
+          "get_mesh_queue"
+        ];
       }
     });
     function resolveBuildTrack(env2 = process.env) {
@@ -66662,6 +66680,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       getMeshQueueStats: () => getMeshQueueStats,
       getParkedTasks: () => getParkedTasks,
       getQueue: () => getQueue3,
+      getQueueEntryById: () => getQueueEntryById,
+      getQueueHeads: () => getQueueHeads,
       hasPendingDependents: () => hasPendingDependents,
       insertDirectDispatch: () => insertDirectDispatch3,
       isMeshTaskMode: () => isMeshTaskMode2,
@@ -66669,6 +66689,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       isMeshTaskStatus: () => isMeshTaskStatus2,
       isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
       isTaskReadonly: () => isTaskReadonly2,
+      listDirectDispatchesForAutoPrune: () => listDirectDispatchesForAutoPrune,
       markStaleDirectDispatches: () => markStaleDirectDispatches3,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
       meshTaskPriorityRank: () => meshTaskPriorityRank2,
@@ -66993,6 +67014,37 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function getQueue3(meshId, opts) {
       return MeshRuntimeStore.getInstance().getQueueEntries(meshId, opts?.status?.length ? opts.status : void 0);
+    }
+    function getQueueEntryById(meshId, taskId) {
+      return MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+    }
+    function getQueueHeads(meshId, opts) {
+      return MeshRuntimeStore.getInstance().getQueueHeads(meshId, opts?.status?.length ? opts.status : void 0);
+    }
+    function listDirectDispatchesForAutoPrune(meshId, staleAfterMs, nowMs = Date.now()) {
+      try {
+        const store = MeshRuntimeStore.getInstance();
+        const expired = store.expireAgedDirectDispatches(meshId, staleAfterMs, nowMs);
+        if (expired.length > 0) {
+          LOG.info("MeshQueue", `Auto-prune: marked ${expired.length} direct dispatch row(s) stale for mesh ${meshId} after ${Math.round(staleAfterMs / 36e5)}h without a lifecycle update: ${expired.map((e) => `${e.taskId} (${e.status} since ${e.updatedAt})`).join(", ")}`);
+          try {
+            appendLedgerEntry3(meshId, {
+              kind: "direct_dispatch_pruned",
+              payload: {
+                source: "daemon_reconcile_auto_prune_age_expiry",
+                action: "marked_stale",
+                prunedCount: expired.length,
+                taskIds: expired.map((e) => e.taskId),
+                reasons: ["no lifecycle update within the auto-prune age gate"]
+              }
+            });
+          } catch {
+          }
+        }
+        return store.getActiveDirectDispatches(meshId);
+      } catch {
+        return [];
+      }
     }
     function getMeshQueueRevision(meshId) {
       return MeshRuntimeStore.getInstance().getQueueRevision(meshId);
@@ -71150,6 +71202,192 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         CLAIM_DEFERRAL_MAX_ENTRIES = 2e3;
       }
     });
+    var import_fs10;
+    var DEFAULT_WAL_CHECKPOINT_POLICY;
+    var WalCheckpointScheduler;
+    var init_mesh_runtime_store_wal = __esm2({
+      "src/mesh/mesh-runtime-store-wal.ts"() {
+        "use strict";
+        import_fs10 = require("fs");
+        init_logger();
+        DEFAULT_WAL_CHECKPOINT_POLICY = {
+          intervalMs: 3e4,
+          maxBytes: 50 * 1024 * 1024,
+          idleMs: 1e4,
+          busyTimeoutMs: 5e3
+        };
+        WalCheckpointScheduler = class {
+          constructor(db, walPath, policy = DEFAULT_WAL_CHECKPOINT_POLICY) {
+            this.db = db;
+            this.walPath = walPath;
+            this.policy = policy;
+          }
+          /** Writes since the last tick. Read by tests through the store (`walWriteCounter`). */
+          writesSinceTick = 0;
+          lastWriteAt = 0;
+          /** The WAL was over the threshold on a tick that was not idle (or TRUNCATE was busy). */
+          truncatePending = false;
+          timer;
+          /** Called on every checkpoint-relevant write. O(1): no stat, no pragma. */
+          noteWrite(now = Date.now()) {
+            this.writesSinceTick++;
+            this.lastWriteAt = now;
+            if (!this.timer) {
+              this.timer = setInterval(() => {
+                this.tick();
+              }, this.policy.intervalMs);
+              this.timer.unref?.();
+            }
+          }
+          stop() {
+            if (this.timer) clearInterval(this.timer);
+            this.timer = void 0;
+          }
+          /** One scheduler pass. Public for tests; production calls it only from the timer. */
+          tick(now = Date.now()) {
+            const writes = this.writesSinceTick;
+            if (writes === 0 && !this.truncatePending) return "none";
+            this.writesSinceTick = 0;
+            try {
+              const size = (0, import_fs10.existsSync)(this.walPath) ? (0, import_fs10.statSync)(this.walPath).size : 0;
+              const overThreshold = size >= this.policy.maxBytes;
+              const idle = now - this.lastWriteAt >= this.policy.idleMs;
+              if (overThreshold && idle) {
+                this.truncatePending = true;
+                const busy = this.truncateWithoutWaiting();
+                this.truncatePending = busy;
+                if (busy) {
+                  LOG.info("MeshRuntimeStore", `WAL ${Math.round(size / 1024 / 1024)}MB over threshold; idle TRUNCATE checkpoint was busy (a reader holds a snapshot), will retry`);
+                  return "truncate_busy";
+                }
+                LOG.info("MeshRuntimeStore", `WAL ${Math.round(size / 1024 / 1024)}MB over threshold; truncated during an idle window`);
+                return "truncate";
+              }
+              this.truncatePending = overThreshold;
+              if (writes > 0) {
+                this.db.pragma("wal_checkpoint(PASSIVE)");
+                return "passive";
+              }
+              return "none";
+            } catch {
+              return "none";
+            }
+          }
+          /** TRUNCATE with busy_timeout 0 for this one statement. Returns true when busy. */
+          truncateWithoutWaiting() {
+            this.db.pragma("busy_timeout = 0");
+            try {
+              const rows = this.db.pragma("wal_checkpoint(TRUNCATE)");
+              return Array.isArray(rows) && rows[0]?.busy === 1;
+            } finally {
+              this.db.pragma(`busy_timeout = ${this.policy.busyTimeoutMs}`);
+            }
+          }
+        };
+      }
+    });
+    function parseQueuePayloadByRowid(self, rowid) {
+      const row = self.db.prepare("SELECT payload FROM mesh_queue WHERE rowid = ?").get(rowid);
+      if (!row) return null;
+      try {
+        return JSON.parse(row.payload);
+      } catch {
+        return null;
+      }
+    }
+    function findAssignedBySession(self, meshId, sessionId, occurredAtIso, taskId) {
+      self.ensureLegacyQueueMigrated(meshId);
+      const heads = self.db.prepare(
+        `SELECT rowid AS rid, id, assigned_session_id FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned'`
+      ).all(meshId);
+      const matches = heads.filter((h) => sessionIdsEquivalent(h.assigned_session_id ?? void 0, sessionId));
+      if (taskId) {
+        const byId = matches.find((h) => h.id === taskId);
+        const entry = byId ? parseQueuePayloadByRowid(self, byId.rid) : null;
+        if (entry) return entry;
+      }
+      if (matches.length === 0) return null;
+      if (matches.length === 1) return parseQueuePayloadByRowid(self, matches[0].rid);
+      const keyRows = self.db.prepare(
+        `SELECT rowid AS rid,
+                CASE WHEN json_valid(payload) THEN json_extract(payload, '$.dispatchTimestamp', '$.updatedAt') END AS k
+         FROM mesh_queue WHERE rowid IN (${matches.map(() => "?").join(", ")})`
+      ).all(...matches.map((m) => m.rid));
+      const keyed = [];
+      for (const row of keyRows) {
+        if (row.k === null) continue;
+        let parts;
+        try {
+          parts = JSON.parse(row.k);
+        } catch {
+          continue;
+        }
+        const [dispatchTs, updatedAt] = Array.isArray(parts) ? parts : [];
+        const key2 = typeof dispatchTs === "string" ? dispatchTs : typeof updatedAt === "string" ? updatedAt : "";
+        keyed.push({ rid: row.rid, key: key2 });
+      }
+      if (keyed.length === 0) return null;
+      keyed.sort((a, b) => b.key.localeCompare(a.key));
+      if (occurredAtIso) {
+        const atOrBefore = keyed.find((k) => k.key <= occurredAtIso);
+        if (atOrBefore) return parseQueuePayloadByRowid(self, atOrBefore.rid);
+      }
+      return parseQueuePayloadByRowid(self, keyed[0].rid);
+    }
+    function getQueueHeads2(self, meshId, statuses) {
+      self.ensureLegacyQueueMigrated(meshId);
+      const statusClause = statuses?.length ? ` AND status IN (${statuses.map(() => "?").join(", ")})` : "";
+      const rows = self.db.prepare(
+        `SELECT id, status, assigned_node_id, assigned_session_id FROM mesh_queue
+         WHERE mesh_id = ?${statusClause} ORDER BY created_at ASC`
+      ).all(meshId, ...statuses ?? []);
+      return rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        ...r.assigned_node_id ? { assignedNodeId: r.assigned_node_id } : {},
+        ...r.assigned_session_id ? { assignedSessionId: r.assigned_session_id } : {}
+      }));
+    }
+    function pruneTerminalQueueEntries(self, olderThanMs) {
+      const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
+      return self.db.prepare(
+        `WITH live AS (
+             SELECT CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS p
+             FROM mesh_queue WHERE status IN ('pending', 'assigned')
+         ),
+         protected AS (
+             SELECT dep.value AS id
+             FROM live, json_each(live.p, '$.dependsOn') AS dep
+             WHERE json_type(live.p, '$.dependsOn') = 'array' AND dep.type = 'text' AND dep.value <> ''
+         )
+         DELETE FROM mesh_queue
+         WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?
+           AND id NOT IN (SELECT id FROM protected)`
+      ).run(cutoffIso).changes;
+    }
+    function expireAgedDirectDispatches(self, meshId, olderThanMs, nowMs = Date.now()) {
+      const cutoffIso = new Date(nowMs - Math.max(0, olderThanMs)).toISOString();
+      return self.transaction(() => {
+        const rows = self.db.prepare(
+          `SELECT task_id, session_id, status, updated_at FROM mesh_direct_dispatches
+             WHERE mesh_id = ? AND status IN ('dispatched', 'acked') AND updated_at < ?`
+        ).all(meshId, cutoffIso);
+        if (rows.length === 0) return [];
+        const flip = self.db.prepare(
+          `UPDATE mesh_direct_dispatches SET status = 'stale', updated_at = ?
+             WHERE mesh_id = ? AND task_id = ? AND status IN ('dispatched', 'acked')`
+        );
+        const nowIso = new Date(nowMs).toISOString();
+        for (const row of rows) flip.run(nowIso, meshId, row.task_id);
+        return rows.map((r) => ({ taskId: r.task_id, sessionId: r.session_id, status: r.status, updatedAt: r.updated_at }));
+      });
+    }
+    var init_mesh_runtime_store_queue_reads = __esm2({
+      "src/mesh/mesh-runtime-store-queue-reads.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
     function meshTurnAttemptFromRow(r) {
       return {
         attemptId: r.attempt_id,
@@ -71918,6 +72156,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             ON mesh_queue(mesh_id, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
             ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
+        -- Cross-mesh retention sweep (pruneTerminalQueueEntries) filters on status +
+        -- updated_at with no mesh_id; without this it was a full table SCAN.
+        CREATE INDEX IF NOT EXISTS idx_mesh_queue_status_updated
+            ON mesh_queue(status, updated_at);
 
         -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
         -- also carries meshId as its first '::'-joined segment (see
@@ -72480,6 +72722,76 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         })()
       }));
     }
+    function readLedgerEntryHeads(self, meshId, opts) {
+      const kinds = opts.kinds.filter((k) => typeof k === "string" && k.trim());
+      if (kinds.length === 0) return [];
+      const paths = opts.payloadPaths.length >= 2 ? [...opts.payloadPaths] : [...opts.payloadPaths, "$.__projection_pad"];
+      const params = [...paths, meshId, ...kinds];
+      let where = `mesh_id = ? AND kind IN (${kinds.map(() => "?").join(", ")})`;
+      if (opts.since) {
+        where += " AND timestamp >= ?";
+        params.push(opts.since);
+      }
+      const rows = self.db.prepare(
+        `SELECT rowid AS rid, id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id,
+                CASE WHEN json_valid(payload) THEN json_extract(payload, ${paths.map(() => "?").join(", ")}) END AS proj
+         FROM mesh_event_ledger WHERE ${where}`
+      ).all(...params);
+      rows.sort((a, b) => {
+        const ta = a.timestamp;
+        const tb = b.timestamp;
+        if (ta !== tb) return ta < tb ? -1 : 1;
+        return a.rid - b.rid;
+      });
+      const splitPaths = paths.map((p) => p.replace(/^\$\.?/, "").split(".").filter(Boolean));
+      return rows.map((r) => {
+        const payload = {};
+        if (typeof r.proj === "string") {
+          let values;
+          try {
+            values = JSON.parse(r.proj);
+          } catch {
+            values = void 0;
+          }
+          if (Array.isArray(values)) {
+            for (let i = 0; i < splitPaths.length; i++) {
+              const value = values[i];
+              const segments = splitPaths[i];
+              if (value === null || value === void 0 || segments.length === 0) continue;
+              let target = payload;
+              for (let s2 = 0; s2 < segments.length - 1; s2++) {
+                const next = target[segments[s2]];
+                if (next && typeof next === "object" && !Array.isArray(next)) {
+                  target = next;
+                } else {
+                  const created = {};
+                  target[segments[s2]] = created;
+                  target = created;
+                }
+              }
+              target[segments[segments.length - 1]] = value;
+            }
+          }
+        }
+        return {
+          id: r.id,
+          meshId: r.mesh_id,
+          timestamp: r.timestamp,
+          kind: r.kind,
+          nodeId: r.node_id,
+          sessionId: r.session_id,
+          providerType: r.provider_type,
+          taskId: r.task_id ?? null,
+          payload
+        };
+      });
+    }
+    function readLedgerKindCounts(self, meshId) {
+      const rows = self.db.prepare(
+        `SELECT kind, COUNT(*) AS n, MAX(timestamp) AS last FROM mesh_event_ledger WHERE mesh_id = ? GROUP BY kind`
+      ).all(meshId);
+      return rows.map((r) => ({ kind: r.kind, count: r.n, lastTimestamp: r.last }));
+    }
     function clearLedgerForMesh(self, meshId) {
       return self.db.prepare("DELETE FROM mesh_event_ledger WHERE mesh_id = ?").run(meshId).changes;
     }
@@ -72845,9 +73157,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       try {
         const strayPath = (0, import_path9.join)(getConfigDir(), "mesh-runtime.db");
         if (strayPath === canonicalPath2) return;
-        if (!(0, import_fs10.existsSync)(strayPath)) return;
-        if ((0, import_fs10.statSync)(strayPath).size !== 0) return;
-        (0, import_fs10.unlinkSync)(strayPath);
+        if (!(0, import_fs11.existsSync)(strayPath)) return;
+        if ((0, import_fs11.statSync)(strayPath).size !== 0) return;
+        (0, import_fs11.unlinkSync)(strayPath);
         if (!loggedStrayCleanup) {
           loggedStrayCleanup = true;
           LOG.info("MeshRuntimeStore", `Removed stray 0-byte root mesh-runtime.db at ${strayPath}`);
@@ -72863,15 +73175,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const dir = getLedgerDir2();
       const nextPath = (0, import_path9.join)(dir, "mesh-runtime.db");
       cleanupStrayRootRuntimeDb(nextPath);
-      if ((0, import_fs10.existsSync)(nextPath)) return nextPath;
+      if ((0, import_fs11.existsSync)(nextPath)) return nextPath;
       const legacyPath = (0, import_path9.join)(dir, "beads.db");
-      if (!(0, import_fs10.existsSync)(legacyPath)) return nextPath;
+      if (!(0, import_fs11.existsSync)(legacyPath)) return nextPath;
       try {
-        (0, import_fs10.renameSync)(legacyPath, nextPath);
+        (0, import_fs11.renameSync)(legacyPath, nextPath);
         for (const suffix of ["-wal", "-shm"]) {
           const legacyCompanion = `${legacyPath}${suffix}`;
-          if ((0, import_fs10.existsSync)(legacyCompanion)) {
-            (0, import_fs10.renameSync)(legacyCompanion, `${nextPath}${suffix}`);
+          if ((0, import_fs11.existsSync)(legacyCompanion)) {
+            (0, import_fs11.renameSync)(legacyCompanion, `${nextPath}${suffix}`);
           }
         }
       } catch (err) {
@@ -72882,11 +73194,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             `Legacy beads.db\u2192mesh-runtime.db migration failed; using existing DB in-place to avoid data loss: ${err?.message || err}`
           );
         }
-        return (0, import_fs10.existsSync)(nextPath) ? nextPath : legacyPath;
+        return (0, import_fs11.existsSync)(nextPath) ? nextPath : legacyPath;
       }
       return nextPath;
     }
-    var import_fs10;
+    var import_fs11;
     var import_path9;
     var DatabaseCtor;
     var loggedStrayCleanup;
@@ -72894,7 +73206,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_runtime_store = __esm2({
       "src/mesh/mesh-runtime-store.ts"() {
         "use strict";
-        import_fs10 = require("fs");
+        import_fs11 = require("fs");
         import_path9 = require("path");
         init_logger();
         init_load_better_sqlite3();
@@ -72907,6 +73219,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_daemon_slot_axis();
         init_dist();
         init_mesh_claim_refusal();
+        init_mesh_runtime_store_wal();
+        init_mesh_runtime_store_queue_reads();
         init_mesh_runtime_store_turn_rows();
         init_mesh_turn_event_queries();
         init_mesh_unsettled_terminal_queries();
@@ -72920,7 +73234,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           static instance;
           /** Readonly (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
           db;
-          dbPath;
           migratedMeshIds = /* @__PURE__ */ new Set();
           // Idle-active-mission-reminder debounce (mesh-idle-reminder.ts). In-memory only:
           // this is a spam guard for a best-effort coordinator nudge, so a daemon restart
@@ -72930,23 +73243,25 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           // re-fires before the time window elapses.
           idleReminderState = /* @__PURE__ */ new Map();
           fingerprintSweepCounter = 0;
-          walWriteCounter = 0;
-          // Independent cadence for the tool-call-log sweep. Must NOT share walWriteCounter:
-          // sharing makes each store's threshold drift by the other's write volume (WAL
-          // checkpoint at 500 vs tool-log sweep at 200 would interfere arbitrarily).
+          // WAL checkpointing runs on a timer, never inside a write (mesh-runtime-store-wal.ts).
+          walCheckpoints;
+          /** Writes since the last checkpoint tick (tests read it to pin counter independence). */
+          get walWriteCounter() {
+            return this.walCheckpoints.writesSinceTick;
+          }
+          // Independent cadence for the tool-call-log sweep. Must NOT share the WAL write
+          // counter: sharing makes each chore's threshold drift by the other's write volume.
           toolCallLogCounter = 0;
-          static WAL_CHECK_INTERVAL = 500;
-          static WAL_MAX_BYTES = 50 * 1024 * 1024;
-          // 50 MB
           constructor(dbPath) {
             const dir = (0, import_path9.dirname)(dbPath);
-            if (!(0, import_fs10.existsSync)(dir)) (0, import_fs10.mkdirSync)(dir, { recursive: true });
-            this.dbPath = dbPath;
+            if (!(0, import_fs11.existsSync)(dir)) (0, import_fs11.mkdirSync)(dir, { recursive: true });
             this.db = new (loadDatabaseCtor())(dbPath);
             this.db.pragma("journal_mode = WAL");
             this.db.pragma("synchronous = NORMAL");
             this.db.pragma("foreign_keys = ON");
-            this.db.pragma("busy_timeout = 5000");
+            this.db.pragma(`busy_timeout = ${DEFAULT_WAL_CHECKPOINT_POLICY.busyTimeoutMs}`);
+            this.db.pragma(`journal_size_limit = ${DEFAULT_WAL_CHECKPOINT_POLICY.maxBytes}`);
+            this.walCheckpoints = new WalCheckpointScheduler(this.db, `${dbPath}-wal`);
             this.migrate();
           }
           static loggedGetInstanceFailure = false;
@@ -72995,6 +73310,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             }
           }
           close() {
+            this.walCheckpoints.stop();
             this.db.close();
           }
           transaction(fn) {
@@ -73041,32 +73357,23 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           sweepExpiredFingerprints() {
             this.db.prepare("DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?").run(Date.now());
           }
-          /** Public (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
+          /**
+           * Public (not private) so the extracted ./mesh-runtime-store-*.ts delegates can reach it
+           * via `self`. O(1): records the write for the timer-driven checkpoint (never checkpoints here).
+           */
           maybeCheckpointWal() {
-            if (++this.walWriteCounter < _MeshRuntimeStore.WAL_CHECK_INTERVAL) return;
-            this.walWriteCounter = 0;
-            try {
-              const walPath = `${this.dbPath}-wal`;
-              if (!(0, import_fs10.existsSync)(walPath)) return;
-              const size = (0, import_fs10.statSync)(walPath).size;
-              if (size < _MeshRuntimeStore.WAL_MAX_BYTES) return;
-              process.stderr.write(
-                `[adhdev-mesh] WAL file ${Math.round(size / 1024 / 1024)}MB exceeds threshold; forcing checkpoint
-`
-              );
-              this.db.pragma("wal_checkpoint(TRUNCATE)");
-            } catch {
-            }
+            this.walCheckpoints.noteWrite();
           }
+          /** Public (not private) so the extracted ./mesh-runtime-store-queue-reads.ts delegates can reach it via `self`. */
           ensureLegacyQueueMigrated(meshId) {
             if (this.migratedMeshIds.has(meshId)) return;
             this.migratedMeshIds.add(meshId);
             const count = this.db.prepare("SELECT COUNT(*) AS count FROM mesh_queue WHERE mesh_id = ?").get(meshId);
             if (count.count > 0) return;
             const path74 = legacyQueuePath(meshId);
-            if (!(0, import_fs10.existsSync)(path74)) return;
+            if (!(0, import_fs11.existsSync)(path74)) return;
             try {
-              const entries = JSON.parse((0, import_fs10.readFileSync)(path74, "utf-8"));
+              const entries = JSON.parse((0, import_fs11.readFileSync)(path74, "utf-8"));
               if (!Array.isArray(entries)) return;
               const insert = this.db.prepare(`
                 INSERT OR REPLACE INTO mesh_queue (
@@ -73545,31 +73852,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            *     most-recent `dispatchTimestamp` rather than returning null.
            */
           findAssignedBySession(meshId, sessionId, occurredAtIso, taskId) {
-            this.ensureLegacyQueueMigrated(meshId);
-            const allRows = this.db.prepare(
-              `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned'`
-            ).all(meshId);
-            const sessionEntries = allRows.map((r) => {
-              try {
-                return JSON.parse(r.payload);
-              } catch {
-                return null;
-              }
-            }).filter((e) => e !== null).filter((e) => sessionIdsEquivalent(e.assignedSessionId, sessionId));
-            if (taskId) {
-              const byId = sessionEntries.find((e) => e.id === taskId);
-              if (byId) return byId;
-            }
-            const entries = sessionEntries;
-            if (entries.length === 0) return null;
-            if (entries.length === 1) return entries[0];
-            const orderKey = (e) => e.dispatchTimestamp ?? e.updatedAt ?? "";
-            const byDispatchDesc = [...entries].sort((a, b) => orderKey(b).localeCompare(orderKey(a)));
-            if (occurredAtIso) {
-              const atOrBefore = byDispatchDesc.find((e) => orderKey(e) <= occurredAtIso);
-              if (atOrBefore) return atOrBefore;
-            }
-            return byDispatchDesc[0];
+            return findAssignedBySession(this, meshId, sessionId, occurredAtIso, taskId);
+          }
+          /** Column-only queue rows (id/status/assignment) — no payload parse. */
+          getQueueHeads(meshId, statuses) {
+            return getQueueHeads2(this, meshId, statuses);
           }
           toRow(entry) {
             return {
@@ -73717,6 +74004,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             SET status = 'stale', updated_at = ?
             WHERE mesh_id = ? AND status = 'dispatched' AND dispatched_at < ?
         `).run(now, meshId, cutoff);
+          }
+          /** Flip dispatched/acked rows with no lifecycle update for `olderThanMs` to 'stale'. */
+          expireAgedDirectDispatches(meshId, olderThanMs, nowMs) {
+            return expireAgedDirectDispatches(this, meshId, olderThanMs, nowMs);
           }
           // ── Remote Idle Sessions ─────────────────────────────────────────────────
           setRemoteIdleSession(meshId, nodeId, sessionId, providerType, expiresAt, metadata) {
@@ -74076,37 +74367,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * Those ids are collected first and excluded. Returns rows deleted.
            */
           pruneTerminalQueueEntries(olderThanMs) {
-            const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-            return this.transaction(() => {
-              const liveRows = this.db.prepare(
-                `SELECT payload FROM mesh_queue WHERE status IN ('pending', 'assigned')`
-              ).all();
-              const protectedIds = /* @__PURE__ */ new Set();
-              for (const row of liveRows) {
-                try {
-                  const entry = JSON.parse(row.payload);
-                  if (Array.isArray(entry.dependsOn)) {
-                    for (const dep of entry.dependsOn) {
-                      if (typeof dep === "string" && dep) protectedIds.add(dep);
-                    }
-                  }
-                } catch {
-                }
-              }
-              const candidates = this.db.prepare(
-                `SELECT id FROM mesh_queue
-                 WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?`
-              ).all(cutoffIso);
-              const deletable = candidates.map((r) => r.id).filter((id) => !protectedIds.has(id));
-              let removed = 0;
-              for (let i = 0; i < deletable.length; i += 500) {
-                const chunk = deletable.slice(i, i + 500);
-                removed += this.db.prepare(
-                  `DELETE FROM mesh_queue WHERE id IN (${chunk.map(() => "?").join(",")})`
-                ).run(...chunk).changes;
-              }
-              return removed;
-            });
+            return pruneTerminalQueueEntries(this, olderThanMs);
           }
           /**
            * Retention prune for TERMINAL-OUTCOME mesh_session_delivery rows (lifecycle
@@ -74156,6 +74417,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            */
           readLedgerEntriesOrdered(meshId, opts) {
             return readLedgerEntriesOrdered(this, meshId, opts);
+          }
+          /** Projection read: entry columns + only the named payload paths (no full payload parse). */
+          readLedgerEntryHeads(meshId, opts) {
+            return readLedgerEntryHeads(this, meshId, opts);
+          }
+          /** Per-kind counts + newest timestamp (getLedgerSummary aggregate; no payload read). */
+          readLedgerKindCounts(meshId) {
+            return readLedgerKindCounts(this, meshId);
           }
           /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
           clearLedgerForMesh(meshId) {
@@ -74579,8 +74848,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function getLedgerDir2() {
       const dir = (0, import_path10.join)(getConfigDir(), LEDGER_DIR_NAME);
-      if (!(0, import_fs11.existsSync)(dir)) {
-        (0, import_fs11.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs12.existsSync)(dir)) {
+        (0, import_fs12.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
       return dir;
     }
@@ -74599,13 +74868,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function getArchivedTerminalKeysPath(meshId) {
       return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archived-terminal-keys.json`);
     }
-    var import_fs11;
+    var import_fs12;
     var import_path10;
     var LEDGER_DIR_NAME;
     var init_mesh_ledger_paths = __esm2({
       "src/mesh/mesh-ledger-paths.ts"() {
         "use strict";
-        import_fs11 = require("fs");
+        import_fs12 = require("fs");
         import_path10 = require("path");
         init_config();
         LEDGER_DIR_NAME = "mesh-ledger";
@@ -74618,10 +74887,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readLedgerFile(meshId) {
       const filePath = getLedgerPath(meshId);
-      if (!(0, import_fs12.existsSync)(filePath)) return [];
+      if (!(0, import_fs13.existsSync)(filePath)) return [];
       let content;
       try {
-        content = (0, import_fs12.readFileSync)(filePath, "utf-8");
+        content = (0, import_fs13.readFileSync)(filePath, "utf-8");
       } catch {
         return [];
       }
@@ -74666,24 +74935,34 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       } catch {
       }
     }
+    function toLedgerEntry(r) {
+      const payload = r.payload && typeof r.payload === "object" ? r.payload : {};
+      const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? void 0, payload });
+      return {
+        id: r.id,
+        meshId: r.meshId,
+        timestamp: r.timestamp,
+        kind: r.kind,
+        ...r.nodeId ? { nodeId: r.nodeId } : {},
+        ...r.sessionId ? { sessionId: r.sessionId } : {},
+        ...r.providerType ? { providerType: r.providerType } : {},
+        ...taskId ? { taskId } : {},
+        payload
+      };
+    }
+    function readLedgerHeadsFromStore(meshId, opts) {
+      const store = MeshRuntimeStore.getInstance();
+      ensureLedgerImported(store, meshId);
+      return store.readLedgerEntryHeads(meshId, {
+        kinds: opts.kinds,
+        ...opts.since ? { since: opts.since } : {},
+        payloadPaths: opts.projection.paths
+      }).map(toLedgerEntry);
+    }
     function readLedgerFromStore(meshId, opts) {
       const store = MeshRuntimeStore.getInstance();
       ensureLedgerImported(store, meshId);
-      return store.readLedgerEntriesOrdered(meshId, opts).map((r) => {
-        const payload = r.payload && typeof r.payload === "object" ? r.payload : {};
-        const taskId = ledgerEntryTaskId({ taskId: r.taskId ?? void 0, payload });
-        return {
-          id: r.id,
-          meshId: r.meshId,
-          timestamp: r.timestamp,
-          kind: r.kind,
-          ...r.nodeId ? { nodeId: r.nodeId } : {},
-          ...r.sessionId ? { sessionId: r.sessionId } : {},
-          ...r.providerType ? { providerType: r.providerType } : {},
-          ...taskId ? { taskId } : {},
-          payload
-        };
-      });
+      return store.readLedgerEntriesOrdered(meshId, opts).map(toLedgerEntry);
     }
     function getLedgerScanStats() {
       return {
@@ -74751,7 +75030,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function filteredLedgerCacheKey(opts) {
       const kinds = opts.kinds ? [...new Set(opts.kinds)].sort() : [];
-      return JSON.stringify([opts.since ?? null, kinds]);
+      return JSON.stringify([opts.since ?? null, kinds, opts.tail ?? null, opts.projection?.name ?? null]);
     }
     function getCachedFilteredRawEntries(meshId, opts) {
       const key2 = filteredLedgerCacheKey(opts);
@@ -74768,7 +75047,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       const cached5 = meshCache?.get(key2);
       if (cached5) return cached5.entries;
-      const entries = readLedgerFromStore(meshId, opts);
+      const entries = opts.projection && opts.kinds?.length ? readLedgerHeadsFromStore(meshId, { kinds: opts.kinds, ...opts.since ? { since: opts.since } : {}, projection: opts.projection }) : readLedgerFromStore(meshId, {
+        ...opts.since ? { since: opts.since } : {},
+        ...opts.kinds?.length ? { kinds: opts.kinds } : {},
+        ...opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}
+      });
       recordLedgerPushdownScan(entries.length);
       const targetCache = meshCache ?? /* @__PURE__ */ new Map();
       targetCache.set(key2, { entries, cachedAt: Date.now() });
@@ -74812,7 +75095,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       ledgerReadCache.clear();
       filteredLedgerReadCache.clear();
     }
-    var import_fs12;
+    var import_fs13;
     var ledgerReadCache;
     var filteredLedgerReadCache;
     var LEDGER_CACHE_TTL_MS;
@@ -74823,7 +75106,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_ledger_read_cache = __esm2({
       "src/mesh/mesh-ledger-read-cache.ts"() {
         "use strict";
-        import_fs12 = require("fs");
+        import_fs13 = require("fs");
         init_mesh_runtime_store();
         init_mesh_runtime_store_turn_rows();
         init_logger();
@@ -74847,12 +75130,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     var mesh_ledger_exports = {};
     __export2(mesh_ledger_exports, {
+      ACTIVE_WORK_LEDGER_PROJECTION: () => ACTIVE_WORK_LEDGER_PROJECTION,
       MAX_LEDGER_SLICE_LIMIT: () => MAX_LEDGER_SLICE_LIMIT,
       OPERATING_NOTE_CATEGORY_TTL_DAYS: () => OPERATING_NOTE_CATEGORY_TTL_DAYS,
       OPERATING_NOTE_DEDUPE_WINDOW: () => OPERATING_NOTE_DEDUPE_WINDOW,
       OPERATING_NOTE_KEEP_LATEST: () => OPERATING_NOTE_KEEP_LATEST,
       OPERATING_NOTE_KIND: () => OPERATING_NOTE_KIND,
       OPERATING_NOTE_TOMBSTONE_KIND: () => OPERATING_NOTE_TOMBSTONE_KIND,
+      REFINE_JOB_LEDGER_KINDS: () => REFINE_JOB_LEDGER_KINDS,
+      REFINE_JOB_LEDGER_PROJECTION: () => REFINE_JOB_LEDGER_PROJECTION,
       __clearMeshLedgerForTests: () => __clearMeshLedgerForTests,
       __resetLedgerScanStatsForTests: () => __resetLedgerScanStatsForTests,
       appendLedgerEntry: () => appendLedgerEntry3,
@@ -74878,12 +75164,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       normalizeMeshWorkerResult: () => normalizeMeshWorkerResult,
       planLedgerRotationEvictions: () => planLedgerRotationEvictions,
       pruneOperatingNotes: () => pruneOperatingNotes,
+      readActiveWorkLedgerEntries: () => readActiveWorkLedgerEntries,
       readArchivedTerminalKeys: () => readArchivedTerminalKeys,
       readLedgerEntries: () => readLedgerEntries3,
       readLedgerEntriesByKind: () => readLedgerEntriesByKind,
       readLedgerSlice: () => readLedgerSlice22,
       readLedgerSliceFromStore: () => readLedgerSliceFromStore3,
       readOperatingNotes: () => readOperatingNotes,
+      readRefineJobLedgerEntries: () => readRefineJobLedgerEntries,
       resolveNoteExpiry: () => resolveNoteExpiry,
       tombstoneOperatingNote: () => tombstoneOperatingNote2
     });
@@ -74920,9 +75208,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readArchivedTerminalKeys(meshId) {
       const path74 = getArchivedTerminalKeysPath(meshId);
-      if (!(0, import_fs13.existsSync)(path74)) return /* @__PURE__ */ new Set();
+      if (!(0, import_fs14.existsSync)(path74)) return /* @__PURE__ */ new Set();
       try {
-        const parsed = JSON.parse((0, import_fs13.readFileSync)(path74, "utf-8"));
+        const parsed = JSON.parse((0, import_fs14.readFileSync)(path74, "utf-8"));
         return new Set(Array.isArray(parsed?.keys) ? parsed.keys.filter((k) => typeof k === "string") : []);
       } catch {
         return /* @__PURE__ */ new Set();
@@ -74944,7 +75232,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           keys = keys.slice(keys.length - ARCHIVED_TERMINAL_KEYS_MAX);
         }
         const index = { keys, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        (0, import_fs13.writeFileSync)(getArchivedTerminalKeysPath(meshId), JSON.stringify(index), { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.writeFileSync)(getArchivedTerminalKeysPath(meshId), JSON.stringify(index), { encoding: "utf-8", mode: 384 });
       } catch {
       }
     }
@@ -74954,13 +75242,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function rotateArchiveFile(meshId, archivePath) {
       let index = 1;
-      while ((0, import_fs13.existsSync)(getRotatedArchivePath(meshId, index))) {
+      while ((0, import_fs14.existsSync)(getRotatedArchivePath(meshId, index))) {
         index++;
         if (index > 5) break;
       }
       if (index > 5) index = 5;
       try {
-        (0, import_fs13.renameSync)(archivePath, getRotatedArchivePath(meshId, index));
+        (0, import_fs14.renameSync)(archivePath, getRotatedArchivePath(meshId, index));
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Archive rotation failed for mesh ${meshId}: ${e?.message || e}
 `);
@@ -74968,15 +75256,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readArchivedCounts(meshId) {
       const path74 = getArchivedCountsPath(meshId);
-      if (!(0, import_fs13.existsSync)(path74)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
+      if (!(0, import_fs14.existsSync)(path74)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
       try {
-        return JSON.parse((0, import_fs13.readFileSync)(path74, "utf-8"));
+        return JSON.parse((0, import_fs14.readFileSync)(path74, "utf-8"));
       } catch {
         return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
       }
     }
     function writeArchivedCounts(meshId, counts) {
-      (0, import_fs13.writeFileSync)(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: "utf-8", mode: 384 });
+      (0, import_fs14.writeFileSync)(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: "utf-8", mode: 384 });
     }
     function updateArchivedCounts(meshId, archived) {
       const counts = readArchivedCounts(meshId);
@@ -75012,7 +75300,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     function compactLedger(meshId) {
       const filePath = getLedgerPath(meshId);
-      if (!(0, import_fs13.existsSync)(filePath)) return { archivedCount: 0, retainedCount: 0 };
+      if (!(0, import_fs14.existsSync)(filePath)) return { archivedCount: 0, retainedCount: 0 };
       const cutoff = Date.now() - ARCHIVE_TERMINAL_OLDER_THAN_MS;
       const entries = readLedgerEntries3(meshId);
       const retainedDispatchKeys = /* @__PURE__ */ new Set();
@@ -75041,11 +75329,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (archive.length === 0) return { archivedCount: 0, retainedCount: keep.length };
       const archivePath = getArchivePath(meshId);
       try {
-        if ((0, import_fs13.existsSync)(archivePath) && (0, import_fs13.statSync)(archivePath).size > 50 * 1024 * 1024) {
+        if ((0, import_fs14.existsSync)(archivePath) && (0, import_fs14.statSync)(archivePath).size > 50 * 1024 * 1024) {
           rotateArchiveFile(meshId, archivePath);
         }
         const archiveLines = archive.map((e) => JSON.stringify(e)).join("\n") + "\n";
-        (0, import_fs13.appendFileSync)(archivePath, archiveLines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.appendFileSync)(archivePath, archiveLines, { encoding: "utf-8", mode: 384 });
         updateArchivedCounts(meshId, archive);
         recordArchivedTerminalKeys(meshId, archive);
       } catch (e) {
@@ -75055,7 +75343,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const keepLines = keep.length ? keep.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
-        (0, import_fs13.writeFileSync)(filePath, keepLines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.writeFileSync)(filePath, keepLines, { encoding: "utf-8", mode: 384 });
         invalidateLedgerCache(meshId);
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Ledger compaction rewrite failed for mesh ${meshId}: ${e?.message || e}
@@ -75237,9 +75525,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (derived) entry.taskId = derived;
       }
       const filePath = getLedgerPath(meshId);
-      if ((0, import_fs13.existsSync)(filePath)) {
+      if ((0, import_fs14.existsSync)(filePath)) {
         try {
-          const stat2 = (0, import_fs13.statSync)(filePath);
+          const stat2 = (0, import_fs14.statSync)(filePath);
           if (stat2.size >= MAX_FILE_SIZE_BYTES) {
             rotateLedgerFile(meshId, filePath);
           } else if (stat2.size >= COMPACT_THRESHOLD_BYTES) {
@@ -75265,7 +75553,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const line = JSON.stringify(entry) + "\n";
-        (0, import_fs13.appendFileSync)(filePath, line, { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.appendFileSync)(filePath, line, { encoding: "utf-8", mode: 384 });
         recordLedgerAppend(meshId, [entry]);
         meshLedgerEvents.emit("append", meshId, entry);
         try {
@@ -75361,7 +75649,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         const remaining = readLedgerFile(meshId).filter((e) => !removeIds.includes(e.id));
         const filePath = getLedgerPath(meshId);
         const lines = remaining.length ? remaining.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
-        (0, import_fs13.writeFileSync)(filePath, lines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.writeFileSync)(filePath, lines, { encoding: "utf-8", mode: 384 });
       } catch {
       }
       invalidateLedgerCache(meshId);
@@ -75418,7 +75706,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const lines = validEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-        (0, import_fs13.appendFileSync)(ledgerPath, lines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs14.appendFileSync)(ledgerPath, lines, { encoding: "utf-8", mode: 384 });
         recordLedgerAppend(meshId, validEntries);
         for (const entry of validEntries) {
           meshLedgerEvents.emit("append", meshId, entry);
@@ -75441,11 +75729,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (cached5) return cached5.entries;
       const hasSince = typeof opts?.since === "string" && !Number.isNaN(new Date(opts.since).getTime());
       const kinds = opts?.kind?.length ? opts.kind : void 0;
-      if (!hasSince && !kinds) return getCachedRawEntries(meshId);
+      const hasNodeFilter = typeof opts?.node === "string" && opts.node.trim().length > 0;
+      const tail = !hasNodeFilter && typeof opts?.tail === "number" && opts.tail >= 1 ? Math.floor(opts.tail) : void 0;
+      if (!hasSince && !kinds && !tail) return getCachedRawEntries(meshId);
       try {
         return getCachedFilteredRawEntries(meshId, {
           ...hasSince ? { since: opts.since } : {},
-          ...kinds ? { kinds } : {}
+          ...kinds ? { kinds } : {},
+          ...tail ? { tail } : {}
         });
       } catch {
         return getCachedRawEntries(meshId);
@@ -75476,6 +75767,24 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         return entries.slice(-cap);
       }
       return entries;
+    }
+    function readLedgerEntriesProjected(meshId, kinds, projection) {
+      const cached5 = liveCacheEntry(meshId);
+      if (cached5) {
+        const kindSet = new Set(kinds);
+        return cached5.entries.filter((e) => kindSet.has(e.kind));
+      }
+      try {
+        return getCachedFilteredRawEntries(meshId, { kinds, projection });
+      } catch {
+        return readLedgerEntriesByKind(meshId, kinds);
+      }
+    }
+    function readActiveWorkLedgerEntries(meshId, kinds) {
+      return readLedgerEntriesProjected(meshId, kinds, ACTIVE_WORK_LEDGER_PROJECTION);
+    }
+    function readRefineJobLedgerEntries(meshId) {
+      return readLedgerEntriesProjected(meshId, REFINE_JOB_LEDGER_KINDS, REFINE_JOB_LEDGER_PROJECTION);
     }
     function buildLedgerSummary(meshId, entries) {
       const archived = readArchivedCounts(meshId);
@@ -75574,7 +75883,52 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       });
     }
     function getLedgerSummary3(meshId) {
-      return buildLedgerSummary(meshId, getCachedRawEntries(meshId));
+      const cached5 = liveCacheEntry(meshId);
+      if (cached5) return buildLedgerSummary(meshId, cached5.entries);
+      try {
+        return buildLedgerSummaryFromStore(meshId);
+      } catch {
+        return buildLedgerSummary(meshId, getCachedRawEntries(meshId));
+      }
+    }
+    function buildLedgerSummaryFromStore(meshId) {
+      const store = MeshRuntimeStore.getInstance();
+      ensureLedgerImported(store, meshId);
+      const counts = /* @__PURE__ */ new Map();
+      let total = 0;
+      let lastActivityAt = null;
+      for (const row of store.readLedgerKindCounts(meshId)) {
+        counts.set(row.kind, row.count);
+        total += row.count;
+        if (row.lastTimestamp && (lastActivityAt === null || row.lastTimestamp > lastActivityAt)) lastActivityAt = row.lastTimestamp;
+      }
+      const archived = readArchivedCounts(meshId);
+      const recentFailureCutoff = Date.now() - RECENT_FAILURE_WINDOW_MS;
+      let taskFailed = 0;
+      let taskStalled = 0;
+      let recentFailures = 0;
+      const failureRows = counts.get("task_failed") || counts.get("task_stalled") ? store.readLedgerEntryHeads(meshId, { kinds: ["task_failed", "task_stalled"], payloadPaths: CLEANUP_STOP_PROJECTION.paths }) : [];
+      for (const row of failureRows) {
+        if (isIntentionalCleanupStopEntry(row)) continue;
+        if (row.kind === "task_stalled") {
+          taskStalled++;
+          continue;
+        }
+        taskFailed++;
+        if (new Date(row.timestamp).getTime() >= recentFailureCutoff) recentFailures++;
+      }
+      return {
+        meshId,
+        totalEntries: total + archived.totalArchived,
+        taskDispatched: counts.get("task_dispatched") ?? 0,
+        taskCompleted: archived.taskCompleted + (counts.get("task_completed") ?? 0),
+        taskFailed: archived.taskFailed + taskFailed,
+        taskStalled: archived.taskStalled + taskStalled,
+        sessionLaunched: counts.get("session_launched") ?? 0,
+        checkpointCreated: counts.get("checkpoint_created") ?? 0,
+        lastActivityAt: total > 0 ? lastActivityAt : null,
+        recentFailures
+      };
     }
     function getSessionRecoveryContext3(meshId, opts) {
       const maxRetries = opts.maxRetries ?? 1;
@@ -75654,13 +76008,13 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     function rotateLedgerFile(meshId, currentPath) {
       let index = 1;
-      while ((0, import_fs13.existsSync)(getRotatedPath(meshId, index))) {
+      while ((0, import_fs14.existsSync)(getRotatedPath(meshId, index))) {
         index++;
         if (index > 10) break;
       }
       if (index > 10) index = 10;
       try {
-        (0, import_fs13.renameSync)(currentPath, getRotatedPath(meshId, index));
+        (0, import_fs14.renameSync)(currentPath, getRotatedPath(meshId, index));
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Ledger rotation failed for mesh ${meshId}: ${e?.message || e}. File will continue to grow.
 `);
@@ -75696,7 +76050,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     function readRotationEntriesTolerant(filePath) {
       let text;
       try {
-        text = (0, import_fs13.readFileSync)(filePath, "utf-8");
+        text = (0, import_fs14.readFileSync)(filePath, "utf-8");
       } catch {
         return [];
       }
@@ -75719,10 +76073,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const counts = readArchivedCounts(safe);
       const alreadyFolded = new Set(counts.evictedRotations ?? []);
       if (alreadyFolded.has(entry.name)) {
-        if ((0, import_fs13.existsSync)(filePath)) (0, import_fs13.unlinkSync)(filePath);
+        if ((0, import_fs14.existsSync)(filePath)) (0, import_fs14.unlinkSync)(filePath);
         return;
       }
-      if (closedRotationKind(safe, entry.name) === "active" && (0, import_fs13.existsSync)(filePath)) {
+      if (closedRotationKind(safe, entry.name) === "active" && (0, import_fs14.existsSync)(filePath)) {
         const entries = readRotationEntriesTolerant(filePath);
         for (const e of entries) {
           if (e.kind === "task_completed") counts.taskCompleted++;
@@ -75735,7 +76089,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       counts.evictedRotations = [...alreadyFolded, entry.name];
       counts.lastArchivedAt = (/* @__PURE__ */ new Date()).toISOString();
       writeArchivedCounts(safe, counts);
-      if ((0, import_fs13.existsSync)(filePath)) (0, import_fs13.unlinkSync)(filePath);
+      if ((0, import_fs14.existsSync)(filePath)) (0, import_fs14.unlinkSync)(filePath);
     }
     function enforceLedgerRotationCap(meshId, opts) {
       const maxFiles = opts?.maxFiles ?? resolveLedgerRotationMaxFiles();
@@ -75746,14 +76100,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const stats = [];
       let names = [];
       try {
-        names = (0, import_fs13.readdirSync)(dir);
+        names = (0, import_fs14.readdirSync)(dir);
       } catch {
         names = [];
       }
       for (const name of names) {
         if (!closedRotationKind(safe, name)) continue;
         try {
-          const st = (0, import_fs13.statSync)((0, import_path11.join)(dir, name));
+          const st = (0, import_fs14.statSync)((0, import_path11.join)(dir, name));
           if (st.isFile()) stats.push({ name, sizeBytes: st.size, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -75786,7 +76140,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const dir = getLedgerDir2();
       let names = [];
       try {
-        names = (0, import_fs13.readdirSync)(dir);
+        names = (0, import_fs14.readdirSync)(dir);
       } catch {
         return result;
       }
@@ -75812,7 +76166,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return result;
     }
-    var import_fs13;
+    var import_fs14;
     var import_path11;
     var import_crypto12;
     var import_events;
@@ -75833,10 +76187,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     var MS_PER_DAY;
     var ARCHIVED_TERMINAL_KEYS_MAX;
     var meshLedgerEvents;
+    var ACTIVE_WORK_LEDGER_PROJECTION;
+    var REFINE_JOB_LEDGER_PROJECTION;
+    var REFINE_JOB_LEDGER_KINDS;
+    var CLEANUP_STOP_PROJECTION;
     var init_mesh_ledger = __esm2({
       "src/mesh/mesh-ledger.ts"() {
         "use strict";
-        import_fs13 = require("fs");
+        import_fs14 = require("fs");
         import_path11 = require("path");
         import_crypto12 = require("crypto");
         init_mesh_retention_config();
@@ -75897,6 +76255,46 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         MS_PER_DAY = 24 * 60 * 60 * 1e3;
         ARCHIVED_TERMINAL_KEYS_MAX = 5e3;
         meshLedgerEvents = new import_events.EventEmitter();
+        ACTIVE_WORK_LEDGER_PROJECTION = {
+          name: "active_work",
+          paths: [
+            "$.taskId",
+            "$.source",
+            "$.via",
+            "$.dispatchedToIdleSession",
+            "$.message",
+            "$.summary",
+            "$.providerType",
+            "$.taskTitle",
+            "$.taskSummary",
+            "$.taskMode",
+            "$.evidenceLevel",
+            "$.reviewRecommended",
+            "$.completionDiagnostic.finalAssistantPresent",
+            "$.completionDiagnostic.transcriptFinalAssistantPresent",
+            "$.completionDiagnostic.blockReason"
+          ]
+        };
+        REFINE_JOB_LEDGER_PROJECTION = {
+          name: "refine_jobs",
+          paths: [
+            "$.taskId",
+            "$.source",
+            "$.refineJob",
+            "$.retryOfJobId",
+            "$.result.branch",
+            "$.result.into",
+            "$.result.finalBranchConvergenceState.branch",
+            "$.result.finalBranchConvergenceState.baseBranch",
+            "$.finalBranchConvergenceState.branch",
+            "$.finalBranchConvergenceState.baseBranch"
+          ]
+        };
+        REFINE_JOB_LEDGER_KINDS = ["task_dispatched", "task_completed", "task_failed"];
+        CLEANUP_STOP_PROJECTION = {
+          name: "cleanup_stop",
+          paths: ["$.intentional", "$.reason", "$.intentionalStopReason", "$.source"]
+        };
       }
     });
     var coordinator_prompt_exports = {};
@@ -76850,21 +77248,21 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     });
     function writeConfigFile(workspace, relativePath, config2) {
       const target = (0, import_path12.join)(workspace, relativePath);
-      (0, import_fs14.mkdirSync)((0, import_path12.dirname)(target), { recursive: true });
-      (0, import_fs14.writeFileSync)(target, `${JSON.stringify(config2, null, 2)}
+      (0, import_fs15.mkdirSync)((0, import_path12.dirname)(target), { recursive: true });
+      (0, import_fs15.writeFileSync)(target, `${JSON.stringify(config2, null, 2)}
 `, "utf-8");
       return target;
     }
     function suggestMeshWorktreeBootstrapConfig(workspace) {
       const commands = [];
-      const hasPackageJson = (0, import_fs14.existsSync)((0, import_path12.join)(workspace, "package.json"));
-      const hasNpmLock = (0, import_fs14.existsSync)((0, import_path12.join)(workspace, "package-lock.json"));
+      const hasPackageJson = (0, import_fs15.existsSync)((0, import_path12.join)(workspace, "package.json"));
+      const hasNpmLock = (0, import_fs15.existsSync)((0, import_path12.join)(workspace, "package-lock.json"));
       if (hasPackageJson) {
         commands.push(
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs14.existsSync)((0, import_path12.join)(workspace, relative9)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs15.existsSync)((0, import_path12.join)(workspace, relative9)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -76975,7 +77373,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
       const writtenPath = writeConfigFile(workspace, relativePath, suggestedConfig);
       return { path: writtenPath, relativePath, written: true, config: suggestedConfig };
     }
-    var import_fs14;
+    var import_fs15;
     var import_path12;
     var MESH_INIT_REFINE_CONFIG_PATH;
     var MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH;
@@ -76985,7 +77383,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     var init_mesh_init = __esm2({
       "src/mesh/mesh-init.ts"() {
         "use strict";
-        import_fs14 = require("fs");
+        import_fs15 = require("fs");
         import_path12 = require("path");
         init_refine_config();
         init_worktree_bootstrap_config();
@@ -78032,9 +78430,9 @@ ${rendered}`, "utf-8");
     }
     function loadMeshCoordinatorRegistry() {
       const path74 = getRegistryPath();
-      if (!(0, import_fs15.existsSync)(path74)) return;
+      if (!(0, import_fs16.existsSync)(path74)) return;
       try {
-        const raw = JSON.parse((0, import_fs15.readFileSync)(path74, "utf-8"));
+        const raw = JSON.parse((0, import_fs16.readFileSync)(path74, "utf-8"));
         if (!Array.isArray(raw)) return;
         _registry.clear();
         for (const entry of raw) {
@@ -78047,7 +78445,7 @@ ${rendered}`, "utf-8");
     }
     function saveRegistry() {
       try {
-        (0, import_fs15.writeFileSync)(
+        (0, import_fs16.writeFileSync)(
           getRegistryPath(),
           JSON.stringify([..._registry.values()], null, 2),
           { encoding: "utf-8", mode: 384 }
@@ -78095,13 +78493,13 @@ ${rendered}`, "utf-8");
       return [..._registry.values()].filter((e) => e.meshId === meshId).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
     }
     var import_path13;
-    var import_fs15;
+    var import_fs16;
     var _registry;
     var init_coordinator_registry = __esm2({
       "src/mesh/coordinator-registry.ts"() {
         "use strict";
         import_path13 = require("path");
-        import_fs15 = require("fs");
+        import_fs16 = require("fs");
         init_config();
         _registry = /* @__PURE__ */ new Map();
       }
@@ -79763,6 +80161,7 @@ ${block2.text}`,
     }
     async function appendFastForwardLedger(result, outcome) {
       if (!result.meshId) return;
+      if (outcome === "noop") return;
       try {
         const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
         appendLedgerEntry32(result.meshId, {
@@ -81103,7 +81502,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         if (policy?.idleActiveMissionReminder === false) return false;
         const activeMissions = getMeshMissions(meshId, ["active"]);
         if (activeMissions.length === 0) return false;
-        const ledgerEntries = sharedLedgerSnapshot?.entries ?? readLedgerEntriesByKind(meshId, [
+        const ledgerEntries = sharedLedgerSnapshot?.entries ?? readActiveWorkLedgerEntries(meshId, [
           "task_dispatched",
           "task_completed",
           "task_failed",
@@ -81130,9 +81529,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           } catch {
           }
         }
-        const refineLedgerEntries = readLedgerEntries3(meshId, {
-          kind: ["task_dispatched", "task_completed", "task_failed"]
-        });
+        const refineLedgerEntries = readRefineJobLedgerEntries(meshId);
         const activeRefineJobs = summarizeMeshAsyncRefineJobs3(
           buildMeshAsyncRefineJobs3({ meshId, ledgerEntries: refineLedgerEntries })
         ).activeJobs;
@@ -84666,7 +85063,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       return isWithinForeignFreshnessWindow(launchedAtMs, nowMs, windowMs);
     }
     function localCoordinatorDaemonId() {
-      return canonicalDaemonId2(readNonEmptyString(getMachineId()));
+      return canonicalDaemonId3(readNonEmptyString(getMachineId()));
     }
     function isIdleSessionState(state2) {
       const status = readNonEmptyString(state2?.status).toLowerCase();
@@ -84764,7 +85161,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (args.status === "completed" && readNonEmptyString(args.sessionId)) return false;
       let existing;
       try {
-        existing = getQueue3(meshId).find((t) => t.id === taskId)?.autoLaunch;
+        existing = getQueueEntryById(meshId, taskId)?.autoLaunch;
       } catch {
         return false;
       }
@@ -84953,7 +85350,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (status !== "skipped") return false;
       let existing;
       try {
-        existing = getQueue3(meshId).find((t) => t.id === taskId)?.autoLaunch;
+        existing = getQueueEntryById(meshId, taskId)?.autoLaunch;
       } catch {
         return false;
       }
@@ -84972,7 +85369,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function handleDifficultyFloorSkip(args) {
       let previousTask;
       try {
-        previousTask = getQueue3(args.meshId).find((task2) => task2.id === args.taskId);
+        previousTask = getQueueEntryById(args.meshId, args.taskId) ?? void 0;
       } catch {
       }
       if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
@@ -84991,7 +85388,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       const waitedMs = Number.isFinite(waitStartedAt) ? Date.now() - waitStartedAt : 0;
       const reportKey = `${args.meshId}:${args.taskId}`;
       if (waitedMs < DIFFICULTY_FLOOR_REPORT_AFTER_MS || difficultyFloorTimeoutReported.has(reportKey)) return;
-      const task = previousTask ?? getQueue3(args.meshId).find((candidate) => candidate.id === args.taskId);
+      const task = previousTask ?? getQueueEntryById(args.meshId, args.taskId) ?? void 0;
       const difficulty = task?.difficulty || args.reason.split(":")[1] || "classified";
       const waitedMinutes = Math.round(waitedMs / 6e4);
       const capacityStall = BOUNDED_WAIT_SKIP_REASONS.some((prefix) => args.reason.startsWith(prefix));
@@ -85285,6 +85682,67 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         };
       }
     });
+    function resolveAutoPruneMinAgeMs() {
+      const raw = readNonEmptyString(process.env.MESH_AUTO_PRUNE_MIN_AGE_MS);
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 60 * 6e4 && parsed <= 30 * 24 * 60 * 6e4) return parsed;
+      }
+      return DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
+    }
+    function resolvePendingHeldDrainEscalateMs() {
+      return resolveTunedReconcileMs("MESH_PENDING_HELD_DRAIN_ESCALATE_MS", DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS, 4e3, 5 * 6e4);
+    }
+    function resolvePendingHeldCeilingMs() {
+      return resolveTunedReconcileMs("MESH_PENDING_HELD_CEILING_MS", DEFAULT_PENDING_HELD_CEILING_MS, 12e3, 30 * 6e4);
+    }
+    function resolveReconcileIntervalMs() {
+      const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1e3 && parsed <= 6e4) return parsed;
+      }
+      return DEFAULT_RECONCILE_INTERVAL_MS;
+    }
+    function resolveAutoFastForwardScanBaseMs() {
+      return resolveTunedReconcileMs("MESH_AUTO_FF_SCAN_BASE_MS", DEFAULT_AUTO_FF_SCAN_BASE_MS, 5e3, 5 * 6e4);
+    }
+    function resolveAutoFastForwardScanMaxMs() {
+      return resolveTunedReconcileMs("MESH_AUTO_FF_SCAN_MAX_MS", DEFAULT_AUTO_FF_SCAN_MAX_MS, DEFAULT_AUTO_FF_SCAN_BASE_MS, 60 * 6e4);
+    }
+    function resolveAutoFastForwardCallTimeoutMs() {
+      return resolveTunedReconcileMs("MESH_AUTO_FF_CALL_TIMEOUT_MS", DEFAULT_AUTO_FF_CALL_TIMEOUT_MS, 2e3, 6e4);
+    }
+    function resolveRemotePullSlowDaemonSkipMs() {
+      return resolveTunedReconcileMs("MESH_REMOTE_PULL_SLOW_DAEMON_SKIP_MS", DEFAULT_REMOTE_PULL_SLOW_DAEMON_SKIP_MS, 500, 6e4);
+    }
+    var DEFAULT_RECONCILE_INTERVAL_MS;
+    var DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
+    var DEFAULT_AUTO_PRUNE_INTERVAL_MS;
+    var DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS;
+    var DEFAULT_PENDING_HELD_CEILING_MS;
+    var DEFAULT_AUTO_FF_SCAN_BASE_MS;
+    var DEFAULT_AUTO_FF_SCAN_MAX_MS;
+    var AUTO_FF_SCAN_BACKOFF_MULTIPLIER;
+    var DEFAULT_AUTO_FF_CALL_TIMEOUT_MS;
+    var DEFAULT_REMOTE_PULL_SLOW_DAEMON_SKIP_MS;
+    var init_mesh_reconcile_config = __esm2({
+      "src/mesh/mesh-reconcile-config.ts"() {
+        "use strict";
+        init_mesh_events_utils();
+        init_mesh_reconcile_acked_hold();
+        DEFAULT_RECONCILE_INTERVAL_MS = 4e3;
+        DEFAULT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 6e4;
+        DEFAULT_AUTO_PRUNE_INTERVAL_MS = 6e4;
+        DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS = 12e3;
+        DEFAULT_PENDING_HELD_CEILING_MS = 12e4;
+        DEFAULT_AUTO_FF_SCAN_BASE_MS = 45e3;
+        DEFAULT_AUTO_FF_SCAN_MAX_MS = 10 * 6e4;
+        AUTO_FF_SCAN_BACKOFF_MULTIPLIER = 2;
+        DEFAULT_AUTO_FF_CALL_TIMEOUT_MS = 8e3;
+        DEFAULT_REMOTE_PULL_SLOW_DAEMON_SKIP_MS = 3e3;
+      }
+    });
     function acquireAutoFastForwardLease(workspace) {
       const key2 = normalizeMeshWorkspaceForCompare(workspace);
       if (!key2) return false;
@@ -85355,10 +85813,18 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       return readNonEmptyString(node?.connection?.state).toLowerCase() === "connected";
     }
+    function withCallTimeout(promise2, timeoutMs) {
+      let timer;
+      const timeout = new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new AutoFastForwardCallTimeoutError(timeoutMs)), timeoutMs);
+        if (typeof timer?.unref === "function") timer.unref();
+      });
+      return Promise.race([promise2, timeout]).finally(() => clearTimeout(timer));
+    }
     async function delegateRemoteAutoFastForward(components, args) {
       const dispatchMeshCommand = components.dispatchMeshCommand;
-      if (!dispatchMeshCommand) return;
-      if (!acquireAutoFastForwardLease(args.workspace)) return;
+      if (!dispatchMeshCommand) return { outcome: "skipped" };
+      if (!acquireAutoFastForwardLease(args.workspace)) return { outcome: "skipped" };
       const submoduleIgnorePaths = readNodeSubmoduleIgnorePaths(args.node);
       const mesh = getMeshWithCache(components, args.meshId);
       const baseArgs = {
@@ -85376,13 +85842,16 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         updateSubmodules: true
       };
       try {
-        const remoteDry = await dispatchMeshCommand(args.daemonId, "fast_forward_mesh_node", {
+        const dryRunCall = dispatchMeshCommand(args.daemonId, "fast_forward_mesh_node", {
           ...baseArgs,
           execute: false,
           dryRun: true
         });
-        if (!dryRunSatisfiesAutoFastForwardPolicy(remoteDry, args.policy)) return;
-        if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId)) return;
+        const remoteDry = await (args.dryRunTimeoutMs ? withCallTimeout(dryRunCall, args.dryRunTimeoutMs) : dryRunCall);
+        if (!dryRunSatisfiesAutoFastForwardPolicy(remoteDry, args.policy)) {
+          return { outcome: "no_op" };
+        }
+        if (nodeHasActiveMeshWork(components, args.meshId, args.nodeId)) return { outcome: "skipped" };
         const executed = await dispatchMeshCommand(args.daemonId, "fast_forward_mesh_node", {
           ...baseArgs,
           execute: true,
@@ -85390,9 +85859,13 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         });
         if (executed?.executed === true) {
           LOG.info("MeshFastForward", `Remote auto fast-forward executed for node ${args.nodeId} (daemon ${String(args.daemonId).slice(0, 12)}, trigger ${args.trigger})`);
+          return { outcome: "executed" };
         }
+        return { outcome: "available" };
       } catch (e) {
+        const isTimeout = e instanceof AutoFastForwardCallTimeoutError;
         LOG.warn("MeshFastForward", `Remote auto fast-forward delegation failed for ${args.nodeId}: ${e?.message || e}`);
+        return { outcome: isTimeout ? "skipped" : "error" };
       } finally {
         releaseAutoFastForwardLease(args.workspace);
       }
@@ -85444,7 +85917,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (now - lastAttempt < IDLE_AUTO_FAST_FORWARD_THROTTLE_MS) return;
       idleAutoFastForwardLastAttempt.set(throttleKey, now);
       if (isLocalAutoLaunchNode(node)) {
-        if (!(0, import_fs17.existsSync)(workspace)) return;
+        if (!(0, import_fs18.existsSync)(workspace)) return;
         await executeLocalAutoFastForward({ meshId: args.meshId, nodeId: args.nodeId, node, workspace, policy, trigger: "idle_auto" });
         return;
       }
@@ -85454,6 +85927,34 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (!remoteNodeIsConnected(components, node)) return;
       await delegateRemoteAutoFastForward(components, { meshId: args.meshId, nodeId: args.nodeId, node, daemonId, workspace, policy, trigger: "idle_auto" });
     }
+    function cachedGitStatusShowsNoMovement(node, nowMs) {
+      const directGit = readObjectRecord(node?.git);
+      const git3 = Object.keys(directGit).length > 0 ? directGit : readObjectRecord(readObjectRecord(node?.cachedStatus).git);
+      if (Object.keys(git3).length === 0) return false;
+      if (git3.upstreamStatus !== "fresh") return false;
+      const fetchedAt = Number(git3.upstreamFetchedAt);
+      if (!Number.isFinite(fetchedAt) || fetchedAt <= 0) return false;
+      if (nowMs - fetchedAt > AUTO_FF_GIT_PRECHECK_MAX_AGE_MS) return false;
+      return git3.ahead === 0 && git3.behind === 0;
+    }
+    function autoFastForwardScanCooldownKey(meshId, nodeId) {
+      return `${meshId}:${nodeId}`;
+    }
+    function isAutoFastForwardScanBackedOff(key2, nowMs) {
+      const state2 = continuousAutoFastForwardScanState.get(key2);
+      return !!state2 && nowMs < state2.nextEligibleAtMs;
+    }
+    function noteAutoFastForwardScanResult(key2, outcome, nowMs) {
+      const baseMs = resolveAutoFastForwardScanBaseMs();
+      const maxMs = resolveAutoFastForwardScanMaxMs();
+      const prev = continuousAutoFastForwardScanState.get(key2);
+      if (outcome === "no_op" || outcome === "precheck_skip") {
+        const nextStep = Math.min(maxMs, Math.max(baseMs, (prev?.currentStepMs ?? baseMs) * AUTO_FF_SCAN_BACKOFF_MULTIPLIER));
+        continuousAutoFastForwardScanState.set(key2, { nextEligibleAtMs: nowMs + nextStep, currentStepMs: nextStep });
+        return;
+      }
+      continuousAutoFastForwardScanState.set(key2, { nextEligibleAtMs: nowMs + baseMs, currentStepMs: baseMs });
+    }
     async function runContinuousAutoFastForwardScan(components, mesh) {
       if (!components.dispatchMeshCommand) return;
       const policy = resolveAutoFastForwardPolicy(mesh);
@@ -85462,6 +85963,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (!meshId) return;
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
       const now = Date.now();
+      const dryRunTimeoutMs = resolveAutoFastForwardCallTimeoutMs();
       for (const node of nodes) {
         const nodeId = normalizeMeshNodeId(node);
         if (!nodeId) continue;
@@ -85473,12 +85975,47 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         if (!daemonId) continue;
         if (!nodeIsAutoFastForwardEligible(components, meshId, nodeId, node)) continue;
         if (!remoteNodeIsConnected(components, node)) continue;
-        const cooldownKey = `${meshId}:${nodeId}`;
-        const lastScan = continuousAutoFastForwardLastScan.get(cooldownKey) || 0;
-        if (now - lastScan < CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS) continue;
-        continuousAutoFastForwardLastScan.set(cooldownKey, now);
-        await delegateRemoteAutoFastForward(components, { meshId, nodeId, node, daemonId, workspace, policy, trigger: "reconcile_auto" });
+        const cooldownKey = autoFastForwardScanCooldownKey(meshId, nodeId);
+        if (isAutoFastForwardScanBackedOff(cooldownKey, now)) continue;
+        if (cachedGitStatusShowsNoMovement(node, now)) {
+          noteAutoFastForwardScanResult(cooldownKey, "precheck_skip", now);
+          LOG.debug("MeshFastForward", `Continuous auto-ff precheck: ${nodeId} cached git status shows no movement \u2014 skipping dry-run`);
+          continue;
+        }
+        const result = await delegateRemoteAutoFastForward(components, { meshId, nodeId, node, daemonId, workspace, policy, trigger: "reconcile_auto", dryRunTimeoutMs });
+        noteAutoFastForwardScanResult(cooldownKey, result.outcome, Date.now());
       }
+    }
+    function startContinuousAutoFastForwardScheduler(components, listMeshesFn = listMeshes) {
+      let running = false;
+      const pollMs = Math.max(1e3, Math.min(resolveAutoFastForwardScanBaseMs(), DEFAULT_AUTO_FF_SCAN_BASE_MS));
+      const tick = () => {
+        if (running) return;
+        running = true;
+        void (async () => {
+          try {
+            const meshes = listMeshesFn();
+            for (const mesh of meshes) {
+              try {
+                await runContinuousAutoFastForwardScan(components, mesh);
+              } catch (e) {
+                LOG.warn("MeshFastForward", `Continuous auto fast-forward scheduler failed for mesh ${mesh?.id}: ${e?.message || e}`);
+              }
+            }
+          } catch (e) {
+            LOG.warn("MeshFastForward", `Continuous auto fast-forward scheduler tick failed: ${e?.message || e}`);
+          } finally {
+            running = false;
+          }
+        })();
+      };
+      const timer = setInterval(tick, pollMs);
+      if (typeof timer.unref === "function") timer.unref();
+      return {
+        stop() {
+          clearInterval(timer);
+        }
+      };
     }
     async function runPendingCoordinatorCatchupScan(components, mesh) {
       const meshId = readNonEmptyString(mesh?.id);
@@ -85534,18 +86071,21 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
       }
     }
-    var import_fs17;
+    var import_fs18;
     var IDLE_AUTO_FAST_FORWARD_THROTTLE_MS;
     var idleAutoFastForwardLastAttempt;
-    var CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS;
+    var continuousAutoFastForwardScanState;
     var continuousAutoFastForwardLastScan;
     var autoFastForwardWorkspaceLease;
+    var AutoFastForwardCallTimeoutError;
+    var AUTO_FF_GIT_PRECHECK_MAX_AGE_MS;
     var init_mesh_auto_fast_forward = __esm2({
       "src/mesh/mesh-auto-fast-forward.ts"() {
         "use strict";
-        import_fs17 = require("fs");
+        import_fs18 = require("fs");
         init_logger();
         init_config();
+        init_mesh_config();
         init_mesh_fast_forward();
         init_dist();
         init_mesh_events_utils();
@@ -85553,11 +86093,19 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         init_mesh_events_pending();
         init_worktree_bootstrap_config();
         init_mesh_queue_assignment();
+        init_mesh_reconcile_config();
         IDLE_AUTO_FAST_FORWARD_THROTTLE_MS = 30 * 60 * 1e3;
         idleAutoFastForwardLastAttempt = /* @__PURE__ */ new Map();
-        CONTINUOUS_AUTO_FAST_FORWARD_SCAN_COOLDOWN_MS = 45 * 1e3;
-        continuousAutoFastForwardLastScan = /* @__PURE__ */ new Map();
+        continuousAutoFastForwardScanState = /* @__PURE__ */ new Map();
+        continuousAutoFastForwardLastScan = continuousAutoFastForwardScanState;
         autoFastForwardWorkspaceLease = /* @__PURE__ */ new Set();
+        AutoFastForwardCallTimeoutError = class extends Error {
+          constructor(ms) {
+            super(`auto fast-forward call timed out after ${ms}ms`);
+            this.name = "AutoFastForwardCallTimeoutError";
+          }
+        };
+        AUTO_FF_GIT_PRECHECK_MAX_AGE_MS = 15 * 6e4;
       }
     });
     function normalizeNodeIdKey(nodeId) {
@@ -85824,7 +86372,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }
       let task;
       try {
-        task = getQueue3(meshId).find((t) => t.id === taskId);
+        task = getQueueEntryById(meshId, taskId) ?? void 0;
       } catch {
       }
       if (task && task.status !== "pending") {
@@ -87120,7 +87668,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       }
     });
     function localCoordinatorDaemonId2() {
-      return canonicalDaemonId2(readNonEmptyString(getMachineId()));
+      return canonicalDaemonId3(readNonEmptyString(getMachineId()));
     }
     function loadRepoConfigForNode(node) {
       const workspace = typeof node?.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
@@ -87809,10 +88357,10 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       return normalizeMeshNodeId(node) ?? "";
     }
     function countQueueStatus(meshId, status) {
-      return getQueue3(meshId, { status: [status] }).length;
+      return getQueueHeads(meshId, { status: [status] }).length;
     }
     function getQueueStatusById(meshId) {
-      return new Map(getQueue3(meshId).map((task) => [task.id, task.status]));
+      return new Map(getQueueHeads(meshId).map((t) => [t.id, t.status]));
     }
     function trackInFlightAutoLaunch(meshId, promise2) {
       let set3 = inFlightAutoLaunches.get(meshId);
@@ -87951,21 +88499,20 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         new Promise((resolve36) => setImmediate(() => resolve36(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId);
-      const afterQueue = getQueue3(meshId);
-      const pendingAfter = afterQueue.filter((task) => task.status === "pending").length;
-      const assignedAfter = afterQueue.filter((task) => task.status === "assigned").length;
-      const newlyAssignedTasks = afterQueue.filter((task) => task.status === "assigned" && beforeStatus.get(task.id) !== "assigned").map((task) => ({
+      const afterHeads = getQueueHeads(meshId, { status: ["pending", "assigned"] });
+      const pendingAfter = afterHeads.filter((task) => task.status === "pending").length;
+      const assignedAfter = afterHeads.filter((task) => task.status === "assigned").length;
+      const newlyAssignedTasks = afterHeads.filter((task) => task.status === "assigned" && beforeStatus.get(task.id) !== "assigned").map((task) => ({
         id: task.id,
         nodeId: task.assignedNodeId,
         sessionId: task.assignedSessionId
       }));
       if (newlyAssignedTasks.length === 0 && !autoLaunchStarted) {
-        logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterQueue.filter((task) => task.status === "pending").map((task) => task.id));
+        logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterHeads.filter((task) => task.status === "pending").map((task) => task.id));
       } else {
         clearAllQuotaClaimCandidatesBlockedState(meshId);
       }
-      const autoLaunchPending = autoLaunchStarted || afterQueue.some((task) => {
-        if (task.status !== "pending") return false;
+      const autoLaunchPending = autoLaunchStarted || getQueue3(meshId, { status: ["pending"] }).some((task) => {
         const al = task.autoLaunch;
         if (!al || al.status !== "started" && al.status !== "completed") return false;
         const launchedAtMs = Date.parse(al.updatedAt);
@@ -88377,11 +88924,11 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     }
     function loadState() {
       const statePath = getStatePath();
-      if (!(0, import_fs18.existsSync)(statePath)) {
+      if (!(0, import_fs19.existsSync)(statePath)) {
         return { ...DEFAULT_STATE };
       }
       try {
-        const raw = (0, import_fs18.readFileSync)(statePath, "utf-8");
+        const raw = (0, import_fs19.readFileSync)(statePath, "utf-8");
         return normalizeState(JSON.parse(raw));
       } catch {
         return { ...DEFAULT_STATE };
@@ -88390,7 +88937,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     function saveState(state2) {
       const statePath = getStatePath();
       const normalized = normalizeState(state2);
-      (0, import_fs18.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
+      (0, import_fs19.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
     }
     function resetState() {
       saveState({ ...DEFAULT_STATE });
@@ -88430,13 +88977,13 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       delete next[key2];
       saveState({ ...state2, deferredRestartSchedules: next });
     }
-    var import_fs18;
+    var import_fs19;
     var import_path15;
     var DEFAULT_STATE;
     var init_state_store = __esm2({
       "src/config/state-store.ts"() {
         "use strict";
-        import_fs18 = require("fs");
+        import_fs19 = require("fs");
         import_path15 = require("path");
         init_config();
         DEFAULT_STATE = {
@@ -88453,6 +89000,8 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     });
     async function updateDarwinMemoryCache() {
       if (os15.platform() !== "darwin") return;
+      if (updateInFlight) return;
+      updateInFlight = true;
       try {
         const { stdout } = await execAsync2("vm_stat", {
           encoding: "utf-8",
@@ -88478,12 +89027,16 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         const bytes = availPages * pageSize;
         cachedDarwinAvail = Number.isFinite(bytes) && bytes >= 0 ? Math.min(bytes, os15.totalmem()) : null;
       } catch {
+      } finally {
+        updateInFlight = false;
       }
     }
     function getHostMemorySnapshot() {
       if (os15.platform() === "darwin" && !darwinMemoryInterval) {
-        updateDarwinMemoryCache();
-        darwinMemoryInterval = setInterval(updateDarwinMemoryCache, 3e3);
+        void updateDarwinMemoryCache();
+        darwinMemoryInterval = setInterval(() => {
+          void updateDarwinMemoryCache();
+        }, REFRESH_INTERVAL_MS);
         darwinMemoryInterval.unref();
       }
       const totalMem = os15.totalmem();
@@ -88499,8 +89052,10 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     var import_child_process4;
     var import_util3;
     var execAsync2;
+    var REFRESH_INTERVAL_MS;
     var cachedDarwinAvail;
     var darwinMemoryInterval;
+    var updateInFlight;
     var init_host_memory = __esm2({
       "src/system/host-memory.ts"() {
         "use strict";
@@ -88508,8 +89063,10 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         import_child_process4 = require("child_process");
         import_util3 = require("util");
         execAsync2 = (0, import_util3.promisify)(import_child_process4.exec);
+        REFRESH_INTERVAL_MS = 3e4;
         cachedDarwinAvail = null;
         darwinMemoryInterval = null;
+        updateInFlight = false;
       }
     });
     function isModuleNotFoundError(error48, ref) {
@@ -90351,7 +90908,7 @@ ${cleanBody}`;
           meshId,
           queue: getQueue3(meshId),
           directDispatches: getActiveDirectDispatches3(meshId),
-          ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+          ledgerEntries: readActiveWorkLedgerEntries(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
           nodes,
           now: now ?? Date.now()
         });
@@ -93441,45 +93998,6 @@ ${statusLine}`;
         init_mesh_events_utils();
       }
     });
-    function resolveAutoPruneMinAgeMs() {
-      const raw = readNonEmptyString(process.env.MESH_AUTO_PRUNE_MIN_AGE_MS);
-      if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed) && parsed >= 60 * 6e4 && parsed <= 30 * 24 * 60 * 6e4) return parsed;
-      }
-      return DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
-    }
-    function resolvePendingHeldDrainEscalateMs() {
-      return resolveTunedReconcileMs("MESH_PENDING_HELD_DRAIN_ESCALATE_MS", DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS, 4e3, 5 * 6e4);
-    }
-    function resolvePendingHeldCeilingMs() {
-      return resolveTunedReconcileMs("MESH_PENDING_HELD_CEILING_MS", DEFAULT_PENDING_HELD_CEILING_MS, 12e3, 30 * 6e4);
-    }
-    function resolveReconcileIntervalMs() {
-      const raw = readNonEmptyString(process.env.MESH_RECONCILE_INTERVAL_MS);
-      if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed) && parsed >= 1e3 && parsed <= 6e4) return parsed;
-      }
-      return DEFAULT_RECONCILE_INTERVAL_MS;
-    }
-    var DEFAULT_RECONCILE_INTERVAL_MS;
-    var DEFAULT_AUTO_PRUNE_MIN_AGE_MS;
-    var DEFAULT_AUTO_PRUNE_INTERVAL_MS;
-    var DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS;
-    var DEFAULT_PENDING_HELD_CEILING_MS;
-    var init_mesh_reconcile_config = __esm2({
-      "src/mesh/mesh-reconcile-config.ts"() {
-        "use strict";
-        init_mesh_events_utils();
-        init_mesh_reconcile_acked_hold();
-        DEFAULT_RECONCILE_INTERVAL_MS = 4e3;
-        DEFAULT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 6e4;
-        DEFAULT_AUTO_PRUNE_INTERVAL_MS = 6e4;
-        DEFAULT_PENDING_HELD_DRAIN_ESCALATE_MS = 12e3;
-        DEFAULT_PENDING_HELD_CEILING_MS = 12e4;
-      }
-    });
     function warnOnce3(message) {
       if (warnedOnce3.has(message)) return;
       warnedOnce3.add(message);
@@ -93634,11 +94152,28 @@ ${statusLine}`;
       return Math.min(REMOTE_PULL_BACKOFF_MAX_MS, REMOTE_PULL_BACKOFF_BASE_MS * 2 ** shift);
     }
     function pullBackoffKey(meshId, daemonId) {
-      return `${meshId}::${canonicalDaemonId2(daemonId) ?? daemonId}`;
+      return `${meshId}::${canonicalDaemonId3(daemonId) ?? daemonId}`;
     }
     function isRemotePullBackedOff(meshId, daemonId, nowMs) {
       const state2 = remotePullBackoffByDaemon.get(pullBackoffKey(meshId, daemonId));
       return !!state2 && nowMs < state2.nextPullAtMs;
+    }
+    function isRemotePullDaemonSlow(meshId, daemonId) {
+      const key2 = pullBackoffKey(meshId, daemonId);
+      const entry = lastPullDurationMsByDaemon.get(key2);
+      if (entry === void 0) return false;
+      lastPullDurationMsByDaemon.delete(key2);
+      return entry.durationMs > resolveRemotePullSlowDaemonSkipMs();
+    }
+    function noteRemotePullDurationMs(meshId, daemonId, durationMs, nowMs) {
+      const key2 = pullBackoffKey(meshId, daemonId);
+      lastPullDurationMsByDaemon.set(key2, { durationMs, touchedAtMs: nowMs });
+      applyBoundedRetention(lastPullDurationMsByDaemon, {
+        ttlMs: REMOTE_PULL_PACING_TTL_MS,
+        maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+        readTimestamp: (value) => value.touchedAtMs,
+        now: nowMs
+      });
     }
     function noteRemotePullResult(meshId, daemonId, result, nowMs) {
       const key2 = pullBackoffKey(meshId, daemonId);
@@ -93672,7 +94207,7 @@ ${statusLine}`;
       for (const node of mesh.nodes) {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         if (!nodeDaemonId) continue;
-        const daemonKey = canonicalDaemonId2(nodeDaemonId) ?? nodeDaemonId;
+        const daemonKey = canonicalDaemonId3(nodeDaemonId) ?? nodeDaemonId;
         if (seenDaemonIds.has(daemonKey)) continue;
         seenDaemonIds.add(daemonKey);
         uniqueNodes.push(node);
@@ -93680,8 +94215,14 @@ ${statusLine}`;
       await Promise.allSettled(uniqueNodes.map((node) => (async () => {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         if (nodeDaemonId && isRemotePullBackedOff(meshId, nodeDaemonId, Date.now())) return;
+        if (nodeDaemonId && isRemotePullDaemonSlow(meshId, nodeDaemonId)) return;
+        const startedAtMs = Date.now();
         const result = await pullPendingEventsFromNode(components, meshId, node, localDaemonId, candidateDaemonIds, pulls);
-        if (nodeDaemonId) noteRemotePullResult(meshId, nodeDaemonId, result, Date.now());
+        const finishedAtMs = Date.now();
+        if (nodeDaemonId) {
+          noteRemotePullResult(meshId, nodeDaemonId, result, finishedAtMs);
+          noteRemotePullDurationMs(meshId, nodeDaemonId, finishedAtMs - startedAtMs, finishedAtMs);
+        }
       })()));
     }
     async function pullPendingEventsFromNode(components, meshId, node, localDaemonId, candidateDaemonIds, pulls, opts) {
@@ -93919,6 +94460,7 @@ ${statusLine}`;
     var REMOTE_PULL_PACING_MAX_ENTRIES;
     var remotePullBackoffByDaemon;
     var lastRedrivePullAtMs;
+    var lastPullDurationMsByDaemon;
     var NOT_REACHED;
     var init_mesh_remote_event_pull = __esm2({
       "src/mesh/mesh-remote-event-pull.ts"() {
@@ -93930,6 +94472,7 @@ ${statusLine}`;
         init_mesh_reconcile_identity();
         init_bounded_retention();
         init_transcript_daemon_consumer_read();
+        init_mesh_reconcile_config();
         REMOTE_PULL_EMPTY_ROUNDS_BEFORE_BACKOFF = 3;
         REMOTE_PULL_BACKOFF_BASE_MS = 8e3;
         REMOTE_PULL_BACKOFF_MAX_MS = 3e4;
@@ -93938,6 +94481,7 @@ ${statusLine}`;
         REMOTE_PULL_PACING_MAX_ENTRIES = 500;
         remotePullBackoffByDaemon = /* @__PURE__ */ new Map();
         lastRedrivePullAtMs = /* @__PURE__ */ new Map();
+        lastPullDurationMsByDaemon = /* @__PURE__ */ new Map();
         NOT_REACHED = { received: 0, reached: false };
       }
     });
@@ -93970,7 +94514,7 @@ ${statusLine}`;
     }
     function readDiskSpace(path74) {
       try {
-        const stats = (0, import_fs19.statfsSync)(path74);
+        const stats = (0, import_fs20.statfsSync)(path74);
         const blockSize = Number(stats.bsize);
         const freeBytes = Number(stats.bavail) * blockSize;
         const totalBytes = Number(stats.blocks) * blockSize;
@@ -94017,7 +94561,7 @@ ${statusLine}`;
       }
       return status;
     }
-    var import_fs19;
+    var import_fs20;
     var DISK_CRITICAL_PERCENT_FREE;
     var DISK_CRITICAL_FREE_BYTES;
     var DISK_WARNING_PERCENT_FREE;
@@ -94026,7 +94570,7 @@ ${statusLine}`;
     var init_disk_space_preflight = __esm2({
       "src/diagnostics/disk-space-preflight.ts"() {
         "use strict";
-        import_fs19 = require("fs");
+        import_fs20 = require("fs");
         init_logger();
         DISK_CRITICAL_PERCENT_FREE = 2;
         DISK_CRITICAL_FREE_BYTES = 1 * 1024 * 1024 * 1024;
@@ -94078,7 +94622,7 @@ ${statusLine}`;
     }
     function safeUnlink(path74) {
       try {
-        (0, import_fs20.unlinkSync)(path74);
+        (0, import_fs21.unlinkSync)(path74);
         return true;
       } catch (e) {
         LOG.warn("DiskRetention", `Failed to delete ${path74}: ${e?.message || e}`);
@@ -94086,18 +94630,18 @@ ${statusLine}`;
       }
     }
     function listDirFiles(dir) {
-      if (!(0, import_fs20.existsSync)(dir)) return [];
+      if (!(0, import_fs21.existsSync)(dir)) return [];
       const out = [];
       let names;
       try {
-        names = (0, import_fs20.readdirSync)(dir);
+        names = (0, import_fs21.readdirSync)(dir);
       } catch {
         return [];
       }
       for (const name of names) {
         const path74 = (0, import_path16.join)(dir, name);
         try {
-          const st = (0, import_fs20.statSync)(path74);
+          const st = (0, import_fs21.statSync)(path74);
           if (st.isFile()) out.push({ path: path74, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -94124,22 +94668,22 @@ ${statusLine}`;
     }
     function pruneExpiredSessionHostRuntimes(now = Date.now()) {
       const root = (0, import_path16.join)(getConfigDir(), "session-host");
-      if (!(0, import_fs20.existsSync)(root)) return 0;
+      if (!(0, import_fs21.existsSync)(root)) return 0;
       let apps;
       try {
-        apps = (0, import_fs20.readdirSync)(root);
+        apps = (0, import_fs21.readdirSync)(root);
       } catch {
         return 0;
       }
       const candidates = [];
       for (const app of apps) {
         const runtimesDir = (0, import_path16.join)(root, app, "runtimes");
-        if (!(0, import_fs20.existsSync)(runtimesDir)) continue;
+        if (!(0, import_fs21.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
           let record2 = null;
           try {
-            const parsed = JSON.parse((0, import_fs20.readFileSync)(f.path, "utf-8"));
+            const parsed = JSON.parse((0, import_fs21.readFileSync)(f.path, "utf-8"));
             const rec = parsed && typeof parsed === "object" ? parsed.record : null;
             record2 = rec && typeof rec === "object" ? rec : null;
           } catch {
@@ -94253,7 +94797,7 @@ ${statusLine}`;
       }
       return signalled;
     }
-    var import_fs20;
+    var import_fs21;
     var import_path16;
     var DAY_MS2;
     var LEDGER_JSONL_MAX_AGE_MS;
@@ -94263,7 +94807,7 @@ ${statusLine}`;
     var init_mesh_disk_retention = __esm2({
       "src/mesh/mesh-disk-retention.ts"() {
         "use strict";
-        import_fs20 = require("fs");
+        import_fs21 = require("fs");
         import_path16 = require("path");
         init_config();
         init_mesh_ledger();
@@ -97043,10 +97587,10 @@ ${statusLine}`;
       }
     }
     async function autoPruneStaleDirectDispatches(components, mesh, selfIds, localDaemonId, minAgeMs, sharedLedgerSnapshot) {
-      const directDispatches = getActiveDirectDispatches3(mesh.id);
+      const directDispatches = listDirectDispatchesForAutoPrune(mesh.id, minAgeMs);
       if (directDispatches.length === 0) return void 0;
       const liveNodes = await collectLiveNodesWithSessions(components, mesh, selfIds, localDaemonId);
-      const ledgerSnapshot = sharedLedgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(readLedgerEntriesByKind(mesh.id, [
+      const ledgerSnapshot = sharedLedgerSnapshot ?? buildMeshActiveWorkLedgerSnapshot(readActiveWorkLedgerEntries(mesh.id, [
         "task_dispatched",
         "task_completed",
         "task_failed",
@@ -99648,17 +100192,6 @@ ${statusLine}`;
           LOG.warn("MeshReconcile", `Coordinator catch-up scan failed for mesh ${mesh.id}: ${e?.message || e}`);
         }
       }
-      if (dispatchMeshCommand) {
-        for (const mesh of meshesSnapshot) {
-          const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
-          if (!daemonHostsMesh(mesh, selfIds)) continue;
-          try {
-            await runContinuousAutoFastForwardScan(components, mesh);
-          } catch (e) {
-            LOG.warn("MeshReconcile", `Continuous auto fast-forward scan failed for mesh ${mesh.id}: ${e?.message || e}`);
-          }
-        }
-      }
       if (store) {
         for (const mesh of meshesSnapshot) {
           const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
@@ -100031,10 +100564,12 @@ ${statusLine}`;
       }, intervalMs);
       if (typeof timer.unref === "function") timer.unref();
       registerUnresolvedForwardRetryNudge(() => scheduleUnresolvedForwardNudge(components));
+      const autoFastForwardScheduler = startContinuousAutoFastForwardScheduler(components);
       LOG.info("MeshReconcile", `Mesh reconcile loop started (interval ${intervalMs}ms)`);
       return {
         stop() {
           clearInterval(timer);
+          autoFastForwardScheduler.stop();
           registerUnresolvedForwardRetryNudge(void 0);
           clearUnresolvedForwardNudge();
           LOG.info("MeshReconcile", "Mesh reconcile loop stopped");
@@ -100069,6 +100604,7 @@ ${statusLine}`;
         init_mesh_retention_config();
         init_mesh_completion_synthesis();
         init_mesh_queue_assignment();
+        init_mesh_auto_fast_forward();
         init_mesh_turn_ledger();
         init_mesh_reconcile_coordinator_drain();
         init_mesh_reconcile_stranded_dispatch();
@@ -103412,6 +103948,11 @@ ${marker}`,
       for (const s2 of state.values()) total += s2.quarantineSkips;
       return total;
     }
+    function getTotalRedriveSkipped() {
+      let total = 0;
+      for (const s2 of state.values()) total += s2.skipped;
+      return total;
+    }
     function getTotalRedriveInjected() {
       let total = 0;
       for (const s2 of state.values()) total += s2.injected;
@@ -103464,7 +104005,7 @@ ${marker}`,
         s2.quarantineSkips++;
         LOG.warn(
           "MeshRedrive",
-          `mesh=${meshId} redrive quarantined (consecutiveFailures=${s2.consecutiveFailures}) \u2014 skip-and-advance entry=${entry.id} to release the \xA77.6 archive floor; the legacy outbox drain remains the redelivery path for this terminal while quarantined`
+          `mesh=${meshId} redrive quarantined (consecutiveFailures=${s2.consecutiveFailures}) \u2014 skip-and-advance entry=${entry.id} to release the \xA77.6 archive floor; no other redelivery path exists for this terminal while quarantined \u2014 the next entry after the ${QUARANTINE_COOLDOWN_MS}ms cooldown gets an automatic retry (half-open probe); if quarantine persists across probes, the underlying pending-queue failure needs investigation`
         );
         return "quarantined";
       }
@@ -103487,9 +104028,9 @@ ${marker}`,
       s2.consecutiveFailures = 0;
       s2.quarantinedAt = null;
       s2.injected++;
-      LOG.debug(
+      LOG.info(
         "MeshRedrive",
-        `re-armed terminal ${entry.ledgerKind} entry=${entry.id} mesh=${meshId} \u2014 dedup collapses it onto the original if already delivered`
+        `redelivered terminal ${entry.ledgerKind} mesh=${meshId} task=${injection.metadataEvent.taskId} event=${injection.event} writer=${entry.writer ?? "unknown"} seq=${entry.seq ?? "unknown"} \u2014 the original delivery was not observed by this consumer before the terminal reached the replica; dedup collapses this onto the original if it was actually delivered`
       );
       return "injected";
     }
@@ -123139,10 +123680,10 @@ ${rawInput}` : rawInput;
     }
     function ensureEmptyDelegatedMcpConfig(workspace) {
       const baseDir = path47.join(os31.tmpdir(), "adhdev-delegated-agent-empty-mcp");
-      (0, import_fs21.mkdirSync)(baseDir, { recursive: true });
+      (0, import_fs22.mkdirSync)(baseDir, { recursive: true });
       const workspaceHash = shortHash(path47.resolve(workspace || os31.tmpdir()));
       const filePath = path47.join(baseDir, `${workspaceHash}.json`);
-      (0, import_fs21.writeFileSync)(filePath, JSON.stringify({ mcpServers: {} }, null, 2), "utf-8");
+      (0, import_fs22.writeFileSync)(filePath, JSON.stringify({ mcpServers: {} }, null, 2), "utf-8");
       return filePath;
     }
     function renderWorkerMcpConfigOverrideTemplate(template, delivery) {
@@ -123355,14 +123896,14 @@ ${rawInput}` : rawInput;
     }
     var os31;
     var path47;
-    var import_fs21;
+    var import_fs22;
     var DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS;
     var init_cli_delegated_launch = __esm2({
       "src/commands/cli-delegated-launch.ts"() {
         "use strict";
         os31 = __toESM2(require("os"));
         path47 = __toESM2(require("path"));
-        import_fs21 = require("fs");
+        import_fs22 = require("fs");
         init_hash();
         init_worker_mcp_isolation();
         init_mesh_coordinator();
@@ -123388,7 +123929,7 @@ ${rawInput}` : rawInput;
       const trimmed = command.trim();
       if (!trimmed) return false;
       if (isExplicitCommand(trimmed)) {
-        return (0, import_fs22.existsSync)(expandExecutable(trimmed));
+        return (0, import_fs23.existsSync)(expandExecutable(trimmed));
       }
       try {
         (0, import_child_process10.execFileSync)(process.platform === "win32" ? "where" : "which", [trimmed], {
@@ -123492,7 +124033,7 @@ ${rawInput}` : rawInput;
     }
     var os322;
     var path48;
-    var import_fs22;
+    var import_fs23;
     var import_child_process10;
     var BUSY_AGENT_STATUSES;
     var ZERO_MESSAGE_STARTING_SEND_WAIT_MS;
@@ -123501,7 +124042,7 @@ ${rawInput}` : rawInput;
         "use strict";
         os322 = __toESM2(require("os"));
         path48 = __toESM2(require("path"));
-        import_fs22 = require("fs");
+        import_fs23 = require("fs");
         import_child_process10 = require("child_process");
         init_dist();
         BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set([
@@ -127415,7 +127956,7 @@ ${effect.notification.body || ""}`.trim();
       if (path50.isAbsolute(trimmed) || trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith("~")) {
         const candidate = trimmed.startsWith("~") ? path50.join((0, import_os4.homedir)(), trimmed.slice(1)) : trimmed;
         const resolved = path50.isAbsolute(candidate) ? candidate : path50.resolve(candidate);
-        return (0, import_fs23.existsSync)(resolved) ? resolved : null;
+        return (0, import_fs24.existsSync)(resolved) ? resolved : null;
       }
       const isWin = (0, import_os4.platform)() === "win32";
       const paths = (process.env.PATH || "").split(isWin ? ";" : ":");
@@ -127425,8 +127966,8 @@ ${effect.notification.body || ""}`.trim();
         for (const ext of exes) {
           const fullPath = path50.join(p, trimmed + ext);
           try {
-            if ((0, import_fs23.existsSync)(fullPath)) {
-              const stat2 = (0, import_fs23.statSync)(fullPath);
+            if ((0, import_fs24.existsSync)(fullPath)) {
+              const stat2 = (0, import_fs24.statSync)(fullPath);
               if (stat2.isFile() && (isWin || stat2.mode & 73)) {
                 return fullPath;
               }
@@ -127444,9 +127985,9 @@ ${effect.notification.body || ""}`.trim();
         if (normalized.includes("*")) {
           const username = home.split(/[\\/]/).pop() || "";
           const resolved = normalized.replace("*", username);
-          if ((0, import_fs23.existsSync)(resolved)) return resolved;
+          if ((0, import_fs24.existsSync)(resolved)) return resolved;
         } else {
-          if ((0, import_fs23.existsSync)(normalized)) return normalized;
+          if ((0, import_fs24.existsSync)(normalized)) return normalized;
         }
       }
       return null;
@@ -127460,7 +128001,7 @@ ${effect.notification.body || ""}`.trim();
         let resolvedCli = cliPath;
         if (!resolvedCli && appPath && os40 === "darwin") {
           const bundledCli = `${appPath}/Contents/Resources/app/bin/${def.cli}`;
-          if ((0, import_fs23.existsSync)(bundledCli)) resolvedCli = bundledCli;
+          if ((0, import_fs24.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os40 === "win32") {
           const { dirname: dirname33 } = await import("path");
@@ -127473,7 +128014,7 @@ ${effect.notification.body || ""}`.trim();
             `${appDir}\\\\resources\\\\app\\\\bin\\\\${def.cli}.cmd`
           ];
           for (const c of candidates) {
-            if ((0, import_fs23.existsSync)(c)) {
+            if ((0, import_fs24.existsSync)(c)) {
               resolvedCli = c;
               break;
             }
@@ -127494,7 +128035,7 @@ ${effect.notification.body || ""}`.trim();
       }
       return results;
     }
-    var import_fs23;
+    var import_fs24;
     var import_os4;
     var path50;
     var BUILTIN_IDE_DEFINITIONS;
@@ -127502,7 +128043,7 @@ ${effect.notification.body || ""}`.trim();
     var init_ide_detector = __esm2({
       "src/detection/ide-detector.ts"() {
         "use strict";
-        import_fs23 = require("fs");
+        import_fs24 = require("fs");
         import_os4 = require("os");
         path50 = __toESM2(require("path"));
         BUILTIN_IDE_DEFINITIONS = [];
@@ -135216,10 +135757,10 @@ ${result.stderr}`, result.code);
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "queue requeue");
             if (ownerFailure) return ownerFailure;
             try {
-              const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTask: requeueTask22, getQueue: getQueue22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTask: requeueTask22, getQueueEntryById: getQueueEntryById2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               if (args?.force !== true) {
                 const { isSessionActivelyGenerating: isSessionActivelyGenerating2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
-                const existing = getQueue22(meshId).find((t) => t?.id === taskId);
+                const existing = getQueueEntryById2(meshId, taskId);
                 if (existing?.status === "assigned" && existing.assignedSessionId && isSessionActivelyGenerating2(ctx.deps, existing.assignedSessionId)) {
                   return {
                     success: false,
@@ -139644,7 +140185,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   workspace
                 };
               }
-              const { existsSync: existsSync79, readFileSync: readFileSync66, writeFileSync: writeFileSync35, copyFileSync: copyFileSync4, mkdirSync: mkdirSync39 } = await import("fs");
+              const { existsSync: existsSync80, readFileSync: readFileSync66, writeFileSync: writeFileSync35, copyFileSync: copyFileSync4, mkdirSync: mkdirSync39 } = await import("fs");
               const { dirname: dirname33 } = await import("path");
               const mcpConfigPath = coordinatorSetup.configPath;
               const hermesManualFallback = cliType === "hermes-cli" && configFormat === "hermes_config_yaml" ? createHermesManualMeshCoordinatorSetup(meshId, workspace) : null;
@@ -139689,7 +140230,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 if (hermesManualFallback) return returnManualFallback(message);
                 return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
               }
-              const hadExistingMcpConfig = existsSync79(mcpConfigPath);
+              const hadExistingMcpConfig = existsSync80(mcpConfigPath);
               let existingMcpConfig = hermesBaseConfig?.config || {};
               if (hermesBaseConfig) {
                 copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname33(mcpConfigPath));
@@ -140240,10 +140781,10 @@ ${ptyResult.output.slice(-2e3)}`);
                 const pendingCoordinatorEvents2 = getPendingMeshCoordinatorEvents(meshId, peekScope);
                 const asyncRefineJobs2 = pendingCoordinatorEvents2.length > 0 ? await (async () => {
                   try {
-                    const { readLedgerEntriesByKind: readLedgerEntriesByKind3 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+                    const { readRefineJobLedgerEntries: readRefineJobLedgerEntries3 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
                     return buildMeshAsyncRefineJobs3({
                       meshId,
-                      ledgerEntries: readLedgerEntriesByKind3(meshId, ["task_dispatched", "task_completed", "task_failed"]),
+                      ledgerEntries: readRefineJobLedgerEntries3(meshId),
                       pendingEvents: [...pendingCoordinatorEvents2]
                     });
                   } catch {
@@ -140327,9 +140868,9 @@ ${ptyResult.output.slice(-2e3)}`);
               const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime22 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
               const schedulingRuntime = buildMeshSchedulingRuntime22(mesh, queue);
               const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
-              const { readLedgerEntries: readLedgerEntries32, readLedgerEntriesByKind: readLedgerEntriesByKind2, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
+              const { readLedgerEntries: readLedgerEntries32, readRefineJobLedgerEntries: readRefineJobLedgerEntries2, getLedgerSummary: getLedgerSummary22 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const ledgerEntries = readLedgerEntries32(meshId, { tail: 20 });
-              const asyncRefineLedgerEntries = readLedgerEntriesByKind2(meshId, ["task_dispatched", "task_completed", "task_failed"]);
+              const asyncRefineLedgerEntries = readRefineJobLedgerEntries2(meshId);
               const ledgerSummary = getLedgerSummary22(meshId);
               const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
               const liveMeshSessions = (0, import_session_host_core3.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
@@ -140807,7 +141348,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
               const { readLedgerEntries: readLedgerEntries32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-              const { existsSync: existsSync79 } = await import("fs");
+              const { existsSync: existsSync80 } = await import("fs");
               const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
@@ -140826,7 +141367,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
               for (const item of derivation.items) {
                 const workspace = item.workspace;
-                if (!workspace || !existsSync79(workspace)) continue;
+                if (!workspace || !existsSync80(workspace)) continue;
                 const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
                 try {
                   const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -147070,7 +147611,7 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { existsSync: existsSync79, readFileSync: readFileSync66, mkdirSync: mkdirSync39, writeFileSync: writeFileSync35 } = await import("fs");
+              const { existsSync: existsSync80, readFileSync: readFileSync66, mkdirSync: mkdirSync39, writeFileSync: writeFileSync35 } = await import("fs");
               const { dirname: dirname33, join: join82 } = await import("path");
               const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -147079,7 +147620,7 @@ ${e?.stderr || ""}`;
               let existedAsYaml = false;
               for (const relative9 of MESH_JSON_CONFIG_LOCATIONS2) {
                 const candidate = join82(workspace, relative9);
-                if (!existsSync79(candidate)) continue;
+                if (!existsSync80(candidate)) continue;
                 try {
                   const text = readFileSync66(candidate, "utf-8");
                   const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml3.load(text);
@@ -149217,9 +149758,17 @@ ${e?.stderr || ""}`;
       GitWorkspaceMonitor: () => GitWorkspaceMonitor,
       IDENTITY: () => IDENTITY2,
       IDLE_REMINDER_DEBOUNCE_MS: () => IDLE_REMINDER_DEBOUNCE_MS,
+      IPC_BUSY_ERROR_CODE: () => IPC_BUSY_ERROR_CODE,
+      IPC_MAX_INFLIGHT_PER_CONNECTION: () => IPC_MAX_INFLIGHT_PER_CONNECTION,
+      IPC_MAX_PAYLOAD_BYTES: () => IPC_MAX_PAYLOAD_BYTES,
+      IPC_PROBE_RATE_LIMITED_COMMANDS: () => IPC_PROBE_RATE_LIMITED_COMMANDS,
+      IPC_PROBE_RATE_LIMIT_MAX_CALLS: () => IPC_PROBE_RATE_LIMIT_MAX_CALLS,
+      IPC_PROBE_RATE_LIMIT_WINDOW_MS: () => IPC_PROBE_RATE_LIMIT_WINDOW_MS,
+      IPC_RATE_LIMITED_ERROR_CODE: () => IPC_RATE_LIMITED_ERROR_CODE,
       IdeProviderInstance: () => IdeProviderInstance,
       InMemoryGitSnapshotStore: () => InMemoryGitSnapshotStore,
       InstanceContextConflictError: () => InstanceContextConflictError,
+      IpcConnectionLoadGuard: () => IpcConnectionLoadGuard,
       KNOWN_DIGEST_ALGORITHMS: () => KNOWN_DIGEST_ALGORITHMS,
       LEGACY_UNVERIFIED_ALGORITHM: () => LEGACY_UNVERIFIED_ALGORITHM,
       LOG: () => LOG,
@@ -149404,7 +149953,7 @@ ${e?.stderr || ""}`;
       buildToolChatMessage: () => buildToolChatMessage,
       buildUserChatMessage: () => buildUserChatMessage,
       cancelTask: () => cancelTask3,
-      canonicalDaemonId: () => canonicalDaemonId2,
+      canonicalDaemonId: () => canonicalDaemonId3,
       checkDiskSpace: () => checkDiskSpace,
       claimMeshGraphGate: () => claimMeshGraphGate3,
       claimNextTask: () => claimNextTask,
@@ -149578,6 +150127,7 @@ ${e?.stderr || ""}`;
       getSessionRecoveryContext: () => getSessionRecoveryContext3,
       getTotalQuarantineSkips: () => getTotalQuarantineSkips,
       getTotalRedriveInjected: () => getTotalRedriveInjected,
+      getTotalRedriveSkipped: () => getTotalRedriveSkipped,
       getTrackIdentity: () => getTrackIdentity,
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
       getUsageDir: () => getUsageDir,
@@ -150886,7 +151436,7 @@ ${e?.stderr || ""}`;
     function isMeshTestPollution(args) {
       return isSyntheticTestMeshId(args.meshId) || isSyntheticTestCoordinatorSession(args.coordinatorSessionId);
     }
-    var import_fs16 = require("fs");
+    var import_fs17 = require("fs");
     var import_path14 = require("path");
     init_config();
     init_usage_normalize();
@@ -150903,7 +151453,7 @@ ${e?.stderr || ""}`;
     };
     function getUsageDir() {
       const dir = (0, import_path14.join)(getConfigDir(), USAGE_DIR_NAME);
-      if (!(0, import_fs16.existsSync)(dir)) (0, import_fs16.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs17.existsSync)(dir)) (0, import_fs17.mkdirSync)(dir, { recursive: true, mode: 448 });
       return dir;
     }
     function getUsagePath(meshId) {
@@ -150918,7 +151468,7 @@ ${e?.stderr || ""}`;
       const path74 = getUsagePath(meshId);
       let stat2;
       try {
-        const s2 = (0, import_fs16.statSync)(path74);
+        const s2 = (0, import_fs17.statSync)(path74);
         stat2 = { mtimeMs: s2.mtimeMs, size: s2.size };
       } catch {
         usageFileCache.delete(path74);
@@ -150929,7 +151479,7 @@ ${e?.stderr || ""}`;
         return cached5.file;
       }
       try {
-        const parsed = JSON.parse((0, import_fs16.readFileSync)(path74, "utf-8"));
+        const parsed = JSON.parse((0, import_fs17.readFileSync)(path74, "utf-8"));
         if (!parsed || typeof parsed !== "object" || !parsed.sessions) {
           usageFileCache.delete(path74);
           return emptyFile(meshId);
@@ -150944,19 +151494,19 @@ ${e?.stderr || ""}`;
     function writeUsageFile(meshId, file2) {
       const path74 = getUsagePath(meshId);
       const tmp = `${path74}.tmp`;
-      (0, import_fs16.writeFileSync)(tmp, JSON.stringify(file2), { encoding: "utf-8", mode: 384 });
+      (0, import_fs17.writeFileSync)(tmp, JSON.stringify(file2), { encoding: "utf-8", mode: 384 });
       try {
-        (0, import_fs16.renameSync)(tmp, path74);
+        (0, import_fs17.renameSync)(tmp, path74);
       } catch (e) {
         try {
-          (0, import_fs16.unlinkSync)(tmp);
+          (0, import_fs17.unlinkSync)(tmp);
         } catch {
         }
         usageFileCache.delete(path74);
         throw e;
       }
       try {
-        const s2 = (0, import_fs16.statSync)(path74);
+        const s2 = (0, import_fs17.statSync)(path74);
         usageFileCache.set(path74, { file: file2, mtimeMs: s2.mtimeMs, size: s2.size });
       } catch {
         usageFileCache.delete(path74);
@@ -163678,6 +164228,7 @@ async (params) => {
         ctx.json(res, 500, { error: `Stop failed: ${e.message}` });
       }
     }
+    var instanceManagersWithCliSSEListener = /* @__PURE__ */ new WeakSet();
     function handleCliSSE(ctx, cliSSEClients, _req, res) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -163687,7 +164238,8 @@ async (params) => {
       });
       res.write('data: {"type":"connected"}\n\n');
       cliSSEClients.push(res);
-      if (cliSSEClients.length === 1 && ctx.instanceManager) {
+      if (ctx.instanceManager && !instanceManagersWithCliSSEListener.has(ctx.instanceManager)) {
+        instanceManagersWithCliSSEListener.add(ctx.instanceManager);
         ctx.instanceManager.onEvent((event) => {
           ctx.sendCliSSE(event);
         });
@@ -167570,6 +168122,11 @@ data: ${JSON.stringify(msg.data)}
     init_build_info();
     init_transcript_publisher();
     var SessionRegistry = class {
+      transcriptTopicRelease = null;
+      /** Hook installed at boot once the seqscribe transcript claim registry exists. */
+      setTranscriptTopicRelease(release2) {
+        this.transcriptTopicRelease = release2;
+      }
       bySessionId = /* @__PURE__ */ new Map();
       byManagerKey = /* @__PURE__ */ new Map();
       byInstanceKey = /* @__PURE__ */ new Map();
@@ -167612,6 +168169,10 @@ data: ${JSON.stringify(msg.data)}
         if (!target) return;
         this.bySessionId.delete(sessionId);
         stopTranscriptStatPolling(sessionId);
+        try {
+          this.transcriptTopicRelease?.(sessionId);
+        } catch {
+        }
         if (target.cdpManagerKey) this.removeIndex(this.byManagerKey, target.cdpManagerKey, sessionId);
         if (target.instanceKey) this.removeIndex(this.byInstanceKey, target.instanceKey, sessionId);
         if (target.parentSessionId) this.removeIndex(this.byParentSessionId, target.parentSessionId, sessionId);
@@ -167656,7 +168217,7 @@ data: ${JSON.stringify(msg.data)}
     init_upgrade_helper();
     init_mesh_events();
     init_mesh_reconcile_loop();
-    var import_fs24 = require("fs");
+    var import_fs25 = require("fs");
     var import_path24 = require("path");
     var import_crypto20 = require("crypto");
     init_logger();
@@ -167725,10 +168286,10 @@ data: ${JSON.stringify(msg.data)}
       } catch {
         return result;
       }
-      if (!(0, import_fs24.existsSync)(dir)) return result;
+      if (!(0, import_fs25.existsSync)(dir)) return result;
       let names;
       try {
-        names = (0, import_fs24.readdirSync)(dir);
+        names = (0, import_fs25.readdirSync)(dir);
       } catch (e) {
         LOG.warn("MeshEvents", `Pending-events migration: cannot read ledger dir: ${e?.message || e}`);
         return result;
@@ -167739,17 +168300,17 @@ data: ${JSON.stringify(msg.data)}
         result.filesScanned++;
         const claimed = `${path74}.migrating`;
         try {
-          (0, import_fs24.renameSync)(path74, claimed);
+          (0, import_fs25.renameSync)(path74, claimed);
         } catch {
           continue;
         }
         let content;
         try {
-          content = (0, import_fs24.readFileSync)(claimed, "utf-8");
+          content = (0, import_fs25.readFileSync)(claimed, "utf-8");
         } catch (e) {
           LOG.warn("MeshEvents", `Pending-events migration: cannot read ${name}; leaving it for the next boot: ${e?.message || e}`);
           try {
-            (0, import_fs24.renameSync)(claimed, path74);
+            (0, import_fs25.renameSync)(claimed, path74);
           } catch {
           }
           result.filesRetained++;
@@ -167764,14 +168325,14 @@ data: ${JSON.stringify(msg.data)}
         }
         if (!allImported) {
           try {
-            (0, import_fs24.renameSync)(claimed, path74);
+            (0, import_fs25.renameSync)(claimed, path74);
           } catch {
           }
           result.filesRetained++;
           continue;
         }
         try {
-          (0, import_fs24.unlinkSync)(claimed);
+          (0, import_fs25.unlinkSync)(claimed);
           result.filesRemoved++;
         } catch (e) {
           LOG.warn("MeshEvents", `Pending-events migration: imported ${name} but could not unlink it: ${e?.message || e}`);
@@ -168395,7 +168956,7 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     init_require_whitelist();
-    var import_fs25 = require("fs");
+    var import_fs26 = require("fs");
     var import_path25 = require("path");
     init_config();
     init_logger();
@@ -168405,10 +168966,10 @@ data: ${JSON.stringify(msg.data)}
     }
     function loadStoredFleetSecret(env2) {
       const path74 = fleetSecretPath(env2);
-      if (!(0, import_fs25.existsSync)(path74)) return null;
+      if (!(0, import_fs26.existsSync)(path74)) return null;
       let raw;
       try {
-        raw = (0, import_fs25.readFileSync)(path74, "utf-8");
+        raw = (0, import_fs26.readFileSync)(path74, "utf-8");
       } catch (err) {
         LOG.warn(
           "Seqscribe",
@@ -168435,26 +168996,26 @@ data: ${JSON.stringify(msg.data)}
         throw new Error("storeFleetSecret requires an integer version >= 1");
       }
       const dir = getConfigDir(env2);
-      if (!(0, import_fs25.existsSync)(dir)) {
-        (0, import_fs25.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs26.existsSync)(dir)) {
+        (0, import_fs26.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
       const path74 = (0, import_path25.join)(dir, FLEET_SECRET_FILE);
       const tmp = `${path74}.tmp-${process.pid}`;
-      (0, import_fs25.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
+      (0, import_fs26.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
         encoding: "utf-8",
         mode: 384
       });
       try {
-        (0, import_fs25.renameSync)(tmp, path74);
+        (0, import_fs26.renameSync)(tmp, path74);
       } catch (err) {
         try {
-          (0, import_fs25.unlinkSync)(tmp);
+          (0, import_fs26.unlinkSync)(tmp);
         } catch {
         }
         throw err;
       }
       try {
-        (0, import_fs25.chmodSync)(path74, 384);
+        (0, import_fs26.chmodSync)(path74, 384);
       } catch {
       }
       LOG.info("Seqscribe", `fleet secret stored (v${version2})`);
@@ -168626,7 +169187,7 @@ data: ${JSON.stringify(msg.data)}
         }))
       };
     }
-    var import_fs26 = require("fs");
+    var import_fs27 = require("fs");
     var import_path26 = require("path");
     init_dist2();
     init_config();
@@ -168682,7 +169243,7 @@ data: ${JSON.stringify(msg.data)}
     function openSeqscribeNode(opts = {}) {
       const dbPath = opts.dbPath ?? getSeqscribeDbPath();
       const dir = (0, import_path26.dirname)(dbPath);
-      if (!(0, import_fs26.existsSync)(dir)) (0, import_fs26.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs27.existsSync)(dir)) (0, import_fs27.mkdirSync)(dir, { recursive: true, mode: 448 });
       const Database = loadBetterSqlite3();
       const db = new Database(dbPath);
       db.pragma("journal_mode = WAL");
@@ -169040,6 +169601,13 @@ data: ${JSON.stringify(msg.data)}
               fromReplica: routing.fromReplica,
               fromLedger: routing.fromLedger,
               fallbacks: { ...routing.fallbacks }
+            }
+          } : {},
+          ...opts.terminalRedrive ? {
+            terminalRedrive: {
+              redelivered: opts.terminalRedrive.redelivered,
+              skipped: opts.terminalRedrive.skipped,
+              quarantined: opts.terminalRedrive.quarantined
             }
           } : {},
           ...snap ? {
@@ -169584,7 +170152,12 @@ data: ${JSON.stringify(msg.data)}
               sessionId: typeof record2.sessionId === "string" ? record2.sessionId : null,
               providerType: typeof record2.providerType === "string" ? record2.providerType : null,
               taskId: typeof record2.taskId === "string" ? record2.taskId : null,
-              payload: record2.payload && typeof record2.payload === "object" ? record2.payload : {}
+              payload: record2.payload && typeof record2.payload === "object" ? record2.payload : {},
+              // From the RAW LogEntry, not the projected ledger record —
+              // this is the seqscribe position, logged for observability
+              // only (never forwarded to the server; see stats.ts).
+              writer: typeof entry.writer === "string" ? entry.writer : void 0,
+              seq: typeof entry.seq === "number" ? entry.seq : void 0
             }
           });
         });
@@ -169616,10 +170189,6 @@ data: ${JSON.stringify(msg.data)}
       configureTerminalRedrive(null);
     }
     init_mesh_terminal_redrive();
-    init_transcript_publisher();
-    init_transcript_parity();
-    init_native_history_executor();
-    init_logger();
     init_logger();
     init_mesh_dual_write();
     init_topics2();
@@ -169672,6 +170241,13 @@ data: ${JSON.stringify(msg.data)}
         return { ok: false, reason: "define_failed" };
       }
     }
+    function releaseSessionTranscriptTopic(claims, rawSessionId) {
+      claims.release(sessionTranscriptTopic(rawSessionId));
+    }
+    init_transcript_publisher();
+    init_transcript_parity();
+    init_native_history_executor();
+    init_logger();
     init_topics2();
     init_transcript_revision_codec();
     var TRANSCRIPT_PARITY_SCAN_ROWS = SESSION_TRANSCRIPT_RING;
@@ -170279,6 +170855,14 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
               // reason is the only surface that says WHICH readiness
               // condition is holding a mesh on the ledger.
               readRouting: meshReadRoutingCounters(),
+              // Terminal-notification redelivery through the seqscribe consumer
+              // (P-δ, 2026-09-23): load-bearing (35 of 295 completions on preview
+              // were redelivered) and previously invisible. Raw local counters.
+              terminalRedrive: {
+                redelivered: getTotalRedriveInjected(),
+                skipped: getTotalRedriveSkipped(),
+                quarantined: getTotalQuarantineSkips()
+              },
               // Transcript trigger attribution + daemon-side stage
               // latencies. Local-only for the same reason as readRouting
               // directly above — raw counters and raw millisecond
@@ -170485,6 +171069,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         if (components.seqscribeNode) {
           const node = components.seqscribeNode;
           const transcriptClaims = new TranscriptTopicClaimRegistry();
+          sessionRegistry.setTranscriptTopicRelease((rawSessionId) => releaseSessionTranscriptTopic(transcriptClaims, rawSessionId));
           components.transcriptReplicaStore = new TranscriptReplicaStore(node, transcriptClaims);
           const transcriptOwnerDaemonId = node.daemonId ?? node.writerId;
           configureTranscriptProjection({
@@ -170800,6 +171385,57 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     var import_ws3 = require_ws();
     init_logger();
     init_ipc_protocol();
+    init_ipc_protocol();
+    var PROBE_RATE_LIMITED_COMMAND_SET = new Set(IPC_PROBE_RATE_LIMITED_COMMANDS);
+    var IpcConnectionLoadGuard = class {
+      inFlight = 0;
+      // command -> timestamps (ms) of calls within the current window, oldest first.
+      probeCallTimestamps = /* @__PURE__ */ new Map();
+      /**
+       * Call BEFORE dispatching a command. Returns a rejection describing the
+       * structured error to send back (never throws) — the caller is expected to
+       * short-circuit and respond with that error instead of running the handler.
+       * Returns null when the command may proceed; the caller MUST then call
+       * `release()` exactly once when the command settles (success or failure).
+       */
+      tryAcquire(command, now = Date.now()) {
+        if (this.inFlight >= IPC_MAX_INFLIGHT_PER_CONNECTION) {
+          return {
+            code: IPC_BUSY_ERROR_CODE,
+            error: `Too many in-flight commands on this connection (max ${IPC_MAX_INFLIGHT_PER_CONNECTION}). Wait for outstanding requests to complete before sending more.`
+          };
+        }
+        if (PROBE_RATE_LIMITED_COMMAND_SET.has(command)) {
+          const windowStart = now - IPC_PROBE_RATE_LIMIT_WINDOW_MS;
+          const timestamps = this.probeCallTimestamps.get(command) ?? [];
+          while (timestamps.length > 0 && timestamps[0] <= windowStart) {
+            timestamps.shift();
+          }
+          if (timestamps.length >= IPC_PROBE_RATE_LIMIT_MAX_CALLS) {
+            const retryAfterMs3 = Math.max(0, timestamps[0] + IPC_PROBE_RATE_LIMIT_WINDOW_MS - now);
+            this.probeCallTimestamps.set(command, timestamps);
+            return {
+              code: IPC_RATE_LIMITED_ERROR_CODE,
+              error: `Rate limit exceeded for '${command}' on this connection (max ${IPC_PROBE_RATE_LIMIT_MAX_CALLS} per ${IPC_PROBE_RATE_LIMIT_WINDOW_MS / 1e3}s). Retry after ${retryAfterMs3}ms.`,
+              retryAfterMs: retryAfterMs3
+            };
+          }
+          timestamps.push(now);
+          this.probeCallTimestamps.set(command, timestamps);
+        }
+        this.inFlight += 1;
+        return null;
+      }
+      /** Call exactly once for every `tryAcquire` that returned null, when the
+       *  command settles (success, error, or exception — always in a `finally`). */
+      release() {
+        if (this.inFlight > 0) this.inFlight -= 1;
+      }
+      /** Current in-flight count — exposed for diagnostics/tests only. */
+      get inFlightCount() {
+        return this.inFlight;
+      }
+    };
     function buildIpcStatusHttpResponse(method, url2, payload) {
       if (method && method.toUpperCase() !== "GET") {
         return { statusCode: 405, body: { ok: false, error: "method not allowed" } };
@@ -170814,6 +171450,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
     async function startLocalIpcServer(opts) {
       const logCategory = opts.logCategory || "IPC";
       const clients = /* @__PURE__ */ new Set();
+      const loadGuards = /* @__PURE__ */ new WeakMap();
       let httpServer = null;
       let wss = null;
       let listening = false;
@@ -170834,7 +171471,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         });
         res.end(body);
       });
-      wss = new import_ws3.WebSocketServer({ noServer: true });
+      wss = new import_ws3.WebSocketServer({ noServer: true, maxPayload: IPC_MAX_PAYLOAD_BYTES });
       wss.on("connection", (ws) => handleConnection(ws));
       httpServer.on("upgrade", (req, socket, head) => {
         const wsUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
@@ -170849,6 +171486,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       });
       function handleConnection(ws) {
         clients.add(ws);
+        loadGuards.set(ws, new IpcConnectionLoadGuard());
         sendWelcome(ws);
         opts.onClientConnected?.(ws);
         ws.on("message", (raw) => {
@@ -170856,10 +171494,12 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         });
         ws.on("close", () => {
           clients.delete(ws);
+          loadGuards.delete(ws);
           opts.onClientDisconnected?.(ws);
         });
         ws.on("error", () => {
           clients.delete(ws);
+          loadGuards.delete(ws);
           opts.onClientDisconnected?.(ws);
         });
       }
@@ -170897,7 +171537,23 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           }));
           return;
         }
+        const guard = loadGuards.get(ws);
         const handlerStartedAt = Date.now();
+        const rejection = guard?.tryAcquire(command, handlerStartedAt) ?? null;
+        if (rejection) {
+          const responseBody = JSON.stringify({
+            type: "ext:command_result",
+            payload: {
+              requestId,
+              success: false,
+              error: rejection.error,
+              code: rejection.code,
+              ...rejection.retryAfterMs !== void 0 ? { retryAfterMs: rejection.retryAfterMs } : {}
+            }
+          });
+          writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+          return;
+        }
         try {
           const result = await opts.handleCommand({ command, args, requestId, ws });
           const responseBody = JSON.stringify({
@@ -170921,6 +171577,8 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
             }
           });
           writeResponse(ws, responseBody, command, requestId, handlerStartedAt);
+        } finally {
+          guard?.release();
         }
       }
       function writeResponse(ws, body, command, requestId, handlerStartedAt) {
@@ -170991,6 +171649,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
         }
       };
     }
+    init_ipc_protocol();
     init_claude_cli_transcript();
     init_codex_cli_transcript();
     init_antigravity_cli_transcript();
@@ -171458,6 +172117,7 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
       let stopped = false;
       let lastScope = [];
       let lastBoard = null;
+      let lastReportedShape = null;
       const doPut = async (rawReport) => {
         const projected = projectBeaconReport(rawReport);
         if (!projected) {
@@ -171549,10 +172209,18 @@ ${upgradeFailureNotice.notice}${supersededHint}`);
           topicScope: [...lastScope],
           capturedAt: Date.now()
         };
-        LOG.info(
+        LOG.debug(
           "Seqscribe",
           `beacon get writer=${handle.writerId} peers=${clean2.length} topics=${lastScope.length}`
         );
+        const shape = { peers: clean2.length, topics: lastScope.length };
+        if (!lastReportedShape || lastReportedShape.peers !== shape.peers || lastReportedShape.topics !== shape.topics) {
+          lastReportedShape = shape;
+          LOG.info(
+            "Seqscribe",
+            `beacon board changed writer=${handle.writerId} peers=${shape.peers} topics=${shape.topics}`
+          );
+        }
         return clean2;
       };
       const libHandle = handle.node.beacon({
@@ -173370,6 +174038,7 @@ var MESH_STATUS_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
+      refresh: { type: "boolean", description: "Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL \u2014 mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false." },
       _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
       includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
       includeSessions: { type: "boolean", description: "Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node." },
@@ -173725,6 +174394,7 @@ var MESH_VIEW_QUEUE_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
+      refresh: { type: "boolean", description: "Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL \u2014 mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false." },
       status: {
         type: "array",
         items: { type: "string" },
@@ -176732,25 +177402,63 @@ async function collectRelatedRepoStatuses(ctx, node) {
   }
   return results;
 }
-async function collectLiveStatusSessions(ctx, node) {
+var PROBE_CACHE_TTL_MS = 5e3;
+var statusMetadataProbeCacheByCtx = /* @__PURE__ */ new WeakMap();
+function statusMetadataProbeCacheForCtx(ctx) {
+  let cache = statusMetadataProbeCacheByCtx.get(ctx);
+  if (!cache) {
+    cache = /* @__PURE__ */ new Map();
+    statusMetadataProbeCacheByCtx.set(ctx, cache);
+  }
+  return cache;
+}
+function statusMetadataProbeCacheKey(ctx, node) {
+  const canonical = (0, import_daemon_core8.canonicalDaemonId)(readNodeDaemonId(node)) || (0, import_daemon_core8.canonicalDaemonId)(ctx.localDaemonId);
+  return canonical || `node:${node.id}`;
+}
+function probeStatusMetadataForNode(ctx, node, opts) {
+  const cache = statusMetadataProbeCacheForCtx(ctx);
+  const key = statusMetadataProbeCacheKey(ctx, node);
+  const now = Date.now();
+  const cached2 = cache.get(key);
+  if (cached2 && cached2.expiresAt > now) {
+    if (!opts?.refresh || cached2.refreshedAt) return cached2.result;
+  }
+  const resultPromise = commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
+  resultPromise.catch(() => {
+    const entry = cache.get(key);
+    if (entry && entry.result === resultPromise) cache.delete(key);
+  });
+  cache.set(key, {
+    expiresAt: now + PROBE_CACHE_TTL_MS,
+    result: resultPromise,
+    // Marks this entry as having been (re)issued under refresh:true, so a
+    // second node hitting the SAME key later in this call shares it instead
+    // of issuing its own "fresh" probe — refresh forces at least one live
+    // probe per daemon per call, not one per node.
+    ...opts?.refresh ? { refreshedAt: now } : {}
+  });
+  return resultPromise;
+}
+async function collectLiveStatusSessions(ctx, node, opts) {
   try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
     return extractStatusMetadataSessions(statusResult);
   } catch {
     return [];
   }
 }
-async function collectLiveStatusSessionsVerified(ctx, node) {
+async function collectLiveStatusSessionsVerified(ctx, node, opts) {
   try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {});
+    const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
     return { sessions: extractStatusMetadataSessions(statusResult), verified: true };
   } catch {
     return { sessions: [], verified: false };
   }
 }
-async function collectLiveStatusProbe(ctx, node) {
+async function collectLiveStatusProbe(ctx, node, opts) {
   try {
-    const statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
+    const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
     const payload = unwrapCommandPayload(statusResult);
     return {
       sessions: extractStatusMetadataSessions(statusResult),
@@ -176762,16 +177470,16 @@ async function collectLiveStatusProbe(ctx, node) {
     return { sessions: [] };
   }
 }
-async function collectMeshViewQueueNodesWithLiveSessions(ctx) {
+async function collectMeshViewQueueNodesWithLiveSessions(ctx, opts) {
   const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const liveSessions = await collectLiveStatusSessions(ctx, node);
+    const liveSessions = await collectLiveStatusSessions(ctx, node, opts);
     return liveSessions.length > 0 ? { ...node, sessions: liveSessions } : node;
   }));
   return nodes;
 }
-async function collectMeshViewQueueNodesWithLiveSessionsVerified(ctx) {
+async function collectMeshViewQueueNodesWithLiveSessionsVerified(ctx, opts) {
   const nodes = await Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const { sessions: liveSessions, verified } = await collectLiveStatusSessionsVerified(ctx, node);
+    const { sessions: liveSessions, verified } = await collectLiveStatusSessionsVerified(ctx, node, opts);
     if (verified) {
       return { ...node, sessions: liveSessions, __liveProbeVerified: true };
     }
@@ -176990,6 +177698,7 @@ function summarizePendingEventProtocolMetrics(pendingEvents) {
 async function meshStatus(ctx, args = {}) {
   const rateResult = recordMeshCoordinatorToolCall(ctx, "mesh_status");
   const compact = args.verbose === true ? false : args.compact ?? true;
+  const probeOpts = args.refresh === true ? { refresh: true } : void 0;
   await refreshMeshFromDaemon(ctx);
   const { mesh, transport } = ctx;
   let ledgerSummary = (0, import_daemon_core9.getLedgerSummary)(mesh.id);
@@ -177116,7 +177825,7 @@ async function meshStatus(ctx, args = {}) {
     }
     const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
-    const statusProbe = await collectLiveStatusProbe(ctx, node);
+    const statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
     const liveSessions = statusProbe.sessions;
     if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
     if (statusProbe.upgradeFailure) entry.upgradeFailure = statusProbe.upgradeFailure;
@@ -178738,6 +179447,7 @@ async function meshEnqueueBatch(ctx, args) {
 async function meshViewQueue(ctx, args) {
   const rateResult = recordMeshCoordinatorToolCall(ctx, "mesh_view_queue");
   const compact = args.verbose === true ? false : args.compact ?? true;
+  const probeOpts = args.refresh === true ? { refresh: true } : void 0;
   try {
     await refreshMeshFromDaemon(ctx);
     const statusFilter = sanitizeQueueStatusFilter(args.status);
@@ -178750,7 +179460,7 @@ async function meshViewQueue(ctx, args) {
       const depState = (0, import_daemon_core9.describeTaskDependencyState)(task, statusById, depMetaById);
       return { ...task, ...depState };
     });
-    const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx);
+    const liveNodes = await collectMeshViewQueueNodesWithLiveSessionsVerified(ctx, probeOpts);
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
     const summary = buildQueueStatusSummary(fullQueue);
@@ -182457,7 +183167,8 @@ async function meshAnswerQuestion(ctx, args) {
 async function meshListPendingApprovals(ctx, _args = {}) {
   recordMeshCoordinatorToolCall(ctx, "mesh_list_pending_approvals");
   await refreshMeshFromDaemon(ctx);
-  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
+  const probeOpts = _args?.refresh === true ? { refresh: true } : void 0;
+  const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx, probeOpts);
   let ledgerEntries = (0, import_daemon_core9.readLedgerEntries)(ctx.mesh.id, { tail: 200 });
   let directDispatches = (0, import_daemon_core9.getActiveDirectDispatches)(ctx.mesh.id);
   const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);

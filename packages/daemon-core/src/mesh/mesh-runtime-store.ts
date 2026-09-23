@@ -15,6 +15,12 @@ import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { selectClaimCandidate, type MeshClaimRefusal, type MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
+import { WalCheckpointScheduler, DEFAULT_WAL_CHECKPOINT_POLICY } from './mesh-runtime-store-wal.js';
+import {
+    findAssignedBySession as findAssignedBySessionImpl, getQueueHeads as getQueueHeadsImpl,
+    pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, expireAgedDirectDispatches as expireAgedDirectDispatchesImpl,
+    type MeshQueueHead,
+} from './mesh-runtime-store-queue-reads.js';
 // Pure move (file-size gate): row shapes/mappers + the retention sweep now live in
 // mesh-runtime-store-turn-rows.ts. Imported back for internal use by class methods
 // below, and re-exported at the bottom of this file so every existing import path
@@ -50,6 +56,7 @@ import {
 import {
     appendLedgerEntry, readLedgerEntries, readLedgerEntriesOrdered, clearLedgerForMesh,
     deleteLedgerEntries, hasLedgerEntry, ledgerEntryCount, importLedgerEntries, readLedgerSlice,
+    readLedgerEntryHeads, readLedgerKindCounts,
 } from './mesh-runtime-store-ledger.js';
 import {
     insertPendingEvent, drainPendingEvents, peekPendingEvents, recentDrainedPendingEvents,
@@ -163,7 +170,6 @@ export class MeshRuntimeStore {
     private static instance: MeshRuntimeStore | undefined;
     /** Readonly (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
     readonly db: DatabaseHandle;
-    private readonly dbPath: string;
     private readonly migratedMeshIds = new Set<string>();
     // Idle-active-mission-reminder debounce (mesh-idle-reminder.ts). In-memory only:
     // this is a spam guard for a best-effort coordinator nudge, so a daemon restart
@@ -173,24 +179,27 @@ export class MeshRuntimeStore {
     // re-fires before the time window elapses.
     private readonly idleReminderState = new Map<string, { emittedAt: number; missionSetHash: string }>();
     private fingerprintSweepCounter = 0;
-    private walWriteCounter = 0;
-    // Independent cadence for the tool-call-log sweep. Must NOT share walWriteCounter:
-    // sharing makes each store's threshold drift by the other's write volume (WAL
-    // checkpoint at 500 vs tool-log sweep at 200 would interfere arbitrarily).
+    // WAL checkpointing runs on a timer, never inside a write (mesh-runtime-store-wal.ts).
+    private readonly walCheckpoints: WalCheckpointScheduler;
+    /** Writes since the last checkpoint tick (tests read it to pin counter independence). */
+    get walWriteCounter(): number { return this.walCheckpoints.writesSinceTick; }
+    // Independent cadence for the tool-call-log sweep. Must NOT share the WAL write
+    // counter: sharing makes each chore's threshold drift by the other's write volume.
     private toolCallLogCounter = 0;
-    private static readonly WAL_CHECK_INTERVAL = 500;
-    private static readonly WAL_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
 
     private constructor(dbPath: string) {
         const dir = dirname(dbPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-        this.dbPath = dbPath;
         this.db = new (loadDatabaseCtor())(dbPath);
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = NORMAL');
         this.db.pragma('foreign_keys = ON');
-        this.db.pragma('busy_timeout = 5000');
+        this.db.pragma(`busy_timeout = ${DEFAULT_WAL_CHECKPOINT_POLICY.busyTimeoutMs}`);
+        // Let SQLite shrink the WAL back to the checkpoint threshold whenever a checkpoint
+        // lets it restart; without this the file only ever shrank on a TRUNCATE.
+        this.db.pragma(`journal_size_limit = ${DEFAULT_WAL_CHECKPOINT_POLICY.maxBytes}`);
+        this.walCheckpoints = new WalCheckpointScheduler(this.db, `${dbPath}-wal`);
         this.migrate();
     }
 
@@ -250,6 +259,7 @@ export class MeshRuntimeStore {
     }
 
     close(): void {
+        this.walCheckpoints.stop();
         this.db.close();
     }
 
@@ -314,23 +324,16 @@ export class MeshRuntimeStore {
         this.db.prepare('DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?').run(Date.now());
     }
 
-    /** Public (not private) so the extracted ./mesh-runtime-store-turn-attempts.ts delegates can reach it via `self`. */
+    /**
+     * Public (not private) so the extracted ./mesh-runtime-store-*.ts delegates can reach it
+     * via `self`. O(1): records the write for the timer-driven checkpoint (never checkpoints here).
+     */
     maybeCheckpointWal(): void {
-        if (++this.walWriteCounter < MeshRuntimeStore.WAL_CHECK_INTERVAL) return;
-        this.walWriteCounter = 0;
-        try {
-            const walPath = `${this.dbPath}-wal`;
-            if (!existsSync(walPath)) return;
-            const size = statSync(walPath).size;
-            if (size < MeshRuntimeStore.WAL_MAX_BYTES) return;
-            process.stderr.write(
-                `[adhdev-mesh] WAL file ${Math.round(size / 1024 / 1024)}MB exceeds threshold; forcing checkpoint\n`,
-            );
-            this.db.pragma('wal_checkpoint(TRUNCATE)');
-        } catch { /* best-effort */ }
+        this.walCheckpoints.noteWrite();
     }
 
-    private ensureLegacyQueueMigrated(meshId: string): void {
+    /** Public (not private) so the extracted ./mesh-runtime-store-queue-reads.ts delegates can reach it via `self`. */
+    ensureLegacyQueueMigrated(meshId: string): void {
         if (this.migratedMeshIds.has(meshId)) return;
         this.migratedMeshIds.add(meshId);
 
@@ -1068,57 +1071,14 @@ export class MeshRuntimeStore {
         occurredAtIso?: string,
         taskId?: string,
     ): MeshWorkQueueEntry | null {
-        this.ensureLegacyQueueMigrated(meshId);
+        // Implementation in ./mesh-runtime-store-queue-reads.ts: decides on columns and
+        // parses only the returned row (IPC load audit #9 — it runs per worker tool call).
+        return findAssignedBySessionImpl(this, meshId, sessionId, occurredAtIso, taskId);
+    }
 
-        // WRITE/READ PREDICATE SYMMETRY (COMPLETION-PROPAGATION F1): the claim path writes
-        // assigned_session_id RAW (claimNextTask), and the sibling gates that decide whether a
-        // session already holds work (sessionHasActiveAssignment) and which pending row a
-        // session may claim (targetMatches) compare it through sessionIdsEquivalent — the
-        // canonical single-form predicate that TRIMS both sides. A raw SQL `assigned_session_id
-        // = ?` here is asymmetric with that write/sibling predicate: a completion whose
-        // resolveEventSessionId-reinterpreted sessionId is equivalent-but-not-byte-identical to
-        // the stored column (e.g. a whitespace/serialization skew from a manually-launched
-        // session) silently fetched zero rows and stranded the finished task as `assigned`
-        // forever (the mesh-work-queue :1251 "N assigned row(s) exist" warning is that exact
-        // signature). Fetch every `assigned` row for the mesh and filter session membership in
-        // JS with sessionIdsEquivalent, mirroring the node-id IN(...)+JS-revalidate pattern the
-        // claim SELECT uses (claimNextTask :720-736 / targetMatches :797-811).
-        const allRows = this.db.prepare(
-            `SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status = 'assigned'`
-        ).all(meshId) as Array<{ payload: string }>;
-        const sessionEntries = allRows
-            .map(r => { try { return JSON.parse(r.payload) as MeshWorkQueueEntry; } catch { return null; } })
-            .filter((e): e is MeshWorkQueueEntry => e !== null)
-            .filter(e => sessionIdsEquivalent(e.assignedSessionId, sessionId));
-
-        // 1. Exact taskId match — robust against clock skew and stale rows. Scoped to the
-        // session-equivalent set (as the raw `AND assigned_session_id = ? AND id = ?` was),
-        // now via the trimming equivalence predicate.
-        if (taskId) {
-            const byId = sessionEntries.find(e => e.id === taskId);
-            if (byId) return byId;
-            // Fall through to session-based matching if the id didn't line up
-            // (e.g. event carried a stale/foreign taskId).
-        }
-
-        // 2. Session-based match WITHOUT the mutable updated_at filter.
-        const entries = sessionEntries;
-        if (entries.length === 0) return null;
-        if (entries.length === 1) return entries[0];
-
-        // Multiple assigned rows for one session: disambiguate by the immutable
-        // dispatchTimestamp (falling back to updated_at only for legacy rows that
-        // predate dispatchTimestamp). We use these to ORDER, never to FILTER —
-        // so a skewed occurredAt can never drop the live row to null.
-        const orderKey = (e: MeshWorkQueueEntry) => e.dispatchTimestamp ?? e.updatedAt ?? '';
-        const byDispatchDesc = [...entries].sort((a, b) => orderKey(b).localeCompare(orderKey(a)));
-        if (occurredAtIso) {
-            const atOrBefore = byDispatchDesc.find(e => orderKey(e) <= occurredAtIso);
-            if (atOrBefore) return atOrBefore;
-        }
-        // Skew made every dispatch later than occurredAt — fall back to the
-        // most-recently dispatched row rather than stranding the completion.
-        return byDispatchDesc[0];
+    /** Column-only queue rows (id/status/assignment) — no payload parse. */
+    getQueueHeads(meshId: string, statuses?: MeshTaskStatus[]): MeshQueueHead[] {
+        return getQueueHeadsImpl(this, meshId, statuses);
     }
 
     private toRow(entry: MeshWorkQueueEntry): Record<string, unknown> {
@@ -1300,6 +1260,11 @@ export class MeshRuntimeStore {
             SET status = 'stale', updated_at = ?
             WHERE mesh_id = ? AND status = 'dispatched' AND dispatched_at < ?
         `).run(now, meshId, cutoff);
+    }
+
+    /** Flip dispatched/acked rows with no lifecycle update for `olderThanMs` to 'stale'. */
+    expireAgedDirectDispatches(meshId: string, olderThanMs: number, nowMs?: number): ReturnType<typeof expireAgedDirectDispatchesImpl> {
+        return expireAgedDirectDispatchesImpl(this, meshId, olderThanMs, nowMs);
     }
 
     // ── Remote Idle Sessions ─────────────────────────────────────────────────
@@ -1746,38 +1711,7 @@ export class MeshRuntimeStore {
      * Those ids are collected first and excluded. Returns rows deleted.
      */
     pruneTerminalQueueEntries(olderThanMs: number): number {
-        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-        return this.transaction(() => {
-            // Dependency guard: protect every id a live row still depends on.
-            const liveRows = this.db.prepare(
-                `SELECT payload FROM mesh_queue WHERE status IN ('pending', 'assigned')`
-            ).all() as Array<{ payload: string }>;
-            const protectedIds = new Set<string>();
-            for (const row of liveRows) {
-                try {
-                    const entry = JSON.parse(row.payload) as MeshWorkQueueEntry;
-                    if (Array.isArray(entry.dependsOn)) {
-                        for (const dep of entry.dependsOn) {
-                            if (typeof dep === 'string' && dep) protectedIds.add(dep);
-                        }
-                    }
-                } catch { /* unparsable payload → nothing to protect */ }
-            }
-            const candidates = this.db.prepare(
-                `SELECT id FROM mesh_queue
-                 WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?`
-            ).all(cutoffIso) as Array<{ id: string }>;
-            const deletable = candidates.map(r => r.id).filter(id => !protectedIds.has(id));
-            let removed = 0;
-            // Chunk the DELETE to stay well under SQLite's bind-parameter limit.
-            for (let i = 0; i < deletable.length; i += 500) {
-                const chunk = deletable.slice(i, i + 500);
-                removed += this.db.prepare(
-                    `DELETE FROM mesh_queue WHERE id IN (${chunk.map(() => '?').join(',')})`
-                ).run(...chunk).changes;
-            }
-            return removed;
-        });
+        return pruneTerminalQueueEntriesImpl(this, olderThanMs);
     }
 
     /**
@@ -1852,6 +1786,16 @@ export class MeshRuntimeStore {
         tail?: number;
     }): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: unknown }> {
         return readLedgerEntriesOrdered(this, meshId, opts);
+    }
+
+    /** Projection read: entry columns + only the named payload paths (no full payload parse). */
+    readLedgerEntryHeads(meshId: string, opts: { kinds: string[]; since?: string; payloadPaths: readonly string[] }): ReturnType<typeof readLedgerEntryHeads> {
+        return readLedgerEntryHeads(this, meshId, opts);
+    }
+
+    /** Per-kind counts + newest timestamp (getLedgerSummary aggregate; no payload read). */
+    readLedgerKindCounts(meshId: string): ReturnType<typeof readLedgerKindCounts> {
+        return readLedgerKindCounts(this, meshId);
     }
 
     /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */

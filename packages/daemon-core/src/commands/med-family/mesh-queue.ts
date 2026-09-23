@@ -143,7 +143,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'queue requeue');
         if (ownerFailure) return ownerFailure;
         try {
-            const { summarizeQueueEntryInputForView, requeueTask, getQueue } = await import('../../mesh/mesh-work-queue.js');
+            const { summarizeQueueEntryInputForView, requeueTask, getQueueEntryById } = await import('../../mesh/mesh-work-queue.js');
             // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
             // mark requeueTask consults is process-local and is lost across a daemon restart.
             // Independently of that mark, if the row is still 'assigned' to a session this
@@ -156,7 +156,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             // group-tagged tasks from this guard; the exemption hook belongs here.
             if (args?.force !== true) {
                 const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
-                const existing = getQueue(meshId).find((t: any) => t?.id === taskId) as { status?: string; assignedSessionId?: string } | undefined;
+                const existing = getQueueEntryById(meshId, taskId) as { status?: string; assignedSessionId?: string } | null;
                 if (existing?.status === 'assigned' && existing.assignedSessionId
                     && isSessionActivelyGenerating(ctx.deps as any, existing.assignedSessionId)) {
                     return {

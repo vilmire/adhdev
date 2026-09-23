@@ -52,6 +52,10 @@ export function migrate(self: MeshRuntimeStore): void {
             ON mesh_queue(mesh_id, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_mesh_queue_assignment
             ON mesh_queue(mesh_id, assigned_node_id, assigned_session_id, status);
+        -- Cross-mesh retention sweep (pruneTerminalQueueEntries) filters on status +
+        -- updated_at with no mesh_id; without this it was a full table SCAN.
+        CREATE INDEX IF NOT EXISTS idx_mesh_queue_status_updated
+            ON mesh_queue(status, updated_at);
 
         -- mesh_id is DB-level isolation (defense-in-depth). The fingerprint STRING
         -- also carries meshId as its first '::'-joined segment (see

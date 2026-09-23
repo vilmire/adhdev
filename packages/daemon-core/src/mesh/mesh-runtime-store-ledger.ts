@@ -141,6 +141,105 @@ export function readLedgerEntriesOrdered(self: MeshRuntimeStore, meshId: string,
 }
 
 
+/**
+ * Projection read (IPC load audit 2026-09-23, #2): the entry columns plus ONLY the named
+ * payload fields, never the whole `payload` text. The kind-filtered active-work reads
+ * (auto-prune, idle reminder, notification status line, mesh_status) used to pull 64 MB
+ * of payload per call — 46 MB of it `task_completed` bodies — and JSON.parse all of it to
+ * look at ids, kinds, timestamps and a handful of flags.
+ *
+ * `payloadPaths` are JSON paths (`$.a` / `$.a.b`); the returned `payload` object holds
+ * just those fields, nested as in the original (JSON null / missing fields are omitted).
+ * All paths are pulled with ONE multi-path json_extract (one SQLite JSON parse per row;
+ * the result is a small JSON array). A row whose payload is not valid JSON yields `{}`,
+ * matching the full read's parse-failure fallback.
+ *
+ * Ordering is (timestamp ASC, rowid ASC) — the same order readLedgerEntriesOrdered
+ * returns — applied in JS rather than SQL: with an `ORDER BY timestamp` the planner
+ * picks idx_mesh_event_ledger_mesh_time and walks every row of the mesh to filter kind;
+ * without it it seeks idx_mesh_event_ledger_mesh_kind, and sorting the few thousand
+ * matches in JS is cheaper than that walk.
+ */
+export function readLedgerEntryHeads(self: MeshRuntimeStore, meshId: string, opts: {
+    kinds: string[];
+    since?: string;
+    payloadPaths: readonly string[];
+}): Array<{ id: string; meshId: string; timestamp: string; kind: string; nodeId: string | null; sessionId: string | null; providerType: string | null; taskId: string | null; payload: Record<string, unknown> }> {
+    const kinds = opts.kinds.filter(k => typeof k === 'string' && k.trim());
+    if (kinds.length === 0) return [];
+    // json_extract with ONE path returns the bare value, with two or more a JSON array;
+    // always pass >= 2 so the row shape is uniform.
+    const paths = opts.payloadPaths.length >= 2 ? [...opts.payloadPaths] : [...opts.payloadPaths, '$.__projection_pad'];
+    const params: unknown[] = [...paths, meshId, ...kinds];
+    let where = `mesh_id = ? AND kind IN (${kinds.map(() => '?').join(', ')})`;
+    if (opts.since) {
+        where += ' AND timestamp >= ?';
+        params.push(opts.since);
+    }
+    const rows = self.db.prepare(
+        `SELECT rowid AS rid, id, mesh_id, timestamp, kind, node_id, session_id, provider_type, task_id,
+                CASE WHEN json_valid(payload) THEN json_extract(payload, ${paths.map(() => '?').join(', ')}) END AS proj
+         FROM mesh_event_ledger WHERE ${where}`
+    ).all(...params) as Array<Record<string, unknown>>;
+    rows.sort((a, b) => {
+        const ta = a.timestamp as string;
+        const tb = b.timestamp as string;
+        if (ta !== tb) return ta < tb ? -1 : 1;
+        return (a.rid as number) - (b.rid as number);
+    });
+    const splitPaths = paths.map(p => p.replace(/^\$\.?/, '').split('.').filter(Boolean));
+    return rows.map(r => {
+        const payload: Record<string, unknown> = {};
+        if (typeof r.proj === 'string') {
+            let values: unknown;
+            try { values = JSON.parse(r.proj); } catch { values = undefined; }
+            if (Array.isArray(values)) {
+                for (let i = 0; i < splitPaths.length; i++) {
+                    const value = values[i];
+                    const segments = splitPaths[i];
+                    if (value === null || value === undefined || segments.length === 0) continue;
+                    let target = payload;
+                    for (let s = 0; s < segments.length - 1; s++) {
+                        const next = target[segments[s]];
+                        if (next && typeof next === 'object' && !Array.isArray(next)) {
+                            target = next as Record<string, unknown>;
+                        } else {
+                            const created: Record<string, unknown> = {};
+                            target[segments[s]] = created;
+                            target = created;
+                        }
+                    }
+                    target[segments[segments.length - 1]] = value;
+                }
+            }
+        }
+        return {
+            id: r.id as string,
+            meshId: r.mesh_id as string,
+            timestamp: r.timestamp as string,
+            kind: r.kind as string,
+            nodeId: r.node_id as string | null,
+            sessionId: r.session_id as string | null,
+            providerType: r.provider_type as string | null,
+            taskId: (r.task_id as string | null) ?? null,
+            payload,
+        };
+    });
+}
+
+
+/**
+ * Per-kind row counts and the newest timestamp for a mesh — the aggregate half of
+ * getLedgerSummary, served by idx_mesh_event_ledger_mesh_kind without reading a payload.
+ */
+export function readLedgerKindCounts(self: MeshRuntimeStore, meshId: string): Array<{ kind: string; count: number; lastTimestamp: string | null }> {
+    const rows = self.db.prepare(
+        `SELECT kind, COUNT(*) AS n, MAX(timestamp) AS last FROM mesh_event_ledger WHERE mesh_id = ? GROUP BY kind`
+    ).all(meshId) as Array<{ kind: string; n: number; last: string | null }>;
+    return rows.map(r => ({ kind: r.kind, count: r.n, lastTimestamp: r.last }));
+}
+
+
 /** Remove all ledger entries for a mesh (mesh deletion / test cleanup). */
 export function clearLedgerForMesh(self: MeshRuntimeStore, meshId: string): number {
     return self.db.prepare('DELETE FROM mesh_event_ledger WHERE mesh_id = ?').run(meshId).changes;

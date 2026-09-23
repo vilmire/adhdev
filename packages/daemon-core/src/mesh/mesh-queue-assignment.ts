@@ -4,7 +4,7 @@ import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
-import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, requeueTask, recordAckedHoldDispatchOutcome } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, claimNextTask, updateTaskStatus, getQueue, getQueueHeads, requeueTask, recordAckedHoldDispatchOutcome } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { createSessionDelivery, updateSessionDeliveryStatus } from './mesh-delivery-policy.js';
@@ -1590,11 +1590,11 @@ export interface MeshQueueTriggerResult {
 }
 
 function countQueueStatus(meshId: string, status: 'pending' | 'assigned'): number {
-    return getQueue(meshId, { status: [status] as any }).length;
+    return getQueueHeads(meshId, { status: [status] as any }).length;
 }
 
 function getQueueStatusById(meshId: string): Map<string, string> {
-    return new Map(getQueue(meshId).map(task => [task.id, task.status]));
+    return new Map(getQueueHeads(meshId).map(t => [t.id, t.status]));
 }
 
 // IPC-ACCEPT-ASYNC-BOUNDARY: in-flight backgrounded auto-launch scans, per mesh. The
@@ -1802,10 +1802,12 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // AUTOLAUNCH-ORPHAN-SWEEP: run AFTER the drain + auto-launch so it reads post-claim
     // assignment state (a session that just won its claim must not be reported as an orphan).
     sweepAutoLaunchOrphanSessions(components, meshId);
-    const afterQueue = getQueue(meshId);
-    const pendingAfter = afterQueue.filter(task => task.status === 'pending').length;
-    const assignedAfter = afterQueue.filter(task => task.status === 'assigned').length;
-    const newlyAssignedTasks = afterQueue
+    // IPC load audit #10: heads-only read (id/status/assignedNodeId/assignedSessionId) — this
+    // block never needs payload fields off the full queue entries.
+    const afterHeads = getQueueHeads(meshId, { status: ['pending', 'assigned'] });
+    const pendingAfter = afterHeads.filter(task => task.status === 'pending').length;
+    const assignedAfter = afterHeads.filter(task => task.status === 'assigned').length;
+    const newlyAssignedTasks = afterHeads
         .filter(task => task.status === 'assigned' && beforeStatus.get(task.id) !== 'assigned')
         .map(task => ({
             id: task.id,
@@ -1817,7 +1819,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // If no candidate cleared the quota gate and auto-launch also made no progress, emit
     // a distinct all-gated conclusion once for this pending-task/gate-state fingerprint.
     if (newlyAssignedTasks.length === 0 && !autoLaunchStarted) {
-        logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterQueue.filter(task => task.status === 'pending').map(task => task.id));
+        logAllQuotaClaimCandidatesBlocked(meshId, quotaClaimTrace, afterHeads.filter(task => task.status === 'pending').map(task => task.id));
     } else {
         clearAllQuotaClaimCandidatesBlockedState(meshId);
     }
@@ -1835,8 +1837,9 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // session that double-edits the worktree. The claim itself is fine; only the wording
     // was wrong, so we surface `autoLaunchPending` to suppress the bad "launch one more"
     // advice while the just-launched session converges.
-    const autoLaunchPending = autoLaunchStarted || afterQueue.some(task => {
-        if (task.status !== 'pending') return false;
+    // `autoLaunch` is a payload field, not a head field, so only the still-pending rows are
+    // read in full here (IPC load audit #10) — assigned/other-status rows never need it.
+    const autoLaunchPending = autoLaunchStarted || getQueue(meshId, { status: ['pending'] }).some(task => {
         const al = task.autoLaunch;
         if (!al || (al.status !== 'started' && al.status !== 'completed')) return false;
         // CLOCK-LOWER-BOUND: `al.updatedAt` is foreign; a future stamp must not report
