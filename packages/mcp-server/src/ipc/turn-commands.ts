@@ -239,7 +239,14 @@ export function classifyTransportFailure(command: TurnIpcCommand, error: unknown
  */
 function unwrapEnvelope(raw: unknown): { ok: true; value: unknown } | { ok: false; error: string; code?: TurnIpcErrorCode } {
     if (raw !== null && typeof raw === 'object' && 'success' in (raw as Record<string, unknown>)) {
-        const { success, error, code, ...rest } = raw as { success: unknown; error?: unknown; code?: unknown; [k: string]: unknown };
+        // `interactionId` is the host runtime's own envelope stamp
+        // (daemon-core boot/host-runtime.ts `execute` returns
+        // `{ ...result, interactionId }` on every transport) — not part of any
+        // wire contract, so it is stripped with the envelope. Live regression
+        // 2026-09-25 (standalone pass): every turn-IPC response failed
+        // `unexpected shape from daemon` because of this one key; the unit
+        // tests fed bare responses and never saw it.
+        const { success, error, code, interactionId: _interactionId, ...rest } = raw as { success: unknown; error?: unknown; code?: unknown; interactionId?: unknown; [k: string]: unknown };
         if (success === false) {
             return {
                 ok: false,

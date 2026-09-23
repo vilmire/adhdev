@@ -377,3 +377,20 @@ test('orphanedPinNotify: orphans is a typed array with a free-text title', async
     assert.equal(res.orphans.length, 1);
     assert.equal(res.orphans[0].title, 'do the thing');
 });
+
+// ─── live regression 2026-09-25: the host runtime stamps `interactionId` on every result ───
+test('queueQuery decodes a daemon envelope that carries the host runtime interactionId stamp', async () => {
+    const transport = {
+        command: async () => ({ success: true, entries: [], interactionId: 'ix_live_stamp' }),
+    } as any;
+    const res = await queueQuery(transport, { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'mesh_live' } as any);
+    assert.deepEqual(res, { entries: [] });
+});
+
+test('queueQuery still rejects a genuinely wrong response shape', async () => {
+    const transport = { command: async () => ({ success: true, entries: 'nope', interactionId: 'ix' }) } as any;
+    await assert.rejects(
+        () => queueQuery(transport, { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'mesh_live' } as any),
+        (e: any) => e instanceof TurnIpcCommandError && /unexpected shape/.test(e.message),
+    );
+});
