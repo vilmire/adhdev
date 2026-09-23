@@ -237,7 +237,7 @@ describe('CliProviderInstance provider patch state', () => {
     ])
   })
 
-  it('keeps all pending events until flush instead of silently slicing to 50', () => {
+  it('getState() carries no pendingEvents field — the per-instance buffer was removed (wiring-unification B residue cleanup)', () => {
     const instance = new CliProviderInstance({ _resolvedSpecPath: minimalSpecPath(),
       type: 'claude-cli',
       name: 'Claude CLI',
@@ -251,17 +251,15 @@ describe('CliProviderInstance provider patch state', () => {
       getRuntimeMetadata: () => null,
     }
 
+    // No manager context and no lifecycle port: pushEvent's forwardProviderEvent
+    // is a no-op in this shape, so these 60 events are simply dropped — there is
+    // no buffer left to overflow or slice.
     for (let index = 0; index < 60; index += 1) {
       instance.pushEvent({ event: 'provider:toast', effectId: `e-${index + 1}`, timestamp: index + 1, message: `toast-${index + 1}` })
     }
 
-    const first = instance.getState() as any
-    expect(first.pendingEvents).toHaveLength(60)
-    expect(first.pendingEvents[0]).toEqual(expect.objectContaining({ message: 'toast-1' }))
-    expect(first.pendingEvents[59]).toEqual(expect.objectContaining({ message: 'toast-60' }))
-
-    const second = instance.getState() as any
-    expect(second.pendingEvents).toEqual([])
+    const state = instance.getState() as any
+    expect(state).not.toHaveProperty('pendingEvents')
   })
 
   it('emits CLI lifecycle events through the instance callback immediately without waiting for state collection', () => {
@@ -292,6 +290,6 @@ describe('CliProviderInstance provider patch state', () => {
       workspaceName: '/tmp/project',
       providerSessionId: 'provider-session-1',
     }))
-    expect((instance.getState() as any).pendingEvents).toEqual([])
+    expect(instance.getState()).not.toHaveProperty('pendingEvents')
   })
 })

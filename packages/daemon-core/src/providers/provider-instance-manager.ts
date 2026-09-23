@@ -248,17 +248,6 @@ export class ProviderInstanceManager {
  // ─── event ────────────────────────────────────
 
     /**
-     * @deprecated Wiring-unification B5 — every provider event consumer is a bus
-     * subscriber (`provider_event`). Kept only as a thin adapter over the bus for
-     * mesh-event-forwarding's bus-less test fallback; there is no listener array
-     * and no buffer drain behind it any more.
-     */
-    onEvent(listener: ProviderEventListener): () => void {
-        if (!this.bus) return () => {};
-        return this.bus.on('provider_event', (e) => listener(e.event), { name: 'instance-manager.onEvent' });
-    }
-
-    /**
      * Forward every provider event to the lifecycle bus as the transitional
      * `provider_event` (wiring-unification B1). Pass null to detach.
      */

@@ -272,8 +272,31 @@ export class TerminalAdapter {
 
     private onChunk(chunk: string): void {
         this.recordEvent('output', capPreview(escapeControl(chunk)), chunk.length);
-        try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
+        // C6 ordering fix (wiring-unification): the screen MUST see this chunk
+        // before `on_pty_data` fires. `on_pty_data` is where the FSM's own
+        // pty_data handling lives (`cli-adapter.ts`'s `handleEvent('pty_data')`,
+        // via `fsm-driver.ts`'s `on_pty_data` wiring), which calls
+        // `maybeCaptureClaudeTuiPrompt()`/`maybeUpgradeClaudeTuiMultiSelect()` —
+        // both read the adapter's screen snapshot (`driver.snapshot()` ->
+        // `adapter.snapshot()` -> `this.lastScreen || this.computeScreen()`).
+        // With the OLD order (handler before write), a snapshot taken
+        // synchronously inside `on_pty_data` saw the screen from BEFORE this
+        // chunk — a real ordering defect, not a refactor nicety, since prompt
+        // detection could miss content that just arrived on the same tick.
+        // `screen.write` is synchronous (ghostty-vt / xterm fallback), so this
+        // flip has no behavioural cost beyond making `on_pty_data` observers
+        // see up-to-date screen state.
+        //
+        // RawTail hook point (C6): a `RawTail` instance (owned by
+        // `SpecCliAdapter`, `src/providers/spec/raw-tail.ts`) is appended to
+        // in the SAME place `on_pty_data` fires downstream (`cli-adapter.ts`'s
+        // `handleEvent('pty_data')`, not in this generic adapter, which has no
+        // session/cliType context) — after this reordering, that append also
+        // happens after the screen already reflects the chunk, so a
+        // `rawTailSeq` recorded alongside evidence built from `on_pty_data`
+        // is guaranteed to correspond to a screen state that includes it.
         this.screen.write(chunk);
+        try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
         // Coalesce snapshot emission — rapid bursts shouldn't fire 200x.
         if (this.screenTimer) return;
         this.screenTimer = setTimeout(() => {

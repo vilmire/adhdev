@@ -3,7 +3,6 @@ import { IdeProviderInstance } from '../../src/providers/ide-provider-instance.j
 import { ExtensionProviderInstance } from '../../src/providers/extension-provider-instance.js'
 import { AcpProviderInstance } from '../../src/providers/acp-provider-instance.js'
 import { ProviderInstanceManager } from '../../src/providers/provider-instance-manager.js'
-import { wasDeliveredThroughPort } from '../../src/providers/provider-event-port.js'
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { createSessionEventPort, type SessionEventPort } from '../../src/sessions/session-port.js'
 import type { BusEvent } from '../../src/sessions/lifecycle-events.js'
@@ -11,8 +10,9 @@ import type { BusEvent } from '../../src/sessions/lifecycle-events.js'
 // Wiring-unification B2: IDE / extension / ACP instances publish provider
 // events and status edges through the lifecycle port AT THE TRANSITION —
 // no collectAllStates() drain is needed for a subscriber to see them. The
-// legacy buffer stays for the onEvent listeners, and the manager's drain must
-// not publish an already-delivered event on the bus a second time.
+// per-instance event buffer (pendingEvents / events / flushEvents) that used
+// to also be written, for the pre-B5 onEvent drain, is gone (wiring-unification
+// B residue cleanup): the port is the only delivery path now.
 
 function busPort() {
   const bus = createSessionLifecycleBus()
@@ -44,16 +44,14 @@ describe('IDE poll → immediate port emission', () => {
     expect(seen.filter((e) => e.kind === 'status')).toEqual([
       expect.objectContaining({ sessionId: id, prev: 'idle', next: 'generating', cause: 'ide_poll', providerType: 'cursor' }),
     ])
-    // Legacy buffer kept for the onEvent drain, marked as already delivered.
-    expect(ide.events).toHaveLength(1)
-    expect(wasDeliveredThroughPort(ide.events[0])).toBe(true)
+    // No buffer any more: getState() carries no pendingEvents field.
+    expect(ide.getState()).not.toHaveProperty('pendingEvents')
   })
 
-  it('without a port nothing is emitted and the buffer is unmarked (today\'s behaviour)', () => {
+  it('without a port nothing is emitted, and nothing throws', () => {
     const ide = new IdeProviderInstance(provider('cursor', 'ide')) as any
-    ide.detectAgentTransitions({ status: 'generating', title: 'Chat', messages: [] }, Date.now())
-    expect(ide.events).toHaveLength(1)
-    expect(wasDeliveredThroughPort(ide.events[0])).toBe(false)
+    expect(() => ide.detectAgentTransitions({ status: 'generating', title: 'Chat', messages: [] }, Date.now())).not.toThrow()
+    expect(ide.getState()).not.toHaveProperty('pendingEvents')
   })
 })
 

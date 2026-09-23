@@ -113,23 +113,21 @@ describe('AcpProviderInstance richer message kinds', () => {
     expect(messages[79]).toEqual(expect.objectContaining({ content: longText }))
   })
 
-  it('keeps all pending ACP events until flush instead of silently slicing to 50', () => {
+  it('getState() carries no pendingEvents field — the per-instance buffer was removed (wiring-unification B residue cleanup)', () => {
     const instance = new AcpProviderInstance({
       type: 'acp-test',
       name: 'ACP Test',
       category: 'acp',
     } as any, '/tmp/project') as any
 
+    // No lifecycle port attached: pushEvent's forwardProviderEvent is a no-op
+    // in this shape, so these 60 events are simply dropped — there is no
+    // buffer left to overflow or slice.
     for (let index = 0; index < 60; index += 1) {
       instance.pushEvent({ event: 'provider:toast', effectId: `acp-${index + 1}`, timestamp: index + 1, message: `toast-${index + 1}` })
     }
 
-    const first = instance.getState()
-    expect(first.pendingEvents).toHaveLength(60)
-    expect(first.pendingEvents[0]).toEqual(expect.objectContaining({ message: 'toast-1' }))
-    expect(first.pendingEvents[59]).toEqual(expect.objectContaining({ message: 'toast-60' }))
-
-    const second = instance.getState()
-    expect(second.pendingEvents).toEqual([])
+    const state = instance.getState()
+    expect(state).not.toHaveProperty('pendingEvents')
   })
 })
