@@ -1,11 +1,32 @@
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
-import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getMachineId } from '../config/config.js';
 import { SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
+
+// ─── target-pin-cleared counter (content-free; moved from the retired legacy
+// reducer module's metrics, C-W8) ───────────────────────────────────────────
+
+const targetPinClearedByReason: Record<string, number> = {};
+
+/**
+ * Count a queue target pin cleared so the task became claimable again.
+ * `reason` is the typed clear reason (dead_target_node_absent /
+ * dead_target_session_absent / target_session_pin_expired_unclaimed).
+ */
+export function noteTargetPinCleared(reason: string): void {
+    targetPinClearedByReason[reason] = (targetPinClearedByReason[reason] ?? 0) + 1;
+}
+
+export function getTargetPinClearedMetrics(): Record<string, number> {
+    return { ...targetPinClearedByReason };
+}
+
+export function __resetTargetPinClearedMetricsForTests(): void {
+    for (const key of Object.keys(targetPinClearedByReason)) delete targetPinClearedByReason[key];
+}
 
 // ---------------------------------------------------------------------------
 // PIN-PARKING: an expired target pin PARKS the task and returns it to the

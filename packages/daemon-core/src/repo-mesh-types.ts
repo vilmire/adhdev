@@ -1763,7 +1763,7 @@ export interface RepoMeshStatus {
      */
     replication?: 'pending';
     /**
-     * Live process-lifetime counters for the mesh_pending_events retention sweep
+     * Live process-lifetime counters for the legacy pending-event inbox retention sweep
      * (age-based: drained rows >7d, undrained rows >30d). `undrainedExpired` is the
      * operational signal — every increment is a pending event that was queued for a
      * coordinator but NEVER delivered before its 30-day window expired; the sweep

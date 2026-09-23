@@ -51,7 +51,7 @@ import {
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import {
     LEGACY_TURN_TABLES,
-    TURN_LEDGER_SCHEMA_VERSION,
+    TURN_LEDGER_V1,
     ensureTurnLedgerSchema,
     readUserVersion,
     tableExists,
@@ -228,6 +228,13 @@ export function importLegacyPendingEventsJsonl(db: DatabaseHandle, ledgerDir: st
         names = readdirSync(ledgerDir);
     } catch {
         return result;
+    }
+    // A pre-B2a DB lacks the v2 envelope columns (the store schema stopped adding
+    // them with the table's retired writers, C-W8) — add them here, the one place
+    // left that writes this table, so the import never fails on an old install.
+    const pendingCols = new Set((db.prepare(`PRAGMA table_info(mesh_pending_events)`).all() as Array<{ name: string }>).map((c) => c.name));
+    for (const col of ['protocol_version', 'event_id', 'scope', 'dispatched_by', 'intended_for', 'drained_by']) {
+        if (!pendingCols.has(col)) db.exec(`ALTER TABLE mesh_pending_events ADD COLUMN ${col} TEXT`);
     }
     const insert = db.prepare(`INSERT OR IGNORE INTO mesh_pending_events
         (id, mesh_id, coordinator_daemon_id, event, payload, fingerprint, queued_at, protocol_version, event_id, scope, dispatched_by, intended_for)
@@ -622,7 +629,7 @@ function migrateMesh(db: DatabaseHandle, store: TurnStore, meshId: string, opts:
 export function migrateTurnLedgerV1(db: DatabaseHandle, options: TurnLedgerMigrationOptions): TurnLedgerMigrationReport {
     const report = emptyReport();
     ensureTurnLedgerSchema(db);
-    if (readUserVersion(db) >= TURN_LEDGER_SCHEMA_VERSION) {
+    if (readUserVersion(db) >= TURN_LEDGER_V1) {
         report.skipped = true;
         return report;
     }
@@ -648,18 +655,18 @@ export function migrateTurnLedgerV1(db: DatabaseHandle, options: TurnLedgerMigra
             db.exec(`DROP TABLE ${table}`);
             report.droppedTables.push(table);
         }
-        db.pragma(`user_version = ${TURN_LEDGER_SCHEMA_VERSION}`);
+        db.pragma(`user_version = ${TURN_LEDGER_V1}`);
     }).immediate();
     return report;
 }
 
 /** The migration log line (C8 live checklist item 1). */
 export function formatTurnLedgerMigrationLine(r: TurnLedgerMigrationReport): string {
-    if (r.skipped) return `turn-ledger migration v1: already at user_version ${TURN_LEDGER_SCHEMA_VERSION}`;
+    if (r.skipped) return `turn-ledger migration v1: already at user_version ≥ ${TURN_LEDGER_V1}`;
     return `turn-ledger migration v1: attempts ${r.legacyAttempts}→${r.attempts} (${r.folds} folds, ${r.retries} retries, ${r.orphans} orphans, ${r.openAttempts} open, ${r.unmappedReasons} free-text reasons),`
         + ` events ${r.events} (+${r.eventCollisions} collisions), held ${r.heldSuspensions} (${r.holdsActive} active), inflight holds ${r.inflightHolds} (${r.inflightHoldsDropped} dropped),`
         + ` deliveries ${r.deliveriesMerged}/${r.deliveries} merged (${r.deliveriesDropped} dropped), direct ${r.directDispatchesMerged}/${r.directDispatches} merged (${r.directDispatchesDropped} dropped),`
         + ` fingerprints ${r.fingerprintsDropped} dropped, pending ${r.pendingEvents} (${r.pendingUndrained} undrained → ${r.pendingNotified} turn.notify pending, ${r.pendingDrainedAcked} acks),`
         + ` ledger ${r.ledgerRows} rows (${r.operatingNotes} notes, ${r.operatingNoteTombstones} tombstones kept; ${r.ledgerRowsDropped} dropped),`
-        + ` meshes ${r.meshes}, exported ${r.exportedRows} rows${r.exportPath ? ` → ${r.exportPath}` : ''}, dropped [${r.droppedTables.join(',')}], user_version=${TURN_LEDGER_SCHEMA_VERSION}`;
+        + ` meshes ${r.meshes}, exported ${r.exportedRows} rows${r.exportPath ? ` → ${r.exportPath}` : ''}, dropped [${r.droppedTables.join(',')}], user_version=${TURN_LEDGER_V1}`;
 }

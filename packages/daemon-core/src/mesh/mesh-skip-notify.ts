@@ -426,12 +426,12 @@ export function retractActionableSkipIfPreviouslyNotified(meshId: string, taskId
  * The distinction this exists to make (see the false-positive it fixes in
  * {@link actionableSkipGuidance}):
  *
- *  - 'consumed'      — a delivery reached 'acked'/'completed', i.e. the worker emitted
- *                      agent:generating_started. The worker demonstrably HAS the message.
- *  - 'delivered'     — a delivery reached 'delivered': the transport confirmed the handoff
- *                      to the provider/PTY boundary, but no turn-start echo came back. The
+ *  - 'consumed'      — an attempt of the task reached `consumed` (the worker started the
+ *                      turn). The worker demonstrably HAS the message.
+ *  - 'delivered'     — an attempt reached `delivered`: the transport confirmed the handoff
+ *                      to the provider/PTY boundary, but no turn start came back. The
  *                      message very likely arrived; we cannot prove the worker acted on it.
- *  - 'never_dispatched' — no delivery record exists at all. Nothing was ever handed to a
+ *  - 'never_dispatched' — no attempt was ever delivered. Nothing was handed to a
  *                      transport, so the message certainly did not reach the session.
  *
  * Only 'never_dispatched' licenses telling the coordinator to re-send. Asserting that on
@@ -442,9 +442,13 @@ type TaskDeliveryEvidence = 'consumed' | 'delivered' | 'never_dispatched';
 
 function resolveTaskDeliveryEvidence(meshId: string, taskId: string): TaskDeliveryEvidence {
     try {
-        const store = MeshRuntimeStore.getInstance();
-        if (store.taskDeliveryConsumed(meshId, taskId)) return 'consumed';
-        if (store.taskHasConfirmedDelivery(meshId, taskId)) return 'delivered';
+        // C-W8: read off the task's turn-ledger attempts (the retired
+        // the legacy session-delivery table rows carried the same two facts): consumed =
+        // the worker started the turn; delivered = the transport confirmed the
+        // handoff. Any attempt of the task counts — a reclaim does not un-deliver.
+        const attempts = MeshRuntimeStore.getInstance().turnStore().listAttemptsForTask(meshId, taskId);
+        if (attempts.some((a) => a.consumedAt !== null)) return 'consumed';
+        if (attempts.some((a) => a.deliveredAt !== null)) return 'delivered';
     } catch {
         // Store unreadable — fall through to the conservative answer. 'delivered' (not
         // 'never_dispatched') is the safe default: it withholds the re-send advice rather

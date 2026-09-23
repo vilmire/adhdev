@@ -1,7 +1,7 @@
 // Pure move out of mesh-runtime-store.ts (file-size gate: baseline-growth cap hit by
 // MESH-TOOL-CALL-CALLER-INSTRUMENTATION 1단계's caller_role addition). No behavior
-// change — the mesh_turn_attempts/mesh_turn_held_suspensions row shapes + mappers and
-// the mesh-runtime.db retention sweep were the most self-contained slice: every symbol
+// change — the mesh-runtime.db retention sweep (and, until C-W8, the legacy
+// mesh_turn_* row shapes) was the most self-contained slice: every symbol
 // here only calls PUBLIC MeshRuntimeStore methods (never touches the private `db`
 // handle or class-internal state), so it needed no class surgery to extract.
 // mesh-runtime-store.ts re-exports these names — see the barrel-preserving pattern in
@@ -13,94 +13,9 @@ import {
     resolveGraphOutboxRetentionMs,
     resolveGraphRetentionEnforce,
     resolveGraphRetentionMs,
-    resolveSessionDeliveryRetentionMs,
     resolveTurnAttemptRetentionMs,
 } from './mesh-retention-config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-
-/** Row shape returned by the mesh_turn_attempts accessors (camelCase, store-agnostic). */
-export interface MeshTurnAttemptRow {
-    attemptId: string;
-    meshId: string;
-    taskId: string;
-    attemptSeq: number;
-    nodeId: string | null;
-    sessionId: string | null;
-    providerType: string | null;
-    coordinatorDaemonId: string | null;
-    coordinatorSessionId: string | null;
-    dispatchNonce: number | null;
-    stage: string;
-    redriveCount: number;
-    leaseDeadlineMs: number | null;
-    acceptedAt: string | null;
-    deliveredAt: string | null;
-    consumedAt: string | null;
-    terminalOutcome: string | null;
-    terminalReason: string | null;
-    terminalAt: string | null;
-    createdAt: string;
-    updatedAt: string;
-}
-
-export function meshTurnAttemptFromRow(r: Record<string, unknown>): MeshTurnAttemptRow {
-    return {
-        attemptId: r.attempt_id as string,
-        meshId: r.mesh_id as string,
-        taskId: r.task_id as string,
-        attemptSeq: r.attempt_seq as number,
-        nodeId: r.node_id as string | null,
-        sessionId: r.session_id as string | null,
-        providerType: r.provider_type as string | null,
-        coordinatorDaemonId: r.coordinator_daemon_id as string | null,
-        coordinatorSessionId: r.coordinator_session_id as string | null,
-        dispatchNonce: r.dispatch_nonce as number | null,
-        stage: r.stage as string,
-        redriveCount: r.redrive_count as number,
-        leaseDeadlineMs: r.lease_deadline_ms as number | null,
-        acceptedAt: r.accepted_at as string | null,
-        deliveredAt: r.delivered_at as string | null,
-        consumedAt: r.consumed_at as string | null,
-        terminalOutcome: r.terminal_outcome as string | null,
-        terminalReason: r.terminal_reason as string | null,
-        terminalAt: r.terminal_at as string | null,
-        createdAt: r.created_at as string,
-        updatedAt: r.updated_at as string,
-    };
-}
-
-/** Row shape returned by the mesh_turn_held_suspensions accessors (camelCase, content-free). */
-export interface MeshTurnHeldSuspensionRow {
-    holdId: string;
-    meshId: string;
-    attemptId: string;
-    taskId: string;
-    stage: string;
-    sessionId: string | null;
-    dispatchNonce: number | null;
-    occurredAtMs: number | null;
-    recordedAt: string;
-    status: string;
-    resolution: string | null;
-    resolvedAt: string | null;
-}
-
-export function meshTurnHeldSuspensionFromRow(r: Record<string, unknown>): MeshTurnHeldSuspensionRow {
-    return {
-        holdId: r.hold_id as string,
-        meshId: r.mesh_id as string,
-        attemptId: r.attempt_id as string,
-        taskId: r.task_id as string,
-        stage: r.stage as string,
-        sessionId: r.session_id as string | null,
-        dispatchNonce: r.dispatch_nonce as number | null,
-        occurredAtMs: r.occurred_at_ms as number | null,
-        recordedAt: r.recorded_at as string,
-        status: r.status as string,
-        resolution: r.resolution as string | null,
-        resolvedAt: r.resolved_at as string | null,
-    };
-}
 
 /**
  * Hook invoked when mesh_event_ledger rows change in a way that is NOT scoped to a
@@ -124,7 +39,7 @@ export function notifyLedgerBulkChange(): void {
 }
 
 // ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────
-// mesh-runtime.db had lifecycle GC only for mesh_pending_events (prunePendingEvents,
+// mesh-runtime.db had lifecycle GC only for the legacy pending-event inbox (prunePendingEvents,
 // hourly via the mesh-event maintenance sweep) and fingerprints/tool-call windows;
 // mesh_event_ledger and terminal mesh_queue rows grew without bound. These windows
 // are deliberately CONSERVATIVE — every production reader operates on a recent
@@ -137,19 +52,11 @@ export function notifyLedgerBulkChange(): void {
 //   - Terminal queue rows 30 days: mesh_task_history / completion-dedup lookups are
 //     recent-task scoped; live dependsOn anchors are exempted inside
 //     pruneTerminalQueueEntries.
-//   - Terminal turn-attempt rows 30 days, cascading to mesh_turn_events and
-//     mesh_turn_held_suspensions: these were the last unbounded turn-side growth
-//     (one attempt row + its causal event log per dispatched turn, never deleted).
-//     Aligned with the terminal-queue window because an attempt is the turn-level
-//     companion of its queue row. Nonterminal rows, each session's newest attempt,
-//     and attempts holding an unresolved suspension are all exempted inside
-//     pruneTerminalTurnAttempts; the window is env-tunable
-//     (resolveTurnAttemptRetentionMs, clamped [1d, 90d]).
-//   - Terminal session-delivery rows 14 days (lifecycle retention Slice 1):
-//     completed/failed/expired/cancelled rows only — live/nonterminal rows
-//     (queued/delivering/delivered/acked) carry the retry/recovery semantics and
-//     are never pruned. Window is env-tunable (resolveSessionDeliveryRetentionMs,
-//     clamped [1d, 90d]); the resolver is read at sweep time.
+//   - Terminal MESH turn attempts 30 days (C-W8: the turn ledger's
+//     `turn_attempts`, successor of the retired legacy mesh_turn_* cascade),
+//     with their turn_events / turn_holds rows; each session's newest attempt is
+//     kept (TurnStore.pruneTerminalMeshAttempts). Plain attempts are pruned by
+//     the ledger scheduler. Env-tunable (resolveTurnAttemptRetentionMs).
 //   - Terminal graphs 30 days (lifecycle retention Slice 3), cascading across all
 //     seven graph control-plane tables, plus a separate 14-day sweep over
 //     delivered/failed outbox rows. The graph tables previously had no GC at all.
@@ -168,7 +75,7 @@ export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 
 /**
  * Periodic retention sweep for the mesh-runtime.db tables that previously had no
  * lifecycle GC (event ledger, tool-call log, terminal queue rows, terminal
- * session-delivery rows). Runs on the SAME cadence as the pending-events retention
+ * mesh turn attempts). Runs on the SAME cadence as the pending-events retention
  * prune (the hourly mesh-event maintenance sweep in mesh-event-forwarding.ts).
  * Best-effort and idempotent: a store failure degrades to a no-op with one warn;
  * re-running with nothing to prune is a set of cheap no-op DELETEs.
@@ -179,10 +86,7 @@ export function pruneMeshRuntimeRetention(): {
     ledger: number;
     toolCalls: number;
     terminalQueue: number;
-    sessionDelivery: number;
     turnAttempts: number;
-    turnEvents: number;
-    turnHeldSuspensions: number;
     graph: MeshGraphRetentionCounts;
 } {
     try {
@@ -198,10 +102,9 @@ export function pruneMeshRuntimeRetention(): {
         if (ledger > 0) notifyLedgerBulkChange();
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
         const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
-        const sessionDelivery = store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs());
-        const turn = store.pruneTerminalTurnAttempts(resolveTurnAttemptRetentionMs());
-        if (ledger + toolCalls + terminalQueue + sessionDelivery + turn.attempts > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${sessionDelivery} terminal-session-delivery / ${turn.attempts} turn-attempt (+${turn.events} turn-event, +${turn.heldSuspensions} held-suspension) row(s)`);
+        const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
+        if (ledger + toolCalls + terminalQueue + turn.attempts > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${ledger} ledger / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
         }
         // Slice 3 — graph control-plane retention. Deliberately its own try/catch
         // and its own log line: it is the newest and by far the widest-blast-radius
@@ -213,17 +116,13 @@ export function pruneMeshRuntimeRetention(): {
             ledger,
             toolCalls,
             terminalQueue,
-            sessionDelivery,
             turnAttempts: turn.attempts,
-            turnEvents: turn.events,
-            turnHeldSuspensions: turn.heldSuspensions,
             graph,
         };
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
         return {
-            ledger: 0, toolCalls: 0, terminalQueue: 0, sessionDelivery: 0,
-            turnAttempts: 0, turnEvents: 0, turnHeldSuspensions: 0,
+            ledger: 0, toolCalls: 0, terminalQueue: 0, turnAttempts: 0,
             graph: emptyGraphRetentionCounts(),
         };
     }

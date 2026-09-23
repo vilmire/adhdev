@@ -14,7 +14,7 @@
  *  - a note that cannot be aged is kept, never silently dropped
  */
 import { describe, expect, it } from 'vitest';
-import { isNoteExpired, resolveNoteExpiry, OPERATING_NOTE_CATEGORY_TTL_DAYS } from '../../src/mesh/mesh-ledger';
+import { isNoteExpired, resolveNoteExpiry, OPERATING_NOTE_CATEGORY_TTL_DAYS } from '../../src/mesh/mesh-operating-notes';
 
 const NOW = Date.parse('2026-09-02T12:00:00.000Z');
 const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();

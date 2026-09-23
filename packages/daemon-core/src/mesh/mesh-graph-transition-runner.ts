@@ -10,9 +10,10 @@
  * delegate their terminal branch here. One call performs, inside the existing
  * mesh queue lock (ONE better-sqlite3 immediate transaction):
  *
- *   1. Fence and accept the terminal attempt (proposeTurnCompletion — the
- *      d18e9838 choke-point settle MOVED here; see the settle-ownership note
- *      in mesh-work-queue.ts updateTaskStatus).
+ *   1. (retired, C-W8) The legacy Stage-5 attempt fence (proposeTurnCompletion
+ *      over the legacy turn-attempt table) is gone: the TURN LEDGER decides the outcome
+ *      upstream and reaches steps 2-8 through applyTaskTerminalInTxn; queue
+ *      writers that still land here are queue-authoritative.
  *   2. Persist the normalized output version (append-only mesh_task_outputs).
  *   3. Flip the upstream queue row to its terminal status.
  *   4. Advance affected graph nodes deterministically (upstream node →
@@ -65,7 +66,6 @@
  */
 
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { proposeTurnCompletion, type CompletionProposalSource, type CompletionRejectionReason, type TurnTerminalOutcome } from './mesh-turn-ledger.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { LOG } from '../logging/logger.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -114,6 +114,18 @@ export interface MeshTerminalCompletionEnvelope {
     completedAt?: string;
 }
 
+/** The terminal-writer classes that reach the queue choke point. */
+export type MeshTerminalCommitSource =
+    | 'provider_event'
+    | 'pty_hook'
+    | 'transcript'
+    | 'idle_status'
+    | 'stall_reconcile'
+    | 'cancellation'
+    | 'reassignment'
+    /** WORKER-MCP report_completion — fenced on the turn ledger by worker-report.ts before it lands here. */
+    | 'worker_tool_report';
+
 export interface MeshTerminalCommitInput {
     meshId: string;
     taskId: string;
@@ -121,8 +133,8 @@ export interface MeshTerminalCommitInput {
     sessionId?: string;
     attemptId?: string;
     occurredAtMs?: number;
-    /** Attempt-fence provenance — same vocabulary as the turn reducer's CompletionProposalSource. */
-    source: CompletionProposalSource;
+    /** Provenance of the terminal (logging / reason only since C-W8 — there is no attempt fence here). */
+    source: MeshTerminalCommitSource;
     reason?: string;
     envelope?: MeshTerminalCompletionEnvelope;
 }
@@ -132,8 +144,6 @@ export interface MeshTerminalCommitResult {
     entry: MeshWorkQueueEntry | null;
     /** False when the task is unknown or a worker report fails the causal fence. */
     committed: boolean;
-    /** Typed causal refusal, distinct from a missing queue row. */
-    rejectionReason?: CompletionRejectionReason;
     /** True when the row was ALREADY terminal with the same status — a replayed event. */
     duplicate: boolean;
     /** Downstream graph nodes materialized by this transition (empty for unlinked tasks). */
@@ -328,45 +338,15 @@ export function commitTaskTerminalAndAdvanceGraph(
         const entry = store.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false, materializedNodeIds: [] as string[] };
         const priorTerminal = entry.status === 'completed' || entry.status === 'failed' || entry.status === 'cancelled';
-        // Worker reports are reducer-authorized proposals (worker-MCP design §4),
-        // unlike legacy status writers whose best-effort settle / terminal
-        // corrections were intentional in d18e9838 and 43f82a5c. A valid token
-        // does not authorize a stale attempt, even against a terminal queue row.
-        const requiresReducerAcceptance = terminal.source === 'worker_tool_report';
 
         // REPLAY FENCE (design :332-334): a replayed terminal event carries the same
         // outcome for an already-terminal row — accept it as a duplicate and perform
         // NO further transition (no new output version, no node advance, no outbox).
-        if (!requiresReducerAcceptance && priorTerminal && entry.status === terminal.status) {
-            return { entry, committed: true, duplicate: true, materializedNodeIds: [] as string[] };
-        }
-
-        // Step 1 — fence and accept the terminal ATTEMPT. This is the one settle call
-        // that d18e9838 placed in updateTaskStatus; it moved here so the attempt and
-        // the row can never diverge regardless of which completion path fires first.
-        // Legacy terminal corrections retain their queue-authoritative contract.
-        // Worker reports must pass the reducer BEFORE replay handling or any
-        // output/queue/graph effects. Rejection leaves its diagnostic event durable.
-        if (!priorTerminal || requiresReducerAcceptance) {
-            try {
-                const decision = proposeTurnCompletion({
-                    meshId: terminal.meshId,
-                    taskId: terminal.taskId,
-                    attemptId: terminal.attemptId,
-                    sessionId: terminal.sessionId,
-                    outcome: terminal.status as TurnTerminalOutcome,
-                    source: terminal.source,
-                    occurredAtMs: terminal.occurredAtMs,
-                    reason: terminal.reason ?? `task_status_terminal:${terminal.status}`,
-                });
-                if (requiresReducerAcceptance && !decision.committed) {
-                    return { entry, committed: false, duplicate: false, rejectionReason: decision.reason, materializedNodeIds: [] as string[] };
-                }
-            } catch (error) {
-                if (requiresReducerAcceptance) throw error;
-                // Legacy reducer-unavailable fallback (pre-Stage-5 shadow mode).
-            }
-        }
+        //
+        // Step 1 (the legacy Stage-5 attempt fence) is retired (C-W8): the turn
+        // ledger's reducer decides a turn's outcome and commits it through
+        // applyTaskTerminalInTxn; the queue writers that reach this entry point are
+        // queue-authoritative corrections (cancel / stall / provider status).
         if (priorTerminal && entry.status === terminal.status) {
             return { entry, committed: true, duplicate: true, materializedNodeIds: [] as string[] };
         }
@@ -446,7 +426,7 @@ export interface MeshLedgerTerminalInput {
     status: MeshTerminalCommitStatus;
     sessionId?: string;
     attemptId?: string;
-    /** turn_attempts.attempt_no (+1 = the output's `attempt`); legacy rows read mesh_turn_attempts. */
+    /** turn_attempts.attempt_no (+1 = the output's `attempt`); legacy rows read the legacy turn-attempt table. */
     attemptNo?: number;
     occurredAtMs: number;
     reason?: string;
@@ -514,8 +494,9 @@ function persistOutputVersion(
     let attemptSeq = attemptNo !== undefined ? attemptNo + 1 : 1;
     if (attemptNo === undefined) {
         try {
-            attemptSeq = store.getCurrentTurnAttempt(terminal.meshId, terminal.taskId)?.attemptSeq ?? 1;
-        } catch { /* legacy task without an attempt row — version still persists */ }
+            const latest = store.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId);
+            if (latest) attemptSeq = latest.attemptNo + 1;
+        } catch { /* task without a ledger attempt — version still persists */ }
     }
     const envelopeJson = canonicalJson({
         task_id: terminal.taskId,

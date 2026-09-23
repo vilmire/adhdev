@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 
 // Isolate all file I/O (ledger JSONL, MeshRuntimeStore, pending events) to a per-run
 // temp directory so test runs never pollute the production ~/.adhdev/mesh-ledger.
-// Without this mock, insertDirectDispatch writes to the real mesh-runtime.db and the
+// Without this mock, the store writes to the real mesh-runtime.db and the
 // entries are never cleaned up — causing staleDirectWorkSummary.count to grow
 // by 4 per test run across the production coordinator view.
 const testTmpDir = path.join(tmpdir(), `adhdev-mesh-events-test-${randomUUID().slice(0, 8)}`)
@@ -69,8 +69,9 @@ import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, 
 // C-W3: coordinator notices are turn.notify rows; the helper captures them.
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js'
 import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, insertDirectDispatch, getActiveDirectDispatches, recordTaskAutoLaunch, requeueTaskForLedgerReclaim } from '../../src/mesh/mesh-work-queue.js'
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue, getActiveDirectDispatches, recordTaskAutoLaunch, requeueTaskForLedgerReclaim } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import { computeMeshTaskStats } from '../../src/mesh/mesh-task-stats.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 import { UNROUTABLE_DIAGNOSTIC_STREAM, __resetUnroutableDiagnosticsForTests } from '../../src/mesh/mesh-routing.js'
@@ -1260,6 +1261,14 @@ const { emit } = components
         targetSessionId: 'remote-session-1',
         action: 'send_chat',
       }))
+      // D2 (applied in C-W8): the dispatch carries its turn-ledger identity + queue policy
+      // so the worker's one send funnel dedupes a same-nonce redelivery.
+      {
+        const call = dispatchMeshCommand.mock.calls.find((c: any[]) => c[1] === 'agent_command')
+        const args = call?.[2]
+        expect(args).toMatchObject({ policy: { mode: 'queue' }, origin: 'mesh' })
+        expect(args.messageId).toMatch(/^task:.+:n\d+$/)
+      }
       const [entry] = getQueue(meshId)
       expect(entry.status).toBe('assigned')
       expect(entry.assignedNodeId).toBe('node_remote_wt')
@@ -1947,14 +1956,15 @@ describe('EVT — re-dispatch 2nd-completion event recovery', () => {
       meshConfigMocks.getMesh.mockReturnValue({ id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }], policy: {} })
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      insertDirectDispatch(meshId, {
+      // C-W8: the direct dispatch is its open mesh_direct turn-ledger attempt.
+      seedMeshAttempt({
+        meshId,
         taskId: 'task_redispatch_1',
         nodeId: 'node_child_1',
         sessionId: 'runtime-session-1',
         providerType: 'claude-cli',
-        message: 'build and commit',
-        via: 'local_direct',
-        dispatchedAt: new Date().toISOString(),
+        scope: 'mesh_direct',
+        stage: 'generating',
       })
 
       const { components, emit } = createComponents(meshId)

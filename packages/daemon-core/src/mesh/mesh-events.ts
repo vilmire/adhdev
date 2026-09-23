@@ -34,13 +34,4 @@ export {
 /** The notice shape `get_pending_mesh_events` / `mesh_status` surface (field names kept for the MCP client). */
 export type { PendingCoordinatorNoticeWire as PendingMeshCoordinatorEvent } from './turn-ledger/deliver.js';
 
-/**
- * @deprecated Renamed `notifyMeshCoordinator` (C-W3). Every daemon-core PRODUCER
- * call site now uses `notifyMeshCoordinator` directly (C-W7) — this alias is
- * kept ONLY because `oss/packages/mcp-server/test/mesh-active-work-artifacts.test.ts`
- * still imports it from the `@adhdev/daemon-core` barrel (mcp-server is C-W6c's
- * file ownership, not touched here). REQUESTED EDIT for C-W6c: switch that
- * import to `notifyMeshCoordinator`, then this alias can be deleted for real.
- */
-export { notifyMeshCoordinator as queuePendingMeshCoordinatorEvent } from './turn-ledger/deliver.js';
 

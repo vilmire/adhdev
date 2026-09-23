@@ -20,12 +20,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import {
-    openTurnAttempt,
-    recordTurnAck,
-    proposeTurnCompletion,
-    __resetTurnLedgerMetricsForTests,
-} from '../../src/mesh/mesh-turn-ledger.js';
+import { seedMeshAttempt, advanceSeededAttempt } from '../helpers/turn-attempt-seed.js';
 import {
     resolveSessionTurnPresentation,
     getTurnPresentationMetrics,
@@ -35,17 +30,11 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 import { withMinimalSpec } from '../helpers/minimal-spec.js';
 
 const MESH = `mesh-${randomUUID().slice(0, 8)}`;
-let nonceSeq = 0;
 
+// C-W8: the presentation reads the turn ledger's `turn_attempts` (seeded in
+// the surface vocabulary; reducer semantics live in test/turn-ledger/**).
 function openAttempt(args: { taskId: string; sessionId: string; providerType?: string }) {
-    nonceSeq += 1;
-    return openTurnAttempt({
-        meshId: MESH,
-        taskId: args.taskId,
-        dispatchNonce: nonceSeq,
-        sessionId: args.sessionId,
-        providerType: args.providerType ?? 'kimi-cli',
-    }).attempt;
+    return seedMeshAttempt({ meshId: MESH, taskId: args.taskId, sessionId: args.sessionId, providerType: args.providerType ?? 'kimi-cli' });
 }
 
 /**
@@ -77,7 +66,6 @@ function modalLaneStatus(args: { sessionId: string; rawFsmStatus: string; provid
 
 beforeEach(() => {
     MeshRuntimeStore.resetForTests();
-    __resetTurnLedgerMetricsForTests();
     __resetTurnPresentationMetricsForTests();
 });
 
@@ -94,8 +82,8 @@ describe('session.modal lane turn authority', () => {
     it('publishes the reducer status when an attempt is mid-turn and the FSM still reads idle', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
-        openAttempt({ taskId, sessionId });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId });
+        const attempt = openAttempt({ taskId, sessionId });
+        advanceSeededAttempt(attempt.attemptId, 'delivered');
 
         expect(modalLaneStatus({ sessionId, rawFsmStatus: 'idle' })).toBe('starting');
     });
@@ -106,8 +94,8 @@ describe('session.modal lane turn authority', () => {
     it('emits no shadow divergence once the lane consumes the projection', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
-        openAttempt({ taskId, sessionId });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId });
+        const attempt = openAttempt({ taskId, sessionId });
+        advanceSeededAttempt(attempt.attemptId, 'delivered');
 
         // First pass: the raw FSM sample is what the lane used to publish.
         const projected = modalLaneStatus({ sessionId, rawFsmStatus: 'idle' });
@@ -134,13 +122,9 @@ describe('session.modal lane turn authority', () => {
         // not keep painting a finished session as working.
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
-        openAttempt({ taskId, sessionId });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', sessionId });
-        const decision = proposeTurnCompletion({
-            meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event',
-        });
-        expect(decision.committed).toBe(true);
+        const attempt = openAttempt({ taskId, sessionId });
+        advanceSeededAttempt(attempt.attemptId, 'consumed');
+        advanceSeededAttempt(attempt.attemptId, 'completed');
         expect(modalLaneStatus({ sessionId, rawFsmStatus: 'idle' })).toBe('idle');
 
         // ...and a stale provider sample claiming 'generating' does NOT resurrect it.

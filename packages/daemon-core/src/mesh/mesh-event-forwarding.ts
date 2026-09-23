@@ -61,7 +61,6 @@ import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler } from './mesh-graph-transition-runner.js';
 import { extractJsonObjectFromSummary } from './mesh-ledger.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
-import { runSessionDestructiveAction } from './mesh-turn-ledger.js';
 import {
     getMeshWithCache,
     tryAssignQueueTask,
@@ -234,28 +233,24 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
     return out;
 }
 
-/**
- * The `SessionInputTarget` the deliver consumer submits a notice into: the
- * coordinator INSTANCE's `send_message` (the chat bookkeeping + adapter FIFO a
- * dashboard send takes), never a raw PTY force-write — a busy or modal-parked
- * coordinator takes it at its next turn boundary.
- */
-export function resolveCoordinatorInputTarget(components: Pick<DaemonComponents, 'instanceManager'>, sessionId: string) {
-    const instance = components.instanceManager.getInstance(sessionId) as unknown as InstanceLike | undefined;
-    if (!instance) return null;
-    return {
-        async sendMessage(text: string): Promise<{ status: 'queued' | 'delivered' }> {
-            const busy = !coordinatorIsIdle(instance) || coordinatorIsModalParked(instance);
-            instance.onEvent('send_message', { input: { text, textFallback: text } });
-            return { status: busy ? 'queued' : 'delivered' };
-        },
-        getStatus: () => ({ status: readNonEmptyString(instance.getState()?.status) || undefined }),
-    };
-}
-
 // ---------------------------------------------------------------------------
 // Cancel executor + envelope helpers (moved from the deleted suppression module)
 // ---------------------------------------------------------------------------
+
+/**
+ * Per-session ordering for destructive actions (stop/kill/teardown): each runs
+ * strictly after the previous one queued for the same session settled. Moved
+ * here from the retired legacy reducer module (C-W8) — this file is its only
+ * caller. The chain stays settled-proof so a rejection never poisons later
+ * actions.
+ */
+const sessionDestructiveChains = new Map<string, Promise<unknown>>();
+function runSessionDestructiveAction<T>(sessionKey: string, act: () => Promise<T> | T): Promise<T> {
+    const prior = sessionDestructiveChains.get(sessionKey) ?? Promise.resolve();
+    const next = prior.then(act, act) as Promise<T>;
+    sessionDestructiveChains.set(sessionKey, next.catch(() => undefined));
+    return next;
+}
 
 /**
  * Stop a worker session whose dispatch the ledger cut (reclaim / R27a / R28a /
@@ -928,22 +923,21 @@ function onCoordinatorIdleEdge(components: DaemonComponents, instanceId: string)
     // the coordinator idles with an empty inbox and active missions remain.
     const rt = meshNoticeRuntime.current();
     if (rt && !rt.hasUndelivered(coordinatorMeshId) && coordinatorIsIdle(source as unknown as InstanceLike)) {
-        try {
-            maybeInjectIdleActiveMissionReminder(
-                coordinatorMeshId,
-                source,
-                getMesh(coordinatorMeshId)?.policy,
-                undefined,
-                components.instanceManager,
-                undefined,
-                (() => {
-                    const cached = components.router?.aggregateMeshStatusCache?.get(coordinatorMeshId)?.snapshot?.nodes;
-                    return Array.isArray(cached) ? cached : undefined;
-                })(),
-            );
-        } catch (e: any) {
+        void maybeInjectIdleActiveMissionReminder(
+            coordinatorMeshId,
+            // D2: through the daemon's one send funnel (shared messageId dedupe).
+            { sessionId: instanceId, input: components.cliManager.input },
+            getMesh(coordinatorMeshId)?.policy,
+            undefined,
+            components.instanceManager,
+            undefined,
+            (() => {
+                const cached = components.router?.aggregateMeshStatusCache?.get(coordinatorMeshId)?.snapshot?.nodes;
+                return Array.isArray(cached) ? cached : undefined;
+            })(),
+        ).catch((e: any) => {
             LOG.warn('MeshEvents', `idle mission reminder failed (mesh ${coordinatorMeshId}): ${e?.message || e}`);
-        }
+        });
     }
     return true;
 }

@@ -15,8 +15,8 @@ import {
 
 import { resolveDeliveryDecision } from '../src/mesh/mesh-delivery-policy.js';
 import { isIdleSessionState, sessionStateLooksActive } from '../src/mesh/mesh-candidacy-predicates.js';
-import { BUSY_AGENT_STATUSES } from '../src/commands/cli-manager-agent-status.js';
-import { waitForIdleAfterInterrupt } from '../src/commands/interrupt-and-deliver.js';
+import { BUSY_DECISION } from '../src/sessions/session-input-service.js';
+import { waitForIdleAfterInterrupt } from '../src/sessions/session-input-interrupt.js';
 import { isCliGeneratingLikeStatus } from '../src/providers/cli-provider-status-helpers.js';
 import type { ManagedStatus } from '../src/status/normalize.js';
 
@@ -136,13 +136,13 @@ describe('SessionStatus type fork', () => {
             expect(Object.keys(SESSION_STATUS_ALIASES).length).toBeGreaterThan(0);
         });
 
-        it.each(EVERY_CLASSIFIED_SPELLING)('BUSY_AGENT_STATUSES.has(%s) === isBusyStatus', (spelling) => {
-            expect(BUSY_AGENT_STATUSES.has(spelling)).toBe(isBusyStatus(spelling));
-        });
-
-        it('BUSY_AGENT_STATUSES contains nothing the class map does not call busy', () => {
-            for (const member of BUSY_AGENT_STATUSES) {
-                expect(isBusyStatus(member), `${member} is in BUSY_AGENT_STATUSES but not busy`).toBe(true);
+        // D3: the send funnel's busy decision is keyed by the class map itself —
+        // no send-side busy set remains (BUSY_AGENT_STATUSES was deleted with
+        // the mesh path's pre-send status guess).
+        it.each(EVERY_CLASSIFIED_SPELLING)('BUSY_DECISION has a cell for the class of %s under every policy', (spelling) => {
+            const cls = classifySessionStatus(spelling);
+            for (const mode of ['queue', 'send_now', 'interrupt'] as const) {
+                expect(BUSY_DECISION[mode][cls]).toBeDefined();
             }
         });
 
@@ -286,9 +286,13 @@ describe('SessionStatus type fork', () => {
             expect(sessionStateLooksActive({ activeChat: { status: 'waiting_choice' } })).toBe(true);
         });
 
-        it('BUSY_AGENT_STATUSES contains waiting_choice alongside waiting_approval', () => {
-            expect(BUSY_AGENT_STATUSES.has('waiting_choice')).toBe(true);
-            expect(BUSY_AGENT_STATUSES.has('waiting_approval')).toBe(true);
+        it('the send funnel treats waiting_choice exactly like waiting_approval (blocked: no out-of-band write)', () => {
+            for (const status of ['waiting_choice', 'waiting_approval']) {
+                const cls = classifySessionStatus(status);
+                expect(cls).toBe('blocked');
+                expect(BUSY_DECISION.send_now[cls]).toEqual({ refuse: 'modal_parked' });
+                expect(BUSY_DECISION.interrupt[cls]).toEqual({ refuse: 'modal_parked' });
+            }
         });
 
         it('still reports a genuinely idle session as inactive', () => {

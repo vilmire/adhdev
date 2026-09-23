@@ -72,6 +72,18 @@ interface HoldRowRaw {
     data_json: string; status: string; created_at: number; resolved_at: number | null;
 }
 
+/** `mesh_operating_notes.meta_json` — content-free lifecycle fields (C-W8). */
+export interface OperatingNoteMetaColumn {
+    pinned?: boolean;
+    expiresAt?: string;
+    supersedes?: string;
+    subjectKey?: string;
+    sourceCoordinator?: string;
+    /** Marker row of a text forget: a later note with this text is born retracted. */
+    textTombstone?: boolean;
+    forgetReason?: string;
+}
+
 export interface MeshOperatingNoteRow {
     noteId: string;
     meshId: string;
@@ -80,6 +92,7 @@ export interface MeshOperatingNoteRow {
     tombstonedAt: number | null;
     callerSessionId: string | null;
     createdAt: number;
+    meta: OperatingNoteMetaColumn;
 }
 
 function parseJsonObject(text: string | null | undefined): Record<string, unknown> {
@@ -228,6 +241,25 @@ export class TurnStore {
         return rows.map(attemptFromRow);
     }
 
+    /**
+     * Stage 6 presentation read (C-W8): the MESH attempt (`mesh_queue` /
+     * `mesh_direct` — never `plain`) governing a session — its open attempt
+     * (≤1, unique partial index), else the most recently written one. With its
+     * `updated_at` stamp, which the stale-authority gate reads.
+     */
+    findPresentationAttemptForSession(sessionId: string): { attempt: TurnAttempt; updatedAt: number } | null {
+        const row = this.stmt(`SELECT * FROM turn_attempts WHERE session_id = ? AND scope != 'plain'
+            ORDER BY (terminal_outcome IS NULL) DESC, updated_at DESC, attempt_no DESC LIMIT 1`).get(sessionId) as AttemptRow | undefined;
+        return row ? { attempt: attemptFromRow(row), updatedAt: row.updated_at } : null;
+    }
+
+    /** Stage 6 presentation read (C-W8): a task's latest attempt with its `updated_at` stamp. */
+    findPresentationAttemptForTask(meshId: string, taskId: string): { attempt: TurnAttempt; updatedAt: number } | null {
+        const row = this.stmt('SELECT * FROM turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_no DESC LIMIT 1')
+            .get(meshId, taskId) as AttemptRow | undefined;
+        return row ? { attempt: attemptFromRow(row), updatedAt: row.updated_at } : null;
+    }
+
     /** null = unknown attempt. */
     isTerminal(attemptId: string): boolean | null {
         const row = this.stmt('SELECT terminal_outcome FROM turn_attempts WHERE attempt_id = ?').get(attemptId) as { terminal_outcome: string | null } | undefined;
@@ -332,6 +364,33 @@ export class TurnStore {
     pruneTerminalPlainAttempts(olderThanMs: number, nowMs: number): { attempts: number; events: number; holds: number } {
         const cutoff = nowMs - olderThanMs;
         const ids = (this.stmt(`SELECT attempt_id FROM turn_attempts WHERE scope = 'plain' AND terminal_outcome IS NOT NULL AND terminal_at < ?`)
+            .all(cutoff) as Array<{ attempt_id: string }>).map((r) => r.attempt_id);
+        let events = 0;
+        let holds = 0;
+        for (const id of ids) {
+            events += this.stmt('DELETE FROM turn_events WHERE attempt_id = ?').run(id).changes;
+            holds += this.stmt('DELETE FROM turn_holds WHERE attempt_id = ?').run(id).changes;
+            this.stmt('DELETE FROM turn_attempts WHERE attempt_id = ?').run(id);
+        }
+        return { attempts: ids.length, events, holds };
+    }
+
+    /**
+     * Retention for TERMINAL mesh attempts (C-W8; successor of the legacy
+     * the legacy turn-attempt table cascade prune). Each session's newest attempt survives
+     * at any age — Stage 6 resolves a session's presentation with no time bound,
+     * so deleting it would blank the session's displayed state. An attempt that
+     * still carries a worker handoff-note index row is kept (that row's lifetime
+     * is the handoff sweep's, and it reads through a join to its attempt) — the
+     * longer of the two windows wins.
+     */
+    pruneTerminalMeshAttempts(olderThanMs: number, nowMs: number): { attempts: number; events: number; holds: number } {
+        const cutoff = nowMs - olderThanMs;
+        const ids = (this.stmt(`SELECT a.attempt_id FROM turn_attempts a
+            WHERE a.scope != 'plain' AND a.terminal_outcome IS NOT NULL AND a.terminal_at < ?
+              AND EXISTS (SELECT 1 FROM turn_attempts b WHERE b.session_id = a.session_id AND b.attempt_id != a.attempt_id
+                  AND (b.updated_at > a.updated_at OR (b.updated_at = a.updated_at AND b.attempt_no > a.attempt_no)))
+              AND NOT EXISTS (SELECT 1 FROM turn_events e WHERE e.attempt_id = a.attempt_id AND e.kind = 'worker_handoff_note')`)
             .all(cutoff) as Array<{ attempt_id: string }>).map((r) => r.attempt_id);
         let events = 0;
         let holds = 0;
@@ -477,11 +536,56 @@ export class TurnStore {
             WHERE event_id = ? AND publish_state = 'pending'`).run(seq, writer, eventId).changes > 0;
     }
 
+    // ── worker-MCP audit rows (C-W8: moved off the legacy turn-event table) ──
+    //
+    // The worker's structured report / progress note / handoff-note index are
+    // local audit rows on the attempt they were filed against: verdict
+    // `recorded`, source `worker_tool`, never published. Content-free except the
+    // handoff index's touched-file paths (identifiers). The generation is the
+    // attempt's current one so UNIQUE(attempt, generation, kind, dedupe) keeps a
+    // re-filed report insert-once.
+
+    insertWorkerEvent(row: { eventId: string; attemptId: string; sessionId?: string | null; kind: string; dedupeKey: string; payload: Record<string, unknown>; atMs: number }): boolean {
+        const info = this.stmt(`INSERT OR IGNORE INTO turn_events (
+                event_id, mesh_id, attempt_id, generation, session_id, kind, source, verdict, dedupe_key, payload_json, publish_state, at_ms, recorded_at)
+            SELECT ?, a.mesh_id, a.attempt_id, a.generation, COALESCE(?, a.session_id), ?, 'worker_tool', 'recorded', ?, ?, 'none', ?, ?
+            FROM turn_attempts a WHERE a.attempt_id = ?`).run(
+            row.eventId, row.sessionId ?? null, row.kind, row.dedupeKey, JSON.stringify(row.payload), row.atMs, row.atMs, row.attemptId,
+        );
+        return info.changes > 0;
+    }
+
+    /** Worker audit rows of one kind for a task (every attempt of it), oldest first. */
+    listWorkerEventsForTask(meshId: string, taskId: string, kind: string): Array<TurnEventRow & { taskId: string }> {
+        const rows = this.stmt(`SELECT e.*, a.task_id AS task_id FROM turn_events e JOIN turn_attempts a ON a.attempt_id = e.attempt_id
+            WHERE a.mesh_id = ? AND a.task_id = ? AND e.kind = ? ORDER BY e.recorded_at, e.rowid`).all(meshId, taskId, kind) as Array<EventRowRaw & { task_id: string }>;
+        return rows.map((r) => ({ ...eventFromRow(r), taskId: r.task_id }));
+    }
+
+    /** Worker audit rows of one kind in a mesh, newest first. */
+    listWorkerEventsByKind(meshId: string, kind: string, limit: number): Array<TurnEventRow & { taskId: string }> {
+        const rows = this.stmt(`SELECT e.*, a.task_id AS task_id FROM turn_events e JOIN turn_attempts a ON a.attempt_id = e.attempt_id
+            WHERE e.mesh_id = ? AND e.kind = ? AND a.task_id IS NOT NULL ORDER BY e.at_ms DESC, e.rowid DESC LIMIT ?`).all(meshId, kind, limit) as Array<EventRowRaw & { task_id: string }>;
+        return rows.map((r) => ({ ...eventFromRow(r), taskId: r.task_id }));
+    }
+
+    /** Retention for one worker audit kind (the handoff-note sweep owns that kind's lifetime). */
+    deleteWorkerEventsOlderThan(kind: string, cutoffMs: number): number {
+        return this.stmt(`DELETE FROM turn_events WHERE kind = ? AND source = 'worker_tool' AND at_ms < ?`).run(kind, cutoffMs).changes;
+    }
+
     // ── operating notes (C3: out of the legacy event ledger) ────────────
 
-    insertOperatingNote(note: Omit<MeshOperatingNoteRow, 'tombstonedAt'>): boolean {
-        return this.stmt(`INSERT OR IGNORE INTO mesh_operating_notes (note_id, mesh_id, text, category, tombstoned_at, caller_session_id, created_at)
-            VALUES (?, ?, ?, ?, NULL, ?, ?)`).run(note.noteId, note.meshId, note.text, note.category, note.callerSessionId, note.createdAt).changes > 0;
+    insertOperatingNote(note: Omit<MeshOperatingNoteRow, 'tombstonedAt' | 'meta'> & { meta?: OperatingNoteMetaColumn }): boolean {
+        return this.stmt(`INSERT OR IGNORE INTO mesh_operating_notes (note_id, mesh_id, text, category, tombstoned_at, caller_session_id, created_at, meta_json)
+            VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`).run(note.noteId, note.meshId, note.text, note.category, note.callerSessionId, note.createdAt, JSON.stringify(note.meta ?? {})).changes > 0;
+    }
+
+    /** Keep-latest-N / tombstone prune (mesh-operating-notes.ts). Returns rows removed. */
+    deleteOperatingNotes(meshId: string, noteIds: readonly string[]): number {
+        let removed = 0;
+        for (const id of noteIds) removed += this.stmt(`DELETE FROM mesh_operating_notes WHERE mesh_id = ? AND note_id = ?`).run(meshId, id).changes;
+        return removed;
     }
 
     tombstoneOperatingNote(meshId: string, noteId: string, atMs: number): boolean {
@@ -490,8 +594,11 @@ export class TurnStore {
     }
 
     listOperatingNotes(meshId: string, opts: { includeTombstoned?: boolean } = {}): MeshOperatingNoteRow[] {
-        const rows = this.db.prepare(`SELECT * FROM mesh_operating_notes WHERE mesh_id = ?${opts.includeTombstoned ? '' : ' AND tombstoned_at IS NULL'} ORDER BY created_at, note_id`)
-            .all(meshId) as Array<{ note_id: string; mesh_id: string; text: string; category: string | null; tombstoned_at: number | null; caller_session_id: string | null; created_at: number }>;
-        return rows.map((r) => ({ noteId: r.note_id, meshId: r.mesh_id, text: r.text, category: r.category, tombstonedAt: r.tombstoned_at, callerSessionId: r.caller_session_id, createdAt: r.created_at }));
+        const rows = this.db.prepare(`SELECT * FROM mesh_operating_notes WHERE mesh_id = ?${opts.includeTombstoned ? '' : ' AND tombstoned_at IS NULL'} ORDER BY created_at, rowid`)
+            .all(meshId) as Array<{ note_id: string; mesh_id: string; text: string; category: string | null; tombstoned_at: number | null; caller_session_id: string | null; created_at: number; meta_json: string | null }>;
+        return rows.map((r) => ({
+            noteId: r.note_id, meshId: r.mesh_id, text: r.text, category: r.category, tombstonedAt: r.tombstoned_at,
+            callerSessionId: r.caller_session_id, createdAt: r.created_at, meta: parseJsonObject(r.meta_json) as OperatingNoteMetaColumn,
+        }));
     }
 }

@@ -41,12 +41,13 @@ import {
   __resetWorkerTaskTokensForTest,
   mintWorkerTaskToken,
 } from '../../src/mesh/worker-mcp-isolation'
-import { openTurnAttempt, recordTurnAck } from '../../src/mesh/mesh-turn-ledger'
+import { seedMeshAttempt, seedWorkerEvent } from '../helpers/turn-attempt-seed'
 
-// Each test needs its own (mesh, task, attempt) namespace: mesh_turn_events is a
-// process-wide SQLite table whose UNIQUE key is (attempt_id, kind, dedupe_key)
-// and is NOT scoped by mesh_id, so varying only the mesh id silently drops the
-// second insert. Same trap the handoff-notes suite documents.
+// Each test needs its own (mesh, task, attempt) namespace: the worker audit rows
+// (`turn_events`, C-W8) are a process-wide SQLite table whose UNIQUE key is
+// (attempt_id, generation, kind, dedupe_key) and is NOT scoped by mesh_id, so
+// varying only the mesh id silently drops the second insert. Same trap the
+// handoff-notes suite documents.
 let seq = 0
 function freshIds(): { meshId: string; taskId: string; attemptId: string } {
   seq += 1
@@ -95,24 +96,22 @@ function seedQueueRow(
     createdAt: now,
     updatedAt: now,
   } as any)
-  const { attempt } = openTurnAttempt({ meshId: ids.meshId, taskId: ids.taskId, dispatchNonce: 1, sessionId })
-  recordTurnAck({ meshId: ids.meshId, taskId: ids.taskId, kind: 'delivered', attemptId: attempt.attemptId })
-  recordTurnAck({ meshId: ids.meshId, taskId: ids.taskId, kind: 'consumed', attemptId: attempt.attemptId })
+  // C-W8: the attempt lives on the turn ledger (`turn_attempts`); the report's
+  // causal fence reads it there.
+  const attempt = seedMeshAttempt({ meshId: ids.meshId, taskId: ids.taskId, sessionId, stage: 'consumed' })
   return attempt.attemptId
 }
 
 /** Seed the evidence row acceptWorkerCompletionReport writes at step (2). */
 function seedReportEvidence(ids: ReturnType<typeof freshIds>, outcome = 'completed'): void {
-  MeshRuntimeStore.getInstance().insertTurnEvent({
+  seedWorkerEvent({
     eventId: `evt-report-${ids.taskId}`,
     meshId: ids.meshId,
     attemptId: ids.attemptId,
     taskId: ids.taskId,
     kind: WORKER_REPORT_EVENT_KIND,
     dedupeKey: outcome,
-    payload: JSON.stringify({ outcome, summaryLength: 42, touchedFileCount: 1 }),
-    occurredAtMs: Date.now(),
-    recordedAt: new Date().toISOString(),
+    payload: { outcome, summaryLength: 42, touchedFileCount: 1 },
   })
 }
 
@@ -151,16 +150,14 @@ describe('F1 — prior worker report is discoverable from the ledger', () => {
 
   it('ignores non-report turn events for the same task', () => {
     const ids = freshIds()
-    MeshRuntimeStore.getInstance().insertTurnEvent({
+    seedWorkerEvent({
       eventId: `evt-other-${ids.taskId}`,
       meshId: ids.meshId,
       attemptId: ids.attemptId,
       taskId: ids.taskId,
       kind: 'worker_progress_update',
       dedupeKey: 'x',
-      payload: JSON.stringify({ noteLength: 5 }),
-      occurredAtMs: Date.now(),
-      recordedAt: new Date().toISOString(),
+      payload: { noteLength: 5 },
     })
     // A progress note is not a completion. Treating any worker-authored row as a
     // report would suppress the PTY completion of a task that never finished.
@@ -197,16 +194,13 @@ describe('F2 — handoff note text survives a restart', () => {
     const ids = freshIds()
     const recordedAtIso = new Date().toISOString()
     __setHandoffNoteSinkForTests(null)
-    MeshRuntimeStore.getInstance().insertTurnEvent({
+    seedWorkerEvent({
       eventId: `evt-handoff-${ids.taskId}`,
       meshId: ids.meshId,
       attemptId: ids.attemptId,
       taskId: ids.taskId,
       kind: WORKER_HANDOFF_EVENT_KIND,
-      dedupeKey: '',
-      payload: JSON.stringify({ touchedFiles: ['src/shared.ts'], intentLength: 4, hasConflictGuidance: false, followUpCount: 0 }),
-      occurredAtMs: Date.now(),
-      recordedAt: recordedAtIso,
+      payload: { touchedFiles: ['src/shared.ts'], intentLength: 4, hasConflictGuidance: false, followUpCount: 0 },
     })
     storeHandoffNote({
       meshId: ids.meshId,
@@ -289,6 +283,7 @@ describe('F4/F5 — a failed write is never reported as success', () => {
 
   it('records a progress update when an attempt exists', () => {
     const ids = freshIds()
+    seedMeshAttempt({ meshId: ids.meshId, taskId: ids.taskId, sessionId: `session-${ids.taskId}`, attemptId: ids.attemptId, stage: 'generating' })
     const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId: ids.attemptId })
     const result = acceptWorkerProgressUpdate(
       { token: token.token },
@@ -297,8 +292,8 @@ describe('F4/F5 — a failed write is never reported as success', () => {
     expect(result.accepted).toBe(true)
     expect(result.taskId).toBe(ids.taskId)
     // The row must actually exist — "accepted" is only meaningful if it did.
-    const rows = MeshRuntimeStore.getInstance().listTurnEventsForTask(ids.meshId, ids.taskId)
-    expect(rows.filter(r => r.kind === 'worker_progress_update')).toHaveLength(1)
+    const rows = MeshRuntimeStore.getInstance().turnStore().listWorkerEventsForTask(ids.meshId, ids.taskId, 'worker_progress_update')
+    expect(rows).toHaveLength(1)
   })
 
   it('reports handoffNoteRecorded:false with a reason when the note cannot be stored', () => {

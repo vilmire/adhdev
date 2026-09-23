@@ -1,37 +1,21 @@
 /**
  * MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT
  *
- * A `mesh_send_task` (direct dispatch) issued WITHOUT a mission_id used to open no
- * turn attempt, because openTurnAttempt/recordTurnAck and createSessionDelivery both
- * sat behind recordDirectDispatchTask's `if (!missionId) return null` early-return —
- * a gate that existed only for mission ATTRIBUTION and which those two later
- * additions inherited by accident.
+ * A `mesh_send_task` (direct dispatch) issued WITHOUT a mission_id once opened
+ * no turn attempt and wrote no confirmed delivery, because both sat behind
+ * recordDirectDispatchTask's `if (!missionId) return null` early-return — a gate
+ * that existed only for mission ATTRIBUTION. Terminal state never converged and
+ * redrive protection was lost.
  *
- * The consequences were not cosmetic:
- *
- *   1. Terminal state never converged. With no attempt, a completion event reaching
- *      proposeTurnCompletion has nothing to resolve, so ensureLegacyTurnAttempt mints
- *      `legacy-<taskId>-<seq>` whose sessionId does not match the worker binding. The
- *      reducer then refuses the flip (stale_attempt / session_mismatch) and
- *      mesh-event-forwarding returns early, skipping updateSessionTaskStatus,
- *      updateDirectDispatchStatus and markSessionDeliveriesTerminal. The session sits
- *      at `generating` while the dashboard reports work in progress.
- *
- *   2. Redrive protection was lost. The confirmed-delivery record is what stops
- *      recoverStrandedAssignedDispatches from reclaiming an already-completed task,
- *      so an unlucky interleaving could re-run finished work.
- *
- * These tests pin the corrected contract. The discriminating assertions are the
- * attempt-id shape (a real UUID, never `legacy-`) and the resolvability of that
- * attempt by (taskId, sessionId) — reverting the fix makes exactly those fail.
- *
- * C-W7 NOTE (wiring-unification): recordDirectDispatchTask still opens this LEGACY
- * Stage-5 attempt in-process — it is NOT redundant with mcp-server's newer
- * `openDirectDispatchAttempt` (turn_observe IPC on the NEW turn ledger). Stage 6
- * presentation (mesh-turn-presentation.ts, read by mesh-active-work/read_chat/
- * session_status/dashboard/stall_watchdog/restart_gate) is wired to THIS table only;
- * removing this open silently breaks every one of those surfaces for a direct
- * dispatch. See the long comment at the call site before changing this again.
+ * C-W8 (wiring-unification): the attempt is the TURN LEDGER's `mesh_direct`
+ * attempt, opened by the caller (mcp-server `openDirectDispatchAttempt` →
+ * `turn_observe` `dispatch_accepted`) — the legacy Stage-5 `openTurnAttempt`
+ * inside recordDirectDispatchTask is retired, and the worker-MCP task token is
+ * minted daemon-side when the ledger opens the attempt. These tests pin:
+ *   - the row materialises missionless and carries the CALLER's attempt id;
+ *   - (the confirmed delivery is the attempt's `delivered` evidence, pinned by the
+ *     ledger suites — the legacy delivery row is retired);
+ *   - the daemon-side `turn_observe` mints the worker token on attempt creation.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -43,8 +27,11 @@ import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
-import { resolveAttemptForTask } from '../../src/mesh/mesh-turn-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
+import { setActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js';
+import { __resetWorkerTaskTokensForTest, findWorkerTaskTokenForSession, liveWorkerTaskTokenCount } from '../../src/mesh/worker-mcp-isolation.js';
+import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 
 const MESH = 'mesh_missionless_dispatch';
 const NODE = 'node_worker';
@@ -65,6 +52,7 @@ describe('missionless direct dispatch opens a real turn attempt', () => {
             assignedSessionId: SESSION,
             dispatchedAt: new Date().toISOString(),
             difficulty: 'medium',
+            attemptId: `mesh_direct:${taskId}`,
         });
         return { taskId, entry };
     };
@@ -78,35 +66,10 @@ describe('missionless direct dispatch opens a real turn attempt', () => {
         expect(getQueue(MESH)).toHaveLength(1);
     });
 
-    it('stamps a proper UUID attemptId, never a legacy- placeholder', () => {
-        const { entry } = dispatch();
-
-        // THE discriminator. Without the fix there is no attempt at all, and the
-        // reducer later synthesises `legacy-<taskId>-<seq>` instead.
-        expect(entry!.attemptId).toBeTruthy();
-        expect(entry!.attemptId).not.toMatch(/^legacy-/);
-        expect(entry!.attemptId).toMatch(
-            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-        );
-    });
-
-    it('opens the attempt bound to the dispatched session so the reducer can resolve it', () => {
+    it("stamps the caller's ledger attempt id on the row (no legacy attempt is opened)", () => {
         const { taskId, entry } = dispatch();
-
-        // The session-binding mismatch is what made the reducer refuse the flip
-        // (stale_attempt / session_mismatch). Resolving by the real session proves the
-        // attempt is usable, not merely present.
-        const resolved = resolveAttemptForTask(MESH, taskId, { sessionId: SESSION });
-        expect(resolved).toBeTruthy();
-        expect(resolved?.attemptId).toBe(entry!.attemptId);
-        expect(resolved?.attemptId).not.toMatch(/^legacy-/);
-    });
-
-    it('records the confirmed delivery that blocks watchdog redrive', () => {
-        const { taskId } = dispatch();
-        // taskHasConfirmedDelivery is the exact gate recoverStrandedAssignedDispatches
-        // consults before reclaiming an assigned row.
-        expect(MeshRuntimeStore.getInstance().taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
+        expect(entry!.attemptId).toBe(`mesh_direct:${taskId}`);
+        expect(getQueue(MESH).find((t) => t.id === taskId)?.attemptId).toBe(`mesh_direct:${taskId}`);
     });
 
     it('reaches a terminal status when the completion arrives', () => {
@@ -126,11 +89,43 @@ describe('missionless direct dispatch opens a real turn attempt', () => {
 
         expect(entry).not.toBeNull();
         expect(entry!.missionId).toBe(missionId);
-        expect(entry!.attemptId).toBeTruthy();
-        expect(entry!.attemptId).not.toMatch(/^legacy-/);
-        expect(MeshRuntimeStore.getInstance().taskHasConfirmedDelivery(MESH, taskId)).toBe(true);
+        expect(entry!.attemptId).toBe(`mesh_direct:${taskId}`);
 
         updateSessionTaskStatus(MESH, SESSION, 'completed');
         expect(getQueue(MESH).find(t => t.id === taskId)?.status).toBe('completed');
+    });
+});
+
+describe('turn_observe mints the worker token when the ledger opens a direct attempt (C-W8)', () => {
+    beforeEach(() => {
+        __resetMeshRuntimeStoreForTests();
+        __resetWorkerTaskTokensForTest();
+    });
+
+    const observe = (taskId: string) => turnLedgerIpcHandlers.turn_observe({ deps: { statusInstanceId: 'dc' } } as any, {
+        v: 1,
+        evidence: {
+            eventId: taskId, at: Date.now(), source: 'dispatch', sessionId: SESSION, taskId, observedBy: 'dc',
+            kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: taskId, meshId: MESH, nodeId: NODE,
+        },
+    });
+
+    it('mints exactly once per applied mesh_direct dispatch_accepted, bound to the attempt', async () => {
+        const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher() });
+        setActiveTurnLedgerForIpc(ledger);
+        try {
+            const taskId = randomUUID();
+            const first: any = await observe(taskId);
+            expect(first.success).toBe(true);
+            const token = findWorkerTaskTokenForSession(MESH, taskId, SESSION);
+            expect(token?.attemptId).toBe(first.attemptRef.attemptId);
+            // A replay (same eventId) is not an applied open — it mints nothing and
+            // the first token stays the live one.
+            await observe(taskId);
+            expect(liveWorkerTaskTokenCount()).toBe(1);
+            expect(findWorkerTaskTokenForSession(MESH, taskId, SESSION)?.token).toBe(token?.token);
+        } finally {
+            setActiveTurnLedgerForIpc(null);
+        }
     });
 });

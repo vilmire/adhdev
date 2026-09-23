@@ -67,18 +67,14 @@ describe('mesh-runtime-store — legacy migration failure (win32 EPERM)', () => 
         mkdirSync(ledgerDir, { recursive: true });
         const legacyDbPath = join(ledgerDir, 'beads.db');
         const nextDbPath = join(ledgerDir, 'mesh-runtime.db');
-        const fingerprint = `legacy-fp-${randomUUID()}`;
+        const marker = `legacy-row-${randomUUID()}`;
 
-        // Seed the legacy DB with a fingerprint row, then close it.
+        // Seed the legacy DB with a probe row, then close it. (C-W8: the fingerprint
+        // table this test used to probe with is retired; a table of its own proves
+        // the same thing — WHICH file the store opened.)
         const legacyDb = new Database(legacyDbPath);
-        legacyDb.exec(`
-            CREATE TABLE mesh_completion_fingerprints (
-                fingerprint TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL
-            );
-        `);
-        legacyDb.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
-            .run(fingerprint, Date.now() + 60_000);
+        legacyDb.exec(`CREATE TABLE legacy_probe (id TEXT PRIMARY KEY);`);
+        legacyDb.prepare('INSERT INTO legacy_probe (id) VALUES (?)').run(marker);
         legacyDb.close();
 
         // Force the migration rename to fail.
@@ -87,9 +83,8 @@ describe('mesh-runtime-store — legacy migration failure (win32 EPERM)', () => 
         const db = MeshRuntimeStore.getInstance();
 
         // The legacy data must still be reachable — proving the store opened the
-        // legacy file in-place rather than a fresh EMPTY mesh-runtime.db. The legacy
-        // fingerprint has no '::', so the isolation migration backfills mesh_id to ''.
-        expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
+        // legacy file in-place rather than a fresh EMPTY mesh-runtime.db.
+        expect((db as any).db.prepare('SELECT id FROM legacy_probe').get()).toEqual({ id: marker });
         // The legacy file is retained; the new path was NOT adopted as the active store.
         expect(existsSync(legacyDbPath)).toBe(true);
         expect(existsSync(nextDbPath)).toBe(false);
@@ -101,23 +96,17 @@ describe('mesh-runtime-store — legacy migration failure (win32 EPERM)', () => 
         mkdirSync(ledgerDir, { recursive: true });
         const legacyDbPath = join(ledgerDir, 'beads.db');
         const nextDbPath = join(ledgerDir, 'mesh-runtime.db');
-        const fingerprint = `legacy-fp-${randomUUID()}`;
+        const marker = `legacy-row-${randomUUID()}`;
 
         const legacyDb = new Database(legacyDbPath);
-        legacyDb.exec(`
-            CREATE TABLE mesh_completion_fingerprints (
-                fingerprint TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL
-            );
-        `);
-        legacyDb.prepare('INSERT INTO mesh_completion_fingerprints (fingerprint, expires_at) VALUES (?, ?)')
-            .run(fingerprint, Date.now() + 60_000);
+        legacyDb.exec(`CREATE TABLE legacy_probe (id TEXT PRIMARY KEY);`);
+        legacyDb.prepare('INSERT INTO legacy_probe (id) VALUES (?)').run(marker);
         legacyDb.close();
 
         renameState.failRename = false; // happy path
 
         const db = MeshRuntimeStore.getInstance();
-        expect(db.hasCompletionFingerprint('', fingerprint)).toBe(true);
+        expect((db as any).db.prepare('SELECT id FROM legacy_probe').get()).toEqual({ id: marker });
         expect(existsSync(legacyDbPath)).toBe(false);
         expect(existsSync(nextDbPath)).toBe(true);
     });

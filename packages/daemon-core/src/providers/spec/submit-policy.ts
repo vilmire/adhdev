@@ -243,8 +243,6 @@ export type QueuedWriteRefusal =
     /** An earlier send is still mid-submit. Writing now would braid two bodies
      *  into one composer line — the SEND-OVERLAP defect. */
     | 'send_in_flight'
-    /** The same body is already being delivered (pre-write duplicate gate). */
-    | 'duplicate'
     /** The driver behind this adapter does not implement the split write (an
      *  out-of-tree ISpecDriver, or a test double). Reported rather than assumed
      *  successful, so the caller's fallback stays correct. */
@@ -287,7 +285,7 @@ export type QueuedWriteRefusal =
  * ── Narrow by construction ────────────────────────────────────────────────
  * This is NOT a general send. It bypasses exactly one gate — `canSendNow()`'s
  * idle requirement — and keeps every other guard the ordinary path has
- * (duplicate suppression, the in-flight latch, ready-once). It is reached
+ * (the in-flight latch, ready-once). It is reached
  * only from the dashboard's explicit "Send now" press; nothing autonomous
  * (the FIFO drain, mesh dispatch, `send_chat` without `sendNow`) can enter
  * it. Optional so test doubles implementing ISpecDriver need not provide it.
@@ -370,27 +368,11 @@ export const MID_GENERATION_MAX_BODY_CHARS = VERIFIED_SUBMIT_MIN_CHARS;
  *  but legitimate submit is never treated as abandoned. */
 export const SEND_IN_FLIGHT_MAX_MS = 30_000;
 
-/** Duplicate-resend suppression window for the PRE-WRITE gate. Sized to match
- *  USER_INPUT_ACK_DEDUP_WINDOW_MS (60s), the post-write bubble-collapse window in
- *  cli-provider-instance — the two now cover the same span, closing the
- *  1.2s..60s hole where a redelivery was collapsed in the UI but had already been
- *  written to the PTY twice.
- *
- *  This is deliberately NOT applied to sends that go out while the machine is
- *  idle and nothing is in flight — see isDuplicateResend. A user legitimately
- *  typing the same text twice ("continue", "y", "run it again") is a normal turn
- *  and must still reach the CLI; only a resend that collides with the SAME text
- *  still being processed is dropped. */
-export const DUPLICATE_RESEND_WINDOW_MS = 60_000;
-
-/** djb2 — a short, stable content hash for the duplicate gate. Not security
- *  relevant; only needs to make accidental collisions vanishingly unlikely
- *  while keeping the map keys small. */
-export function hashSendText(text: string): string {
-    let h = 5381;
-    for (let i = 0; i < text.length; i += 1) h = (((h << 5) + h) ^ text.charCodeAt(i)) >>> 0;
-    return `${h.toString(36)}:${text.length}`;
-}
+/* Wiring-unification D2: the 60 s content-hash pre-write duplicate gate
+ * (`DUPLICATE_RESEND_WINDOW_MS` / `hashSendText`) is deleted. Identity is the
+ * `OutboundMessage.messageId` now, deduplicated once in
+ * `sessions/session-input-service.ts`; a queued body carries that id
+ * (`QueuedSendEntry.messageId`), so no layer here recovers identity from text. */
 
 // win32 ConPTY submit reliability — TWO independent concerns, do not conflate:
 //
@@ -465,5 +447,5 @@ export const WIN32_ECHO_MAX_WAIT_MS = 20_000;
  */
 export type SendDisposition =
     | { status: 'delivered' }
-    | { status: 'queued'; queueDepth: number; reason: string }
-    | { status: 'duplicate' };
+    /** `queueDepth` doubles as this body's 1-based FIFO position (it was pushed last). */
+    | { status: 'queued'; queueDepth: number; reason: string };

@@ -27,6 +27,7 @@ import { triggerMeshQueue } from './mesh-events-coordinator.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { resolveCoordinatorDaemonIds, daemonHostsMesh, resolveCoordinatorSelfIds } from './mesh-reconcile-identity.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
+import { pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
 import { runIdleSessionReapPass, type IdleSessionReaperDeps } from './mesh-idle-session-reaper.js';
 import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
@@ -187,6 +188,12 @@ export async function runMeshHousekeepingTick(
         } catch (e: any) {
             LOG.warn('MeshHousekeeping', `Disk retention sweep failed: ${e?.message || e}`);
         }
+        // mesh-runtime.db row retention (tool-call log, terminal queue rows,
+        // terminal session deliveries, terminal mesh turn attempts, graph
+        // control plane). Its hourly caller went with the retired reconcile
+        // loop (C-W3/C-W4, 2ddca06f) — re-homed here on the same cadence (C-W8).
+        // Best-effort by construction (never throws).
+        pruneMeshRuntimeRetention();
         for (const { mesh } of hosted) {
             try {
                 await detectAndSignalOrphanWorktrees(mesh, nowMs);

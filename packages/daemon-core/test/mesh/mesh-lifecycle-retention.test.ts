@@ -31,6 +31,7 @@ import {
     MESH_TERMINAL_QUEUE_RETENTION_MS,
 } from '../../src/mesh/mesh-runtime-store.js';
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report.js';
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import {
     getLedgerDir,
     planLedgerRotationEvictions,
@@ -38,11 +39,9 @@ import {
     enforceAllLedgerRotationCaps,
 } from '../../src/mesh/mesh-ledger.js';
 import {
-    DEFAULT_SESSION_DELIVERY_RETENTION_MS,
     DEFAULT_TURN_ATTEMPT_RETENTION_MS,
     DEFAULT_LEDGER_ROTATION_MAX_BYTES,
     DEFAULT_LEDGER_ROTATION_MAX_FILES,
-    resolveSessionDeliveryRetentionMs,
     resolveTurnAttemptRetentionMs,
     resolveLedgerRotationMaxBytes,
     resolveLedgerRotationMaxFiles,
@@ -54,7 +53,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
 
 const RETENTION_ENV_VARS = [
-    'MESH_SESSION_DELIVERY_RETENTION_MS',
     'MESH_TURN_ATTEMPT_RETENTION_MS',
     'MESH_LEDGER_ROTATION_MAX_BYTES',
     'MESH_LEDGER_ROTATION_MAX_FILES',
@@ -63,19 +61,6 @@ const savedEnv: Record<string, string | undefined> = {};
 
 function isoAgo(ms: number): string {
     return new Date(Date.now() - ms).toISOString();
-}
-
-function insertDelivery(id: string, status: string, updatedAt: string, taskId?: string): void {
-    MeshRuntimeStore.getInstance().insertSessionDelivery({
-        id,
-        meshId: MESH,
-        kind: 'task_message',
-        message: `msg ${id}`,
-        status,
-        taskId,
-        createdAt: updatedAt,
-        updatedAt,
-    });
 }
 
 function writeLedgerFile(name: string, lines: Array<Record<string, unknown> | string>, mtimeMs?: number): string {
@@ -122,108 +107,17 @@ describe('test isolation', () => {
     });
 });
 
-// ─── (1) mesh_session_delivery retention ─────────────────────────────────────
-
-describe('pruneTerminalSessionDeliveries', () => {
-    it('deletes aged terminal-outcome rows but preserves aged live/nonterminal rows', () => {
-        const store = MeshRuntimeStore.getInstance();
-        const aged = isoAgo(20 * DAY_MS);
-        // Terminal outcomes → prunable.
-        insertDelivery('d-completed', 'completed', aged, 't-completed');
-        insertDelivery('d-failed', 'failed', aged);
-        insertDelivery('d-expired', 'expired', aged);
-        insertDelivery('d-cancelled', 'cancelled', aged);
-        // Live/nonterminal (progress ranks) → preserved for retry/recovery semantics.
-        insertDelivery('d-queued', 'queued', aged);
-        insertDelivery('d-delivering', 'delivering', aged);
-        insertDelivery('d-delivered', 'delivered', aged, 't-delivered');
-        insertDelivery('d-acked', 'acked', aged, 't-acked');
-
-        const removed = store.pruneTerminalSessionDeliveries(DEFAULT_SESSION_DELIVERY_RETENTION_MS);
-        expect(removed).toBe(4);
-
-        // Live rows survive: queued/delivering are active...
-        const activeIds = store.getActiveSessionDeliveries(MESH).map(r => r.id);
-        expect(activeIds).toContain('d-queued');
-        expect(activeIds).toContain('d-delivering');
-        // ...and delivered/acked still back the confirmed-delivery recovery reads.
-        expect(store.taskHasConfirmedDelivery(MESH, 't-delivered')).toBe(true);
-        expect(store.taskHasConfirmedDelivery(MESH, 't-acked')).toBe(true);
-        expect(store.taskDeliveryConsumed(MESH, 't-acked')).toBe(true);
-        // The aged terminal row is gone from the recovery surface too.
-        expect(store.taskHasConfirmedDelivery(MESH, 't-completed')).toBe(false);
-    });
-
-    it('keeps terminal rows still inside the retention window', () => {
-        const store = MeshRuntimeStore.getInstance();
-        insertDelivery('d-recent-done', 'completed', isoAgo(2 * DAY_MS));
-        insertDelivery('d-recent-failed', 'failed', isoAgo(1 * DAY_MS));
-        const removed = store.pruneTerminalSessionDeliveries(DEFAULT_SESSION_DELIVERY_RETENTION_MS);
-        expect(removed).toBe(0);
-    });
-
-    it('keeps a row exactly AT the cutoff (strict <) and prunes one 1ms past it', () => {
-        const fixedNow = 1_760_000_000_000;
-        vi.useFakeTimers();
-        vi.setSystemTime(fixedNow);
-        const store = MeshRuntimeStore.getInstance();
-        const window = DEFAULT_SESSION_DELIVERY_RETENTION_MS;
-        insertDelivery('d-edge', 'completed', new Date(fixedNow - window).toISOString());
-        insertDelivery('d-past', 'completed', new Date(fixedNow - window - 1).toISOString());
-
-        const removed = store.pruneTerminalSessionDeliveries(window);
-        expect(removed).toBe(1);
-        // Only the 1ms-past row was deleted; the boundary row survives.
-        expect(store.getActiveSessionDeliveries(MESH)).toHaveLength(0);
-    });
-
-    it('is restart-repeat idempotent: a second sweep prunes nothing', () => {
-        const store = MeshRuntimeStore.getInstance();
-        insertDelivery('d-old', 'completed', isoAgo(30 * DAY_MS));
-        expect(store.pruneTerminalSessionDeliveries(DEFAULT_SESSION_DELIVERY_RETENTION_MS)).toBe(1);
-        // Re-open the store (restart) and re-run: nothing left to prune.
-        __resetMeshRuntimeStoreForTests();
-        const store2 = MeshRuntimeStore.getInstance();
-        expect(store2.pruneTerminalSessionDeliveries(DEFAULT_SESSION_DELIVERY_RETENTION_MS)).toBe(0);
-    });
-
-    it('pruneMeshRuntimeRetention wires the session-delivery prune and reports its count', () => {
-        insertDelivery('d-old-2', 'expired', isoAgo(30 * DAY_MS));
-        insertDelivery('d-live', 'queued', isoAgo(30 * DAY_MS));
-        const result = pruneMeshRuntimeRetention();
-        expect(result.sessionDelivery).toBe(1);
-        // Second run is a no-op for every table.
-        const again = pruneMeshRuntimeRetention();
-        expect(again.sessionDelivery).toBe(0);
-    });
-
-    it('honors the env-overridden retention window at sweep time', () => {
-        process.env.MESH_SESSION_DELIVERY_RETENTION_MS = String(2 * DAY_MS);
-        const store = MeshRuntimeStore.getInstance();
-        insertDelivery('d-3d', 'completed', isoAgo(3 * DAY_MS));
-        expect(store.pruneTerminalSessionDeliveries(resolveSessionDeliveryRetentionMs())).toBe(1);
-    });
-});
-
 // ─── (2) config resolvers ────────────────────────────────────────────────────
 
 describe('mesh-retention-config resolvers', () => {
     it('returns conservative defaults when env is unset or garbage', () => {
-        expect(resolveSessionDeliveryRetentionMs()).toBe(14 * DAY_MS);
         expect(resolveLedgerRotationMaxBytes()).toBe(200 * MB);
         expect(resolveLedgerRotationMaxFiles()).toBe(DEFAULT_LEDGER_ROTATION_MAX_FILES);
-        process.env.MESH_SESSION_DELIVERY_RETENTION_MS = 'not-a-number';
         process.env.MESH_LEDGER_ROTATION_MAX_BYTES = 'abc';
-        expect(resolveSessionDeliveryRetentionMs()).toBe(14 * DAY_MS);
         expect(resolveLedgerRotationMaxBytes()).toBe(200 * MB);
     });
 
     it('clamps out-of-range values back to the defaults', () => {
-        // Below the 1d floor / above the 90d ceiling.
-        process.env.MESH_SESSION_DELIVERY_RETENTION_MS = String(60_000);
-        expect(resolveSessionDeliveryRetentionMs()).toBe(DEFAULT_SESSION_DELIVERY_RETENTION_MS);
-        process.env.MESH_SESSION_DELIVERY_RETENTION_MS = String(365 * DAY_MS);
-        expect(resolveSessionDeliveryRetentionMs()).toBe(DEFAULT_SESSION_DELIVERY_RETENTION_MS);
         // Below the 16MB floor / above the 4GB ceiling.
         process.env.MESH_LEDGER_ROTATION_MAX_BYTES = String(1024);
         expect(resolveLedgerRotationMaxBytes()).toBe(DEFAULT_LEDGER_ROTATION_MAX_BYTES);
@@ -237,8 +131,6 @@ describe('mesh-retention-config resolvers', () => {
     });
 
     it('accepts in-range overrides and explicit 0 disables the byte cap', () => {
-        process.env.MESH_SESSION_DELIVERY_RETENTION_MS = String(2 * DAY_MS);
-        expect(resolveSessionDeliveryRetentionMs()).toBe(2 * DAY_MS);
         process.env.MESH_LEDGER_ROTATION_MAX_BYTES = String(32 * MB);
         expect(resolveLedgerRotationMaxBytes()).toBe(32 * MB);
         process.env.MESH_LEDGER_ROTATION_MAX_BYTES = '0';
@@ -432,155 +324,92 @@ describe('enforceLedgerRotationCap', () => {
     });
 });
 
-// ─── (1b) mesh_turn_attempts retention + cascade ─────────────────────────────
+// ─── (1b) turn-ledger mesh attempt retention (C-W8) ──────────────────────────
 
-/**
- * Seeds one attempt row. `terminalAt` non-null commits the terminal outcome at
- * that timestamp, which also backdates updated_at (commitTurnAttemptTerminal
- * sets both), so an "aged terminal" fixture needs no direct SQL.
- */
+/** Seeds one mesh attempt on the turn ledger; `terminalAt` commits it at that time (also its updated_at). */
 function insertAttempt(opts: {
     attemptId: string;
     taskId: string;
-    attemptSeq: number;
-    sessionId?: string;
+    attemptNo: number;
+    sessionId: string;
     terminalAt?: string;
     createdAt?: string;
+    scope?: 'mesh_queue' | 'plain';
 }): void {
-    const store = MeshRuntimeStore.getInstance();
-    const stamp = opts.createdAt ?? opts.terminalAt ?? new Date().toISOString();
-    store.insertTurnAttempt({
-        attemptId: opts.attemptId,
-        meshId: MESH,
-        taskId: opts.taskId,
-        attemptSeq: opts.attemptSeq,
-        sessionId: opts.sessionId,
-        stage: 'accepted',
-        createdAt: stamp,
-        updatedAt: stamp,
+    const at = Date.parse(opts.terminalAt ?? opts.createdAt ?? new Date().toISOString());
+    seedMeshAttempt({
+        meshId: MESH, taskId: opts.taskId, sessionId: opts.sessionId, attemptId: opts.attemptId,
+        attemptNo: opts.attemptNo, stage: opts.terminalAt ? 'completed' : 'generating', nowMs: at,
+        ...(opts.scope ? { scope: opts.scope } : {}),
     });
-    if (opts.terminalAt) {
-        store.commitTurnAttemptTerminal(opts.attemptId, 'completed', null, opts.terminalAt);
-    }
 }
 
 function attemptExists(attemptId: string): boolean {
-    return MeshRuntimeStore.getInstance().getTurnAttempt(attemptId) !== null;
+    return MeshRuntimeStore.getInstance().turnStore().getAttempt(attemptId) !== null;
 }
 
-describe('pruneTerminalTurnAttempts', () => {
-    it('deletes aged terminal attempts but never nonterminal ones, at any age', () => {
-        const store = MeshRuntimeStore.getInstance();
+function prune(): { attempts: number; events: number; holds: number } {
+    return MeshRuntimeStore.getInstance().turnStore().pruneTerminalMeshAttempts(DEFAULT_TURN_ATTEMPT_RETENTION_MS, Date.now());
+}
+
+describe('pruneTerminalMeshAttempts', () => {
+    it('deletes aged terminal mesh attempts but never nonterminal or plain ones, at any age', () => {
         const aged = isoAgo(45 * DAY_MS);
+        insertAttempt({ attemptId: 'a-old-1', taskId: 't-old', attemptNo: 0, sessionId: 'sess-old', terminalAt: aged });
+        insertAttempt({ attemptId: 'a-old-2', taskId: 't-old', attemptNo: 1, sessionId: 'sess-old', terminalAt: aged });
+        // The session's newest attempt is its anchor — keep it fresh so the two aged rows are prunable.
+        insertAttempt({ attemptId: 'a-anchor', taskId: 't-anchor', attemptNo: 0, sessionId: 'sess-old', terminalAt: isoAgo(1 * DAY_MS) });
+        // Aged but NONTERMINAL → the live set; never pruned however old.
+        insertAttempt({ attemptId: 'a-active', taskId: 't-active', attemptNo: 0, sessionId: 'sess-active', createdAt: aged });
+        // Plain (non-mesh) attempts are the scheduler's own prune.
+        insertAttempt({ attemptId: 'a-plain-1', taskId: 't-plain', attemptNo: 0, sessionId: 'sess-plain', terminalAt: aged, scope: 'plain' });
+        insertAttempt({ attemptId: 'a-plain-2', taskId: 't-plain', attemptNo: 1, sessionId: 'sess-plain', terminalAt: isoAgo(DAY_MS), scope: 'plain' });
 
-        // Aged + terminal → prunable. Two per task so neither is a session anchor.
-        insertAttempt({ attemptId: 'a-old-1', taskId: 't-old', attemptSeq: 1, terminalAt: aged });
-        insertAttempt({ attemptId: 'a-old-2', taskId: 't-old', attemptSeq: 2, terminalAt: aged });
-        // Aged but NONTERMINAL → the recovery set; never pruned however old.
-        insertAttempt({ attemptId: 'a-active', taskId: 't-active', attemptSeq: 1, createdAt: aged });
-        // Recent terminal → inside the window.
-        insertAttempt({ attemptId: 'a-fresh', taskId: 't-fresh', attemptSeq: 1, terminalAt: isoAgo(1 * DAY_MS) });
-
-        const r = store.pruneTerminalTurnAttempts(DEFAULT_TURN_ATTEMPT_RETENTION_MS);
-        expect(r.attempts).toBe(2);
-
+        expect(prune().attempts).toBe(2);
         expect(attemptExists('a-old-1')).toBe(false);
         expect(attemptExists('a-old-2')).toBe(false);
-        // ★Anchor 1: an aged nonterminal row is the STUCK turn — exactly the row
-        // recovery needs — so age must not collect it.
+        expect(attemptExists('a-anchor')).toBe(true);
         expect(attemptExists('a-active')).toBe(true);
-        expect(store.listActiveTurnAttempts(MESH).map(a => a.attemptId)).toContain('a-active');
-        expect(attemptExists('a-fresh')).toBe(true);
+        expect(attemptExists('a-plain-1')).toBe(true);
     });
 
     it("preserves each session's newest attempt regardless of age", () => {
-        const store = MeshRuntimeStore.getInstance();
-        // Every attempt of this session is far past the window and terminal, so a
-        // plain age TTL would empty the session out.
-        insertAttempt({ attemptId: 'a-s1', taskId: 't-s', attemptSeq: 1, sessionId: 'sess-1', terminalAt: isoAgo(60 * DAY_MS) });
-        insertAttempt({ attemptId: 'a-s2', taskId: 't-s', attemptSeq: 2, sessionId: 'sess-1', terminalAt: isoAgo(50 * DAY_MS) });
-        insertAttempt({ attemptId: 'a-s3', taskId: 't-s', attemptSeq: 3, sessionId: 'sess-1', terminalAt: isoAgo(40 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-s1', taskId: 't-s', attemptNo: 0, sessionId: 'sess-1', terminalAt: isoAgo(60 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-s2', taskId: 't-s', attemptNo: 1, sessionId: 'sess-1', terminalAt: isoAgo(50 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-s3', taskId: 't-s', attemptNo: 2, sessionId: 'sess-1', terminalAt: isoAgo(40 * DAY_MS) });
 
-        const r = store.pruneTerminalTurnAttempts(DEFAULT_TURN_ATTEMPT_RETENTION_MS);
-        expect(r.attempts).toBe(2);
-
-        // ★Anchor 2: getLatestTurnAttemptForSession resolves by session_id with NO
-        // time bound and backs the presented session status. Deleting the last row
-        // would not age out history — it would blank the session's displayed state.
+        expect(prune().attempts).toBe(2);
+        // Stage 6 resolves a session with no time bound: deleting its last row would
+        // blank the session's displayed state rather than age out history.
         expect(attemptExists('a-s3')).toBe(true);
         expect(attemptExists('a-s1')).toBe(false);
         expect(attemptExists('a-s2')).toBe(false);
-        const latest = store.getLatestTurnAttemptForSession('sess-1');
-        expect(latest).not.toBeNull();
-        expect(latest!.attemptId).toBe('a-s3');
+        expect(MeshRuntimeStore.getInstance().turnStore().findPresentationAttemptForSession('sess-1')?.attempt.attemptId).toBe('a-s3');
     });
 
-    it('cascades turn events and resolved held suspensions, keeping held rows and their parent', () => {
-        const store = MeshRuntimeStore.getInstance();
+    it('cascades the attempt\'s turn events and holds; an attempt holding a handoff-note index row is kept', () => {
         const aged = isoAgo(45 * DAY_MS);
+        const store = MeshRuntimeStore.getInstance().turnStore();
+        insertAttempt({ attemptId: 'a-c1', taskId: 't-c', attemptNo: 0, sessionId: 'sess-c', terminalAt: aged });
+        insertAttempt({ attemptId: 'a-c2', taskId: 't-c', attemptNo: 1, sessionId: 'sess-c', terminalAt: aged });
+        insertAttempt({ attemptId: 'a-c-anchor', taskId: 't-c2', attemptNo: 0, sessionId: 'sess-c', terminalAt: isoAgo(DAY_MS) });
+        store.insertWorkerEvent({ eventId: 'e-c1', attemptId: 'a-c1', kind: 'worker_progress_update', dedupeKey: '1', payload: {}, atMs: Date.parse(aged) });
+        store.insertWorkerEvent({ eventId: 'e-c2-handoff', attemptId: 'a-c2', kind: WORKER_HANDOFF_EVENT_KIND, dedupeKey: '', payload: {}, atMs: Date.parse(aged) });
+        store.syncHolds('a-c1', [{ holdId: 'a-c1:hard_ceiling', attemptId: 'a-c1', generation: null, reason: 'hard_ceiling', until: null, onExpire: 'commit', data: {}, createdAt: Date.parse(aged) }], Date.parse(aged));
 
-        // Two aged terminal attempts on separate sessions; each session's newest is
-        // its only row, so a third "decoy" per session keeps them prunable.
-        for (const [id, seq] of [['a-c1', 1], ['a-c2', 2]] as const) {
-            insertAttempt({ attemptId: id, taskId: 't-cascade', attemptSeq: seq, terminalAt: aged });
-            store.insertTurnEvent({
-                eventId: `e-${id}`, meshId: MESH, attemptId: id, taskId: 't-cascade',
-                kind: 'delivered_ack', recordedAt: aged,
-            });
-        }
-        // A handoff-note event on a prunable attempt: owned by pruneExpiredHandoffNotes,
-        // so the cascade must leave it alone.
-        store.insertTurnEvent({
-            eventId: 'e-handoff', meshId: MESH, attemptId: 'a-c1', taskId: 't-cascade',
-            kind: 'worker_handoff_note', recordedAt: aged,
-        });
-        // Resolved suspension on a prunable attempt → cascades.
-        store.insertHeldTurnSuspension({
-            holdId: 'a-c2:waiting_approval', meshId: MESH, attemptId: 'a-c2',
-            taskId: 't-cascade', stage: 'waiting_approval', recordedAt: aged,
-        });
-        store.resolveHeldTurnSuspension('a-c2:waiting_approval', 'dropped', 'terminal_commit', aged);
-        // UNRESOLVED suspension pins its own parent attempt in place.
-        insertAttempt({ attemptId: 'a-held', taskId: 't-held', attemptSeq: 1, terminalAt: aged });
-        insertAttempt({ attemptId: 'a-held-2', taskId: 't-held', attemptSeq: 2, terminalAt: aged });
-        store.insertHeldTurnSuspension({
-            holdId: 'a-held:waiting_choice', meshId: MESH, attemptId: 'a-held',
-            taskId: 't-held', stage: 'waiting_choice', recordedAt: aged,
-        });
-
-        const r = store.pruneTerminalTurnAttempts(DEFAULT_TURN_ATTEMPT_RETENTION_MS);
-
-        // a-c1, a-c2, a-held-2 collected; a-held pinned by its unresolved hold.
+        const r = prune();
+        expect(r).toEqual({ attempts: 1, events: 1, holds: 1 });
         expect(attemptExists('a-c1')).toBe(false);
-        expect(attemptExists('a-c2')).toBe(false);
-        expect(attemptExists('a-held-2')).toBe(false);
-        // ★Anchor 3: an unresolved hold is a waiting_* edge the reconcile drain has
-        // still to apply. Keeping the parent with it is also what stops the cascade
-        // from manufacturing an orphaned child row.
-        expect(attemptExists('a-held')).toBe(true);
-        expect(store.listHeldTurnSuspensionsForAttempt('a-held', 'held')).toHaveLength(1);
-
-        // Cascade: ordinary events of collected attempts are gone...
-        const remaining = store.listTurnEventsForTask(MESH, 't-cascade').map(e => e.eventId);
-        expect(remaining).not.toContain('e-a-c1');
-        expect(remaining).not.toContain('e-a-c2');
-        expect(r.events).toBe(2);
-        // ...but the handoff note is left to its own sweep (longer-of-the-two rule).
-        expect(remaining).toContain('e-handoff');
-        // Resolved suspension cascaded with its parent.
-        expect(r.heldSuspensions).toBe(1);
-        expect(store.listHeldTurnSuspensionsForAttempt('a-c2')).toHaveLength(0);
-    });
-
-    it('keeps the handoff-note kind literal in sync with its canonical definition', () => {
-        // The store declares this kind as a local literal to avoid an import cycle
-        // (worker-report.ts imports mesh-runtime-store.ts). Pin the two together.
-        expect(WORKER_HANDOFF_EVENT_KIND).toBe('worker_handoff_note');
+        // The handoff note's index reads through a join to its attempt, so the
+        // attempt outlives the turn window until the handoff sweep collects the note.
+        expect(attemptExists('a-c2')).toBe(true);
+        expect(store.listWorkerEventsByKind(MESH, WORKER_HANDOFF_EVENT_KIND, 10).map((e) => e.eventId)).toEqual(['e-c2-handoff']);
     });
 
     it('is wired into the periodic sweep and reports content-free counts', () => {
-        insertAttempt({ attemptId: 'a-sweep-1', taskId: 't-sweep', attemptSeq: 1, terminalAt: isoAgo(45 * DAY_MS) });
-        insertAttempt({ attemptId: 'a-sweep-2', taskId: 't-sweep', attemptSeq: 2, terminalAt: isoAgo(45 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-sweep-1', taskId: 't-sweep', attemptNo: 0, sessionId: 'sess-sweep', terminalAt: isoAgo(45 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-sweep-2', taskId: 't-sweep', attemptNo: 1, sessionId: 'sess-sweep', terminalAt: isoAgo(44 * DAY_MS) });
+        insertAttempt({ attemptId: 'a-sweep-3', taskId: 't-sweep2', attemptNo: 0, sessionId: 'sess-sweep', terminalAt: isoAgo(DAY_MS) });
 
         const swept = pruneMeshRuntimeRetention();
         expect(swept.turnAttempts).toBe(2);

@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto'
 //
 // THE DEFECT (mesh-stall-watchdog.ts Stage 6):
 //     now - causalEvidenceMs < threshold   → re-arm the anchor, suppress the stall
-// `causalEvidenceMs` is `Date.parse(mesh_turn_attempts.updated_at)` — a FOREIGN
+// `causalEvidenceMs` is `Date.parse(turn_attempts.updated_at)` — a FOREIGN
 // timestamp, written by whichever process/machine owned the turn. Nothing forces
 // it to precede our `now`: node clock skew, an NTP step, or a replicated row can
 // all put it in the future. When it does, the left side goes NEGATIVE, the `<`
@@ -31,13 +31,11 @@ import { randomUUID } from 'crypto'
 // the 30-minute bound, and so kept authority permanently — the same inversion,
 // one layer up.
 //
-// NOTE ON SEEDING (the trap this file's sibling suite documents at
-// cli-provider-stall-generating-live-turn.test.ts:100-107): `recordTurnStage`
-// stamps `updated_at` from `nowMs`, NOT from `occurredAtMs`. Seeding with
-// occurredAtMs alone leaves the row at real wall-clock and manufactures an
-// accidental negative age — i.e. it would silently fake this very defect. Every
-// writer below passes `nowMs` explicitly, and the first test ASSERTS the stamp
-// it produced rather than trusting it.
+// NOTE ON SEEDING (C-W8): rows are seeded on the turn ledger's `turn_attempts`
+// through `seedMeshAttempt`, whose `nowMs` stamps `updated_at`. Seeding at real
+// wall-clock instead manufactures an accidental negative age — i.e. it would
+// silently fake this very defect. Every seed below passes `nowMs` explicitly,
+// and the first test ASSERTS the stamp it produced rather than trusting it.
 
 const testTmpDir = join(tmpdir(), `adhdev-stall-clock-bound-test-${randomUUID().slice(0, 8)}`)
 const testConfigDir = join(testTmpDir, '.adhdev')
@@ -52,11 +50,7 @@ vi.mock('../../src/config/config.js', () => ({
 }))
 
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
-import {
-    openTurnAttempt,
-    recordTurnAck,
-    recordTurnStage,
-} from '../../src/mesh/mesh-turn-ledger.js'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import {
     resolveSessionTurnPresentation,
     resolveTurnAttemptRow,
@@ -99,19 +93,8 @@ describe('stall watchdog — causal freshness needs a lower bound on age', () =>
      * place the row in the FUTURE relative to the ticks it then runs.
      */
     function seedAttempt(stage: 'generating' | 'consumed', stampAt: number): void {
-        openTurnAttempt({
-            meshId,
-            taskId,
-            dispatchNonce: seq,
-            sessionId,
-            providerType: 'codex-cli',
-            nowMs: stampAt,
-        })
-        recordTurnAck({ meshId, taskId, kind: 'delivered', sessionId, nowMs: stampAt })
-        recordTurnAck({ meshId, taskId, kind: 'consumed', sessionId, nowMs: stampAt })
-        if (stage === 'generating') {
-            recordTurnStage({ meshId, taskId, stage: 'generating', sessionId, nowMs: stampAt, occurredAtMs: stampAt })
-        }
+        // C-W8: seeded on the turn ledger (`turn_attempts`), the table Stage 6 reads.
+        seedMeshAttempt({ meshId, taskId, sessionId, providerType: 'codex-cli', stage, nowMs: stampAt })
     }
 
     function makeInstance(opts: { lastOutputAt: number; turnActive: boolean; startedAt: number }) {
@@ -159,7 +142,7 @@ describe('stall watchdog — causal freshness needs a lower bound on age', () =>
             surface: 'stall_watchdog',
             nowMs: observeAt,
         })
-        // Guard against the recordTurnStage(nowMs vs occurredAtMs) trap: assert the
+        // Guard against the seeding-clock trap (see the header note): assert the
         // stamp we actually produced rather than assuming the writer honoured it.
         expect(raw).not.toBeNull()
         expect(raw!.stage).toBe('generating')

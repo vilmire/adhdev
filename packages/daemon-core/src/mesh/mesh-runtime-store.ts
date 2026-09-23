@@ -4,12 +4,12 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger.js';
-import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
 import { MeshGraphStore } from './mesh-graph-store.js';
 import { TurnStore } from './turn-ledger/store.js';
 import { migrateTurnLedgerV1, turnLedgerExportPath, type TurnLedgerMigrationOptions, type TurnLedgerMigrationReport } from './turn-ledger/migrate-v1.js';
+import { migrateTurnLedgerV2, type TurnLedgerMigrationV2Report } from './turn-ledger/migrate-v2.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -20,7 +20,7 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 import { WalCheckpointScheduler, DEFAULT_WAL_CHECKPOINT_POLICY } from './mesh-runtime-store-wal.js';
 import {
     findAssignedBySession as findAssignedBySessionImpl, getQueueHeads as getQueueHeadsImpl,
-    pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, expireAgedDirectDispatches as expireAgedDirectDispatchesImpl,
+    pruneTerminalQueueEntries as pruneTerminalQueueEntriesImpl, selectActiveDirectDispatches, selectSoleActiveDirectDispatchTaskId, type DirectDispatchView,
     type MeshQueueHead,
 } from './mesh-runtime-store-queue-reads.js';
 // Pure move (file-size gate): row shapes/mappers + the retention sweep now live in
@@ -28,22 +28,8 @@ import {
 // below, and re-exported at the bottom of this file so every existing import path
 // (`from './mesh-runtime-store.js'`) keeps working unchanged — barrel-preserving,
 // same pattern as mesh-tools-internal.ts / mesh-tools.ts.
-import { notifyLedgerBulkChange, type MeshTurnAttemptRow, type MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
-import { selectTurnEventsForTask, selectTurnEventsByKind, deleteTurnEventsByKindOlderThan, pruneTerminalTurnAttemptsWithCascade, upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type TurnEventRow, type HandoffNoteTextRow } from './mesh-turn-event-queries.js';
-// TURN-LEDGER pure move (file-size gate): the Stage 5 turn-attempt / turn-event /
-// held-suspension persistence lives in mesh-runtime-store-turn-attempts.ts; the
-// class methods below delegate with `this` as `self` (router.ts → router-refine.ts
-// pattern). No behavior change — SQL strings and WAL-checkpoint order are verbatim.
-import {
-    insertTurnAttempt, getTurnAttempt, getCurrentTurnAttempt, getLatestTurnAttemptForSession,
-    getTurnAttemptBySeq, listTurnAttemptsForTask, listSupersededNonterminalTurnAttempts,
-    listQueueTerminatedNonterminalTurnAttempts, listActiveTurnAttempts, advanceTurnAttemptStage,
-    commitTurnAttemptTerminal, markTurnAttemptRedriven, rebindTurnAttemptSession,
-    insertTurnEvent, hasTurnEvent, insertHeldTurnSuspension, getHeldTurnSuspension,
-    listHeldTurnSuspensionsForAttempt, listHeldTurnSuspensionsForMesh, resolveHeldTurnSuspension,
-    type MeshTurnAttemptInsert, type MeshTurnAttemptStageOpts,
-    type MeshTurnEventInsert, type MeshHeldTurnSuspensionInsert,
-} from './mesh-runtime-store-turn-attempts.js';
+import { notifyLedgerBulkChange } from './mesh-runtime-store-turn-rows.js';
+import { upsertHandoffNoteText, selectHandoffNoteText, deleteHandoffNoteTextOlderThan, type HandoffNoteTextRow } from './mesh-handoff-note-text.js';
 // Pure move (file-size gate): the schema DDL + column migrations and the G2 event
 // ledger now live in mesh-runtime-store-schema.ts / -ledger.ts (the G3
 // pending-coordinator-event store retired with C-W3 — notices are turn_events). The class keeps
@@ -70,19 +56,6 @@ function loadDatabaseCtor(): typeof BetterSqlite3 {
 
 function safeMeshId(meshId: string): string {
     return meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-
-// T2 (B2b): a persisted acked-hold record for one in-flight direct dispatch. The
-// reconcile loop keeps a Map cache of these but this row is the SSOT so the hold
-// survives a daemon restart. See the mesh_inflight_hold table comment.
-export interface MeshInflightHoldRow {
-    taskId: string;
-    meshId: string | null;
-    holdReason: string | null;
-    heldAt: number | null;
-    firstIdleSinceAck: number | null;
-    readFailureCount: number | null;
-    updatedAt: number | null;
 }
 
 function legacyQueuePath(meshId: string): string {
@@ -172,7 +145,6 @@ export class MeshRuntimeStore {
     // and the hash of the active-mission id set it named, so a changed mission set
     // re-fires before the time window elapses.
     private readonly idleReminderState = new Map<string, { emittedAt: number; missionSetHash: string }>();
-    private fingerprintSweepCounter = 0;
     // WAL checkpointing runs on a timer, never inside a write (mesh-runtime-store-wal.ts).
     private readonly walCheckpoints: WalCheckpointScheduler;
     /** Writes since the last checkpoint tick (tests read it to pin counter independence). */
@@ -280,16 +252,19 @@ export class MeshRuntimeStore {
     runTurnLedgerMigrationV1(opts: Omit<TurnLedgerMigrationOptions, 'exportPath'> & { exportPath?: string | null }): TurnLedgerMigrationReport {
         const nowMs = opts.nowMs ?? Date.now();
         const report = migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
-        // Transitional (wiring-unification C integration): the schema step still
-        // CREATEs the legacy tables on every open, because writers of three of
-        // them remain (mesh_event_ledger — appendLedgerEntry; mesh_session_delivery
-        // — createSessionDelivery; mesh_direct_dispatches — the direct-dispatch
-        // store; see the C report's runnability list). Every later open recreates
-        // the dropped tables EMPTY; re-running the schema step here gives the
-        // migrating boot that same state instead of "no such table" throws until
-        // the next restart. Drop the legacy CREATEs with their last writer.
+        // v1 dropped `mesh_event_ledger` with the rest; its generic event readers
+        // and writers are still live (the remaining C-W8 work), so the schema step
+        // re-creates it EMPTY for this boot — the state every later open has. The
+        // other legacy tables are no longer created (C-W8 retired their writers;
+        // migrate-v2 drops any that survive).
         if (report.droppedTables.length > 0) this.migrate();
         return report;
+    }
+
+    /** C-W8 one-way step (user_version 1 → 2): drop the retired legacy tables, fold post-v1 notes. Boot runs it after v1. */
+    runTurnLedgerMigrationV2(opts: { exportPath?: string | null; nowMs?: number }): TurnLedgerMigrationV2Report {
+        const nowMs = opts.nowMs ?? Date.now();
+        return migrateTurnLedgerV2(this.db, { exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs).replace(/\.jsonl$/, '.v2.jsonl') : opts.exportPath });
     }
 
     // ── Schema DDL + column migrations ───────────────────────────────────────
@@ -311,34 +286,6 @@ export class MeshRuntimeStore {
     // idempotent across boots (mesh-runtime-store.test.ts, Part 8-1).
     private migrateMeshIsolationColumns(): void {
         schemaMigrateMeshIsolationColumns(this);
-    }
-
-    hasCompletionFingerprint(meshId: string, fingerprint: string): boolean {
-        const now = Date.now();
-        // Scope by mesh_id (defense-in-depth) AS WELL AS the fingerprint string, whose
-        // first '::' segment already encodes meshId. A fingerprint can only suppress a
-        // duplicate within its own mesh.
-        const row = this.db
-            .prepare('SELECT 1 FROM mesh_completion_fingerprints WHERE mesh_id = ? AND fingerprint = ? AND expires_at > ?')
-            .get(meshId, fingerprint, now) as { 1: number } | undefined;
-        // Sweep expired fingerprints every 100 reads so stale rows don't accumulate
-        // even during read-heavy (non-write) periods when recordFingerprintSeen is idle.
-        if (++this.fingerprintSweepCounter >= 100) {
-            this.fingerprintSweepCounter = 0;
-            this.sweepExpiredFingerprints();
-        }
-        return row !== undefined;
-    }
-
-    recordCompletionFingerprint(meshId: string, fingerprint: string, ttlMs: number): void {
-        const expiresAt = Date.now() + ttlMs;
-        this.db.prepare('INSERT OR REPLACE INTO mesh_completion_fingerprints (fingerprint, expires_at, mesh_id) VALUES (?, ?, ?)')
-            .run(fingerprint, expiresAt, meshId);
-        this.maybeCheckpointWal();
-    }
-
-    sweepExpiredFingerprints(): void {
-        this.db.prepare('DELETE FROM mesh_completion_fingerprints WHERE expires_at <= ?').run(Date.now());
     }
 
     /**
@@ -560,78 +507,6 @@ export class MeshRuntimeStore {
             `).run(meshId, current + 1);
             return current;
         });
-    }
-
-    // ── Acked-Hold State (T2 / B2b) ──────────────────────────────────────────
-    //
-    // Persistent mirror of the reconcile loop's inFlightAckedHoldState Map. Keyed
-    // by task_id (one in-flight dispatch = one hold). These are plain read/write/
-    // delete/list accessors; the read-through/write-through cache and the restart
-    // rehydrate live in mesh-reconcile-loop.ts.
-
-    private mapInflightHoldRow(r: Record<string, unknown> | undefined): MeshInflightHoldRow | null {
-        if (!r) return null;
-        return {
-            taskId: r.task_id as string,
-            meshId: (r.mesh_id as string | null) ?? null,
-            holdReason: (r.hold_reason as string | null) ?? null,
-            heldAt: (r.held_at as number | null) ?? null,
-            firstIdleSinceAck: (r.first_idle_since_ack as number | null) ?? null,
-            readFailureCount: (r.read_failure_count as number | null) ?? null,
-            updatedAt: (r.updated_at as number | null) ?? null,
-        };
-    }
-
-    upsertInflightHold(entry: {
-        taskId: string;
-        meshId?: string | null;
-        holdReason?: string | null;
-        heldAt?: number | null;
-        firstIdleSinceAck?: number | null;
-        readFailureCount?: number | null;
-    }): void {
-        const now = Date.now();
-        // Preserve held_at across an upsert (it marks when the hold was first created);
-        // only set it from the incoming value when the row is new. All other fields are
-        // overwritten with the latest state — the caller passes the full current state.
-        this.db.prepare(`
-            INSERT INTO mesh_inflight_hold
-                (task_id, mesh_id, hold_reason, held_at, first_idle_since_ack, read_failure_count, updated_at)
-            VALUES (@taskId, @meshId, @holdReason, @heldAt, @firstIdleSinceAck, @readFailureCount, @updatedAt)
-            ON CONFLICT(task_id) DO UPDATE SET
-                mesh_id = excluded.mesh_id,
-                hold_reason = excluded.hold_reason,
-                first_idle_since_ack = excluded.first_idle_since_ack,
-                read_failure_count = excluded.read_failure_count,
-                updated_at = excluded.updated_at
-        `).run({
-            taskId: entry.taskId,
-            meshId: entry.meshId ?? null,
-            holdReason: entry.holdReason ?? null,
-            heldAt: entry.heldAt ?? now,
-            firstIdleSinceAck: entry.firstIdleSinceAck ?? null,
-            readFailureCount: entry.readFailureCount ?? null,
-            updatedAt: now,
-        });
-        this.maybeCheckpointWal();
-    }
-
-    getInflightHold(taskId: string): MeshInflightHoldRow | null {
-        const row = this.db.prepare(
-            'SELECT * FROM mesh_inflight_hold WHERE task_id = ?'
-        ).get(taskId) as Record<string, unknown> | undefined;
-        return this.mapInflightHoldRow(row);
-    }
-
-    listInflightHoldsByMesh(meshId: string): MeshInflightHoldRow[] {
-        const rows = this.db.prepare(
-            'SELECT * FROM mesh_inflight_hold WHERE mesh_id = ?'
-        ).all(meshId) as Array<Record<string, unknown>>;
-        return rows.map(r => this.mapInflightHoldRow(r)).filter((r): r is MeshInflightHoldRow => r !== null);
-    }
-
-    deleteInflightHold(taskId: string): void {
-        this.db.prepare('DELETE FROM mesh_inflight_hold WHERE task_id = ?').run(taskId);
     }
 
     /**
@@ -1113,175 +988,17 @@ export class MeshRuntimeStore {
         };
     }
 
-    // ── Direct Dispatch Tracking ─────────────────────────────────────────────
+    // ── Direct dispatches (C-W8: open `mesh_direct` turn-ledger attempts) ────
+    // The legacy direct-dispatch table and its writers are retired: the attempt
+    // the caller opens (`dispatch_accepted`, scope mesh_direct) IS the pre-recorded
+    // dispatch, and its state is the reducer's. Reads: mesh-runtime-store-queue-reads.ts.
 
-    insertDirectDispatch(entry: {
-        taskId: string;
-        meshId: string;
-        nodeId?: string;
-        sessionId?: string;
-        providerType?: string;
-        message: string;
-        taskMode?: string;
-        via: string;
-        dispatchedToIdleSession?: boolean;
-        dispatchedAt: string;
-    }): void {
-        const now = new Date().toISOString();
-        this.db.prepare(`
-            INSERT OR REPLACE INTO mesh_direct_dispatches
-                (task_id, mesh_id, node_id, session_id, provider_type, message, task_mode, via,
-                 status, dispatched_to_idle_session, dispatched_at, updated_at)
-            VALUES
-                (@taskId, @meshId, @nodeId, @sessionId, @providerType, @message, @taskMode, @via,
-                 'dispatched', @dispatchedToIdle, @dispatchedAt, @updatedAt)
-        `).run({
-            taskId: entry.taskId,
-            meshId: entry.meshId,
-            nodeId: entry.nodeId ?? null,
-            sessionId: entry.sessionId ?? null,
-            providerType: entry.providerType ?? null,
-            message: entry.message,
-            taskMode: entry.taskMode ?? null,
-            via: entry.via,
-            dispatchedToIdle: entry.dispatchedToIdleSession ? 1 : 0,
-            dispatchedAt: entry.dispatchedAt,
-            updatedAt: now,
-        });
+    getActiveDirectDispatches(meshId: string): DirectDispatchView[] {
+        return selectActiveDirectDispatches(this, meshId);
     }
 
-    getActiveDirectDispatches(meshId: string): Array<{
-        taskId: string;
-        meshId: string;
-        nodeId: string | null;
-        sessionId: string | null;
-        providerType: string | null;
-        message: string;
-        taskMode: string | null;
-        via: string;
-        status: string;
-        dispatchedToIdleSession: boolean;
-        dispatchedAt: string;
-        updatedAt: string;
-    }> {
-        const rows = this.db.prepare(`
-            SELECT task_id, mesh_id, node_id, session_id, provider_type, message, task_mode, via,
-                   status, dispatched_to_idle_session, dispatched_at, updated_at
-            FROM mesh_direct_dispatches
-            WHERE mesh_id = ? AND status NOT IN ('completed', 'failed', 'stale')
-            ORDER BY dispatched_at ASC
-        `).all(meshId) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            taskId: r.task_id as string,
-            meshId: r.mesh_id as string,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            message: r.message as string,
-            taskMode: r.task_mode as string | null,
-            via: r.via as string,
-            status: r.status as string,
-            dispatchedToIdleSession: (r.dispatched_to_idle_session as number) === 1,
-            dispatchedAt: r.dispatched_at as string,
-            updatedAt: r.updated_at as string,
-        }));
-    }
-
-    // CANON-B (dispatch identity): mesh_direct_dispatches is keyed by task_id (PK), but a
-    // single session can host several sequential direct dispatches (re-dispatch / nudge), so
-    // matching a status flip by session_id alone hits EVERY non-terminal row for that session
-    // — flipping a sibling task's row and stranding the one whose event actually fired (the
-    // assigned-stranded watchdog then requeues a task that is really still generating). When
-    // the firing event carries a taskId, target the single PK row; the session_id match is the
-    // legacy fallback only for events that arrive without a taskId.
-    updateDirectDispatchStatus(meshId: string, sessionId: string, status: 'acked' | 'completed' | 'failed' | 'stale', taskId?: string): void {
-        const now = new Date().toISOString();
-        if (taskId) {
-            this.db.prepare(`
-                UPDATE mesh_direct_dispatches
-                SET status = @status, updated_at = @updatedAt
-                WHERE mesh_id = @meshId AND task_id = @taskId
-                  AND status NOT IN ('completed', 'failed')
-            `).run({ status, meshId, taskId, updatedAt: now });
-            return;
-        }
-        if (!sessionId) return; // never update rows without a session binding
-        this.db.prepare(`
-            UPDATE mesh_direct_dispatches
-            SET status = @status, updated_at = @updatedAt
-            WHERE mesh_id = @meshId AND session_id = @sessionId
-              AND session_id IS NOT NULL
-              AND status NOT IN ('completed', 'failed')
-        `).run({ status, meshId, sessionId, updatedAt: now });
-    }
-
-    /**
-     * MESH-DISPATCH-MISROUTE (fix 3, consumer residual): resolve the task_id of the SINGLE
-     * non-terminal direct dispatch a session owns. Returns the task_id only when the session
-     * holds exactly ONE active ('dispatched'/'acked') row — the case where a taskId-less
-     * lifecycle event (a legacy/relayed worker whose producer never stamped meshActiveTaskId)
-     * unambiguously belongs to that one dispatch. With zero rows there is nothing to ack; with
-     * two or more (a re-dispatch/nudge sibling) the firing event's owner is ambiguous, so we
-     * return null and the caller MUST NOT fall back to the session_id sweep that would flip a
-     * sibling row ("may flip a sibling dispatch row"). This narrows the legacy fallback to the
-     * only safe case instead of removing the producer-side TASKIDLESS stamp's safety net.
-     */
     getSoleActiveDirectDispatchTaskId(meshId: string, sessionId: string): string | null {
-        if (!sessionId) return null;
-        const rows = this.db.prepare(`
-            SELECT task_id FROM mesh_direct_dispatches
-            WHERE mesh_id = ? AND session_id = ?
-              AND status NOT IN ('completed', 'failed', 'stale')
-        `).all(meshId, sessionId) as Array<{ task_id: string }>;
-        if (rows.length !== 1) return null;
-        const taskId = typeof rows[0]?.task_id === 'string' ? rows[0].task_id.trim() : '';
-        return taskId || null;
-    }
-
-    cleanupTerminalDirectDispatches(olderThanMs: number): void {
-        const cutoff = new Date(Date.now() - olderThanMs).toISOString();
-        this.db.prepare(`
-            DELETE FROM mesh_direct_dispatches
-            WHERE status IN ('completed', 'failed', 'stale') AND updated_at < ?
-        `).run(cutoff);
-    }
-
-    deleteDirectDispatches(meshId: string): void {
-        this.db.prepare(`DELETE FROM mesh_direct_dispatches WHERE mesh_id = ?`).run(meshId);
-    }
-
-    /**
-     * Delete specific direct dispatch rows by taskId for a mesh. Used by the staleDirect prune
-     * path to remove orphaned/terminal dispatch records whose node/session is no longer in the
-     * live mesh. Returns the number of rows actually deleted. No-op for an empty taskId list.
-     */
-    deleteDirectDispatchesByTaskId(meshId: string, taskIds: string[]): number {
-        const ids = (taskIds || []).map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean);
-        if (!ids.length) return 0;
-        const stmt = this.db.prepare(`DELETE FROM mesh_direct_dispatches WHERE mesh_id = ? AND task_id = ?`);
-        let deleted = 0;
-        const run = this.db.transaction((rows: string[]) => {
-            for (const taskId of rows) {
-                deleted += stmt.run(meshId, taskId).changes;
-            }
-        });
-        run(ids);
-        return deleted;
-    }
-
-    markStaleDirectDispatches(meshId: string, olderThanMs: number): void {
-        const cutoff = new Date(Date.now() - olderThanMs).toISOString();
-        const now = new Date().toISOString();
-        this.db.prepare(`
-            UPDATE mesh_direct_dispatches
-            SET status = 'stale', updated_at = ?
-            WHERE mesh_id = ? AND status = 'dispatched' AND dispatched_at < ?
-        `).run(now, meshId, cutoff);
-    }
-
-    /** Flip dispatched/acked rows with no lifecycle update for `olderThanMs` to 'stale'. */
-    expireAgedDirectDispatches(meshId: string, olderThanMs: number, nowMs?: number): ReturnType<typeof expireAgedDirectDispatchesImpl> {
-        return expireAgedDirectDispatchesImpl(this, meshId, olderThanMs, nowMs);
+        return selectSoleActiveDirectDispatchTaskId(this, meshId, sessionId);
     }
 
     // ── Remote Idle Sessions ─────────────────────────────────────────────────
@@ -1319,293 +1036,6 @@ export class MeshRuntimeStore {
 
     pruneExpiredRemoteIdleSessions(): void {
         this.db.prepare('DELETE FROM remote_idle_sessions WHERE expires_at <= ?').run(Date.now());
-    }
-
-    // ── Session Delivery Queue ───────────────────────────────────────────────
-
-    insertSessionDelivery(entry: {
-        id: string;
-        meshId: string;
-        nodeId?: string;
-        sessionId?: string;
-        providerType?: string;
-        taskId?: string;
-        kind: string;
-        priority?: number;
-        message: string;
-        status: string;
-        deliverAfter?: string;
-        expiresAt?: string;
-        sourceCoordinatorSessionId?: string;
-        sourceCoordinatorDaemonId?: string;
-        createdAt: string;
-        updatedAt: string;
-    }): void {
-        this.db.prepare(`
-            INSERT OR REPLACE INTO mesh_session_delivery (
-                id, mesh_id, node_id, session_id, provider_type, task_id, kind, priority,
-                message, status, deliver_after, expires_at, attempt_count,
-                source_coordinator_session_id, source_coordinator_daemon_id,
-                last_error, created_at, updated_at
-            ) VALUES (
-                @id, @meshId, @nodeId, @sessionId, @providerType, @taskId, @kind, @priority,
-                @message, @status, @deliverAfter, @expiresAt, 0,
-                @sourceCoordinatorSessionId, @sourceCoordinatorDaemonId,
-                NULL, @createdAt, @updatedAt
-            )
-        `).run({
-            id: entry.id,
-            meshId: entry.meshId,
-            nodeId: entry.nodeId ?? null,
-            sessionId: entry.sessionId ?? null,
-            providerType: entry.providerType ?? null,
-            taskId: entry.taskId ?? null,
-            kind: entry.kind,
-            priority: entry.priority ?? 0,
-            // MESH-DELIVERY-MESSAGE-NOTNULL: the `message` column is NOT NULL, but a
-            // re-dispatch / reclaim / idle-assign path can reach here with an undefined
-            // message (a claimed task whose payload predates the message field, or a
-            // slimmed re-drive entry). better-sqlite3 binds undefined as NULL, so the
-            // bare `entry.message` threw 'NOT NULL constraint failed' and — because this
-            // insert runs inside triggerMeshQueue — took down the ENTIRE queue drain
-            // (fresh enqueue, pending-claim recovery, idle-assign, MAGI replica launch),
-            // stranding all delegation. A delivery record's message is informational
-            // ack-tracking, so coercing an absent message to '' preserves the row and the
-            // drain instead of crashing. Matches the `?? null` defensive coercion every
-            // other optional column here already uses.
-            message: entry.message ?? '',
-            status: entry.status,
-            deliverAfter: entry.deliverAfter ?? null,
-            expiresAt: entry.expiresAt ?? null,
-            sourceCoordinatorSessionId: entry.sourceCoordinatorSessionId ?? null,
-            sourceCoordinatorDaemonId: entry.sourceCoordinatorDaemonId ?? null,
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
-        });
-        this.maybeCheckpointWal();
-    }
-
-    // DELIVERED-NOT-CONSUMED-REDRIVE monotonic FSM: the forward-progress lifecycle of a
-    // delivery is a strictly increasing rank — a status may only advance, never regress.
-    // The redrive bug was a NON-monotonic FSM: the transport-confirm callback
-    // (mesh-queue-assignment :384) writes 'delivered' unconditionally by PK, so when the
-    // worker's agent:generating_started raced AHEAD of the confirm and already flipped the
-    // row 'delivering'→'acked', the late confirm CLOBBERED 'acked' back to 'delivered'.
-    // taskDeliveryConsumed() (which keys on 'acked'/'completed') then read false forever,
-    // and the short-grace re-drive re-opened an already-consumed task. Enforcing the rank
-    // ordering here makes the two event orders converge on the same monotone terminal state
-    // regardless of arrival order, so a late confirm can never demote a consumed delivery.
-    // 'failed'/'expired'/'cancelled' are absorbing OUTCOMES, not progress ranks — they are
-    // always allowed (a genuine dispatch failure must be recordable even from 'acked').
-    //
-    // QUEUED-IS-PROGRESS: 'queued' is a legitimate INTERMEDIATE rank between 'delivering'
-    // and 'delivered', NOT the floor of the FSM. A delivery row is INSERTED as 'delivering'
-    // (dispatch in flight to the transport); when the session is busy the adapter buffers
-    // the prompt and the transport confirm reports {status:'queued'} — a genuine forward
-    // step (handed to the adapter's outbound queue), but still short of 'delivered'
-    // (submitted at the PTY boundary; see DISPATCH-ACK-EVIDENCE in mesh-queue-assignment).
-    // Ranking 'queued' at 0 made that confirm write a rank REGRESSION (0 < 1), so the
-    // monotonic guard dropped it and the row stayed 'delivering' forever — never confirmed
-    // for taskHasConfirmedDelivery, feeding the redrive staleness heuristics a permanent
-    // "no confirmed delivery" signal for a prompt that was already buffered on the worker.
-    // At rank 2 the confirm records correctly and the later flush advance
-    // (queued→delivered / queued→acked via consumeSessionDelivery) still applies.
-    private static readonly DELIVERY_PROGRESS_RANK: Record<string, number> = {
-        delivering: 1,
-        queued: 2,
-        delivered: 3,
-        acked: 4,
-        completed: 5,
-    };
-
-    updateSessionDeliveryStatus(id: string, status: string, opts?: { lastError?: string; incrementAttempt?: boolean }): void {
-        const now = new Date().toISOString();
-        if (opts?.incrementAttempt) {
-            // Retry/requeue path (transport failure → 'failed', or an explicit re-queue): this is
-            // the deliberate reset signal, NOT the racing progress writes that cause the clobber, so
-            // it is exempt from the monotonic guard and always applies (preserves attempt_count
-            // bookkeeping and the failure ledger). The clobber bug lives only in the plain
-            // progress write below.
-            this.db.prepare(`
-                UPDATE mesh_session_delivery
-                SET status = @status, last_error = @lastError, attempt_count = attempt_count + 1, updated_at = @updatedAt
-                WHERE id = @id
-            `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
-            return;
-        }
-        // Monotonic guard for forward-progress statuses: a plain status write may ADVANCE or
-        // rewrite the SAME rank, but NEVER regress to a strictly-lower rank. This is what stops the
-        // late transport-confirm ('delivered', rank 3) from clobbering an already-consumed row
-        // ('acked', rank 4): the `@targetRank >= current` predicate fetches zero rows for 4→3, so
-        // 'acked' survives. Absorbing failure outcomes (failed/expired/cancelled) have no rank and
-        // are written unconditionally.
-        const targetRank = MeshRuntimeStore.DELIVERY_PROGRESS_RANK[status];
-        if (targetRank === undefined) {
-            this.db.prepare(`
-                UPDATE mesh_session_delivery
-                SET status = @status, last_error = @lastError, updated_at = @updatedAt
-                WHERE id = @id
-            `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now });
-            return;
-        }
-        // Absorbing failure states (failed/expired/cancelled) map to rank 99 so no progress write
-        // (max rank 5) can ever resurrect a dead delivery. The CASE mirrors DELIVERY_PROGRESS_RANK
-        // exactly — keep the two in sync.
-        this.db.prepare(`
-            UPDATE mesh_session_delivery
-            SET status = @status, last_error = @lastError, updated_at = @updatedAt
-            WHERE id = @id AND (@targetRank >= CASE status
-                WHEN 'delivering' THEN 1 WHEN 'queued' THEN 2 WHEN 'delivered' THEN 3
-                WHEN 'acked' THEN 4 WHEN 'completed' THEN 5 ELSE 99 END)
-        `).run({ id, status, lastError: opts?.lastError ?? null, updatedAt: now, targetRank });
-    }
-
-    /**
-     * DELIVERED-NOT-CONSUMED-REDRIVE consume path. Advance a task's delivery record(s) to a
-     * CONSUMED status ('acked' or 'completed'), matching on mesh + session (+ taskId when the
-     * event names one) and INCLUDING rows already in 'delivered'/'acked'/'delivering'.
-     *
-     * The ack/terminal callers previously routed through getActiveSessionDeliveries(), whose SQL
-     * EXCLUDES 'delivered' — so in the normal event order (transport confirm flips 'delivered'
-     * BEFORE the worker's generating_started fires) the ack matched zero rows and the delivery
-     * was stranded 'delivered', never 'acked'. This finds the row by (mesh, session[, task])
-     * directly and relies on updateSessionDeliveryStatus's monotonic guard to only advance it.
-     * Returns the number of rows advanced.
-     */
-    consumeSessionDelivery(meshId: string, sessionId: string, status: 'acked' | 'completed', taskId?: string): number {
-        const rows = this.db.prepare(
-            taskId
-                ? `SELECT id, session_id FROM mesh_session_delivery
-                     WHERE mesh_id = ? AND task_id = ?
-                       AND status IN ('queued','delivering','delivered','acked')`
-                : `SELECT id, session_id FROM mesh_session_delivery
-                     WHERE mesh_id = ? AND session_id = ?
-                       AND status IN ('queued','delivering','delivered','acked')`,
-        ).all(meshId, taskId ?? sessionId) as Array<{ id: string; session_id: string | null }>;
-        // Filter session membership in JS with the trimming equivalence predicate (mirrors
-        // findAssignedBySession): a taskId match must still belong to this session, and the
-        // session-only match already selected by column may carry serialization skew.
-        let advanced = 0;
-        for (const r of rows) {
-            if (!sessionIdsEquivalent(r.session_id ?? undefined, sessionId)) continue;
-            this.updateSessionDeliveryStatus(r.id, status);
-            advanced++;
-        }
-        return advanced;
-    }
-
-    /**
-     * DELIVERED-NOT-CONSUMED-REDRIVE terminal path. Mark every OPEN delivery for a session
-     * (queued/delivering/delivered/acked) terminal on task completion/failure. The prior
-     * markSessionDeliveriesTerminal() routed through getActiveSessionDeliveries(), whose SQL
-     * EXCLUDES 'delivered'/'completed' — so a 'delivered' row (the common case, since the
-     * transport confirm flips it before the completion event) was never marked terminal and
-     * stayed 'delivered', keeping taskDeliveryConsumed() false and feeding the false re-drive.
-     * We match rows in OPEN states directly here. 'completed' advances monotonically (it is the
-     * top progress rank); 'failed' is an absorbing outcome written unconditionally.
-     */
-    markOpenSessionDeliveriesTerminal(meshId: string, sessionId: string, terminalStatus: 'completed' | 'failed'): number {
-        const rows = this.db.prepare(
-            `SELECT id, session_id FROM mesh_session_delivery
-               WHERE mesh_id = ? AND status IN ('queued','delivering','delivered','acked')`,
-        ).all(meshId) as Array<{ id: string; session_id: string | null }>;
-        let marked = 0;
-        for (const r of rows) {
-            if (!sessionIdsEquivalent(r.session_id ?? undefined, sessionId)) continue;
-            this.updateSessionDeliveryStatus(r.id, terminalStatus);
-            marked++;
-        }
-        return marked;
-    }
-
-    getActiveSessionDeliveries(meshId: string, sessionId?: string): Array<{
-        id: string; meshId: string; nodeId: string | null; sessionId: string | null;
-        providerType: string | null; taskId: string | null; kind: string; priority: number;
-        message: string; status: string; deliverAfter: string | null; expiresAt: string | null;
-        attemptCount: number; sourceCoordinatorSessionId: string | null;
-        sourceCoordinatorDaemonId: string | null; lastError: string | null;
-        createdAt: string; updatedAt: string;
-    }> {
-        const now = new Date().toISOString();
-        const sql = sessionId
-            ? `SELECT * FROM mesh_session_delivery WHERE mesh_id = ? AND session_id = ? AND status NOT IN ('delivered','completed','failed','expired','cancelled') AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority DESC, created_at ASC`
-            : `SELECT * FROM mesh_session_delivery WHERE mesh_id = ? AND status NOT IN ('delivered','completed','failed','expired','cancelled') AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority DESC, created_at ASC`;
-        const rows = sessionId
-            ? this.db.prepare(sql).all(meshId, sessionId, now) as Array<Record<string, unknown>>
-            : this.db.prepare(sql).all(meshId, now) as Array<Record<string, unknown>>;
-        return rows.map(r => ({
-            id: r.id as string,
-            meshId: r.mesh_id as string,
-            nodeId: r.node_id as string | null,
-            sessionId: r.session_id as string | null,
-            providerType: r.provider_type as string | null,
-            taskId: r.task_id as string | null,
-            kind: r.kind as string,
-            priority: r.priority as number,
-            message: r.message as string,
-            status: r.status as string,
-            deliverAfter: r.deliver_after as string | null,
-            expiresAt: r.expires_at as string | null,
-            attemptCount: r.attempt_count as number,
-            sourceCoordinatorSessionId: r.source_coordinator_session_id as string | null,
-            sourceCoordinatorDaemonId: r.source_coordinator_daemon_id as string | null,
-            lastError: r.last_error as string | null,
-            createdAt: r.created_at as string,
-            updatedAt: r.updated_at as string,
-        }));
-    }
-
-    /**
-     * Bug B watchdog support: true when at least one delivery record for the task has
-     * reached a confirmed-handed-off status (delivered / acked / completed). The
-     * assigned-stranded watchdog uses this to distinguish a dispatch that was never
-     * confirmed (reclaimable) from one that WAS handed to the worker (a genuinely
-     * in-flight or completion-lost task, which is PHASE 4's responsibility, not this
-     * watchdog's). Indexed by (mesh_id, task_id).
-     */
-    taskHasConfirmedDelivery(meshId: string, taskId: string): boolean {
-        const row = this.db.prepare(`
-            SELECT 1 FROM mesh_session_delivery
-            WHERE mesh_id = ? AND task_id = ? AND status IN ('delivered','acked','completed')
-            LIMIT 1
-        `).get(meshId, taskId) as { 1: number } | undefined;
-        return !!row;
-    }
-
-    /**
-     * DELIVERED-NOT-CONSUMED re-drive support: true when at least one delivery record for
-     * the task has reached a CONSUMED status ('acked' / 'completed'). Distinct from
-     * {@link taskHasConfirmedDelivery} ('delivered' | 'acked' | 'completed'): a delivery is
-     * flipped to 'delivered' the instant the transport hands the dispatch off, but only
-     * flipped to 'acked' when the worker's agent:generating_started event arrives (see the
-     * generating_started handler in mesh-event-forwarding) — i.e. when the session has
-     * actually begun the turn. That distinction is the cross-daemon consumption signal the
-     * short-grace re-drive uses: a row whose delivery is 'delivered' but never 'acked' was
-     * handed to a REMOTE worker that never started generating — the remote autoLaunch
-     * delivered≠consumed gap — even when the session's busy verdict is UNKNOWN (not locally
-     * observable). Indexed by (mesh_id, task_id).
-     */
-    taskDeliveryConsumed(meshId: string, taskId: string): boolean {
-        const row = this.db.prepare(`
-            SELECT 1 FROM mesh_session_delivery
-            WHERE mesh_id = ? AND task_id = ? AND status IN ('acked','completed')
-            LIMIT 1
-        `).get(meshId, taskId) as { 1: number } | undefined;
-        return !!row;
-    }
-
-    expireStaleSessionDeliveries(meshId: string): void {
-        const now = new Date().toISOString();
-        this.db.prepare(`
-            UPDATE mesh_session_delivery
-            SET status = 'expired', updated_at = ?
-            WHERE mesh_id = ? AND expires_at IS NOT NULL AND expires_at <= ?
-              AND status NOT IN ('delivered','completed','failed','expired','cancelled')
-        `).run(now, meshId, now);
-    }
-
-    deleteSessionDeliveries(meshId: string): void {
-        this.db.prepare('DELETE FROM mesh_session_delivery WHERE mesh_id = ?').run(meshId);
     }
 
     // ── Completion Conflict Diagnostics ──────────────────────────────────────
@@ -1729,38 +1159,6 @@ export class MeshRuntimeStore {
      */
     pruneTerminalQueueEntries(olderThanMs: number): number {
         return pruneTerminalQueueEntriesImpl(this, olderThanMs);
-    }
-
-    /**
-     * Retention prune for TERMINAL-OUTCOME mesh_session_delivery rows (lifecycle
-     * retention Slice 1). Only the absorbing/final statuses are deleted —
-     * 'completed' (top progress rank), 'failed', 'expired', 'cancelled'. The
-     * live/nonterminal rows (queued/delivering/delivered/acked) are NEVER
-     * pruned here: they carry the retry/recovery semantics
-     * (taskHasConfirmedDelivery / taskDeliveryConsumed / consumeSessionDelivery /
-     * the delivered≠consumed re-drive), and expireStaleSessionDeliveries is the
-     * only path that retires a live row (into 'expired', which this prune then
-     * collects after the window). Age is measured from updated_at (when the row
-     * reached its outcome). Timestamps are ISO-8601 TEXT, so the lexicographic
-     * `<` cutoff is a correct time comparison; a row exactly AT the cutoff is
-     * kept (strict `<`). Returns rows deleted.
-     */
-    pruneTerminalSessionDeliveries(olderThanMs: number): number {
-        const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-        return this.db.prepare(
-            `DELETE FROM mesh_session_delivery
-             WHERE status IN ('completed', 'failed', 'expired', 'cancelled')
-               AND updated_at < ?`
-        ).run(cutoffIso).changes;
-    }
-
-    /**
-     * Retention prune for TERMINAL mesh_turn_attempts rows, cascading to
-     * mesh_turn_events and mesh_turn_held_suspensions. SQL, the three exclusion
-     * anchors and their rationale: mesh-turn-event-queries.ts.
-     */
-    pruneTerminalTurnAttempts(olderThanMs: number): { attempts: number; events: number; heldSuspensions: number } {
-        return this.transaction(() => pruneTerminalTurnAttemptsWithCascade(this.db, olderThanMs));
     }
 
     // ── G2: Event Ledger ────────────────────────────────────────────────────
@@ -1963,58 +1361,17 @@ export class MeshRuntimeStore {
         return this.db.prepare('DELETE FROM mesh_missions WHERE mesh_id = ?').run(meshId).changes;
     }
 
-    // ── TURN-LEDGER (Stage 5): authoritative turn attempts ───────────────────
-    // Implementation lives in ./mesh-runtime-store-turn-attempts.ts (behavior-
-    // preserving code move, file-size gate). Kept here as thin delegators so the
-    // public surface and every call site are unchanged; the extracted functions
-    // reach the db handle via `self` (same pattern as router.ts → router-refine.ts).
-
-    insertTurnAttempt(row: MeshTurnAttemptInsert): boolean { return insertTurnAttempt(this, row); }
-    getTurnAttempt(attemptId: string): MeshTurnAttemptRow | null { return getTurnAttempt(this, attemptId); }
-    getCurrentTurnAttempt(meshId: string, taskId: string): MeshTurnAttemptRow | null { return getCurrentTurnAttempt(this, meshId, taskId); }
-    getLatestTurnAttemptForSession(sessionId: string): MeshTurnAttemptRow | null { return getLatestTurnAttemptForSession(this, sessionId); }
-    getTurnAttemptBySeq(meshId: string, taskId: string, attemptSeq: number): MeshTurnAttemptRow | null { return getTurnAttemptBySeq(this, meshId, taskId, attemptSeq); }
-    listTurnAttemptsForTask(meshId: string, taskId: string): MeshTurnAttemptRow[] { return listTurnAttemptsForTask(this, meshId, taskId); }
-    listSupersededNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listSupersededNonterminalTurnAttempts(this, meshId); }
-    listQueueTerminatedNonterminalTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listQueueTerminatedNonterminalTurnAttempts(this, meshId); }
-    listActiveTurnAttempts(meshId: string): MeshTurnAttemptRow[] { return listActiveTurnAttempts(this, meshId); }
-    advanceTurnAttemptStage(attemptId: string, toStage: string, allowedFromCsv: string, opts: MeshTurnAttemptStageOpts): string | null { return advanceTurnAttemptStage(this, attemptId, toStage, allowedFromCsv, opts); }
-    commitTurnAttemptTerminal(attemptId: string, outcome: string, reason: string | null, terminalAt: string): { committed: boolean; row: MeshTurnAttemptRow | null } { return commitTurnAttemptTerminal(this, attemptId, outcome, reason, terminalAt); }
-    markTurnAttemptRedriven(attemptId: string, leaseDeadlineMs: number, updatedAt: string): void { markTurnAttemptRedriven(this, attemptId, leaseDeadlineMs, updatedAt); }
-    rebindTurnAttemptSession(attemptId: string, sessionId: string, updatedAt: string): boolean { return rebindTurnAttemptSession(this, attemptId, sessionId, updatedAt); }
-
-    // ── TURN-LEDGER (Stage 5): idempotency-keyed causal events ───────────────
-    // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).
-
-    insertTurnEvent(row: MeshTurnEventInsert): boolean { return insertTurnEvent(this, row); }
-    hasTurnEvent(attemptId: string, kind: string, dedupeKey = ''): boolean { return hasTurnEvent(this, attemptId, kind, dedupeKey); }
-
-    /** Turn events for one task, oldest first. SQL: mesh-turn-event-queries.ts. */
-    listTurnEventsForTask(meshId: string, taskId: string): Omit<TurnEventRow, 'taskId'>[] { return selectTurnEventsForTask(this.db, meshId, taskId); }
-
-    /** By-KIND turn-event queries. SQL + index rationale: mesh-turn-event-queries.ts. */
-    listTurnEventsByKind(meshId: string, kind: string, limit = 200): TurnEventRow[] { return selectTurnEventsByKind(this.db, meshId, kind, limit); }
-    deleteTurnEventsByKindOlderThan(kind: string, cutoffIso: string, meshId?: string): number { return deleteTurnEventsByKindOlderThan(this.db, kind, cutoffIso, meshId); }
-
     /** WORKER-MCP decision C: handoff note TEXT (durable, replaces the in-process mirror). */
     upsertHandoffNoteText(row: HandoffNoteTextRow): void { return upsertHandoffNoteText(this.db, row); }
     getHandoffNoteText(meshId: string, taskId: string): HandoffNoteTextRow | null { return selectHandoffNoteText(this.db, meshId, taskId); }
     deleteHandoffNoteTextOlderThan(cutoffIso: string): number { return deleteHandoffNoteTextOlderThan(this.db, cutoffIso); }
 
-    // ── TURN-LEDGER (Stage 5): held suspensions (pre-consumed waiting_*) ─────
-    // Implementation: ./mesh-runtime-store-turn-attempts.ts (same pure move).
 
-    insertHeldTurnSuspension(row: MeshHeldTurnSuspensionInsert): boolean { return insertHeldTurnSuspension(this, row); }
-    getHeldTurnSuspension(attemptId: string, stage: string): MeshTurnHeldSuspensionRow | null { return getHeldTurnSuspension(this, attemptId, stage); }
-    listHeldTurnSuspensionsForAttempt(attemptId: string, status?: string): MeshTurnHeldSuspensionRow[] { return listHeldTurnSuspensionsForAttempt(this, attemptId, status); }
-    listHeldTurnSuspensionsForMesh(meshId: string, status: string): MeshTurnHeldSuspensionRow[] { return listHeldTurnSuspensionsForMesh(this, meshId, status); }
-    resolveHeldTurnSuspension(holdId: string, status: 'applied' | 'dropped', resolution: string, resolvedAt: string): boolean { return resolveHeldTurnSuspension(this, holdId, status, resolution, resolvedAt); }
 }
 
-// Re-export barrel: row shapes/mappers + the retention sweep moved to
-// mesh-runtime-store-turn-rows.ts (pure move, file-size gate) — every existing
+// Re-export barrel: the retention sweep moved to mesh-runtime-store-turn-rows.ts
+// (pure move, file-size gate) — every existing
 // `import { X } from './mesh-runtime-store.js'` keeps resolving unchanged.
-export type { MeshTurnAttemptRow, MeshTurnHeldSuspensionRow } from './mesh-runtime-store-turn-rows.js';
 // A6-SILENT-REFUSAL: the claim-refusal vocabulary lives in its own dependency-free leaf
 // (mesh-claim-refusal) because this file is a frozen file-size baseline entry. Re-exported
 // here so callers can keep importing it alongside the claim API they already use.

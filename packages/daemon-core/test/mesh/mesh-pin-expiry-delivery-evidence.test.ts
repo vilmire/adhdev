@@ -44,7 +44,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { notifyCoordinatorOfActionableSkip } from '../../src/mesh/mesh-skip-notify.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask } from '../../src/mesh/mesh-work-queue.js'
-import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js'
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 
 const NODE_ID = 'node_pin_evidence'
@@ -67,14 +67,16 @@ function notifiedMessage(meshId: string, taskId: string): string {
   return String(hit?.coordinatorMessage ?? '')
 }
 
-/** Create a delivery row for the task and drive it to `status`. */
+/**
+ * Seed the task's turn-ledger attempt at the delivery stage `status` names
+ * (C-W8: the delivery evidence is the attempt's `delivered` / `consumed`, not
+ * a mesh_session_delivery row). 'acked' == the worker started the turn.
+ */
 function seedDelivery(meshId: string, taskId: string, status: 'delivered' | 'acked') {
-  const d = createSessionDelivery({
-    meshId, nodeId: NODE_ID, sessionId: SESSION_ID,
-    providerType: 'claude-cli', taskId, kind: 'task',
-    message: 'delta', status: 'delivering',
-  } as any)
-  updateSessionDeliveryStatus(d.id, status)
+  seedMeshAttempt({
+    meshId, taskId, sessionId: SESSION_ID, nodeId: NODE_ID, providerType: 'claude-cli',
+    stage: status === 'acked' ? 'consumed' : 'delivered',
+  })
 }
 
 describe('DISPATCH-ACK-EVIDENCE — pin-expiry guidance must not claim a delta was lost when it was delivered', () => {

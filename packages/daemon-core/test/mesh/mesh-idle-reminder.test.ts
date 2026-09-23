@@ -34,13 +34,21 @@ import { __clearMeshLedgerForTests, appendLedgerEntry, readLedgerEntriesByKind }
 import { buildMeshActiveWorkLedgerSnapshot } from '../../src/mesh/mesh-active-work.js';
 import type { MeshMissionRecord } from '../../src/mesh/mesh-missions.js';
 
-// Minimal coordinator stub: the reminder only ever calls onEvent('send_message', …).
-function makeCoordinator() {
+// Minimal coordinator target stub (D2/C-W8: the reminder submits through the one
+// send funnel). Recorded in the old `send_message` shape so the text assertions
+// below read unchanged; `messageId` / `policy` ride along for the funnel checks.
+function makeCoordinator(outcome: { kind: string } = { kind: 'delivered' }) {
     const calls: Array<{ event: string; payload: any }> = [];
     return {
         calls,
         instance: {
-            onEvent: (event: string, payload: any) => { calls.push({ event, payload }); },
+            sessionId: 'coord-1',
+            input: {
+                submit: async (msg: any) => {
+                    calls.push({ event: 'send_message', payload: { input: { text: msg.input.textFallback, textFallback: msg.input.textFallback }, messageId: msg.messageId, policy: msg.policy, origin: msg.origin } });
+                    return outcome;
+                },
+            },
         } as any,
     };
 }
@@ -89,18 +97,18 @@ describe('mesh idle-active-mission reminder', () => {
     });
 
     describe('shouldFireIdleReminder (pure)', () => {
-        it('fires when there is no prior marker', () => {
+        it('fires when there is no prior marker', async () => {
             expect(shouldFireIdleReminder(null, 'a,b', 1000)).toBe(true);
         });
-        it('suppresses within the debounce window for the same mission set', () => {
+        it('suppresses within the debounce window for the same mission set', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,b', 1000 + IDLE_REMINDER_DEBOUNCE_MS - 1)).toBe(false);
         });
-        it('re-fires once the debounce window has elapsed', () => {
+        it('re-fires once the debounce window has elapsed', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,b', 1000 + IDLE_REMINDER_DEBOUNCE_MS + 1)).toBe(true);
         });
-        it('re-fires immediately when the mission set changed', () => {
+        it('re-fires immediately when the mission set changed', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,c', 1001)).toBe(true);
         });
@@ -109,57 +117,74 @@ describe('mesh idle-active-mission reminder', () => {
         // debounce window. A same-or-SHRUNK set stays debounced — closing a mission (or a
         // content-only edit, which never touches the id-only hash anyway) must not restart
         // the spam clock.
-        it('does NOT re-fire when the mission set only shrank (a mission was closed)', () => {
+        it('does NOT re-fire when the mission set only shrank (a mission was closed)', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a', 1001)).toBe(false);
         });
-        it('does NOT re-fire when the mission set is unchanged', () => {
+        it('does NOT re-fire when the mission set is unchanged', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,b', 1001)).toBe(false);
         });
-        it('re-fires when the set both drops one id and gains a different one (net growth of a new id)', () => {
+        it('re-fires when the set both drops one id and gains a different one (net growth of a new id)', async () => {
             const last = { emittedAt: 1000, missionSetHash: 'a,b' };
             expect(shouldFireIdleReminder(last, 'a,c', 1001)).toBe(true);
         });
     });
 
     describe('missionSetHash / message', () => {
-        it('is order-independent', () => {
+        it('is order-independent', async () => {
             expect(missionSetHash([mission('b', 'B'), mission('a', 'A')]))
                 .toBe(missionSetHash([mission('a', 'A'), mission('b', 'B')]));
         });
-        it('lists each mission as title (id) and never embeds the full goal', () => {
+        it('lists each mission as title (id) and never embeds the full goal', async () => {
             const msg = buildIdleReminderMessage([mission('m1', 'Ship X'), mission('m2', 'Fix Y')]);
             expect(msg).toContain('[System] Coordinator idle with 2 active mission(s):');
             expect(msg).toContain('Ship X (m1)');
             expect(msg).toContain('Fix Y (m2)');
         });
-        it('folds the overflow past the cap into "and M more"', () => {
+        it('folds the overflow past the cap into "and M more"', async () => {
             const many = Array.from({ length: 13 }, (_, i) => mission(`m${i}`, `T${i}`));
             const msg = buildIdleReminderMessage(many);
             expect(msg).toContain('…and 3 more');
         });
     });
 
-    it('injects a reminder once when idle with active missions', () => {
+    it('injects a reminder once when idle with active missions', async () => {
         upsertMeshMission(meshId, { title: 'Deploy pipeline', goal: 'ship rc' });
         const coord = makeCoordinator();
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(true);
         expect(coord.calls).toHaveLength(1);
         expect(coord.calls[0].event).toBe('send_message');
         expect(coord.calls[0].payload.input.text).toContain('Deploy pipeline');
     });
 
-    it('reuses a same-tick active-work ledger snapshot without reading that slice again', () => {
+    it('D2: submits through the send funnel with a per-mission-set messageId, queue policy, mesh origin', async () => {
+        upsertMeshMission(meshId, { title: 'Funnel mission', goal: 'x' });
+        const coord = makeCoordinator();
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(coord.calls[0].payload).toMatchObject({ policy: { mode: 'queue' }, origin: 'mesh' });
+        expect(coord.calls[0].payload.messageId).toMatch(new RegExp(`^reminder:${meshId}:`));
+    });
+
+    it('D2: a refused submit is NOT marked — the next idle edge retries the reminder', async () => {
+        upsertMeshMission(meshId, { title: 'Refused mission', goal: 'x' });
+        const refused = makeCoordinator({ kind: 'refused' });
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, refused.instance, undefined, 1_000)).toBe(false);
+        const ok = makeCoordinator();
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, ok.instance, undefined, 1_500)).toBe(true);
+        expect(ok.calls).toHaveLength(1);
+    });
+
+    it('reuses a same-tick active-work ledger snapshot without reading that slice again', async () => {
         upsertMeshMission(meshId, { title: 'Shared snapshot', goal: 'ship it' });
         const coord = makeCoordinator();
         const store = MeshRuntimeStore.getInstance();
         const readSpy = vi.spyOn(store, 'readLedgerEntries');
         const snapshot = buildMeshActiveWorkLedgerSnapshot([]);
 
-        const fired = maybeInjectIdleActiveMissionReminder(
+        const fired = await maybeInjectIdleActiveMissionReminder(
             meshId,
             coord.instance,
             undefined,
@@ -173,34 +198,34 @@ describe('mesh idle-active-mission reminder', () => {
         expect(activeWorkReads).toHaveLength(0);
     });
 
-    it('no-op when there are no active missions', () => {
+    it('no-op when there are no active missions', async () => {
         const coord = makeCoordinator();
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
-    it('no-op when a completed/abandoned mission is the only mission', () => {
+    it('no-op when a completed/abandoned mission is the only mission', async () => {
         const m = upsertMeshMission(meshId, { title: 'Done work', goal: 'x' });
         upsertMeshMission(meshId, { id: m.id, title: 'Done work', status: 'completed' });
         const coord = makeCoordinator();
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
-    it('no-op when the mesh is NOT idle (a queue task is in flight)', () => {
+    it('no-op when the mesh is NOT idle (a queue task is in flight)', async () => {
         upsertMeshMission(meshId, { title: 'Active work', goal: 'x' });
         enqueueTask(meshId, 'do the thing', { difficulty: 'medium' }); // pending queue task → totalActiveCount > 0
         const coord = makeCoordinator();
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
-    it('passes live nodes into the idle gate so an idle session contradicts a stale approval', () => {
+    it('passes live nodes into the idle gate so an idle session contradicts a stale approval', async () => {
         upsertMeshMission(meshId, { title: 'Resolved approval', goal: 'continue' });
         const coord = makeCoordinator();
         appendLedgerEntry(meshId, {
@@ -213,14 +238,14 @@ describe('mesh idle-active-mission reminder', () => {
         } as any);
         const nodes = [{ id: 'node-a', nodeId: 'node-a', sessions: [{ id: 'sess-a', status: 'idle' }] }] as any;
 
-        expect(maybeInjectIdleActiveMissionReminder(
+        expect(await maybeInjectIdleActiveMissionReminder(
             meshId, coord.instance, undefined, new Date('2026-09-23T00:02:00.000Z').getTime(),
             undefined, undefined, nodes,
         )).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
-    it('does not retire a genuine approval when supplied live nodes still report awaiting_approval', () => {
+    it('does not retire a genuine approval when supplied live nodes still report awaiting_approval', async () => {
         upsertMeshMission(meshId, { title: 'Still blocked', goal: 'wait' });
         const coord = makeCoordinator();
         appendLedgerEntry(meshId, {
@@ -233,7 +258,7 @@ describe('mesh idle-active-mission reminder', () => {
         } as any);
         const nodes = [{ id: 'node-a', nodeId: 'node-a', sessions: [{ id: 'sess-a', status: 'awaiting_approval' }] }] as any;
 
-        expect(maybeInjectIdleActiveMissionReminder(
+        expect(await maybeInjectIdleActiveMissionReminder(
             meshId, coord.instance, undefined, new Date('2026-09-23T00:02:00.000Z').getTime(),
             undefined, undefined, nodes,
         )).toBe(false);
@@ -268,26 +293,26 @@ describe('mesh idle-active-mission reminder', () => {
         } as any);
     }
 
-    it('no-op when an async refine job is in flight (accepted/running)', () => {
+    it('no-op when an async refine job is in flight (accepted/running)', async () => {
         upsertMeshMission(meshId, { title: 'Refining branch', goal: 'x' });
         appendRefineDispatch('job-inflight');
         const coord = makeCoordinator();
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
-    it('fires once the async refine job terminates and nothing else is in flight', () => {
+    it('fires once the async refine job terminates and nothing else is in flight', async () => {
         upsertMeshMission(meshId, { title: 'Refining branch', goal: 'x' });
         appendRefineDispatch('job-done');
         const coord = makeCoordinator();
 
         // Still running → suppressed.
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
         // Terminal entry lands → the job is no longer active → reminder now fires.
         appendRefineTerminal('job-done');
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
@@ -307,7 +332,7 @@ describe('mesh idle-active-mission reminder', () => {
     // The fix reads the refine slice with an explicit `kind` filter and NO tail. This test
     // pins that: the dispatch is buried under far more than 200 unrelated entries and the
     // reminder must STILL stay silent.
-    it('★stays silent when an in-flight refine dispatch is buried beyond the 200-entry tail window', () => {
+    it('★stays silent when an in-flight refine dispatch is buried beyond the 200-entry tail window', async () => {
         upsertMeshMission(meshId, { title: 'Refining under churn', goal: 'x' });
         appendRefineDispatch('job-buried');
 
@@ -325,14 +350,14 @@ describe('mesh idle-active-mission reminder', () => {
         // The refine job is STILL in flight (no terminal row was ever appended), so the
         // reminder must not fire. Before the fix the tail window held only the 260 filler
         // rows, the gate saw no refine job, and this fired.
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
     // The inverse must still hold: burying entries must not permanently mute the reminder.
     // Once the refine job genuinely terminates, the reminder fires again — so the fix
     // suppresses only real in-flight work, it does not blanket-silence a busy mesh.
-    it('fires once a buried refine dispatch reaches a terminal row', () => {
+    it('fires once a buried refine dispatch reaches a terminal row', async () => {
         upsertMeshMission(meshId, { title: 'Refining under churn', goal: 'x' });
         appendRefineDispatch('job-buried-then-done');
         for (let i = 0; i < 260; i++) {
@@ -343,10 +368,10 @@ describe('mesh idle-active-mission reminder', () => {
             } as any);
         }
         const coord = makeCoordinator();
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(false);
 
         appendRefineTerminal('job-buried-then-done');
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
@@ -362,7 +387,7 @@ describe('mesh idle-active-mission reminder', () => {
     // test pins that directly against the function the gate delegates to: a task's
     // task_completed row, buried under 260 unrelated entries, must still be found by a
     // kind-filtered read of exactly buildMeshActiveWork's kind set.
-    it('★buildMeshActiveWork kind set survives crowding beyond the 200-entry tail window', () => {
+    it('★buildMeshActiveWork kind set survives crowding beyond the 200-entry tail window', async () => {
         const task = enqueueTask(meshId, 'do the thing', { difficulty: 'medium' });
         appendLedgerEntry(meshId, {
             kind: 'task_completed',
@@ -387,35 +412,35 @@ describe('mesh idle-active-mission reminder', () => {
         expect(entries.some(e => e.kind === 'task_completed' && e.payload?.taskId === task.id)).toBe(true);
     });
 
-    it('debounces a second reminder for the same mission set inside the window', () => {
+    it('debounces a second reminder for the same mission set inside the window', async () => {
         upsertMeshMission(meshId, { title: 'Lingering', goal: 'x' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
         // Same set, still inside the window → suppressed.
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
         expect(coord.calls).toHaveLength(1);
     });
 
-    it('re-fires when the active mission set changes', () => {
+    it('re-fires when the active mission set changes', async () => {
         const a = upsertMeshMission(meshId, { title: 'Mission A', goal: 'x' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
         // Add a second active mission → the set hash changes → re-fire even inside the window.
         upsertMeshMission(meshId, { title: 'Mission B', goal: 'y' });
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000)).toBe(true);
         expect(coord.calls).toHaveLength(2);
         void a;
     });
 
-    it('re-fires after the debounce window elapses for an unchanged set', () => {
+    it('re-fires after the debounce window elapses for an unchanged set', async () => {
         upsertMeshMission(meshId, { title: 'Persistent', goal: 'x' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
         const later = 1_000 + IDLE_REMINDER_DEBOUNCE_MS + 1;
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, later)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, later)).toBe(true);
         expect(coord.calls).toHaveLength(2);
     });
 
@@ -429,11 +454,11 @@ describe('mesh idle-active-mission reminder', () => {
     // close+reopen bookkeeping) churn on every coordinator upsert. The net effect: routine
     // mission maintenance kept re-arming the reminder. This test pins the direct case —
     // re-upserting the same id with only goal text changed — never bypasses the window.
-    it('★does NOT re-fire when only an existing mission\'s goal text is edited (same mission_id)', () => {
+    it('★does NOT re-fire when only an existing mission\'s goal text is edited (same mission_id)', async () => {
         const m = upsertMeshMission(meshId, { title: 'Ship pipeline', goal: 'original goal text' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
 
         // Routine coordinator bookkeeping: re-upsert the SAME mission_id with new goal text.
         // The active-mission id SET is unchanged (still just [m.id]) even though the
@@ -444,48 +469,48 @@ describe('mesh idle-active-mission reminder', () => {
         // must stay silent. Before the fix, any hash change (which this scenario did NOT
         // even need to produce, since the id set is unchanged) would have been the trigger
         // path for the broader class of routine-upsert re-fires.
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
         expect(coord.calls).toHaveLength(1);
     });
 
     // The inverse must still hold: a GENUINELY new mission still nudges immediately, even
     // inside the debounce window — the original bypass intent ("new work needs attention
     // now") must survive the fix.
-    it('still fires immediately when a genuinely NEW mission is added inside the debounce window', () => {
+    it('still fires immediately when a genuinely NEW mission is added inside the debounce window', async () => {
         upsertMeshMission(meshId, { title: 'Existing mission', goal: 'x' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
 
         // A brand-new mission id enters the active set → growth → immediate re-fire, even
         // though we are only 5s into the 5-minute window.
         upsertMeshMission(meshId, { title: 'Newly discovered work', goal: 'y' });
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(true);
         expect(coord.calls).toHaveLength(2);
     });
 
     // Closing a mission (a legitimate coordinator action) shrinks the set and must not
     // re-arm the reminder for the remaining mission(s) either.
-    it('does NOT re-fire when a mission is closed and the surviving set is a subset of the last-fired set', () => {
+    it('does NOT re-fire when a mission is closed and the surviving set is a subset of the last-fired set', async () => {
         const a = upsertMeshMission(meshId, { title: 'Mission A', goal: 'x' });
         const b = upsertMeshMission(meshId, { title: 'Mission B', goal: 'y' });
         const coord = makeCoordinator();
 
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000)).toBe(true);
         expect(coord.calls).toHaveLength(1);
 
         // Close mission B — the active set shrinks from {A, B} to {A}.
         upsertMeshMission(meshId, { id: b.id, title: 'Mission B', status: 'completed' });
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000 + 5_000)).toBe(false);
         expect(coord.calls).toHaveLength(1);
         void a;
     });
 
-    it('no-op when policy.idleActiveMissionReminder === false', () => {
+    it('no-op when policy.idleActiveMissionReminder === false', async () => {
         upsertMeshMission(meshId, { title: 'Suppressed', goal: 'x' });
         const coord = makeCoordinator();
 
-        const fired = maybeInjectIdleActiveMissionReminder(
+        const fired = await maybeInjectIdleActiveMissionReminder(
             meshId,
             coord.instance,
             { idleActiveMissionReminder: false } as any,
@@ -497,24 +522,24 @@ describe('mesh idle-active-mission reminder', () => {
 
     // ── localNonCoordinatorSessionBusy (pure) ───────────────────────────────────────
     describe('localNonCoordinatorSessionBusy (pure)', () => {
-        it('is false with no local sessions', () => {
+        it('is false with no local sessions', async () => {
             expect(localNonCoordinatorSessionBusy([], 'mesh-x', 1_000)).toBe(false);
             expect(localNonCoordinatorSessionBusy(undefined, 'mesh-x', 1_000)).toBe(false);
         });
 
-        it('is true when a non-coordinator local session is generating', () => {
+        it('is true when a non-coordinator local session is generating', async () => {
             const states = [localState({ instanceId: 'direct-1', status: 'generating', lastUpdated: 1_000 })];
             expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(true);
         });
 
-        it('is true when a non-coordinator local session is parked on an approval/choice modal', () => {
+        it('is true when a non-coordinator local session is parked on an approval/choice modal', async () => {
             const waitingApproval = [localState({ status: 'waiting_approval', lastUpdated: 1_000 })];
             expect(localNonCoordinatorSessionBusy(waitingApproval, 'mesh-x', 1_000)).toBe(true);
             const waitingChoice = [localState({ status: 'waiting_choice', lastUpdated: 1_000 })];
             expect(localNonCoordinatorSessionBusy(waitingChoice, 'mesh-x', 1_000)).toBe(true);
         });
 
-        it('excludes a session that is the mesh\'s own coordinator, even if generating', () => {
+        it('excludes a session that is the mesh\'s own coordinator, even if generating', async () => {
             const states = [localState({
                 instanceId: 'coord-1',
                 status: 'generating',
@@ -524,7 +549,7 @@ describe('mesh idle-active-mission reminder', () => {
             expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(false);
         });
 
-        it('does not exclude a coordinator session for a DIFFERENT mesh', () => {
+        it('does not exclude a coordinator session for a DIFFERENT mesh', async () => {
             const states = [localState({
                 instanceId: 'coord-other-mesh',
                 status: 'generating',
@@ -534,13 +559,13 @@ describe('mesh idle-active-mission reminder', () => {
             expect(localNonCoordinatorSessionBusy(states, 'mesh-x', 1_000)).toBe(true);
         });
 
-        it('ignores a stale entry (past LOCAL_SESSION_STALE_MS) rather than treating it as busy', () => {
+        it('ignores a stale entry (past LOCAL_SESSION_STALE_MS) rather than treating it as busy', async () => {
             const now = 1_000_000;
             const states = [localState({ status: 'generating', lastUpdated: now - LOCAL_SESSION_STALE_MS - 1 })];
             expect(localNonCoordinatorSessionBusy(states, 'mesh-x', now)).toBe(false);
         });
 
-        it('still treats a fresh entry within the staleness window as busy', () => {
+        it('still treats a fresh entry within the staleness window as busy', async () => {
             const now = 1_000_000;
             const states = [localState({ status: 'generating', lastUpdated: now - LOCAL_SESSION_STALE_MS + 1 })];
             expect(localNonCoordinatorSessionBusy(states, 'mesh-x', now)).toBe(true);
@@ -555,30 +580,30 @@ describe('mesh idle-active-mission reminder', () => {
     // direct work, no refine job — the pre-fix gates all read "idle" — yet a local
     // instanceManager session is genuinely generating. Before the fix (no instanceManager
     // param / no local-session check) this fires; after the fix it must stay silent.
-    it('★DIRECT-SESSION-IDLE-BLINDSPOT: stays silent when a directly-launched local session is generating', () => {
+    it('★DIRECT-SESSION-IDLE-BLINDSPOT: stays silent when a directly-launched local session is generating', async () => {
         upsertMeshMission(meshId, { title: 'Direct session in flight', goal: 'x' });
         const coord = makeCoordinator();
         const instanceManager = makeInstanceManager([
             localState({ instanceId: 'direct-session-1', status: 'generating', lastUpdated: 1_000 }),
         ]);
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
         expect(fired).toBe(false);
         expect(coord.calls).toHaveLength(0);
     });
 
-    it('fires once the direct session returns to idle and nothing else is in flight', () => {
+    it('fires once the direct session returns to idle and nothing else is in flight', async () => {
         upsertMeshMission(meshId, { title: 'Direct session finishing', goal: 'x' });
         const coord = makeCoordinator();
         const busyManager = makeInstanceManager([
             localState({ instanceId: 'direct-session-2', status: 'generating', lastUpdated: 1_000 }),
         ]);
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, busyManager)).toBe(false);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, busyManager)).toBe(false);
 
         const idleManager = makeInstanceManager([
             localState({ instanceId: 'direct-session-2', status: 'idle', lastUpdated: 2_000 }),
         ]);
-        expect(maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000, idleManager)).toBe(true);
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 2_000, idleManager)).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
@@ -589,7 +614,7 @@ describe('mesh idle-active-mission reminder', () => {
     // as "busy" and permanently suppress the reminder. This pins that the coordinator's
     // own session for THIS mesh — even if its snapshot momentarily reads 'generating' —
     // must never by itself block the reminder.
-    it('★self-coordinator exclusion: fires when only the coordinator\'s OWN session is generating', () => {
+    it('★self-coordinator exclusion: fires when only the coordinator\'s OWN session is generating', async () => {
         upsertMeshMission(meshId, { title: 'Coordinator self session', goal: 'x' });
         const coord = makeCoordinator();
         const instanceManager = makeInstanceManager([
@@ -601,24 +626,24 @@ describe('mesh idle-active-mission reminder', () => {
             }),
         ]);
 
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, instanceManager);
         expect(fired).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
-    it('is unaffected when no instanceManager is passed (backward-compatible call sites)', () => {
+    it('is unaffected when no instanceManager is passed (backward-compatible call sites)', async () => {
         upsertMeshMission(meshId, { title: 'No instanceManager arg', goal: 'x' });
         const coord = makeCoordinator();
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000);
         expect(fired).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });
 
-    it('is best-effort: a throwing instanceManager does not block the reminder', () => {
+    it('is best-effort: a throwing instanceManager does not block the reminder', async () => {
         upsertMeshMission(meshId, { title: 'Broken instanceManager', goal: 'x' });
         const coord = makeCoordinator();
         const throwingManager = { collectAllStates: () => { throw new Error('boom'); } } as any;
-        const fired = maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, throwingManager);
+        const fired = await maybeInjectIdleActiveMissionReminder(meshId, coord.instance, undefined, 1_000, throwingManager);
         expect(fired).toBe(true);
         expect(coord.calls).toHaveLength(1);
     });

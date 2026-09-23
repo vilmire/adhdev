@@ -89,7 +89,7 @@ export const queueWorkerProgressNotice: WorkerProgressNoticeSink = (notice) => {
                 ...(notice.sessionId ? { sessionId: notice.sessionId } : {}),
                 // ★The note TEXT rides here. This is a local daemon→coordinator
                 // queue, not the cloud status path — the server content boundary
-                // is not in play. The `mesh_turn_events` row for the same note
+                // is not in play. The `turn_events` row for the same note
                 // stays content-free (length only), which is what keeps the
                 // LEDGER meta-only per design §9.1.
                 note: notice.note,

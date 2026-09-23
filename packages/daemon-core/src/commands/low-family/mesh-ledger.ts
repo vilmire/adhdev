@@ -50,7 +50,7 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { readOperatingNotes, resolveNoteExpiry } = await import('../../mesh/mesh-ledger.js');
+            const { readOperatingNotes, resolveNoteExpiry } = await import('../../mesh/mesh-operating-notes.js');
             const tail = typeof args?.tail === 'number' ? args.tail : 100;
             const entries = readOperatingNotes(meshId, { tail });
             /* Flatten to the shape the notes tab renders: id + note payload fields.
@@ -100,17 +100,13 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const text = typeof args?.text === 'string' ? args.text.trim() : '';
         if (!text) return { success: false, error: 'text required' };
         try {
-            const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
+            const { recordOperatingNote } = await import('../../mesh/mesh-operating-notes.js');
             const category = typeof args?.category === 'string' ? args.category : undefined;
-            // appendLedgerEntry de-dupes identical note text within its recent window.
-            const entry = appendLedgerEntry(meshId, {
-                kind: 'coordinator_operating_note',
-                payload: {
-                    text,
-                    ...(category ? { category } : {}),
-                    createdAt: new Date().toISOString(),
-                    sourceCoordinator: 'dashboard',
-                },
+            // recordOperatingNote de-dupes identical note text within its recent window.
+            const entry = recordOperatingNote(meshId, {
+                text,
+                ...(category ? { category } : {}),
+                sourceCoordinator: 'dashboard',
             });
             return { success: true, id: entry.id };
         } catch (e: any) {
@@ -125,11 +121,11 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const text = typeof args?.text === 'string' ? args.text.trim() : '';
         if (!noteId && !text) return { success: false, error: 'noteId or text required' };
         try {
-            const { tombstoneOperatingNote } = await import('../../mesh/mesh-ledger.js');
+            const { forgetOperatingNote } = await import('../../mesh/mesh-operating-notes.js');
             const reason = typeof args?.reason === 'string' && args.reason.trim()
                 ? args.reason.trim()
                 : 'dashboard_manual';
-            const result = tombstoneOperatingNote(meshId, {
+            const result = forgetOperatingNote(meshId, {
                 ...(noteId ? { noteId } : {}),
                 ...(text ? { text } : {}),
                 reason,

@@ -1,6 +1,12 @@
 /**
- * Mesh Direct Dispatch Tracking — persists direct (non-queue) task dispatches,
+ * Mesh Direct Dispatch Tracking — reads direct (non-queue) task dispatches,
  * plus the mesh tool-call rate window.
+ *
+ * C-W8: a direct dispatch IS its open `mesh_direct` turn-ledger attempt (opened
+ * by the caller's `dispatch_accepted` before the send). The retired
+ * the legacy direct-dispatch table and its writers (insert / status flips / stale
+ * sweeps / deletes) are gone; readers keep `getActiveDirectDispatches`, and the
+ * queue-side abandonment paths close the attempt with a ledger `cancel`.
  *
  * Split out of mesh-work-queue.ts (FILE-SIZE-HEADROOM). Pure move. This module
  * writes only direct-dispatch rows in MeshRuntimeStore — never a queue row's
@@ -8,37 +14,17 @@
  * mesh-work-queue.ts. mesh-work-queue.ts re-exports the surface.
  */
 
+import type { CancelReason } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import type { DirectDispatchView } from './mesh-runtime-store-queue-reads.js';
+import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry } from './mesh-ledger.js';
 import { cancelTask, recordDirectDispatchTask, requeueTask } from './mesh-work-queue.js';
 
 // ── Direct Dispatch Tracking ─────────────────────────────────────────────────
-// Persists direct (non-queue) task dispatches so buildMeshActiveWork can read
-// active work from MeshRuntimeStore instead of scanning ledger JSONL entries.
 
-export type DirectDispatchRecord = ReturnType<MeshRuntimeStore['getActiveDirectDispatches']>[number];
-
-export function insertDirectDispatch(
-    meshId: string,
-    data: {
-        taskId: string;
-        nodeId?: string;
-        sessionId?: string;
-        providerType?: string;
-        message: string;
-        taskMode?: string;
-        via: string;
-        dispatchedToIdleSession?: boolean;
-        dispatchedAt: string;
-    },
-): void {
-    try {
-        MeshRuntimeStore.getInstance().insertDirectDispatch({ ...data, meshId });
-    } catch (e: any) {
-        process.stderr.write(`[adhdev-mesh] insertDirectDispatch failed for task ${data.taskId}: ${e?.message || e}\n`);
-    }
-}
+export type DirectDispatchRecord = DirectDispatchView;
 
 export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[] {
     try {
@@ -48,21 +34,48 @@ export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[
     }
 }
 
-export function updateDirectDispatchStatus(
+/**
+ * Close the open `mesh_direct` attempt(s) of `taskIds` with a ledger `cancel`
+ * (R22 → cancelled). The default reason `intentional_cleanup` is bookkeeping
+ * only: R22 then emits NO `cancel_dispatch`, so the worker session is neither
+ * withdrawn nor stopped (the retired row flip never touched it either).
+ * Daemon-side only: it needs this process's turn ledger —
+ * the mcp-server reaches the daemon's ledger with `turn_cancel` over IPC
+ * instead. Returns how many attempts the ledger closed (0 when no ledger is
+ * armed here). Best-effort: never throws.
+ */
+export function cancelDirectDispatchAttempts(
     meshId: string,
-    sessionId: string,
-    status: 'acked' | 'completed' | 'failed' | 'stale',
-    taskId?: string,
-): void {
+    taskIds: readonly string[],
+    reason: CancelReason = 'intentional_cleanup',
+    source: 'operator' | 'scheduler' | 'intentional_cleanup' = 'intentional_cleanup',
+): number {
+    const ledger = getActiveTurnLedger();
+    if (!ledger) return 0;
+    let closed = 0;
     try {
-        // CANON-B: prefer the exact task_id row; fall back to the session_id match only when
-        // the firing event carried no taskId (a legacy/relayed event). Warn on the fallback so
-        // the residual PK-substitute path is observable when it strands a sibling dispatch.
-        if (!taskId) {
-            LOG.warn('MeshQueue', `updateDirectDispatchStatus(${status}) for mesh ${meshId} session ${sessionId} has no taskId — falling back to session_id match (may flip a sibling dispatch row)`);
+        const open = new Map(MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId).map((d) => [d.taskId, d] as const));
+        for (const taskId of taskIds) {
+            const dispatch = open.get(taskId);
+            if (!dispatch) continue;
+            const attempt = ledger.getAttempt(dispatch.attemptId);
+            if (!attempt || attempt.terminal) continue;
+            const result = ledger.observe({
+                eventId: `cancel:${attempt.attemptId}:g${attempt.generation}:${reason}`,
+                at: Date.now(),
+                source,
+                sessionId: attempt.sessionId,
+                observedBy: ledger.selfDaemonId,
+                attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+                kind: 'cancel',
+                reason,
+            });
+            if (result.verdict === 'applied') closed += 1;
         }
-        MeshRuntimeStore.getInstance().updateDirectDispatchStatus(meshId, sessionId, status, taskId);
-    } catch { /* best-effort */ }
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `cancelDirectDispatchAttempts(${meshId}) failed: ${e?.message || e}`);
+    }
+    return closed;
 }
 
 /**
@@ -81,42 +94,18 @@ export type SiblingDispatchTerminalizeReason =
     | 'queue_task_stranded_reclaimed';
 
 /**
- * SIBLING-DISPATCH-ORPHAN: terminalize the `mesh_direct_dispatches` row that shares this
- * task id, whenever the QUEUE row is abandoned out from under it.
+ * SIBLING-DISPATCH-ORPHAN: close the open direct dispatch (its `mesh_direct`
+ * attempt, C-W8) that shares this task id whenever the QUEUE row is abandoned
+ * out from under it (cancelTask, requeueTask incl. its dispatch-failure branch,
+ * the stranded reclaim). Those paths touch only the queue row; without this the
+ * dispatch outlived its task and `buildMeshActiveWork` rendered a cancelled task
+ * as live `generating` work — feeding generatingCount, sessionHasActiveAssignment,
+ * routing fitness and idle reminders (measured live: one orphan survived 12 days).
  *
- * WHY THIS EXISTS. `recordDirectDispatchTask` materialises TWO rows per direct dispatch —
- * a queue entry and a `mesh_direct_dispatches` entry — but every abandonment path
- * (cancelTask, requeueTask incl. its dispatch-failure branch, reclaimStrandedAssignedTask)
- * only ever touched the queue row and `endTaskDispatchInFlight`. The dispatch row was left
- * behind, and nothing else would ever collect it:
- *
- *   - `markStaleDirectDispatches` sweeps ONLY `status='dispatched'`, so a row that reached
- *     `acked` (the worker confirmed it started) has NO timeout sweeper whatsoever;
- *   - the orphan-prune path is age-gated and node/session-liveness-gated, so a row whose
- *     session is still alive is never pruned.
- *
- * The consequence is not cosmetic. `buildMeshActiveWork` skips CANCELLED queue rows when
- * building its dedupe set, so the orphan is NOT deduped against its queue sibling, and the
- * `dbStatus === 'acked' ? 'generating' : 'assigned'` fallback then renders a cancelled task
- * as actively generating — feeding generatingCount, sessionHasActiveAssignment, routing
- * fitness, idle reminders and the completion-synthesis loop. Measured live: one such row
- * survived 12 days. (Both halves are load-bearing: cancelling BEFORE dispatch leaves no
- * dispatch row at all, which is why this only ever bit already-dispatched tasks.)
- *
- * 'stale' — never 'completed'/'failed' — for the same reason `terminalizeAckedHold` chose
- * it: the abandonment says nothing about whether the worker finished, and a cancel is not
- * completion evidence (mesh-terminal-admission.ts). 'stale' is exactly "this dispatch will
- * never resolve itself": it leaves the active set without asserting an outcome.
- *
- * Deliberately NOT `terminalizeAckedHold` (mesh-completion-synthesis.ts) even though the
- * two do a similar flip: that helper is bound to synth-hold state and its own ledger kind,
- * and this module is upstream of it — importing it here would invert the dependency
- * (mesh-completion-synthesis already imports mesh-work-queue). The acked-hold state itself
- * needs no explicit cleanup on this path: reconcileUnterminatedDirectDispatches prunes hold
- * rows whose task has left the active dispatch set, which this flip is what causes.
- *
- * Best-effort and self-contained: a store/ledger failure must never fail the cancel/requeue
- * that already committed.
+ * The ledger `cancel` (reason intentional_cleanup) asserts no completion outcome: the
+ * abandonment says nothing about whether the worker finished. Best-effort and
+ * self-contained: a ledger/audit failure never fails the queue mutation that
+ * already committed.
  */
 export function terminalizeSiblingDispatch(
     meshId: string,
@@ -124,16 +113,17 @@ export function terminalizeSiblingDispatch(
     reason: SiblingDispatchTerminalizeReason,
 ): void {
     try {
-        const store = MeshRuntimeStore.getInstance();
-        // Only act on a row that is actually still live; a dispatch that already reached a
-        // terminal status by its own path needs neither the flip nor an audit entry (this
-        // keeps the ledger free of a no-op record on the common well-behaved case).
-        const sibling = store.getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
+        // Only act on a dispatch that is actually still open; one that already
+        // reached a terminal outcome by its own path needs neither the cancel nor
+        // an audit entry.
+        const sibling = getActiveDirectDispatches(meshId).find(d => d.taskId === taskId);
         if (!sibling) return;
-        // Keyed by the exact task id — never the session_id fallback, which would flip a
-        // sibling task's row (CANON-B, see updateDirectDispatchStatus).
-        store.updateDirectDispatchStatus(meshId, sibling.sessionId ?? '', 'stale', taskId);
-        LOG.info('MeshQueue', `SIBLING-DISPATCH-ORPHAN: task ${taskId} (mesh ${meshId}) was abandoned (${reason}) while its direct-dispatch row was still '${sibling.status}'; marked that row stale so it stops rendering as active work.`);
+        // C-W8: the dispatch is its open mesh_direct attempt — close it on the
+        // ledger (`cancel` / intentional_cleanup → cancelled, no session side
+        // effect). "Cancelled" asserts no completion outcome, the same neutrality
+        // the old 'stale' flip had; stopping the worker stays the cancel path's job.
+        const closed = cancelDirectDispatchAttempts(meshId, [taskId]);
+        LOG.info('MeshQueue', `SIBLING-DISPATCH-ORPHAN: task ${taskId} (mesh ${meshId}) was abandoned (${reason}) while its direct dispatch was still '${sibling.status}'; ${closed > 0 ? 'cancelled its attempt' : 'no ledger armed to cancel its attempt'} so it stops rendering as active work.`);
         try {
             appendLedgerEntry(meshId, {
                 kind: 'sibling_dispatch_terminalized',
@@ -145,37 +135,13 @@ export function terminalizeSiblingDispatch(
                     taskId,
                     reason,
                     dispatchStatus: sibling.status,
+                    attemptId: sibling.attemptId,
                     ...(sibling.sessionId ? { sessionId: sibling.sessionId } : {}),
                     ...(sibling.nodeId ? { nodeId: sibling.nodeId } : {}),
                 },
             });
-        } catch { /* best-effort audit — the terminalization above still stands */ }
+        } catch { /* best-effort audit — the cancel above still stands */ }
     } catch { /* best-effort — never fail the queue mutation that already committed */ }
-}
-
-export function cleanupTerminalDirectDispatches(olderThanMs = 7 * 24 * 60 * 60_000): void {
-    try {
-        MeshRuntimeStore.getInstance().cleanupTerminalDirectDispatches(olderThanMs);
-    } catch { /* best-effort */ }
-}
-
-export function markStaleDirectDispatches(meshId: string, olderThanMs = 60 * 60_000): void {
-    try {
-        MeshRuntimeStore.getInstance().markStaleDirectDispatches(meshId, olderThanMs);
-    } catch { /* best-effort */ }
-}
-
-/**
- * Delete specific direct dispatch rows by taskId. Returns the number of rows deleted.
- * Used by the staleDirect prune path to evict orphaned/terminal dispatch records from the
- * active staleDirect surface while leaving the append-only mesh ledger (audit history) intact.
- */
-export function deleteDirectDispatchesByTaskId(meshId: string, taskIds: string[]): number {
-    try {
-        return MeshRuntimeStore.getInstance().deleteDirectDispatchesByTaskId(meshId, taskIds);
-    } catch {
-        return 0;
-    }
 }
 
 export type MeshToolCallRateResult = { rateLimitExceeded: boolean; callsInWindow: number; advisory: string | null };

@@ -69,7 +69,8 @@ describe('forwarding → turn evidence', () => {
   it('a genuine completion becomes turn_end{genuine} with the summary LOCAL in the envelope; no queue/dispatch row is touched', () => {
     const { components, observed, off } = setup()
     const store = MeshRuntimeStore.getInstance()
-    const dispatchSpy = vi.spyOn(store, 'updateDirectDispatchStatus')
+    // C-W8: the dispatch-row writer is gone entirely (a direct dispatch is its ledger attempt).
+    expect((store as any).updateDirectDispatchStatus).toBeUndefined()
     components.emit({ event: 'agent:generating_completed', instanceId: SESSION, targetSessionId: SESSION, providerType: 'codex-cli', finalSummary: SENTINEL, timestamp: 1_000 })
     expect(observed).toHaveLength(1)
     const { evidence, opts } = observed[0]!
@@ -79,7 +80,6 @@ describe('forwarding → turn evidence', () => {
     expect(opts.envelope.finalSummary).toBe(SENTINEL)
     expect(opts.envelope.notice.nodeLabel).toBeTruthy()
     expect(opts.owner).toBeUndefined()
-    expect(dispatchSpy).not.toHaveBeenCalled()
     off()
   })
 

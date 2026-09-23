@@ -19,13 +19,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import {
-    openTurnAttempt,
-    recordTurnAck,
-    recordTurnStage,
-    proposeTurnCompletion,
-    __resetTurnLedgerMetricsForTests,
-} from '../../src/mesh/mesh-turn-ledger.js';
+import { seedMeshAttempt, advanceSeededAttempt, type SeedTurnStage } from '../helpers/turn-attempt-seed.js';
 import {
     resolveSessionTurnPresentation,
     resolveTurnAttemptRow,
@@ -40,29 +34,37 @@ import { normalizeManagedStatus } from '../../src/status/normalize.js';
 import { validateReadChatResultPayload } from '../../src/providers/read-chat-contract.js';
 
 const MESH = `mesh-${randomUUID().slice(0, 8)}`;
-let nonceSeq = 0;
 
+// C-W8: the presentation reads the turn ledger's `turn_attempts`. These are
+// SURFACE tests, so rows are seeded in the surface vocabulary (reducer
+// semantics — exactly-once commits, stale-attempt fences — are covered by
+// test/turn-ledger/**).
 function openAttempt(args: { taskId: string; sessionId: string; providerType?: string; nowMs?: number }) {
-    nonceSeq += 1;
-    return openTurnAttempt({
+    return seedMeshAttempt({
         meshId: MESH,
         taskId: args.taskId,
-        dispatchNonce: nonceSeq,
         sessionId: args.sessionId,
         providerType: args.providerType ?? 'kimi-cli',
-        nowMs: args.nowMs,
-    }).attempt;
+        ...(args.nowMs !== undefined ? { nowMs: args.nowMs } : {}),
+    });
 }
 
-function driveToGenerating(meshId: string, taskId: string, sessionId: string, nowMs?: number): void {
-    recordTurnAck({ meshId, taskId, kind: 'delivered', sessionId, nowMs });
-    recordTurnAck({ meshId, taskId, kind: 'consumed', sessionId, nowMs });
-    recordTurnStage({ meshId, taskId, stage: 'generating', sessionId, occurredAtMs: nowMs });
+function attemptIdFor(taskId: string): string {
+    const found = MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(MESH, taskId);
+    if (!found) throw new Error(`no attempt for ${taskId}`);
+    return found.attemptId;
+}
+
+function advance(taskId: string, stage: SeedTurnStage, nowMs?: number): void {
+    advanceSeededAttempt(attemptIdFor(taskId), stage, nowMs !== undefined ? { nowMs } : {});
+}
+
+function driveToGenerating(_meshId: string, taskId: string, _sessionId: string, nowMs?: number): void {
+    advance(taskId, 'generating', nowMs);
 }
 
 beforeEach(() => {
     MeshRuntimeStore.resetForTests();
-    __resetTurnLedgerMetricsForTests();
     __resetTurnPresentationMetricsForTests();
 });
 
@@ -106,6 +108,15 @@ describe('authority selector', () => {
         expect(p.taskId).toBe(taskId);
         expect(p.meshId).toBe(MESH);
         expect(p.attemptId).toBeTruthy();
+    });
+
+    it('a plain-scope (non-mesh) ledger attempt never takes authority — the provider FSM governs (C-W8)', () => {
+        const sessionId = `sess-${randomUUID().slice(0, 8)}`;
+        seedMeshAttempt({ meshId: MESH, taskId: `plain-${randomUUID().slice(0, 8)}`, sessionId, scope: 'plain', stage: 'generating' });
+        const p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', providerType: 'claude-cli', surface: 'session_status' });
+        expect(p.authority).toBe('provider_fsm_fallback');
+        expect(p.status).toBe('idle');
+        expect(resolveTurnAttemptRow({ sessionId })).toBeNull();
     });
 
     it('resolves the same projection by (meshId, taskId) and by sessionId (surface equivalence)', () => {
@@ -185,7 +196,7 @@ describe('provider idle while the reducer is finalizing', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
-        recordTurnStage({ meshId: MESH, taskId, stage: 'finalizing', sessionId });
+        advance(taskId, 'finalizing');
 
         for (const surface of ['read_chat', 'session_status', 'mesh_status', 'dashboard', 'mcp_pending', 'restart_gate'] as const) {
             const p = resolveSessionTurnPresentation({ meshId: MESH, taskId, sessionId, legacyStatus: 'idle', surface });
@@ -212,8 +223,8 @@ describe('waiting_approval vs waiting_choice stay distinct', () => {
         driveToGenerating(MESH, approvalTask, approvalSession);
         driveToGenerating(MESH, choiceTask, choiceSession);
 
-        recordTurnStage({ meshId: MESH, taskId: approvalTask, stage: 'waiting_approval', sessionId: approvalSession });
-        recordTurnStage({ meshId: MESH, taskId: choiceTask, stage: 'waiting_choice', sessionId: choiceSession });
+        advance(approvalTask, 'waiting_approval');
+        advance(choiceTask, 'waiting_choice');
 
         const approval = resolveSessionTurnPresentation({ sessionId: approvalSession, legacyStatus: 'waiting_approval', surface: 'read_chat' });
         const choice = resolveSessionTurnPresentation({ sessionId: choiceSession, legacyStatus: 'idle', surface: 'dashboard' });
@@ -228,7 +239,7 @@ describe('waiting_approval vs waiting_choice stay distinct', () => {
         expect(classifyShadowDivergence('waiting_approval', choice)).toBe('legacy_approval_choice_confusion');
 
         // Resume (generating) continues the SAME attempt — no new attemptId.
-        recordTurnStage({ meshId: MESH, taskId: approvalTask, stage: 'generating', sessionId: approvalSession });
+        advance(approvalTask, 'generating');
         const resumed = resolveSessionTurnPresentation({ sessionId: approvalSession, legacyStatus: 'generating', surface: 'session_status' });
         expect(resumed.stage).toBe('generating');
         expect(resumed.attemptId).toBe(approvalAttempt.attemptId);
@@ -243,8 +254,7 @@ describe('committed terminal projection', () => {
         openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
 
-        const decision = proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
-        expect(decision.committed).toBe(true);
+        advance(taskId, 'completed');
 
         const first = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'notification' });
         expect(first.stage).toBe('completed');
@@ -255,13 +265,11 @@ describe('committed terminal projection', () => {
         // sample still reads generating.
         expect(isRestartBlockingPresentation(first, true)).toBe(false);
 
-        // Repeated reads/legacy terminal signals do not duplicate the outcome.
+        // Repeated reads are stable (exactly-once commit is the reducer's contract,
+        // covered by test/turn-ledger/**).
         const second = resolveSessionTurnPresentation({ meshId: MESH, taskId, legacyStatus: 'generating', surface: 'mcp_pending' });
         expect(second.attemptId).toBe(first.attemptId);
         expect(second.terminalOutcome).toBe('completed');
-        const dup = proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
-        expect(dup.committed).toBe(true); // idempotent duplicate
-        expect(dup.duplicate).toBe(true);
         const metrics = getTurnPresentationMetrics();
         expect(metrics.shadowDivergences['legacy_busy_turn_terminal|notification|kimi-cli']).toBe(1);
     });
@@ -270,8 +278,7 @@ describe('committed terminal projection', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         openAttempt({ taskId, sessionId });
-        const decision = proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'cancelled', source: 'cancellation' });
-        expect(decision.committed).toBe(true);
+        advance(taskId, 'cancelled');
         const p = resolveSessionTurnPresentation({ sessionId, surface: 'session_status' });
         expect(p.stage).toBe('cancelled');
         expect(p.status).toBe('stopped');
@@ -322,15 +329,15 @@ describe('restart / deferred-restart gate', () => {
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
         driveToGenerating(MESH, taskId, sessionId);
-        recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_choice', sessionId });
+        advance(taskId, 'waiting_choice');
         p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'restart_gate' });
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
-        recordTurnStage({ meshId: MESH, taskId, stage: 'finalizing', sessionId });
+        advance(taskId, 'finalizing');
         p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'restart_gate' });
         expect(isRestartBlockingPresentation(p, false)).toBe(true);
 
-        proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'failed', source: 'provider_event' });
+        advance(taskId, 'failed');
         p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'generating', surface: 'restart_gate' });
         expect(p.status).toBe('error');
         expect(isRestartBlockingPresentation(p, true)).toBe(false);
@@ -351,7 +358,7 @@ describe('session → attempt resolution', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         // Older, completed attempt on the same session (an earlier turn).
         openAttempt({ taskId: taskA, sessionId, nowMs: Date.now() - 60_000 });
-        proposeTurnCompletion({ meshId: MESH, taskId: taskA, sessionId, outcome: 'completed', source: 'provider_event', occurredAtMs: Date.now() - 50_000 });
+        advance(taskA, 'completed', Date.now() - 50_000);
         // Current nonterminal attempt.
         const current = openAttempt({ taskId: taskB, sessionId });
         const row = resolveTurnAttemptRow({ sessionId });
@@ -363,7 +370,7 @@ describe('session → attempt resolution', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         const attempt = openAttempt({ taskId, sessionId });
-        proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
+        advance(taskId, 'completed');
         const row = resolveTurnAttemptRow({ sessionId });
         expect(row?.attemptId).toBe(attempt.attemptId);
         expect(row?.terminalOutcome).toBe('completed');
@@ -398,18 +405,13 @@ describe('restart reconstruction', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
-        proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
+        advance(taskId, 'completed');
 
         MeshRuntimeStore.resetForTests();
 
         const p = resolveSessionTurnPresentation({ sessionId, surface: 'notification' });
         expect(p.stage).toBe('completed');
         expect(p.terminalOutcome).toBe('completed');
-        // A late duplicate proposal after restart is an idempotent no-op, never
-        // a second completion.
-        const dup = proposeTurnCompletion({ meshId: MESH, taskId, sessionId, outcome: 'completed', source: 'provider_event' });
-        expect(dup.committed).toBe(true);
-        expect(dup.duplicate).toBe(true);
     });
 });
 
@@ -419,7 +421,7 @@ describe('observability', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         openAttempt({ taskId, sessionId });
         driveToGenerating(MESH, taskId, sessionId);
-        recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId });
+        advance(taskId, 'waiting_approval');
 
         resolveSessionTurnPresentation({ sessionId, legacyStatus: 'waiting_approval', surface: 'dashboard' });
         resolveSessionTurnPresentation({ sessionId: `sess-${randomUUID().slice(0, 8)}`, legacyStatus: 'idle', surface: 'dashboard' });
@@ -449,11 +451,11 @@ describe('stale in-flight attempt max-age gate', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         const startedMs = Date.parse('2026-09-02T05:00:00.000Z');
         openAttempt({ taskId, sessionId, nowMs: startedMs });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId, nowMs: startedMs });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', sessionId, nowMs: startedMs });
+        advance(taskId, 'delivered', startedMs);
+        advance(taskId, 'consumed', startedMs);
         // `nowMs` (not `occurredAtMs`) is what stamps `updated_at` — the column the
         // max-age gate reads. Passing only `occurredAtMs` leaves the row wall-clock fresh.
-        recordTurnStage({ meshId: MESH, taskId, stage: 'generating', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
+        advance(taskId, 'generating', startedMs);
         return { sessionId, startedMs };
     }
 
@@ -512,12 +514,12 @@ describe('stale in-flight attempt max-age gate', () => {
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         const startedMs = Date.parse('2026-09-02T05:00:00.000Z');
         openAttempt({ taskId, sessionId, nowMs: startedMs });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'delivered', sessionId, nowMs: startedMs });
-        recordTurnAck({ meshId: MESH, taskId, kind: 'consumed', sessionId, nowMs: startedMs });
+        advance(taskId, 'delivered', startedMs);
+        advance(taskId, 'consumed', startedMs);
         // `nowMs` (not `occurredAtMs`) is what stamps `updated_at` — the column the
         // max-age gate reads. Passing only `occurredAtMs` leaves the row wall-clock fresh.
-        recordTurnStage({ meshId: MESH, taskId, stage: 'generating', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
-        recordTurnStage({ meshId: MESH, taskId, stage: 'waiting_approval', sessionId, nowMs: startedMs, occurredAtMs: startedMs });
+        advance(taskId, 'generating', startedMs);
+        advance(taskId, 'waiting_approval', startedMs);
 
         const p = resolveSessionTurnPresentation({
             sessionId,

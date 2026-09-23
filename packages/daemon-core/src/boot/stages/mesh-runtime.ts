@@ -28,13 +28,13 @@ import { subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.j
 import {
     listLocalCoordinatorSessions,
     resolveCoordinatorDrainDaemonIds,
-    resolveCoordinatorInputTarget,
     setupMeshEventForwarding,
     stopStaleMeshWorker,
 } from '../../mesh/mesh-event-forwarding.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { getLedgerDir } from '../../mesh/mesh-ledger.js';
 import { formatTurnLedgerMigrationLine, importLegacyPendingEventsJsonl } from '../../mesh/turn-ledger/migrate-v1.js';
+import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-v2.js';
 import { createMeshRuntimeTurnLedger } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
@@ -59,7 +59,6 @@ import {
 } from '../../mesh/turn-ledger/deliver.js';
 import { MeshTopicIndex } from '../../mesh/mesh-topic-index.js';
 import { buildMeshStatusLineForNotification } from '../../mesh/mesh-notification-status-line.js';
-import { createLegacySessionInputPort } from '../../sessions/session-input-port.js';
 import { armMeshTurnConsumer, type MeshTurnConsumer } from '../../seqscribe/mesh-turn-consumer.js';
 import { appendMeshHandoff } from '../../seqscribe/mesh-publisher.js';
 import { meshEventsTopic } from '../../seqscribe/topics.js';
@@ -149,7 +148,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         return expandDaemonIdForms([selfDaemonId, ...resolveCoordinatorDrainDaemonIds(components)]);
     };
 
-    // 1. One-way migration (no-op once user_version ≥ 1).
+    // 1. One-way migrations (v1: no-op once user_version ≥ 1).
     if (opts.runMigration !== false) {
         try {
             const report = store.runTurnLedgerMigrationV1({
@@ -165,6 +164,14 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         } catch (error) {
             // The failed mesh's txn rolled back; the next boot resumes it.
             LOG.error('TurnLedger', `turn-ledger migration v1 failed: ${error instanceof Error ? error.message : String(error)} — the next boot resumes it`);
+        }
+        // 1b. v1 → v2 (C-W8): drop the legacy tables whose last writer is gone,
+        // fold post-v1 operating notes out of the event ledger. No-op once ≥ 2;
+        // refuses until v1 succeeded (the next boot retries both).
+        try {
+            LOG.info('TurnLedger', formatTurnLedgerMigrationV2Line(store.runTurnLedgerMigrationV2({})));
+        } catch (error) {
+            LOG.error('TurnLedger', `turn-ledger migration v2 failed: ${error instanceof Error ? error.message : String(error)} — the next boot resumes it`);
         }
     }
 
@@ -197,13 +204,11 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
     const resolveHandoff = resolveHandoffOn(rt);
     const appendHandoff = rt ? (meshId: string, kind: string, payload: Record<string, unknown>) => appendMeshHandoff(meshId, kind, payload as never) : undefined;
-    const inputPort = createLegacySessionInputPort({
-        resolveSession: (sessionId) => resolveCoordinatorInputTarget(components, sessionId),
-        // Notices only ever use `queue` mode; the other two are refused by construction.
-        interruptAndDeliver: async () => ({ ok: false, reason: 'interrupt_not_implemented', message: 'mesh notices never interrupt' }),
-        sendNowIntoAgentQueue: async () => ({ ok: false, reason: 'not_supported', message: 'mesh notices never bypass the queue', restored: false }),
-        log: (level, msg) => { if (level === 'warn' || level === 'error') LOG.warn('MeshNotice', msg); },
-    });
+    // D2 (applied in C-W8): notices go through the daemon's ONE send funnel —
+    // `cliManager.input` — so they share the single messageId dedupe with every
+    // other origin and get the same runtime ack bubble. Notices are always
+    // `queue` mode (deliver.ts builds them), so a busy coordinator parks them.
+    const inputPort = components.cliManager.input;
     const deliverLog = { info: (m: string) => LOG.info('MeshNotice', m), warn: (m: string) => LOG.warn('MeshNotice', m) };
     const deliverDeps: TurnDeliverDeps = {
         ledger,

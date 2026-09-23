@@ -322,7 +322,7 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
         }
     } catch (e: any) { LOG.warn('DiskRetention', `Ledger rotation cap sweep failed: ${e?.message || e}`); }
     // WORKER-MCP decision G / owner §12-4: handoff notes expire 30 days out.
-    // A DB-row pass rather than a file pass — the notes live in mesh_turn_events
+    // A DB-row pass rather than a file pass — the notes live in turn_events
     // — but it belongs on the same hourly cadence as its file-based siblings.
     try {
         handoffNotes = pruneExpiredHandoffNotes(now);

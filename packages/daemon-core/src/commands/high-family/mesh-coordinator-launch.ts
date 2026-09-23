@@ -212,12 +212,14 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     };
 
                     // Gap2-A: load accumulated operating notes (provider-neutral
-                    // lessons) from the ledger so they ride into the prompt. Newest
+                    // lessons) so they ride into the prompt. Newest
                     // last; cap to the most recent 20 so the section stays lean.
                     // Best-effort: a read failure just omits the section.
                     const buildOperatingNotesBestEffort = async (id: string) => {
                         try {
-                            const { readOperatingNotes } = await import('../../mesh/mesh-ledger.js');
+                            const { readOperatingNotes } = await import('../../mesh/mesh-operating-notes.js');
+                            // C-W8: notes live in mesh_operating_notes (the event ledger no
+                            // longer holds them — pre-migration notes were invisible here).
                             // readOperatingNotes filters out tombstoned (forgotten) notes so a
                             // retracted lesson never rides into the prompt. Newest last.
                             // Phase 2 (d): the byte-budget/count cap now bounds the injected list

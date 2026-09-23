@@ -10,8 +10,9 @@
 // the next hourly sweep without a restart.
 //
 // Scope (Slice 1): safe SQLite/disk retention only —
-//   1. mesh_session_delivery terminal-row age pruning (wired into
-//      pruneMeshRuntimeRetention in mesh-runtime-store.ts).
+//   1. (retired, C-W8) the legacy session-delivery table terminal-row pruning went with the
+//      table; (1b) turn-ledger mesh attempts replaced it in
+//      pruneMeshRuntimeRetention (mesh-runtime-store-turn-rows.ts).
 //   2. Per-mesh ledger rotation total-byte/count cap over CLOSED rotation
 //      files (wired into runDiskRetentionSweep in mesh-disk-retention.ts).
 //
@@ -35,42 +36,20 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
 
-// ─── (1) mesh_session_delivery retention ─────────────────────────────────────
-// Terminal-outcome rows (completed/failed/expired/cancelled) past this window
-// are deleted. Live/nonterminal rows (queued/delivering/delivered/acked) are
-// NEVER pruned here — they carry the retry/recovery semantics
-// (taskHasConfirmedDelivery / taskDeliveryConsumed / consumeSessionDelivery).
-// Default 14 days: every reader that consults delivery rows (re-drive grace,
-// assigned-stranded watchdog, ack tracking) operates on a seconds-to-hours
-// horizon, so 14d is a generous dead-space window. Clamp [1d, 90d] so a mis-set
-// env cannot prune rows a live recovery path might still need, nor keep them
-// effectively forever.
-export const DEFAULT_SESSION_DELIVERY_RETENTION_MS = 14 * DAY_MS;
+// (1) The legacy session-delivery retention retired with its table (C-W8).
 
-export function resolveSessionDeliveryRetentionMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_SESSION_DELIVERY_RETENTION_MS);
-    if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
-    }
-    return DEFAULT_SESSION_DELIVERY_RETENTION_MS;
-}
-
-// ─── (1b) mesh_turn_attempts retention ───────────────────────────────────────
-// TERMINAL attempt rows (terminal_outcome IS NOT NULL) past this window are
-// deleted, cascading to their mesh_turn_events / mesh_turn_held_suspensions
-// children. Nonterminal rows are NEVER pruned — they are the recovery set
-// (listActiveTurnAttempts → restart reconcile drain), and an old nonterminal row
-// is the stuck turn that most needs recovering. Two further anchors are enforced
-// in the SQL (see pruneTerminalTurnAttempts): each session's newest attempt
-// survives at any age, because getLatestTurnAttemptForSession has no time bound
-// and backs the presented session status; and an attempt still holding an
-// unresolved suspension stays with it.
+// ─── (1b) turn-ledger mesh attempt retention ──────────────────────────────────
+// TERMINAL mesh attempts (`turn_attempts`, scope mesh_queue / mesh_direct) past
+// this window are deleted with their `turn_events` / `turn_holds` rows
+// (`TurnStore.pruneTerminalMeshAttempts`; C-W8 moved it off the retired legacy
+// mesh_turn_* tables). Nonterminal attempts are never pruned; each session's
+// newest attempt survives at any age because Stage 6 presentation resolves a
+// session with no time bound. Plain (non-mesh) attempts are the scheduler's
+// own 7-day prune.
 //
 // Default 30 days, aligned with MESH_TERMINAL_QUEUE_RETENTION_MS: an attempt row
-// is the turn-level companion of the queue row it came from, so letting the two
-// age out on different clocks would leave one side referring to a task the other
-// had already forgotten. Clamp [1d, 90d], same rationale as (1).
+// is the turn-level companion of the queue row it came from. Clamp [1d, 90d],
+// same rationale as (1).
 export const DEFAULT_TURN_ATTEMPT_RETENTION_MS = 30 * DAY_MS;
 
 export function resolveTurnAttemptRetentionMs(): number {

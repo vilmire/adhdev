@@ -35,7 +35,7 @@ import { getDifficultyBrains } from '../config/mesh-config.js';
 import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
-import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-ledger.js';
+import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-operating-notes.js';
 import { MESH_TASK_DIFFICULTIES, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared';
 import type { MagiKindPanelMap, MagiSlot, MagiTaskKind } from '@adhdev/mesh-shared';
 
