@@ -208,13 +208,13 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // index and missions now that it may not open mesh-runtime.db itself
     // (check:boundaries C8). IPC-only: pinned by the `sources` test below.
     'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
-    'mesh_index_query', 'mission_upsert', 'mission_query',
+    'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
 const TURN_LEDGER_IPC_COMMANDS = [
     'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
-    'mesh_index_query', 'mission_upsert', 'mission_query',
+    'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */

@@ -13,7 +13,7 @@ function fixture(sendMessage = vi.fn(async (): Promise<any> => ({ status: 'deliv
     type: 'hermes-cli', category: 'cli',
     capabilities: { input: { multipart: true, mediaTypes: ['text', 'image'] } },
   }
-  const adapter = { cliType: 'hermes-cli', sendMessage, getScriptParsedStatus: () => null }
+  const adapter = { cliType: 'hermes-cli', sendMessage, getScriptParsedStatus: () => null, getStatus: () => ({ status: 'idle' }) }
   Object.assign(instance, {
     category: 'cli', type: 'hermes-cli', provider, adapter,
     instanceId: sessionId, workingDir: '/tmp/image-ledger',
@@ -23,13 +23,13 @@ function fixture(sendMessage = vi.fn(async (): Promise<any> => ({ status: 'deliv
   const helpers = {
     getProvider: () => provider, getCliAdapter: () => adapter,
     currentSession: { sessionId, transport: 'pty', providerType: 'hermes-cli' },
-    ctx: { instanceManager: { getInstance: () => instance } },
+    ctx: { adapters: new Map([[sessionId, adapter]]), instanceManager: { getInstance: (key: string) => (key === sessionId ? instance : null) } },
   } as any
   const input = {
     parts: [{ type: 'image', mimeType: 'image/png', uri: 'file:///tmp/ledger-screenshot.png' }],
     textFallback: '',
   }
-  const send = () => handleSendChat(helpers, { targetSessionId: sessionId, input })
+  const send = () => handleSendChat(helpers, { targetSessionId: sessionId, input, messageId: `msg_${sessionId}` })
   return { instance, send, sendMessage }
 }
 
@@ -75,11 +75,13 @@ describe('send_chat image ledger acknowledgement', () => {
     expect(instance.historyWriter.appendNewMessages).toHaveBeenCalledTimes(1)
   })
 
-  it('fails closed if an instance supplies no acknowledgement', async () => {
+  it('stamps the ack with the messageId (meta.sourceMessageId) exactly once', async () => {
     const { instance, send } = fixture()
-    instance.onEvent = vi.fn()
-    await expect(send()).resolves.toMatchObject({ success: false, sent: false })
-    expect(instance.runtimeMessages).toEqual([])
-    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+    await send()
+    expect(instance.runtimeMessages).toHaveLength(1)
+    expect(instance.runtimeMessages[0].message.meta).toMatchObject({ runtimeInputAck: true, sourceMessageId: `msg_${instance.instanceId}` })
+    // A redelivery of the same messageId is a duplicate: no second write, no second ack.
+    await expect(send()).resolves.toMatchObject({ success: true, deduplicated: true })
+    expect(instance.runtimeMessages).toHaveLength(1)
   })
 })

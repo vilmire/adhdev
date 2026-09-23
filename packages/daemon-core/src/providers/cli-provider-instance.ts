@@ -8,7 +8,6 @@
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
-import { adapterSupportsMidGenerationQueue, adapterSendMessageDuringGeneration } from './cli-provider-mid-generation.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
 import type { ProviderSendMessageResult, ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
@@ -49,8 +48,7 @@ import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
 import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
-import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
-import { isTerminalTurnStage } from '../mesh/mesh-turn-ledger.js';
+import { resolveSessionTurnPresentation, isTerminalTurnStage } from '../mesh/mesh-turn-presentation.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
 import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
@@ -777,12 +775,6 @@ export class CliProviderInstance implements ProviderInstance {
         return this.resolveModalParkStatus() !== null;
     }
 
-    // NOTIF-IMMEDIACY: both delegate to providers/cli-provider-mid-generation.ts.
-    supportsMidGenerationQueue(): boolean { return adapterSupportsMidGenerationQueue(this.adapter); }
-    sendMessageDuringGeneration(text: string): { accepted: boolean; reason?: string } {
-        return adapterSendMessageDuringGeneration(this.adapter, text);
-    }
-
     /**
      * Provider-agnostic live-state observation for the mesh completion gate —
      * see completion/evidence.ts (verbatim move; the private discriminators it
@@ -913,16 +905,14 @@ export class CliProviderInstance implements ProviderInstance {
                     LOG.info('CLI', `[${this.type}] force send_message held — coordinator parked on modal (${this.resolveModalParkStatus()})`);
                     return Promise.resolve({ success: false, error: 'send_message held by active modal' });
                 }
-                // (SEND-NOW-DOUBLE-SEND, image bodies) The FIFO parks the BUILT
-                // prompt, but send-now / cancel / interrupt callers only know the
-                // raw dashboard text — so a structured body rides with its source
-                // text as `claimKey`, the second identity the queue claim matches.
-                // Omitted when it equals the built prompt (plain text sends),
-                // where the text match already works.
-                const claimKey = input.textFallback.trim();
-                const sendOpts: { force?: boolean; bracketedPaste?: boolean; claimKey?: string } =
+                // Wiring-unification D2: a parked body is keyed by the caller's
+                // `messageId` when it has one (claims are by id, never by text).
+                // User-facing sends reach the session through
+                // SessionInputService.submit, not this event; this remains for
+                // event-only callers (mesh idle reminder).
+                const sendOpts: { force?: boolean; bracketedPaste?: boolean; messageId?: string } =
                     buildAdapterSendOpts(force, bracketedPaste);
-                if (claimKey && claimKey !== promptText) sendOpts.claimKey = claimKey;
+                if (typeof data?.messageId === 'string' && data.messageId.trim()) sendOpts.messageId = data.messageId.trim();
                 // Return the completion to callers that need an acknowledgement.
                 // Resolve failures explicitly so legacy event-only callers can safely
                 // ignore the promise without creating unhandled rejections.

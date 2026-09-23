@@ -4,19 +4,17 @@
  * handleResolveAction and the send/mode/model helpers they use.
  */
 
-import type { CommandResult, CommandHelpers } from './handler.js';
-import type { CliAdapter } from '../cli-adapter-types.js';
+import type { CommandResult, CommandHelpers, CommandContext } from './handler.js';
 import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
-import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
+import { assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
-import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
-import { sendNowIntoAgentQueue, type QueueWritableAdapter } from './send-now-queued-write.js';
-import { readSendPolicy, readMessageId } from './command-args.js';
+import { mintLegacyMessageId, readMessageId, readOutboundOrigin, readSendPolicy } from './command-args.js';
+import type { SubmitOutcome } from '@adhdev/mesh-shared';
+import { createSessionInputService, type SessionInputService } from '../sessions/session-input-service.js';
+import { buildSessionInputTarget, type SessionInputAdapterLike, type SessionInputInstanceLike } from '../sessions/session-input-target.js';
 import {
     READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS,
-    type RuntimeChatMessageMerger,
-    buildSendInputSignature,
     getCurrentManagerKey,
     getCurrentProviderType,
     getTargetTransport,
@@ -28,53 +26,13 @@ import {
 
 type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
 
-const RECENT_SEND_WINDOW_MS = 1200;
-const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
-const recentSendByTarget = new Map<string, number>();
-
-function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModule | undefined, signature: string): string {
-    const transport = getTargetTransport(h, provider) || 'unknown';
-    const target =
-        args?.targetSessionId
-        || args?.agentType
-        || h.currentSession?.providerType
-        || h.currentProviderType
-        || h.currentManagerKey
-        || 'unknown';
-    return `${transport}:${target}:${signature.trim()}`;
-}
-
 function getSendChatInputEnvelope(args: any): InputEnvelope {
     return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitOnceForFreshHermesCliStart(adapter: CliAdapter, log: (msg: string) => void): Promise<void> {
-    if (adapter.cliType !== 'hermes-cli') return;
-    const status = typeof adapter.getStatus === 'function' ? adapter.getStatus()?.status : undefined;
-    if (status !== 'starting') return;
-
-    log(`Hermes CLI is still starting; waiting ${HERMES_CLI_STARTING_SEND_SETTLE_MS}ms before first send`);
-    await sleep(HERMES_CLI_STARTING_SEND_SETTLE_MS);
 }
 
 function callLegacyTextScript(script: ProviderScripts[keyof ProviderScripts] | undefined, text: string): string | null {
     if (typeof script !== 'function') return null;
     return (script as LegacyStringScript)(text);
-}
-
-function isRecentDuplicateSend(key: string): boolean {
-    const now = Date.now();
-    for (const [candidate, ts] of recentSendByTarget.entries()) {
-        if (now - ts > RECENT_SEND_WINDOW_MS) recentSendByTarget.delete(candidate);
-    }
-    const previous = recentSendByTarget.get(key);
-    if (previous && (now - previous) <= RECENT_SEND_WINDOW_MS) return true;
-    recentSendByTarget.set(key, now);
-    return false;
 }
 
 function didProviderConfirmSend(result: any): boolean {
@@ -138,6 +96,134 @@ async function verifyExtensionSendObserved(h: CommandHelpers, before: any): Prom
     return false;
 }
 
+// ─── CLI/ACP sends: one OutboundMessage into SessionInputService ─────────────
+
+/**
+ * Handler-local fallback service for a command context built without the
+ * daemon's shared one (tests, embedders). The live daemon passes
+ * `DaemonCliManager.input` as `ctx.sessionInput`, so the dashboard shares the
+ * one `messageId` dedupe with mesh dispatch and turn-ledger notices.
+ */
+const fallbackSessionInput = new WeakMap<CommandContext, SessionInputService>();
+
+function sessionInputFor(h: CommandHelpers): SessionInputService {
+    if (h.ctx.sessionInput) return h.ctx.sessionInput;
+    let service = fallbackSessionInput.get(h.ctx);
+    if (!service) {
+        const ctx = h.ctx;
+        service = createSessionInputService({
+            resolveSession: (sessionId) => {
+                const adapter = ctx.adapters?.get(sessionId) ?? null;
+                const instance = ctx.instanceManager?.getInstance(sessionId) ?? null;
+                if (!adapter && !instance) return null;
+                const providerType = adapter?.cliType || (instance as { type?: string } | null)?.type;
+                const provider = providerType
+                    ? (ctx.providerLoader?.resolve(providerType) || ctx.providerLoader?.getMeta(providerType) || h.getProvider(providerType))
+                    : null;
+                return buildSessionInputTarget({
+                    adapter: adapter as unknown as SessionInputAdapterLike | null,
+                    instance: instance as unknown as SessionInputInstanceLike | null,
+                    provider,
+                });
+            },
+            log: (level, msg) => (level === 'debug' ? LOG.debug : level === 'info' ? LOG.info : LOG.warn)('SessionInput', msg),
+        });
+        fallbackSessionInput.set(ctx, service);
+    }
+    return service;
+}
+
+/**
+ * The session key a `send_chat` / `cancel_queued_chat` targets — the key the
+ * CLI adapter map and the instance manager share. Resolved through the same
+ * helpers the handler has always used (`getTargetedCliAdapter`, then the
+ * registry's instance key), so routing is unchanged.
+ */
+function resolveInputSessionKey(h: CommandHelpers, args: any, providerType: string | undefined): string | null {
+    const adapter = getTargetedCliAdapter(h, args, providerType);
+    if (adapter && h.ctx.adapters) {
+        for (const [key, candidate] of h.ctx.adapters) {
+            if (candidate === adapter) return key;
+        }
+    }
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const sessionId = targetSessionId || h.currentSession?.sessionId || '';
+    if (!sessionId) return null;
+    const session = h.ctx.sessionRegistry?.get(sessionId);
+    const key = session?.adapterKey || session?.instanceKey || sessionId;
+    return h.ctx.adapters?.has(key) || h.ctx.instanceManager?.getInstance(key) ? key : null;
+}
+
+function interruptFields(outcome: SubmitOutcome): Record<string, unknown> {
+    if ((outcome.kind === 'delivered' || outcome.kind === 'queued') && outcome.interrupt) {
+        return { interrupted: true, interruptKey: outcome.interrupt.keyName, interruptConfidence: outcome.interrupt.confidence };
+    }
+    return {};
+}
+
+/**
+ * `SubmitOutcome` → the `send_chat` command result the dashboard reads
+ * (`sent`/`queued`/`submitted`/`queuedWithAgent`/`deduplicated`/`restored`).
+ * `submitted` is true only for a body written as a real turn; the agent-queue
+ * split write is `queuedWithAgent` (in the CLI's queue, not answered yet).
+ */
+export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: string, transport: 'pty' | 'acp', targetAgent?: string): CommandResult {
+    switch (outcome.kind) {
+        case 'delivered':
+            if (outcome.route === 'agent_queue') {
+                return { success: true, sent: true, method: 'pty-adapter-agent-queue', targetAgent, messageId, submitted: false, queuedWithAgent: true };
+            }
+            return {
+                success: true,
+                sent: true,
+                method: outcome.route === 'acp' ? 'acp-instance' : outcome.route === 'interrupt' ? 'pty-adapter-interrupt' : `${transport}-adapter`,
+                targetAgent,
+                messageId,
+                ...(outcome.route === 'acp' ? {} : { submitted: true }),
+                ...interruptFields(outcome),
+            };
+        case 'queued':
+            return { success: true, sent: false, queued: true, submitted: false, position: outcome.position, method: `${transport}-adapter`, targetAgent, messageId, ...interruptFields(outcome) };
+        case 'duplicate':
+            return { success: true, sent: false, deduplicated: true, messageId };
+        case 'refused':
+            return {
+                success: false,
+                sent: false,
+                reason: outcome.reason,
+                error: outcome.message || `send refused: ${outcome.reason}`,
+                messageId,
+                ...(outcome.restored !== undefined ? { restored: outcome.restored } : {}),
+            };
+    }
+}
+
+async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope, provider: ProviderModule | undefined, transport: 'pty' | 'acp'): Promise<CommandResult> {
+    const sessionKey = resolveInputSessionKey(h, args, provider?.type);
+    if (!sessionKey) {
+        return { success: false, error: `${transport === 'acp' ? 'ACP' : 'CLI'} instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
+    }
+    const service = sessionInputFor(h);
+    const policy = readSendPolicy(args, (flag) => LOG.debug('Command', `[send_chat] legacy '${flag}' flag mapped to policy (session ${sessionKey})`));
+    let messageId = readMessageId(args);
+    if (!messageId && policy.mode !== 'queue') {
+        // LEGACY (one release): a pre-D dashboard presses Send now on a parked
+        // bubble by TEXT; find the id this service parked that text under.
+        messageId = await service.findParkedMessageIdByText(sessionKey, input.textFallback);
+        if (messageId) LOG.debug('Command', `[send_chat] legacy text-keyed ${policy.mode} resolved to parked ${messageId}`);
+    }
+    if (!messageId) messageId = mintLegacyMessageId();
+    const outcome = await service.submit({
+        messageId,
+        sessionId: sessionKey,
+        input,
+        origin: readOutboundOrigin(args, 'dashboard'),
+        policy,
+        createdAt: Date.now(),
+    });
+    return sendChatResultFromOutcome(outcome, messageId, transport, provider?.type);
+}
+
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const input = getSendChatInputEnvelope(args);
     const text = input.textFallback;
@@ -146,16 +232,6 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     const _log = (msg: string) => LOG.debug('Command', `[send_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
-    const dedupeKey = buildRecentSendKey(h, args, provider, buildSendInputSignature(input));
-    // Wiring-unification D3: `policy.mode` (D-web's typed dual-write) is read as
-    // the PRIMARY source, legacy `sendNow`/`interrupt`/`force`/`forceSend`
-    // booleans as fallback — see command-args.ts's header for why this changes
-    // no behaviour today (every current caller either omits `policy` or sends
-    // it in agreement with the booleans). `messageId` is threaded through to
-    // the two out-of-band helpers below for logging only; no dedupe/claim/ack
-    // behaviour changes from this pass — see those functions' own headers.
-    const sendPolicy = readSendPolicy(args);
-    const messageId = readMessageId(args);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         // Sending and transcript persistence are intentionally decoupled.
@@ -164,200 +240,11 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         return { success: true, sent: true, method, targetAgent };
     };
 
-    if (isRecentDuplicateSend(dedupeKey)) {
-        _log(`Suppressed duplicate send for ${dedupeKey}`);
-        return { success: true, sent: false, deduplicated: true };
-    }
-
-    if (transport === 'acp') {
-        const target = getTargetInstance(h, args);
-        if (!target || target.category !== 'acp') {
-            return { success: false, error: `ACP instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
-        }
-        try {
-            assertProviderSupportsDeclaredInput(provider, input);
-            // SEND-RECORD-SYMMETRY: check the acknowledgement. The ACP instance
-            // refuses a send outright when it has no live connection/session or when
-            // a prompt is already in flight; both were previously fire-and-forget and
-            // reported as success, so the dashboard showed a sent turn the agent had
-            // never received.
-            const outcome = await target.onEvent('send_message', { input });
-            if (!outcome?.success) {
-                return { success: false, sent: false, error: `acp send failed: ${outcome?.error || 'ACP send was not acknowledged'}` };
-            }
-            return _logSendSuccess('acp-instance', target.type);
-        } catch (e: any) {
-            return { success: false, error: `acp send failed: ${e.message}` };
-        }
-    }
-
-    // PTY transport: route structured input through the provider instance so
-    // provider-specific CLI attachment strategies (for example Hermes file-path
-    // image prompts) are applied instead of collapsing everything to text.
-    if (transport === 'pty') {
-        const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        if (adapter) {
-            _log(`${transport} adapter: ${adapter.cliType}`);
-            try {
-                const hasStructuredParts = input.parts.some((part) => part.type !== 'text');
-                if (hasStructuredParts) {
-                    const target = getTargetInstance(h, args);
-                    if (!target || target.category !== 'cli') {
-                        return { success: false, error: `CLI instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
-                    }
-                    assertProviderSupportsDeclaredInput(provider, input);
-                    await waitOnceForFreshHermesCliStart(adapter, _log);
-                    const outcome = await target.onEvent('send_message', { input });
-                    if (!outcome?.success) {
-                        return { success: false, sent: false, error: `${transport} send failed: ${outcome?.error || 'CLI send was not acknowledged'}` };
-                    }
-                    const runtimeTarget = target as RuntimeChatMessageMerger;
-                    if (typeof runtimeTarget.recordAcknowledgedUserInput === 'function') {
-                        runtimeTarget.recordAcknowledgedUserInput(input, messageId);
-                    }
-                    // Match text-only sends: accepted queue entries get a bubble,
-                    // but must not be advertised as already submitted to the PTY.
-                    return {
-                        ..._logSendSuccess(`${transport}-instance`, target.type),
-                        ...(outcome.status === 'queued'
-                            ? { sent: false, queued: true, submitted: false }
-                            : { submitted: true }),
-                    };
-                }
-                assertTextOnlyInput(provider, input);
-                if (!text) return { success: false, error: 'text required for PTY send' };
-                await waitOnceForFreshHermesCliStart(adapter, _log);
-                // ── SEND-NOW-AGENT-QUEUE ────────────────────────────────────
-                // `sendNow` asks for the body to reach the agent WITHOUT killing
-                // the turn in flight, by letting the CLI's own input queue take
-                // it (claude-cli: "Press up to edit queued messages"). This is a
-                // SPLIT write — text, gap, submit key — which live A/B measured
-                // as consumed mid-turn where the retired atomic force-inject was
-                // not. See commands/send-now-queued-write.ts for the full
-                // derivation and providers/spec/fsm-driver.ts for the primitive.
-                //
-                // ★ It is its OWN flag, not an alias of `interrupt`. The two ask
-                // for materially different things — one preserves the running
-                // turn, the other destroys it — so a refusal here must NOT
-                // silently fall through to the interrupt path: the owner who
-                // pressed "Send now" to add a thought would lose the answer they
-                // were waiting for, which is precisely the outcome they avoided
-                // by not pressing stop. A refusal is reported, and the body stays
-                // queued for the ordinary drain.
-                if (sendPolicy.mode === 'send_now') {
-                    const queued = await sendNowIntoAgentQueue(adapter as unknown as QueueWritableAdapter, text, { messageId });
-                    if (!queued.ok) {
-                        return {
-                            success: false,
-                            sent: false,
-                            queuedWithAgent: false,
-                            reason: queued.reason,
-                            error: queued.message,
-                            // Tells the pane whether the body is still held by the
-                            // driver. `restored: false` means nothing holds it —
-                            // the bubble is the only remaining copy.
-                            restored: queued.restored,
-                        };
-                    }
-                    // (IMAGE-TRIPLE-BUBBLE ④) claimed > 0 means this body was
-                    // parked by an EARLIER send_chat whose ack already rendered
-                    // the owner's bubble — send-now merely re-routed its
-                    // delivery. Re-acking here with THIS call's (text-only)
-                    // envelope would append a second, differently-worded user
-                    // bubble for the same message whenever the original send
-                    // carried attachments (the content-keyed dedup window only
-                    // collapses identical content). A direct press on a body the
-                    // driver never parked (claimed === 0) is a genuine first
-                    // delivery and still gets its ack.
-                    if (queued.claimed === 0) {
-                        const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
-                        if (target?.category === 'cli'
-                            && target.type === adapter.cliType
-                            && typeof target.recordAcknowledgedUserInput === 'function') {
-                            target.recordAcknowledgedUserInput(input, messageId);
-                        }
-                    }
-                    return {
-                        ..._logSendSuccess(`${transport}-adapter-agent-queue`, adapter.cliType),
-                        // `submitted` is deliberately false: the bytes are in the
-                        // agent's queue, not answered. Reporting a submit here
-                        // would repeat the exact lie 6cca365b was retired for.
-                        submitted: false,
-                        queuedWithAgent: true,
-                        claimed: queued.claimed,
-                    };
-                }
-                // SEND-NOW: `interrupt` asks to abort the turn in flight and
-                // deliver this body as a genuine new turn. `force`/`forceSend`
-                // are the retired force-inject spelling and are accepted as
-                // aliases so older dashboards keep working — but they now route
-                // to the SAME interrupt path. There is deliberately no branch
-                // left that writes the body into a generating PTY (oss 6cca365b:
-                // the bytes are never consumed and the caller is told they were).
-                const wantsInterrupt = sendPolicy.mode === 'interrupt';
-                if (wantsInterrupt) {
-                    const outcome = await interruptAndDeliver(adapter as unknown as InterruptibleAdapter, text, { messageId });
-                    if (!outcome.ok) {
-                        // The body was NOT written. Report failure rather than a
-                        // phantom success so the pane keeps the bubble queued.
-                        return {
-                            success: false,
-                            sent: false,
-                            interrupted: false,
-                            reason: outcome.reason,
-                            error: outcome.message,
-                        };
-                    }
-                    const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
-                    if (target?.category === 'cli'
-                        && target.type === adapter.cliType
-                        && typeof target.recordAcknowledgedUserInput === 'function') {
-                        target.recordAcknowledgedUserInput(input, messageId);
-                    }
-                    return {
-                        ..._logSendSuccess(`${transport}-adapter-interrupt`, adapter.cliType),
-                        interrupted: true,
-                        interruptKey: outcome.keyName,
-                        interruptConfidence: outcome.confidence,
-                        ...(outcome.queued
-                            ? { sent: false, queued: true, submitted: false }
-                            : { submitted: true }),
-                    };
-                }
-                const sendResult: { status: 'queued' | 'delivered' } | void = await adapter.sendMessage(text);
-                // QUEUED-SEND-LOSS: a `queued` result means the body is parked in
-                // the driver's in-memory FIFO and has NOT been written to the PTY.
-                // It does not survive a driver shutdown or daemon restart, so it
-                // must not be reported with the same shape as a real submit.
-                const queued = sendResult?.status === 'queued';
-                const target = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
-                // The transcript ack still runs for a queued send, deliberately.
-                // It is what renders the owner's own bubble, and it carries a
-                // 60s content-keyed dedup window — deferring it until the queue
-                // drains (observed at 35.5s, and unbounded in principle) would
-                // risk the bubble never appearing at all. The ordering defect it
-                // causes — bubble before submit — is real but is a UI-surface
-                // concern, and is out of scope here; the daemon now reports the
-                // distinction so the UI can act on it.
-                if (target?.category === 'cli'
-                    && target.type === adapter.cliType
-                    && typeof target.recordAcknowledgedUserInput === 'function') {
-                    target.recordAcknowledgedUserInput(input, messageId);
-                }
-                if (queued) {
-                    _log(`send queued (not yet submitted) for ${adapter.cliType}`);
-                }
-                return {
-                    ..._logSendSuccess(`${transport}-adapter`, adapter.cliType),
-                    // `sent` distinguishes submitted from merely accepted; the
-                    // command still succeeds, because queueing is the correct
-                    // behaviour while the agent is generating.
-                    ...(queued ? { sent: false, queued: true, submitted: false } : { submitted: true }),
-                };
-            } catch (e: any) {
-                return { success: false, error: `${transport} send failed: ${e.message}` };
-            }
-        }
+    // CLI/ACP: the one send funnel (wiring-unification D2). IDE/extension (CDP)
+    // sends below are a different mechanism (provider scripts in a browser page)
+    // and are not part of it.
+    if (transport === 'pty' || transport === 'acp') {
+        return submitCliChat(h, args, input, provider, transport);
     }
 
     assertTextOnlyInput(provider, input);
@@ -513,35 +400,25 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
  * (QUEUED-SEND-CANCEL) Withdraw a body that is parked in the driver's FIFO but
  * has NOT been written to the PTY yet.
  *
- * ★ Why the daemon has to be involved at all.
+ * ★ Why the daemon has to be involved at all: a queued send is not just a UI
+ * state — `FsmDriver.pendingSends` genuinely holds the body and the idle drain
+ * WILL write it. A dashboard that merely hid its bubble would be lying: the
+ * agent would answer the "cancelled" message minutes later. Cancellation has to
+ * remove the body at the only place that holds it.
  *
- * A queued send is not just a UI state. `FsmDriver.pendingSends` genuinely holds
- * the body and `drainPendingSends()` will write it to the agent the moment the
- * machine returns to idle. So a dashboard that merely hid its own bubble would
- * be lying: the owner would be told the message was cancelled and the agent
- * would answer it anyway, minutes later, with no bubble on screen to explain
- * where it came from. Cancellation has to remove the body at the only place
- * that actually holds it.
+ * ★ Keyed by `messageId` (wiring-unification D2): the FIFO entry carries the id
+ * the dashboard minted, so the withdrawal is exact. A pre-D dashboard that sends
+ * only the text is served for one release through the service's legacy
+ * text → parked-id lookup (DEBUG-logged).
  *
- * ★ Content-keyed, matching every other identity in this path. The dashboard
- * cannot know an id for a queued body — the driver mints none, and the FIFO
- * stores `{text, bracketedPaste}` — and the daemon's own dedup windows are
- * likewise content-keyed. `claimQueuedSends(text)` is the existing primitive
- * (the interrupt path already uses it to take a body out of the queue), so this
- * command adds no new removal semantics; it only exposes them.
- *
- * ★ Reports `cancelled: 0` rather than failing when nothing matched. That is
- * not an error — it is the race the caller must distinguish: the queue drained
- * while the owner was deciding, and the agent already has the message. The
- * dashboard keeps the bubble and says so.
- *
- * PTY-only by construction. Queueing exists because a PTY has one composer that
- * can only accept a body at an idle prompt; the ACP/extension transports have
- * no such FIFO and so have nothing to cancel.
+ * ★ Reports `cancelled: 0` rather than failing when nothing matched — the race
+ * the caller must distinguish: the queue drained while the owner was deciding,
+ * and the agent already has the message. PTY-only by construction.
  */
 export async function handleCancelQueuedChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const text = typeof args?.message === 'string' ? args.message : '';
-    if (!text.trim()) return { success: false, error: 'message required' };
+    let messageId = readMessageId(args);
+    if (!messageId && !text.trim()) return { success: false, error: 'messageId required' };
 
     const _log = (msg: string) => LOG.debug('Command', `[cancel_queued_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);
@@ -551,26 +428,26 @@ export async function handleCancelQueuedChat(h: CommandHelpers, args: any): Prom
         return { success: false, error: `cancel_queued_chat is only supported on PTY sessions (got ${transport || 'unknown'})` };
     }
 
-    const adapter = getTargetedCliAdapter(h, args, provider?.type);
-    if (!adapter) {
+    const sessionKey = resolveInputSessionKey(h, args, provider?.type);
+    if (!sessionKey) {
         return { success: false, error: 'CLI adapter not found for this session' };
     }
-
-    const claim = (adapter as unknown as { claimQueuedSends?: (t: string) => number }).claimQueuedSends;
-    if (typeof claim !== 'function') {
-        return { success: false, error: 'This session does not support cancelling a queued send' };
+    const service = sessionInputFor(h);
+    if (!messageId) {
+        messageId = await service.findParkedMessageIdByText(sessionKey, text);
+        _log(`legacy text-keyed cancel resolved to ${messageId || 'nothing parked'}`);
+        if (!messageId) return { success: true, cancelled: 0, removed: false };
     }
-
-    // Content-free log: a count, never the body.
-    const cancelled = claim.call(adapter, text);
-    _log(`cancelled ${cancelled} queued send(s) for ${adapter.cliType} (len=${text.length})`);
-
+    const { removed, unsupported } = await service.withdraw(sessionKey, messageId);
+    if (unsupported) return { success: false, error: 'This session does not support cancelling a queued send' };
+    _log(`${removed ? 'withdrew' : 'nothing parked under'} ${messageId} (session ${sessionKey})`);
     return {
         success: true,
-        cancelled,
+        cancelled: removed ? 1 : 0,
         // `false` is the honest answer to "did I stop it?" when the FIFO had
         // already drained — the caller must not clear its bubble on this.
-        removed: cancelled > 0,
+        removed,
+        messageId,
     };
 }
 

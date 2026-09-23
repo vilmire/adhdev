@@ -160,15 +160,18 @@ export function recordAcknowledgedUserInput(
 
     const receivedAt = Date.now();
 
-    // TASKBUBBLE-DUP: collapse a redelivered dispatch to one bubble. A single
-    // mesh_send_task can reach this instance as TWO send_chat calls when the
-    // first injection is buffered during bootstrap/busy and a retry (dispatch-
-    // confirm-timeout requeue, or a reconcile re-dispatch) fires before the
-    // outbound queue drains. The previous dedupKey hashed receivedAt, so the
-    // two acks produced different keys and BOTH bubbled. Suppress an identical
-    // content ack seen within USER_INPUT_ACK_DEDUP_WINDOW_MS; a later resend of
-    // the same text (beyond the window) is a genuine new turn and still shows.
-    const ackContentKey = shortHash(`${host.instanceId}:${content}`, 24);
+    // TASKBUBBLE-DUP: collapse a redelivered dispatch to one bubble — a
+    // defense-in-depth backstop behind SessionInputService's messageId dedupe
+    // (which stamps each message's ack exactly once). Keyed by the message's
+    // identity when it has one (wiring-unification D2): two DIFFERENT messages
+    // with the same text ("continue", "continue") are two turns and both
+    // bubble, while a redelivery of the SAME messageId collapses. An ack with
+    // no identity (event-only callers) keeps the content key and its 60 s
+    // window, exactly as before.
+    const sourceId = typeof sourceMessageId === 'string' && sourceMessageId.trim() ? sourceMessageId.trim() : '';
+    const ackContentKey = sourceId
+        ? `id:${shortHash(`${host.instanceId}:${sourceId}`, 24)}`
+        : shortHash(`${host.instanceId}:${content}`, 24);
     const lastAckAt = host.recentUserInputAcks.get(ackContentKey);
     if (lastAckAt !== undefined && receivedAt - lastAckAt <= USER_INPUT_ACK_DEDUP_WINDOW_MS) {
         // Refresh the timestamp so a steady stream of redeliveries keeps
@@ -184,7 +187,7 @@ export function recordAcknowledgedUserInput(
     // The runtimeMessages dedupKey stays per-call unique (includes receivedAt)
     // so a genuine resend of the same text after the window appends a fresh
     // bubble; redelivery within the window is already suppressed above.
-    const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}`, 24)}`;
+    const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}${sourceId ? `:${sourceId}` : ''}`, 24)}`;
     appendRuntimeMessage(host, buildChatMessage({
         role: 'user',
         senderName: 'User',
@@ -200,7 +203,7 @@ export function recordAcknowledgedUserInput(
             // D1/D2: the send-side identity (`mintMessageId`) of the message this
             // ack echoes, so the dashboard reconciles its optimistic bubble with
             // the ack by id instead of by content.
-            ...(typeof sourceMessageId === 'string' && sourceMessageId.trim() ? { sourceMessageId: sourceMessageId.trim() } : {}),
+            ...(sourceId ? { sourceMessageId: sourceId } : {}),
         },
     } as ChatMessage), dedupKey);
 }

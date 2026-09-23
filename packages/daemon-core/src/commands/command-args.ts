@@ -17,23 +17,15 @@
  * incoming P2P mesh command). Pinned by
  * test/commands/mesh-direct-dispatch-single-writer.test.ts.
  *
- * ★ `SendPolicy`/`messageId` — daemon-core does not yet have its own
- * `OutboundMessage`/`SubmitOutcome` types (that is D1's job, `providers/
- * io-contracts.ts`, not done in this pass). `readSendPolicy`/`readMessageId`
- * import `SendPolicy` structurally from `@adhdev/mesh-shared` (D-web's
- * landed `outbound-message.ts`) rather than declaring a second copy — see
- * that file's header for why mesh-shared's type is the wire-level SoT.
- * `policy.mode` is read as the PRIMARY source when present; the legacy
- * `sendNow`/`interrupt`/`force`/`forceSend` booleans are the fallback. This
- * changes NO current behaviour: no caller sends `policy` yet except
- * D-web's dashboard funnel, which sends it ALONGSIDE the legacy booleans as
- * a dual-write (see phase-D-daemon-brief.md line 13-16), so `policy.mode`
- * and the booleans always agree today. The point of reading `policy` first
- * is only to make the swap in `chat-commands-write.ts`/`cli-manager.ts`
- * itself a no-op — see the pinning test.
+ * ★ `SendPolicy`/`messageId`/`OutboundMessage` — one vocabulary, mesh-shared's
+ * (`outbound-message.ts`); daemon-core does not fork it. `readSendPolicy` reads
+ * `policy.mode`; the legacy booleans are a one-release mapped fallback (D3
+ * cut-compat), logged at DEBUG by the caller. Every send origin turns these
+ * reads into ONE `OutboundMessage` for `SessionInputService.submit`
+ * (sessions/session-input-service.ts).
  */
 
-import { isSendPolicy, type SendPolicy } from '@adhdev/mesh-shared'
+import { isOutboundMessageOrigin, isSendPolicy, mintMessageId, type OutboundMessageOrigin, type SendPolicy } from '@adhdev/mesh-shared'
 
 // ─── MeshCommandContext ─────────────────────────────────────────────────────
 
@@ -175,22 +167,14 @@ export function readMessageId(args: unknown): string | undefined {
 /**
  * Resolve the effective `SendPolicy` for a send-shaped args bag.
  *
- * `policy.mode` wins when present and valid (D-web's typed dual-write is the
- * primary source). Otherwise falls back to the legacy booleans, in the SAME
- * precedence order `chat-commands-write.ts`/`cli-manager.ts` already apply
- * today: `sendNow` (dashboard-only "send now" — checked first because it is
- * its OWN flag, not an alias of interrupt, see chat-commands-write.ts's
- * SEND-NOW-AGENT-QUEUE comment) beats `interrupt`/`force`/`forceSend`
- * (which are three spellings of the same thing) beats the `'queue'`
- * default.
- *
- * This function changes no behaviour today: every existing caller either
- * sends no `policy` (mesh) or sends `policy` in agreement with the legacy
- * booleans (dashboard, D-web's dual-write) — see the pinning test
- * (`test/commands/command-args.test.ts`) asserting the two sources agree
- * and that `policy.mode` wins when both are present.
+ * `policy.mode` is THE source (wiring-unification D3). The legacy booleans
+ * (`sendNow` → `send_now`; `interrupt`/`force`/`forceSend` → `interrupt`, in
+ * that precedence — `sendNow` is its own flag, never an alias of interrupt)
+ * are accepted for ONE release as a mapped fallback for pre-D dashboards and
+ * older peers, and every use is logged at DEBUG through `onLegacy` so the
+ * fallback's retirement can be judged from the log. Default `queue`.
  */
-export function readSendPolicy(args: unknown): SendPolicy {
+export function readSendPolicy(args: unknown, onLegacy?: (flag: string) => void): SendPolicy {
     const a = args as {
         policy?: unknown
         sendNow?: unknown
@@ -201,7 +185,24 @@ export function readSendPolicy(args: unknown): SendPolicy {
 
     if (isSendPolicy(a?.policy)) return a!.policy as SendPolicy
 
-    if (a?.sendNow === true) return { mode: 'send_now' }
-    if (a?.interrupt === true || a?.force === true || a?.forceSend === true) return { mode: 'interrupt' }
+    if (a?.sendNow === true) { onLegacy?.('sendNow'); return { mode: 'send_now' } }
+    if (a?.interrupt === true) { onLegacy?.('interrupt'); return { mode: 'interrupt' } }
+    if (a?.force === true) { onLegacy?.('force'); return { mode: 'interrupt' } }
+    if (a?.forceSend === true) { onLegacy?.('forceSend'); return { mode: 'interrupt' } }
     return { mode: 'queue' }
+}
+
+/** `args.origin` when it names a known `OutboundMessageOrigin`, else `fallback`. */
+export function readOutboundOrigin(args: unknown, fallback: OutboundMessageOrigin): OutboundMessageOrigin {
+    const raw = (args as { origin?: unknown } | null | undefined)?.origin
+    return isOutboundMessageOrigin(raw) ? raw : fallback
+}
+
+/**
+ * A daemon-minted messageId for a send whose origin sent none (pre-D clients,
+ * the shortcuts API, `adhdev send`). Unique per call, so such sends are never
+ * deduplicated against each other — exactly their pre-D behaviour.
+ */
+export function mintLegacyMessageId(): string {
+    return `legacy:${mintMessageId()}`
 }

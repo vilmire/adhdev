@@ -7,22 +7,19 @@ describe('handleSendChat input contracts', () => {
 
     try {
       const sendMessage = vi.fn(async () => {})
+      const hermesAdapter = { cliType: 'hermes-cli', sendMessage, getStatus: () => ({ status: 'starting' }) }
       const resultPromise = handleSendChat({
         getCdp: () => null,
         getProvider: () => ({ type: 'hermes-cli', name: 'Hermes CLI', category: 'cli' }),
         getProviderScript: () => null,
         evaluateProviderScript: async () => null,
-        getCliAdapter: () => ({
-          cliType: 'hermes-cli',
-          sendMessage,
-          getStatus: () => ({ status: 'starting' }),
-        }) as any,
+        getCliAdapter: () => hermesAdapter as any,
         currentManagerKey: undefined,
         currentIdeType: undefined,
         currentProviderType: undefined,
         currentSession: undefined,
         agentStream: null,
-        ctx: { instanceManager: { getInstance: () => null } },
+        ctx: { adapters: new Map([['hermes-cli_1', hermesAdapter]]), instanceManager: { getInstance: () => null } },
         historyWriter: { appendNewMessages: () => {} },
       } as any, {
         agentType: 'hermes-cli',
@@ -44,15 +41,16 @@ describe('handleSendChat input contracts', () => {
         targetAgent: 'hermes-cli',
       })
       expect(sendMessage).toHaveBeenCalledTimes(1)
-      expect(sendMessage).toHaveBeenCalledWith('launch-race-message')
+      expect(sendMessage).toHaveBeenCalledWith('launch-race-message', expect.objectContaining({ messageId: expect.stringMatching(/^legacy:msg_/) }))
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('routes declared structured PTY input to the provider instance instead of flattening it', async () => {
-    const sendMessage = vi.fn()
-    const onEvent = vi.fn(async () => ({ success: true, status: 'delivered' }))
+  it('builds declared structured PTY input into ONE image body (materialized path + text, bracketed paste) — D2', async () => {
+    const sendMessage = vi.fn(async () => ({ status: 'delivered' as const }))
+    const recordAcknowledgedUserInput = vi.fn()
+    const adapter = { cliType: 'hermes-cli', sendMessage, getStatus: () => ({ status: 'idle' }) }
     const result = await handleSendChat({
       getCdp: () => null,
       getProvider: () => ({
@@ -69,57 +67,59 @@ describe('handleSendChat input contracts', () => {
       }),
       getProviderScript: () => null,
       evaluateProviderScript: async () => null,
-      getCliAdapter: () => ({ cliType: 'hermes-cli', sendMessage }) as any,
+      getCliAdapter: () => adapter as any,
       currentManagerKey: undefined,
       currentIdeType: undefined,
       currentProviderType: undefined,
       currentSession: { sessionId: 'sess-cli-1', transport: 'pty', providerType: 'hermes-cli' },
       agentStream: null,
       ctx: {
+        adapters: new Map([['adapter-1', adapter]]),
         sessionRegistry: { get: () => ({ sessionId: 'sess-cli-1', adapterKey: 'adapter-1' }) },
-        instanceManager: { getInstance: () => ({ category: 'cli', type: 'hermes-cli', onEvent }) },
+        instanceManager: { getInstance: (key: string) => (key === 'adapter-1' ? { category: 'cli', type: 'hermes-cli', recordAcknowledgedUserInput } : null) },
       },
       historyWriter: { appendNewMessages: () => {} },
     } as any, {
       agentType: 'hermes-cli',
       targetSessionId: 'sess-cli-1',
+      messageId: 'msg_structured_1',
+      policy: { mode: 'queue' },
       input: {
         parts: [
           { type: 'text', text: 'describe this image' },
-          { type: 'image', mimeType: 'image/png', data: 'img-base64' },
+          { type: 'image', mimeType: 'image/png', data: 'aW1n' },
         ],
         textFallback: 'describe this image',
       },
     })
 
-    expect(result).toMatchObject({ success: true, sent: true, method: 'pty-instance', targetAgent: 'hermes-cli' })
-    expect(sendMessage).not.toHaveBeenCalled()
-    expect(onEvent).toHaveBeenCalledWith('send_message', {
-      input: {
-        parts: [
-          { type: 'text', text: 'describe this image' },
-          { type: 'image', mimeType: 'image/png', data: 'img-base64' },
-        ],
-        textFallback: 'describe this image',
-      },
-    })
+    expect(result).toMatchObject({ success: true, sent: true, submitted: true, method: 'pty-adapter', targetAgent: 'hermes-cli', messageId: 'msg_structured_1' })
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    const [body, opts] = sendMessage.mock.calls[0] as unknown as [string, { bracketedPaste?: boolean; messageId?: string }]
+    expect(body).toMatch(/adhdev-input-media[\\/].+\.png\ndescribe this image$/)
+    expect(opts).toEqual({ bracketedPaste: true, messageId: 'msg_structured_1' })
+    // The ack is stamped once, with the message identity.
+    expect(recordAcknowledgedUserInput).toHaveBeenCalledTimes(1)
+    expect(recordAcknowledgedUserInput.mock.calls[0][1]).toBe('msg_structured_1')
   })
 
   it('rejects structured PTY input when the CLI provider did not declare media support', async () => {
     const sendMessage = vi.fn()
     const onEvent = vi.fn()
+    const plainAdapter = { cliType: 'plain-cli', sendMessage }
     const result = await handleSendChat({
       getCdp: () => null,
       getProvider: () => ({ type: 'plain-cli', name: 'Plain CLI', category: 'cli' }),
       getProviderScript: () => null,
       evaluateProviderScript: async () => null,
-      getCliAdapter: () => ({ cliType: 'plain-cli', sendMessage }) as any,
+      getCliAdapter: () => plainAdapter as any,
       currentManagerKey: undefined,
       currentIdeType: undefined,
       currentProviderType: undefined,
       currentSession: { sessionId: 'sess-cli-2', transport: 'pty', providerType: 'plain-cli' },
       agentStream: null,
       ctx: {
+        adapters: new Map([['adapter-2', plainAdapter]]),
         sessionRegistry: { get: () => ({ sessionId: 'sess-cli-2', adapterKey: 'adapter-2' }) },
         instanceManager: { getInstance: () => ({ category: 'cli', type: 'plain-cli', onEvent }) },
       },
@@ -136,6 +136,7 @@ describe('handleSendChat input contracts', () => {
     })
 
     expect(result.success).toBe(false)
+    expect(result.reason).toBe('unsupported_input')
     expect(result.error).toContain('does not support input type: image')
     expect(sendMessage).not.toHaveBeenCalled()
     expect(onEvent).not.toHaveBeenCalled()

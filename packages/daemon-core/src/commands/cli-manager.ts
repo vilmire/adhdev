@@ -20,7 +20,6 @@ import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
-import { shortHash } from '../system/hash.js';
 import { getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { appendLedgerEntry } from '../mesh/mesh-ledger.js';
@@ -32,20 +31,21 @@ import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
-import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { drainInFlightSubmits, type SubmitDrainResult } from './cli-manager-submit-drain.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
-import type { ProviderInstance, ProviderSendMessageResult } from '../providers/provider-instance.js';
+import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
-import { interruptAndDeliver, type InterruptibleAdapter } from './interrupt-and-deliver.js';
-import { readMeshContext, readMessageId, type AgentCommandArgs, type MeshCommandContext } from './command-args.js';
+import { mintLegacyMessageId, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy, type AgentCommandArgs, type MeshCommandContext } from './command-args.js';
+import { createSessionInputService, type SessionInputService, type SessionInputTarget } from '../sessions/session-input-service.js';
+import { buildSessionInputTarget, type SessionInputAdapterLike, type SessionInputInstanceLike } from '../sessions/session-input-target.js';
+import { dispatchMessageId } from '../mesh/mesh-queue-dispatch-evidence.js';
+import type { SubmitOutcome } from '@adhdev/mesh-shared';
 // MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
 // deduplicated by the SAME signature on both routes rather than by two divergent rules.
-import { buildSendInputSignature } from './chat-commands-shared.js';
 import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
 import { expandModelLaunchArgs, resolveModelLaunchValue } from './model-launch-args.js';
 import { readModelCache } from '../models/registry.js';
@@ -80,11 +80,8 @@ export {
 export { expandModelLaunchArgs } from './model-launch-args.js';
 
 import {
-    BUSY_AGENT_STATUSES,
     commandExists,
-    getEffectiveAgentSendStatus,
     normalizeDirForCompare,
-    waitForZeroMessageStartingLaunch,
 } from './cli-manager-agent-status.js';
 import {
     type CliLaunchMode,
@@ -235,19 +232,46 @@ type CliStartOptions = {
     launchProvenance?: LaunchProvenanceArgs & { launchedBy?: SessionLaunchedBy };
 };
 
-// PTY-SUBMIT-IDEMPOTENCY: window for the mesh-dispatch duplicate-submission guard
-// (see DaemonCliManager.beginMeshDispatchSubmission). Observed machine-driven
-// redeliveries of one dispatch landed 8.5s / 18s / 96s after the first inject —
-// the 96s case already outruns the 60s chat-bubble ack dedup window
-// (USER_INPUT_ACK_DEDUP_WINDOW_MS). The window must outlast the slowest automatic
-// re-dispatch source: a dispatch-confirm timeout (120s,
-// mesh-queue-assignment DISPATCH_CONFIRM_TIMEOUT_MS) plus a reconcile tick (~4s)
-// before the re-claimed dispatch arrives, so 300s gives >2x headroom over that
-// ~124s worst case. It stays finite so a genuinely re-issued turn of the same
-// task text much later is never permanently blocked — and because the guard key
-// includes the taskId, a deliberate resend (a handoff/retry mints a NEW task row,
-// hence a new taskId) is unaffected by the window at any length.
-const MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS = 300_000;
+/**
+ * `agent_command send_chat` result from the one `SubmitOutcome` (D2). A refusal
+ * THROWS — the mesh dispatch lifecycle (deliverTaskToSession) treats a resolved
+ * command as a delivery receipt and a rejection as a dispatch failure, and the
+ * router reports a throw as `{success:false, error}`. `status:'queued'` is the
+ * driver's authoritative "parked, not yet written" (never a pre-send guess).
+ */
+function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandResult {
+    switch (outcome.kind) {
+        case 'delivered':
+            return {
+                success: true,
+                status: 'generating',
+                submitted: outcome.route !== 'agent_queue',
+                ...(outcome.route ? { route: outcome.route } : {}),
+                ...(outcome.interrupt ? { interrupted: true, interruptKey: outcome.interrupt.keyName, interruptConfidence: outcome.interrupt.confidence } : {}),
+            };
+        case 'queued':
+            return {
+                success: true,
+                status: 'queued',
+                queued: true,
+                queuedReason: 'driver_fifo_parked',
+                position: outcome.position,
+                sent: false,
+                submitted: false,
+                ...(outcome.interrupt ? { interrupted: true, interruptKey: outcome.interrupt.keyName, interruptConfidence: outcome.interrupt.confidence } : {}),
+            };
+        case 'duplicate':
+            LOG.warn('MeshDispatch', `Suppressed duplicate submission on session ${sessionKey}: messageId ${outcome.of} was already submitted — not re-injecting`);
+            return { success: true, status: 'generating', duplicateSuppressed: true, messageId: outcome.of };
+        case 'refused': {
+            const error = new Error(outcome.message || `send refused: ${outcome.reason}`) as Error & { reason?: string; restored?: boolean };
+            error.reason = outcome.reason;
+            if (outcome.restored !== undefined) error.restored = outcome.restored;
+            throw error;
+        }
+    }
+}
+
 /** Grace between a session reporting stopped/error and its reclamation — long
  *  enough for the final status/mesh events to flush, see scheduleAutoClean. */
 const AUTO_CLEAN_DELAY_MS = 5_000;
@@ -280,43 +304,40 @@ export class DaemonCliManager {
     readonly adapters = new Map<string, CliAdapter>();
     private deps: CliManagerDeps;
     private providerLoader: ProviderLoader;
-    // PTY-SUBMIT-IDEMPOTENCY: (sessionKey:taskId:contentHash) → first-submission
-    // timestamp for mesh task dispatches already handed to the adapter. Entries
-    // older than MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS are pruned lazily on check.
-    private meshDispatchSubmissions = new Map<string, number>();
+    /**
+     * The ONE send funnel (wiring-unification D2): every input into a session
+     * this manager hosts — mesh `agent_command`, dashboard `send_chat` (via the
+     * command context), turn-ledger notices — is `input.submit(OutboundMessage)`,
+     * sharing one `messageId` dedupe.
+     */
+    readonly input: SessionInputService;
 
     constructor(deps: CliManagerDeps, providerLoader: ProviderLoader) {
         this.deps = deps;
         this.providerLoader = providerLoader;
+        this.input = createSessionInputService({
+            resolveSession: (sessionId) => this.resolveSessionInputTarget(sessionId),
+            log: (level, msg) => {
+                if (level === 'debug') LOG.debug('SessionInput', msg);
+                else if (level === 'info') LOG.info('SessionInput', msg);
+                else if (level === 'warn') LOG.warn('SessionInput', msg);
+                else LOG.error('SessionInput', msg);
+            },
+        });
     }
 
-    /**
-     * PTY-SUBMIT-IDEMPOTENCY guard. recordAcknowledgedUserInput runs AFTER
-     * adapter.sendMessage, so it only collapses the duplicate chat bubble — the
-     * second PTY write has already happened. And the attachMeshAssignment stamp
-     * guard (findLiveWorkingTaskHolder) deliberately excludes the TARGET instance,
-     * so a redelivery onto the SAME session (dispatch-confirm-timeout requeue,
-     * reconcile re-dispatch, delivered-not-consumed redrive) was never caught.
-     * This guard runs BEFORE the submit and keys on session + taskId + content:
-     *   - same task, same text, inside the window → a machine redelivery → suppress;
-     *   - same task, DIFFERENT text → a legitimate follow-up delta → allowed;
-     *   - different taskId (a deliberate resend/handoff mints a fresh task row) → allowed;
-     *   - same task+text AFTER the window → a genuinely re-issued turn → allowed;
-     *   - a prior attempt whose submit FAILED releases its key (see the catch in
-     *     the send_chat branch), so failure retries are never blocked;
-     *   - forceSend bypasses the guard entirely (explicit operator intent).
-     * Returns the guard key on admission, or null when the submission is a
-     * duplicate and must be suppressed.
-     */
-    private beginMeshDispatchSubmission(sessionKey: string, taskId: string, content: string): string | null {
-        const now = Date.now();
-        for (const [k, at] of this.meshDispatchSubmissions) {
-            if (now - at > MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS) this.meshDispatchSubmissions.delete(k);
-        }
-        const guardKey = `${sessionKey}:${taskId}:${shortHash(content, 24)}`;
-        if (this.meshDispatchSubmissions.has(guardKey)) return null;
-        this.meshDispatchSubmissions.set(guardKey, now);
-        return guardKey;
+    /** `SessionInputService` resolver: the adapter/instance pair under one session key. */
+    resolveSessionInputTarget(sessionId: string): SessionInputTarget | null {
+        const adapter = this.adapters.get(sessionId) ?? null;
+        const instance = this.deps.getInstanceManager()?.getInstance(sessionId) ?? null;
+        if (!adapter && !instance) return null;
+        const providerType = adapter?.cliType || (instance as { type?: string } | null)?.type;
+        const provider = providerType ? (this.providerLoader.resolve(providerType) || this.providerLoader.getMeta(providerType)) : null;
+        return buildSessionInputTarget({
+            adapter: adapter as unknown as SessionInputAdapterLike | null,
+            instance: instance as unknown as SessionInputInstanceLike | null,
+            provider,
+        });
     }
 
  // ─── Key create ─────────────────────────────────
@@ -1884,12 +1905,6 @@ export class DaemonCliManager {
         const { adapter, key } = found;
 
         if (action === 'send_chat') {
-            let currentStatus = getEffectiveAgentSendStatus(adapter);
-            if (currentStatus === 'starting' && await waitForZeroMessageStartingLaunch(adapter)) {
-                currentStatus = 'idle';
-            } else if (currentStatus === 'starting') {
-                currentStatus = getEffectiveAgentSendStatus(adapter);
-            }
             // Stamp mesh direct-dispatch assignment on the target
             // instance BEFORE sending the prompt so the completion
             // event has a routing marker by the time it fires.
@@ -1960,167 +1975,31 @@ export class DaemonCliManager {
                     } catch { /* best-effort — silent-idle is a notification nicety, never fail the dispatch */ }
                 }
             }
-            const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
-            const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
-            // MESH-IMAGE-DISPATCH: a mesh dispatch carrying non-text parts (an image
-            // from the coordinator or dashboard) must reach the provider instance as
-            // STRUCTURED input, exactly as the dashboard path already does — see
-            // chat-commands-write.ts, whose PTY branch routes structured parts through
-            // `instance.onEvent('send_message', { input })` so provider-specific
-            // attachment strategies apply.
-            //
-            // Before this change every non-ACP send took `assertTextOnlyInput` (a hard
-            // throw on any image part) and then collapsed to `input.textFallback`, so a
-            // mesh image was rejected outright while the SAME provider on the SAME
-            // daemon accepted it from the dashboard. That asymmetry — not a missing
-            // capability — was the whole defect. Capability is still enforced, but by
-            // the provider's own declaration rather than a blanket text-only rule.
-            const hasStructuredParts = input.parts.some((part) => part.type !== 'text');
-            if (hasStructuredParts) {
-                // Refuses with a clear provider-named error when the provider does not
-                // declare the media type (opencode and every ACP provider are text-only),
-                // so an unsupported dispatch fails loudly instead of silently dropping
-                // the image and sending a prompt that references a picture nobody got.
-                assertProviderSupportsDeclaredInput(provider, input);
-            } else if (provider?.category === 'acp') {
-                assertProviderSupportsDeclaredInput(provider, input);
-            } else {
-                assertTextOnlyInput(provider, input);
-            }
-            const message = input.textFallback;
-            // A multipart send is legitimately allowed to carry no text (an image on its
-            // own); only the text-only path still requires a non-empty message.
-            if (!message && !hasStructuredParts) throw new Error('message required for send_chat');
-            // ARCH-REFACTOR R1: thread the dispatched task's id into the turn so the
-            // worker's completion event is bound to THIS task (per-turn identity),
-            // not the last-write-wins session scalar. Carried for both local and
-            // remote (P2P-echoed meshContext) dispatch; absent for plain ad-hoc chat.
-            const meshTaskId = (meshContext && typeof meshContext === 'object'
-                && typeof meshContext.taskId === 'string' && meshContext.taskId.trim())
-                ? meshContext.taskId
-                : undefined;
-            const forceSend = args?.force === true || args?.forceSend === true;
+            // Wiring-unification D2: ONE submit through the shared SessionInputService.
+            // It owns input normalisation, the capability check, the image body
+            // build, the busy decision, the messageId dedupe (which replaced the
+            // 300 s (session, taskId, content) submission guard) and the ack.
+            const meshTaskId = typeof meshContext?.taskId === 'string' && meshContext.taskId.trim() ? meshContext.taskId.trim() : undefined;
             // DISPATCH-SOURCE-TRACE: every agent_command send_chat issuer tags its
-            // call site (args.dispatchSource) so a duplicate/unexpected inject can
-            // be attributed from the daemon log WITHOUT timing inference. Logged
-            // before the idempotency guard so suppressed duplicates are traced too.
-            // 'untagged' itself is a signal: an issuer this change did not cover.
+            // call site so a duplicate/unexpected inject is attributable from the log.
             const dispatchSource = typeof args?.dispatchSource === 'string' && args.dispatchSource.trim()
                 ? args.dispatchSource.trim() : 'untagged';
-            LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} dispatchSource=${dispatchSource}`);
-            // PTY-SUBMIT-IDEMPOTENCY: run the duplicate-submission guard BEFORE the
-            // adapter write — this is the last funnel before the PTY. forceSend is an
-            // explicit operator/coordinator override and bypasses the guard.
-            let submissionGuardKey: string | null = null;
-            if (meshTaskId && !forceSend) {
-                // MESH-IMAGE-DISPATCH: hash the FULL input envelope for a multipart
-                // send. `message` is the text fallback, which is empty for an
-                // image-only dispatch — hashing it alone would make two different
-                // images within one task collide and silently suppress the second as
-                // a duplicate. buildSendInputSignature covers text + every part, and
-                // is the same signature the dashboard dedup path uses.
-                const guardContent = hasStructuredParts ? buildSendInputSignature(input) : message;
-                submissionGuardKey = this.beginMeshDispatchSubmission(key, meshTaskId, guardContent);
-                if (submissionGuardKey === null) {
-                    LOG.warn('MeshDispatch', `Suppressed duplicate PTY submission on session ${key}: task ${meshTaskId} with identical content was already submitted within the last ${Math.round(MESH_DISPATCH_SUBMIT_DEDUP_WINDOW_MS / 1000)}s — the prompt is already sent/buffered on this session, not re-injecting`);
-                    return {
-                        success: true,
-                        status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
-                        duplicateSuppressed: true,
-                    };
-                }
-            }
-            // Preserve the exact prior call shape when there is no taskId (plain
-            // ad-hoc chat / non-mesh dispatch); only thread the per-turn taskId when
-            // present, so existing non-mesh callers and their contracts are unchanged.
-            let interruptRequeued = false;
-            // MESH-SEND-ACK-ASYMMETRY: a multipart dispatch that is merely ACCEPTED
-            // into the driver FIFO must not be reported with the same shape as a
-            // real PTY submit — same distinction handleSendChat draws for the
-            // dashboard path.
-            let structuredQueued = false;
-            try {
-                if (hasStructuredParts) {
-                    // MESH-IMAGE-DISPATCH: multipart input goes to the provider INSTANCE
-                    // rather than the adapter, so provider-specific attachment strategies
-                    // (e.g. Hermes' file-path image prompt) run instead of the envelope
-                    // being flattened to text. Same call the dashboard PTY path makes.
-                    //
-                    // Deliberately placed HERE, after DISPATCH-SOURCE-TRACE and the
-                    // PTY-SUBMIT-IDEMPOTENCY guard: an image dispatch must be
-                    // duplicate-suppressed on redelivery exactly like a text one, and
-                    // returning earlier would have bypassed both.
-                    const structuredTarget = this.deps.getInstanceManager()?.getInstance(key) as
-                        | { onEvent?: (event: string, payload: unknown) => void | Promise<ProviderSendMessageResult> }
-                        | undefined;
-                    if (!structuredTarget || typeof structuredTarget.onEvent !== 'function') {
-                        throw new Error(`No provider instance for session '${key}' — cannot deliver multipart input for agent '${agentType}'`);
-                    }
-                    // MESH-SEND-ACK-ASYMMETRY: AWAIT the send and check its outcome.
-                    // This call was previously fire-and-forget, so an asynchronous
-                    // delivery failure (dead PTY, modal hold, adapter reject) still
-                    // fell through to the ack bubble below and returned
-                    // `success: true` — the exact inverse of the defect b6c2444da
-                    // fixed on the dashboard funnel, where the body was delivered
-                    // but never recorded. Throwing here routes into the catch that
-                    // releases the idempotency guard key, so a redrive is not
-                    // suppressed as a duplicate.
-                    const outcome = await structuredTarget.onEvent('send_message', { input });
-                    if (!outcome?.success) {
-                        throw new Error(outcome?.error || 'CLI send was not acknowledged');
-                    }
-                    structuredQueued = outcome.status === 'queued';
-                } else if (forceSend) {
-                    // SEND-NOW: `force` no longer means "write into the
-                    // generating PTY" — that path was retired in oss
-                    // 6cca365b after measured data loss. It now routes
-                    // through the supported sequence: press the
-                    // provider's own stop key, wait for busy→idle, then
-                    // deliver as a genuine new turn.
-                    const outcome = await interruptAndDeliver(
-                        adapter as unknown as InterruptibleAdapter,
-                        message,
-                        meshTaskId ? { meshTaskId } : undefined,
-                    );
-                    if (!outcome.ok) throw new Error(outcome.message);
-                    // An interrupt can still end with the body parked in
-                    // the driver FIFO (the session re-entered busy between
-                    // the idle observation and the write). Report that
-                    // instead of the blanket `queued: false` the retired
-                    // force path used to claim.
-                    interruptRequeued = outcome.queued;
-                } else if (meshTaskId) {
-                    await adapter.sendMessage(message, { meshTaskId });
-                } else {
-                    await adapter.sendMessage(message);
-                }
-            } catch (e) {
-                // PTY-SUBMIT-IDEMPOTENCY: the submit never landed — release the guard
-                // key so the requeue/redrive retry of this dispatch is NOT suppressed
-                // as a duplicate (a legitimate resend after a failure must go through).
-                if (submissionGuardKey) this.meshDispatchSubmissions.delete(submissionGuardKey);
-                throw e;
-            }
-            const targetInstance = this.deps.getInstanceManager()?.getInstance(key) as
-                | { recordAcknowledgedUserInput?: (input: unknown, sourceMessageId?: string) => void }
-                | undefined;
-            targetInstance?.recordAcknowledgedUserInput?.(input, readMessageId(args));
-            return {
-                success: true,
-                status: BUSY_AGENT_STATUSES.has(currentStatus) ? currentStatus : 'generating',
-                ...(BUSY_AGENT_STATUSES.has(currentStatus) ? { queued: true, queuedReason: 'agent_runtime_busy' } : {}),
-                // MESH-SEND-ACK-ASYMMETRY: the driver parked the body in its
-                // in-memory FIFO rather than writing it to the PTY. That is an
-                // authoritative post-send signal and outranks the pre-send status
-                // guess above — it can be true even when `currentStatus` read idle,
-                // in which case the branch above contributed nothing. A parked body
-                // does not survive a driver shutdown or daemon restart, so it must
-                // never be advertised as submitted.
-                ...(structuredQueued
-                    ? { queued: true, queuedReason: 'driver_fifo_parked', sent: false, submitted: false }
-                    : {}),
-                ...(forceSend ? { forceSent: true, interrupted: true, queued: interruptRequeued } : {}),
-            };
+            const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
+            const policy = readSendPolicy(args, (flag) => LOG.debug('MeshDispatch', `agent_command send_chat: legacy '${flag}' flag mapped to policy (session ${key})`));
+            const messageId = readMessageId(args)
+                ?? (meshTaskId ? dispatchMessageId({ id: meshTaskId, ...(typeof meshContext?.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}) }) : undefined)
+                ?? mintLegacyMessageId();
+            LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} messageId=${messageId} policy=${policy.mode} dispatchSource=${dispatchSource}`);
+            const outcome = await this.input.submit({
+                messageId,
+                sessionId: key,
+                input,
+                origin: readOutboundOrigin(args, meshContext ? 'mesh' : 'api'),
+                policy,
+                createdAt: Date.now(),
+                ...(typeof meshContext?.attemptId === 'string' && meshContext.attemptId ? { meshAttemptRef: meshContext.attemptId } : {}),
+            });
+            return meshSubmitResult(outcome, key);
         } else if (action === 'clear_history') {
             if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
             return { success: true, cleared: true };

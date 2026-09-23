@@ -92,11 +92,11 @@ const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcr
 // (mesh-runtime.db is the daemon's alone — check:boundaries C8).
 const TURN_LEDGER_IPC_CMDS = [
   'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
-  'mesh_index_query', 'mission_upsert', 'mission_query',
+  'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
 ]
 
 describe('low-family registry', () => {
-  it('registers all 67 LOW family commands once, no overlap', () => {
+  it('registers all 69 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -104,7 +104,7 @@ describe('low-family registry', () => {
       ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS,
     ]
-    expect(all).toHaveLength(67)
+    expect(all).toHaveLength(69)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

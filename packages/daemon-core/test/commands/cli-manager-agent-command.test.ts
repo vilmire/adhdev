@@ -12,7 +12,12 @@ function createManager(adapterStatus = 'idle', options: {
    *  as a silent success. */
   noInterruptSupport?: boolean
 } = {}) {
-  const sendMessage = vi.fn(async () => {})
+  // D2: the adapter reports the DRIVER's disposition — the only authority on
+  // whether a body was written or parked (the mesh path's pre-send status
+  // guess is deleted).
+  const sendMessage = vi.fn(async (_text: string, _opts?: unknown) => (
+    adapterStatus === 'idle' ? { status: 'delivered' as const } : { status: 'queued' as const, position: 1 }
+  ))
   const adapter = {
     cliType: 'hermes-cli',
     cliName: 'Hermes Agent',
@@ -70,15 +75,17 @@ describe('DaemonCliManager agent_command', () => {
 
     expect(result).toMatchObject({
       success: true,
-      status: 'generating',
+      status: 'queued',
       queued: true,
-      queuedReason: 'agent_runtime_busy',
+      queuedReason: 'driver_fifo_parked',
+      position: 1,
+      submitted: false,
     })
     expect(String(result?.error || '')).not.toContain('retry after the current turn finishes')
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
-  it('force-sends while generating when requested', async () => {
+  it('legacy force (one-release fallback → policy interrupt) stops the turn, then delivers', async () => {
     const { manager, adapter, sendMessage } = createManager('generating')
 
     const result = await manager.agentCommand({
@@ -93,15 +100,15 @@ describe('DaemonCliManager agent_command', () => {
     expect(result).toMatchObject({
       success: true,
       status: 'generating',
-      forceSent: true,
       interrupted: true,
-      queued: false,
+      submitted: true,
+      route: 'interrupt',
     })
     // SEND-NOW: the body is delivered by the ORDINARY send, and only AFTER the
     // stop key landed and the session was observed idle. A send without a prior
     // interrupt would be the retired force-inject path.
     expect(adapter.interruptTurn).toHaveBeenCalledTimes(1)
-    expect(sendMessage).toHaveBeenCalledWith('urgent follow-up', undefined)
+    expect(sendMessage).toHaveBeenCalledWith('urgent follow-up', expect.objectContaining({ messageId: expect.any(String) }))
     // Order is the contract: the stop key must land BEFORE the body is written.
     // A send that precedes the interrupt is the retired force-inject defect.
     expect(adapter.interruptTurn.mock.invocationCallOrder[0])
@@ -120,10 +127,10 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true, status: 'generating' })
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
-  it('accepts send_chat when read_chat parser status is still generating', async () => {
+  it('a stale parser "generating" no longer second-guesses the driver: an idle adapter delivers', async () => {
     const { manager, sendMessage } = createManager('idle', {
       parsedStatus: 'generating',
       pending: true,
@@ -137,40 +144,27 @@ describe('DaemonCliManager agent_command', () => {
       message: 'next task',
     })
 
-    expect(result).toMatchObject({
-      success: true,
-      status: 'generating',
-      queued: true,
-      queuedReason: 'agent_runtime_busy',
-    })
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(result).toMatchObject({ success: true, status: 'generating', submitted: true })
+    expect(result).not.toHaveProperty('queued')
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
-  it('does not reject the first task for a zero-message starting launch state', async () => {
-    vi.useFakeTimers()
-    try {
-      const { manager, sendMessage } = createManager('starting', {
-        parsedStatus: 'generating',
-        pending: false,
-      })
+  it('does not reject the first task for a starting session: the driver parks it (no pre-send wait)', async () => {
+    const { manager, sendMessage } = createManager('starting', {
+      parsedStatus: 'generating',
+      pending: false,
+    })
 
-      const resultPromise = manager.agentCommand({
-        targetSessionId: 'session-1',
-        agentType: 'hermes-cli',
-        cliType: 'hermes-cli',
-        action: 'send_chat',
-        message: 'first task',
-      })
+    const result = await manager.agentCommand({
+      targetSessionId: 'session-1',
+      agentType: 'hermes-cli',
+      cliType: 'hermes-cli',
+      action: 'send_chat',
+      message: 'first task',
+    })
 
-      await Promise.resolve()
-      expect(sendMessage).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(2_000)
-
-      await expect(resultPromise).resolves.toMatchObject({ success: true, status: 'generating' })
-      expect(sendMessage).toHaveBeenCalledWith('first task')
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(result).toMatchObject({ success: true, status: 'queued', queued: true })
+    expect(sendMessage).toHaveBeenCalledWith('first task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
   it('dispatches send_chat when startup status is stale but parser has a final idle assistant', async () => {
@@ -190,8 +184,8 @@ describe('DaemonCliManager agent_command', () => {
       message: 'next task',
     })
 
-    expect(result).toMatchObject({ success: true, status: 'generating' })
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(result).toMatchObject({ success: true, status: 'queued' })
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
   it('does not deadlock on stale parser busy once adapter idle has no pending evidence', async () => {
@@ -209,7 +203,7 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true, status: 'generating' })
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
   // TASKECHO fix #1: findAdapter must fail closed when an explicit targetSessionId is
@@ -244,7 +238,7 @@ describe('DaemonCliManager agent_command', () => {
     })
 
     expect(result).toMatchObject({ success: true, status: 'generating' })
-    expect(sendMessage).toHaveBeenCalledWith('next task')
+    expect(sendMessage).toHaveBeenCalledWith('next task', expect.objectContaining({ messageId: expect.any(String) }))
   })
 
   // ── interrupt_capability / interrupt_turn dispatch (delivery_mode 'interrupt') ──

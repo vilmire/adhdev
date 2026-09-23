@@ -19,6 +19,7 @@ import type { ProviderInstanceManager } from '../providers/provider-instance-man
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
+import type { SessionInputService } from '../sessions/session-input-service.js';
 import { loadConfig, getConfigDir } from '../config/config.js';
 import { resolveRegistryBaseUrl } from '../config/registry-resolver.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -54,6 +55,13 @@ export interface CommandContext {
     onBeforeSendChat?: (params: { workspace: string; sessionId: string }) => void;
     /** Agent-stream manager for IDE extension sessions (B4: constructor value, no late setter). */
     agentStreamManager?: DaemonAgentStreamManager | null;
+    /**
+     * The daemon's ONE send funnel (wiring-unification D2) —
+     * `DaemonCliManager.input`. `send_chat` / `cancel_queued_chat` submit through
+     * it so dashboard sends share the `messageId` dedupe with mesh dispatch and
+     * turn-ledger notices. Absent → the chat handlers build a handler-local one.
+     */
+    sessionInput?: SessionInputService;
 }
 
 /**
