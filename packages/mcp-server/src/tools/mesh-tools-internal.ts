@@ -40,37 +40,26 @@ import {
     getLastQuotaRanking,
     buildP2pRelayFailurePayload,
     classifyP2pRelayFailure,
-    pruneStaleDirectDispatches,
     describeTaskDependencyState,
     parseOnDependencyFailurePolicy,
     MeshGraphPolicyError,
-    // GRAPH-ORCHESTRATION Phase E — the graph surface the mesh_graph_* tools call.
-    claimMeshGraphGate,
-    releaseMeshGraphGate,
-    abandonMeshGraphGate,
-    patchGraphNodeAndRetry,
+    // GRAPH-ORCHESTRATION Phase E — pure request-shape classifier only; the graph
+    // gate/plan/patch/view CORES moved to the daemon in C-W9c (mesh-tools-graph.ts
+    // calls them over IPC — see that file's header).
     MESH_NODE_PATCH_KEYS,
-    collectGateConvergenceEvidence,
-    commitMeshGraphPlan,
     requestUsesGraphV2,
-    MeshGraphPlanError,
-    buildMeshGraphViews,
     normalizeOrchestrationDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
     MESH_UNSANCTIONED_DIRECT_HINT,
     MESH_VALID_DIRECT_REASONS,
     taskDependenciesSatisfied,
-    computeMeshMissionStats,
-    computeMeshTaskStats,
     getActiveMeshMissionSummaries,
-    getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     listMeshMissionSummaries,
     listMeshMissionsForTool,
     MESH_MISSION_STATUSES,
-    upsertMeshMission,
     summarizeMeshUsage,
     hasTrailingToolActivityAfterFinalAssistant,
     isP2pRelayTransportFailure,
@@ -101,7 +90,7 @@ import {
     collectNodeSessionIds,
     unwrapCommandPayload,
 } from './mesh-session-helpers.js';
-import { activeWorkQuery, ledgerQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
+import { activeWorkQuery, ledgerQuery, missionQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
 import type { buildMeshActiveWork as BuildMeshActiveWorkFn, DirectDispatchRecord, MeshLedgerEntry, MeshLedgerSummary, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import {
     ACTIVE_QUEUE_STATUSES,
@@ -295,22 +284,14 @@ export {
     getLastQuotaRanking,
     buildP2pRelayFailurePayload,
     classifyP2pRelayFailure,
-    computeMeshMissionStats,
-    computeMeshTaskStats,
     daemonIdsEquivalent,
     describeTaskDependencyState,
     parseOnDependencyFailurePolicy,
     MeshGraphPolicyError,
-    claimMeshGraphGate,
-    releaseMeshGraphGate,
-    abandonMeshGraphGate,
-    patchGraphNodeAndRetry,
+    // GRAPH-ORCHESTRATION Phase E — pure request-shape classifier only; the graph
+    // gate/plan/patch/view CORES moved to the daemon in C-W9c.
     MESH_NODE_PATCH_KEYS,
-    collectGateConvergenceEvidence,
-    commitMeshGraphPlan,
     requestUsesGraphV2,
-    MeshGraphPlanError,
-    buildMeshGraphViews,
     normalizeOrchestrationDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
     // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
@@ -325,7 +306,6 @@ export {
     removeMagiKindPanel,
     normalizeMagiSlots,
     collectIgnoredMagiSlotFields,
-    getMeshMission,
     getMeshStatusMissionSummaries,
     getMeshStatusMissionsCompact,
     isP2pRelayTransportFailure,
@@ -342,19 +322,17 @@ export {
     normalizeMeshTaskPriority,
     resolveNotBefore,
     meshTaskPriorityRank,
-    pruneStaleDirectDispatches,
     resolveDelegatedWorkerAutoApprove,
     resolveDelegatedWorkerDangerousModeAllow,
     loadRepoMeshJsonConfig,
     resolveAllowSendKeysDestructive,
     resolveMeshSurfacedSessionPreview,
     summarizeMeshAsyncRefineJobs,
-    upsertMeshMission,
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
-    // CANCEL-ORPHANS-PINNED-TASK: consumed by mesh-tools-queue.ts (meshQueueCancel).
-    notifyCoordinatorOfOrphanedPins,
-    findTasksOrphanedBySessionStop,
+    // CANCEL-ORPHANS-PINNED-TASK: buildOrphanedPinNotice is a pure formatter, still
+    // consumed by mesh-tools-queue.ts (meshQueueCancel); the notify CORE (queue read +
+    // event write) moved to the daemon in C-W9c (`orphaned_pin_notify` IPC command).
     buildOrphanedPinNotice,
 } from '@adhdev/daemon-core';
 export type { OrphanedPinnedTask } from '@adhdev/daemon-core';
@@ -910,12 +888,14 @@ export async function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_
  * absent mission_id, or an unknown mission id (nothing to warn about — an
  * unknown id is a different problem, not this one).
  */
-export function buildMissionInactiveWarning(
+export async function buildMissionInactiveWarning(
     ctx: MeshContext,
     missionId: string | undefined,
-): { missionInactive: { missionId: string; status: string; title: string }; missionInactiveHint: string } | undefined {
+): Promise<{ missionInactive: { missionId: string; status: string; title: string }; missionInactiveHint: string } | undefined> {
     if (!missionId) return undefined;
-    const mission = getMeshMission(ctx.mesh.id, missionId);
+    // C-W9c: was in-process `getMeshMission`; now the `mission_query` IPC round
+    // trip mesh-tools-mission.ts's read path already uses.
+    const mission = (await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0];
     if (!mission || mission.status === 'active') return undefined;
     const hintByStatus: Record<string, string> = {
         paused: `Mission '${missionId}' (${mission.title}) is paused — a new task was just attached to it anyway. Mission status is never auto-transitioned; if this mission should be active again, call mesh_mission_upsert(mission_id: '${missionId}', status: 'active').`,

@@ -22,6 +22,14 @@ import {
     queueCancel,
     activeWorkQuery,
     recoveryContextQuery,
+    graphGateClaim,
+    graphGateRelease,
+    graphGateAbandon,
+    graphNodePatch,
+    graphViewQuery,
+    taskStatsQuery,
+    pruneStaleDirect,
+    orphanedPinNotify,
 } from '../src/ipc/turn-commands.js';
 
 /**
@@ -53,16 +61,18 @@ function throwingTransport(error: unknown) {
     } as any;
 }
 
-test('TURN_IPC_COMMANDS has exactly twenty-three names (the C2 six + mission_* + C-W8 note_* + C-W9b tool_call_record/ledger_query/mission_list_query + the C-W9a store commands)', () => {
-    assert.equal(TURN_IPC_COMMANDS.length, 23);
+test('TURN_IPC_COMMANDS has exactly thirty-one names (the C2 six + mission_* + C-W8 note_* + C-W9b tool_call_record/ledger_query/mission_list_query + the C-W9a store commands + the C-W9c graph/stats/prune/orphaned-pin commands)', () => {
+    assert.equal(TURN_IPC_COMMANDS.length, 31);
     assert.deepEqual(
         [...TURN_IPC_COMMANDS].sort(),
         [
             'active_work_query', 'direct_dispatch_record', 'graph_audit_record',
+            'graph_gate_abandon', 'graph_gate_claim', 'graph_gate_release', 'graph_node_patch', 'graph_view_query',
             'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
-            'note_forget', 'note_upsert', 'operator_status',
+            'note_forget', 'note_upsert', 'operator_status', 'orphaned_pin_notify',
+            'prune_stale_direct',
             'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
-            'record_local', 'recovery_context_query',
+            'record_local', 'recovery_context_query', 'task_stats_query',
             'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ],
     );
@@ -299,4 +309,71 @@ test('activeWorkQuery / recoveryContextQuery decode their computed views', async
     assert.deepEqual(aw.records, []);
     const rc = await recoveryContextQuery(fakeTransport(() => ({ context: { consecutiveNodeFailures: 2, advice: 'retry' } })), { meshId: 'm1', nodeId: 'n1' });
     assert.equal((rc.context as any).consecutiveNodeFailures, 2);
+});
+
+// ─── C-W9c: graph gates/plan/patch, task/mission stats, prune audit, orphaned-pin notify ──
+
+test('graphGateClaim: a refusal is a claimed:false RESULT; a claim carries the lease + gate JSON passthrough', async () => {
+    const refused = await graphGateClaim(fakeTransport(() => ({ claimed: false, reason: 'gate_lease_held', gate: { state: 'claimed' } })), { meshId: 'm1', gateId: 'g1', coordinatorSessionId: 's1' });
+    assert.equal(refused.claimed, false);
+    assert.equal(refused.claimed === false && refused.reason, 'gate_lease_held');
+    const claimed = await graphGateClaim(fakeTransport(() => ({ claimed: true, gate: { graphId: 'gr1', ref: 'a' }, leaseGeneration: 1, fencingToken: 'tok', leaseExpiresAt: 'T' })), { meshId: 'm1', gateId: 'g1', coordinatorSessionId: 's1' });
+    assert.equal(claimed.claimed, true);
+    assert.equal(claimed.claimed === true && claimed.fencingToken, 'tok');
+});
+
+test('graphGateRelease: a thrown domain refusal comes back as released:false + refusalCode, not a thrown TurnIpcCommandError', async () => {
+    const res = await graphGateRelease(
+        fakeTransport(() => ({ success: true, released: false, refusalCode: 'stale_fence', message: 'stale_fence: another coordinator claimed this gate' })),
+        { meshId: 'm1', gateId: 'g1', fencingToken: 'tok', leaseGeneration: 1, idempotencyKey: 'k1', outcome: 'passed' },
+    );
+    assert.equal(res.released, false);
+    assert.equal(res.released === false && res.refusalCode, 'stale_fence');
+});
+
+test('graphGateAbandon: cancelledNodeIds/cancelledTaskIds round-trip on a successful abandon', async () => {
+    const res = await graphGateAbandon(
+        fakeTransport(() => ({ abandoned: true, gate: { state: 'cancelled' }, cancelledNodeIds: ['n1'], cancelledTaskIds: ['t1'], graphStatus: 'cancelled' })),
+        { meshId: 'm1', gateId: 'g1', reason: 'cancelled upstream' },
+    );
+    assert.equal(res.abandoned, true);
+    assert.deepEqual(res.abandoned === true ? res.cancelledNodeIds : [], ['n1']);
+});
+
+test('graphNodePatch: a thrown domain refusal comes back as patched:false + refusalCode', async () => {
+    const res = await graphNodePatch(
+        fakeTransport(() => ({ success: true, patched: false, refusalCode: 'node_patch_forbidden', message: 'node_patch_forbidden: x' })),
+        { meshId: 'm1', node: 'n1', baseSpecPatch: { run_if: false } },
+    );
+    assert.equal(res.patched, false);
+    assert.equal(res.patched === false && res.refusalCode, 'node_patch_forbidden');
+});
+
+test('graphViewQuery: graphs is a JSON-passthrough array', async () => {
+    const res = await graphViewQuery(fakeTransport(() => ({ graphs: [{ graphId: 'g1', gates: [] }] })), { meshId: 'm1' });
+    assert.equal(res.graphs.length, 1);
+});
+
+test('taskStatsQuery: tasks + an optional mission rollup round-trip', async () => {
+    const res = await taskStatsQuery(fakeTransport(() => ({ tasks: [{ taskId: 't1', status: 'completed' }], mission: { missionId: 'ms1', taskCount: 1 } })), { meshId: 'm1', missionId: 'ms1', rollup: true });
+    assert.equal(res.tasks.length, 1);
+    assert.equal((res.mission as any)?.missionId, 'ms1');
+});
+
+test('pruneStaleDirect: dry-run vs execute mode round-trips with the prunable/preserved buckets', async () => {
+    const res = await pruneStaleDirect(fakeTransport(() => ({
+        mode: 'dry_run', includeTerminal: false, candidateCount: 1, prunable: [{ taskId: 't1' }], prunedCount: 0,
+        preservedUnacknowledged: [], preservedLedgerOnly: [], preservedNotOrphan: [],
+    })), { meshId: 'm1' });
+    assert.equal(res.mode, 'dry_run');
+    assert.equal(res.prunable.length, 1);
+});
+
+test('orphanedPinNotify: orphans is a typed array with a free-text title', async () => {
+    const res = await orphanedPinNotify(
+        fakeTransport(() => ({ orphans: [{ taskId: 't2', title: 'do the thing', targetSessionId: 's1' }] })),
+        { meshId: 'm1', stoppedSessionId: 's1', excludeTaskId: 't1' },
+    );
+    assert.equal(res.orphans.length, 1);
+    assert.equal(res.orphans[0].title, 'do the thing');
 });

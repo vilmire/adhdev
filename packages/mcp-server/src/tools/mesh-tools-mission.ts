@@ -2,7 +2,7 @@
 // Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
 // state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
 //
-// MIGRATION STATUS (wiring-unification Phase C, workstreams C-W6 and C-W9b —
+// MIGRATION STATUS (wiring-unification Phase C, workstreams C-W6, C-W9b, C-W9c —
 // docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph):
 // the mission-CRUD functions below (meshMissionUpsert / meshMissionUpsertBulk /
 // meshMissionList) now call `missionUpsert`/`missionQuery`/`missionListQuery`
@@ -12,6 +12,9 @@
 // in-process `readLedgerEntries`/`getLedgerSummary` (the gap this file's C-W6
 // header used to flag — `turn_query`'s shape had no free-form kind-list/node
 // filter, so `ledger_query` is a sibling command, not a `turn_query` widening).
+// C-W9c: meshTaskHistory's M7 per-task stats now call `task_stats_query`
+// instead of the in-process `computeMeshTaskStats` — the REQUESTED EDIT this
+// section used to flag is closed (mesh-graph-ipc.ts, oss/packages/daemon-core).
 //
 // NOT migrated in this pass:
 //   - meshRecordNote / meshForgetNote: write/tombstone `coordinator_operating_note`
@@ -25,15 +28,10 @@
 //     replicated `mesh.<id>.events` topic; a peer's nested payload is read from
 //     the peer. The tool now queries every node's `get_mesh_ledger_slice` (the
 //     local node over its own transport too) and reports the evidence.
-//   - computeMeshTaskStats (meshTaskHistory's M7 per-task stats): a separate
-//     in-process ledger-scanning compute call, not part of any landed IPC
-//     command surface — REQUESTED EDIT, left unchanged (best-effort, does not
-//     block the entries/summary read it augments).
 
 import {
     MESH_MISSION_STATUSES,
     commandForNode,
-    computeMeshTaskStats,
     drainCoordinatorPendingEvents,
     isLocalControlPlaneNode,
     readString,
@@ -44,9 +42,39 @@ import {
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
-import { ledgerQuery, missionListQuery, missionUpsert, missionQuery, noteForget, noteUpsert, recordLocal, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { ledgerQuery, missionListQuery, missionUpsert, missionQuery, noteForget, noteUpsert, recordLocal, taskStatsQuery, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import { buildMeshRecordReconciliationEvidence, buildMeshRecordReplicaEvidence } from './mesh-record-reconcile-evidence.js';
-import type { MeshMissionStatusValue } from '@adhdev/mesh-shared';
+import type { MeshMissionStatusValue, MissionBriefWire } from '@adhdev/mesh-shared';
+
+/**
+ * H2 (mission brief): shape a raw tool `brief` argument into the wire type, without
+ * re-implementing `normalizeMissionBrief`'s validation — that runs authoritatively on
+ * the daemon side (mesh-missions.ts). This only avoids forwarding an obviously
+ * malformed value (non-object, non-string arrays) so the wire guard's `hasOnlyKeys`
+ * does not reject the whole request for a stray extra key or wrong-typed field;
+ * genuine shape problems (e.g. a missing goal) still surface as "no brief attached"
+ * on the daemon, per that module's own non-rejecting philosophy.
+ */
+function coerceBriefArg(value: unknown): MissionBriefWire | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const raw = value as Record<string, unknown>;
+    const goal = typeof raw.goal === 'string' ? raw.goal : '';
+    if (!goal.trim()) return undefined;
+    const asStringArray = (v: unknown): string[] | undefined =>
+        Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : undefined;
+    const brief: MissionBriefWire = { goal };
+    const constraints = asStringArray(raw.constraints);
+    const doneCriteria = asStringArray(raw.doneCriteria);
+    const handoffNotes = asStringArray(raw.handoffNotes);
+    const ownedPaths = asStringArray(raw.ownedPaths);
+    if (constraints) brief.constraints = constraints;
+    if (doneCriteria) brief.doneCriteria = doneCriteria;
+    if (handoffNotes) brief.handoffNotes = handoffNotes;
+    if (ownedPaths) brief.ownedPaths = ownedPaths;
+    return brief;
+}
 
 export async function meshTaskHistory(
     ctx: MeshContext,
@@ -86,14 +114,16 @@ export async function meshTaskHistory(
     // M7: per-task time/attempt stats for tasks visible in the returned window.
     // Derived from ledger truth at query time; incomplete evidence is flagged,
     // never estimated.
-    let taskStats: unknown[] | undefined;
+    // C-W9c: was in-process `computeMeshTaskStats`; now the `task_stats_query`
+    // IPC round trip (computed in the daemon that owns the queue + records).
+    let taskStats: readonly unknown[] | undefined;
     try {
         const taskIds = [...new Set(rawEntries
             .map(e => (typeof e.payload?.taskId === 'string' ? e.payload.taskId : ''))
             .filter(Boolean))] as string[];
         if (taskIds.length > 0) {
-            const stats = computeMeshTaskStats(mesh.id, { taskIds });
-            if (stats.length > 0) taskStats = stats;
+            const { tasks } = await taskStatsQuery(ctx.transport, { meshId: mesh.id, taskIds });
+            if (tasks.length > 0) taskStats = tasks;
         }
     } catch { /* stats are best-effort */ }
     return JSON.stringify({
@@ -401,7 +431,7 @@ function missionIpcErrorResult(e: unknown): { success: false; code?: string; err
 
 export async function meshMissionUpsert(
     ctx: MeshContext,
-    args: { mission_id?: string; missionId?: string; mission_ids?: unknown; missionIds?: unknown; title?: string; goal?: string; status?: string },
+    args: { mission_id?: string; missionId?: string; mission_ids?: unknown; missionIds?: unknown; title?: string; goal?: string; status?: string; brief?: unknown },
 ): Promise<string> {
     // Bulk mode: mission_ids[] + status applies one status to many missions (stale
     // cleanup). Takes precedence over the single mission_id path. title/goal are ignored;
@@ -429,12 +459,14 @@ export async function meshMissionUpsert(
                 error: `invalid_mission_status: '${statusArg}' (valid: ${MESH_MISSION_STATUSES.join(', ')})`,
             });
         }
+        const brief = coerceBriefArg(args.brief);
         const { mission } = await missionUpsert(ctx.transport, {
             meshId: ctx.mesh.id,
             id: readString(args.mission_id) || readString(args.missionId) || undefined,
             title,
             goal: typeof args.goal === 'string' ? args.goal : undefined,
             status: statusArg,
+            ...(brief !== undefined ? { brief } : {}),
         });
         return JSON.stringify({
             success: true,

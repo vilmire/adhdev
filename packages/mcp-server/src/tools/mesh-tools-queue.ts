@@ -27,7 +27,6 @@ import {
     // GRAPH-ORCHESTRATION Phase E — batch v2 plan commit + enqueue provenance.
     normalizeOrchestrationDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-    getMeshMission,
     normalizeMeshTaskPriority,
     resolveNotBefore,
     filterQueueForView,
@@ -39,7 +38,6 @@ import {
     normalizeMeshCapabilityTags,
     providerPinsFromRequiredTags,
     normalizeQueueViewMode,
-    notifyCoordinatorOfOrphanedPins,
     buildOrphanedPinNotice,
     prioritizeActiveQueueRows,
     readString,
@@ -65,7 +63,9 @@ import { summarizeQueueEntryInputForView, resolveDispatchMessage, type Dispatcha
 import { buildGraphPlanShape } from './mesh-tools-graph.js';
 // C-W9a: the queue and the records are the daemon's — every read and mutation
 // below goes over its IPC commands (the mcp-server never opens mesh-runtime.db).
-import { queueCancel, queueEnqueue, queueEnqueueGraph, queueQuery, queueRequeue, recordLocal } from '../ipc/turn-commands.js';
+// C-W9c: + mission_query (mission_id existence check) and orphaned_pin_notify
+// (CANCEL-ORPHANS-PINNED-TASK) — the last in-process daemon-core calls this file made.
+import { missionQuery, orphanedPinNotify, queueCancel, queueEnqueue, queueEnqueueGraph, queueQuery, queueRequeue, recordLocal } from '../ipc/turn-commands.js';
 import { MESH_TASK_GRAPH_MAX_TASKS } from '@adhdev/daemon-core';
 import type { MeshGraphPlanResult, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
@@ -216,11 +216,11 @@ type NormalizeEnqueueTaskResult =
  * `callerLabel` scopes error text ('mesh_enqueue_task' vs "mesh_enqueue_batch
  * task 'fix'").
  */
-function normalizeEnqueueTaskArgs(
+async function normalizeEnqueueTaskArgs(
     ctx: MeshContext,
     args: EnqueueTaskArgsShape,
     callerLabel: string,
-): NormalizeEnqueueTaskResult {
+): Promise<NormalizeEnqueueTaskResult> {
     // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
     // tool dispatcher forwards raw args without runtime schema validation, so a caller
     // that omits message (or passes a non-string) would otherwise hand undefined to
@@ -258,7 +258,9 @@ function normalizeEnqueueTaskArgs(
     // warning (buildMissionInactiveWarning only warns for a KNOWN-but-inactive mission —
     // see its own doc comment). Reject loudly here, mirroring target_node_not_found below,
     // rather than letting the task enqueue unattributed under a typo'd/truncated id.
-    if (missionId && !getMeshMission(ctx.mesh.id, missionId)) {
+    // C-W9c: was in-process `getMeshMission`; now the `mission_query` IPC round
+    // trip mesh-tools-mission.ts's read path already uses.
+    if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
         return {
             ok: false,
             code: 'mission_not_found',
@@ -570,7 +572,7 @@ export async function meshEnqueueTask(
     // listed 7 nodes). Best-effort: a refresh failure leaves the previous
     // behavior unchanged.
     await refreshMeshFromDaemon(ctx);
-    const normalized = normalizeEnqueueTaskArgs(ctx, args, 'mesh_enqueue_task');
+    const normalized = await normalizeEnqueueTaskArgs(ctx, args, 'mesh_enqueue_task');
     if (!normalized.ok) {
         return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
     }
@@ -665,7 +667,7 @@ export async function meshEnqueueTask(
             : {};
         // MISSION-STATUS-TASK-WARNING: warn (never block) when this task attaches to a
         // mission that is paused/completed/abandoned — see buildMissionInactiveWarning.
-        const missionWarning = buildMissionInactiveWarning(ctx, missionId) ?? {};
+        const missionWarning = (await buildMissionInactiveWarning(ctx, missionId)) ?? {};
         // WORKTREE-ROUTING-ADVISORY (b1): advisory only — never blocks, never re-routes.
         const worktreeAdvisory = buildUntargetedCodeChangeWorktreeAdvisory({
             taskMode, readonly, requiredTags, targetNodeId, preferWorktree,
@@ -849,7 +851,7 @@ export async function meshEnqueueBatch(
         }
     }
 
-    if (batchMissionId && !getMeshMission(ctx.mesh.id, batchMissionId)) {
+    if (batchMissionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: batchMissionId })).missions[0]) {
         return JSON.stringify({
             success: false,
             code: 'mission_not_found',
@@ -882,7 +884,7 @@ export async function meshEnqueueBatch(
         const entry = rawTasks[i] ?? ({} as EnqueueTaskArgsShape & { ref?: string });
         const ref = readString((entry as { ref?: string }).ref) || undefined;
         const label = ref ? `task '${ref}'` : `task #${i}`;
-        const normalized = normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
+        const normalized = await normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
         if (!normalized.ok) {
             return JSON.stringify({
                 success: false,
@@ -1022,9 +1024,8 @@ export async function meshEnqueueBatch(
     // ── Post-insert (best-effort, never undoes the committed batch): mission
     //    warnings, routing advisories, queue drain, cloud eager push for roots. ──
     const distinctMissionIds = [...new Set(specs.map(s => s.missionId).filter((m): m is string => !!m))];
-    const missionWarning = distinctMissionIds
-        .map(missionId => buildMissionInactiveWarning(ctx, missionId))
-        .find(w => w !== null) ?? {};
+    const missionWarnings = await Promise.all(distinctMissionIds.map(missionId => buildMissionInactiveWarning(ctx, missionId)));
+    const missionWarning = missionWarnings.find(w => w !== undefined) ?? {};
     const advisoryTasks: string[] = [];
     normalizedEntries.forEach((entry, i) => {
         const advisory = buildUntargetedCodeChangeWorktreeAdvisory({
@@ -1465,18 +1466,25 @@ export async function meshQueueCancel(
         // — "that session is alive and working another task, so I did not kill it". No session
         // died, so nothing pinned to it is orphaned, and paging the coordinator would be a
         // false alarm telling it to requeue work that is fine where it is.
+        // C-W9c: was in-process `notifyCoordinatorOfOrphanedPins` (a live queue read
+        // + a `notifyMeshCoordinator` event write, both daemon-only concerns); now
+        // the `orphaned_pin_notify` IPC round trip runs the whole call in the daemon.
         let orphanedPinnedTasks: OrphanedPinnedTask[] = [];
         if (workerStop.attempted && assignedSessionId && workerStop.skipped !== 'session_moved_to_other_task') {
             try {
-                orphanedPinnedTasks = notifyCoordinatorOfOrphanedPins(ctx.mesh.id, assignedSessionId, {
+                const { orphans } = await orphanedPinNotify(ctx.transport, {
+                    meshId: ctx.mesh.id,
+                    stoppedSessionId: assignedSessionId,
                     excludeTaskId: taskId,
                     cause: `Cancelling task ${taskId}`,
                     ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
                     ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
                 });
+                orphanedPinnedTasks = orphans as unknown as OrphanedPinnedTask[];
             } catch {
-                // The helper already logs its own failures (queue read / event persist).
-                // This outer catch only guarantees the cancel response is still returned.
+                // The daemon-side helper already logs its own failures (queue read /
+                // event persist). This outer catch only guarantees the cancel response
+                // is still returned.
                 orphanedPinnedTasks = [];
             }
         }

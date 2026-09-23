@@ -16,6 +16,15 @@
  *  - `mesh_graph_gate_abandon` → abandonMeshGraphGate (design :399)
  *  - `mesh_graph_view`         → buildMeshGraphViews  (design :759-775)
  *
+ * C-W9c (wiring-unification, 2026-09-24 19:00 stamp): every one of those cores
+ * — plus `patchGraphNodeAndRetry` and `collectGateConvergenceEvidence` — now
+ * runs in the daemon that owns the graph rows, reached over the
+ * `graph_gate_claim` / `graph_gate_release` / `graph_gate_abandon` /
+ * `graph_node_patch` / `graph_view_query` IPC commands (`../ipc/turn-commands.js`,
+ * `@adhdev/mesh-shared` `turn-ipc.ts`). This file is now a thin client + the
+ * response-shape mapping (`gateField()` below reads the wire's JSON-passthrough
+ * `gate` object) — the tool-facing JSON shape is unchanged from before the move.
+ *
  * There is NO tool that expires, force-releases, or auto-passes a gate. The
  * deadline sweep runs on the daemon reconcile tick and can only EXPIRE a gate
  * (design :431-432: no `auto_release`; elapsed time is never completion
@@ -48,23 +57,18 @@
  */
 
 import {
-    claimMeshGraphGate,
-    releaseMeshGraphGate,
-    abandonMeshGraphGate,
-    buildMeshGraphViews,
-    collectGateConvergenceEvidence,
     requestUsesGraphV2,
-    patchGraphNodeAndRetry,
     MESH_NODE_PATCH_KEYS,
     readString,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
-    triggerMeshQueueAndReport,
 } from './mesh-tools-internal.js';
 import type { MeshContext, MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from './mesh-tools-internal.js';
-// C-W9a: gate / node-patch provenance is written by the daemon's allow-listed
-// recorders (daemon-core's graph provenance module) over IPC — best-effort like before.
-import { graphAuditRecord } from '../ipc/turn-commands.js';
+// C-W9c: the whole graph-gate/patch/view core now runs in the daemon that owns
+// the graph rows — claim/release/abandon/patch/view and the gate's provenance
+// audit record and post-materialization queue nudge all happen there in one
+// round trip. This tool layer is now a thin client + response-shape mapper.
+import { graphGateAbandon, graphGateClaim, graphGateRelease, graphNodePatch, graphViewQuery } from '../ipc/turn-commands.js';
 
 // ── batch v2 request normalization (design :566-592) ─────────────────────────
 //
@@ -189,25 +193,13 @@ export function buildGraphPlanShape(
 }
 
 /**
- * Rejection codes `releaseMeshGraphGate` throws (design :417-421). Matched by
- * prefix so the LLM caller gets a stable `code` instead of parsing prose.
+ * `MeshGraphGateRow` field reader — the wire carries `gate` as a JSON
+ * passthrough (`Record<string, unknown>`, see turn-ipc.ts's content-boundary
+ * note on this section), so every access goes through this instead of a typed
+ * property read.
  */
-const GATE_RELEASE_ERROR_CODES = [
-    'gate_not_found',
-    'gate_release_conflict',
-    'gate_already_released',
-    'gate_not_claimed',
-    'stale_fence',
-    'gate_lease_expired',
-    'gate_upstream_unsettled',
-    'gate_patch_not_downstream',
-    'gate_patch_forbidden',
-    'task_already_claimed',
-    'graph_node_not_found',
-] as const;
-
-function classifyGateError(message: string): string | undefined {
-    return GATE_RELEASE_ERROR_CODES.find(code => message.startsWith(`${code}:`) || message.includes(`${code}:`));
+function gateField(gate: Record<string, unknown> | undefined, key: string): any {
+    return gate ? (gate as any)[key] : undefined;
 }
 
 /**
@@ -263,12 +255,16 @@ export async function meshGraphGateClaim(
     const extendDeadlineSeconds = readNumber(args.extend_deadline_seconds ?? args.extendDeadlineSeconds);
 
     try {
-        const result = claimMeshGraphGate({
+        // C-W9c: the claim, its provenance audit record and the G4 convergence-
+        // evidence probe all run in the daemon now — one round trip instead of
+        // an in-process claim + a separate graphAuditRecord IPC call.
+        const result = await graphGateClaim(ctx.transport, {
             meshId: ctx.mesh.id,
             gateId,
             coordinatorSessionId,
             ...(leaseSeconds !== undefined ? { leaseSeconds } : {}),
             ...(extendDeadlineSeconds !== undefined ? { extendDeadlineSeconds } : {}),
+            probeConvergenceEvidence: true,
         });
         if (!result.claimed) {
             // An expected refusal, not an error: the caller may legitimately retry
@@ -278,46 +274,26 @@ export async function meshGraphGateClaim(
                 claimed: false,
                 code: result.reason ?? 'gate_not_claimable',
                 gateId,
-                ...(result.gate ? { gateState: result.gate.state, action: result.gate.action } : {}),
-                error: describeClaimRefusal(result.reason, result.gate?.state),
+                ...(result.gate ? { gateState: gateField(result.gate, 'state'), action: gateField(result.gate, 'action') } : {}),
+                error: describeClaimRefusal(result.reason, gateField(result.gate, 'state')),
             });
         }
-        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_claimed', fields: {
-            graphId: result.gate!.graphId,
-            gateId,
-            ref: result.gate!.ref,
-            action: result.gate!.action,
-            generation: result.leaseGeneration!,
-            ownerSessionId: coordinatorSessionId,
-            leaseExpiresAt: result.leaseExpiresAt,
-            ambiguousExternalOutcome: result.ambiguousExternalOutcome,
-            previousLeaseOwnerSessionId: result.previousLeaseOwnerSessionId,
-        } }).catch(() => undefined);
-        // G4: read-only convergence evidence — did the guarded work already land?
-        // Runs AFTER the claim transaction committed, outside any DB lock; git
-        // reachability against local origin/main, fail-soft to null. Evidence
-        // never releases anything; it arms the coordinator to release with
-        // evidence instead of re-running an already-landed action.
-        let convergenceEvidence = null;
-        try {
-            convergenceEvidence = await collectGateConvergenceEvidence(ctx.mesh.id, gateId);
-        } catch { /* evidence is an enhancement — a probe fault never fails the claim */ }
         return JSON.stringify({
             success: true,
             claimed: true,
             gateId,
-            graphId: result.gate!.graphId,
-            ...(convergenceEvidence ? { convergenceEvidence } : {}),
-            ...(result.gate!.ref ? { ref: result.gate!.ref } : {}),
-            action: result.gate!.action,
-            ...(result.gate!.instructions ? { instructions: result.gate!.instructions } : {}),
+            graphId: gateField(result.gate, 'graphId'),
+            ...(result.convergenceEvidence ? { convergenceEvidence: result.convergenceEvidence } : {}),
+            ...(gateField(result.gate, 'ref') ? { ref: gateField(result.gate, 'ref') } : {}),
+            action: gateField(result.gate, 'action'),
+            ...(gateField(result.gate, 'instructions') ? { instructions: gateField(result.gate, 'instructions') } : {}),
             // ★ Both values are REQUIRED by mesh_graph_gate_release. Losing them
             // means the lease must lapse before anyone can act on the gate again.
             leaseGeneration: result.leaseGeneration,
             fencingToken: result.fencingToken,
             leaseExpiresAt: result.leaseExpiresAt,
             ...(result.deadlineAt ? { deadlineAt: result.deadlineAt } : {}),
-            onTimeout: result.gate!.onTimeout,
+            onTimeout: gateField(result.gate, 'onTimeout'),
             ...(result.ambiguousExternalOutcome
                 ? {
                     ambiguousExternalOutcome: true,
@@ -334,7 +310,7 @@ export async function meshGraphGateClaim(
         });
     } catch (e: any) {
         const message = e?.message || String(e);
-        return JSON.stringify({ success: false, claimed: false, gateId, code: classifyGateError(message), error: message });
+        return JSON.stringify({ success: false, claimed: false, gateId, error: message });
     }
 }
 
@@ -415,7 +391,11 @@ export async function meshGraphGateRelease(
         .filter(p => p.node.length > 0);
 
     try {
-        const result = releaseMeshGraphGate({
+        // C-W9c: release, its provenance audit record, and the post-materialization
+        // queue nudge all run in the daemon now. A domain refusal comes back as a
+        // RESULT (`released: false` + `refusalCode`) — releaseMeshGraphGate's THROW
+        // is caught daemon-side (mesh-graph-ipc.ts) rather than crossing the wire.
+        const result = await graphGateRelease(ctx.transport, {
             meshId: ctx.mesh.id,
             gateId: gateId!,
             fencingToken: fencingToken!,
@@ -426,22 +406,28 @@ export async function meshGraphGateRelease(
             ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
             ...(patches.length > 0 ? { patches } : {}),
         });
-        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_released', fields: {
-            graphId: result.gate!.graphId,
-            gateId: gateId!,
-            ref: result.gate!.ref,
-            action: result.gate!.action,
-            outcome: outcome!,
-            generation: leaseGeneration!,
-            releaseDigest: result.gate!.releaseEvidenceDigest,
-            materializedNodeIds: result.materializedNodeIds,
-            duplicate: result.duplicate,
-        } }).catch(() => undefined);
-        // Newly materialized downstream rows are claimable now — nudge the queue so
-        // an idle node picks them up without waiting for the next reconcile tick.
-        const queueTrigger = result.materializedNodeIds.length > 0
-            ? await triggerMeshQueueAndReport(ctx)
-            : undefined;
+        if (!result.released) {
+            const code = result.refusalCode;
+            return JSON.stringify({
+                success: false,
+                released: false,
+                gateId,
+                ...(code ? { code } : {}),
+                error: result.message,
+                ...(code === 'gate_lease_expired'
+                    ? {
+                        hint: 'The lease expired before the release. Elapsed time is never completion evidence, so the release is refused. '
+                            + 'Re-claim the gate (you get a HIGHER generation), reconcile whether the external action already landed, then release.',
+                    }
+                    : {}),
+                ...(code === 'stale_fence'
+                    ? { hint: 'Another coordinator has claimed this gate since your claim. Your token is stale — re-claim before releasing.' }
+                    : {}),
+                ...(code === 'gate_release_conflict'
+                    ? { hint: 'This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload.' }
+                    : {}),
+            });
+        }
         // ── P3: interpret materializedCount: 0 ───────────────────────────────────
         //
         // `materializedCount: 0` is otherwise silent — the coordinator has no way to tell
@@ -470,8 +456,8 @@ export async function meshGraphGateRelease(
             // error — that is what makes a retried release safe (design :420-421).
             duplicate: result.duplicate,
             gateId,
-            graphId: result.gate!.graphId,
-            ...(result.gate!.ref ? { ref: result.gate!.ref } : {}),
+            graphId: gateField(result.gate, 'graphId'),
+            ...(gateField(result.gate, 'ref') ? { ref: gateField(result.gate, 'ref') } : {}),
             outcome,
             materializedNodeIds: result.materializedNodeIds,
             materializedCount: result.materializedNodeIds.length,
@@ -483,33 +469,13 @@ export async function meshGraphGateRelease(
                         + 'it at this gate with gated_by, so releasing the gate dispatches it — or drop the gate and enqueue that step directly.',
                 }
                 : {}),
-            ...(queueTrigger ? { queueTrigger } : {}),
             ...(result.duplicate
                 ? { duplicateHint: 'This idempotency_key + payload was already committed; nothing changed. Re-sending an identical release is safe.' }
                 : {}),
         });
     } catch (e: any) {
         const message = e?.message || String(e);
-        const code = classifyGateError(message);
-        return JSON.stringify({
-            success: false,
-            released: false,
-            gateId,
-            ...(code ? { code } : {}),
-            error: message,
-            ...(code === 'gate_lease_expired'
-                ? {
-                    hint: 'The lease expired before the release. Elapsed time is never completion evidence, so the release is refused. '
-                        + 'Re-claim the gate (you get a HIGHER generation), reconcile whether the external action already landed, then release.',
-                }
-                : {}),
-            ...(code === 'stale_fence'
-                ? { hint: 'Another coordinator has claimed this gate since your claim. Your token is stale — re-claim before releasing.' }
-                : {}),
-            ...(code === 'gate_release_conflict'
-                ? { hint: 'This idempotency_key was already used with a DIFFERENT payload. Use a new key, or re-send the identical payload.' }
-                : {}),
-        });
+        return JSON.stringify({ success: false, released: false, gateId, error: message });
     }
 }
 
@@ -559,7 +525,8 @@ export async function meshGraphGateAbandon(
     const coordinatorSessionId = resolveGateSession(ctx, args.coordinator_session_id ?? args.coordinatorSessionId);
 
     try {
-        const result = abandonMeshGraphGate({
+        // C-W9c: the abandon and its provenance audit record both run in the daemon now.
+        const result = await graphGateAbandon(ctx.transport, {
             meshId: ctx.mesh.id,
             gateId: gateId!,
             reason: reason!,
@@ -572,27 +539,11 @@ export async function meshGraphGateAbandon(
                 abandoned: false,
                 code: result.reason ?? 'gate_not_abandonable',
                 gateId,
-                ...(result.gate ? { gateState: result.gate.state, action: result.gate.action } : {}),
-                error: describeAbandonRefusal(result.reason, result.gate?.state),
+                ...(result.gate ? { gateState: gateField(result.gate, 'state'), action: gateField(result.gate, 'action') } : {}),
+                error: describeAbandonRefusal(result.reason, gateField(result.gate, 'state')),
             });
         }
         const duplicate = result.reason === 'gate_already_abandoned';
-        if (!duplicate) {
-            await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'gate_abandoned', fields: {
-                graphId: result.gate!.graphId,
-                gateId: gateId!,
-                ref: result.gate!.ref,
-                action: result.gate!.action,
-                // The gate row already carries `cancelled`; the PRIOR state is what
-                // says whether this closed an open gate or a stranded expired one.
-                priorState: result.gate!.state,
-                reason: reason!,
-                ...(coordinatorSessionId ? { coordinatorSessionId } : {}),
-                ...(args.force === true ? { force: true } : {}),
-                cancelledNodeIds: result.cancelledNodeIds,
-                ...(result.graphStatus ? { graphStatus: result.graphStatus } : {}),
-            } }).catch(() => undefined);
-        }
         return JSON.stringify({
             success: true,
             abandoned: true,
@@ -600,9 +551,9 @@ export async function meshGraphGateAbandon(
             // never has to tell "I did it" from "it was already done".
             duplicate,
             gateId,
-            graphId: result.gate!.graphId,
-            ...(result.gate!.ref ? { ref: result.gate!.ref } : {}),
-            gateState: result.gate!.state,
+            graphId: gateField(result.gate, 'graphId'),
+            ...(gateField(result.gate, 'ref') ? { ref: gateField(result.gate, 'ref') } : {}),
+            gateState: gateField(result.gate, 'state'),
             cancelledNodeIds: result.cancelledNodeIds,
             cancelledCount: result.cancelledNodeIds.length,
             ...(result.cancelledTaskIds.length > 0 ? { cancelledTaskIds: result.cancelledTaskIds } : {}),
@@ -636,30 +587,6 @@ function describeAbandonRefusal(reason: string | undefined, state?: string): str
             }
             return `The gate could not be abandoned (${reason ?? 'unknown reason'}).`;
     }
-}
-
-/**
- * Rejection codes `patchGraphNodeAndRetry` throws, matched by prefix like the
- * gate codes so the caller gets a stable `code` rather than prose.
- */
-const NODE_PATCH_ERROR_CODES = [
-    'graph_node_not_found',
-    'graph_not_found',
-    'ambiguous_node_ref',
-    'node_not_patchable',
-    'node_patch_forbidden',
-    'task_already_claimed',
-] as const;
-
-function classifyNodePatchError(e: unknown, message: string): string | undefined {
-    // A rejected replacement binding is a MeshMaterializationError, whose message
-    // carries NO code prefix — it exposes the code as a field instead. Read that
-    // field rather than pattern-matching prose, so the caller gets the parser's
-    // own precise vocabulary (`invalid_selector` vs `invalid_binding_spec`)
-    // instead of one flattened code.
-    const code = (e as { code?: unknown } | undefined)?.code;
-    if (typeof code === 'string' && code) return code;
-    return NODE_PATCH_ERROR_CODES.find(c => message.startsWith(`${c}:`) || message.includes(`${c}:`));
 }
 
 /**
@@ -724,28 +651,39 @@ export async function meshGraphNodePatch(
 
     const graphId = readString(args.graph_id) || readString(args.graphId);
     try {
-        const result = patchGraphNodeAndRetry({
+        // C-W9c: the patch, its provenance audit record, and the post-materialization
+        // queue nudge all run in the daemon now. A domain refusal comes back as a
+        // RESULT (`patched: false` + `refusalCode`) — patchGraphNodeAndRetry's THROW
+        // is caught daemon-side (mesh-graph-ipc.ts) rather than crossing the wire.
+        const result = await graphNodePatch(ctx.transport, {
             meshId: ctx.mesh.id,
             node: node!,
             ...(graphId ? { graphId } : {}),
             baseSpecPatch: patch!,
         });
-        const recovered = result.outcome.kind === 'materialized';
-        await graphAuditRecord(ctx.transport, { meshId: ctx.mesh.id, event: 'node_patched', fields: {
-            graphId: result.graphId,
-            nodeId: result.nodeId,
-            ...(result.ref ? { ref: result.ref } : {}),
-            ...(result.queueTaskId ? { queueTaskId: result.queueTaskId } : {}),
-            patchedKeys: Object.keys(patch!),
-            outcome: result.outcome.kind,
-            state: result.state,
-            ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
-            materializationVersion: result.materializationVersion,
-            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        } }).catch(() => undefined);
-        // A recovered node is claimable now — nudge the queue rather than waiting
-        // for the next reconcile tick, exactly as a gate release does.
-        const queueTrigger = recovered ? await triggerMeshQueueAndReport(ctx) : undefined;
+        if (!result.patched) {
+            const code = result.refusalCode;
+            return JSON.stringify({
+                success: false,
+                patched: false,
+                node,
+                ...(code ? { code } : {}),
+                error: result.message,
+                ...(code === 'task_already_claimed'
+                    ? {
+                        hint: 'This node\'s task is already assigned or finished, and an assigned task is immutable. If the work must change, '
+                            + 'cancel it with mesh_queue_cancel and enqueue the corrected step.',
+                    }
+                    : {}),
+                ...(code === 'node_patch_forbidden'
+                    ? { hint: `Only ${MESH_NODE_PATCH_KEYS.join(', ')} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy — enqueue a new task instead.` }
+                    : {}),
+                ...(code === 'ambiguous_node_ref'
+                    ? { hint: 'That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view.' }
+                    : {}),
+            });
+        }
+        const recovered = result.outcomeKind === 'materialized';
         return JSON.stringify({
             success: true,
             patched: true,
@@ -757,15 +695,14 @@ export async function meshGraphNodePatch(
             materializationVersion: result.materializationVersion,
             // ★ The patch and the RETRY are one transaction, so this answers "did
             // it actually work?" now — the caller never has to poll to find out.
-            retryOutcome: result.outcome.kind,
+            retryOutcome: result.outcomeKind,
             recovered,
             state: result.state,
             ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
-            ...(queueTrigger ? { queueTrigger } : {}),
             ...(recovered
                 ? { note: 'The node materialized and its task is claimable again.' }
                 : {}),
-            ...(result.outcome.kind === 'error'
+            ...(result.outcomeKind === 'error'
                 ? {
                     hint: `The patch was applied but the node still cannot materialize (${result.blockedReason ?? 'see blockedReason'}). `
                         + 'Read the new reason: `required_input_missing` means the upstream genuinely never produced that field — '
@@ -773,38 +710,19 @@ export async function meshGraphNodePatch(
                         + '`invalid_binding_spec` mean the replacement is still malformed. Inspect the upstream envelope with mesh_graph_view.',
                 }
                 : {}),
-            ...(result.outcome.kind === 'deferred'
+            ...(result.outcomeKind === 'deferred'
                 ? {
                     hint: 'The patch was applied but the node is not ready to settle yet — a predecessor has not completed, or an '
                         + 'incoming gate is still unreleased. It will settle on its own when they do; nothing further is needed here.',
                 }
                 : {}),
-            ...(result.outcome.kind === 'skipped'
-                ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.outcome.reason}). Skipped is terminal and never satisfies a downstream dependency.` }
+            ...(result.outcomeKind === 'skipped'
+                ? { hint: `The patched run_if evaluated FALSE, so the node is now skipped (${result.skippedReason}). Skipped is terminal and never satisfies a downstream dependency.` }
                 : {}),
         });
     } catch (e: any) {
         const message = e?.message || String(e);
-        const code = classifyNodePatchError(e, message);
-        return JSON.stringify({
-            success: false,
-            patched: false,
-            node,
-            ...(code ? { code } : {}),
-            error: message,
-            ...(code === 'task_already_claimed'
-                ? {
-                    hint: 'This node\'s task is already assigned or finished, and an assigned task is immutable. If the work must change, '
-                        + 'cancel it with mesh_queue_cancel and enqueue the corrected step.',
-                }
-                : {}),
-            ...(code === 'node_patch_forbidden'
-                ? { hint: `Only ${MESH_NODE_PATCH_KEYS.join(', ')} may be patched. A task's message, routing, permissions, task mode and model are immutable by policy — enqueue a new task instead.` }
-                : {}),
-            ...(code === 'ambiguous_node_ref'
-                ? { hint: 'That ref exists in more than one live graph. Pass graph_id, or use the exact node id from mesh_graph_view.' }
-                : {}),
-        });
+        return JSON.stringify({ success: false, patched: false, node, error: message });
     }
 }
 
@@ -834,31 +752,18 @@ export async function meshGraphView(
         const batchId = readString(args.batch_id) || readString(args.batchId);
         const includeTerminal = args.include_terminal === true || args.includeTerminal === true;
         const probeGateEvidence = args.probe_gate_evidence === true || args.probeGateEvidence === true;
-        const graphs = buildMeshGraphViews(ctx.mesh.id, {
+        // C-W9c: buildMeshGraphViews and the G4 gate-evidence probe both run in the
+        // daemon now — one round trip returns the fully-assembled view.
+        const { graphs } = await graphViewQuery(ctx.transport, {
+            meshId: ctx.mesh.id,
             ...(graphId ? { graphId } : {}),
             ...(batchId ? { batchId } : {}),
             activeOnly: !includeTerminal,
             ...(readNumber(args.limit) !== undefined ? { limit: readNumber(args.limit) } : {}),
+            ...(probeGateEvidence ? { probeGateEvidence: true } : {}),
         });
-        // G4 (opt-in, default OFF — views stay cheap and git-free without the flag):
-        // attach convergence evidence to waiting gates so "did this already land?"
-        // is answerable without claiming. Bounded to the first few gates.
-        if (probeGateEvidence) {
-            let probesLeft = 5;
-            for (const graph of graphs) {
-                for (const gate of graph.gates ?? []) {
-                    if (probesLeft <= 0) break;
-                    if (gate.state !== 'awaiting_coordinator' && gate.state !== 'expired') continue;
-                    probesLeft -= 1;
-                    try {
-                        const evidence = await collectGateConvergenceEvidence(ctx.mesh.id, gate.gateId);
-                        if (evidence) gate.convergenceEvidence = evidence;
-                    } catch { /* fail-soft: the view never breaks on a probe fault */ }
-                }
-            }
-        }
-        const pendingActions = graphs.flatMap(g =>
-            (g.nextCoordinatorAction ?? []).map(a => ({ graphId: g.graphId, ...a })));
+        const pendingActions = graphs.flatMap((g: any) =>
+            (g.nextCoordinatorAction ?? []).map((a: any) => ({ graphId: g.graphId, ...a })));
         return JSON.stringify({
             success: true,
             meshId: ctx.mesh.id,

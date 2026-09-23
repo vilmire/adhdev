@@ -27,14 +27,12 @@ import {
     extractStatusMetadataSessions,
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
-    getMeshMission,
     getSessionMetadata,
     getWorktreeBootstrapLaunchBlock,
     hasRecentDuplicateDispatch,
     ipcDispatchToRemoteAgent,
     reconcileDirectDispatchesFromTranscriptEvidence,
     readActiveWorkFromDaemon,
-    readQueueFromDaemon,
     recordMeshCoordinatorToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
@@ -47,7 +45,6 @@ import {
     meshSessionCacheKey,
     meshSessionProviderMetadata,
     missingProviderPriorityMessage,
-    pruneStaleDirectDispatches,
     randomUUID,
     readProviderPriority,
     readSessionRecordId,
@@ -91,7 +88,7 @@ import { resolveDispatchMessage } from '@adhdev/daemon-core';
 // via IPC, instead of the legacy openTurnAttempt/recordTurnAck pair that
 // recordDirectDispatchTask used to trigger in-process. See the design's C2
 // paragraph and the C-W6c report's "direct dispatch end to end" deliverable.
-import { directDispatchRecord, queueEnqueue, recordLocal, turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { directDispatchRecord, missionQuery, pruneStaleDirect, queueEnqueue, recordLocal, turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 
 
@@ -260,51 +257,28 @@ export async function meshPruneStaleDirect(
     const execute = args.execute === true && args.dry_run !== true;
     const includeTerminal = args.include_terminal === true;
 
-    const liveNodes = await collectMeshViewQueueNodesWithLiveSessions(ctx);
-    // C-W9a: the prune's inputs (records, open direct dispatches, queue) come from the
-    // daemon over IPC; the prune's decisions are unchanged.
-    const pruneInputs = await readActiveWorkFromDaemon(ctx, { compute: false, includeInputs: true, recordTail: 500 });
-    const ledgerEntries = pruneInputs.records;
-    const directDispatches = pruneInputs.directDispatches;
-    const pruneQueue = await readQueueFromDaemon(ctx);
-
-    // Manual prune is immediate (minAgeMs omitted → 0). The same prune core powers the daemon
-    // reconcile-loop auto-prune, which passes a conservative age gate. Keeping a single core
-    // means the safety classification + audit-ledger behavior can never drift between the two.
-    const result = await pruneStaleDirectDispatches({
+    // C-W9c: the whole prune core (inputs, decision, deletion, audit record, and
+    // closing each prunable dispatch's open mesh_direct turn-ledger attempt) now
+    // runs in the daemon — one round trip instead of reading records/queue over
+    // IPC and reconstructing the closeDispatches closure over turn_cancel here.
+    const result = await pruneStaleDirect(ctx.transport, {
         meshId: ctx.mesh.id,
-        queue: pruneQueue,
-        ledgerEntries,
-        directDispatches,
-        nodes: liveNodes,
         execute,
         includeTerminal,
         source: 'mesh_prune_stale_direct',
-        // C-W8: each prunable dispatch is an open mesh_direct attempt on the daemon's
-        // turn ledger — close it there (`turn_cancel`), not in this process.
-        closeDispatches: async (taskIds) => {
-            let closed = 0;
-            for (const taskId of taskIds) {
-                try {
-                    const res = await turnCancel(ctx.transport, { taskId, reason: 'intentional_cleanup' });
-                    if (res.verdict === 'applied') closed += 1;
-                } catch { /* best-effort — the next prune pass retries */ }
-            }
-            return closed;
-        },
     });
 
     const { prunable, prunedCount, preservedUnacknowledged, preservedLedgerOnly, preservedNotOrphan } = result;
 
     const summarize = (records: typeof prunable) => records.map(r => ({
-        taskId: r.taskId,
-        nodeId: r.nodeId,
-        sessionId: r.sessionId,
-        status: r.status,
+        taskId: r.taskId as string,
+        nodeId: r.nodeId as string | undefined,
+        sessionId: r.sessionId as string | undefined,
+        status: r.status as string | undefined,
         terminal: r.terminal === true,
-        staleReason: r.staleReason,
-        taskTitle: r.taskTitle,
-        createdAt: r.createdAt,
+        staleReason: r.staleReason as string | undefined,
+        taskTitle: r.taskTitle as string | undefined,
+        createdAt: r.createdAt as string | undefined,
     }));
 
     return JSON.stringify({
@@ -339,6 +313,8 @@ export async function meshSendTask(
         task_mode?: string; taskMode?: string;
         readonly?: boolean; read_only?: boolean;
         mission_id?: string; missionId?: string;
+        /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths doc. */
+        owned_paths?: unknown; ownedPaths?: unknown;
         difficulty?: string;
         delivery_mode?: string; deliveryMode?: string;
         /** GRAPH-MEASUREMENT-DIRECT — optional dispatch-decision record (provenance only). */
@@ -379,12 +355,19 @@ export async function meshSendTask(
     // task aggregates — see recordDirectDispatchTask. Absent → unattributed
     // direct dispatch as before (backward compatible).
     const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
+    // H1 (path ownership): raw passthrough — normalizeOwnedPaths (daemon-side, inside
+    // recordDirectDispatchTask) does the real validation/normalization; here we only
+    // avoid forwarding a non-array value.
+    const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
+    const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : undefined;
     // MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id previously dispatched fine
     // and only produced silence — buildMissionInactiveWarning (used further below) warns
     // solely for a KNOWN-but-inactive mission and returns undefined for an unknown id (see
     // its own doc comment), so the task landed unattributed with zero feedback. Reject at
     // the tool boundary, same convention as invalid_message/missing_difficulty above.
-    if (missionId && !getMeshMission(ctx.mesh.id, missionId)) {
+    // C-W9c: was in-process `getMeshMission`; now the `mission_query` IPC round
+    // trip mesh-tools-mission.ts's read path already uses.
+    if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
         return JSON.stringify({
             success: false,
             code: 'mission_not_found',
@@ -689,6 +672,7 @@ export async function meshSendTask(
                         message,
                         task: {
                             ...(missionId ? { missionId } : {}),
+                            ...(ownedPaths ? { ownedPaths } : {}),
                             assignedNodeId: args.node_id,
                             assignedSessionId: dispatchedSessionId,
                             taskMode,
@@ -732,7 +716,7 @@ export async function meshSendTask(
                 taskMode,
                 ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
                 dispatched: result.success === true,
-                ...(result.success ? (buildMissionInactiveWarning(ctx, missionId) ?? {}) : {}),
+                ...(result.success ? ((await buildMissionInactiveWarning(ctx, missionId)) ?? {}) : {}),
                 // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
                 // actually happened — a failed dispatch made no routing decision to report on.
                 ...(result.success ? orchestrationWarning : {}),
@@ -927,6 +911,7 @@ export async function meshSendTask(
                         ...(taskInput ? { input: taskInput } : {}),
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
+                        ...(ownedPaths ? { ownedPaths } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
                     } })).entry as unknown as MeshWorkQueueEntry);
                     return JSON.stringify({
@@ -956,7 +941,7 @@ export async function meshSendTask(
                             : `Interrupt support for '${resolvedProviderType}' is DECLARED by its spec but not live-verified. `
                                 + 'Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.',
                         ...(unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {}),
-                        ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
+                        ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
                     });
                 }
                 if (policyResult.decision === 'queued') {
@@ -989,6 +974,7 @@ export async function meshSendTask(
                         ...(taskInput ? { input: taskInput } : {}),
                         ...(readonly ? { readonly: true } : {}),
                         ...(missionId ? { missionId } : {}),
+                        ...(ownedPaths ? { ownedPaths } : {}),
                         ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
                     } })).entry as unknown as MeshWorkQueueEntry);
                     return JSON.stringify({
@@ -1012,7 +998,7 @@ export async function meshSendTask(
                                     + "Valid values are 'when_idle' and 'interrupt'.",
                             }
                             : {}),
-                        ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
+                        ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
                     });
                 }
             }
@@ -1184,6 +1170,7 @@ export async function meshSendTask(
                     message,
                     task: {
                         ...(missionId ? { missionId } : {}),
+                        ...(ownedPaths ? { ownedPaths } : {}),
                         assignedNodeId: args.node_id,
                         assignedSessionId: args.session_id,
                         taskMode,
@@ -1223,7 +1210,7 @@ export async function meshSendTask(
                 // session whose dispatch row did NOT survive pre-record. A successfully
                 // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
                 ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
-                ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
+                ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
                 // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
                 ...orchestrationWarning,
             });
@@ -1245,6 +1232,7 @@ export async function meshSendTask(
             ...(taskInput ? { input: taskInput } : {}),
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
+            ...(ownedPaths ? { ownedPaths } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         } })).entry as unknown as MeshWorkQueueEntry);
 
@@ -1262,7 +1250,7 @@ export async function meshSendTask(
             taskMode: task.taskMode,
             queueTrigger,
             ...buildQueueTriggerGuidance(queueTrigger),
-            ...(buildMissionInactiveWarning(ctx, missionId) ?? {}),
+            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
         };
         if (pendingEvents.length > 0) {
             result.pendingCoordinatorEvents = pendingEvents;
