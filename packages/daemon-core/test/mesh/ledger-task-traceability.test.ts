@@ -20,14 +20,16 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 
-import {
-    appendLedgerEntry,
-    readLedgerEntries,
-    ledgerEntryTaskId,
-    getLedgerDir,
-} from '../../src/mesh/mesh-ledger.js';
+import { ledgerEntryTaskId } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import type { MeshLedgerEntry } from '../../src/mesh/mesh-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { LocalRecordStore } from '../../src/mesh/mesh-local-record-store.js';
+import { migrateTurnLedgerV3 } from '../../src/mesh/turn-ledger/migrate-v3.js';
+import { ensureTurnLedgerSchema } from '../../src/mesh/turn-ledger/schema.js';
+import { loadBetterSqlite3 } from '../../src/system/load-better-sqlite3.js';
 
 describe('ledger task traceability', () => {
     const meshId = `test-mesh-${randomUUID().slice(0, 8)}`;
@@ -42,54 +44,54 @@ describe('ledger task traceability', () => {
     });
 
     it('(B) promotes payload.taskId to the base taskId field for task-lifecycle kinds', () => {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node_a',
             sessionId: 'sess_1',
             providerType: 'claude-cli',
             payload: { taskId: 'task-42', routingDecision: { source: 'queue' } },
         });
-        const [entry] = readLedgerEntries(meshId, { kind: ['task_dispatched'] });
+        const [entry] = readLocalRecords(meshId, { kind: ['task_dispatched'] });
         expect(entry.taskId).toBe('task-42');
         // payload copy is untouched (back-compat readers that key off payload still work).
         expect((entry.payload as any).taskId).toBe('task-42');
     });
 
     it('(B) does NOT invent a taskId for non-lifecycle kinds without one', () => {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'coordinator_started',
             payload: { note: 'boot' },
         });
-        const [entry] = readLedgerEntries(meshId, { kind: ['coordinator_started'] });
+        const [entry] = readLocalRecords(meshId, { kind: ['coordinator_started'] });
         expect(entry.taskId).toBeUndefined();
     });
 
     it('(C) records a distinct task_claimed kind that joins task_dispatched by taskId', () => {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_claimed',
             nodeId: 'node_a', sessionId: 'sess_1', providerType: 'codex-cli',
             payload: { taskId: 'task-99', claimedAt: '2026-07-25T00:00:00.000Z' },
         });
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node_a', sessionId: 'sess_1', providerType: 'codex-cli',
             payload: { taskId: 'task-99', routingDecision: { source: 'autoLaunch' } },
         });
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_completed',
             nodeId: 'node_a', sessionId: 'sess_1',
             payload: { taskId: 'task-99' },
         });
 
         // Join the full lifecycle by base taskId without scanning payloads.
-        const all = readLedgerEntries(meshId);
+        const all = readLocalRecords(meshId);
         const lifecycle = all.filter(e => e.taskId === 'task-99').map(e => e.kind);
         expect(lifecycle).toEqual(expect.arrayContaining(['task_claimed', 'task_dispatched', 'task_completed']));
         expect(lifecycle.length).toBe(3);
     });
 
     it('(A/D) preserves the routingDecision sub-object through append+read', () => {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node_b', sessionId: 'sess_2', providerType: 'claude-cli',
             taskId: 'task-7',
@@ -108,7 +110,7 @@ describe('ledger task traceability', () => {
                 },
             },
         });
-        const [entry] = readLedgerEntries(meshId, { kind: ['task_dispatched'] });
+        const [entry] = readLocalRecords(meshId, { kind: ['task_dispatched'] });
         const rd = (entry.payload as any).routingDecision;
         expect(rd.source).toBe('autoLaunch');
         expect(rd.fitnessScore).toBe(121);
@@ -117,48 +119,39 @@ describe('ledger task traceability', () => {
         expect(rd.skippedCandidates).toEqual([{ nodeId: 'node_c', reason: 'dirty_workspace' }]);
     });
 
-    it('(back-compat) a legacy JSONL entry with taskId only in payload still resolves via fallback', () => {
-        // Fresh meshId so the one-time JSONL→SQLite import for it hasn't run yet.
-        const meshId = `legacy-mesh-${randomUUID().slice(0, 8)}`;
-        // Simulate a pre-migration ledger file: an entry whose top-level has NO taskId,
-        // written directly to the JSONL export artifact before the store imports it.
-        const legacy: MeshLedgerEntry = {
-            id: randomUUID(),
-            meshId,
-            timestamp: '2026-01-01T00:00:00.000Z',
-            kind: 'task_dispatched',
-            nodeId: 'node_legacy',
-            payload: { taskId: 'legacy-task-1' },
-        } as MeshLedgerEntry;
-        // Strip the base field to mimic an old writer (defensive — it isn't set here anyway).
-        delete (legacy as any).taskId;
+    // C-W9a: legacy JSONL rows reach `mesh_local_records` only through the one-way
+    // v3 migration (the lazy per-read JSONL import retired with the event ledger).
+    function migrateLegacyJsonl(meshId: string, legacy: MeshLedgerEntry): MeshLedgerEntry[] {
         const filePath = join(getLedgerDir(), `${meshId}.jsonl`);
         if (!existsSync(getLedgerDir())) mkdirSync(getLedgerDir(), { recursive: true });
         appendFileSync(filePath, JSON.stringify(legacy) + '\n', { encoding: 'utf-8', mode: 0o600 });
+        const db = new (loadBetterSqlite3())(':memory:');
+        ensureTurnLedgerSchema(db);
+        db.pragma('user_version = 2');
+        const report = migrateTurnLedgerV3(db, { exportPath: null, jsonlDir: getLedgerDir(), nowMs: Date.parse('2026-01-02T00:00:00.000Z') });
+        expect(report.jsonlRowsImported).toBeGreaterThanOrEqual(1);
+        return new LocalRecordStore(db).query(meshId);
+    }
 
-        // First read triggers the one-time JSONL→SQLite import; the base taskId is
-        // backfilled from payload.taskId so the join works for legacy rows too.
-        const entries = readLedgerEntries(meshId, { kind: ['task_dispatched'] });
-        const found = entries.find(e => e.id === legacy.id);
+    it('(back-compat) a legacy JSONL entry with taskId only in payload still resolves via fallback', () => {
+        const meshId = `legacy-mesh-${randomUUID().slice(0, 8)}`;
+        const legacy = {
+            id: randomUUID(), meshId, timestamp: '2026-01-01T00:00:00.000Z', kind: 'task_dispatched',
+            nodeId: 'node_legacy', payload: { taskId: 'legacy-task-1' },
+        } as MeshLedgerEntry;
+        const found = migrateLegacyJsonl(meshId, legacy).find(e => e.id === legacy.id);
         expect(found).toBeDefined();
+        // The migration backfills the base taskId column from payload.taskId.
+        expect(found!.taskId).toBe('legacy-task-1');
         expect(ledgerEntryTaskId(found!)).toBe('legacy-task-1');
     });
 
     it('(back-compat) a legacy entry with NO taskId anywhere parses without error', () => {
         const meshId = `legacy-mesh-${randomUUID().slice(0, 8)}`;
-        const legacy: MeshLedgerEntry = {
-            id: randomUUID(),
-            meshId,
-            timestamp: '2026-01-01T00:00:00.000Z',
-            kind: 'checkpoint_created',
-            payload: { note: 'legacy' },
+        const legacy = {
+            id: randomUUID(), meshId, timestamp: '2026-01-01T00:00:00.000Z', kind: 'checkpoint_created', payload: { note: 'legacy' },
         } as MeshLedgerEntry;
-        const filePath = join(getLedgerDir(), `${meshId}.jsonl`);
-        if (!existsSync(getLedgerDir())) mkdirSync(getLedgerDir(), { recursive: true });
-        appendFileSync(filePath, JSON.stringify(legacy) + '\n', { encoding: 'utf-8', mode: 0o600 });
-
-        const entries = readLedgerEntries(meshId);
-        const found = entries.find(e => e.id === legacy.id);
+        const found = migrateLegacyJsonl(meshId, legacy).find(e => e.id === legacy.id);
         expect(found).toBeDefined();
         expect(found!.taskId).toBeUndefined();
         expect(ledgerEntryTaskId(found!)).toBeUndefined();
@@ -178,7 +171,7 @@ describe('ledger task traceability', () => {
     // member of MeshLedgerKind, therefore absent from TASK_LIFECYCLE_LEDGER_KINDS, therefore
     // never given the top-level taskId every other lifecycle kind gets.
     //
-    // ★ Where it actually broke: SQLite, the PRIMARY runtime store. appendLedgerEntry persists
+    // ★ Where it actually broke: SQLite, the PRIMARY runtime store. seedLocalRecord persists
     // `taskId: entry.taskId ?? null` into the indexed task_id column with no derivation, so the
     // row landed with task_id = NULL and fell out of every index-backed kind+task_id join. The
     // JSONL path masks this — readLedgerFile() backfills taskId from payload on read for legacy
@@ -188,12 +181,12 @@ describe('ledger task traceability', () => {
     // Injection check: drop 'dispatch_failed' from TASK_LIFECYCLE_LEDGER_KINDS and the SQLite
     // task_id assertion goes red (the JSONL one stays green — it is not the defect).
     it('(B) promotes taskId for dispatch_failed so the failure joins the task lifecycle', () => {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node_z', sessionId: 'sess_9',
             payload: { taskId: 'task-df', routingDecision: { source: 'queue' } },
         });
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'dispatch_failed',
             nodeId: 'node_z', sessionId: 'sess_9',
             payload: {
@@ -206,12 +199,12 @@ describe('ledger task traceability', () => {
         });
 
         // ★ The real assertion: the SQLite row carries task_id, so the join is index-backed.
-        const stored = MeshRuntimeStore.getInstance()
-            .readLedgerEntriesOrdered(meshId, { kinds: ['dispatch_failed'] });
+        const stored = MeshRuntimeStore.getInstance().localRecordStore()
+            .query(meshId, { kinds: ['dispatch_failed'], taskId: 'task-df' });
         expect(stored).toHaveLength(1);
         expect(stored[0].taskId).toBe('task-df');
 
-        const [failed] = readLedgerEntries(meshId, { kind: ['dispatch_failed'] });
+        const [failed] = readLocalRecords(meshId, { kind: ['dispatch_failed'] });
         expect(failed).toBeDefined();
         expect(failed.taskId).toBe('task-df');
         expect(ledgerEntryTaskId(failed)).toBe('task-df');
@@ -220,7 +213,7 @@ describe('ledger task traceability', () => {
         expect((failed.payload as any).error).toBe('CLI agent not running: kimi');
 
         // And it joins the lifecycle by taskId alone, which is what made the row useless.
-        const lifecycle = readLedgerEntries(meshId).filter(e => e.taskId === 'task-df').map(e => e.kind);
+        const lifecycle = readLocalRecords(meshId).filter(e => e.taskId === 'task-df').map(e => e.kind);
         expect(lifecycle).toEqual(expect.arrayContaining(['task_dispatched', 'dispatch_failed']));
     });
 });

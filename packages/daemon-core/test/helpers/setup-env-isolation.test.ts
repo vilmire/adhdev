@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { getConfigDir } from '../../src/config/config.js';
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
 
 describe('setup-env config-dir isolation', () => {
     it('ADHDEV_CONFIG_DIR is pinned to a throwaway temp dir, never a live track home', () => {

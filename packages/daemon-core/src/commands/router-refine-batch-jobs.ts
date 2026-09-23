@@ -597,13 +597,13 @@ export async function appendRefineBatchJobLedger(self: DaemonCommandRouter,
         result?: Record<string, unknown>,
     ): Promise<void> {
         try {
-            const { appendLedgerEntry, buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            const { buildLedgerOriginatingCoordinatorStamp } = await import('../mesh/mesh-ledger.js');
+            const { meshRecord } = await import('../mesh/mesh-record.js');
             // B2a: stamp the originating coordinator on dispatch (see appendRefineJobLedger).
             const originatingStamp = kind === 'task_dispatched'
                 ? buildLedgerOriginatingCoordinatorStamp({ coordinatorDaemonId: handle.targetCoordinatorDaemonId })
                 : undefined;
-            appendLedgerEntry(handle.meshId, {
-                kind,
+            meshRecord(handle.meshId, kind, {
                 nodeId: handle.batchLabel,
                 payload: {
                     source: 'refine_mesh_node_async_job',
@@ -627,7 +627,7 @@ export async function appendRefineBatchJobLedger(self: DaemonCommandRouter,
                         result,
                     } : {}),
                 },
-            });
+            }, { local: true });
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine batch ledger entry: ${e?.message || e}`);
         }

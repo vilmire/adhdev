@@ -113,12 +113,11 @@ export async function refinePatchEquivalenceStage(self: DaemonCommandRouter, ctx
                         error: removeResult?.error,
                     });
                     try {
-                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-                        appendLedgerEntry(meshId, {
-                            kind: 'node_removed',
+                        const { meshRecord } = await import('../mesh/mesh-record.js');
+                        meshRecord(meshId, 'node_removed', {
                             nodeId,
                             payload: { alreadyMergedViaOtherPath: true, branch, into: baseBranch, validationSummary, patchEquivalence },
-                        });
+                        }, { local: true });
                     } catch { /* ledger append is best-effort */ }
                     return { kind: 'terminal', result: {
                         success: removeResult?.success !== false,

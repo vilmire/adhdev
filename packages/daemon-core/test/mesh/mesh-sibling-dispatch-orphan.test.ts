@@ -29,7 +29,8 @@ import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
-import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
 
 describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direct-dispatch sibling', () => {
     const meshId = `test_mesh_sdo_${Date.now()}`;
@@ -108,7 +109,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
             meshId,
             queue: getQueue(meshId),
             directDispatches: getActiveDirectDispatches(meshId),
-            ledgerEntries: readLedgerEntries(meshId),
+            ledgerEntries: readLocalRecords(meshId),
             nodes: [{ id: nodeId, sessions: [{ id: sessionId, status: 'generating' }] } as any],
         } as any);
         return activeWork.filter(r => r.taskId === taskId);
@@ -146,7 +147,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
 
         cancelTask(meshId, taskId, { reason: 'operator_cancel' });
 
-        const audit = readLedgerEntries(meshId)
+        const audit = readLocalRecords(meshId)
             .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
         expect(audit).toHaveLength(1);
         expect((audit[0].payload as any).reason).toBe('queue_task_cancelled');
@@ -185,7 +186,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
 
         requeueTask(meshId, taskId, { reason: 'operator_requeue', force: true });
 
-        const audit = readLedgerEntries(meshId)
+        const audit = readLocalRecords(meshId)
             .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
         expect(audit).toHaveLength(1);
         expect((audit[0].payload as any).reason).toBe('queue_task_requeued');
@@ -197,7 +198,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         requeueTask(meshId, taskId, { reason: 'transport_reject', dispatchFailure: true, force: false });
 
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
-        const audit = readLedgerEntries(meshId)
+        const audit = readLocalRecords(meshId)
             .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
         expect(audit).toHaveLength(1);
         expect((audit[0].payload as any).reason).toBe('queue_task_dispatch_failed');
@@ -212,7 +213,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         requeueTaskForLedgerReclaim(meshId, taskId, 'H1_await_delivery', new Date().toISOString());
 
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
-        const audit = readLedgerEntries(meshId)
+        const audit = readLocalRecords(meshId)
             .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
         expect(audit).toHaveLength(1);
         expect((audit[0].payload as any).reason).toBe('queue_task_stranded_reclaimed');
@@ -233,7 +234,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         expect(getActiveDirectDispatches(meshId)).toHaveLength(0);
         // Scoped to THIS task: the ledger is per-mesh and append-only, so earlier cases in
         // this file have legitimately written their own entries.
-        expect(readLedgerEntries(meshId).filter(e =>
+        expect(readLocalRecords(meshId).filter(e =>
             e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === 'task-nodispatch-1',
         )).toHaveLength(0);
     });
@@ -248,7 +249,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         // Already out of the active set by its own path — no second cancel, no audit entry.
         // The attempt keeps the outcome its own cancel wrote — the queue cancel did not re-close it.
         expect(ledger.getAttempt(`mesh_direct:${taskId}`)?.terminal?.reason).toBe('operator_cancel');
-        expect(readLedgerEntries(meshId).filter(e =>
+        expect(readLocalRecords(meshId).filter(e =>
             e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId,
         )).toHaveLength(0);
     });

@@ -43,7 +43,9 @@ import {
   handleSessionTerminationObservation,
   subscribeMeshTermination,
 } from '../../src/mesh/mesh-termination-bridge.js'
-import { appendLedgerEntry, isIntentionalCleanupStopEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { isIntentionalCleanupStopEntry } from '../../src/mesh/mesh-ledger.js'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js'
+import { seedLocalRecord } from '../helpers/local-records.js'
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { SessionRegistry } from '../../src/sessions/registry.js'
 
@@ -177,7 +179,7 @@ describe('recordMeshSessionTerminationStop', () => {
       termination: SIGTERM_TERMINATION,
     })
 
-    const stops = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const stops = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(stops).toHaveLength(1)
     expect(stops[0].sessionId).toBe('249e9979')
     expect(stops[0].providerType).toBe('claude-cli')
@@ -189,12 +191,12 @@ describe('recordMeshSessionTerminationStop', () => {
     const meshId = `mesh_skip_${randomUUID().slice(0, 8)}`
     await recordMeshSessionTerminationStop({ meshId, sessionId: '', termination: SIGTERM_TERMINATION })
     await recordMeshSessionTerminationStop({ meshId: '', sessionId: 's1', termination: SIGTERM_TERMINATION })
-    expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
+    expect(readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
   })
 
   it('does not duplicate an intentional cleanup row for a host-requested stop', async () => {
     const meshId = `mesh_intentional_${randomUUID().slice(0, 8)}`
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'session_stopped',
       nodeId: 'node_1',
       sessionId: 'sess_cleanup',
@@ -215,7 +217,7 @@ describe('recordMeshSessionTerminationStop', () => {
       termination: { ...SIGTERM_TERMINATION, requestedStop: 'stop' },
     })
 
-    const stops = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const stops = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(stops).toHaveLength(1)
     expect(stops[0].payload.source).toBe('mesh_cleanup_sessions')
   })
@@ -232,7 +234,7 @@ describe('ledger-only discrimination of intentional vs. external stop', () => {
 
     // (1) The existing intentional path, byte-for-byte as
     //     recordIntentionalMeshSessionStop writes it. Left untouched by this fix.
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'session_stopped',
       nodeId: 'node_9c22',
       sessionId: '9c22c895',
@@ -254,7 +256,7 @@ describe('ledger-only discrimination of intentional vs. external stop', () => {
       termination: SIGTERM_TERMINATION,
     })
 
-    const stops = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const stops = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(stops).toHaveLength(2)
 
     const cleanup = stops.find(e => e.sessionId === '9c22c895')!
@@ -279,7 +281,7 @@ describe('ledger-only discrimination of intentional vs. external stop', () => {
       sessionId: 'sess_kill',
       termination: SIGTERM_TERMINATION,
     })
-    const [entry] = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const [entry] = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(entry.payload.intentional).toBe(false)
     expect(entry.payload.source).not.toBe('mesh_remove_node')
     expect(entry.payload.source).not.toBe('mesh_cleanup_sessions')
@@ -308,7 +310,7 @@ describe('session termination seam', () => {
       termination: SIGTERM_TERMINATION,
     })
 
-    const [entry] = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const [entry] = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(entry.sessionId).toBe('sess_seam')
     expect(entry.nodeId).toBe('node_7')
     expect(entry.providerType).toBe('claude')
@@ -324,7 +326,7 @@ describe('session termination seam', () => {
       termination: SIGTERM_TERMINATION,
     })
 
-    const [entry] = readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const [entry] = readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     expect(entry.payload.coordinatorSession).toBe(true)
   })
 
@@ -335,7 +337,7 @@ describe('session termination seam', () => {
       runtimeSettings: { autoApprove: true },
       termination: SIGTERM_TERMINATION,
     })
-    expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
+    expect(readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
   })
 
   it('reaches the ledger only through a subscribed bus, never on daemon_shutdown or without a tombstone', async () => {
@@ -346,7 +348,7 @@ describe('session termination seam', () => {
       sessionId, parentSessionId: null, providerType: 'claude-cli', transport: 'pty', instanceKey: sessionId, workspace: '/tmp/ws',
     }, 'launch')
     const detail = { termination: SIGTERM_TERMINATION, runtimeSettings: { meshNodeFor: meshId, meshNodeId: 'node_bus' } }
-    const stops = () => readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    const stops = () => readLocalRecords(meshId).filter(e => e.kind === 'session_stopped')
     // The subscriber runs on the bus's async lane and the ledger write is
     // itself async (dynamic import), so let both settle before reading.
     const flush = () => new Promise(resolve => setTimeout(resolve, 20))

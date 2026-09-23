@@ -7,20 +7,17 @@
 // RETENTION so it does not recur.
 //
 // What it prunes (all thresholds defensive — never touches a live/in-use file):
-//   1. JSONL ledger files      ~/.adhdev/mesh-ledger/*.jsonl  older than 30 days
-//      (legacy after the SQLite ledger; zero lifetime before this).
+//   1. JSONL files             ~/.adhdev/mesh-ledger/*.jsonl  older than 30 days
+//      (the retired event-ledger mirror, its rotations/archives and the
+//      turn-ledger migration exports — C-W9a stopped writing the mirror, so
+//      this pass ages the leftovers out).
 //   2. session-host runtimes   ~/.adhdev/session-host/*/runtimes/*.json for
 //      TERMINATED (dead) runtimes older than 14 days (live runtimes never touched).
 //   3. DB backups              ~/.adhdev/mesh-ledger/mesh-runtime.db.bak-* older
 //      than 7 days.
-//   4. closed ledger rotations <mesh>.<n>.jsonl / <mesh>.archive.<n>.jsonl past
-//      the per-mesh byte/count caps (lifecycle retention Slice 1 — see
-//      enforceAllLedgerRotationCaps in mesh-ledger.ts; folds terminal counts
-//      into the archived-counts rollup before unlink, never touches the active
-//      ledger/current archive/runtime DB).
 // Plus DETECTION-ONLY orphan-worktree signalling (see mesh-reconcile-loop.ts):
-//   5. a worktree present on disk with no matching live mesh node is reported as a
-//      cleanup_candidate ledger entry — NEVER auto-deleted (that stays manual /
+//   4. a worktree present on disk with no matching live mesh node is reported as a
+//      cleanup_candidate record — NEVER auto-deleted (that stays manual /
 //      coordinator-driven).
 //
 // The functions are split into PURE core selectors (age/orphan decisions, taking
@@ -38,7 +35,9 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { getConfigDir } from '../config/config.js';
-import { getLedgerDir, appendLedgerEntry, readLedgerEntries, enforceAllLedgerRotationCaps } from './mesh-ledger.js';
+import { getLedgerDir } from './mesh-ledger-paths.js';
+import { readLocalRecords } from './mesh-local-records.js';
+import { meshRecord } from './mesh-record.js';
 import { isSessionHostLiveRuntime } from '../session-host/runtime-surface.js';
 import type { SessionHostSurfaceRecordLike } from '../session-host/runtime-surface.js';
 import { listWorktrees } from '../git/git-worktree.js';
@@ -283,22 +282,17 @@ export function pruneExpiredSessionHostRuntimes(now: number = Date.now()): numbe
 }
 
 /**
- * Run the file-deleting retention passes (JSONL ledger, DB backups, session-host
- * runtimes, closed-rotation caps) once. Each pass is isolated so one failing
- * pass never blocks the others. Orphan-worktree DETECTION is driven separately
- * in the reconcile loop (it needs the live mesh config + git worktree list and
- * emits a ledger signal rather than deleting).
- * The closed-rotation pass (lifecycle retention Slice 1) evicts only the oldest
- * CLOSED rotation files past the per-mesh byte/count caps; it never touches the
- * active ledger, current archive, archived-counts rollup, or the runtime DB.
- * The returned counts are the content-free sweep metrics.
+ * Run the file-deleting retention passes (JSONL files, DB backups, session-host
+ * runtimes, handoff notes) once. Each pass is isolated so one failing pass never
+ * blocks the others. Orphan-worktree DETECTION is driven separately in the
+ * reconcile loop (it needs the live mesh config + git worktree list and emits a
+ * record rather than deleting). The returned counts are the content-free sweep
+ * metrics.
  */
 export function runDiskRetentionSweep(now: number = Date.now()): {
     ledgerJsonl: number;
     dbBackups: number;
     sessionHostRuntimes: number;
-    rotationEvicted: number;
-    rotationEvictedBytes: number;
     /** Handoff-note ledger rows dropped past their 30-day window. */
     handoffNotes: number;
     /** Volume health after reclaiming ('ok' when unmeasurable). */
@@ -307,20 +301,10 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
     let ledgerJsonl = 0;
     let dbBackups = 0;
     let sessionHostRuntimes = 0;
-    let rotationEvicted = 0;
-    let rotationEvictedBytes = 0;
     let handoffNotes = 0;
     try { ledgerJsonl = pruneExpiredLedgerJsonl(now); } catch (e: any) { LOG.warn('DiskRetention', `Ledger JSONL prune failed: ${e?.message || e}`); }
     try { dbBackups = pruneExpiredDbBackups(now); } catch (e: any) { LOG.warn('DiskRetention', `DB backup prune failed: ${e?.message || e}`); }
     try { sessionHostRuntimes = pruneExpiredSessionHostRuntimes(now); } catch (e: any) { LOG.warn('DiskRetention', `Session-host runtime prune failed: ${e?.message || e}`); }
-    try {
-        const rotation = enforceAllLedgerRotationCaps();
-        rotationEvicted = rotation.evicted;
-        rotationEvictedBytes = rotation.evictedBytes;
-        if (rotation.evicted > 0) {
-            LOG.info('DiskRetention', `Ledger rotation cap evicted ${rotation.evicted} closed rotation file(s) across ${rotation.meshes} mesh(es), ${rotation.evictedBytes} byte(s) freed (rotation_cap_count=${rotation.byReason.rotation_cap_count}, rotation_cap_bytes=${rotation.byReason.rotation_cap_bytes})`);
-        }
-    } catch (e: any) { LOG.warn('DiskRetention', `Ledger rotation cap sweep failed: ${e?.message || e}`); }
     // WORKER-MCP decision G / owner §12-4: handoff notes expire 30 days out.
     // A DB-row pass rather than a file pass — the notes live in turn_events
     // — but it belongs on the same hourly cadence as its file-based siblings.
@@ -342,7 +326,7 @@ export function runDiskRetentionSweep(now: number = Date.now()): {
         logDiskSpaceStatus(status, 'disk retention sweep');
         if (status) diskLevel = status.level;
     } catch (e: any) { LOG.warn('DiskRetention', `Disk space check failed: ${e?.message || e}`); }
-    return { ledgerJsonl, dbBackups, sessionHostRuntimes, rotationEvicted, rotationEvictedBytes, handoffNotes, diskLevel };
+    return { ledgerJsonl, dbBackups, sessionHostRuntimes, handoffNotes, diskLevel };
 }
 
 // ─── Orphan worktree detection (detection-only, emits cleanup_candidate) ──────
@@ -390,7 +374,7 @@ export async function detectAndSignalOrphanWorktrees(
     // hourly sweep is idempotent and does not flood the ledger with duplicates.
     let recentPaths = new Set<string>();
     try {
-        const recent = readLedgerEntries(mesh.id, { kind: ['worktree_cleanup_candidate'], tail: ORPHAN_DEDUPE_WINDOW });
+        const recent = readLocalRecords(mesh.id, { kind: ['worktree_cleanup_candidate'], tail: ORPHAN_DEDUPE_WINDOW, turnTerminals: false });
         for (const e of recent) {
             const p = typeof e.payload?.worktreePath === 'string' ? e.payload.worktreePath : '';
             if (p) recentPaths.add(p);
@@ -403,15 +387,14 @@ export async function detectAndSignalOrphanWorktrees(
     for (const wt of orphans) {
         if (recentPaths.has(wt.path)) continue;
         try {
-            appendLedgerEntry(mesh.id, {
-                kind: 'worktree_cleanup_candidate',
+            meshRecord(mesh.id, 'worktree_cleanup_candidate', {
                 payload: {
                     worktreePath: wt.path,
                     reason: 'no_matching_live_node',
                     state: 'cleanup_candidate',
                     detectedAt: new Date(now).toISOString(),
                 },
-            });
+            }, { local: true });
             signalled.push(wt.path);
         } catch (e: any) {
             LOG.warn('DiskRetention', `Failed to record orphan worktree signal for ${wt.path}: ${e?.message || e}`);

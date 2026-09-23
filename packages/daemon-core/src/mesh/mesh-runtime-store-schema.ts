@@ -93,30 +93,6 @@ export function migrate(self: MeshRuntimeStore): void {
         CREATE INDEX IF NOT EXISTS idx_mesh_tool_call_log_mesh_tool_time
             ON mesh_tool_call_log(mesh_id, tool, called_at);
 
-        -- G2: Event ledger — runtime source of truth for task/session lifecycle events.
-        -- JSONL files are retained as export/import/debug/legacy artifacts only.
-        CREATE TABLE IF NOT EXISTS mesh_event_ledger (
-            id TEXT PRIMARY KEY,
-            mesh_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            node_id TEXT,
-            session_id TEXT,
-            provider_type TEXT,
-            -- LEDGER-TASK-TRACEABILITY (B): the task a lifecycle entry pertains to,
-            -- promoted from payload.taskId so kind+task_id joins are index-backed
-            -- (legacy DBs get this column via migrateMeshIsolationColumns' ALTER).
-            task_id TEXT,
-            payload TEXT NOT NULL DEFAULT '{}'
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_time
-            ON mesh_event_ledger(mesh_id, timestamp);
-        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_mesh_kind
-            ON mesh_event_ledger(mesh_id, kind, timestamp);
-        CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_session
-            ON mesh_event_ledger(mesh_id, session_id, timestamp);
-
         -- M3: persistent mission records. Plans live in the system, not in the
         -- coordinator LLM's context. Progress is derived from task statuses at
         -- query time (mission_id on queue tasks) — never stored here.
@@ -281,23 +257,8 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
         //    Idempotent — DROP TABLE IF EXISTS is a no-op on every subsequent boot.
         self.db.exec(`DROP TABLE IF EXISTS mesh_completion_conflicts`);
 
-        // 7. LEDGER-TASK-TRACEABILITY (B): mesh_event_ledger.task_id. A pre-existing
-        //    DB has the ledger table (CREATE IF NOT EXISTS is a no-op) without this
-        //    column, so add it. Nullable — legacy rows read back with task_id NULL and
-        //    fall back to payload.taskId at the read layer (ledgerEntryTaskId), so no
-        //    backfill is needed. Idempotent: the column check short-circuits once present.
-        const ledgerCols = tableColumns(self, 'mesh_event_ledger');
-        if (!ledgerCols.has('task_id')) {
-            self.db.exec(`ALTER TABLE mesh_event_ledger ADD COLUMN task_id TEXT`);
-        }
-        // kind+task_id join index (task lifecycle timeline). Created unconditionally —
-        // IF NOT EXISTS is a no-op once present; the column is guaranteed above.
-        self.db.exec(`
-            CREATE INDEX IF NOT EXISTS idx_mesh_event_ledger_task
-                ON mesh_event_ledger(mesh_id, task_id, timestamp)
-                WHERE task_id IS NOT NULL
-        `);
-
+        // 7. (retired, C-W9a) the event ledger's task_id column migration went with the
+        //    table — migrate-v3 folds its rows into mesh_local_records and drops it.
         // 8. MESH-TOOL-CALL-CALLER-INSTRUMENTATION (1단계): mesh_tool_call_log.caller_role.
         //    Nullable provenance tag ('coordinator' | 'unknown') recording whether the
         //    process that made this tool call carried ADHDEV_COORDINATOR_SESSION_ID at

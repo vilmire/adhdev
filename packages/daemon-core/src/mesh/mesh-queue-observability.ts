@@ -1,5 +1,5 @@
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import {
     PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON,
     type ProviderQuotaGateBlock,
@@ -100,13 +100,12 @@ export function logQuotaClaimBlockTransition(
         if (observation.context?.pinOverride) {
             payload.pinOverride = true;
         }
-        appendLedgerEntry(meshId, {
-            kind: 'quota_claim_gate',
+        meshRecord(meshId, 'quota_claim_gate', {
             nodeId: observation.nodeId,
             sessionId: observation.sessionId,
             providerType: observation.providerType,
             payload,
-        });
+        }, { local: true });
     } catch { /* best-effort: diagnostics must never break the claim path */ }
 }
 
@@ -118,13 +117,12 @@ export function clearQuotaClaimBlockState(meshId: string, nodeId: string, sessio
     // noise this dedup discipline exists to avoid.
     if (lastQuotaClaimBlockLog.has(key)) {
         try {
-            appendLedgerEntry(meshId, {
-                kind: 'quota_claim_gate',
+            meshRecord(meshId, 'quota_claim_gate', {
                 nodeId,
                 sessionId,
                 providerType,
                 payload: { phase: 'cleared', nodeId, sessionId, providerType },
-            });
+            }, { local: true });
         } catch { /* best-effort: diagnostics must never break the claim path */ }
     }
     lastQuotaClaimBlockLog.delete(key);
@@ -187,8 +185,7 @@ export function recordClaimRefusal(meshId: string, args: {
     rememberBounded(lastClaimRefusalLog, key, fingerprint);
     LOG.info('MeshQueue', `CLAIM REFUSED on node ${args.nodeId} (${args.sessionId}${args.providerType ? `, ${args.providerType}` : ''}) for mesh ${meshId}: ${args.reason}${args.detail ? ` — ${args.detail}` : ''}`);
     try {
-        appendLedgerEntry(meshId, {
-            kind: 'claim_refused',
+        meshRecord(meshId, 'claim_refused', {
             nodeId: args.nodeId,
             sessionId: args.sessionId,
             ...(args.providerType ? { providerType: args.providerType } : {}),
@@ -196,7 +193,7 @@ export function recordClaimRefusal(meshId: string, args: {
                 reason: args.reason,
                 ...(args.detail ? { detail: args.detail } : {}),
             },
-        });
+        }, { local: true });
     } catch { /* best-effort: diagnostics must never break the claim path */ }
 }
 
@@ -299,8 +296,7 @@ export function recordAutoLaunchEvent(meshId: string, args: {
         if (oldest !== undefined) lastAutoLaunchLedgerKey.delete(oldest);
     }
     try {
-        appendLedgerEntry(meshId, {
-            kind: 'session_auto_launch',
+        meshRecord(meshId, 'session_auto_launch', {
             nodeId: args.nodeId,
             sessionId: args.sessionId,
             providerType: args.providerType,
@@ -315,7 +311,7 @@ export function recordAutoLaunchEvent(meshId: string, args: {
                 ...(args.model ? { resolvedModel: args.model } : {}),
                 ...(args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}),
             },
-        });
+        }, { local: true });
     } catch (e: any) {
         LOG.warn('MeshQueue', `Failed to record auto-launch ledger event: ${e?.message || e}`);
     }

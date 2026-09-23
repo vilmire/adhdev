@@ -32,9 +32,10 @@ import {
     stopStaleMeshWorker,
 } from '../../mesh/mesh-event-forwarding.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
-import { getLedgerDir } from '../../mesh/mesh-ledger.js';
+import { getLedgerDir } from '../../mesh/mesh-ledger-paths.js';
 import { formatTurnLedgerMigrationLine, importLegacyPendingEventsJsonl } from '../../mesh/turn-ledger/migrate-v1.js';
 import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-v2.js';
+import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
 import { createMeshRuntimeTurnLedger } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
@@ -172,6 +173,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             LOG.info('TurnLedger', formatTurnLedgerMigrationV2Line(store.runTurnLedgerMigrationV2({})));
         } catch (error) {
             LOG.error('TurnLedger', `turn-ledger migration v2 failed: ${error instanceof Error ? error.message : String(error)} — the next boot resumes it`);
+        }
+        // 1c. v2 → v3 (C-W9a): fold the recent event-ledger rows + active per-mesh
+        // JSONL mirrors into `mesh_local_records`, drop the event ledger.
+        try {
+            LOG.info('TurnLedger', formatTurnLedgerMigrationV3Line(store.runTurnLedgerMigrationV3({})));
+        } catch (error) {
+            LOG.error('TurnLedger', `turn-ledger migration v3 failed: ${error instanceof Error ? error.message : String(error)} — the next boot resumes it`);
         }
     }
 

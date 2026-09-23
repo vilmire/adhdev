@@ -132,12 +132,11 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             ctx.getCachedInlineMesh(meshId, applied.mesh);
             ctx.invalidateAggregateMeshStatus(meshId);
             try {
-                const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                appendLedgerEntry(meshId, {
-                    kind: 'node_joined',
+                const { meshRecord } = await import('../../mesh/mesh-record.js');
+                meshRecord(meshId, 'node_joined', {
                     nodeId: applied.node.id,
                     payload: { role: 'member', tokenId: applied.tokenId, workspace: applied.node.workspace },
-                });
+                }, { local: true });
             } catch { /* ledger append is best-effort */ }
             return {
                 success: true,

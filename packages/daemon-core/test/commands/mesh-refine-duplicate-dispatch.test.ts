@@ -167,16 +167,6 @@ describe('findOpenRefineDispatchForNode — durable in-flight detection', () => 
       entries, nodeId: 'node-wt', nowMs: now, excludeJobId: 'refine_interrupted',
     })).toBeNull()
   })
-
-  it('treats an archived terminal row as closed, not open', () => {
-    const match = findOpenRefineDispatchForNode({
-      entries: [dispatchEntry('node-wt', 'refine_archived', '2026-08-17T02:55:00.000Z')],
-      nodeId: 'node-wt',
-      nowMs: now,
-      archivedTerminalKeys: new Set(['refine:node-wt:refine_archived']),
-    })
-    expect(match).toBeNull()
-  })
 })
 
 // ── End-to-end through the real router: the cross-process duplicate ──────────
@@ -216,8 +206,8 @@ describe('refine_mesh_node — duplicate dispatch across processes', () => {
       expect(second.jobId).toBe(first.jobId)
 
       // The ledger is the assertion that matters: exactly ONE dispatch row for this node.
-      const { readLedgerEntries } = await import('../../src/mesh/mesh-ledger')
-      const dispatches = readLedgerEntries(meshId, { kind: ['task_dispatched'] })
+      const { readLocalRecords } = await import('../../src/mesh/mesh-local-records')
+      const dispatches = readLocalRecords(meshId, { kind: ['task_dispatched'] })
         .filter(e => (e.payload as any)?.source === 'refine_mesh_node_async_job')
         .filter(e => e.nodeId === 'node-dup')
       expect(dispatches).toHaveLength(1)

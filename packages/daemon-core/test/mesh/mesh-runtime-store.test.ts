@@ -920,93 +920,55 @@ describe('mesh-runtime-store', () => {
         });
     });
 
-    // ── Phase G2: Event Ledger SQLite ────────────────────────────────────────
+    // ── C-W9a: mesh_local_records (successor of the G2 event-ledger table) ──
 
-    describe('Phase G2: mesh_event_ledger table', () => {
+    describe('C-W9a: mesh_local_records table', () => {
         afterEach(() => {
             __resetMeshRuntimeStoreForTests();
         });
 
-        it('G2.1 — appendLedgerEntry persists and readLedgerEntries returns it', () => {
-            const meshId = `mesh-g2-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            db.appendLedgerEntry({
-                id,
-                meshId,
-                timestamp: new Date().toISOString(),
-                kind: 'task_completed',
-                nodeId: 'node-1',
-                sessionId: 'sess-1',
-                providerType: 'claude-cli',
-                payload: { taskId: 'task-1' },
-            });
-            const entries = db.readLedgerEntries(meshId, { tail: 10 });
+        const row = (meshId: string, over: Record<string, unknown> = {}) => ({
+            eventId: randomUUID(), meshId, kind: 'task_completed', nodeId: 'node-1', sessionId: 'sess-1',
+            providerType: 'claude-cli', taskId: 'task-1', atMs: Date.now(), payload: { taskId: 'task-1' }, ...over,
+        });
+
+        it('L.1 — insert persists and query returns it in the reader shape', () => {
+            const meshId = `mesh-lr-${randomUUID().slice(0, 8)}`;
+            const records = MeshRuntimeStore.getInstance().localRecordStore();
+            const r = row(meshId);
+            expect(records.insert(r as any)).toBe(true);
+            const entries = records.query(meshId, { tail: 10 });
             expect(entries).toHaveLength(1);
-            expect(entries[0].id).toBe(id);
-            expect(entries[0].kind).toBe('task_completed');
-            expect((entries[0].payload as any).taskId).toBe('task-1');
+            expect(entries[0]).toMatchObject({ id: r.eventId, kind: 'task_completed', nodeId: 'node-1', providerType: 'claude-cli', taskId: 'task-1' });
+            expect(entries[0].timestamp).toBe(new Date(r.atMs).toISOString());
         });
 
-        it('G2.2 — duplicate id insert is silently ignored', () => {
-            const meshId = `mesh-g2-dedup-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const id = randomUUID();
-            const entry = { id, meshId, timestamp: new Date().toISOString(), kind: 'task_dispatched', payload: {} };
-            db.appendLedgerEntry(entry);
-            db.appendLedgerEntry(entry);
-            expect(db.ledgerEntryCount(meshId)).toBe(1);
+        it('L.2 — a duplicate event id is silently ignored', () => {
+            const meshId = `mesh-lr-dedup-${randomUUID().slice(0, 8)}`;
+            const records = MeshRuntimeStore.getInstance().localRecordStore();
+            const r = row(meshId);
+            expect(records.insert(r as any)).toBe(true);
+            expect(records.insert(r as any)).toBe(false);
+            expect(records.query(meshId)).toHaveLength(1);
         });
 
-        it('G2.3 — importLedgerEntries skips existing ids', () => {
-            const meshId = `mesh-g2-import-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const now = new Date().toISOString();
-            const entries = [
-                { id: randomUUID(), meshId, timestamp: now, kind: 'task_dispatched', payload: {} },
-                { id: randomUUID(), meshId, timestamp: now, kind: 'task_completed', payload: {} },
-            ];
-            const first = db.importLedgerEntries(entries);
-            expect(first).toBe(2);
-            const second = db.importLedgerEntries(entries); // same ids — should all skip
-            expect(second).toBe(0);
-            expect(db.ledgerEntryCount(meshId)).toBe(2);
-        });
-
-        it('G2.4 — readLedgerEntries kind filter works', () => {
-            const meshId = `mesh-g2-kind-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            const now = new Date().toISOString();
-            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_dispatched', payload: {} });
-            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_completed', payload: {} });
-            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: now, kind: 'task_failed', payload: {} });
-            const completed = db.readLedgerEntries(meshId, { kind: 'task_completed' });
+        it('L.3 — kind filter applies before the tail', () => {
+            const meshId = `mesh-lr-kind-${randomUUID().slice(0, 8)}`;
+            const records = MeshRuntimeStore.getInstance().localRecordStore();
+            records.insert(row(meshId, { kind: 'task_dispatched' }) as any);
+            records.insert(row(meshId, { kind: 'task_completed' }) as any);
+            for (let i = 0; i < 5; i++) records.insert(row(meshId, { kind: 'session_launched' }) as any);
+            const completed = records.query(meshId, { kinds: ['task_completed'], tail: 1 });
             expect(completed).toHaveLength(1);
             expect(completed[0].kind).toBe('task_completed');
         });
-    });
 
-    // ── Phase G3 residue: the pending-events store retired with C-W3 (notices
-    // are turn_events rows); only the ledger kind invariant test remains here.
-
-    describe('Phase G3: ledger kind invariant', () => {
-        afterEach(() => {
-            __resetMeshRuntimeStoreForTests();
-        });
-
-        it('G3.7 — appendLedgerEntry / importLedgerEntries reject a blank kind (schema invariant)', () => {
-            const meshId = `mesh-g3-blankkind-${randomUUID().slice(0, 8)}`;
-            const db = MeshRuntimeStore.getInstance();
-            // Direct append with empty kind is refused (no row written).
-            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '' });
-            db.appendLedgerEntry({ id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '   ' });
-            // Import path skips blank-kind entries but imports valid ones from the same batch.
-            const imported = db.importLedgerEntries([
-                { id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: '' },
-                { id: randomUUID(), meshId, timestamp: new Date().toISOString(), kind: 'task_dispatched' },
-            ]);
-            expect(imported).toBe(1);
-            expect(db.readLedgerEntriesOrdered(meshId).every(e => !!e.kind)).toBe(true);
+        it('L.4 — a blank kind is refused (schema invariant)', () => {
+            const meshId = `mesh-lr-blank-${randomUUID().slice(0, 8)}`;
+            const records = MeshRuntimeStore.getInstance().localRecordStore();
+            expect(records.insert(row(meshId, { kind: '' }) as any)).toBe(false);
+            expect(records.insert(row(meshId, { kind: '   ' }) as any)).toBe(false);
+            expect(records.query(meshId)).toEqual([]);
         });
     });
 

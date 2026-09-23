@@ -46,7 +46,8 @@ import {
     resolveWorktreeNodeRetentionGraceMs,
     resolveWorktreeNodeRetentionLeaseMs,
 } from '../../src/mesh/mesh-retention-config.js';
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
 import { LOG } from '../../src/logging/logger.js';
 
 const MESH_ID = 'mesh_retention_test';
@@ -518,10 +519,7 @@ describe('execution', () => {
         const mesh = makeMesh([worktreeNode()]);
         await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, { tickId: 'tick-1', nowMs: NOW }, calls));
 
-        const ledgerFile = join(getLedgerDir(), `${MESH_ID}.jsonl`);
-        const ledgerLenBefore = fs.existsSync(ledgerFile)
-            ? fs.readFileSync(ledgerFile, 'utf8').split('\n').filter(Boolean).length
-            : 0;
+        const ledgerLenBefore = readLocalRecords(MESH_ID, { turnTerminals: false }).length;
 
         const t = await runWorktreeNodeRetentionTick(deps, makeOpts(mesh, {
             tickId: 'tick-2', nowMs: NOW + GRACE, execute: true,
@@ -532,11 +530,9 @@ describe('execution', () => {
         expect(entryFor(t, 'node-wt-1').execution?.code).toBe('execution_membership_not_removed');
         expect(calls.cleanup).toHaveLength(1);
 
-        // The shared ledger file accumulates across this suite, so compare
-        // against the pre-tick baseline rather than the whole file.
-        const ledgerPath = join(getLedgerDir(), `${MESH_ID}.jsonl`);
-        const entries = fs.readFileSync(ledgerPath, 'utf8')
-            .split('\n').filter(Boolean).map(line => JSON.parse(line));
+        // The shared record table accumulates across this suite, so compare
+        // against the pre-tick baseline rather than every row.
+        const entries = readLocalRecords(MESH_ID, { turnTerminals: false });
         const fresh = entries.slice(ledgerLenBefore);
         const deletion = fresh.filter(e => e.kind === 'worktree_directory_removed' && e.nodeId === 'node-wt-1');
         expect(deletion).toHaveLength(1);

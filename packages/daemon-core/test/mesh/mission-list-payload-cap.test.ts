@@ -23,7 +23,7 @@ import {
     MESH_MISSION_LIST_STATUS_LIMIT,
     type MeshMissionSlimSummary,
 } from '../../src/mesh/mesh-missions.js';
-import { __clearMeshLedgerForTests } from '../../src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 describe('mesh_mission_list payload cap (listMeshMissionsForTool)', () => {
@@ -36,7 +36,7 @@ describe('mesh_mission_list payload cap (listMeshMissionsForTool)', () => {
 
     afterEach(() => {
         try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
-        __clearMeshLedgerForTests(meshId);
+        __clearLocalRecordsForTests(meshId);
         MeshRuntimeStore.resetForTests();
     });
 

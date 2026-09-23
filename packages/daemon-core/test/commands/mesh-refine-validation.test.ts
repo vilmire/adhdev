@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records'
 import { handleMeshForwardEvent } from '../../src/mesh/mesh-events'
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js'
 import { computeStaleInputsDigest } from '../../src/mesh/worktree-bootstrap-config'
@@ -223,7 +223,7 @@ function createMeshEventComponents(meshId: string, messages: string[], coordinat
 async function waitForRefineLedger(meshId: string, jobId: string, timeoutMs = 60000): Promise<any> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const entries = readLedgerEntries(meshId)
+    const entries = readLocalRecords(meshId)
     const terminal = entries.find(entry =>
       (entry.kind === 'task_completed' || entry.kind === 'task_failed')
       && (entry.payload as any)?.refineJob?.jobId === jobId
@@ -550,7 +550,7 @@ describe('refine_mesh_node validation gate', () => {
       expect(retry.jobId).not.toBe(first.jobId)
       expect(retry.duplicate).not.toBe(true)
       expect(retry.retryOfJobId).toBe(first.jobId)
-      const retryDispatched = readLedgerEntries(mesh.id).find(entry =>
+      const retryDispatched = readLocalRecords(mesh.id).find(entry =>
         entry.kind === 'task_dispatched'
         && (entry.payload as any)?.refineJob?.jobId === retry.jobId
       )

@@ -75,7 +75,9 @@ const DAEMON_LIFECYCLE_CMDS = [
   'get_quota_account_label', 'set_quota_account_label',
   'get_quota_provider_enabled', 'set_quota_provider_enabled',
 ]
-const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note', 'import_mesh_ledger_slice']
+// C-W9a: `import_mesh_ledger_slice` retired with the event ledger (a peer's records
+// are read from the peer, never copied into this daemon's local store).
+const MESH_LEDGER_CMDS = ['get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes', 'record_mesh_note', 'forget_mesh_note']
 const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_progress_update']
@@ -93,10 +95,14 @@ const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcr
 const TURN_LEDGER_IPC_CMDS = [
   'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
   'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
+  // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
+  'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
+  'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+  'graph_audit_record', 'active_work_query', 'recovery_context_query',
 ]
 
 describe('low-family registry', () => {
-  it('registers all 69 LOW family commands once, no overlap', () => {
+  it('registers all 81 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -104,7 +110,8 @@ describe('low-family registry', () => {
       ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS,
     ]
-    expect(all).toHaveLength(69)
+    // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands = 81.
+    expect(all).toHaveLength(81)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -233,7 +240,7 @@ describe('low-family registry', () => {
     expect(result).toEqual({ success: false, error: 'notificationId is required' })
   })
 
-  it('get_mesh_ledger / slice / import all require a meshId', async () => {
+  it('get_mesh_ledger / slice / notes all require a meshId', async () => {
     for (const cmd of MESH_LEDGER_CMDS) {
       const result: any = await lowCommand(cmd)({ deps: {} as any }, {})
       expect(result).toEqual({ success: false, error: 'meshId required' })

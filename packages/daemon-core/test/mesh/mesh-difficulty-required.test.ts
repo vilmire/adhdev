@@ -48,7 +48,8 @@ import {
     getQueue,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
-import { appendLedgerEntry, getSessionRecoveryContext } from '../../src/mesh/mesh-ledger.js';
+import { getSessionRecoveryContext } from '../../src/mesh/mesh-local-records.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import { createMesh } from '../../src/config/mesh-config.js';
 import { MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 
@@ -201,7 +202,7 @@ describe('DIFFICULTY-REQUIRED — recovery relaunch inherits difficulty from the
     // same entry lastTaskMessage already came from. Before this, resolvedDifficulty was
     // written to the ledger but nothing ever read it back.
     function seedDispatch(meshId: string, opts: { difficulty?: string; nodeId: string; sessionId: string }) {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: opts.nodeId,
             sessionId: opts.sessionId,

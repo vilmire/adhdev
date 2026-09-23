@@ -182,11 +182,16 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // the section, never blocks launch.
                     const buildRecentActivityBestEffort = async (id: string) => {
                         try {
-                            const { getLedgerSummary, readLedgerEntries } = await import('../../mesh/mesh-ledger.js');
+                            const { getLocalRecordSummary, readLocalRecords } = await import('../../mesh/mesh-local-records.js');
+                            const { isIntentionalCleanupStopEntry } = await import('../../mesh/mesh-ledger.js');
                             const { getMeshQueueStats } = await import('../../mesh/mesh-work-queue.js');
-                            const summary = getLedgerSummary(id);
+                            const summary = getLocalRecordSummary(id);
                             const queue = getMeshQueueStats(id);
-                            const failureEntries = readLedgerEntries(id, { kind: ['task_failed'], tail: 5 });
+                            // Failures = the turn ledger's failed commits (+ local task_failed
+                            // records, e.g. undeliverable dispatches); a cancel is not a failure.
+                            const failureEntries = readLocalRecords(id, { kind: ['task_failed'], tail: 20 })
+                                .filter((e) => !isIntentionalCleanupStopEntry(e))
+                                .slice(-5);
                             const recentFailures = failureEntries.map((e) => {
                                 const p = (e.payload || {}) as Record<string, unknown>;
                                 const raw = typeof p.taskSummary === 'string' ? p.taskSummary
@@ -660,13 +665,12 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             });
                         }
                         try {
-                            const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                            appendLedgerEntry(meshId, {
-                                kind: 'coordinator_started',
+                            const { meshRecord } = await import('../../mesh/mesh-record.js');
+                            meshRecord(meshId, 'coordinator_started', {
                                 sessionId: cliCmdSessionId,
                                 providerType: cliType,
                                 payload: { workspace },
-                            });
+                            }, { local: true });
                         } catch { /* best-effort */ }
 
                         await backfillMeshHostPinAfterLaunch({
@@ -934,13 +938,12 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
 
                     // Record coordinator launch in task ledger
                     try {
-                        const { appendLedgerEntry } = await import('../../mesh/mesh-ledger.js');
-                        appendLedgerEntry(meshId, {
-                            kind: 'coordinator_started',
+                        const { meshRecord } = await import('../../mesh/mesh-record.js');
+                        meshRecord(meshId, 'coordinator_started', {
                             sessionId: launchSessionId,
                             providerType: cliType,
                             payload: { workspace },
-                        });
+                        }, { local: true });
                     } catch { /* ledger append is best-effort */ }
 
                     await backfillMeshHostPinAfterLaunch({

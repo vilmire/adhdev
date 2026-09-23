@@ -41,7 +41,7 @@ import { selectOpenRefineDispatches } from './mesh-refine-zombie-sweep.js';
 import { buildRefineWorktreeMissingResult } from './mesh-refine-landing.js';
 import { recordMeshRefineStage, type RefineContext } from './mesh-refine-gates.js';
 import { readStringValue } from './mesh-node-identity.js';
-import { readLedgerEntries, readArchivedTerminalKeys } from './mesh-ledger.js';
+import { readLocalRecords } from './mesh-local-records.js';
 import { LOG } from '../logging/logger.js';
 
 /** How long an open dispatch keeps blocking a second one for the same node.
@@ -85,7 +85,6 @@ export function findOpenRefineDispatchForNode(args: {
     nowMs: number;
     freshnessMs?: number;
     excludeJobId?: string;
-    archivedTerminalKeys?: ReadonlySet<string>;
 }): OpenRefineDispatchMatch | null {
     const nodeId = typeof args.nodeId === 'string' ? args.nodeId.trim() : '';
     if (!nodeId) return null;
@@ -95,7 +94,6 @@ export function findOpenRefineDispatchForNode(args: {
 
     const open = selectOpenRefineDispatches(
         args.entries as Array<{ kind: string; nodeId?: string; timestamp: string; payload?: unknown }>,
-        args.archivedTerminalKeys,
     );
 
     let newest: OpenRefineDispatchMatch | null = null;
@@ -141,13 +139,12 @@ export function findOpenLedgerRefineDispatch(
         // Filter by kind with NO tail — the same read shape the resume scanner uses.
         // A tailed read would let unrelated ledger churn evict an in-flight dispatch
         // row and silently reopen the duplicate window this guard exists to close.
-        const entries = readLedgerEntries(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'] });
+        const entries = readLocalRecords(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'], turnTerminals: false });
         return findOpenRefineDispatchForNode({
             entries,
             nodeId,
             nowMs: Date.now(),
             excludeJobId: selfJobId,
-            archivedTerminalKeys: readArchivedTerminalKeys(meshId),
         });
     } catch (e: any) {
         LOG.warn('Mesh', `[Refinery] Durable duplicate-dispatch check failed for node ${nodeId} (allowing dispatch): ${e?.message || e}`);

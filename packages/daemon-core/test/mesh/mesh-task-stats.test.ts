@@ -11,7 +11,7 @@ vi.mock('../../src/seqscribe/mesh-publisher.js', async (importOriginal) => ({
 import { computeMeshTaskStats, computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index.js';
 import { enqueueTask, claimNextTask, updateTaskStatus, __writeTaskStatusForTests, requeueTask, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '../../src/mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 
 describe('M7 — operational stats (time/attempts)', () => {
@@ -19,7 +19,7 @@ describe('M7 — operational stats (time/attempts)', () => {
 
     afterEach(() => {
         __clearMeshQueueForTests(meshId);
-        __clearMeshLedgerForTests(meshId);
+        __clearLocalRecordsForTests(meshId);
         MeshRuntimeStore.resetForTests();
     });
 

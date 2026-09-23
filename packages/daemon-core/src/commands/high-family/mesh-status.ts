@@ -152,10 +152,10 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                         const asyncRefineJobs = pendingCoordinatorEvents.length > 0
                             ? await (async () => {
                                 try {
-                                    const { readRefineJobLedgerEntries } = await import('../../mesh/mesh-ledger.js');
+                                    const { readRefineJobRecords } = await import('../../mesh/mesh-local-records.js');
                                     return buildMeshAsyncRefineJobs({
                                         meshId,
-                                        ledgerEntries: readRefineJobLedgerEntries(meshId),
+                                        ledgerEntries: readRefineJobRecords(meshId),
                                         pendingEvents: [...pendingCoordinatorEvents],
                                     });
                                 } catch {
@@ -285,14 +285,14 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     const schedulingRuntime = buildMeshSchedulingRuntime(mesh, queue);
                     const schedulingByNode = new Map(schedulingRuntime.nodes.map(n => [n.nodeId, n]));
 
-                    const { readLedgerEntries, readRefineJobLedgerEntries, getLedgerSummary } = await import('../../mesh/mesh-ledger.js');
-                    const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
+                    const { readLocalRecords, readRefineJobRecords, getLocalRecordSummary } = await import('../../mesh/mesh-local-records.js');
+                    const ledgerEntries = readLocalRecords(meshId, { tail: 20 });
                     // LEDGER-KIND-TAIL-BLINDSPOT: kind-filtered, no bare tail — feeds
                     // buildMeshAsyncRefineJobs below, an existence/status check for in-flight
                     // Refinery jobs. A bare tail window can be crowded out by unrelated mesh
                     // traffic while a refine job (minutes-long) is still running.
-                    const asyncRefineLedgerEntries = readRefineJobLedgerEntries(meshId);
-                    const ledgerSummary = getLedgerSummary(meshId);
+                    const asyncRefineLedgerEntries = readRefineJobRecords(meshId);
+                    const ledgerSummary = getLocalRecordSummary(meshId);
                     const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions
                         ? await ctx.deps.sessionHostControl.listSessions().catch(() => [])
                         : [];
@@ -818,7 +818,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // the dispatch/synthesis pair). Compact (the default) folds synthesized groups
                     // to a bounded recent set + a count summary; verbose carries the full list.
                     const { buildMeshMagiActivity, summarizeMeshMagiActivity } = await import('../../mesh/mesh-magi-status.js');
-                    const magiLedgerEntries = readLedgerEntries(meshId, { kind: ['magi_dispatched', 'magi_synthesis'], tail: 200 });
+                    const magiLedgerEntries = readLocalRecords(meshId, { kind: ['magi_dispatched', 'magi_synthesis'], tail: 200 });
                     const magiActivity = buildMeshMagiActivity({ meshId, ledgerEntries: magiLedgerEntries });
                     let magiActivityFold: ReturnType<typeof summarizeMeshMagiActivity> | undefined;
                     if (magiActivity.length > 0 && !verboseMissions) {
@@ -945,7 +945,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                 if (!meshId) return { success: false, error: 'meshId required' };
                 try {
                     const { deriveMeshReviewInboxItems } = await import('../../mesh/mesh-review-inbox.js');
-                    const { readLedgerEntries } = await import('../../mesh/mesh-ledger.js');
+                    const { readLocalRecords } = await import('../../mesh/mesh-local-records.js');
                     const { getGitDiffSummary } = await import('../../git/git-diff.js');
                     const { existsSync } = await import('node:fs');
 
@@ -978,7 +978,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                                 ? mesh.nodes as Record<string, unknown>[]
                                 : [];
 
-                    const ledgerEntries = readLedgerEntries(meshId, { tail: 300 });
+                    const ledgerEntries = readLocalRecords(meshId, { tail: 300 });
                     const derivation = deriveMeshReviewInboxItems({ nodes: nodeStatuses, ledgerEntries });
 
                     for (const item of derivation.items) {

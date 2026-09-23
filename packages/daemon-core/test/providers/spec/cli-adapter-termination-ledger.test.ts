@@ -47,7 +47,8 @@ import { subscribeMeshTermination } from '../../../src/mesh/mesh-termination-bri
 import { createSessionLifecycleBus, type SessionLifecycleBus } from '../../../src/sessions/lifecycle-bus.js';
 import { createSessionEventPort } from '../../../src/sessions/session-port.js';
 import { SessionRegistry } from '../../../src/sessions/registry.js';
-import { appendLedgerEntry, readLedgerEntries } from '../../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../../src/mesh/mesh-local-records.js';
+import { seedLocalRecord } from '../../helpers/local-records.js';
 
 const EXTERNAL_SIGTERM: SessionTermination = {
   exitCode: 143,
@@ -114,7 +115,7 @@ function spawnMeshAdapter(settings: Record<string, unknown>, sessionId = 'sess_w
 }
 
 const stopEntries = (meshId: string) =>
-  readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped');
+  readLocalRecords(meshId).filter(e => e.kind === 'session_stopped');
 
 let unsubscribe: () => void = () => {};
 beforeEach(() => {
@@ -189,7 +190,7 @@ describe('SpecCliAdapter mesh termination ledger wiring', () => {
    */
   it('does not add a second row for a host-requested stop', async () => {
     const meshId = `mesh_reqstop_${randomUUID().slice(0, 8)}`;
-    appendLedgerEntry(meshId, {
+    seedLocalRecord(meshId, {
       kind: 'session_stopped',
       nodeId: 'node_1',
       sessionId: 'sess_worker',

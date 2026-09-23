@@ -874,9 +874,8 @@ export async function recordIntentionalMeshSessionStop(self: DaemonCommandRouter
         action: 'stop_session' | 'delete_session_force';
     }): Promise<void> {
         try {
-            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-            appendLedgerEntry(args.meshId, {
-                kind: 'session_stopped',
+            const { meshRecord } = await import('../mesh/mesh-record.js');
+            meshRecord(args.meshId, 'session_stopped', {
                 nodeId: args.nodeId,
                 sessionId: args.sessionId,
                 payload: {
@@ -888,7 +887,7 @@ export async function recordIntentionalMeshSessionStop(self: DaemonCommandRouter
                     action: args.action,
                     workspace: typeof args.node?.workspace === 'string' ? args.node.workspace : undefined,
                 },
-            });
+            }, { local: true });
         } catch (e: any) {
             LOG.warn('MeshCleanup', `Failed to record intentional cleanup stop for ${args.sessionId}: ${e?.message || e}`);
         }

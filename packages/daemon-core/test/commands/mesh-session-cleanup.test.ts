@@ -8,7 +8,8 @@ import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { createWorktree, resolveWorktreePath, getDefaultWorktreeBaseDir } from '../../src/git/git-worktree'
 import { resolveConfigDir } from '../../src/config/config-dir'
-import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger'
+import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records'
 
 const execFileAsync = promisify(execFile)
 
@@ -386,7 +387,7 @@ describe('mesh session cleanup', () => {
 
       expect(result).toMatchObject({ success: true, stoppedSessionIds: ['duplicate-live'] })
       expect(sessionHostControl.stopSession).toHaveBeenCalledWith('duplicate-live')
-      const entries = readLedgerEntries(meshId)
+      const entries = readLocalRecords(meshId)
       expect(entries).toHaveLength(1)
       expect(entries[0]).toMatchObject({
         kind: 'session_stopped',
@@ -434,7 +435,7 @@ describe('mesh session cleanup', () => {
         sessionCleanup: { deletedSessionIds: ['remove-live'] },
       })
       expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('remove-live', { force: true })
-      const stopIntent = readLedgerEntries(meshId).find(entry => entry.kind === 'session_stopped')
+      const stopIntent = readLocalRecords(meshId).find(entry => entry.kind === 'session_stopped')
       expect(stopIntent).toMatchObject({
         nodeId: 'node-a',
         sessionId: 'remove-live',

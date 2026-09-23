@@ -44,7 +44,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { evaluateQuotaClaimGateForAssignment } from '../../src/mesh/mesh-queue-claim-gate.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
-import { __clearMeshLedgerForTests, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { __clearLocalRecordsForTests, readLocalRecords } from '../../src/mesh/mesh-local-records.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_quota_ledger'
@@ -152,7 +152,7 @@ const antigravityQuota = () => ({
 
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
-  __clearMeshLedgerForTests(meshId)
+  __clearLocalRecordsForTests(meshId)
   __resetMeshRuntimeStoreForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
@@ -205,7 +205,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
 
       await triggerMeshQueue(components, meshId)
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       expect(entries).toHaveLength(1)
       expect(entries[0].payload).toMatchObject({
         phase: 'blocked',
@@ -240,7 +240,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
         await triggerMeshQueue(components, meshId)
       }
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       expect(entries).toHaveLength(1)
     } finally {
       cleanup(meshId)
@@ -265,7 +265,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       })], { weeklyMinRemainingPercent: 50 })
       await triggerMeshQueue(components, meshId)
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       expect(entries.length).toBeGreaterThanOrEqual(2)
       expect(entries.every(e => (e.payload as any).phase === 'blocked')).toBe(true)
       expect(entries.every(e => (e.payload as any).trigger === 'idle_claim_scan')).toBe(true)
@@ -293,7 +293,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const second = await triggerMeshQueue(components, meshId)
       expect(second.claimed).toBe(true)
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       const phases = entries.map(e => (e.payload as any).phase)
       expect(phases).toEqual(['blocked', 'cleared'])
     } finally {
@@ -313,7 +313,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const result = await triggerMeshQueue(components, meshId)
       expect(result.claimed).toBe(true)
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       expect(entries).toHaveLength(0)
     } finally {
       cleanup(meshId)
@@ -339,7 +339,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       const result = await triggerMeshQueue(components, meshId)
       expect(result.claimed).toBe(true)
 
-      const entries = readLedgerEntries(meshId, { kind: ['quota_claim_gate'] })
+      const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
       expect(entries).toHaveLength(1)
       expect(entries[0].payload).toMatchObject({
         phase: 'overridden_by_pin',

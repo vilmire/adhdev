@@ -1371,12 +1371,11 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             let ledgerError: string | undefined;
             const ledgerStarted = Date.now();
             try {
-                const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
-                appendLedgerEntry(meshId, {
-                    kind: 'node_removed',
+                const { meshRecord } = await import('../mesh/mesh-record.js');
+                meshRecord(meshId, 'node_removed', {
                     nodeId,
                     payload: { refined: true, mergedBranch: branch, into: baseBranch, pushed: true, validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment },
-                });
+                }, { local: true });
                 recordMeshRefineStage(refineStages, 'ledger', 'passed', ledgerStarted);
             } catch (e: any) {
                 ledgerError = e?.message || String(e);

@@ -30,7 +30,8 @@ import {
 import { upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { enqueueTask } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { __clearMeshLedgerForTests, appendLedgerEntry, readLedgerEntriesByKind } from '../../src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests, readLocalRecordsByKind } from '../../src/mesh/mesh-local-records.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import { buildMeshActiveWorkLedgerSnapshot } from '../../src/mesh/mesh-active-work.js';
 import type { MeshMissionRecord } from '../../src/mesh/mesh-missions.js';
 
@@ -92,7 +93,7 @@ describe('mesh idle-active-mission reminder', () => {
             store.clearMissionsForMesh(meshId);
             store.clearIdleReminderState(meshId);
         } catch { /* fresh store */ }
-        __clearMeshLedgerForTests(meshId);
+        __clearLocalRecordsForTests(meshId);
         MeshRuntimeStore.resetForTests();
     });
 
@@ -180,8 +181,8 @@ describe('mesh idle-active-mission reminder', () => {
     it('reuses a same-tick active-work ledger snapshot without reading that slice again', async () => {
         upsertMeshMission(meshId, { title: 'Shared snapshot', goal: 'ship it' });
         const coord = makeCoordinator();
-        const store = MeshRuntimeStore.getInstance();
-        const readSpy = vi.spyOn(store, 'readLedgerEntries');
+        const records = MeshRuntimeStore.getInstance().localRecordStore();
+        const readSpy = vi.spyOn(records, 'heads');
         const snapshot = buildMeshActiveWorkLedgerSnapshot([]);
 
         const fired = await maybeInjectIdleActiveMissionReminder(
@@ -194,7 +195,7 @@ describe('mesh idle-active-mission reminder', () => {
         );
 
         expect(fired).toBe(true);
-        const activeWorkReads = readSpy.mock.calls.filter(([, opts]) => opts?.kinds?.includes('task_dispatched'));
+        const activeWorkReads = readSpy.mock.calls.filter(([, opts]) => opts?.projection?.name === 'active_work');
         expect(activeWorkReads).toHaveLength(0);
     });
 
@@ -228,11 +229,11 @@ describe('mesh idle-active-mission reminder', () => {
     it('passes live nodes into the idle gate so an idle session contradicts a stale approval', async () => {
         upsertMeshMission(meshId, { title: 'Resolved approval', goal: 'continue' });
         const coord = makeCoordinator();
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched', timestamp: '2026-09-23T00:00:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
             payload: { taskId: 'task-a', source: 'direct', via: 'mesh_send_task', message: 'waiting' },
         } as any);
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_approval_needed', timestamp: '2026-09-23T00:01:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
             payload: { taskId: 'task-a', event: 'agent:waiting_approval' },
         } as any);
@@ -248,11 +249,11 @@ describe('mesh idle-active-mission reminder', () => {
     it('does not retire a genuine approval when supplied live nodes still report awaiting_approval', async () => {
         upsertMeshMission(meshId, { title: 'Still blocked', goal: 'wait' });
         const coord = makeCoordinator();
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched', timestamp: '2026-09-23T00:00:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
             payload: { taskId: 'task-a', source: 'direct', via: 'mesh_send_task', message: 'waiting' },
         } as any);
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_approval_needed', timestamp: '2026-09-23T00:01:00.000Z', nodeId: 'node-a', sessionId: 'sess-a',
             payload: { taskId: 'task-a', event: 'agent:waiting_approval' },
         } as any);
@@ -270,7 +271,7 @@ describe('mesh idle-active-mission reminder', () => {
     // so without the explicit async-refine gate this mesh reads as "no work in flight" and the
     // reminder would push the coordinator to close a mission whose verification is still running.
     function appendRefineDispatch(id: string) {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_dispatched',
             nodeId: 'node-a',
             payload: {
@@ -281,7 +282,7 @@ describe('mesh idle-active-mission reminder', () => {
         } as any);
     }
     function appendRefineTerminal(id: string) {
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_completed',
             nodeId: 'node-a',
             payload: {
@@ -319,7 +320,7 @@ describe('mesh idle-active-mission reminder', () => {
     // ── IDLE-REFINE-TAIL-BLINDSPOT ────────────────────────────────────────────────
     //
     // The async-refine gate used to derive its in-flight jobs from the SAME
-    // `readLedgerEntries(meshId, { tail: 200 })` window the active-work summary reads.
+    // `readLocalRecords(meshId, { tail: 200 })` window the active-work summary reads.
     // `tail` slices the last N entries of EVERY kind, so ledger churn from unrelated
     // events evicts a still-running refine job's `task_dispatched` row from the window —
     // and a refine pass runs typecheck/test/build for minutes, ample time for that churn.
@@ -339,7 +340,7 @@ describe('mesh idle-active-mission reminder', () => {
         // Bury it under unrelated ledger traffic — more than the 200-entry tail window, of
         // a kind the refine derivation ignores, exactly like a busy mesh produces.
         for (let i = 0; i < 260; i++) {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_launched',
                 nodeId: 'node-b',
                 payload: { source: 'unrelated_traffic', seq: i },
@@ -361,7 +362,7 @@ describe('mesh idle-active-mission reminder', () => {
         upsertMeshMission(meshId, { title: 'Refining under churn', goal: 'x' });
         appendRefineDispatch('job-buried-then-done');
         for (let i = 0; i < 260; i++) {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_launched',
                 nodeId: 'node-b',
                 payload: { source: 'unrelated_traffic', seq: i },
@@ -379,31 +380,31 @@ describe('mesh idle-active-mission reminder', () => {
     //
     // The fully-idle gate reads ledger entries via buildMeshActiveWork — the SAME
     // consumer mesh-completion-synthesis.ts / mesh-worktree-retention.ts feed — and used
-    // to read `readLedgerEntries(meshId, { tail: 200 })` directly, the naive shape the
+    // to read `readLocalRecords(meshId, { tail: 200 })` directly, the naive shape the
     // refine gate below was fixed away from. buildMeshActiveWork only ever reads
     // task_dispatched/task_completed/task_failed/task_stalled/task_approval_needed/
-    // task_question_pending, so a kind-filtered read (readLedgerEntriesByKind, the fix)
+    // task_question_pending, so a kind-filtered read (readLocalRecordsByKind, the fix)
     // can never miss evidence a bare tail would have to be lucky to still contain. This
     // test pins that directly against the function the gate delegates to: a task's
     // task_completed row, buried under 260 unrelated entries, must still be found by a
     // kind-filtered read of exactly buildMeshActiveWork's kind set.
     it('★buildMeshActiveWork kind set survives crowding beyond the 200-entry tail window', async () => {
         const task = enqueueTask(meshId, 'do the thing', { difficulty: 'medium' });
-        appendLedgerEntry(meshId, {
+        seedLocalRecord(meshId, {
             kind: 'task_completed',
             nodeId: 'node-a',
             payload: { taskId: task.id, success: true },
         } as any);
 
         for (let i = 0; i < 260; i++) {
-            appendLedgerEntry(meshId, {
+            seedLocalRecord(meshId, {
                 kind: 'session_launched',
                 nodeId: 'node-b',
                 payload: { source: 'unrelated_traffic', seq: i },
             } as any);
         }
 
-        const entries = readLedgerEntriesByKind(meshId, [
+        const entries = readLocalRecordsByKind(meshId, [
             'task_dispatched', 'task_completed', 'task_failed', 'task_stalled',
             'task_approval_needed', 'task_approval_resolved', 'task_question_pending',
         ]);

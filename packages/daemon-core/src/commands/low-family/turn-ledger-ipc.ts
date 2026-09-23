@@ -6,6 +6,8 @@
  * (docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph).
  *
  * (C-W8: + `note_upsert` / `note_forget` — operating notes over local IPC.)
+ * (C-W9b/C-W9a: + the thirteen store commands of mesh-store-ipc.ts — records,
+ * queue composites, missions list, active work, recovery hints.)
  *
  * SCOPE: this file is the RESPONDER side. `mcp-server/src/ipc/turn-commands.ts`
  * (C-W6 pre-work, landed) is the CLIENT — it calls `transport.command(name,
@@ -35,7 +37,7 @@
  * WHAT MOVES HERE VS. WHAT DOESN'T (per the C-W2 report + the C-W6 brief)
  * -------------------------------------------------------------------------
  *   - mesh_record       → `meshRecord()` (mesh/mesh-record.ts, C-W2 pre-work,
- *     already the target of `appendLedgerEntry`'s replication leg).
+ *     since C-W9a the ONE record write API, topic + optional local leg).
  *   - operator_status    → `ledger.observe()` with an `operator_status`
  *     evidence body. The former `recordMeshCoordinatorToolCall` log write
  *     (`mesh_tool_call_log`, rate-limit advisory) is a SEPARATE concern this
@@ -103,6 +105,7 @@ import {
 import { LOG } from '../../logging/logger.js';
 import { forgetOperatingNote, readOperatingNotes, recordOperatingNote } from '../../mesh/mesh-operating-notes.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
+import { meshStoreIpcHandlers } from './mesh-store-ipc.js';
 
 // ─── late-binding slot (see file header) ────────────────────────────────────
 
@@ -559,6 +562,9 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     mission_query: missionQuery,
     note_upsert: noteUpsert,
     note_forget: noteForget,
+    // C-W9b / C-W9a: the mcp-server's store access (records, queue, missions,
+    // active work) — mesh-store-ipc.ts.
+    ...meshStoreIpcHandlers,
 };
 
 export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandlers, {
@@ -572,4 +578,5 @@ export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandler
     mission_query: { sources: ['ipc'] },
     note_upsert: { sources: ['ipc'] },
     note_forget: { sources: ['ipc'] },
+    ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ['ipc'] as const }])),
 });

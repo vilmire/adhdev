@@ -18,7 +18,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
 import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
-import { appendLedgerEntry } from './mesh-ledger.js';
+import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 
 /**
@@ -225,8 +225,7 @@ function appendMissionLedgerEntries(
     try {
         if (isCreate) {
             const goal = record.goal ?? '';
-            appendLedgerEntry(meshId, {
-                kind: 'mission_created',
+            meshRecord(meshId, 'mission_created', {
                 payload: {
                     missionId: record.id,
                     title: record.title,
@@ -235,24 +234,22 @@ function appendMissionLedgerEntries(
                     goalTruncated: goal.length > LEDGER_GOAL_SUMMARY_MAX,
                     status: record.status,
                 },
-            });
+            }, { local: true });
             return;
         }
         if (prevStatus !== null && prevStatus !== record.status) {
-            appendLedgerEntry(meshId, {
-                kind: 'mission_status_changed',
+            meshRecord(meshId, 'mission_status_changed', {
                 payload: {
                     missionId: record.id,
                     title: record.title,
                     fromStatus: prevStatus,
                     toStatus: record.status,
                 },
-            });
+            }, { local: true });
         }
         const nextGoal = record.goal ?? '';
         if (nextGoal !== prevGoal) {
-            appendLedgerEntry(meshId, {
-                kind: 'mission_goal_updated',
+            meshRecord(meshId, 'mission_goal_updated', {
                 payload: {
                     missionId: record.id,
                     title: record.title,
@@ -262,7 +259,7 @@ function appendMissionLedgerEntries(
                     nextGoalLength: nextGoal.length,
                     goalTruncated: prevGoal.length > LEDGER_GOAL_SUMMARY_MAX || nextGoal.length > LEDGER_GOAL_SUMMARY_MAX,
                 },
-            });
+            }, { local: true });
         }
     } catch { /* audit trail is best-effort; never break the mission write */ }
 }

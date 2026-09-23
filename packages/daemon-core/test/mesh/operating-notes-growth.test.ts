@@ -20,7 +20,9 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 
-import { appendLedgerEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js';
+import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { meshRecord } from '../../src/mesh/mesh-record.js';
+import { seedLocalRecord } from '../helpers/local-records.js';
 import {
     forgetOperatingNote as tombstoneOperatingNote,
     pruneOperatingNotes,
@@ -83,9 +85,9 @@ describe('operating-notes growth controls', () => {
 
         it('does not dedupe non-note kinds (task_completed accumulates)', () => {
             for (let i = 0; i < 5; i++) {
-                appendLedgerEntry(meshId, { kind: 'task_completed', payload: { taskId: 't1', note: 'same' } });
+                seedLocalRecord(meshId, { kind: 'task_completed', payload: { taskId: 't1', note: 'same' } });
             }
-            const completed = readLedgerEntries(meshId, { kind: ['task_completed'] });
+            const completed = readLocalRecords(meshId, { kind: ['task_completed'] });
             expect(completed.length).toBe(5);
         });
     });
@@ -121,9 +123,10 @@ describe('operating-notes growth controls', () => {
             expect(readOperatingNotes(meshId).map(n => (n.payload as any).text)).not.toContain('never again');
         });
 
-        it('notes are refused by the event ledger (they would be invisible there)', () => {
-            expect(() => appendLedgerEntry(meshId, { kind: 'coordinator_operating_note', payload: { text: 'x' } })).toThrow(/not a ledger kind/);
-            expect(readLedgerEntries(meshId, { kind: ['coordinator_operating_note'] })).toEqual([]);
+        it('notes are refused as mesh records (they would be invisible there)', () => {
+            const res = meshRecord(meshId, 'coordinator_operating_note', { payload: { text: 'x' } }, { local: true });
+            expect(res).toMatchObject({ storedLocally: false, published: false });
+            expect(readLocalRecords(meshId, { kind: ['coordinator_operating_note'] })).toEqual([]);
         });
 
         it('requires a target', () => {
