@@ -61,7 +61,7 @@ describe('registration', () => {
             'record_local', 'recovery_context_query', 'tool_call_record',
         ]);
         const byName = new Map(turnLedgerIpcSpecs.map((spec) => [spec.name, spec]));
-        for (const name of names) expect(byName.get(name)?.sources, name).toEqual(['ipc']);
+        for (const name of names) expect(byName.get(name)?.sources, name).toEqual(['ipc', 'standalone']);
     });
 
     it('a malformed request is refused by the wire decoder, never executed', async () => {
@@ -195,5 +195,23 @@ describe('active_work_query / recovery_context_query / tool_call_record / missio
         expect(first).toMatchObject({ success: true, rateLimitExceeded: false, callsInWindow: 1, advisory: null });
         const missions = await call('mission_list_query', { v, meshId });
         expect(missions).toMatchObject({ success: true, missions: [], historyFold: null, truncated: false, matched: 0 });
+    });
+});
+
+describe('router-internal args (live regression 2026-09-25: mesh_send_task → queue_query "bad shape")', () => {
+    // The router stamps `_interactionId` onto every command's args before the
+    // handler runs. The wire decoders are strict, so the SPEC (what the router
+    // actually invokes) must strip it; the raw handler stays strict.
+    it('the registered spec decodes a request carrying the router stamp; the raw handler does not', async () => {
+        const byName = new Map(turnLedgerIpcSpecs.map((spec) => [spec.name, spec]));
+        const spec = byName.get('queue_query');
+        expect(spec).toBeDefined();
+        const ctx = { deps: { statusInstanceId: 'daemon-test' } } as any;
+        const stamped = { v, meshId, _interactionId: 'ix_test_stamp' };
+        const viaSpec = await (spec!.run as any)(ctx, stamped);
+        expect(viaSpec).toMatchObject({ success: true, entries: [] });
+        const raw = await call('queue_query', stamped);
+        expect(raw.success).toBe(false);
+        expect(String(raw.error)).toContain('bad shape');
     });
 });

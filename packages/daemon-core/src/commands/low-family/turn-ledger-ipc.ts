@@ -15,11 +15,18 @@
  * (C-W6 pre-work, landed) is the CLIENT — it calls `transport.command(name,
  * args)` exactly like every other mesh tool. These specs are what answers
  * that call once it reaches the daemon that owns the turn ledger / seqscribe
- * node. `sources: ['ipc']` on every spec below means these eight commands are
- * reachable ONLY over the local IPC transport (`IpcTransport`/`LocalTransport`
- * — never P2P/WS/ext), matching the design's "executed in the daemon that
- * owns the turn ledger and the seqscribe node" and the fact that mcp-server
- * is always local to that daemon's machine.
+ * node. `sources: TURN_IPC_SOURCES` (`['ipc', 'standalone']`) on every spec
+ * below means these commands are reachable ONLY over the two LOCAL transports
+ * the mcp-server uses — the cloud daemon's IPC socket (`IpcTransport`, source
+ * `ipc`) and the standalone daemon's loopback HTTP `/api/v1/command`
+ * (`LocalTransport`, which `StandaloneServer.executeCommand` labels
+ * `standalone`) — never P2P/WS/ext, matching the design's "executed in the
+ * daemon that owns the turn ledger and the seqscribe node" and the fact that
+ * mcp-server is always local to that daemon's machine. `standalone` was added
+ * after the 2026-09-25 live pass: with `['ipc']` alone every mesh tool on a
+ * standalone daemon failed `COMMAND_SOURCE_REJECTED` (mesh_status,
+ * mesh_send_task …) — a regression C-W9 introduced when the mcp-server
+ * stopped opening the store in-process.
  *
  * LATE-BINDING THE TURN LEDGER
  * -----------------------------
@@ -93,6 +100,7 @@ import {
     type TurnQueryResponse,
 } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { stripRouterInternalArgs } from '../router-internal-args.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
 import { getActiveTurnLedger, setActiveTurnLedger } from '../../mesh/turn-ledger/active-ledger.js';
@@ -580,17 +588,34 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     ...meshGraphIpcHandlers,
 };
 
-export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandlers, {
-    turn_observe: { sources: ['ipc'] },
-    mesh_record: { sources: ['ipc'] },
-    turn_cancel: { sources: ['ipc'] },
-    operator_status: { sources: ['ipc'] },
-    turn_query: { sources: ['ipc'] },
-    mesh_index_query: { sources: ['ipc'] },
-    mission_upsert: { sources: ['ipc'] },
-    mission_query: { sources: ['ipc'] },
-    note_upsert: { sources: ['ipc'] },
-    note_forget: { sources: ['ipc'] },
-    ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ['ipc'] as const }])),
-    ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: ['ipc'] as const }])),
+/** The local transports the mcp-server reaches this daemon over (see the file header). */
+export const TURN_IPC_SOURCES = ['ipc', 'standalone'] as const;
+
+/**
+ * The router stamps `_interactionId` (and may stamp other `_`-prefixed
+ * internals) onto every command's args; the mesh-shared request decoders are
+ * strict (`hasOnlyKeys`), so every responder here decodes the args WITHOUT
+ * those keys. See `commands/router-internal-args.ts` for the live failure
+ * this prevents.
+ */
+function withWireArgs(handlers: Record<string, LowFamilyHandler>): Record<string, LowFamilyHandler> {
+    return Object.fromEntries(Object.entries(handlers).map(([name, run]) => [
+        name,
+        (ctx, args) => run(ctx, stripRouterInternalArgs(args)),
+    ]));
+}
+
+export const turnLedgerIpcSpecs = defineCommandSpecs('low', withWireArgs(turnLedgerIpcHandlers), {
+    turn_observe: { sources: TURN_IPC_SOURCES },
+    mesh_record: { sources: TURN_IPC_SOURCES },
+    turn_cancel: { sources: TURN_IPC_SOURCES },
+    operator_status: { sources: TURN_IPC_SOURCES },
+    turn_query: { sources: TURN_IPC_SOURCES },
+    mesh_index_query: { sources: TURN_IPC_SOURCES },
+    mission_upsert: { sources: TURN_IPC_SOURCES },
+    mission_query: { sources: TURN_IPC_SOURCES },
+    note_upsert: { sources: TURN_IPC_SOURCES },
+    note_forget: { sources: TURN_IPC_SOURCES },
+    ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }])),
+    ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }])),
 });

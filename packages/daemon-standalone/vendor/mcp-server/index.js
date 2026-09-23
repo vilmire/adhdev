@@ -117803,6 +117803,25 @@ ${marker}`,
         meshLedgerSpecs = defineCommandSpecs("low", meshLedgerHandlers);
       }
     });
+    function isRouterInternalArgKey(key2) {
+      return key2.startsWith(ROUTER_INTERNAL_ARG_PREFIX);
+    }
+    function stripRouterInternalArgs(args) {
+      if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+      const out = {};
+      for (const [key2, value] of Object.entries(args)) {
+        if (isRouterInternalArgKey(key2)) continue;
+        out[key2] = value;
+      }
+      return out;
+    }
+    var ROUTER_INTERNAL_ARG_PREFIX;
+    var init_router_internal_args = __esm2({
+      "src/commands/router-internal-args.ts"() {
+        "use strict";
+        ROUTER_INTERNAL_ARG_PREFIX = "_";
+      }
+    });
     function normalizeOrchestrationDecision3(raw, surface) {
       const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
       const readCount = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : void 0;
@@ -120533,6 +120552,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...record2.brief ? { brief: record2.brief } : {}
       };
     }
+    function withWireArgs(handlers) {
+      return Object.fromEntries(Object.entries(handlers).map(([name, run2]) => [
+        name,
+        (ctx, args) => run2(ctx, stripRouterInternalArgs(args))
+      ]));
+    }
     var import_crypto18;
     var indexSlot;
     var turnObserve2;
@@ -120548,6 +120573,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var noteUpsert2;
     var noteForget2;
     var turnLedgerIpcHandlers;
+    var TURN_IPC_SOURCES;
     var turnLedgerIpcSpecs;
     var init_turn_ledger_ipc = __esm2({
       "src/commands/low-family/turn-ledger-ipc.ts"() {
@@ -120555,6 +120581,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         import_crypto18 = require("crypto");
         init_dist();
         init_dist();
+        init_router_internal_args();
         init_command_registry();
         init_active_ledger();
         init_mesh_record();
@@ -120845,19 +120872,20 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           // orphaned-pin notify — mesh-graph-ipc.ts.
           ...meshGraphIpcHandlers
         };
-        turnLedgerIpcSpecs = defineCommandSpecs("low", turnLedgerIpcHandlers, {
-          turn_observe: { sources: ["ipc"] },
-          mesh_record: { sources: ["ipc"] },
-          turn_cancel: { sources: ["ipc"] },
-          operator_status: { sources: ["ipc"] },
-          turn_query: { sources: ["ipc"] },
-          mesh_index_query: { sources: ["ipc"] },
-          mission_upsert: { sources: ["ipc"] },
-          mission_query: { sources: ["ipc"] },
-          note_upsert: { sources: ["ipc"] },
-          note_forget: { sources: ["ipc"] },
-          ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ["ipc"] }])),
-          ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: ["ipc"] }]))
+        TURN_IPC_SOURCES = ["ipc", "standalone"];
+        turnLedgerIpcSpecs = defineCommandSpecs("low", withWireArgs(turnLedgerIpcHandlers), {
+          turn_observe: { sources: TURN_IPC_SOURCES },
+          mesh_record: { sources: TURN_IPC_SOURCES },
+          turn_cancel: { sources: TURN_IPC_SOURCES },
+          operator_status: { sources: TURN_IPC_SOURCES },
+          turn_query: { sources: TURN_IPC_SOURCES },
+          mesh_index_query: { sources: TURN_IPC_SOURCES },
+          mission_upsert: { sources: TURN_IPC_SOURCES },
+          mission_query: { sources: TURN_IPC_SOURCES },
+          note_upsert: { sources: TURN_IPC_SOURCES },
+          note_forget: { sources: TURN_IPC_SOURCES },
+          ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }])),
+          ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: TURN_IPC_SOURCES }]))
         });
       }
     });
@@ -154843,7 +154871,8 @@ ${e?.stderr || ""}`;
             params: normalized,
             subscription: this.gitMonitor.createSubscription(normalized),
             seq: 0,
-            lastSentAt: 0
+            lastSentAt: 0,
+            lastFlushedAt: 0
           });
           return true;
         }
@@ -154863,6 +154892,7 @@ ${e?.stderr || ""}`;
           params,
           seq: 0,
           lastSentAt: 0,
+          lastFlushedAt: 0,
           lastDeliveredSignature: ""
         });
         return true;
@@ -154942,6 +154972,28 @@ ${e?.stderr || ""}`;
         for (const subs of byConn.values()) {
           for (const entry of subs.values()) {
             if (oldest === null || entry.lastSentAt < oldest) oldest = entry.lastSentAt;
+          }
+        }
+        return oldest;
+      }
+      /** Oldest `lastFlushedAt` across every subscriber of `topic` (see the field doc) — what the WARN-only reconciliation compares against. */
+      oldestLastFlushedAt(topic) {
+        if (topic === "workspace.git") {
+          let oldest2 = null;
+          for (const subs of this.gitSubscriptions.values()) {
+            for (const entry of subs.values()) {
+              if (oldest2 === null || entry.lastFlushedAt < oldest2) oldest2 = entry.lastFlushedAt;
+            }
+          }
+          return oldest2;
+        }
+        if (!this.isPushTopic(topic)) return null;
+        const byConn = this.pushSubscriptions.get(topic);
+        if (!byConn) return null;
+        let oldest = null;
+        for (const subs of byConn.values()) {
+          for (const entry of subs.values()) {
+            if (oldest === null || entry.lastFlushedAt < oldest) oldest = entry.lastFlushedAt;
           }
         }
         return oldest;
@@ -155031,6 +155083,7 @@ ${e?.stderr || ""}`;
           if (entry.lastSentAt > 0 && now - entry.lastSentAt < intervalMs) continue;
           entry.seq += 1;
           entry.lastSentAt = now;
+          entry.lastFlushedAt = now;
           this.sink.send(entry.connectionId, "machine.runtime", {
             topic: "machine.runtime",
             key: entry.key,
@@ -155065,6 +155118,7 @@ ${e?.stderr || ""}`;
           const diagnostics = await pending;
           entry.seq += 1;
           entry.lastSentAt = now;
+          entry.lastFlushedAt = now;
           if (!this.sink.isDeliverable(entry.connectionId)) continue;
           this.sink.send(entry.connectionId, "session_host.diagnostics", {
             topic: "session_host.diagnostics",
@@ -155106,6 +155160,7 @@ ${e?.stderr || ""}`;
           });
           entry.seq = prepared.seq;
           entry.lastDeliveredSignature = prepared.lastDeliveredSignature;
+          entry.lastFlushedAt = now;
           if (!prepared.update) continue;
           entry.lastSentAt = now;
           this.opts.recordTrace?.({
@@ -155147,6 +155202,7 @@ ${e?.stderr || ""}`;
           const now = this.now();
           entry.seq += 1;
           entry.lastSentAt = now;
+          entry.lastFlushedAt = now;
           const body = bodyFor(entry.params?.includeSessions === true);
           this.sink.send(entry.connectionId, "daemon.metadata", {
             topic: "daemon.metadata",
@@ -155301,6 +155357,7 @@ ${e?.stderr || ""}`;
             if (current2 !== entry || !this.sink.isDeliverable(entry.connectionId)) return;
             entry.seq += 1;
             entry.lastSentAt = monitorUpdate.timestamp;
+            entry.lastFlushedAt = now;
             this.sink.send(entry.connectionId, "workspace.git", {
               ...monitorUpdate,
               key: entry.key,
@@ -172371,15 +172428,26 @@ ${notice.notice}${supersededHint}`;
       "daemon.metadata"
     ];
     var RECONCILE_EDGE_KINDS = [
-      "status",
       "modal",
       "prompt",
-      "registered",
-      "terminated",
-      "daemon_facts",
       "command_executed",
       "mesh_state"
     ];
+    var FIXED_EDGE_TOPIC = {
+      modal: "session.modal",
+      prompt: "session.modal",
+      mesh_state: "daemon.metadata"
+    };
+    function edgeLabel(e) {
+      return e.kind === "command_executed" ? `command_executed:${e.command}` : e.kind;
+    }
+    function isCommandInvalidationTopic(topic) {
+      return topic === "daemon.metadata" || topic === "session_host.diagnostics" || topic === "session.modal" || topic === "workspace.git";
+    }
+    function edgeInvalidatesTopic(e, topic) {
+      if (e.kind === "command_executed") return isCommandInvalidationTopic(topic) && e.invalidates.has(topic);
+      return FIXED_EDGE_TOPIC[e.kind] === topic;
+    }
     var DEFAULT_HOST_RECONCILE_INTERVAL_MS = 6e4;
     var RECONCILE_STALE_GRACE_MS = 2e4;
     function subscribeHostTopicReconciliation(bus, topics, opts = {}) {
@@ -172387,21 +172455,28 @@ ${notice.notice}${supersededHint}`;
       const setIntervalFn = opts.setIntervalFn ?? setInterval;
       const clearIntervalFn = opts.clearIntervalFn ?? clearInterval;
       const intervalMs = opts.intervalMs ?? DEFAULT_HOST_RECONCILE_INTERVAL_MS;
-      let newestEdgeAt = now();
+      const newestEdgeByTopic = /* @__PURE__ */ new Map();
+      const startedAt = now();
       const offEdges = bus.on(RECONCILE_EDGE_KINDS, (e) => {
-        const at = e.at;
-        if (typeof at === "number" && at > newestEdgeAt) newestEdgeAt = at;
+        const at = e.at ?? startedAt;
+        for (const topic of RECONCILE_TOPICS) {
+          if (!edgeInvalidatesTopic(e, topic)) continue;
+          const current2 = newestEdgeByTopic.get(topic);
+          if (current2 && current2.at >= at) continue;
+          newestEdgeByTopic.set(topic, { at, label: edgeLabel(e) });
+        }
       }, { name: "host.reconcile-edge-tracker" });
       const tick = () => {
-        const edgeAt = newestEdgeAt;
-        if (now() < edgeAt + RECONCILE_STALE_GRACE_MS) return;
         for (const topic of RECONCILE_TOPICS) {
           if (!topics.hasSubscriptions(topic)) continue;
-          const oldest = topics.oldestLastSentAt(topic);
+          const edge = newestEdgeByTopic.get(topic);
+          if (!edge) continue;
+          if (now() < edge.at + RECONCILE_STALE_GRACE_MS) continue;
+          const oldest = topics.oldestLastFlushedAt(topic);
           if (oldest === null) continue;
-          if (oldest >= edgeAt) continue;
+          if (oldest >= edge.at) continue;
           const ageMs2 = now() - oldest;
-          LOG.warn("HostRuntime", `topic reconciliation: ${topic} has subscribers but no flush since ${ageMs2}ms ago (newest bus edge was ${now() - edgeAt}ms ago) \u2014 a bus subscriber may be silently broken`);
+          LOG.warn("HostRuntime", `topic reconciliation: ${topic} has subscribers but no flush since ${ageMs2}ms ago (newest ${topic} edge (${edge.label}) was ${now() - edge.at}ms ago) \u2014 a bus subscriber may be silently broken`);
         }
       };
       const timer = setIntervalFn(tick, intervalMs);
@@ -174803,7 +174878,7 @@ function classifyTransportFailure(command, error48) {
 }
 function unwrapEnvelope(raw) {
   if (raw !== null && typeof raw === "object" && "success" in raw) {
-    const { success: success2, error: error48, code, ...rest } = raw;
+    const { success: success2, error: error48, code, interactionId: _interactionId, ...rest } = raw;
     if (success2 === false) {
       return {
         ok: false,
