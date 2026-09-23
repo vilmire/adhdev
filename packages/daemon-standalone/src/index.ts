@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import {
   parseStandaloneCliArgs,
+  normalizeStandaloneLogLevel,
   StandaloneCliArgsError,
   STANDALONE_HELP_TEXT,
   resolveStandalonePortEnvOverride,
@@ -28,6 +29,10 @@ import {
 import {
   LOG,
   setLogInstancePort,
+  setLogLevel,
+  resolveDebugRuntimeConfig,
+  setDebugRuntimeConfig,
+  configureDebugTraceStore,
   bootDaemonRuntime,
   bootSessionHost,
   createDaemonHostRuntime,
@@ -730,6 +735,19 @@ async function main(): Promise<void> {
   }
   const options: StandaloneOptions = parsed.options;
   const hostExplicit = parsed.hostExplicit;
+
+  // Debug runtime (log level + structured trace store), the same resolver the
+  // cloud daemon applies: `--log-level` > ADHDEV_LOG_LEVEL > (`--dev` ⇒ debug)
+  // > info. Before this the standalone never called `setLogLevel`, so `--dev`
+  // could not surface DEBUG-only proof lines (`[bus] …`, TurnEvidencePort).
+  const envLogLevel = process.env.ADHDEV_LOG_LEVEL?.trim();
+  const debugRuntime = resolveDebugRuntimeConfig({
+    dev: options.dev,
+    logLevel: parsed.options.logLevel ?? (envLogLevel ? normalizeStandaloneLogLevel(envLogLevel, 'ADHDEV_LOG_LEVEL') : undefined),
+  });
+  setDebugRuntimeConfig(debugRuntime);
+  configureDebugTraceStore();
+  setLogLevel(debugRuntime.logLevel);
 
   // Try to find web-standalone build
   if (!hostExplicit) {
