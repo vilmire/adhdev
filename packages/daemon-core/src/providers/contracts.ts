@@ -10,6 +10,7 @@
 // ─── readChat() return value ───────────────────────────
 
 import type { ProviderSummaryMetadata } from '../shared-types.js';
+import type { ModelDiscoverySpec } from '../models/types.js';
 import type { ChatMessageKind } from './chat-message-normalization.js';
 
 export type ReadChatTurnStatus = 'open' | 'waiting_approval' | 'complete' | 'error';
@@ -753,6 +754,27 @@ export interface ProviderModule {
    * text too, so the list going stale never blocks a model the provider accepts.
    */
   modelOptions?: string[];
+  /**
+   * MODEL DISCOVERY: how to ask the INSTALLED binary what models it actually
+   * offers, so `modelOptions` above stops being a hand-written list that drifts.
+   *
+   * Drift is two-directional and both directions are user-visible: measured
+   * 2026-09-23, codex's manifest lacked `gpt-6-astra` AND still listed four
+   * models the binary no longer offers. So a successful discovery REPLACES
+   * `modelOptions` at read time rather than merging into it.
+   *
+   * ★The result is a RUNTIME OVERLAY (daemon-core `models/`), never a write back
+   * to this manifest: manifests are digest-verified channel objects, and the
+   * answer is per-machine and per-account anyway (`grok models` → "You are
+   * logged in with grok.com"). Any discovery failure falls back to the list
+   * above, so a signed-out CLI can never empty a picker.
+   *
+   * `kind: 'none'` is an explicit declaration that a provider cannot be
+   * discovered (claude-cli ships no listing subcommand; hermes-cli is
+   * interactive only) — stated rather than omitted so the UI can render
+   * "cannot verify" instead of implying the list was checked.
+   */
+  modelDiscovery?: ModelDiscoverySpec;
   /**
    * BRAIN-ROUTING (thinking axis): template for expanding an `initialThinkingLevel`
    * selection into launch args for a CLI provider, parallel to modelLaunchArgs.

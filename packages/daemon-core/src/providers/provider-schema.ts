@@ -77,6 +77,10 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'modelLaunchArgs',
   'modelLaunchValueMap',
   'modelOptions',
+  // How to ask the installed binary for its own model list, so modelOptions
+  // stops drifting in both directions. Read-only; the result is a runtime
+  // overlay and is never written back into this manifest (digest-verified).
+  'modelDiscovery',
   'thinkingLaunchArgs',
   'thinkingLevelMap',
   'thinkingLevelOptions',

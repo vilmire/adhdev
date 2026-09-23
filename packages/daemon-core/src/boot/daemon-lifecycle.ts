@@ -46,6 +46,7 @@ import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 import { setupMeshReconcileLoop } from '../mesh/mesh-reconcile-loop.js';
 import { migratePendingEventsJsonlToSqlite } from '../mesh/mesh-events-pending-migration.js';
 import { setupQuotaRefreshLoop, setupQuotaEventRefresh, refreshQuotaCacheOnBoot, hydrateQuotaCacheFromDisk, quotaProviderEnabledFromLoader } from '../quota/refresh.js';
+import { hydrateModelCache, refreshDueModelDiscovery } from '../models/registry.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { loadMeshCoordinatorRegistry } from '../mesh/coordinator-registry.js';
 import {
@@ -1326,6 +1327,33 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         const isQuotaProviderEnabled = quotaProviderEnabledFromLoader(components.providerLoader);
         try { hydrateQuotaCacheFromDisk(process.env, isQuotaProviderEnabled); } catch { /* fail-soft: an unusable cache is just an empty one */ }
         refreshQuotaCacheOnBoot(isQuotaProviderEnabled);
+    });
+
+    // 11d. MODEL DISCOVERY: same shape, same reasons — hydrate the last known
+    // model lists so a restart never regresses a picker, then refresh only the
+    // entries whose TTL has actually expired (24h for a success; a model list
+    // moves when a vendor ships, not within a session). Deferred and not
+    // awaited: several of these spawn a CLI and one of them
+    // (`agy models`) goes to the network, none of which may add to startup.
+    //
+    // Failure of any provider leaves the manifest's own modelOptions in force —
+    // discovery can raise the list above the signed manifest, never below it.
+    setImmediate(() => {
+        try { hydrateModelCache(process.env); } catch { /* fail-soft: an unusable cache is just an empty one */ }
+        // Read from the public inventory: it already carries the DETECTED path
+        // for each provider, so discovery can only ever run a binary provider
+        // detection already resolved — it never picks an executable itself.
+        const targets = (components.providerLoader.getAvailableProviderInfos?.() || [])
+            .filter((p: any) => p?.category === 'cli' && p?.modelDiscovery)
+            // Same enable gate the quota axis uses: a provider this machine
+            // cannot run is never probed.
+            .filter((p: any) => p.enabled !== false)
+            .map((p: any) => ({
+                type: p.type,
+                modelDiscovery: p.modelDiscovery,
+                binary: p.detectedPath || p.binary,
+            }));
+        void refreshDueModelDiscovery(targets).catch(() => { /* background; manifest lists stand */ });
     });
 
     // 12. Resume any refine jobs that were interrupted by a previous daemon restart.

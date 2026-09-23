@@ -58,6 +58,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [pins, setPins] = useState<Record<string, ProviderPinInfo>>({})
     // Verified-channel types never activated/installed on this machine (kimi class).
     const [channelNewTypes, setChannelNewTypes] = useState<string[]>([])
+    /** Providers whose model list is discoverable but whose last read failed. */
+    const [modelStaleTypes, setModelStaleTypes] = useState<string[]>([])
+    /** Providers that declare they cannot be enumerated at all (kind: 'none'). */
+    const [modelCannotVerifyTypes, setModelCannotVerifyTypes] = useState<string[]>([])
     const [installingNewType, setInstallingNewType] = useState<string | null>(null)
     // Why a channel install failed, per provider type. The daemon already
     // returns the typed channelSync errors (DIGEST_MISMATCH, TRANSPORT_FAILED,
@@ -181,7 +185,11 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
         try {
             const res = await sendDaemonCommand(machineId, 'check_provider_updates', {})
             const body = (res && typeof res === 'object' && 'result' in (res as any) ? (res as any).result : res) as
-                { providers?: Array<Record<string, any>>; channelStaleness?: { newTypes?: string[] } } | undefined
+                {
+                    providers?: Array<Record<string, any>>
+                    channelStaleness?: { newTypes?: string[] }
+                    modelStaleness?: { cannotVerifyTypes?: string[]; staleTypes?: string[] }
+                } | undefined
             const next: Record<string, ProviderPinInfo> = {}
             for (const row of body?.providers ?? []) {
                 if (typeof row?.type !== 'string') continue
@@ -199,6 +207,13 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             // the kimi class: without this list there is NO dashboard path to
             // install a type first published after bootstrap.
             setChannelNewTypes(Array.isArray(body?.channelStaleness?.newTypes) ? body.channelStaleness.newTypes : [])
+            // Model-list axis. ★Two DISTINCT lists, never merged: "we looked
+            // and the read failed" (staleTypes) is a different fact from "this
+            // provider can never be enumerated" (cannotVerifyTypes —
+            // claude-cli, hermes-cli). Showing either as up-to-date would
+            // assert a check that never happened.
+            setModelStaleTypes(Array.isArray(body?.modelStaleness?.staleTypes) ? body.modelStaleness.staleTypes : [])
+            setModelCannotVerifyTypes(Array.isArray(body?.modelStaleness?.cannotVerifyTypes) ? body.modelStaleness.cannotVerifyTypes : [])
         } catch { /* leave empty — rows then show no pin rather than a wrong one */ }
     }, [machineId, sendDaemonCommand])
 
@@ -489,6 +504,47 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                             )
                         })}
                     </div>
+                </Card>
+            )}
+
+            {/* Model-list verification status. Reuses the channel-staleness card
+                convention rather than inventing a second one.
+
+                ★The two lists stay visually and textually SEPARATE. A provider
+                that cannot be enumerated at all (claude-cli, hermes-cli) is not
+                "stale" — nothing failed, and nothing will ever succeed. Folding
+                it into the stale list would imply a retry might fix it; folding
+                either into a green "up to date" state would claim a check that
+                never happened. */}
+            {(modelStaleTypes.length > 0 || modelCannotVerifyTypes.length > 0) && (
+                <Card padding="none" className="px-4.5 py-3.5">
+                    <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">{t('machine.providers.modelListTitle')}</div>
+                    {modelStaleTypes.length > 0 && (
+                        <>
+                            <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListStaleDesc')}</div>
+                            <div className="flex flex-wrap gap-1.5 mb-2.5">
+                                {modelStaleTypes.map((providerType) => (
+                                    <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-2 py-0.5">
+                                        <span className="font-mono text-xxs text-text-primary">{providerType}</span>
+                                        <span className="text-3xs uppercase tracking-wider text-amber-300/90">{t('machine.providers.modelListStaleBadge')}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                    {modelCannotVerifyTypes.length > 0 && (
+                        <>
+                            <div className="text-2xs text-text-muted mt-1 mb-2">{t('machine.providers.modelListCannotVerifyDesc')}</div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {modelCannotVerifyTypes.map((providerType) => (
+                                    <span key={providerType} className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg-tertiary px-2 py-0.5">
+                                        <span className="font-mono text-xxs text-text-primary">{providerType}</span>
+                                        <span className="text-3xs uppercase tracking-wider text-text-muted">{t('machine.providers.modelListCannotVerifyBadge')}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        </>
+                    )}
                 </Card>
             )}
 

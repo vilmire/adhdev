@@ -79,6 +79,12 @@ import {
   findProviderDirInternal,
 } from './provider-loader-manifest-scan.js';
 import { applySpecNativeHistoryWiring } from './provider-loader-spec-wiring.js';
+// Model-discovery overlay: a synchronous, side-effect-free read of the
+// discovery cache, merged over the manifest's advisory modelOptions. See
+// models/overlay.ts for why discovery outranks the manifest for this one field
+// and why the manifest is never written back to.
+import { buildModelOverlayPatch } from '../models/overlay.js';
+import { readModelCache } from '../models/registry.js';
 import type { CliDetectionEntry, MachineProviderCheckResult, MachineProviderConfig, ProviderAvailabilityState, ProviderChannelStalenessSnapshot, ProviderMachineStatus } from './provider-loader-types.js';
 
 export { providerLoaderConfigOptions } from './provider-loader-config.js';
@@ -1675,6 +1681,19 @@ export class ProviderLoader {
       const availability = this.getEffectiveProviderAvailability(provider.type);
       const enabled = this.isMachineProviderEnabled(provider.type);
       const machineConfig = this.getMachineProviderConfig(provider.type);
+      // ★MODEL-DISCOVERY OVERLAY. This is the single merge point: every model
+      // picker (new-session dialog, mesh slot editor, MAGI kind panel) reads
+      // its list from this inventory via modelOptionsForProvider, so applying
+      // the overlay here fixes all three at once and none of them can drift.
+      //
+      // `readModelCache` is a synchronous Map lookup that CANNOT fetch — this
+      // runs on the inventory path, which is hot. Refreshes happen on the
+      // registry's own schedule; see models/registry.ts.
+      //
+      // A non-ok (or absent) snapshot yields an empty patch, so the manifest's
+      // own modelOptions stand. That is the fallback guarantee: a signed-out or
+      // offline CLI can never blank a picker.
+      const modelPatch = buildModelOverlayPatch(readModelCache(provider.type), provider);
       return {
         ...provider,
         enabled,
@@ -1687,8 +1706,45 @@ export class ProviderLoader {
               detectedPath: availability.detectedPath,
             }
           : {}),
+        ...modelPatch,
       };
     });
+  }
+
+  /**
+   * Which providers' model lists could not be verified on this machine, and
+   * why — the input to the "cannot verify" badge.
+   *
+   * ★Three states, deliberately distinguished, because collapsing them is how a
+   * UI ends up claiming a list is current when nothing ever checked it:
+   *   - `cannotVerify` — the provider DECLARES it cannot be discovered
+   *     (`kind: 'none'`: claude-cli, hermes-cli). Honest permanent state.
+   *   - `stale`        — discovery is supported but the last attempt FAILED
+   *     (signed out, offline, unparseable). The manifest list is in force and
+   *     may be wrong.
+   *   - neither        — discovered successfully; the list is ground truth.
+   */
+  getModelDiscoveryStaleness(): { cannotVerifyTypes: string[]; staleTypes: string[] } {
+    const cannotVerifyTypes: string[] = [];
+    const staleTypes: string[] = [];
+    for (const provider of this.getAll()) {
+      if (provider.category !== 'cli') continue;
+      const spec = (provider as { modelDiscovery?: { kind?: string } }).modelDiscovery;
+      if (!spec || spec.kind === 'none') {
+        // Undeclared and declared-none both mean "nothing checked this list".
+        cannotVerifyTypes.push(provider.type);
+        continue;
+      }
+      // Only providers this machine can actually run are judged: a CLI that is
+      // not installed here has no list to be stale about, and flagging it would
+      // fill the badge with rows the user cannot act on.
+      if (!this.isMachineProviderEnabled(provider.type)) continue;
+      const snapshot = readModelCache(provider.type);
+      if (!snapshot || snapshot.status !== 'ok') staleTypes.push(provider.type);
+    }
+    cannotVerifyTypes.sort();
+    staleTypes.sort();
+    return { cannotVerifyTypes, staleTypes };
   }
 
  /**
