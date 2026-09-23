@@ -31,6 +31,7 @@ import { collectGateConvergenceEvidence } from '../../mesh/mesh-graph-gate-evide
 import { buildMeshRoutePreview } from '../../mesh/mesh-route-preview.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
@@ -218,3 +219,5 @@ export const meshGraphCommandHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshGraphCommandSpecs = defineCommandSpecs('med', meshGraphCommandHandlers);

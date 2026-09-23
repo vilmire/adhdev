@@ -30,7 +30,7 @@ function makeMedCtx(overrides: Partial<any> = {}): any {
     deps: {
       statusInstanceId: 'daemon_mach_self',
       // No dispatchMeshCommand → local execution path.
-      cliManager: { handleCliCommand: vi.fn(async () => ({ success: true })) },
+      cliManager: { agentCommand: vi.fn(async () => ({ success: true })) },
       instanceManager: { getInstance: () => null },
     },
     getMeshForCommand: vi.fn(async () => null),
@@ -72,11 +72,11 @@ describe('(1) fast_forward_mesh_node safety-gate never escapes as an IPC crash',
 
 describe('(2a) agent_command defers send_chat while node worktree bootstrap is running', () => {
   it('refuses the inject with a recoverable mesh_node_bootstrap_pending result and does not dispatch', async () => {
-    const handleCliCommand = vi.fn(async () => ({ success: true }))
+    const agentCommand = vi.fn(async () => ({ success: true }))
     const ctx = makeMedCtx({
       deps: {
         statusInstanceId: 'daemon_mach_self',
-        cliManager: { handleCliCommand },
+        cliManager: { agentCommand },
         instanceManager: { getInstance: () => null },
       },
       getCachedInlineMesh: vi.fn(() => ({
@@ -102,15 +102,15 @@ describe('(2a) agent_command defers send_chat while node worktree bootstrap is r
       taskId: 'task-1',
     })
     // The inject must NOT have been forwarded to the CLI manager — the gap this fix closes.
-    expect(handleCliCommand).not.toHaveBeenCalled()
+    expect(agentCommand).not.toHaveBeenCalled()
   })
 
   it('dispatches normally when the node bootstrap is already complete', async () => {
-    const handleCliCommand = vi.fn(async () => ({ success: true, status: 'generating' }))
+    const agentCommand = vi.fn(async () => ({ success: true, status: 'generating' }))
     const ctx = makeMedCtx({
       deps: {
         statusInstanceId: 'daemon_mach_self',
-        cliManager: { handleCliCommand },
+        cliManager: { agentCommand },
         instanceManager: { getInstance: () => null },
       },
       getCachedInlineMesh: vi.fn(() => ({
@@ -126,7 +126,7 @@ describe('(2a) agent_command defers send_chat while node worktree bootstrap is r
       meshContext: { meshId: 'mesh-ready', nodeId: 'node-ready' },
     })
 
-    expect(handleCliCommand).toHaveBeenCalledTimes(1)
+    expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(result).toMatchObject({ success: true })
   })
 })

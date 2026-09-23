@@ -59,7 +59,7 @@ function resolveHermesCoordinatorHomeForTest(meshId: string, workspace: string):
 
 function createAutoImportRouter(
   provider: ProviderModule,
-  cliManager: { handleCliCommand: ReturnType<typeof vi.fn> },
+  cliManager: { launchCli: ReturnType<typeof vi.fn> },
   sessionHostControl?: { listSessions?: ReturnType<typeof vi.fn> },
 ) {
   return new DaemonCommandRouter({
@@ -554,7 +554,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'coordinator-live-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'coordinator-live-session' })),
     }
     const router = createAutoImportRouter(provider, cliManager, {
       listSessions: vi.fn(async () => [
@@ -601,13 +601,12 @@ describe('resolveMeshCoordinatorSetup', () => {
       // declarative auto-approve settings (same resolver the delegated worker uses).
       // No repo mesh.json providerDefaults here → enable gate defaults on (autoApprove:true),
       // and crucially NO launchedByCoordinator stamp (coordinator is the owner, not a worker).
-      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+      expect(cliManager.launchCli).toHaveBeenCalledWith(expect.objectContaining({
         cliType: 'claude-cli',
         dir: liveRepo,
         settings: expect.objectContaining({ meshCoordinatorFor: 'mesh-live-workspace' }),
       }))
-      const liveLaunchSettings = (cliManager.handleCliCommand as any).mock.calls
-        .find((c: any[]) => c[0] === 'launch_cli')?.[1]?.settings
+      const liveLaunchSettings = (cliManager.launchCli as any).mock.calls[0]?.[0]?.settings
       expect(liveLaunchSettings).not.toHaveProperty('launchedByCoordinator')
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
@@ -649,7 +648,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'coordinator-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'coordinator-session' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh = {
@@ -731,7 +730,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       if (!sourceNode) throw new Error('expected persisted source node')
 
       const router = createAutoImportRouter(baseProvider, {
-        handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+        launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
       })
 
       const cachedInlineMesh = {
@@ -790,7 +789,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'session-1' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'session-1' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
 
@@ -821,7 +820,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         },
       })
       expect(mcpConfig.mcpServers['adhdev-mesh'].command).toBe('adhdev')
-      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+      expect(cliManager.launchCli).toHaveBeenCalledWith(expect.objectContaining({
         cliType: 'claude-cli',
         dir: workspace,
       }))
@@ -850,7 +849,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'session-should-not-launch' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'session-should-not-launch' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh = {
@@ -874,7 +873,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         code: 'mesh_coordinator_manual_mcp_setup_required',
         cliType: 'other-cli',
       })
-      expect(cliManager.handleCliCommand).not.toHaveBeenCalled()
+      expect(cliManager.launchCli).not.toHaveBeenCalled()
     } finally {
       rmSync(workspace, { recursive: true, force: true })
     }
@@ -918,7 +917,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-1' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-1' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh = {
@@ -945,7 +944,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       const configText = readFileSync(configPath, 'utf-8')
       expect(configText).toBe('model:\n  provider: openrouter\nmcp_servers:\n  existing:\n    command: existing-server\n')
 
-      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      const launchCall = (cliManager.launchCli as any).mock.calls[0]?.[0] as any
       expect(launchCall).toBeTruthy()
       expect(launchCall).toEqual(expect.objectContaining({
         cliType: 'hermes-cli',
@@ -1021,7 +1020,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-stale-model' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-stale-model' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh = {
@@ -1041,7 +1040,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       })
 
       expect(result).toMatchObject({ success: true, sessionId: 'hermes-session-stale-model', mcpConfigWritten: true })
-      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      const launchCall = (cliManager.launchCli as any).mock.calls[0]?.[0] as any
       expect(launchCall).toBeTruthy()
       expect(launchCall.env.HERMES_HOME).toBe(staleCoordinatorHome)
       const isolatedConfigText = readFileSync(staleCoordinatorConfigPath, 'utf-8')
@@ -1089,7 +1088,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'session-should-not-launch' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'session-should-not-launch' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh: any = {
@@ -1127,7 +1126,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         cliType: 'claude-cli',
       })
       expect(String((result as any).error)).toContain('broken inline mesh policy')
-      expect(cliManager.handleCliCommand).not.toHaveBeenCalled()
+      expect(cliManager.launchCli).not.toHaveBeenCalled()
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
@@ -1138,7 +1137,7 @@ describe('resolveMeshCoordinatorSetup', () => {
   it('reuses cached cloud node status when an inline mesh workspace is not local to the selected coordinator', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-'))
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const inlineMesh: any = {
       id: 'mesh_status_cached_remote',
@@ -1217,7 +1216,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     const submoduleRepo = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-submodule-child-'))
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-submodule-parent-'))
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
 
     try {
@@ -1283,7 +1282,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     }, null, 2), 'utf-8')
 
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const inlineMesh: any = {
       id: 'mesh_status_inline_preferred',
@@ -1379,7 +1378,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     }, null, 2), 'utf-8')
 
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const inlineMesh: any = {
       id: 'mesh_status_inline_preferred',
@@ -1431,7 +1430,7 @@ describe('resolveMeshCoordinatorSetup', () => {
   it('does not resurrect removed live nodes when the same stale cloud bootstrap inline mesh is sent again', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-live-cache-'))
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const inlineMesh: any = {
       id: 'mesh_status_inline_live_cache',
@@ -1499,7 +1498,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-stale-inline-fields-'))
     initGitRepo(workspace)
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const staleInlineMesh: any = {
       id: 'mesh_status_stale_inline_fields',
@@ -1577,7 +1576,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-live-git-truth-'))
     initGitRepo(workspace)
     const router = createAutoImportRouter(baseProvider, {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
     })
     const meshId = 'mesh_status_live_git_truth'
     const remoteWorkspace = '/Users/remote/.worktrees/adhdev'
@@ -1738,7 +1737,7 @@ describe('claude-cli coordinator provider capability', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
     const inlineMesh = {
@@ -1758,7 +1757,7 @@ describe('claude-cli coordinator provider capability', () => {
       })
 
       expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
-      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      const launchCall = (cliManager.launchCli as any).mock.calls[0]?.[0] as any
       expect(launchCall.cliType).toBe('claude-cli')
       // AUTOAPPROVE-COORD: coordinator launch inherits the workspace auto-approve settings
       // (delegatedWorkerAutoApproveSettings). No providerDefaults declared here → enable gate on.
@@ -1825,7 +1824,7 @@ describe('claude-cli coordinator provider capability', () => {
       },
     }
     const cliManager = {
-      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-session' })),
     }
     const router = createAutoImportRouter(provider, cliManager)
 
@@ -1846,8 +1845,7 @@ describe('claude-cli coordinator provider capability', () => {
       })
 
       expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
-      const launchCall = (cliManager.handleCliCommand as any).mock.calls
-        .find((c: any[]) => c[0] === 'launch_cli')?.[1] as any
+      const launchCall = (cliManager.launchCli as any).mock.calls[0]?.[0] as any
       expect(launchCall).toBeDefined()
       // The declared mode rode into the coordinator launch settings…
       expect(launchCall.settings).toMatchObject({

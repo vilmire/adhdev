@@ -12,22 +12,22 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
 
   const make = () => {
     const removeInstance = vi.fn();
-    const unregisterByInstanceKey = vi.fn();
+    const terminateByInstanceKey = vi.fn();
     const flush = vi.fn(() => true);
     const deps = {
       getInstanceManager: () => ({ getInstance: () => ({ flushMeshCompletionBeforeCleanup: flush }), removeInstance }),
-      getSessionRegistry: () => ({ unregisterByInstanceKey }),
+      getSessionRegistry: () => ({ terminateByInstanceKey }),
       removeAgentTracking: vi.fn(),
       onStatusChange: vi.fn(),
     };
     const manager = Object.create(DaemonCliManager.prototype) as any;
     manager.deps = deps;
     manager.adapters = new Map();
-    return { manager, deps, removeInstance, unregisterByInstanceKey, flush };
+    return { manager, deps, removeInstance, terminateByInstanceKey, flush };
   };
 
   it('reclaims the session fully after the grace window, flushing a pending mesh completion first', () => {
-    const { manager, deps, removeInstance, unregisterByInstanceKey, flush } = make();
+    const { manager, deps, removeInstance, terminateByInstanceKey, flush } = make();
     const adapter = { cliType: 'claude-cli' };
     manager.adapters.set('sess', adapter);
 
@@ -39,7 +39,7 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
     expect(manager.adapters.has('sess')).toBe(false);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(deps.removeAgentTracking).toHaveBeenCalledWith('sess');
-    expect(unregisterByInstanceKey).toHaveBeenCalledWith('sess');
+    expect(terminateByInstanceKey).toHaveBeenCalledWith('sess', 'auto_clean');
     expect(removeInstance).toHaveBeenCalledWith('sess');
     expect(flush.mock.invocationCallOrder[0]).toBeLessThan(removeInstance.mock.invocationCallOrder[0]);
     expect(deps.onStatusChange).toHaveBeenCalledTimes(1);

@@ -811,6 +811,22 @@ export async function handleSetMode(h: CommandHelpers, args: any): Promise<Comma
     return { success: false, error: `setMode '${mode}' not supported by this provider` };
 }
 
+/**
+ * Phase E: a successful runtime model / thinking change updates the session's
+ * launch record (`current` + history). The addressed session is the explicit
+ * `targetSessionId`, else the routed current session. A session with no launch
+ * record (IDE / extension, or launched before Phase E) is a silent no-op.
+ */
+function recordRuntimeAxisChange(h: CommandHelpers, args: any, axis: 'model' | 'thinkingLevel', value: unknown): void {
+    if (typeof value !== 'string' || !value.trim()) return;
+    const targetSessionId = typeof args?.targetSessionId === 'string' && args.targetSessionId.trim()
+        ? args.targetSessionId.trim()
+        : h.currentSession?.sessionId;
+    try {
+        h.ctx.sessionRegistry?.updateLaunchAxis?.(targetSessionId, axis, value);
+    } catch { /* provenance bookkeeping must never fail the command */ }
+}
+
 export async function handleChangeModel(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
@@ -826,6 +842,7 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
         if (acpInstance && typeof acpInstance.setConfigOption === 'function') {
                 await acpInstance.setConfigOption('model', model);
                 LOG.info('Command', `[change_model] Updated ACP model to ${model}`);
+                recordRuntimeAxisChange(h, args, 'model', model);
                 return { success: true, model };
         }
         return { success: false, error: 'ACP adapter not found' };
@@ -842,7 +859,10 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
                 const raw = await cdp.evaluateInWebviewFrame?.(webviewScript, matchFn);
                 let result: any = raw;
                 if (typeof raw === 'string') { try { result = JSON.parse(raw); } catch { } }
-                if (result?.success) return { success: true, model, method: 'webview-script' };
+                if (result?.success) {
+                    recordRuntimeAxisChange(h, args, 'model', model);
+                    return { success: true, model, method: 'webview-script' };
+                }
             } catch (e: any) {
                 LOG.info('Command', `[change_model] webview script error: ${e.message}`);
             }
@@ -857,7 +877,10 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
             if (evalResult?.result) {
                 let parsed = evalResult.result;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
-                if (parsed?.success) return { success: true, model, method: 'script' };
+                if (parsed?.success) {
+                    recordRuntimeAxisChange(h, args, 'model', model);
+                    return { success: true, model, method: 'script' };
+                }
             }
         } catch (e: any) {
             LOG.info('Command', `[change_model] script error: ${e.message}`);
@@ -887,6 +910,9 @@ export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promi
     try {
         await acpInstance.setConfigOption(configId, value);
         LOG.info('Command', `[set_thought_level] ${configId}=${value} for ${provider?.type || 'unknown_acp'}`);
+        // `configId` is the ACP config CATEGORY (setConfigOption resolves the
+        // agent's own id); only the thinking-level category is the launch axis.
+        if (configId === 'thought_level') recordRuntimeAxisChange(h, args, 'thinkingLevel', value);
         return { success: true, configId, value };
     } catch (e: any) {
         return { success: false, error: e?.message };

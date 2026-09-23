@@ -16,6 +16,7 @@
  *    resolves the same way, through the bind/token the caller presents.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
     /**
@@ -92,3 +93,5 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const workerMailboxSpecs = defineCommandSpecs('low', workerMailboxHandlers);

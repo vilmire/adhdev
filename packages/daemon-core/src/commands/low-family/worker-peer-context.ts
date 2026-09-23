@@ -35,6 +35,7 @@
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerKind } from '../../mesh/mesh-ledger.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /** Read-model event kinds that carry sibling lifecycle signal worth surfacing. */
 const PEER_EVENT_KINDS: MeshLedgerKind[] = [
@@ -166,3 +167,5 @@ export const workerPeerContextHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const workerPeerContextSpecs = defineCommandSpecs('low', workerPeerContextHandlers);

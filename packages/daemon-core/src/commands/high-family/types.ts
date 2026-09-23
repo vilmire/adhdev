@@ -11,10 +11,9 @@
  * re-entry both depend on. The router binds those onto HighFamilyContext at
  * dispatch; they are NOT reachable from `deps`.
  *
- * Registry dispatch: DaemonCommandRouter.executeDaemonCommand looks up the cmd in
- * highFamilyRegistry AFTER the LOW and MED registries and BEFORE its remaining
- * switch; a hit returns the handler result, a miss falls through to the switch
- * (and ultimately CommandHandler delegation).
+ * Dispatch: each family file turns its handler table into command specs
+ * (defineCommandSpecs) and the router runs `getDaemonCommandRegistry().get(cmd)`
+ * with the context this family needs.
  */
 import type {
     CommandRouterDeps,
@@ -102,6 +101,5 @@ export interface HighFamilyContext {
     meshGitProbeCache: MeshGitProbeCache;
 }
 
-export type HighFamilyHandler = (ctx: HighFamilyContext, args: any) => Promise<CommandRouterResult | null>;
+export type HighFamilyHandler = (ctx: HighFamilyContext, args: any) => Promise<CommandRouterResult>;
 
-export type HighFamilyRegistry = Map<string, HighFamilyHandler>;

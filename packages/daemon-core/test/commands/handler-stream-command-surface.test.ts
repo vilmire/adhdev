@@ -19,12 +19,13 @@ describe('DaemonCommandHandler stream command surface', () => {
           }
         },
       } as any,
+      // B4: a constructor value (the late setAgentStreamManager is gone).
+      agentStreamManager: {
+        selectSession,
+        openSessionPanel,
+        focusSession: vi.fn(async () => true),
+      } as any,
     })
-    handler.setAgentStreamManager({
-      selectSession,
-      openSessionPanel,
-      focusSession: vi.fn(async () => true),
-    } as any)
 
     await expect(handler.handle('select_session', { targetSessionId: 'child-1' })).resolves.toEqual({ success: true })
     await expect(handler.handle('open_panel', { targetSessionId: 'child-1' })).resolves.toEqual({ success: true })

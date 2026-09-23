@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveConfigLogsDir } from '../config/config-dir.js';
+import type { CommandSource } from '../commands/command-registry.js';
 
 // ─── Config ──────────────────────────────────
 // Command history lives under the unified ADHDev home (~/.adhdev/logs/) next to
@@ -27,7 +28,7 @@ const MAX_DAYS = 7;
 export interface CommandLogEntry {
     ts: string;           // ISO timestamp
     cmd: string;          // command name
-    source: 'ws' | 'p2p' | 'ext' | 'api' | 'standalone' | 'unknown';  // where it came from
+    source: CommandSource | 'unknown';  // where it came from (see normalizeCommandSource)
     /** Transport-level peer identifier for src:'p2p' commands (the DataChannel
      *  connection id, e.g. `peer_…`). Identifier ONLY — never a username, email
      *  or any other PII. Answers "which connected peer sent this" where `src`

@@ -27,6 +27,7 @@
 
 import type { TranscriptConsumerFallbackReason } from '../../mesh/transcript-read-model-consumers.js';
 import type { LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 function readKeyArgs(args: any): { ownerDaemonId: string; rawSessionId: string } | null {
     const ownerDaemonId = typeof args?.ownerDaemonId === 'string' ? args.ownerDaemonId.trim() : '';
@@ -78,3 +79,5 @@ export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
         return { success: true, available: true, snapshot: read.snapshot, identity: read.identity };
     },
 };
+
+export const transcriptReplicaSpecs = defineCommandSpecs('low', transcriptReplicaHandlers);

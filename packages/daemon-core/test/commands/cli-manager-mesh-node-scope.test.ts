@@ -95,7 +95,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
   it('routes a worktree-targeted sessionless dispatch to the worktree session, NOT base (by meshNodeId)', async () => {
     const { manager, base, worktree, worktreeNodeId } = createDualNodeManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',
@@ -112,7 +112,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
   it('routes by node workspace when meshNodeId is absent (detached worktree session)', async () => {
     const { manager, base, worktree, worktreeNodeId } = createDualNodeManager({ worktreeDetached: true })
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',
@@ -129,7 +129,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
   it('fails closed (no base auto-pick) when the worktree session is not present on this daemon', async () => {
     const { manager, base, worktreeNodeId } = createDualNodeManager({ includeWorktree: false })
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',
@@ -143,7 +143,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
   it('same-node dispatch still resolves the base session (no over-correction)', async () => {
     const { manager, base, worktree, baseNodeId } = createDualNodeManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',
@@ -159,7 +159,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
   it('an explicit targetSessionId is honored even with meshContext.nodeId present', async () => {
     const { manager, base, worktree, worktreeNodeId } = createDualNodeManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'sess-base',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -181,7 +181,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     // resolution must be exact-or-null: never heal to a different session by workspace.
     const { manager, base, worktree } = createDualNodeManager()
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       targetSessionId: 'sess-ghost', // not hosted here
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -210,7 +210,7 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     } as any)
     manager.adapters.set('sess-1', base.adapter as any)
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',

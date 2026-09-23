@@ -12,6 +12,7 @@ import { buildSessionEntries } from '../../status/builders.js';
 import { getSessionCompletionMarker } from '../../status/snapshot.js';
 import { LOG } from '../../logging/logger.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
@@ -114,3 +115,5 @@ export const notificationHandlers: Record<string, LowFamilyHandler> = {
         };
     },
 };
+
+export const notificationSpecs = defineCommandSpecs('low', notificationHandlers);

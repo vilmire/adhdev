@@ -11,6 +11,7 @@
 import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { buildMemberJoinNode, normalizeStandaloneHostCommandUrl } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
     get_mesh_host_pairing: async (ctx: MedFamilyContext, args: any) => {
@@ -241,3 +242,5 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshHostPairingSpecs = defineCommandSpecs('med', meshHostPairingHandlers);

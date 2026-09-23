@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { lowFamilyRegistry } from '../../src/commands/low-family/index.js'
+import { getDaemonCommandRegistry } from '../../src/commands/router.js'
 import { sessionHostHandlers } from '../../src/commands/low-family/session-host.js'
 import { specProviderDevHandlers } from '../../src/commands/low-family/spec-providerdev.js'
 import { refineConfigHandlers } from '../../src/commands/low-family/refine-config.js'
@@ -16,11 +16,23 @@ import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mail
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
 import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
 
-// RF-ROUTER LOW family extraction: the registry must carry exactly the commands
-// removed from executeDaemonCommand's switch, and each handler must return the same
+// RF-ROUTER LOW family: the command registry must carry exactly the low-family
+// handler tables as `family: 'low'` specs, and each handler must return the same
 // shape the inlined case did. The full facade path (router.execute → registry) is
 // covered by session-host-trace.test.ts / mesh-refine-validation.test.ts; this file
 // unit-tests the handlers and registry membership directly.
+
+/** The low-family command names the registry holds. */
+function lowFamilyNames(): string[] {
+  return getDaemonCommandRegistry().list().filter((spec) => spec.family === 'low').map((spec) => spec.name)
+}
+
+/** Run a low-family spec directly (no router), the way the router would. */
+function lowCommand(cmd: string): (ctx: any, args: any) => Promise<any> {
+  const spec = getDaemonCommandRegistry().get(cmd)
+  expect(spec?.family, cmd).toBe('low')
+  return spec!.run as (ctx: any, args: any) => Promise<any>
+}
 
 const SESSION_HOST_CMDS = [
   'session_host_get_diagnostics',
@@ -81,8 +93,8 @@ describe('low-family registry', () => {
     ]
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
-    expect(lowFamilyRegistry.size).toBe(all.length)
-    for (const cmd of all) expect(lowFamilyRegistry.has(cmd)).toBe(true)
+    expect(lowFamilyNames()).toHaveLength(all.length)
+    for (const cmd of all) expect(getDaemonCommandRegistry().get(cmd)?.family, cmd).toBe('low')
     // family maps are disjoint and each owns exactly its declared commands
     expect(Object.keys(sessionHostHandlers)).toEqual(SESSION_HOST_CMDS)
     expect(Object.keys(specProviderDevHandlers)).toEqual(SPEC_CMDS)
@@ -103,13 +115,13 @@ describe('low-family registry', () => {
   // The lists above are written by hand, which is what makes them a real gate:
   // adding a handler without declaring it fails. But they share a blind spot —
   // they can only check families someone remembered to list. A whole new family
-  // spread into lowFamilyRegistry and never added here would leave every
+  // registered as low-family specs and never added here would leave every
   // assertion above passing, because each one only compares a family to its own
   // list and the size check compares against the same incomplete union.
   //
-  // This derives the expectation from the handler objects the registry itself
-  // spreads, so registry membership is pinned to its actual sources rather than
-  // to whatever the union above happens to cover.
+  // This derives the expectation from the handler objects the registry's specs
+  // are built from, so registry membership is pinned to its actual sources rather
+  // than to whatever the union above happens to cover.
   it('registry contains exactly the union of the family handler objects', () => {
     const union = [
       sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
@@ -120,23 +132,23 @@ describe('low-family registry', () => {
     ].flatMap((handlers) => Object.keys(handlers))
 
     expect(new Set(union).size).toBe(union.length)
-    expect([...lowFamilyRegistry.keys()].sort()).toEqual([...union].sort())
+    expect(lowFamilyNames().sort()).toEqual([...union].sort())
   })
 
   it('session_host handler fails gracefully when the control plane is unavailable', async () => {
-    const result = await lowFamilyRegistry.get('session_host_list_sessions')!({ deps: {} as any }, {})
+    const result = await lowCommand('session_host_list_sessions')({ deps: {} as any }, {})
     expect(result).toEqual({ success: false, error: 'Session host control unavailable' })
   })
 
   it('session_host_stop_session requires a sessionId', async () => {
     const deps = { sessionHostControl: { stopSession: vi.fn() } } as any
-    const result = await lowFamilyRegistry.get('session_host_stop_session')!({ deps }, {})
+    const result = await lowCommand('session_host_stop_session')({ deps }, {})
     expect(result).toEqual({ success: false, error: 'sessionId required' })
     expect(deps.sessionHostControl.stopSession).not.toHaveBeenCalled()
   })
 
   it('refine schema handler returns the schema + locations, no deps needed', async () => {
-    const result: any = await lowFamilyRegistry.get('get_mesh_refine_config_schema')!({ deps: {} as any }, {})
+    const result: any = await lowCommand('get_mesh_refine_config_schema')({ deps: {} as any }, {})
     expect(result.success).toBe(true)
     expect(result.schema).toBeDefined()
     expect(result.locations).toBeDefined()
@@ -145,28 +157,28 @@ describe('low-family registry', () => {
   })
 
   it('validate_spec rejects a non-v4 schema and accepts a structurally valid v4 spec', async () => {
-    const bad: any = await lowFamilyRegistry.get('validate_spec')!({ deps: {} as any }, { spec: { $schema: 'adhdev:cli/spec@3' } })
+    const bad: any = await lowCommand('validate_spec')({ deps: {} as any }, { spec: { $schema: 'adhdev:cli/spec@3' } })
     expect(bad.success).toBe(true)
     expect(bad.valid).toBe(false)
 
-    const badJson: any = await lowFamilyRegistry.get('validate_spec')!({ deps: {} as any }, { content: '{not json' })
+    const badJson: any = await lowCommand('validate_spec')({ deps: {} as any }, { content: '{not json' })
     expect(badJson.valid).toBe(false)
     expect(String(badJson.errors?.[0])).toMatch(/invalid JSON/)
   })
 
   it('get_spec_debug requires a targetSessionId and reports session-not-found', async () => {
-    const missing: any = await lowFamilyRegistry.get('get_spec_debug')!({ deps: {} as any }, {})
+    const missing: any = await lowCommand('get_spec_debug')({ deps: {} as any }, {})
     expect(missing).toEqual({ success: false, error: 'targetSessionId required' })
 
     const deps = { sessionRegistry: { get: vi.fn(() => null) }, cliManager: { findAdapter: vi.fn() } } as any
-    const notFound: any = await lowFamilyRegistry.get('get_spec_debug')!({ deps }, { targetSessionId: 'sess-x' })
+    const notFound: any = await lowCommand('get_spec_debug')({ deps }, { targetSessionId: 'sess-x' })
     expect(notFound).toMatchObject({ success: false, error: 'Session not found', sessionId: 'sess-x' })
   })
 
   // ─── Stage 2 family handler contracts ───
 
   it('get_debug_trace returns a trace envelope with no deps needed', async () => {
-    const result: any = await lowFamilyRegistry.get('get_debug_trace')!({ deps: {} as any }, { limit: 5 })
+    const result: any = await lowCommand('get_debug_trace')({ deps: {} as any }, { limit: 5 })
     expect(result.success).toBe(true)
     expect(Array.isArray(result.trace)).toBe(true)
     expect(result.count).toBe(result.trace.length)
@@ -174,41 +186,41 @@ describe('low-family registry', () => {
 
   it('set_user_name requires a userName string', async () => {
     await expect(
-      lowFamilyRegistry.get('set_user_name')!({ deps: {} as any }, {}),
+      lowCommand('set_user_name')({ deps: {} as any }, {}),
     ).rejects.toThrow(/userName required/)
   })
 
   it('get_session_info requires a targetSessionId and reports session-not-found', async () => {
-    const missing: any = await lowFamilyRegistry.get('get_session_info')!({ deps: {} as any }, {})
+    const missing: any = await lowCommand('get_session_info')({ deps: {} as any }, {})
     expect(missing).toEqual({ success: false, error: 'targetSessionId required' })
 
     const deps = { sessionRegistry: { get: vi.fn(() => null) }, cliManager: { findAdapter: vi.fn() } } as any
-    const notFound: any = await lowFamilyRegistry.get('get_session_info')!({ deps }, { targetSessionId: 'sess-y' })
+    const notFound: any = await lowCommand('get_session_info')({ deps }, { targetSessionId: 'sess-y' })
     expect(notFound).toMatchObject({ success: false, error: 'Session not found', sessionId: 'sess-y' })
   })
 
   it('write_coordinator_prompt rejects a path-traversal key before touching disk', async () => {
-    const bad: any = await lowFamilyRegistry.get('write_coordinator_prompt')!({ deps: {} as any }, { key: '../../etc/passwd', content: 'x' })
+    const bad: any = await lowCommand('write_coordinator_prompt')({ deps: {} as any }, { key: '../../etc/passwd', content: 'x' })
     expect(bad).toEqual({ success: false, error: 'key must match [a-zA-Z0-9_.-]+' })
   })
 
   it('mark_session_seen / delete_notification / mark_notification_unread require a sessionId', async () => {
-    expect(await lowFamilyRegistry.get('mark_session_seen')!({ deps: {} as any }, {}))
+    expect(await lowCommand('mark_session_seen')({ deps: {} as any }, {}))
       .toEqual({ success: false, error: 'sessionId is required' })
-    expect(await lowFamilyRegistry.get('delete_notification')!({ deps: {} as any }, {}))
+    expect(await lowCommand('delete_notification')({ deps: {} as any }, {}))
       .toEqual({ success: false, error: 'sessionId is required' })
-    expect(await lowFamilyRegistry.get('mark_notification_unread')!({ deps: {} as any }, {}))
+    expect(await lowCommand('mark_notification_unread')({ deps: {} as any }, {}))
       .toEqual({ success: false, error: 'sessionId is required' })
   })
 
   it('delete_notification requires a notificationId once a sessionId is present', async () => {
-    const result: any = await lowFamilyRegistry.get('delete_notification')!({ deps: {} as any }, { sessionId: 'sess-z' })
+    const result: any = await lowCommand('delete_notification')({ deps: {} as any }, { sessionId: 'sess-z' })
     expect(result).toEqual({ success: false, error: 'notificationId is required' })
   })
 
   it('get_mesh_ledger / slice / import all require a meshId', async () => {
     for (const cmd of MESH_LEDGER_CMDS) {
-      const result: any = await lowFamilyRegistry.get(cmd)!({ deps: {} as any }, {})
+      const result: any = await lowCommand(cmd)({ deps: {} as any }, {})
       expect(result).toEqual({ success: false, error: 'meshId required' })
     }
   })
@@ -221,7 +233,7 @@ describe('low-family registry', () => {
       source: 'inline_cache' as const,
     }))
     const ctx = { deps: { statusInstanceId: 'local-daemon', dispatchMeshCommand } as any, getMeshForCommand }
-    const result: any = await lowFamilyRegistry.get('get_mesh_node_logs')!(ctx, { meshId: 'm1', nodeId: 'n1' })
+    const result: any = await lowCommand('get_mesh_node_logs')(ctx, { meshId: 'm1', nodeId: 'n1' })
     expect(getMeshForCommand).toHaveBeenCalledWith('m1', undefined, { preferInline: true })
     expect(dispatchMeshCommand).toHaveBeenCalledWith('remote-daemon', 'get_mesh_node_logs', expect.objectContaining({ _meshDirectDispatch: true }))
     expect(result).toEqual({ success: true, lines: ['remote'] })

@@ -33,6 +33,7 @@ import {
 import type { CommandRouterResult } from '../router.js';
 import type { GitRepoIdentity } from '../../git/git-types.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /**
  * Decision for syncing a freshly-cloned worktree's `oss` submodule to its clone
@@ -2024,3 +2025,13 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshCrudSpecs = defineCommandSpecs('med', meshCrudHandlers, {
+    add_mesh_node: { invalidates: ['daemon.metadata'] },
+    update_mesh_node: { invalidates: ['daemon.metadata'] },
+    // DASHBOARD-GHOST-LINGER: deleted sessions linger as ghost rows until the next
+    // heartbeat without an immediate daemon.metadata flush.
+    cleanup_mesh_sessions: { invalidates: ['daemon.metadata'] },
+    remove_mesh_node: { invalidates: ['daemon.metadata'] },
+    clone_mesh_node: { invalidates: ['daemon.metadata'] },
+});

@@ -4,6 +4,7 @@
 import { detectCLIs } from '../../detection/cli-detector.js';
 import { planMeshOnboarding } from '../../mesh/mesh-onboarding-plan.js';
 import type { MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshOnboardingHandlers: Record<string, MedFamilyHandler> = {
     plan_mesh_onboarding: async (ctx, args: any) => {
@@ -39,3 +40,5 @@ export const meshOnboardingHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshOnboardingSpecs = defineCommandSpecs('med', meshOnboardingHandlers);

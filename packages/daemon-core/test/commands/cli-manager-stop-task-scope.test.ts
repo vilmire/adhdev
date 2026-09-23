@@ -73,7 +73,7 @@ describe('DaemonCliManager stop — task scoping (defect)', () => {
         // task2, and the cancel of task1 destroyed task2's work.
         const { manager, stopSession } = createManager({ currentTurnTaskId: 'task2' })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({
             success: false,
@@ -88,7 +88,7 @@ describe('DaemonCliManager stop — task scoping (defect)', () => {
     it('refuses when only the session scalar shows the session moved on', async () => {
         const { manager, stopSession } = createManager({ meshActiveTaskId: 'task2' })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({ stopped: false, reason: 'stop_task_mismatch', sessionTaskId: 'task2' })
         expect(stopSession).not.toHaveBeenCalled()
@@ -100,7 +100,7 @@ describe('DaemonCliManager stop — task scoping (defect)', () => {
             meshActiveTaskId: 'task1', // lagging last-write-wins scalar
         })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({ stopped: false, sessionTaskId: 'task2' })
         expect(stopSession).not.toHaveBeenCalled()
@@ -112,7 +112,7 @@ describe('DaemonCliManager stop — original intent preserved (control group)', 
     it('STILL stops a session genuinely running the cancelled task', async () => {
         const { manager, stopSession } = createManager({ currentTurnTaskId: 'task1' })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({ success: true, stopped: true, stoppedTaskId: 'task1' })
         expect(stopSession).toHaveBeenCalledWith('session-1')
@@ -121,7 +121,7 @@ describe('DaemonCliManager stop — original intent preserved (control group)', 
     it('STILL stops when only the session scalar identifies the cancelled task', async () => {
         const { manager, stopSession } = createManager({ meshActiveTaskId: 'task1' })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({ success: true, stopped: true })
         expect(stopSession).toHaveBeenCalledWith('session-1')
@@ -132,7 +132,7 @@ describe('DaemonCliManager stop — original intent preserved (control group)', 
         // worse regression than the defect being fixed.
         const { manager, stopSession } = createManager({})
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand('task1'))
+        const result = await manager.agentCommand(stopCommand('task1'))
 
         expect(result).toMatchObject({ success: true, stopped: true })
         expect(stopSession).toHaveBeenCalledWith('session-1')
@@ -141,7 +141,7 @@ describe('DaemonCliManager stop — original intent preserved (control group)', 
     it('leaves an UNSCOPED stop (dashboard / operator) completely unchanged', async () => {
         const { manager, stopSession } = createManager({ currentTurnTaskId: 'task_unrelated' })
 
-        const result = await manager.handleCliCommand('agent_command', stopCommand())
+        const result = await manager.agentCommand(stopCommand())
 
         expect(result).toEqual({ success: true, stopped: true })
         expect(stopSession).toHaveBeenCalledWith('session-1')

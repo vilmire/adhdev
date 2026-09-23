@@ -34,6 +34,7 @@ import { compareSemver } from '../../version-compare.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
 import { resolveSessionHostAppName } from '../../session-host/app-name.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 // Matches the installed package directory ("…/@adhdev/daemon-standalone/…" or
 // "…/daemon-standalone/…" in a monorepo checkout) as a bounded path SEGMENT,
@@ -400,3 +401,7 @@ export const daemonLifecycleHandlers: Record<string, LowFamilyHandler> = {
         return { success: true, enabled, ...(statusline ? { statusline } : {}) };
     },
 };
+
+export const daemonLifecycleSpecs = defineCommandSpecs('low', daemonLifecycleHandlers, {
+    set_machine_nickname: { invalidates: ['daemon.metadata'] },
+});
