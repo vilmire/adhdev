@@ -145,3 +145,35 @@ describe('createInflightGate', () => {
         expect(gate.count()).toBe(0);
     });
 });
+
+describe('createAwaitedSlots (C7-1 backpressure)', () => {
+    it('grants up to max, queues the rest FIFO, and never refuses', async () => {
+        const { createAwaitedSlots } = await import('../../src/seqscribe/inflight-gate.js');
+        const slots = createAwaitedSlots(2);
+        const order: number[] = [];
+        const releases = await Promise.all([slots.acquire(), slots.acquire()]);
+        const waiting = [3, 4, 5].map((n) => slots.acquire().then((release) => { order.push(n); return release; }));
+        expect(slots.inflight()).toBe(2);
+        expect(slots.waiting()).toBe(3);
+        releases[0]!();
+        const r3 = await waiting[0]!;
+        releases[1]!();
+        const r4 = await waiting[1]!;
+        r3();
+        const r5 = await waiting[2]!;
+        expect(order).toEqual([3, 4, 5]);
+        r4(); r5();
+        expect(slots.inflight()).toBe(0);
+    });
+
+    it('a double release frees one slot only', async () => {
+        const { createAwaitedSlots } = await import('../../src/seqscribe/inflight-gate.js');
+        const slots = createAwaitedSlots(1);
+        const release = await slots.acquire();
+        release();
+        release();
+        expect(slots.inflight()).toBe(0);
+        await slots.acquire();
+        expect(slots.inflight()).toBe(1);
+    });
+});

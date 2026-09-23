@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { onTopicActivated } from '../../src/seqscribe/mesh-dual-write.js';
+import { onTopicActivated } from '../../src/seqscribe/mesh-publisher.js';
 import type { SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import { sessionTranscriptPolicy, sessionTranscriptTopic } from '../../src/seqscribe/topics.js';
 import {

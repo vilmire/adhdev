@@ -371,22 +371,10 @@ export function commitTaskTerminalAndAdvanceGraph(
             return { entry, committed: true, duplicate: true, materializedNodeIds: [] as string[] };
         }
 
-        // Step 2 — persist the normalized output version (append-only; a later
-        // evidence arrival is a NEW version, never a mutation — design :165-167).
-        const graphStore = store.graphStore();
-        const node = graphStore.findNodeByQueueTaskId(terminal.meshId, terminal.taskId);
-        persistOutputVersion(store, terminal, node, nowIso);
-
-        // Step 3 — flip the upstream queue row to terminal.
-        entry.status = terminal.status;
-        store.updateQueueEntry(entry);
-        endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
-
-        // Steps 4-8 — graph advancement. A task with no backing graph node is the
-        // legacy path: steps 1-3 + the drain still ran, everything else is a no-op.
-        const materializedNodeIds = node
-            ? advanceGraphForTerminalNode(store, node, terminal, nowIso)
-            : [] as string[];
+        // Steps 2-8 — shared with the turn ledger's commit effect (C2), which
+        // reaches them through applyTaskTerminalInTxn WITHOUT step 1: the ledger's
+        // reducer already decided the outcome upstream.
+        const { materializedNodeIds } = applyTaskTerminalSteps(store, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false, materializedNodeIds };
     });
     // WORKER-MCP (design §9.2.2): expire this task's worker tokens at the single
@@ -422,20 +410,113 @@ export function commitTaskTerminalAndAdvanceGraph(
     return result;
 }
 
+/** Steps 2-8 on a queue row known to be non-terminal-for-this-status. Inside the caller's txn. */
+function applyTaskTerminalSteps(
+    store: MeshRuntimeStore,
+    entry: MeshWorkQueueEntry,
+    terminal: MeshTerminalCommitInput,
+    nowIso: string,
+    attemptNo?: number,
+): { materializedNodeIds: string[] } {
+    // Step 2 — persist the normalized output version (append-only; a later
+    // evidence arrival is a NEW version, never a mutation — design :165-167).
+    const graphStore = store.graphStore();
+    const node = graphStore.findNodeByQueueTaskId(terminal.meshId, terminal.taskId);
+    persistOutputVersion(store, terminal, node, nowIso, attemptNo);
+
+    // Step 3 — flip the upstream queue row to terminal.
+    entry.status = terminal.status;
+    store.updateQueueEntry(entry);
+    endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
+
+    // Steps 4-8 — graph advancement. A task with no backing graph node is the
+    // legacy path: steps 1-3 + the drain still ran, everything else is a no-op.
+    const materializedNodeIds = node
+        ? advanceGraphForTerminalNode(store, node, terminal, nowIso)
+        : [] as string[];
+    return { materializedNodeIds };
+}
+
+// ── Turn-ledger entry points (wiring-unification C2, C-W2) ───────────────────
+
+/** A committed turn's queue/graph consequence, as the ledger's `graph_advance` effect names it. */
+export interface MeshLedgerTerminalInput {
+    meshId: string;
+    taskId: string;
+    status: MeshTerminalCommitStatus;
+    sessionId?: string;
+    attemptId?: string;
+    /** turn_attempts.attempt_no (+1 = the output's `attempt`); legacy rows read mesh_turn_attempts. */
+    attemptNo?: number;
+    occurredAtMs: number;
+    reason?: string;
+    envelope?: MeshTerminalCompletionEnvelope;
+}
+
+export interface MeshLedgerTerminalResult {
+    entry: MeshWorkQueueEntry | null;
+    /** False when the row is unknown or was already in this exact terminal (replay fence). */
+    transitioned: boolean;
+    materializedNodeIds: string[];
+}
+
+/**
+ * Steps 2-8 for a turn the ledger ALREADY committed — no step 1: the reducer
+ * (turn-ledger/reducer.ts) is the only acceptance decision, and running the
+ * legacy proposeTurnCompletion here would be a second reducer. MUST run inside
+ * the ledger's transaction on the MeshRuntimeStore handle (it nests as a
+ * savepoint). Post-commit work is `afterTaskTerminalCommitted`.
+ *
+ * The replay fence is kept: a row already in this terminal (e.g. flipped by a
+ * legacy writer before the integration pass retires them) advances nothing.
+ */
+export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): MeshLedgerTerminalResult {
+    const store = MeshRuntimeStore.getInstance();
+    return store.transaction(() => {
+        const entry = store.findQueueEntryById(input.meshId, input.taskId);
+        if (!entry) return { entry: null, transitioned: false, materializedNodeIds: [] as string[] };
+        if (entry.status === input.status) return { entry, transitioned: false, materializedNodeIds: [] as string[] };
+        const terminal: MeshTerminalCommitInput = {
+            meshId: input.meshId,
+            taskId: input.taskId,
+            status: input.status,
+            ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+            ...(input.attemptId ? { attemptId: input.attemptId } : {}),
+            occurredAtMs: input.occurredAtMs,
+            source: 'provider_event',
+            ...(input.reason ? { reason: input.reason } : {}),
+            ...(input.envelope ? { envelope: input.envelope } : {}),
+        };
+        const nowIso = new Date(input.occurredAtMs).toISOString();
+        const { materializedNodeIds } = applyTaskTerminalSteps(store, entry, terminal, nowIso, input.attemptNo);
+        return { entry, transitioned: true, materializedNodeIds };
+    });
+}
+
+/** Post-commit half of a task terminal: token expiry, mailbox discard, outbox drain (step 9). */
+export function afterTaskTerminalCommitted(meshId: string, taskId: string): void {
+    try { expireWorkerTaskTokensForTask(meshId, taskId); } catch { /* best-effort, see commitTaskTerminalAndAdvanceGraph */ }
+    try { discardWorkerMailboxForTask(meshId, taskId); } catch { /* best-effort */ }
+    try { drainMeshGraphOutbox(meshId); } catch { /* best-effort — next graph event drains */ }
+}
+
 /** Step 2 helper: insert the next immutable output version for this task. */
 function persistOutputVersion(
     store: MeshRuntimeStore,
     terminal: MeshTerminalCommitInput,
     node: MeshTaskGraphNodeRow | null,
     nowIso: string,
+    attemptNo?: number,
 ): void {
     const graphStore = store.graphStore();
     const latest = graphStore.getLatestOutput(terminal.taskId);
     const version = (latest?.version ?? 0) + 1;
-    let attemptSeq = 1;
-    try {
-        attemptSeq = store.getCurrentTurnAttempt(terminal.meshId, terminal.taskId)?.attemptSeq ?? 1;
-    } catch { /* legacy task without an attempt row — version still persists */ }
+    let attemptSeq = attemptNo !== undefined ? attemptNo + 1 : 1;
+    if (attemptNo === undefined) {
+        try {
+            attemptSeq = store.getCurrentTurnAttempt(terminal.meshId, terminal.taskId)?.attemptSeq ?? 1;
+        } catch { /* legacy task without an attempt row — version still persists */ }
+    }
     const envelopeJson = canonicalJson({
         task_id: terminal.taskId,
         attempt: attemptSeq,

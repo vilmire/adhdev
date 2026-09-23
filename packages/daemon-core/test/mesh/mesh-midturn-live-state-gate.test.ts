@@ -68,6 +68,7 @@ import {
   recordTurnStage,
 } from '../../src/mesh/mesh-turn-ledger.js'
 import { buildMeshActiveWork, collectPendingApprovals } from '../../src/mesh/mesh-active-work.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 const NODE_ID = 'node_local_1'
 const SESSION_ID = 'live-session-1'
@@ -96,7 +97,6 @@ function mockMesh(meshId: string) {
 // A fake live CliProviderInstance-shaped source. `pendingEvidence` simulates
 // hasLiveTurnPendingEvidence() — the ONLY method the new gate calls.
 function makeLocalComponents(pendingEvidence: boolean | (() => boolean), opts: { withMethod?: boolean } = { withMethod: true }) {
-  let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: SESSION_ID,
     workspace: WORKSPACE,
@@ -111,17 +111,14 @@ function makeLocalComponents(pendingEvidence: boolean | (() => boolean), opts: {
       typeof pendingEvidence === 'function' ? pendingEvidence() : pendingEvidence)
   }
   const instanceManager = {
-    onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
     getInstance: vi.fn((id: string) => (id === SESSION_ID ? source : undefined)),
     getByCategory: vi.fn((category: string) => (category === 'cli' ? [source] : [])),
   }
+  const components = withMeshForwardingBus({ instanceManager } as any)
   return {
-    components: { instanceManager } as any,
+    components,
     source,
-    emit: (event: any) => {
-      if (!listener) throw new Error('listener was not registered')
-      listener(event)
-    },
+    emit: components.emit,
     setMeshFor: (meshId: string) => { sourceState.settings = { meshNodeFor: meshId, meshNodeId: NODE_ID } },
   }
 }
@@ -310,19 +307,17 @@ describe('MID-TURN-LIVE-STATE-GATE — suppresses a premature completion while t
       mockMesh(meshId)
       // No live instance registered at all for this session (simulates a remote worker).
       const instanceManager = {
-        onEvent: vi.fn(),
         getInstance: vi.fn(() => undefined),
         getByCategory: vi.fn(() => []),
       }
-      let listener: ((event: any) => void) | undefined
-      instanceManager.onEvent.mockImplementation((cb: any) => { listener = cb })
-      setupMeshEventForwarding({ instanceManager } as any)
+      const components = withMeshForwardingBus({ instanceManager } as any)
+      setupMeshEventForwarding(components)
 
       // Without a resolvable instance, the gate is scoped out entirely (typeof check fails), so
       // the event proceeds unaffected by THIS gate. There is no session/nodeId route available in
       // this minimal harness, so this only asserts the call does not throw and does not itself
       // fail-closed via the mid-turn gate (a thrown error would fail this test).
-      expect(() => listener?.(completedEvent())).not.toThrow()
+      expect(() => components.emit(completedEvent())).not.toThrow()
     } finally {
       cleanupMeshFiles(meshId)
     }

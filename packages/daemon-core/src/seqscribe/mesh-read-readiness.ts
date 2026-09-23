@@ -110,7 +110,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import { isMeshReadPrimary } from './mesh-dual-write.js';
+import { isMeshReadPrimary } from './mesh-publisher.js';
 import { meshParityCounters } from './mesh-parity.js';
 import {
     hasMeshReadModelIndex,

@@ -59,10 +59,10 @@ import {
     type ParityLedgerEntry,
 } from '../seqscribe/mesh-parity.js';
 import type { SeqscribeNodeHandle } from '../seqscribe/node.js';
-import {
-    backfillMeshEventShadow,
-    isMeshDualWriteActive,
-} from '../seqscribe/mesh-dual-write.js';
+// C7-1 (C-W2): the dual-write shadow and its backfill repair are deleted; the
+// publisher is the only writer and this loop is no longer armed at boot
+// (seqscribe-projections.ts). The file itself is a C-W3 deletion target.
+import { isMeshDualWriteActive } from '../seqscribe/mesh-publisher.js';
 import { readLedgerEntries } from './mesh-ledger.js';
 
 /** How often a parity sweep runs. Slow on purpose — see the header. */
@@ -214,8 +214,9 @@ export function startMeshParityLoop(
                 skipped++;
                 continue;
             }
-            if (backfillMeshEventShadow(meshId, entry)) mirrored++;
-            else failed++;
+            // Backfill deleted (C7-1): nothing can mirror late any more.
+            void entry;
+            failed++;
         }
 
         if (mirrored > 0) backfillFailures.delete(meshId);

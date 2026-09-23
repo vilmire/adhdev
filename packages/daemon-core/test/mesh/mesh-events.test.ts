@@ -78,9 +78,9 @@ import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } fro
 import { LOG } from '../../src/logging/logger.js'
 import { hasWorkerProtocolFooter } from '@adhdev/mesh-shared'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating' | 'waiting_approval'; statusInstanceId?: string }) {
-  let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'runtime-session-1',
     workspace: '/repo/worktree-a',
@@ -109,20 +109,15 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
     onEvent: vi.fn(),
   }
   const instanceManager = {
-    onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
     getInstance: vi.fn((id: string) => id === 'runtime-session-1' ? source : undefined),
     getByCategory: vi.fn((category: string) => category === 'cli' ? [source, coordinator] : []),
   }
 
-  return {
-    // Tests assign `components.cliManager` later; the mesh router stub resolves it at call time.
-    components: withMeshRouter({ instanceManager, ...(opts?.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}) } as any),
-    emit: (event: any) => {
-      if (!listener) throw new Error('listener was not registered')
-      listener(event)
-    },
-    coordinator,
-  }
+  // Tests assign `components.cliManager` later; the mesh router stub resolves it at call time.
+  const routed = withMeshRouter({ instanceManager, ...(opts?.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}) } as any)
+  const components = withMeshForwardingBus(routed)
+const { emit } = components
+  return { components, emit, coordinator }
 }
 
 function cleanupMeshFiles(meshId: string) {
@@ -2790,7 +2785,6 @@ describe('setupMeshEventForwarding', () => {
     meshConfigMocks.getMesh.mockReturnValue(undefined)
     meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_1', nodes: [] })
 
-    let listener: ((event: any) => void) | undefined
     const coordinatorState = {
       instanceId: 'coordinator-session-self',
       workspace: '/repo/main',
@@ -2802,14 +2796,14 @@ describe('setupMeshEventForwarding', () => {
       onEvent: vi.fn(),
     }
     const instanceManager = {
-      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
       getInstance: vi.fn(() => coordinator),
       getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
     }
-    const components = { instanceManager } as any
+    const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
     setupMeshEventForwarding(components)
 
-    listener!({
+    emit({
       event: 'agent:generating_completed',
       instanceId: 'coordinator-session-self',
       targetSessionId: 'coordinator-session-self',
@@ -2839,7 +2833,6 @@ describe('setupMeshEventForwarding', () => {
         dispatchedAt: new Date().toISOString(),
       })
 
-      let listener: ((event: any) => void) | undefined
       const coordinatorState = {
         instanceId: 'coordinator-session-self',
         workspace: '/repo/main',
@@ -2851,16 +2844,16 @@ describe('setupMeshEventForwarding', () => {
         onEvent: vi.fn(),
       }
       const instanceManager = {
-        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
         getInstance: vi.fn(() => coordinator),
         // Only this single coordinator instance is present on this daemon; the
         // dispatching coordinator lives elsewhere and consumes pendingCoordinatorEvents.
         getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
       }
-      const components = { instanceManager } as any
+      const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
       setupMeshEventForwarding(components)
 
-      listener!({
+      emit({
         event: 'agent:generating_completed',
         instanceId: 'coordinator-session-self',
         targetSessionId: 'coordinator-session-self',
@@ -2914,7 +2907,6 @@ describe('setupMeshEventForwarding', () => {
         },
       })
 
-      let listener: ((event: any) => void) | undefined
       const coordinatorState = {
         instanceId: 'coordinator-session-self',
         workspace: '/repo/main',
@@ -2926,14 +2918,14 @@ describe('setupMeshEventForwarding', () => {
         onEvent: vi.fn(),
       }
       const instanceManager = {
-        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
         getInstance: vi.fn(() => coordinator),
         getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
       }
-      const components = { instanceManager } as any
+      const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
       setupMeshEventForwarding(components)
 
-      listener!({
+      emit({
         event: 'agent:generating_completed',
         instanceId: 'coordinator-session-self',
         targetSessionId: 'coordinator-session-self',
@@ -2969,7 +2961,6 @@ describe('setupMeshEventForwarding', () => {
     meshConfigMocks.getMesh.mockReturnValue(undefined)
     meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_1', nodes: [] })
 
-    let listener: ((event: any) => void) | undefined
     const unrelatedState = {
       instanceId: 'unrelated-session-1',
       workspace: '/repo/main',
@@ -2991,14 +2982,14 @@ describe('setupMeshEventForwarding', () => {
       onEvent: vi.fn(),
     }
     const instanceManager = {
-      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
       getInstance: vi.fn((id: string) => id === 'unrelated-session-1' ? unrelated : undefined),
       getByCategory: vi.fn((category: string) => category === 'cli' ? [unrelated, coordinator] : []),
     }
-    const components = { instanceManager } as any
+    const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
     setupMeshEventForwarding(components)
 
-    listener!({
+    emit({
       event: 'agent:generating_completed',
       instanceId: 'unrelated-session-1',
       targetSessionId: 'unrelated-session-1',
@@ -5082,7 +5073,6 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       meshConfigMocks.getMesh.mockReturnValue(undefined)
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
 
-      let listener: ((event: any) => void) | undefined
       const workerState = {
         instanceId: 'worker-session-codex',
         workspace: '/repo/worktree-a',
@@ -5109,14 +5099,14 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
         onEvent: vi.fn(),
       }
       const instanceManager = {
-        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
         getInstance: vi.fn((id: string) => id === 'worker-session-codex' ? worker : undefined),
         getByCategory: vi.fn((category: string) => category === 'cli' ? [worker, claudeCoordinator] : []),
       }
-      const components = { instanceManager } as any
+      const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
       setupMeshEventForwarding(components)
 
-      listener!({
+      emit({
         event: 'agent:generating_completed',
         instanceId: 'worker-session-codex',
         targetSessionId: 'worker-session-codex',
@@ -5144,7 +5134,6 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
     meshConfigMocks.getMesh.mockReturnValue(undefined)
     meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_claude', nodes: [] })
 
-    let listener: ((event: any) => void) | undefined
     const claudeCoordinatorState = {
       instanceId: 'claude-coord-self',
       workspace: '/repo/main',
@@ -5157,14 +5146,14 @@ describe('Codex coordinator stuck-generating: refine terminal event delivery', (
       onEvent: vi.fn(),
     }
     const instanceManager = {
-      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
       getInstance: vi.fn(() => claudeCoordinator),
       getByCategory: vi.fn((category: string) => category === 'cli' ? [claudeCoordinator] : []),
     }
-    const components = { instanceManager } as any
+    const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
     setupMeshEventForwarding(components)
 
-    listener!({
+    emit({
       event: 'agent:generating_completed',
       instanceId: 'claude-coord-self',
       targetSessionId: 'claude-coord-self',
@@ -5272,7 +5261,6 @@ describe('workspace-to-mesh cache in setupMeshEventForwarding', () => {
       meshConfigMocks.getMeshByRepo.mockReturnValue({ id: meshId, nodes: [] })
       meshConfigMocks.getMesh.mockReturnValue(null)
 
-      let listener: ((event: any) => void) | undefined
       const noMeshNodeForState = {
         instanceId: 'runtime-session-ws',
         workspace: `/repo/workspace-cached-${randomUUID().slice(0, 8)}`,
@@ -5286,16 +5274,16 @@ describe('workspace-to-mesh cache in setupMeshEventForwarding', () => {
         getState: vi.fn(() => noMeshNodeForState),
       }
       const instanceManager = {
-        onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
         getInstance: vi.fn((id: string) => id === 'runtime-session-ws' ? workerSession : undefined),
         getByCategory: vi.fn((_category: string) => []),
       }
-      const components = { instanceManager } as any
+      const components = withMeshForwardingBus({ instanceManager } as any)
+const { emit } = components
       setupMeshEventForwarding(components)
 
       // Emit 5 mesh events from the same workspace instance
       for (let i = 0; i < 5; i++) {
-        listener!({
+        emit({
           instanceId: 'runtime-session-ws',
           event: 'agent:ready',
           targetSessionId: `sess-${i}`,
@@ -5416,7 +5404,6 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
       meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
       fastForwardMocks.fastForwardMeshNode.mockResolvedValue({ code: 'noop', allowed: false })
 
-      let listener: ((event: any) => void) | undefined
       const completingState = {
         instanceId: 'runtime-session-1',
         workspace: '/repo/worktree-a',
@@ -5437,14 +5424,15 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
         adapters: new Map([['runtime-session-1', {}], ['runtime-session-2', {}]]),
         handleCliCommand: vi.fn(() => Promise.resolve({ success: true })),
       }
-      const components = withMeshRouter({
+      const routed = withMeshRouter({
         instanceManager: {
-          onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
           getInstance: vi.fn((id: string) => id === 'runtime-session-1' ? completing : id === 'runtime-session-2' ? idleWorker : undefined),
           getByCategory: vi.fn((category: string) => category === 'cli' ? [completing, idleWorker] : []),
         },
         cliManager,
       } as any)
+      const components = withMeshForwardingBus(routed)
+const { emit } = components
 
       // Task A assigned to session-1; B depends on A and targets session-2.
       const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' })
@@ -5455,7 +5443,7 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
 })
 
       setupMeshEventForwarding(components)
-      listener!({
+      emit({
         event: 'agent:generating_completed',
         instanceId: 'runtime-session-1',
         targetSessionId: 'runtime-session-1',

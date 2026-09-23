@@ -8,6 +8,8 @@ import { resolveSessionDeliveryRetentionMs } from './mesh-retention-config.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
 import { MeshGraphStore } from './mesh-graph-store.js';
+import { TurnStore } from './turn-ledger/store.js';
+import { migrateTurnLedgerV1, turnLedgerExportPath, type TurnLedgerMigrationOptions, type TurnLedgerMigrationReport } from './turn-ledger/migrate-v1.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -273,6 +275,19 @@ export class MeshRuntimeStore {
     graphStore(): MeshGraphStore {
         if (!this.graphStoreInstance) this.graphStoreInstance = new MeshGraphStore(this.db);
         return this.graphStoreInstance;
+    }
+
+    /** Wiring-unification C3: turn-ledger row CRUD on THIS handle (one txn with mesh_queue). */
+    private turnStoreInstance: TurnStore | undefined;
+    turnStore(): TurnStore {
+        if (!this.turnStoreInstance) this.turnStoreInstance = new TurnStore(this.db);
+        return this.turnStoreInstance;
+    }
+
+    /** C3 one-way fold of the legacy turn/outbox/ledger tables (user_version 0 → 1). Boot calls it once. */
+    runTurnLedgerMigrationV1(opts: Omit<TurnLedgerMigrationOptions, 'exportPath'> & { exportPath?: string | null }): TurnLedgerMigrationReport {
+        const nowMs = opts.nowMs ?? Date.now();
+        return migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === undefined ? turnLedgerExportPath(getLedgerDir(), nowMs) : opts.exportPath });
     }
 
     // ── Schema DDL + column migrations ───────────────────────────────────────

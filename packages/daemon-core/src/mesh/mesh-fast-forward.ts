@@ -834,10 +834,13 @@ async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: '
   // A no-op check (already up to date) is not an event: on preview 34,025 of ~38k replica
   // rows were other daemons' noop fast-forward entries (seqscribe usage audit, 2026-09-23).
   if (outcome === 'noop') return;
+  // C3 (C-W2): a fast-forward is a non-turn record — `mesh.record` topic-only
+  // via meshRecord, no legacy event-ledger / JSONL row. Only the projection's
+  // allow-listed scalars (outcome, status, …) reach the topic; the nested
+  // before/after blocks stay local to this result object.
   try {
-    const { appendLedgerEntry } = await import('./mesh-ledger.js');
-    appendLedgerEntry(result.meshId, {
-      kind: 'direct_fast_forward',
+    const { meshRecord } = await import('./mesh-record.js');
+    meshRecord(result.meshId, 'direct_fast_forward', {
       ...(result.nodeId ? { nodeId: result.nodeId } : {}),
       payload: {
         operation: 'mesh_fast_forward_node',

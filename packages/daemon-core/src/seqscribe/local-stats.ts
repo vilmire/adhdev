@@ -11,7 +11,7 @@
 
 import { LOG } from '../logging/logger.js';
 import type { SeqscribeStatusSummary } from '../shared-types.js';
-import { isMeshDualWriteActive, meshDualWriteCounters } from './mesh-dual-write.js';
+import { isMeshDualWriteActive, meshDualWriteCounters } from './mesh-publisher.js';
 import { meshParityCounters } from './mesh-parity.js';
 import { meshReadRoutingCounters } from './mesh-read-readiness.js';
 import type { SeqscribeRuntime } from './runtime.js';
