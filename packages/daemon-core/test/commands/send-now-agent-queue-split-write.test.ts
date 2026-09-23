@@ -30,6 +30,12 @@ import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../src/cli-adapters/pty-transport.js';
 
+/** Bracketed-paste markers, spelled literally rather than imported so the test
+ *  pins the BYTES the CLI must receive — importing the constant would make the
+ *  assertion pass against any value the source happens to hold. */
+const BP_OPEN = '\x1b[200~';
+const BP_CLOSE = '\x1b[201~';
+
 class DrivablePty implements PtyRuntimeTransport {
     readonly pid = 5150;
     readonly ready = Promise.resolve();
@@ -274,6 +280,137 @@ describe('SEND-NOW-DOUBLE-SEND: image bodies claim by claimKey and deliver the P
             await adapter.sendMessage('/tmp/img.png\nnever mind', { bracketedPaste: true, claimKey: 'never mind' });
             expect(adapter.claimQueuedSends('never mind')).toBe(1);
             expect(adapter.claimQueuedSends('never mind')).toBe(0);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+});
+
+describe('SEND-NOW-PASTE-LOSS: the mid-generation write honours bracketedPaste (live 2026-09-23, darwin)', () => {
+    /**
+     * The mid-generation branch of actuallySendMessage RECEIVED `bracketedPaste`
+     * and returned before ever reaching the wrapInPaste block, so a send-now'd
+     * image body reached claude-cli as literal text and was never converted into
+     * an attachment — the owner's picture arrived as a filename. The idle drain
+     * was unaffected (it calls beginSend → the wrapInPaste branch), which is the
+     * asymmetry that identified the defect.
+     *
+     * These assertions pin the four properties the fix must have: the wrap
+     * happens, the raw body is NOT also written, the non-image path is preserved
+     * byte-for-byte, and the split structure (body and submit key as separate
+     * writes) survives the wrapping.
+     */
+    const IMG_BODY = '/tmp/adhdev-input-media/adhdev-input-image-1-0-aaaa.png\nwhat is this?';
+
+    /** claude-shaped spec with the POSIX image-paste opt-in the real claude-cli
+     *  provider carries. Without the opt-in the wrap must not happen at all. */
+    function pasteOptInSpec(optIn: boolean): Record<string, unknown> {
+        const spec = queueableSpec();
+        spec.send_message = optIn
+            ? { submit_key: '\r', posix_bracketed_paste_for_images: true }
+            : { submit_key: '\r' };
+        return spec;
+    }
+
+    async function generatingAdapterWithSpec(optIn: boolean) {
+        const factory = new DrivableFactory();
+        const adapter = new SpecCliAdapter(writeSpec(pasteOptInSpec(optIn)), os.tmpdir(), [], {}, factory);
+        await adapter.spawn();
+        const pty = factory.last!;
+        pty.feed('\n>\n? for shortcuts');
+        await sleep(300);
+        pty.feed('\n>\nesc to interrupt');
+        await sleep(300);
+        return { adapter, pty };
+    }
+
+    it('★ wraps the body in bracketed-paste markers, and does NOT also write it raw', async () => {
+        const { adapter, pty } = await generatingAdapterWithSpec(true);
+        try {
+            expect(adapter.getStatus().status).toBe('generating');
+            const before = pty.writes.length;
+
+            const outcome = adapter.sendMessageDuringGeneration(IMG_BODY, true);
+            expect(outcome.accepted).toBe(true);
+            await sleep(900);
+
+            const after = pty.writes.slice(before).map(w => w.data);
+            // The body write is the WRAPPED body, exactly — same markers the idle
+            // drain uses, no second paste concept.
+            expect(after).toContain(`${BP_OPEN}${IMG_BODY}${BP_CLOSE}`);
+            // ★ The unwrapped body must not ALSO land: that would be the defect
+            // surviving alongside the fix, and claude-cli would see it twice.
+            expect(after).not.toContain(IMG_BODY);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('★ keeps the split structure: the wrapped body and the submit key are SEPARATE writes with a gap', async () => {
+        const { adapter, pty } = await generatingAdapterWithSpec(true);
+        try {
+            const before = pty.writes.length;
+            expect(adapter.sendMessageDuringGeneration(IMG_BODY, true).accepted).toBe(true);
+            await sleep(900);
+
+            const after = pty.writes.slice(before);
+            const bodyIdx = after.findIndex(w => w.data === `${BP_OPEN}${IMG_BODY}${BP_CLOSE}`);
+            expect(bodyIdx).toBeGreaterThanOrEqual(0);
+            // No trailing CR fused onto the wrapped body — the atomic shape stays
+            // forbidden here exactly as it is for a plain text body.
+            expect(after[bodyIdx].data.endsWith('\r')).toBe(false);
+
+            const crIdx = after.findIndex((w, i) => i > bodyIdx && w.data === '\r');
+            expect(crIdx).toBeGreaterThan(bodyIdx);
+            expect(after[crIdx].at - after[bodyIdx].at).toBeGreaterThanOrEqual(300);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('★ bracketedPaste: false keeps the legacy RAW write, byte for byte', async () => {
+        const { adapter, pty } = await generatingAdapterWithSpec(true);
+        try {
+            const before = pty.writes.length;
+            expect(adapter.sendMessageDuringGeneration('plain text body', false).accepted).toBe(true);
+            await sleep(900);
+
+            const after = pty.writes.slice(before).map(w => w.data);
+            expect(after).toContain('plain text body');
+            expect(after.join('')).not.toContain(BP_OPEN);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('★ a spec that does NOT opt in keeps the raw write even with bracketedPaste: true', async () => {
+        const { adapter, pty } = await generatingAdapterWithSpec(false);
+        try {
+            const before = pty.writes.length;
+            expect(adapter.sendMessageDuringGeneration(IMG_BODY, true).accepted).toBe(true);
+            await sleep(900);
+
+            const after = pty.writes.slice(before).map(w => w.data);
+            expect(after).toContain(IMG_BODY);
+            expect(after.join('')).not.toContain(BP_OPEN);
+        } finally {
+            adapter.shutdown();
+        }
+    }, 15_000);
+
+    it('★ the IDLE drain path is unchanged — a parked image body still drains wrapped, exactly once', async () => {
+        const { adapter, pty } = await generatingAdapterWithSpec(true);
+        try {
+            // Parked while generating → delivered by drainPendingSends at idle.
+            expect(await adapter.sendMessage(IMG_BODY, { bracketedPaste: true })).toEqual({ status: 'queued' });
+            const before = pty.writes.length;
+
+            pty.feed('\n>\n? for shortcuts');
+            await sleep(900);
+
+            const after = pty.writes.slice(before).map(w => w.data);
+            expect(after.filter(w => w === `${BP_OPEN}${IMG_BODY}${BP_CLOSE}`)).toHaveLength(1);
+            expect(after).not.toContain(IMG_BODY);
         } finally {
             adapter.shutdown();
         }
