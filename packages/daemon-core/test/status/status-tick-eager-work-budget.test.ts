@@ -67,6 +67,16 @@ describe('status tick eager-work budget', () => {
                     opts.onSeqscribeStats?.();
                     return null;
                 },
+                // B4: the fleet.status producer is passed explicitly
+                // (StatusReporterDeps.seqscribe); route it through the module
+                // functions so the spies below still observe the gate.
+                seqscribe: {
+                    fleetStatus: {
+                        isShadowActive: () => fleetShadow.isFleetStatusShadowActive(),
+                        record: (entry: any) => fleetShadow.recordFleetStatusShadow(entry),
+                        observeWsProjection: () => false,
+                    },
+                },
             } as any,
             { logFn: () => {} },
         );

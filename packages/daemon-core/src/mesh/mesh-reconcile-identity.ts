@@ -6,7 +6,7 @@
 // coordinator-daemon drain scope and the per-mesh host gate / remote pull filter.
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { getMachineId } from '../config/config.js';
 import { expandDaemonIdForms, daemonIdsEquivalent } from '@adhdev/mesh-shared';

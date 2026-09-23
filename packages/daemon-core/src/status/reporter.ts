@@ -16,13 +16,13 @@ import type { MachineInfo } from '../shared-types.js';
 import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusEventPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
-import { recordFleetStatusShadow, isFleetStatusShadowActive } from '../seqscribe/fleet-status-shadow.js';
-import { observeFleetStatusWsProjection } from '../seqscribe/fleet-status-parity.js';
-import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
+import type { FleetStatusProducer } from '../seqscribe/runtime.js';
+import { seqscribeSlot } from '../seqscribe/runtime-slot.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
 // `type: string`, leaving the primary status_report producer outside the only
 // typed protocol surface (which lived in the proprietary consumer package).
 import type { DaemonToServerWsMsg } from '@adhdev/mesh-shared';
+import { isModelAxisSource, sanitizeModelIdentifier } from '@adhdev/mesh-shared';
 import type {
     ProviderState,
     IdeProviderState,
@@ -160,6 +160,12 @@ export function buildCloudStatusReportPayload(
                 // only one the server sees). Both are plain booleans, not content.
                 surfaceHidden: session.surfaceHidden,
                 muted: session.muted,
+                // Phase E launch provenance — exactly two derived fields, each
+                // re-checked at runtime: an identifier (a label or free text is
+                // dropped) and an enum (MODEL_AXIS_SOURCES). The full `launch`
+                // record and the thinking level stay on P2P.
+                model: sanitizeModelIdentifier(session.model),
+                modelSource: isModelAxisSource(session.modelSource) ? session.modelSource : undefined,
             };
         }),
         p2p: buildCloudP2PSummary(p2p),
@@ -476,6 +482,13 @@ export interface StatusReporterDeps {
      * buildCloudStatusReportPayload and never reads this getter.
      */
     getFleetStatusPeerView?: () => FleetStatusPeerView | null;
+    /**
+     * The seqscribe runtime's fleet.status producer (wiring-unification B4):
+     * the shadow append + parity expectation legs this reporter feeds each
+     * tick. `null` = explicitly none. Omitted (hosts not yet migrated, B5) =
+     * read the process's armed runtime from `seqscribeSlot`.
+     */
+    seqscribe?: { fleetStatus: FleetStatusProducer } | null;
 }
 
 /**
@@ -717,15 +730,9 @@ export class DaemonStatusReporter {
         LOG.info('StatusEvent', `${event.event} (${event.providerType || event.ideType || ''})`);
         const serverEvent = this.buildServerStatusEvent(event);
         if (!serverEvent) return;
-        // §8 unit 3 dirty trigger (design §5.2's "status-change/finalizing
-        // hook"): a per-session status transition — most notably
-        // `agent:generating_completed` (the finalizing→terminal edge) and the
-        // `agent:waiting_approval`/`agent:waiting_choice` pair the approval-
-        // push exception (CLAUDE.md) already trusts with `targetSessionId` —
-        // is exactly the kind of change that can happen with no new PTY output
-        // byte, so `markChatOutputActivity`'s trigger alone would miss it.
-        // Safe no-op until configureTranscriptProjection is armed.
-        if (serverEvent.targetSessionId) markTranscriptSessionDirty(serverEvent.targetSessionId, 'status_event');
+        // The transcript "status-change/finalizing" dirty trigger that used to
+        // fire here is a lifecycle-bus subscriber now (wiring-unification B4,
+        // seqscribe/transcript-bus-subscriber.ts) and runs in both hosts.
         // Dashboard delivery is P2P-only, but the server still receives the event
         // for push notifications, webhook dispatch, and audit-side effects. The
         // P2P copy additionally carries the structured question payload; the
@@ -921,7 +928,10 @@ export class DaemonStatusReporter {
         // before counting, so this side does not simply reuse the ring entry it
         // is meant to verify. The thunk is never evaluated in the default/off
         // mode, and only fixed counts/state are retained locally.
-        observeFleetStatusWsProjection(() => {
+        const fleetStatus = this.deps.seqscribe === undefined
+            ? seqscribeSlot.current()?.fleetStatus
+            : this.deps.seqscribe?.fleetStatus;
+        fleetStatus?.observeWsProjection(() => {
             const wsProjection = buildCloudStatusReportPayload(payload.sessions, payload.p2p, now);
             return {
                 at: new Date(now).toISOString(),
@@ -940,8 +950,8 @@ export class DaemonStatusReporter {
         // mode check recordFleetStatusShadow performs first, so gating here is
         // behavior-identical: when the shadow IS armed the entry is built and
         // recorded exactly as before.
-        if (isFleetStatusShadowActive()) {
-            recordFleetStatusShadow(fleetStatusEntry({
+        if (fleetStatus?.isShadowActive()) {
+            fleetStatus.record(fleetStatusEntry({
                 daemonId: this.deps.instanceId,
                 sessions: payload.sessions,
                 // Derived from what this process can actually observe: a live server

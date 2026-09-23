@@ -117,7 +117,7 @@ export class AgentStreamPoller {
                     if (!enabledExtTypes.has(extType)) {
                         const extInstance = ideInstance.getExtension?.(extType);
                         if (extInstance?.getInstanceId) {
-                            sessionRegistry.unregister(extInstance.getInstanceId());
+                            sessionRegistry.terminate(extInstance.getInstanceId(), 'extension_gone');
                         }
                         ideInstance.removeExtension(extType);
                         LOG.info('AgentStream', `Extension removed: ${extType} (disabled for ${ideType})`);
@@ -140,7 +140,7 @@ export class AgentStreamPoller {
                                     transport: 'cdp-webview',
                                     cdpManagerKey: ideType,
                                     instanceKey: `ide:${ideType}`,
-                                });
+                                }, 'discover');
                                 const activeSessionId = agentStreamManager.getActiveSessionId(parentSessionId);
                                 if (!activeSessionId || enabledExtTypes.size === 1) {
                                     await agentStreamManager.setActiveSession(

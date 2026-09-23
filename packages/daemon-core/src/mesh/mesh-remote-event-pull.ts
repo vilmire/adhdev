@@ -14,7 +14,7 @@
 // loop itself consumes pullRemoteNodeQueues.
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { getPendingMeshCoordinatorEvents, serializeV2EnvelopeToWire } from './mesh-events-pending.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events-pending.js';
@@ -520,10 +520,87 @@ export async function reprobeWorkerStatus(
     return null;
 }
 
-// Probe each node for its live session list (get_status_metadata) and return mesh.nodes
-// decorated with a `sessions` array — the shape buildMeshActiveWork / sessionStatusFromNodes
-// consume to decide whether a dispatched session is still present. Best-effort: an unreachable
-// node yields an empty session list rather than throwing.
+// ─── Live session lists (auto-prune evidence) ───────────────────────────────
+//
+// Wiring-unification B4 (seqscribe usage audit: 19,725 internal
+// get_status_metadata calls in 8 days). The LOCAL node's list is read straight
+// from the session registry — never by re-entering get_status_metadata, which
+// built a full status snapshot (every provider state, seqscribe stats, beacon
+// diagnostics) just to learn which session ids exist. REMOTE nodes still need
+// the P2P probe, but it goes through a per-daemon cache (canonical daemon id,
+// 5 s TTL, in-flight dedupe) so N worktree nodes on one daemon cost one probe.
+
+/** Same TTL as the MCP-side `probeStatusMetadataForNode` cache (P-γ). */
+export const REMOTE_STATUS_PROBE_CACHE_TTL_MS = 5_000;
+
+interface RemoteStatusProbeEntry {
+    expiresAt: number;
+    result: Promise<unknown>;
+}
+
+/** Per-components cache so two daemons (or two test fixtures) never share entries. */
+const remoteStatusProbeCache = new WeakMap<object, Map<string, RemoteStatusProbeEntry>>();
+
+/**
+ * `get_status_metadata` for a REMOTE daemon, deduped + cached per canonical
+ * daemon id. A rejected probe is evicted, never cached, so a transient failure
+ * cannot poison the next tick.
+ */
+export function probeRemoteStatusMetadata(
+    components: DaemonComponents,
+    daemonId: string,
+    now: number = Date.now(),
+): Promise<unknown> {
+    const dispatchMeshCommand = components.dispatchMeshCommand;
+    if (!dispatchMeshCommand) return Promise.reject(new Error('no mesh transport'));
+    let cache = remoteStatusProbeCache.get(components);
+    if (!cache) {
+        cache = new Map();
+        remoteStatusProbeCache.set(components, cache);
+    }
+    const key = canonicalDaemonId(daemonId) || daemonId;
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > now) return cached.result;
+    const result = Promise.resolve().then(() => dispatchMeshCommand(daemonId, 'get_status_metadata', {}));
+    cache.set(key, { expiresAt: now + REMOTE_STATUS_PROBE_CACHE_TTL_MS, result });
+    result.catch(() => {
+        const entry = cache!.get(key);
+        if (entry && entry.result === result) cache!.delete(key);
+    });
+    return result;
+}
+
+/**
+ * This daemon's live sessions in the shape `sessionStatusFromNodes` reads
+ * (`id` + `status`), from the session registry. `status` comes from the owning
+ * CLI/ACP instance's state — the same source get_status_metadata's snapshot
+ * used — and is omitted for IDE/extension sessions (mesh workers are CLI/ACP).
+ */
+export function listLocalLiveSessions(components: DaemonComponents): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const target of components.sessionRegistry.list()) {
+        let status: string | undefined;
+        if (target.transport === 'pty' || target.transport === 'acp') {
+            try {
+                const state = components.instanceManager.getInstance(target.instanceKey || target.sessionId)?.getState?.();
+                status = readNonEmptyString((state as { status?: unknown } | undefined)?.status) || undefined;
+            } catch { /* status is advisory — presence is what prune needs */ }
+        }
+        out.push({
+            id: target.sessionId,
+            sessionId: target.sessionId,
+            providerType: target.providerType,
+            transport: target.transport,
+            ...(status ? { status } : {}),
+        });
+    }
+    return out;
+}
+
+// Return mesh.nodes decorated with a `sessions` array — the shape
+// buildMeshActiveWork / sessionStatusFromNodes consume to decide whether a
+// dispatched session is still present. Best-effort: an unreachable node yields
+// an empty session list rather than throwing.
 export async function collectLiveNodesWithSessions(
     components: DaemonComponents,
     mesh: LocalMeshEntry,
@@ -531,45 +608,32 @@ export async function collectLiveNodesWithSessions(
     localDaemonId: string | undefined,
 ): Promise<any[]> {
     const dispatchMeshCommand = components.dispatchMeshCommand;
+    let localSessions: Array<Record<string, unknown>> | null = null;
     return Promise.all(mesh.nodes.map(async (node) => {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         const isLocalNode = !nodeDaemonId
             || daemonIdListIncludes(selfIds, nodeDaemonId)
             || daemonIdsEquivalent(nodeDaemonId, localDaemonId);
+        if (isLocalNode) {
+            // One registry read per tick, shared by every local (worktree) node.
+            localSessions ??= listLocalLiveSessions(components);
+            return localSessions.length > 0 ? { ...node, sessions: localSessions } : node;
+        }
         // Peer-connected pre-check (EVENT-DELIVERY-DELAY fix(a) + OFFLINE-NODE-FANOUT):
         // mirror pullRemoteNodeQueues. Without this the 90s connect-deadline block
-        // re-enters via this Promise.all — a degraded remote's get_status_metadata sinks
-        // into peer.connectQueue and stalls the whole prune probe. Only call the remote
-        // when the peer is 'connected'; an unconnected peer is left undecorated (empty
-        // session list), same as unreachable.
-        //   • getter WIRED (cloud) → a null snapshot means "no peer object right now" =
-        //     NOT connected (offline node whose failPeer deleted the peer). Skip (leave
-        //     undecorated) rather than dialing into another 90s connect wait — the same
-        //     null-race harden as pullRemoteNodeQueues.
-        //   • getter UNWIRED (standalone) → do NOT skip, fall through (regression-free).
-        if (!isLocalNode) {
-            const getPeerStatus = components.getMeshPeerConnectionStatus;
-            if (getPeerStatus) {
-                const peerSnapshot = getPeerStatus(nodeDaemonId);
-                if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return node;
-            }
+        // re-enters via this Promise.all — a degraded remote's probe sinks into
+        // peer.connectQueue and stalls the whole prune. Getter WIRED (cloud) → a
+        // null/unconnected snapshot leaves the node undecorated; UNWIRED
+        // (standalone) → fall through (regression-free).
+        const getPeerStatus = components.getMeshPeerConnectionStatus;
+        if (getPeerStatus) {
+            const peerSnapshot = getPeerStatus(nodeDaemonId);
+            if (!peerSnapshot || String(peerSnapshot.state) !== 'connected') return node;
         }
+        if (!dispatchMeshCommand) return node; // remote node, no P2P transport — leave undecorated
         let statusResult: unknown;
         try {
-            if (isLocalNode) {
-                // get_status_metadata is a LOW-family registry command, not a
-                // DaemonCommandHandler switch case — so it must be dispatched
-                // through the router (which consults lowFamilyRegistry before
-                // delegating to commandHandler). Calling commandHandler.handle()
-                // directly falls through to `Unknown command: get_status_metadata`
-                // and leaves the local node's live-session list empty in the mesh
-                // graph. See router.execute() / low-family/index.ts.
-                statusResult = await components.router.execute('get_status_metadata', {}, 'mesh');
-            } else if (dispatchMeshCommand) {
-                statusResult = await dispatchMeshCommand(nodeDaemonId, 'get_status_metadata', {});
-            } else {
-                return node; // remote node, no P2P transport — leave undecorated
-            }
+            statusResult = await probeRemoteStatusMetadata(components, nodeDaemonId);
         } catch {
             return node; // unreachable — leave undecorated (empty session list)
         }

@@ -18,8 +18,8 @@ import {
   acceptWorkerCompletionReport,
   acceptWorkerProgressUpdate,
   buildWorkerProgressNotice,
-  configureHandoffNoteSink,
-  configureWorkerProgressNoticeSink,
+  __setHandoffNoteSinkForTests,
+  __setWorkerProgressNoticeSinkForTests,
   findPriorWorkerReport,
   shouldSurfaceProgressToCoordinator,
   validateWorkerCompletionReport,
@@ -64,8 +64,8 @@ beforeEach(() => {
   __resetWorkerTaskTokensForTest()
 })
 afterEach(() => {
-  configureHandoffNoteSink(null)
-  configureWorkerProgressNoticeSink(null)
+  __setHandoffNoteSinkForTests(null)
+  __setWorkerProgressNoticeSinkForTests(null)
   __resetReportedSummariesForTest()
   __resetProgressSurfaceForTest()
   __resetHandoffNotesForTest()
@@ -171,7 +171,7 @@ describe('F1 — prior worker report is discoverable from the ledger', () => {
 describe('F2 — handoff note text survives a restart', () => {
   it('re-reads a note whose in-process cache was lost', () => {
     const ids = freshIds()
-    configureHandoffNoteSink(null)
+    __setHandoffNoteSinkForTests(null)
     storeHandoffNote({
       meshId: ids.meshId,
       taskId: ids.taskId,
@@ -196,7 +196,7 @@ describe('F2 — handoff note text survives a restart', () => {
   it('encloses a pre-restart note into a later overlapping task', () => {
     const ids = freshIds()
     const recordedAtIso = new Date().toISOString()
-    configureHandoffNoteSink(null)
+    __setHandoffNoteSinkForTests(null)
     MeshRuntimeStore.getInstance().insertTurnEvent({
       eventId: `evt-handoff-${ids.taskId}`,
       meshId: ids.meshId,
@@ -307,7 +307,7 @@ describe('F4/F5 — a failed write is never reported as success', () => {
     // A sink that throws is the measured shape of "the text did not persist".
     // Pre-fix the throw was swallowed and the call still answered
     // handoffNoteRecorded:true, so the worker was told the note was filed.
-    configureHandoffNoteSink(() => { throw new Error('sink unavailable') })
+    __setHandoffNoteSinkForTests(() => { throw new Error('sink unavailable') })
     const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
     const result: any = acceptWorkerCompletionReport({ token: token.token }, {
       outcome: 'completed',
@@ -324,7 +324,7 @@ describe('F4/F5 — a failed write is never reported as success', () => {
     const ids = freshIds()
     const attemptId = seedQueueRow(ids, { readonly: false })
     let stored = 0
-    configureHandoffNoteSink(() => { stored += 1 })
+    __setHandoffNoteSinkForTests(() => { stored += 1 })
     const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
     const result: any = acceptWorkerCompletionReport({ token: token.token }, {
       outcome: 'completed',
@@ -363,7 +363,7 @@ describe('F6 — touchedFiles is validated against the task mode', () => {
   it('accepts an empty list on a READ-ONLY task', () => {
     const ids = freshIds()
     const attemptId = seedQueueRow(ids, { readonly: true })
-    configureHandoffNoteSink(() => {})
+    __setHandoffNoteSinkForTests(() => {})
     const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
     const result: any = acceptWorkerCompletionReport({ token: token.token }, {
       outcome: 'completed',

@@ -15,11 +15,15 @@ import type { ProviderCategory } from '../providers/contracts.js';
  * Context passed from the main DevServer to handler modules.
  * Provides access to shared dependencies and utility methods.
  */
+import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
+
 export interface DevServerContext {
   readonly providerLoader: ProviderLoader;
   readonly cdpManagers: Map<string, DaemonCdpManager>;
   readonly instanceManager: ProviderInstanceManager | null;
   readonly cliManager: DaemonCliManager | null;
+  /** Lifecycle bus — the CLI SSE stream subscribes to its `provider_event` (B5). */
+  readonly bus?: Pick<SessionLifecycleBus, 'on'> | null;
   readonly onProviderSourceConfigChanged?: (() => Promise<void> | void) | null;
 
   // Utilities

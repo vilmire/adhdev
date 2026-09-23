@@ -841,28 +841,24 @@ export async function handleCliStop(ctx: DevServerContext, req: http.IncomingMes
   }
 }
 
-// Audit #15 (IPC load audit, 2026-09-23): handleCliSSE registered a new
+// Audit #15 (IPC load audit, 2026-09-23): handleCliSSE used to register a new
 // `instanceManager.onEvent` listener on every 0→1 SSE-client transition and
-// never removed it — ProviderInstanceManager.onEvent has no unsubscribe, so
-// each transition (client connects, disconnects, a new client connects again)
-// leaked one more permanent listener. With K such transitions over a
-// DevServer's lifetime, every provider event then fanned out to K listeners,
-// each doing its own `sendCliSSE` (a JSON.stringify + one write per connected
-// client) — K-fold duplicate work and K-fold duplicate SSE frames to every
-// client connected at the time.
-//
-// Dev-only surface (needs `--dev`, DevServer on :19280 — see the audit), so
-// this is not a production hot path, but the fix is still "register once,
-// not once per transition": a module-level WeakSet keyed by the
-// ProviderInstanceManager instance ensures at most one listener is ever
-// attached per manager for its lifetime, regardless of how many client
-// connect/disconnect cycles handleCliSSE sees. The listener itself is
-// deliberately NOT removed on last-client-close (ProviderInstanceManager
-// exposes no `offEvent`, and re-adding it on the next 0→1 transition is
-// exactly the leak this guards against) — it fans out through
-// `ctx.sendCliSSE`, which is already a no-op-safe iteration over whatever
-// `cliSSEClients` currently holds (empty when no client is connected).
-const instanceManagersWithCliSSEListener = new WeakSet<object>();
+// never removed it, so K connect/disconnect cycles fanned every provider event
+// out K times. Since wiring-unification B5 the fan-out is ONE lifecycle-bus
+// subscription (`provider_event`) per bus, registered on the first SSE client
+// and removed by `releaseCliSSEBusListener` when the DevServer stops. It fans
+// out through `ctx.sendCliSSE`, which iterates whatever `cliSSEClients`
+// currently holds (a no-op while nobody is connected).
+const cliSSEBusListeners = new WeakMap<object, () => void>();
+
+/** Remove the CLI SSE bus subscription for `bus` (DevServer.stop). Idempotent. */
+export function releaseCliSSEBusListener(bus: object | null | undefined): void {
+  if (!bus) return;
+  const off = cliSSEBusListeners.get(bus);
+  if (!off) return;
+  cliSSEBusListeners.delete(bus);
+  try { off(); } catch { /* bus already closed */ }
+}
 
 /** GET /api/cli/events — SSE stream of CLI status events */
 export function handleCliSSE(ctx: DevServerContext, cliSSEClients: http.ServerResponse[], _req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -875,13 +871,13 @@ export function handleCliSSE(ctx: DevServerContext, cliSSEClients: http.ServerRe
   res.write('data: {"type":"connected"}\n\n');
   cliSSEClients.push(res);
 
-  // Register the fan-out listener AT MOST ONCE per instanceManager instance,
-  // not once per 0→1 client transition (see the comment above the WeakSet).
-  if (ctx.instanceManager && !instanceManagersWithCliSSEListener.has(ctx.instanceManager)) {
-    instanceManagersWithCliSSEListener.add(ctx.instanceManager);
-    ctx.instanceManager.onEvent((event) => {
-      ctx.sendCliSSE(event);
-    });
+  // Register the fan-out AT MOST ONCE per bus, not once per 0→1 client
+  // transition (see the comment above cliSSEBusListeners).
+  const bus = ctx.bus;
+  if (bus && !cliSSEBusListeners.has(bus)) {
+    cliSSEBusListeners.set(bus, bus.on('provider_event', (e) => {
+      ctx.sendCliSSE(e.event);
+    }, { name: 'dev.cli-sse' }));
   }
 
   // Send current state snapshot immediately

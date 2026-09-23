@@ -39,6 +39,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const BASE_NODE_ID = 'node_base'
 const WORKTREE_NODE_ID = 'node_worktree'
@@ -75,7 +76,7 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
       updateSettings: vi.fn(),
     }
   })
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
       getInstance: vi.fn((sid: string) => cliInstances.find((i) => i.getState().instanceId === sid)),
@@ -91,7 +92,7 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, nodes: any[]) {

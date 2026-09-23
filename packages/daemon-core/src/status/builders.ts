@@ -39,6 +39,12 @@ import {
     EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE,
 } from '../providers/open-panel-support.js';
 import { TEXT_ONLY_MESSAGE_INPUT_SUPPORT } from '../providers/provider-input-support.js';
+import {
+    describeModelSelection,
+    effectiveModelSelectionValue,
+    parseSessionLaunchRecord,
+    type SessionLaunchRecord,
+} from '@adhdev/mesh-shared';
 
 /**
  * A coordinator-spawned worker session that mesh policy launched hidden. This is
@@ -426,6 +432,36 @@ function shouldIncludeExtensionSession(ext: ExtensionProviderState): boolean {
         || hasInterestingStatus;
 }
 
+/**
+ * Phase E: the session's launch record rides the provider state
+ * (`ProviderStateBase.launch`, stamped from the SessionRegistry when states are
+ * collected). Read structurally so a state without it is simply "no record".
+ */
+function readStateLaunch(state: ProviderState): SessionLaunchRecord | undefined {
+    const raw = (state as { launch?: unknown }).launch;
+    if (!raw || typeof raw !== 'object') return undefined;
+    return parseSessionLaunchRecord(raw);
+}
+
+/**
+ * The launch fields of a session entry: the full record (P2P / local only) plus
+ * the three derived scalars every surface reads — `model` / `modelSource`
+ * (which `buildCloudStatusReportPayload` re-sanitizes for the server) and
+ * `thinkingLevel`. Empty when the session has no launch record.
+ */
+export function buildSessionLaunchFields(
+    launch: SessionLaunchRecord | undefined,
+): Pick<SessionEntry, 'launch' | 'model' | 'modelSource' | 'thinkingLevel'> {
+    if (!launch) return {};
+    const model = describeModelSelection(launch.model);
+    const thinkingLevel = effectiveModelSelectionValue(launch.thinkingLevel);
+    return {
+        launch,
+        ...(model ? { model: model.value, modelSource: model.source } : { modelSource: launch.model.source }),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+    };
+}
+
 function buildCliSession(state: CliProviderState, options: SessionEntryBuildOptions): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
@@ -472,6 +508,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         activeChat,
         activeInteractivePrompt: state.activeInteractivePrompt ?? null,
         ...(summaryMetadata && { summaryMetadata }),
+        ...buildSessionLaunchFields(readStateLaunch(state)),
         ...(includeSessionMetadata && {
             capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
             messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT,
@@ -527,6 +564,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
+        ...buildSessionLaunchFields(readStateLaunch(state)),
         ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT }),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),

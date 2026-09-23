@@ -1,3 +1,4 @@
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -208,13 +209,9 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
         await refreshQuotaCacheOnce([agyFetch], allEnabled)
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
 
-        const listeners: Array<(event: any) => void> = []
-        const handle = setupQuotaEventRefresh({
-            instanceManager: { onEvent: (listener: (event: any) => void) => { listeners.push(listener) } },
-        })
-        for (const listener of listeners) {
-            listener({ event: 'agent:generating_completed', providerType: 'antigravity-cli' })
-        }
+        const bus = createSessionLifecycleBus()
+        const handle = setupQuotaEventRefresh({ bus })
+        bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event: { event: 'agent:generating_completed', providerType: 'antigravity-cli' } as any })
         await new Promise(r => setTimeout(r, 20))
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
         handle.stop()
@@ -430,16 +427,17 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
 
 describe('event-driven refresh (agent:generating_completed, agent:stopped)', () => {
     function makeEventSource() {
-        const listeners: Array<(event: any) => void> = []
+        // Provider events reach quota refresh as the bus's `provider_event` (B5).
+        const bus = createSessionLifecycleBus()
         return {
-            instanceManager: { onEvent: (listener: (event: any) => void) => { listeners.push(listener) } },
-            emit(event: any) { for (const listener of listeners) listener(event) },
+            bus,
+            emit(event: any) { bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event }) },
         }
     }
 
     it('refreshes ONLY the provider whose agent just finished a turn', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        const handle = setupQuotaEventRefresh({ bus: source.bus })
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
@@ -457,7 +455,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { instanceManager: source.instanceManager },
+            { bus: source.bus },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
@@ -479,7 +477,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
     it('never refetches a provider disabled on this machine', async () => {
         const source = makeEventSource()
         const providerLoader = { isMachineProviderEnabled: (type: string) => type !== 'kimi' }
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager, providerLoader })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, providerLoader })
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
@@ -494,7 +492,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
 
     it('ignores non-completion events and providers without a quota fetcher', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        const handle = setupQuotaEventRefresh({ bus: source.bus })
 
         source.emit({ event: 'agent:ready', providerType: 'kimi' })
         source.emit({ event: 'agent:generating_started', providerType: 'kimi' })
@@ -510,7 +508,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
 
     it('stop() disarms the listener', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        const handle = setupQuotaEventRefresh({ bus: source.bus })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         handle.stop()
@@ -527,7 +525,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
     // reproduction of that exact gap.
     it('refreshes on agent:stopped — the session-died-without-completing case', async () => {
         const source = makeEventSource()
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        const handle = setupQuotaEventRefresh({ bus: source.bus })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         source.emit({ event: 'agent:ready', providerType: 'kimi' })
@@ -543,7 +541,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { instanceManager: source.instanceManager },
+            { bus: source.bus },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
@@ -566,7 +564,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
         let now = 1_000_000
         const source = makeEventSource()
         const handle = setupQuotaEventRefresh(
-            { instanceManager: source.instanceManager },
+            { bus: source.bus },
             { now: () => now },
         )
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
@@ -587,7 +585,7 @@ describe('event-driven refresh (agent:generating_completed, agent:stopped)', () 
     it('never refetches a provider disabled on this machine on agent:stopped', async () => {
         const source = makeEventSource()
         const providerLoader = { isMachineProviderEnabled: (type: string) => type !== 'kimi' }
-        const handle = setupQuotaEventRefresh({ instanceManager: source.instanceManager, providerLoader })
+        const handle = setupQuotaEventRefresh({ bus: source.bus, providerLoader })
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
 
         source.emit({ event: 'agent:stopped', providerType: 'kimi' })

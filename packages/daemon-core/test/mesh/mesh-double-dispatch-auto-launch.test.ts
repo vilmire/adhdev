@@ -46,6 +46,7 @@ import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask,
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests, __seedAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main'
 
@@ -80,7 +81,7 @@ function coordinatorSession(meshId: string, sessionId: string, status = 'generat
 }
 
 function createComponents(cliInstances: any[] = []) {
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
       getInstance: vi.fn(() => undefined),
@@ -102,7 +103,7 @@ function createComponents(cliInstances: any[] = []) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string) {
@@ -389,7 +390,7 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
   function createRemoteComponents() {
     const dispatchMeshCommand = vi.fn(async (_daemonId: string, cmd: string) =>
       cmd === 'launch_cli' ? { success: true, sessionId: 'remote-sess-A' } : { success: true })
-    return {
+    return withMeshRouter({
       instanceManager: {
         getByCategory: vi.fn((category: string) => (category === 'cli' ? [] : [])),
         getInstance: vi.fn(() => undefined),
@@ -403,7 +404,7 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
       dispatchMeshCommand,
       statusInstanceId: 'daemon-local',
       onStatusChange: vi.fn(),
-    } as any
+    } as any)
   }
 
   function dispatchCalls(components: any, cmd: string): number {

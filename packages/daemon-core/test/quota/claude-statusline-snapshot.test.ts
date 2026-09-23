@@ -107,6 +107,18 @@ describe('snapshotFromStatuslineInput', () => {
         expect(serialized).not.toContain('transcript');
         expect(serialized).not.toContain('abc');
     });
+
+    it('Phase E: keeps the model id (an identifier) but never the display name', () => {
+        const result = snapshotFromStatuslineInput(statuslineInput(), NOW);
+        expect(result?.model).toBe('claude-opus-5');
+        expect(JSON.stringify(result)).not.toContain('"Opus"');
+        expect(snapshotFromStatuslineInput(statuslineInput({ model: 'opus' }), NOW)).not.toHaveProperty('model');
+    });
+
+    it('Phase E: the model id round-trips through the snapshot file', () => {
+        const written = JSON.stringify(snapshotFromStatuslineInput(statuslineInput(), NOW));
+        expect(parseSnapshotFile(written)?.model).toBe('claude-opus-5');
+    });
 });
 
 describe('shouldWriteSnapshot (throttle)', () => {

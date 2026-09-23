@@ -354,8 +354,8 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work')
     expect(prompt).toContain('After dispatching a direct or queued task, send one progress update with the task/session handle, then stop')
     expect(prompt).toContain('pendingCoordinatorEvents')
-    expect(prompt).toContain('completion/approval/status signal')
-    expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
+    expect(prompt).toContain('Worker completion, progress and blocked reports arrive as events')
+    expect(prompt).toContain('call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing')
     expect(prompt).toContain('Never launch a second session onto in-flight work')
 
     // The anti-polling/concurrency rules must not bleed into deferring NEW
@@ -635,7 +635,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Before reopening a reported issue after context compaction or session resume')
     expect(prompt).toContain('continue from the existing diff/commit instead of starting a duplicate investigation')
     // (6) Stuck-but-verified → stop polling, verify with git, land.
-    expect(prompt).toContain('If a delegated session appears stuck but has already produced a verified final summary or diff')
+    expect(prompt).toContain('If a delegated session appears stuck but has already delivered a `report_completion` summary')
     // (7) Manual strict fast-forward convergence bypass when Refinery falsely blocks a clean branch.
     expect(prompt).toContain('converge by strict fast-forward')
     expect(prompt).toContain("rebase the submodule commit onto the submodule's `origin/<default-branch>`")

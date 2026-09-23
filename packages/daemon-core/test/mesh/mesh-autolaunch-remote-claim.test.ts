@@ -66,6 +66,7 @@ import {
   __clearAwaitClaimBackoffForTests,
   AUTO_LAUNCH_REMOTE_IDLE_TTL_MS,
 } from '../../src/mesh/mesh-autolaunch-integrity.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_de3c0072b6404341bc5512a77c358421'
 const REMOTE_SESSION_ID = 'e55126a4-4347-45a0-99d4-1bf6d7e3563c'
@@ -89,7 +90,7 @@ function setMesh(meshId: string, extra: Record<string, unknown> = {}) {
 }
 
 function createComponents() {
-  const components: any = {
+  const components: any = withMeshRouter({
     instanceManager: {
       // Remote shape: this daemon cannot see the launched session in instanceManager.
       // That is the live topology, not a drain-bypass — do NOT plant a local idle
@@ -114,7 +115,7 @@ function createComponents() {
     }),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  }
+  })
   return components
 }
 

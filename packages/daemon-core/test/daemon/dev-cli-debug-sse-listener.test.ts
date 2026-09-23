@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type * as http from 'http'
-import { handleCliSSE } from '../../src/daemon/dev-cli-debug.js'
+import { handleCliSSE, releaseCliSSEBusListener } from '../../src/daemon/dev-cli-debug.js'
 import type { DevServerContext } from '../../src/daemon/dev-server-types.js'
 
+// Wiring-unification B5: the fan-out is a lifecycle-bus `provider_event`
+// subscription now (ctx.bus), registered once per bus and removed by
+// releaseCliSSEBusListener when the DevServer stops. The fake bus below counts
+// live subscriptions so the same once-per-transition leak stays pinned.
+//
 // Audit #15 (IPC load audit, 2026-09-23): handleCliSSE registered a new
 // `instanceManager.onEvent` listener on every 0→1 SSE-client transition and
 // never removed it. ProviderInstanceManager.onEvent has no unsubscribe, so a
@@ -35,12 +40,24 @@ function fakeRequest(): http.IncomingMessage & { emitClose: () => void } {
   } as any
 }
 
-function buildCtx(onEventListeners: Array<(event: any) => void>, cliSSEClients: http.ServerResponse[]): DevServerContext {
+/** A fake bus whose live `provider_event` handlers are `onEventListeners` (fed the raw event). */
+function buildCtx(onEventListeners: Array<(event: any) => void>, cliSSEClients: http.ServerResponse[]): DevServerContext & { bus: any } {
   const instanceManager: any = {
-    onEvent: (listener: (event: any) => void) => { onEventListeners.push(listener) },
     collectAllStates: () => [],
   }
+  const bus = {
+    on: (kind: string, handler: (e: any) => void) => {
+      if (kind !== 'provider_event') throw new Error(`unexpected subscription ${kind}`)
+      const listener = (event: any) => handler({ kind: 'provider_event', sessionId: 's1', at: 0, event })
+      onEventListeners.push(listener)
+      return () => {
+        const i = onEventListeners.indexOf(listener)
+        if (i >= 0) onEventListeners.splice(i, 1)
+      }
+    },
+  }
   return {
+    bus,
     providerLoader: {} as any,
     cdpManagers: new Map(),
     instanceManager,
@@ -66,7 +83,7 @@ function buildCtx(onEventListeners: Array<(event: any) => void>, cliSSEClients: 
 }
 
 describe('handleCliSSE listener registration (audit #15)', () => {
-  it('registers exactly one instanceManager.onEvent listener across multiple 0→1 client transitions', () => {
+  it('registers exactly one bus provider_event subscription across multiple 0→1 client transitions', () => {
     const onEventListeners: Array<(event: any) => void> = []
     const cliSSEClients: http.ServerResponse[] = []
     const ctx = buildCtx(onEventListeners, cliSSEClients)
@@ -124,7 +141,7 @@ describe('handleCliSSE listener registration (audit #15)', () => {
     expect(statusChangeWrites.length).toBe(1)
   })
 
-  it('two independent instanceManager instances each get their own listener (no cross-daemon suppression)', () => {
+  it('two independent buses each get their own subscription (no cross-daemon suppression)', () => {
     const listenersA: Array<(event: any) => void> = []
     const listenersB: Array<(event: any) => void> = []
     const clientsA: http.ServerResponse[] = []
@@ -137,5 +154,18 @@ describe('handleCliSSE listener registration (audit #15)', () => {
 
     expect(listenersA.length).toBe(1)
     expect(listenersB.length).toBe(1)
+  })
+
+  it('releaseCliSSEBusListener removes the subscription (DevServer.stop) and a later client re-registers once', () => {
+    const listeners: Array<(event: any) => void> = []
+    const clients: http.ServerResponse[] = []
+    const ctx = buildCtx(listeners, clients)
+    handleCliSSE(ctx, clients, fakeRequest() as any, fakeResponse() as any)
+    expect(listeners.length).toBe(1)
+    releaseCliSSEBusListener(ctx.bus)
+    expect(listeners.length).toBe(0)
+    releaseCliSSEBusListener(ctx.bus) // idempotent
+    handleCliSSE(ctx, clients, fakeRequest() as any, fakeResponse() as any)
+    expect(listeners.length).toBe(1)
   })
 })

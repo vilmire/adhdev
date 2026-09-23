@@ -8,9 +8,9 @@
 //      escape their quoted field in the coordinator-facing prose — the
 //      prompt-injection boundary.
 //
-// The seam is driven from the PUBLISHER side (publishProviderSignal) so the
-// inverted provider→shared→mesh dependency is exercised end to end, not just
-// the handler in isolation.
+// The seam is driven from the PUBLISHER side (a session port's `signal` →
+// the lifecycle bus) so the inverted provider→bus→mesh dependency is
+// exercised end to end, not just the handler in isolation.
 // ---------------------------------------------------------------------------
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
@@ -25,11 +25,12 @@ import {
   handleProviderSignalObservation,
   buildProviderSignalNotice,
   renderSignalParams,
-  installMeshProviderSignalObserver,
-  uninstallMeshProviderSignalObserver,
+  subscribeMeshProviderSignals,
   PROVIDER_SIGNAL_EVENT,
 } from '../../src/mesh/mesh-signal-bridge.js'
-import { publishProviderSignal } from '../../src/shared/provider-signal-sink.js'
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
+import { createSessionEventPort } from '../../src/sessions/session-port.js'
+import { SessionRegistry } from '../../src/sessions/registry.js'
 
 const MESH_BOUND_SETTINGS = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-7' }
 
@@ -47,8 +48,21 @@ function observation(overrides: Record<string, any> = {}) {
   }
 }
 
+let unsubscribe: (() => void) | null = null
 beforeEach(() => { queued.length = 0 })
-afterEach(() => { uninstallMeshProviderSignalObserver() })
+afterEach(() => { unsubscribe?.(); unsubscribe = null })
+
+/** Publish one signal through a real port, exactly as the CLI instance does. */
+function publishThroughPort(bus = createSessionLifecycleBus(), obs = observation()) {
+  const port = createSessionEventPort(bus, new SessionRegistry(bus))
+  port.signal(obs.sessionId, {
+    providerType: obs.providerType,
+    workspace: obs.workspace,
+    runtimeSettings: obs.runtimeSettings,
+    signal: { ruleId: obs.ruleId, kind: obs.kind, params: obs.params, detectedAt: obs.detectedAt },
+  })
+  return bus
+}
 
 describe('provider signal → coordinator event', () => {
   it('queues an event carrying the captured params as structured fields', () => {
@@ -77,16 +91,25 @@ describe('provider signal → coordinator event', () => {
     expect(queued.map(e => e.metadataEvent.taskId)).toEqual(['usage_limit', 'auth_expired'])
   })
 
-  it('delivers through the published seam, exercising the inverted dependency', () => {
-    installMeshProviderSignalObserver()
-    publishProviderSignal(observation())
+  it('delivers through the bus seam, exercising the inverted dependency', () => {
+    const bus = createSessionLifecycleBus()
+    unsubscribe = subscribeMeshProviderSignals(bus)
+    publishThroughPort(bus)
     expect(queued).toHaveLength(1)
-    expect(queued[0].metadataEvent.params.resetsAt).toBe('3:45pm')
+    // Field-for-field what the deleted provider-signal sink delivered.
+    expect(queued[0]).toMatchObject({ event: PROVIDER_SIGNAL_EVENT, meshId: 'mesh-abc', nodeId: 'node-7', workspace: '/tmp/ws' })
+    expect(queued[0].metadataEvent).toMatchObject({
+      ruleId: 'usage_limit', signalKind: 'usage_limit', sessionId: 'sess-1', providerType: 'claude',
+      params: { resetsAt: '3:45pm' }, detectedAt: 1_700_000_000_000,
+    })
   })
 
-  it('is a no-op when no observer is wired (non-mesh daemon)', () => {
-    uninstallMeshProviderSignalObserver()
-    publishProviderSignal(observation())
+  it('is a no-op when nothing is subscribed (non-mesh daemon), and after unsubscribe', () => {
+    const bus = publishThroughPort()
+    expect(queued).toHaveLength(0)
+    const off = subscribeMeshProviderSignals(bus)
+    off()
+    publishThroughPort(bus)
     expect(queued).toHaveLength(0)
   })
 })

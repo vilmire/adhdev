@@ -56,6 +56,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 // A LOCAL node (no daemonId): dispatch goes through cliManager.handleCliCommand, the
 // exact path that threw 'CLI agent not running: claude-cli' in the live incident.
@@ -80,7 +81,7 @@ function createComponents(meshId: string, handleCliCommand: (...args: any[]) => 
     workspace: WS,
   }
   const instance = { getState: () => state, updateSettings: vi.fn() }
-  return {
+  return withMeshRouter({
     instanceManager: {
       getInstance: vi.fn(() => instance),
       getByCategory: vi.fn((c: string) => (c === 'cli' ? [instance] : [])),
@@ -98,7 +99,7 @@ function createComponents(meshId: string, handleCliCommand: (...args: any[]) => 
     },
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function cleanup(meshId: string) {

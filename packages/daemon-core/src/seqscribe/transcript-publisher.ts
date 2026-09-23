@@ -387,6 +387,25 @@ export class TranscriptProjectionService {
         }
     }
 
+    /**
+     * Drop every per-session row for a session that terminated (wiring-
+     * unification B4 — these maps previously grew for every session that ever
+     * existed, C9). A pull already in flight settles normally; `inFlight` and
+     * the in-flight `triggerContext` are left for `settle()` to clear.
+     */
+    forgetSession(sessionId: string): void {
+        if (!sessionId) return;
+        this.stopPolling(sessionId);
+        this.sessionState.delete(sessionId);
+        this.pendingObservation.delete(sessionId);
+        this.pendingPull.delete(sessionId);
+        this.pendingContext.delete(sessionId);
+        const timer = this.ptyDirtyTimers.get(sessionId);
+        if (timer) clearTimeout(timer);
+        this.ptyDirtyTimers.delete(sessionId);
+        this.ptyDirtyTrailing.delete(sessionId);
+    }
+
     private runStatPoll(): void {
         for (const sessionId of this.pollingSessions) {
             let path = this.knownPaths.get(sessionId);

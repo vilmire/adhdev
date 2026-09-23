@@ -219,6 +219,13 @@ describe('statusline wrapper capture', () => {
         expect(raw).not.toContain('/Users/someone/project');
     });
 
+    it('Phase E: records the model id, never the display name', async () => {
+        await runWrapper('printf ok');
+        const snapshot = readSnapshot();
+        expect(snapshot.model).toBe('claude-opus-5');
+        expect(fs.readFileSync(snapshotFile, 'utf-8')).not.toContain('display_name');
+    });
+
     it('throttles a rapid second invocation to a single write', async () => {
         await runWrapper('printf ok');
         const first = readSnapshot();

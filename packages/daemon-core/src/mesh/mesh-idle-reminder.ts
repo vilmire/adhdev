@@ -76,7 +76,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';

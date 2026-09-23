@@ -52,6 +52,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
 import { handleClaimPathDifficultyFloorRefusal, resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from '../../src/mesh/mesh-autolaunch-integrity.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_floor_clobber'
 const NODE_WS = '/repo/floor-clobber'
@@ -79,7 +80,7 @@ function setMesh(meshId: string) {
 
 function createComponents() {
   const spawned: string[] = []
-  const components: any = {
+  const components: any = withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn(() => []),
       getInstance: vi.fn(() => undefined),
@@ -102,7 +103,7 @@ function createComponents() {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  }
+  })
   components.__spawned = spawned
   return components
 }

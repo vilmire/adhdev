@@ -24,6 +24,7 @@
  * late). These tests therefore move time ONLY with advanceTimersByTimeAsync
  * once the loop is armed — no mid-test clock jumps.
  */
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,10 +82,11 @@ const codexFetcher = { provider: 'codex-cli' as const, fetch: fetchCodexQuota }
 const kimiFetcher = { provider: 'kimi' as const, fetch: fetchKimiQuota }
 
 function makeEventSource() {
-    const listeners: Array<(event: any) => void> = []
+    // Provider events reach quota refresh as the bus's `provider_event` (B5).
+    const bus = createSessionLifecycleBus()
     return {
-        instanceManager: { onEvent: (listener: (event: any) => void) => { listeners.push(listener) } },
-        emit(event: any) { for (const listener of listeners) listener(event) },
+        bus,
+        emit(event: any) { bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event }) },
     }
 }
 
@@ -258,7 +260,7 @@ describe('a wake never fails to come', () => {
             isEnabled: allEnabled,
         })
         const source = makeEventSource()
-        const eventHandle = setupQuotaEventRefresh({ instanceManager: source.instanceManager })
+        const eventHandle = setupQuotaEventRefresh({ bus: source.bus })
         try {
             // First wake: idle, everything fresh — the chain goes to sleep
             // until the backfill horizon.

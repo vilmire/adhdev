@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { listMeshes } from '../config/mesh-config.js';

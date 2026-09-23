@@ -419,6 +419,17 @@ export interface SessionEntry {
     providerControls?: ProviderControlSchema[];
     /** Flexible always-visible metadata for compact/live surfaces. */
     summaryMetadata?: ProviderSummaryMetadata;
+    /**
+     * Launch provenance — provider, model, thinking level and where each came
+     * from (Phase E). Full record: P2P / local only, never the server WS.
+     */
+    launch?: import('@adhdev/mesh-shared').SessionLaunchRecord;
+    /** The model in force, derived from `launch` (identifier). */
+    model?: string;
+    /** Where the model came from, derived from `launch` (enum). */
+    modelSource?: import('@adhdev/mesh-shared').ModelAxisSource;
+    /** The thinking level in force, derived from `launch`. */
+    thinkingLevel?: string;
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
     lastMessagePreview?: string;
@@ -517,6 +528,17 @@ export interface CompactSessionEntry {
     controlValues?: Record<string, string | number | boolean>;
     providerControls?: ProviderControlSchema[];
     summaryMetadata?: ProviderSummaryMetadata;
+    /**
+     * Launch provenance — provider, model, thinking level and where each came
+     * from (Phase E). Full record: P2P / local only, never the server WS.
+     */
+    launch?: import('@adhdev/mesh-shared').SessionLaunchRecord;
+    /** The model in force, derived from `launch` (identifier). */
+    model?: string;
+    /** Where the model came from, derived from `launch` (enum). */
+    modelSource?: import('@adhdev/mesh-shared').ModelAxisSource;
+    /** The thinking level in force, derived from `launch`. */
+    thinkingLevel?: string;
     settings?: Record<string, any>;
     meshQueueStats?: {
         total?: number;
@@ -992,6 +1014,14 @@ export interface RoutingSessionEntry {
     surfaceHidden?: boolean;
     /** Lets the server suppress push notifications for user-muted sessions. */
     muted?: boolean;
+    /**
+     * The session's model — an IDENTIFIER (`claude-opus-4-1`, `gpt-5.6-sol`),
+     * passed through `sanitizeModelIdentifier` at every layer; a label or any
+     * free text is dropped. Phase E.
+     */
+    model?: string;
+    /** Where that model came from — an enum (`MODEL_AXIS_SOURCES`), allow-listed at every layer. */
+    modelSource?: import('@adhdev/mesh-shared').ModelAxisSource;
 }
 
 /**

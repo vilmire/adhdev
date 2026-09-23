@@ -83,6 +83,7 @@ import {
   __resetAutoLaunchAwaitClaimBackoffForTests,
   __resetClaimDeferralForTests,
 } from '../../src/mesh/mesh-queue-assignment.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_A = 'node_alpha'
 
@@ -116,7 +117,7 @@ function createComponents(opts: { hideFromLocalDrain?: boolean } = {}) {
       settings: { meshNodeFor: meshId, meshNodeId: NODE_A, providerType: 'codex-cli' },
     }),
   })
-  const components: any = {
+  const components: any = withMeshRouter({
     __meshId: '',
     instanceManager: {
       getByCategory: vi.fn((category: string) => (
@@ -143,7 +144,7 @@ function createComponents(opts: { hideFromLocalDrain?: boolean } = {}) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  }
+  })
   components.__spawned = spawned
   return components
 }

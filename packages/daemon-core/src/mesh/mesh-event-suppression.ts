@@ -4,7 +4,7 @@
 // behavior change — see mesh-event-forwarding.ts for the call sites and injectMeshSystemMessage
 // itself, which remains in that file and is threaded into evaluateMeshEventSuppression's ctx to
 // avoid a circular import.
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, extractJsonObjectFromSummary, isIntentionalCleanupStopEntry, readLedgerEntriesByKind } from './mesh-ledger.js';
 import { updateTaskStatus, getActiveDirectDispatches, getQueue, REDRIVE_RECLAIM_REASONS, REDRIVE_SUPERSEDE_WINDOW_MS } from './mesh-work-queue.js';
@@ -1005,7 +1005,7 @@ export function stopStaleMeshWorker(
                     const localType = components.cliManager?.adapters?.get?.(sessionId)?.cliType;
                     if (localType) stopArgs.cliType = localType;
                 }
-                Promise.resolve(components.cliManager?.handleCliCommand?.('stop_cli', stopArgs))
+                Promise.resolve().then(() => components.cliManager.stopCli(stopArgs))
                     .catch((e: any) => LOG.warn('MeshQueue', `Local stop of stale worker ${sessionId} failed: ${e?.message || e}`));
                 return;
             }

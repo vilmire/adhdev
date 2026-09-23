@@ -98,7 +98,7 @@ export async function setupIdeInstance(
     transport: 'cdp-page',
     cdpManagerKey: managerKey,
     instanceKey: `ide:${managerKey}`,
-  });
+  }, 'attach');
 
   // 6. Register enabled extensions
   const extensionProviders = providerLoader.getEnabledByCategory('extension', ideType);
@@ -115,7 +115,7 @@ export async function setupIdeInstance(
       transport: 'cdp-webview',
       cdpManagerKey: managerKey,
       instanceKey: `ide:${managerKey}`,
-    });
+    }, 'attach');
   }
 
   return ideInstance;

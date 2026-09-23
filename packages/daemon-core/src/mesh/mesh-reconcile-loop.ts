@@ -44,8 +44,9 @@
 //     and its nudge timer (PHASE 0).
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
+import { migratePendingEventsJsonlToSqlite } from './mesh-events-pending-migration.js';
 import { listMeshes, getMesh } from '../config/mesh-config.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
@@ -1053,8 +1054,26 @@ interface ReconcileLoopHandle {
     stop(): void;
 }
 
+/**
+ * Proof that the legacy `*.pending-events.jsonl` inbox was drained into SQLite.
+ * Only `migratePendingInboxBeforeReconcile` mints one, so the boot order
+ * "migrate BEFORE the loop starts" is a type requirement, not a comment: the
+ * loop drives the retention sweep whose pruneExpiredLedgerJsonl deletes
+ * `*.jsonl` at 30 days WITHOUT draining (wiring-unification B4).
+ */
+export interface MigratedPendingInbox {
+    readonly __migratedPendingInbox: true;
+}
+
+/** Drain any leftover JSONL inbox into SQLite. Best-effort — never blocks boot. */
+export function migratePendingInboxBeforeReconcile(): MigratedPendingInbox {
+    try { migratePendingEventsJsonlToSqlite(); } catch { /* best-effort — never block boot */ }
+    return { __migratedPendingInbox: true };
+}
+
 // Start the periodic reconcile loop. Returns a handle with stop() for shutdown.
-export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileLoopHandle {
+// `inbox` is optional only for unit tests that never had a JSONL inbox.
+export function setupMeshReconcileLoop(components: DaemonComponents, _inbox?: MigratedPendingInbox): ReconcileLoopHandle {
     const intervalMs = resolveReconcileIntervalMs();
     let running = false;
     // TURN-LEDGER (Stage 5) restart recovery, once at loop start (before the first

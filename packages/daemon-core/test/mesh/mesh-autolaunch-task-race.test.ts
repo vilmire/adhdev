@@ -63,6 +63,7 @@ import {
 import { __seedAutoLaunchOrphanFirstSeenForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_A = 'node_alpha'
 const NODE_B = 'node_beta'
@@ -86,7 +87,7 @@ function setMesh(meshId: string) {
 // overlap rather than running to completion one after the other.
 function createComponents(opts: { launchDelayMs?: number } = {}) {
   const spawned: string[] = []
-  const components: any = {
+  const components: any = withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? [] : [])),
       getInstance: vi.fn(() => undefined),
@@ -110,7 +111,7 @@ function createComponents(opts: { launchDelayMs?: number } = {}) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  }
+  })
   components.__spawned = spawned
   return components
 }

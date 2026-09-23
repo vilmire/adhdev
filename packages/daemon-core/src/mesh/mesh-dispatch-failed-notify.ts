@@ -4,7 +4,7 @@ import { readNonEmptyString } from './mesh-events-utils.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 import { getMachineId } from '../config/config.js';
 import { isTerminalSessionStatus } from './mesh-candidacy-predicates.js';
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 
 // ---------------------------------------------------------------------------
 // COORD-NOTIFY-STUCK: a PINNED task (targetSessionId set) whose dispatch fails

@@ -24,10 +24,22 @@
 
 import type { SessionTermination } from '@adhdev/session-host-core';
 import { LOG } from '../logging/logger.js';
-import {
-    configureSessionTerminationObserver,
-    type SessionTerminationObservation,
-} from '../shared/session-termination-sink.js';
+import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
+import type { EventOf } from '../sessions/lifecycle-events.js';
+
+/**
+ * A terminated session as the mesh sees it — the fields of the bus
+ * `terminated` event this module reads (wiring-unification B4 replaced the
+ * neutral `shared/session-termination-sink` with the lifecycle bus).
+ */
+export interface SessionTerminationObservation {
+    sessionId: string;
+    providerType?: string;
+    workspace?: string;
+    /** The provider instance's runtime settings, forwarded opaquely (carries the mesh binding). */
+    runtimeSettings: Readonly<Record<string, unknown>>;
+    termination: SessionTermination;
+}
 
 /**
  * How a terminated mesh session should be classified in the ledger.
@@ -197,7 +209,7 @@ export function buildMeshTerminationStopPayload(
  * Returns null when the session has no mesh binding at all (an ordinary
  * non-mesh CLI session), which is the signal to write nothing.
  */
-export function resolveMeshTerminationBinding(settings: Record<string, unknown> | null | undefined): {
+export function resolveMeshTerminationBinding(settings: Readonly<Record<string, unknown>> | null | undefined): {
     meshId: string;
     nodeId?: string;
     isCoordinator: boolean;
@@ -335,12 +347,35 @@ export function handleSessionTerminationObservation(
     });
 }
 
-/** Wire the provider→mesh termination seam at daemon boot. */
-export function installMeshTerminationObserver(): void {
-    configureSessionTerminationObserver(handleSessionTerminationObservation);
+/**
+ * Subscribe the ledger writer to the lifecycle bus (wiring-unification B4).
+ *
+ * Only a `terminated` that carries a session-host tombstone is a death the
+ * provider layer observed — every other cause (explicit stop, auto-clean, IDE
+ * detach) has no tombstone and is recorded, when at all, by its own path.
+ *
+ * `daemon_shutdown` is filtered explicitly: sessions torn down while the daemon
+ * goes away are not deaths worth a ledger row. This replaces the old
+ * "uninstall the observer before tearing sessions down" ordering rule.
+ *
+ * Async lane: the ledger write is best-effort and must never run inside the
+ * PTY-exit call stack that emitted the event.
+ */
+export function subscribeMeshTermination(bus: SessionLifecycleBus): Unsubscribe {
+    return bus.onAsync('terminated', (event) => {
+        const observation = toTerminationObservation(event);
+        return observation ? handleSessionTerminationObservation(observation) : undefined;
+    }, { name: 'mesh.termination-ledger' });
 }
 
-/** Unwire the seam at daemon shutdown (and between tests). */
-export function uninstallMeshTerminationObserver(): void {
-    configureSessionTerminationObserver(null);
+/** Project a bus `terminated` into the observation the ledger writer takes; null when there is nothing to record. */
+export function toTerminationObservation(event: EventOf<'terminated'>): SessionTerminationObservation | null {
+    if (event.cause === 'daemon_shutdown' || !event.termination) return null;
+    return {
+        sessionId: event.sessionId,
+        providerType: event.providerType,
+        ...(event.workspace ? { workspace: event.workspace } : {}),
+        runtimeSettings: event.runtimeSettings,
+        termination: event.termination,
+    };
 }

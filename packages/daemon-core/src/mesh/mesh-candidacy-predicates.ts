@@ -25,7 +25,7 @@
 // is not a leaf predicate. resolveAutoLaunchTarget() likewise stayed behind — it reads
 // the localCoordinatorDaemonId() CANON helper defined there.
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';

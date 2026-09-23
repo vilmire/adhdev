@@ -9,8 +9,13 @@
  *
  * Content boundary: only the numbers Claude Code reports about plan
  * consumption are persisted. The statusline JSON also carries `cwd`,
- * `transcript_path`, `session_id`, cost and the model name; none of that is
- * quota, so none of it is written here.
+ * `transcript_path`, `session_id` and cost; none of that is quota, so none of
+ * it is written here.
+ *
+ * One exception, the model id (Phase E, wiring-unification §7 E1): it is the
+ * running model as Claude Code itself reports it — an observation for session
+ * launch provenance. It is an identifier (`model.id`, never the display name),
+ * and this file is local to the daemon: it never crosses to the server.
  */
 'use strict';
 
@@ -35,6 +40,8 @@ export interface StatuslineSnapshot {
     sevenDay: StatuslineWindowRecord | null;
     /** Claude Code version that produced the reading, for diagnostics. */
     cliVersion?: string | null;
+    /** Phase E: the model id Claude Code reported (`model.id`); see the header note. */
+    model?: string | null;
 }
 
 /**
@@ -155,12 +162,14 @@ export function snapshotFromStatuslineInput(input: unknown, nowMs: number): Stat
         return null;
     }
     const version = root.version;
+    const modelId = readModelId(root.model);
     return {
         version: SNAPSHOT_VERSION,
         capturedAt: nowMs,
         fiveHour,
         sevenDay,
         ...(typeof version === 'string' ? { cliVersion: version } : {}),
+        ...(modelId ? { model: modelId } : {}),
     };
 }
 
@@ -194,7 +203,15 @@ export function parseSnapshotFile(raw: string): StatuslineSnapshot | null {
         fiveHour,
         sevenDay,
         ...(typeof record.cliVersion === 'string' ? { cliVersion: record.cliVersion } : {}),
+        ...(typeof record.model === 'string' && record.model.trim() ? { model: record.model.trim() } : {}),
     };
+}
+
+/** Phase E: `model` in the statusline protocol is `{ id, display_name }`; only the id is kept. */
+function readModelId(raw: unknown): string | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const id = (raw as Record<string, unknown>).id;
+    return typeof id === 'string' && id.trim() ? id.trim() : undefined;
 }
 
 /** Re-read our own persisted window shape (camelCase), unlike the CLI's. */

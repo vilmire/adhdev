@@ -77,6 +77,7 @@ import {
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js';
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js';
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main';
 
@@ -170,7 +171,7 @@ function setMesh(id: string) {
 }
 
 function createComponents(cliInstances: any[] = []) {
-    return {
+    return withMeshRouter({
         instanceManager: {
             getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
             getInstance: vi.fn(() => undefined),
@@ -189,7 +190,7 @@ function createComponents(cliInstances: any[] = []) {
         dispatchMeshCommand: vi.fn(async () => ({ success: true })),
         statusInstanceId: 'daemon-local',
         onStatusChange: vi.fn(),
-    } as any;
+    } as any);
 }
 
 function launchCliCalls(components: any): number {

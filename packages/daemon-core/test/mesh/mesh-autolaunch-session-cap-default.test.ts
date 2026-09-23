@@ -47,6 +47,7 @@ import {
   DEFAULT_NODE_MAX_CONCURRENT_SESSIONS,
   resolveNodeMaxConcurrentSessions,
 } from '../../src/repo-mesh-types.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main'
 
@@ -65,7 +66,7 @@ function liveSession(meshId: string, sessionId: string, status = 'generating') {
 }
 
 function createComponents(cliInstances: any[] = []) {
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
       getInstance: vi.fn(() => undefined),
@@ -84,7 +85,7 @@ function createComponents(cliInstances: any[] = []) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, nodePolicy: Record<string, unknown> = {}) {
