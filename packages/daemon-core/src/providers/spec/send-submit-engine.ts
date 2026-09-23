@@ -525,6 +525,15 @@ export class SendSubmitEngine {
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.host.opts.manifestSendDelayMs);
 
+        // POSIX-IMAGE-PASTE gate — see the long note at the wrapInPaste branch
+        // below. Hoisted above the mid-generation early return because BOTH send
+        // shapes need the same answer: an image body loses its attachments if it
+        // reaches the CLI as literal text, and that is true whether the session
+        // was idle or generating when the owner pressed send.
+        const wrapInPaste = process.platform !== 'win32'
+            && bracketedPaste === true
+            && sm.posix_bracketed_paste_for_images === true;
+
         // SEND-NOW-AGENT-QUEUE: a mid-generation write takes the PLAIN split path
         // — body write, timed gap, submit key — and never the echo-verified one,
         // for two reasons that both come from the session being busy:
@@ -546,7 +555,19 @@ export class SendSubmitEngine {
         // perChar typing simulation is skipped — it would stretch the body write
         // across the very turn boundary we are racing.
         if (opts?.midGeneration) {
-            this.host.adapter.send_keys(text);
+            // SEND-NOW-PASTE-LOSS (live 2026-09-23, darwin): this branch received
+            // `bracketedPaste` and ignored it, writing an image body as literal
+            // text so claude-cli never converted the paths into attachments — the
+            // owner's picture arrived as a filename. The idle drain never had the
+            // bug because it reaches the wrapInPaste branch below; only send-now
+            // lost it. The body is therefore wrapped with the SAME gate and the
+            // SAME markers as that branch — this is not a second paste concept.
+            //
+            // ★ The split structure is preserved exactly: the wrapping changes
+            // only the BODY bytes, and the submit key remains its own later
+            // write. The paste CLOSE marker is not a submit — the CR still is.
+            const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
+            this.host.adapter.send_keys(body);
             // ★ The CR MUST be a separate, later write. An atomic `text + '\r'`
             // is the retired force-inject shape and is NOT consumed mid-turn
             // (see ISpecDriver.sendMessageDuringGeneration for the A/B).
@@ -572,9 +593,9 @@ export class SendSubmitEngine {
         // the raw body can never echo and the gate would stall to its blind-fire
         // backstop. The verified-resend net still runs, covering a CR that lands
         // while the CLI's async image ingestion is still in flight.
-        const wrapInPaste = process.platform !== 'win32'
-            && bracketedPaste === true
-            && sm.posix_bracketed_paste_for_images === true;
+        //
+        // (The `wrapInPaste` gate itself is computed at the top of this method so
+        // the mid-generation branch above can consult the same answer.)
         if (wrapInPaste) {
             this.host.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
             this.markBodyWrite();
