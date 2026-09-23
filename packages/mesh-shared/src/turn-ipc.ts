@@ -682,6 +682,110 @@ export function decodeMissionQueryResponse(value: unknown): MissionQueryResponse
     return isMissionQueryResponse(value) ? value : null
 }
 
+// ─── note_upsert / note_forget ──────────────────────────────────────────────
+//
+// Decision (2026-09-24, C-W6b; implemented C-W8): coordinator operating notes
+// get their own two local-IPC commands. A note's text is coordinator-authored
+// free text, so — exactly like mission_upsert's `goal` — it cannot ride
+// `mesh_record`'s scalar allow-list, and it never needs to: notes live in the
+// owning daemon's `mesh_operating_notes` table (local-only; never on
+// `mesh.<id>.events`). The same "local IPC is inside the boundary" rationale as
+// the mission commands above applies.
+
+export const OPERATING_NOTE_CATEGORIES = ['provider_quirk', 'pattern_to_avoid', 'recovery_lesson'] as const
+export type OperatingNoteCategory = typeof OPERATING_NOTE_CATEGORIES[number]
+export const isOperatingNoteCategory = makeGuard(OPERATING_NOTE_CATEGORIES)
+
+export interface NoteUpsertRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** Free text (local IPC — see the section note). */
+    text: string
+    category?: OperatingNoteCategory
+    pinned?: boolean
+    /** Explicit expiry, ISO-8601. */
+    expiresAt?: string
+    /** Note id (or subject key) this note supersedes. */
+    supersedes?: string
+    subjectKey?: string
+    /** Best-effort identity of the recording coordinator (session id / daemon id / host). */
+    sourceCoordinator?: string
+}
+
+export interface NoteUpsertResponse {
+    noteId: string
+    /** True when the same text was already among the recent live notes (no new note). */
+    deduped: boolean
+    createdAt: string
+}
+
+function isOptionalShortString(value: unknown, max = 512): boolean {
+    return value === undefined || (typeof value === 'string' && value.trim().length > 0 && value.length <= max)
+}
+
+export function isNoteUpsertRequest(value: unknown): value is NoteUpsertRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'text', 'category', 'pinned', 'expiresAt', 'supersedes', 'subjectKey', 'sourceCoordinator'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (typeof value.text !== 'string' || value.text.trim().length === 0) return false
+    if (value.category !== undefined && !isOperatingNoteCategory(value.category)) return false
+    if (value.pinned !== undefined && typeof value.pinned !== 'boolean') return false
+    if (value.expiresAt !== undefined && (typeof value.expiresAt !== 'string' || Number.isNaN(Date.parse(value.expiresAt)))) return false
+    return isOptionalShortString(value.supersedes) && isOptionalShortString(value.subjectKey) && isOptionalShortString(value.sourceCoordinator)
+}
+
+export function decodeNoteUpsertRequest(value: unknown): NoteUpsertRequest | null {
+    return isNoteUpsertRequest(value) ? value : null
+}
+
+export function isNoteUpsertResponse(value: unknown): value is NoteUpsertResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['noteId', 'deduped', 'createdAt'])
+        && isEvidenceIdentifier(value.noteId) && typeof value.deduped === 'boolean' && typeof value.createdAt === 'string'
+}
+
+export function decodeNoteUpsertResponse(value: unknown): NoteUpsertResponse | null {
+    return isNoteUpsertResponse(value) ? value : null
+}
+
+export interface NoteForgetRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    /** At least one of `noteId` / `text` (a text forget retracts every note with that exact text, and any recorded later). */
+    noteId?: string
+    text?: string
+    reason?: string
+}
+
+export interface NoteForgetResponse {
+    /** Live notes this forget hid. */
+    matched: number
+    tombstoneId: string
+}
+
+export function isNoteForgetRequest(value: unknown): value is NoteForgetRequest {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'noteId', 'text', 'reason'])) return false
+    if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
+    if (!isEvidenceIdentifier(value.meshId)) return false
+    if (value.noteId !== undefined && !isEvidenceIdentifier(value.noteId)) return false
+    if (value.text !== undefined && (typeof value.text !== 'string' || value.text.trim().length === 0)) return false
+    if (value.noteId === undefined && value.text === undefined) return false
+    return value.reason === undefined || typeof value.reason === 'string'
+}
+
+export function decodeNoteForgetRequest(value: unknown): NoteForgetRequest | null {
+    return isNoteForgetRequest(value) ? value : null
+}
+
+export function isNoteForgetResponse(value: unknown): value is NoteForgetResponse {
+    return isRecord(value) && hasOnlyKeys(value, ['matched', 'tombstoneId'])
+        && typeof value.matched === 'number' && Number.isInteger(value.matched) && value.matched >= 0
+        && isEvidenceIdentifier(value.tombstoneId)
+}
+
+export function decodeNoteForgetResponse(value: unknown): NoteForgetResponse | null {
+    return isNoteForgetResponse(value) ? value : null
+}
+
 // ─── command registry ───────────────────────────────────────────────────────
 
 /** The complete, closed set of IPC command names this contract defines. */
@@ -694,6 +798,8 @@ export const TURN_IPC_COMMANDS = [
     'mesh_index_query',
     'mission_upsert',
     'mission_query',
+    'note_upsert',
+    'note_forget',
 ] as const
 export type TurnIpcCommand = typeof TURN_IPC_COMMANDS[number]
 export const isTurnIpcCommand = makeGuard(TURN_IPC_COMMANDS)
@@ -708,6 +814,8 @@ export interface TurnIpcRequestByCommand {
     mesh_index_query: MeshIndexQueryRequest
     mission_upsert: MissionUpsertRequest
     mission_query: MissionQueryRequest
+    note_upsert: NoteUpsertRequest
+    note_forget: NoteForgetRequest
 }
 
 /** Response type keyed by command name — for a generically-typed dispatcher on either end. */
@@ -720,5 +828,7 @@ export interface TurnIpcResponseByCommand {
     mission_upsert: MissionUpsertResponse
     mission_query: MissionQueryResponse
     mesh_index_query: MeshIndexQueryResponse
+    note_upsert: NoteUpsertResponse
+    note_forget: NoteForgetResponse
 }
 
