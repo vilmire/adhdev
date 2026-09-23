@@ -87,7 +87,7 @@ describe('registration', () => {
             'orphaned_pin_notify', 'prune_stale_direct', 'task_stats_query',
         ]);
         const byName = new Map(turnLedgerIpcSpecs.map((spec) => [spec.name, spec]));
-        for (const name of names) expect(byName.get(name)?.sources, name).toEqual(['ipc']);
+        for (const name of names) expect(byName.get(name)?.sources, name).toEqual(['ipc', 'standalone']);
     });
 
     it('a malformed request is refused by the wire decoder, never executed', async () => {

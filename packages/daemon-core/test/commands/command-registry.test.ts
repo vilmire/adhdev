@@ -390,7 +390,7 @@ describe('turn-ledger IPC commands (C-W6)', () => {
         for (const name of TURN_LEDGER_IPC_COMMANDS) {
             const spec = getDaemonCommandRegistry().get(name);
             expect(spec?.family, name).toBe('low');
-            expect(spec?.sources, name).toEqual(['ipc']);
+            expect(spec?.sources, name).toEqual(['ipc', 'standalone']);
         }
     });
 });
