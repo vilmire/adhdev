@@ -29,13 +29,10 @@ import { resolveLegacyProviderScript, type LegacyStringScript } from './provider
 import { sha256Hex } from '../system/hash.js';
 import { MANUAL_ATTENDANCE_COMMANDS, MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS } from '../providers/manual-attendance.js';
 
-// Sub-module imports
-import * as Chat from './chat-commands.js';
-import * as Cdp from './cdp-commands.js';
-import * as Stream from './stream-commands.js';
-import * as WorkspaceCmd from './workspace-commands.js';
 import { getWorkspaceState } from '../config/workspaces.js';
-import { handleGitCommand, isGitCommandName, type GitCommandServices } from '../git/git-commands.js';
+import type { GitCommandServices } from '../git/git-commands.js';
+import type { CommandSpec } from './command-registry.js';
+import { gitSpecs, handlerSpecs } from './handler-specs.js';
 
 export interface CommandResult {
     success: boolean;
@@ -55,6 +52,8 @@ export interface CommandContext {
     gitCommandServices?: GitCommandServices;
     /** Fired synchronously before send_chat is dispatched; fire-and-forget for callers */
     onBeforeSendChat?: (params: { workspace: string; sessionId: string }) => void;
+    /** Agent-stream manager for IDE extension sessions (B4: constructor value, no late setter). */
+    agentStreamManager?: DaemonAgentStreamManager | null;
 }
 
 /**
@@ -170,10 +169,20 @@ function summarizeCommandArgs(args: any): string {
     return entries.length ? entries.join(' ') : '{...}';
 }
 
+let handlerCommandSpecsByName: Map<string, CommandSpec> | undefined;
+
+/** Handler/git spec by name (built on first use — the spec modules sit in an import cycle with this file). */
+function handlerCommandSpec(cmd: string): CommandSpec | undefined {
+    if (!handlerCommandSpecsByName) {
+        handlerCommandSpecsByName = new Map<string, CommandSpec>([...handlerSpecs, ...gitSpecs].map((spec) => [spec.name, spec]));
+    }
+    return handlerCommandSpecsByName.get(cmd);
+}
+
 export class DaemonCommandHandler implements CommandHelpers {
     private _ctx: CommandContext;
     private _agentStream: DaemonAgentStreamManager | null = null;
-    private domHandlers: CdpDomHandlers;
+    readonly domHandlers: CdpDomHandlers;
     private _historyWriter: ChatHistoryWriter;
 
     /** Current request route context */
@@ -186,6 +195,7 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     constructor(ctx: CommandContext) {
         this._ctx = ctx;
+        this._agentStream = ctx.agentStreamManager ?? null;
         this.domHandlers = new CdpDomHandlers((ideType?) => this.getCdp(ideType));
         this._historyWriter = new ChatHistoryWriter();
     }
@@ -299,12 +309,15 @@ export class DaemonCommandHandler implements CommandHelpers {
         return key.split('_')[0];
     }
 
-    private resolveRoute(args: any): { session?: SessionRuntimeTarget; managerKey?: string; providerType?: string; sessionLookupFailed?: boolean } {
+    private resolveRoute(args: any, spec?: CommandSpec): { session?: SessionRuntimeTarget; managerKey?: string; providerType?: string; sessionLookupFailed?: boolean } {
         const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
         let session = targetSessionId ? this._ctx.sessionRegistry?.get(targetSessionId) : undefined;
         if (targetSessionId && !session) {
             reconcileIdeRuntimeSessions(this._ctx.instanceManager, this._ctx.sessionRegistry);
             session = this._ctx.sessionRegistry?.get(targetSessionId);
+        }
+        if (targetSessionId && !session && spec?.session?.allowInactiveHistory === true) {
+            session = this.exitedCliSessionFromAdapter(targetSessionId);
         }
         const sessionLookupFailed = !!targetSessionId && !session;
 
@@ -321,6 +334,30 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
 
         return { session, managerKey, providerType, sessionLookupFailed };
+    }
+
+    /**
+     * PTY-exit window (wiring-unification B4): `port.exited` removes a CLI
+     * session from the registry immediately, but cli-manager keeps its adapter
+     * (with the final screen / transcript state) until auto-clean. A
+     * history-capable read (`allowInactiveHistory`: read_chat,
+     * get_chat_debug_bundle) addressed at such a session is resolved through
+     * that adapter — provider type and workspace come from it — so the dashboard
+     * and the transcript projection's final pull still get the transcript.
+     * Once auto-clean drops the adapter, the ordinary history fallback applies.
+     */
+    private exitedCliSessionFromAdapter(sessionId: string): SessionRuntimeTarget | undefined {
+        const adapter = this._ctx.adapters?.get(sessionId);
+        if (!adapter?.cliType) return undefined;
+        return {
+            sessionId,
+            parentSessionId: null,
+            providerType: adapter.cliType,
+            transport: 'pty',
+            adapterKey: sessionId,
+            instanceKey: sessionId,
+            ...(adapter.workingDir ? { workspace: adapter.workingDir } : {}),
+        };
     }
 
     /** Extract CDP scope key from target session or explicit ideType */
@@ -377,10 +414,6 @@ export class DaemonCommandHandler implements CommandHelpers {
         logAtLevel(level, 'Command', parts.join(' '));
     }
 
-    setAgentStreamManager(manager: DaemonAgentStreamManager): void {
-        this._agentStream = manager;
-    }
-
     /**
      * When a command in the manual-attendance set arrives for a session this
      * daemon hosts, stamp the live instance so auto-approve holds while the user
@@ -416,55 +449,57 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     // ─── Command Dispatcher ──────────────────────────
 
+    /**
+     * Run a handler-family or git command by name — for in-process callers that
+     * address the handler directly instead of going through the router. Unknown
+     * names answer `Unknown command`, exactly as a router miss does.
+     */
     async handle(cmd: string, args: any): Promise<CommandResult> {
-        // Per-request: extract target session / CDP scope / provider type from args
+        const spec = handlerCommandSpec(cmd);
+        return spec ? this.handleSpec(spec, args) : this.rejectUnknown(cmd, args);
+    }
+
+    /** A command no spec defines: resolve the route (for the log line) and refuse it. */
+    async rejectUnknown(cmd: string, args: any): Promise<CommandResult> {
         this._currentRoute = this.resolveRoute(args);
+        const startedAt = Date.now();
+        this.logCommandStart(cmd, args);
+        this.noteManualAttendanceIfApplicable(cmd, args);
+        const result: CommandResult = { success: false, error: `Unknown command: ${cmd}` };
+        this.logCommandEnd(cmd, result, startedAt);
+        return result;
+    }
+
+    /**
+     * Run a `handler`- or `git`-family spec: resolve the per-request route,
+     * stamp manual attendance, apply the spec's `session` pre-checks, then run.
+     */
+    async handleSpec(spec: CommandSpec, args: any): Promise<CommandResult> {
+        const cmd = spec.name;
+        // Per-request: extract target session / CDP scope / provider type from args
+        this._currentRoute = this.resolveRoute(args, spec);
         const startedAt = Date.now();
         this.logCommandStart(cmd, args);
         this.noteManualAttendanceIfApplicable(cmd, args);
         let result: CommandResult;
 
-        if (isGitCommandName(cmd)) {
-            result = await handleGitCommand(cmd, args, this._ctx.gitCommandServices);
+        if (spec.family === 'git') {
+            result = await (spec as CommandSpec<'git'>).run(this._ctx.gitCommandServices, args);
             this.logCommandEnd(cmd, result, startedAt);
             return result;
         }
+        if (spec.family !== 'handler') {
+            throw new Error(`command '${cmd}' is a ${spec.family}-family command, not a handler command`);
+        }
 
-        const sessionScopedCommands = new Set([
-            'read_chat',
-            'get_chat_debug_bundle',
-            // Addresses ONE session's transcript file. Failing closed when that
-            // session is gone is the point: resolving the ref against whatever
-            // session is current instead would expand the wrong transcript.
-            'expand_tool_block',
-            'send_chat',
-            // Cancelling a queued send addresses ONE session's driver FIFO, so it
-            // must fail closed exactly like send_chat when the session is gone —
-            // silently "succeeding" against no session would tell the dashboard a
-            // body was withdrawn that is still parked somewhere else.
-            'cancel_queued_chat',
-            'list_chats',
-            'new_chat',
-            'switch_chat',
-            'set_mode',
-            'change_model',
-            'set_thought_level',
-            'resolve_action',
-            'select_session',
-            'open_panel',
-            'pty_input',
-            'pty_resize',
-            'invoke_provider_script',
-        ]);
-
-        // read_chat and get_chat_debug_bundle can serve historical transcript data even
-        // when the live session record is gone (stopped/destroyed). Allow the fallback
-        // when the provider type is known and any session identity hint is present:
-        // an explicit providerSessionId/historySessionId, or the targetSessionId itself
+        const session = spec.session;
+        // allowInactiveHistory commands can serve historical transcript data even when
+        // the live session record is gone (stopped/destroyed). Allow the fallback when
+        // the provider type is known and any session identity hint is present: an
+        // explicit providerSessionId/historySessionId, or the targetSessionId itself
         // (which getHistorySessionId already uses as a fallback history key).
-        const isReadOrDebugCmd = cmd === 'read_chat' || cmd === 'get_chat_debug_bundle';
-        const allowsInactiveReadChatFallback =
-            isReadOrDebugCmd
+        const allowsInactiveHistoryFallback =
+            session?.allowInactiveHistory === true
             && !!this._currentRoute.providerType
             && (
                 (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim().length > 0)
@@ -472,7 +507,7 @@ export class DaemonCommandHandler implements CommandHelpers {
                 || (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim().length > 0)
             );
 
-        if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd) && !allowsInactiveReadChatFallback) {
+        if (this._currentRoute.sessionLookupFailed && session?.scope === 'required' && !allowsInactiveHistoryFallback) {
             const result = {
                 success: false,
                 error: `Live session not found for targetSessionId: ${String(args?.targetSessionId || '').trim() || 'unknown'}`,
@@ -482,13 +517,10 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
 
         // Commands without ideType CDP silently fail (prevent P2P retry spam)
-        if (!this._currentRoute.session && !this._currentRoute.managerKey && !this._currentRoute.providerType) {
-            const cdpCommands = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action'];
-            if (cdpCommands.includes(cmd)) {
-                result = { success: false, error: 'No targetSessionId specified — cannot route command' };
-                this.logCommandEnd(cmd, result, startedAt);
-                return result;
-            }
+        if (session?.requireRoute && !this._currentRoute.session && !this._currentRoute.managerKey && !this._currentRoute.providerType) {
+            result = { success: false, error: 'No targetSessionId specified — cannot route command' };
+            this.logCommandEnd(cmd, result, startedAt);
+            return result;
         }
 
         if (cmd === 'send_chat' && this._ctx.onBeforeSendChat) {
@@ -506,7 +538,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
 
         try {
-            result = await this.dispatch(cmd, args);
+            result = await (spec as CommandSpec<'handler'>).run(this, args);
             this.logCommandEnd(cmd, result, startedAt);
             return result;
         } catch (e: any) {
@@ -514,100 +546,6 @@ export class DaemonCommandHandler implements CommandHelpers {
             result = { success: false, error: `Internal error: ${e?.message || 'unknown'}` };
             this.logCommandEnd(cmd, result, startedAt);
             return result;
-        }
-    }
-
-    private async dispatch(cmd: string, args: any): Promise<CommandResult> {
-        switch (cmd) {
-            // ─── Chat commands (chat-commands.ts) ───────────────
-            case 'read_chat': return Chat.handleReadChat(this, args);
-            case 'expand_tool_block': return Chat.handleExpandToolBlock(this, args);
-            case 'get_chat_debug_bundle': return Chat.handleGetChatDebugBundle(this, args);
-            case 'chat_history': return Chat.handleChatHistory(this, args);
-            case 'send_chat': return Chat.handleSendChat(this, args);
-            case 'cancel_queued_chat': return Chat.handleCancelQueuedChat(this, args);
-            case 'list_chats': return Chat.handleListChats(this, args);
-            case 'new_chat': return Chat.handleNewChat(this, args);
-            case 'switch_chat': return Chat.handleSwitchChat(this, args);
-            case 'set_mode': return Chat.handleSetMode(this, args);
-            case 'change_model': return Chat.handleChangeModel(this, args);
-            case 'set_thought_level': return Chat.handleSetThoughtLevel(this, args);
-            case 'resolve_action': return Chat.handleResolveAction(this, args);
-
-            // ─── CDP commands (cdp-commands.ts) ───────────────
-            case 'cdp_eval': return Cdp.handleCdpEval(this, args);
-            case 'cdp_screenshot':
-            case 'screenshot': return Cdp.handleScreenshot(this, args);
-            case 'cdp_command_exec': return Cdp.handleCdpCommand(this, args);
-            case 'cdp_batch': return Cdp.handleCdpBatch(this, args);
-            case 'cdp_remote_action': return Cdp.handleCdpRemoteAction(this, args);
-            case 'cdp_discover_agents': return Cdp.handleDiscoverAgents(this, args);
-            case 'cdp_dom_dump': return this.domHandlers.handleDomDump(args);
-            case 'cdp_dom_query': return this.domHandlers.handleDomQuery(args);
-            case 'cdp_dom_debug': return this.domHandlers.handleDomDebug(args);
-
-            // ─── File commands (cdp-commands.ts) ──────────────
-            case 'file_read': return Cdp.handleFileRead(this, args);
-            case 'file_write': return Cdp.handleFileWrite(this, args);
-            case 'file_list': return Cdp.handleFileList(this, args);
-            case 'file_list_browse': return Cdp.handleFileListBrowse(this, args);
-
-            // ─── Workspace cmds ──────────────
-            case 'workspace_list': return WorkspaceCmd.handleWorkspaceList();
-            case 'workspace_add': return WorkspaceCmd.handleWorkspaceAdd(args);
-            case 'workspace_remove': return WorkspaceCmd.handleWorkspaceRemove(args);
-            case 'workspace_set_label': return WorkspaceCmd.handleWorkspaceSetLabel(args);
-            case 'registry_catalog': return this.handleRegistryCatalog(args);
-            case 'workspace_set_default':
-                return WorkspaceCmd.handleWorkspaceSetDefault(args);
-
-            // ─── Script manage ───────────────────
-            case 'refresh_scripts': return this.handleRefreshScripts(args);
-            case 'list_provider_availability': return this.handleListProviderAvailability(args);
-            case 'install_provider_manifest': return this.handleInstallProviderManifest(args);
-            case 'uninstall_provider_manifest': return this.handleUninstallProviderManifest(args);
-            case 'check_provider_updates': return this.handleCheckProviderUpdates(args);
-            case 'activate_provider_updates': return this.handleActivateProviderUpdates(args);
-            case 'rollback_provider_update': return this.handleRollbackProviderUpdate(args);
-            case 'list_installed_providers': return this.handleListInstalledProviders(args);
-            case 'add_provider_source': return this.handleAddProviderSource(args);
-            case 'remove_provider_source': return this.handleRemoveProviderSource(args);
-            case 'list_provider_sources': return this.handleListProviderSources(args);
-            case 'set_active_provider_source': return this.handleSetActiveProviderSource(args);
-
-            // ─── Stream commands (stream-commands.ts) ───────────
-            case 'select_session': return Stream.handleSelectSession(this, args);
-            case 'open_panel': return Stream.handleOpenPanel(this, args);
-
-            // ─── PTY Raw I/O (stream-commands.ts) ─────────
-            case 'pty_input': return Stream.handlePtyInput(this, args);
-            case 'pty_resize': return Stream.handlePtyResize(this, args);
-            // ─── MESH-READ-TERMINAL (feature 2): raw viewport read ──────────
-            case 'read_terminal': return Stream.handleReadTerminal(this, args);
-            // ─── MESH-SEND-KEYS (feature 3): structured key injection ────────
-            case 'send_keys': return Stream.handleSendKeys(this, args);
-
-            // ─── Provider Settings (stream-commands.ts) ──────────
-            case 'get_provider_settings': return Stream.handleGetProviderSettings(this, args);
-            case 'set_provider_setting': return Stream.handleSetProviderSetting(this, args);
-            case 'get_provider_source_config': return Stream.handleGetProviderSourceConfig(this, args);
-            case 'set_provider_source_config': return Stream.handleSetProviderSourceConfig(this, args);
-
-            // ─── IDE Extension Settings (stream-commands.ts) ──────────
-            case 'get_ide_extensions': return Stream.handleGetIdeExtensions(this, args);
-            case 'set_ide_extension': return Stream.handleSetIdeExtension(this, args);
-
-            // ─── Provider control execution (stream-commands.ts) ──────────
-            case 'invoke_provider_script': return Stream.handleProviderScript(this, args);
-
-            // ─── Provider Auto-Fix / Clone (DevServer proxy) ──────────
-            case 'provider_auto_fix': return this.proxyDevServerPost(args, 'auto-implement');
-            case 'provider_auto_fix_cancel': return this.proxyDevServerPost(args, 'auto-implement/cancel');
-            case 'provider_auto_fix_status': return this.proxyDevServerGet(args, 'auto-implement/status');
-            case 'provider_clone': return this.proxyDevServerScaffold(args);
-
-            default:
-                return { success: false, error: `Unknown command: ${cmd}` };
         }
     }
 
@@ -620,7 +558,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * desired version (or with no version to pick up the latest from
      * registry), or use check_provider_updates to see what is out of date.
      */
-    private async handleRefreshScripts(_args: any): Promise<CommandResult> {
+    async handleRefreshScripts(_args: any): Promise<CommandResult> {
         if (this._ctx.providerLoader) {
             this._ctx.providerLoader.reload();
             this._ctx.providerLoader.registerToDetector();
@@ -642,7 +580,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * can show "Installed" badges. Reuses the existing detection state from
      * ProviderLoader.getMachineProviderStatus() — no probing is triggered.
      */
-    private handleListProviderAvailability(_args: any): CommandResult {
+    handleListProviderAvailability(_args: any): CommandResult {
         if (!this._ctx.providerLoader) {
             return { success: false, error: 'ProviderLoader not initialized' };
         }
@@ -712,7 +650,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * exactly ONE version per channel: a version request that does not match
      * the channel entry fails closed instead of pretending to honor it.
      */
-    private async handleInstallProviderManifest(args: any): Promise<CommandResult> {
+    async handleInstallProviderManifest(args: any): Promise<CommandResult> {
         const loader = this._ctx.providerLoader;
         if (!loader) {
             return { success: false, error: 'ProviderLoader not initialized' };
@@ -775,7 +713,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * dashboard no longer exposes a per-provider uninstall button (external
      * sources are removed as a whole via remove_provider_source).
      */
-    private async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
+    async handleUninstallProviderManifest(args: any): Promise<CommandResult> {
         const type = typeof args?.type === 'string' ? args.type : '';
         const category = typeof args?.category === 'string' ? args.category : '';
         if (!type || !category) return { success: false, error: 'type and category are required' };
@@ -841,7 +779,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * version. This is the "what does this daemon have" answer used both by
      * the UI and by the update checker.
      */
-    private handleListInstalledProviders(_args: any): CommandResult {
+    handleListInstalledProviders(_args: any): CommandResult {
         const fs = require('fs') as typeof import('fs');
         const path = require('path') as typeof import('path');
 
@@ -929,7 +867,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * defeat it on the very first screen). Channel-aware like every other
      * registry read in this file.
      */
-    private async handleRegistryCatalog(args: any): Promise<CommandResult> {
+    async handleRegistryCatalog(args: any): Promise<CommandResult> {
         const https = require('https') as typeof import('https');
         const cfg = loadConfig();
         const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
@@ -957,7 +895,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
     }
 
-    private async handleCheckProviderUpdates(_args: any): Promise<CommandResult> {
+    async handleCheckProviderUpdates(_args: any): Promise<CommandResult> {
         const installed = this.handleListInstalledProviders({});
         if (!installed.success) return installed;
 
@@ -1073,7 +1011,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * pins+installed, which by construction cannot contain a type published
      * after this machine's bootstrap.
      */
-    private async handleActivateProviderUpdates(args: any): Promise<CommandResult> {
+    async handleActivateProviderUpdates(args: any): Promise<CommandResult> {
         const typesRaw = Array.isArray(args?.types) ? args.types : [];
         const types: string[] = [];
         for (const candidate of typesRaw) {
@@ -1119,7 +1057,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      *
      * Args: { providerType: string }
      */
-    private async handleRollbackProviderUpdate(args: any): Promise<CommandResult> {
+    async handleRollbackProviderUpdate(args: any): Promise<CommandResult> {
         const providerType = typeof args?.providerType === 'string' ? args.providerType.trim() : '';
         if (!providerType) return { success: false, error: 'providerType required' };
 
@@ -1157,7 +1095,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      *     source already exposes. UI uses this to prompt for active-source
      *     selection before the load takes effect.
      */
-    private async handleAddProviderSource(args: any): Promise<CommandResult> {
+    async handleAddProviderSource(args: any): Promise<CommandResult> {
         const url = typeof args?.url === 'string' ? args.url.trim() : '';
         if (!url) return { success: false, error: 'url is required' };
         const ref = typeof args?.ref === 'string' && args.ref.trim() ? args.ref.trim() : 'main';
@@ -1258,7 +1196,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      *
      * Args: { name: string }
      */
-    private async handleRemoveProviderSource(args: any): Promise<CommandResult> {
+    async handleRemoveProviderSource(args: any): Promise<CommandResult> {
         const name = typeof args?.name === 'string' ? args.name.trim() : '';
         if (!name) return { success: false, error: 'name is required' };
         const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
@@ -1301,7 +1239,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * providers + the active selection for any conflicting types. Used by
      * the dashboard's "Sources" tab.
      */
-    private handleListProviderSources(_args: any): CommandResult {
+    handleListProviderSources(_args: any): CommandResult {
         const ext = require('../providers/external-sources.js') as typeof import('../providers/external-sources.js');
         const file = ext.loadExternalSources();
         const inventory = ext.inventoryExternalSources();
@@ -1344,7 +1282,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      *
      * Args: { type: string, sourceName: string }
      */
-    private handleSetActiveProviderSource(args: any): CommandResult {
+    handleSetActiveProviderSource(args: any): CommandResult {
         const type = typeof args?.type === 'string' ? args.type.trim() : '';
         const sourceName = typeof args?.sourceName === 'string' ? args.sourceName.trim() : '';
         if (!type || !sourceName) return { success: false, error: 'type and sourceName are required' };
@@ -1372,7 +1310,7 @@ export class DaemonCommandHandler implements CommandHelpers {
     // ─── DevServer HTTP proxy helpers ─────────────────
     // These bridge WS commands to the DevServer REST API (localhost:19280)
 
-    private async proxyDevServerPost(args: any, endpoint: string): Promise<CommandResult> {
+    async proxyDevServerPost(args: any, endpoint: string): Promise<CommandResult> {
         const { providerType, ...body } = args || {};
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
@@ -1401,7 +1339,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
     }
 
-    private async proxyDevServerGet(args: any, endpoint: string): Promise<CommandResult> {
+    async proxyDevServerGet(args: any, endpoint: string): Promise<CommandResult> {
         const { providerType } = args || {};
         if (!providerType) return { success: false, error: 'providerType required' };
         try {
@@ -1421,7 +1359,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
     }
 
-    private async proxyDevServerScaffold(args: any): Promise<CommandResult> {
+    async proxyDevServerScaffold(args: any): Promise<CommandResult> {
         try {
             const http = await import('http');
             const postData = JSON.stringify(args || {});

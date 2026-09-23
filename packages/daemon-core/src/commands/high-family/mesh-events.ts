@@ -19,6 +19,7 @@ import {
 } from '../../mesh/mesh-events.js';
 import { normalizeInteractivePromptResponse } from '../../providers/types/interactive-prompt.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
     mesh_forward_event: async (ctx: HighFamilyContext, args: any) => {
@@ -238,3 +239,9 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         }
     },
 };
+
+export const meshEventsSpecs = defineCommandSpecs('high', meshEventsHandlers, {
+    // mesh_answer_question (mission f1d25e11): the answer must reach the OWNING worker
+    // session's live instance — its activeInteractivePrompt and adapter live only there.
+    interactive_prompt_response: { forwardToOwner: true, fastFlush: true },
+});

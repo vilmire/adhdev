@@ -4,9 +4,9 @@
  * router deps it needs and returns the exact CommandRouterResult the original
  * `executeDaemonCommand` switch case returned, so the router facade is unchanged.
  *
- * Registry dispatch: DaemonCommandRouter.executeDaemonCommand looks up the cmd in
- * lowFamilyRegistry BEFORE its switch; a hit returns the handler result, a miss
- * falls through to the remaining switch (and ultimately CommandHandler delegation).
+ * Dispatch: each family file turns its handler table into command specs
+ * (defineCommandSpecs) and the router runs `getDaemonCommandRegistry().get(cmd)`
+ * with the context this family needs.
  */
 import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
 
@@ -36,4 +36,3 @@ export interface LowFamilyContext {
 
 export type LowFamilyHandler = (ctx: LowFamilyContext, args: any) => Promise<CommandRouterResult>;
 
-export type LowFamilyRegistry = Map<string, LowFamilyHandler>;

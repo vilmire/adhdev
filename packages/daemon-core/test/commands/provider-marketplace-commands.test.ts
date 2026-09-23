@@ -267,11 +267,12 @@ describe('marketplace install / uninstall safety', () => {
         it('deactivates the channel store before deciding not-installed', () => {
             const source = fs.readFileSync(
                 path.resolve(__dirname, '../../src/commands/handler.ts'), 'utf-8')
-            const start = source.indexOf('private async handleUninstallProviderManifest')
+            const start = source.indexOf('async handleUninstallProviderManifest(')
             expect(start).toBeGreaterThan(0)
             const rest = source.slice(start)
-            const nextMethod = rest.indexOf('private async ', 'private async '.length)
-            const uninstall = nextMethod > 0 ? rest.slice(0, nextMethod) : rest
+            // The next class member at method indentation ends the method body.
+            const nextMethod = rest.slice(1).search(/\n    (?:private |public )?(?:async )?[A-Za-z]+\(/)
+            const uninstall = nextMethod > 0 ? rest.slice(0, nextMethod + 1) : rest
             const deactivateAt = uninstall.indexOf('deactivateVerifiedChannel')
             const notInstalledAt = uninstall.indexOf("error: 'not installed'")
             expect(deactivateAt).toBeGreaterThan(0)

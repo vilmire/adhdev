@@ -7,6 +7,7 @@
  * CommandRouterResult the inlined cases did.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_ledger: async (_ctx: LowFamilyContext, args: any) => {
@@ -156,3 +157,5 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const meshLedgerSpecs = defineCommandSpecs('low', meshLedgerHandlers);

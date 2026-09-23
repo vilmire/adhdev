@@ -94,7 +94,7 @@ describe('cli-manager multipart mesh dispatch', () => {
   it('delivers image input to the provider instance instead of collapsing to text', async () => {
     const { manager, sendMessage, onEvent } = createManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       ...BASE_ARGS,
       message: 'what is in this screenshot?',
       input: IMAGE_INPUT,
@@ -115,7 +115,7 @@ describe('cli-manager multipart mesh dispatch', () => {
   it('accepts an image-only dispatch with no accompanying text', async () => {
     const { manager, onEvent } = createManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       ...BASE_ARGS,
       input: { parts: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }] },
     })
@@ -129,7 +129,7 @@ describe('cli-manager multipart mesh dispatch', () => {
   it('leaves the text-only path byte-for-byte unchanged', async () => {
     const { manager, sendMessage, onEvent } = createManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       ...BASE_ARGS,
       message: 'plain text task',
     })
@@ -148,7 +148,7 @@ describe('cli-manager multipart mesh dispatch', () => {
       capabilities: { input: { multipart: false, mediaTypes: ['text'] } },
     })
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       ...BASE_ARGS,
       message: 'look at this',
       input: IMAGE_INPUT,
@@ -165,7 +165,7 @@ describe('cli-manager multipart mesh dispatch', () => {
     // to a text-only send that drops the image.
     ;(manager as any).deps.getInstanceManager = () => ({ getInstance: () => undefined })
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       ...BASE_ARGS,
       message: 'look at this',
       input: IMAGE_INPUT,
@@ -176,8 +176,8 @@ describe('cli-manager multipart mesh dispatch', () => {
     const { manager, onEvent } = createManager()
     const meshContext = { meshId: 'mesh-1', nodeId: 'node-1', taskId: 'task-1' }
 
-    await manager.handleCliCommand('agent_command', { ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
-    const second = await manager.handleCliCommand('agent_command', { ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
+    await manager.agentCommand({ ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
+    const second = await manager.agentCommand({ ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
 
     // PTY-SUBMIT-IDEMPOTENCY must cover multipart too — a redelivered dispatch of the
     // same task+content is suppressed rather than injected twice.
@@ -189,8 +189,8 @@ describe('cli-manager multipart mesh dispatch', () => {
     const { manager, onEvent } = createManager()
     const meshContext = { meshId: 'mesh-1', nodeId: 'node-1', taskId: 'task-1' }
 
-    await manager.handleCliCommand('agent_command', { ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
-    const second = await manager.handleCliCommand('agent_command', {
+    await manager.agentCommand({ ...BASE_ARGS, input: IMAGE_INPUT, meshContext })
+    const second = await manager.agentCommand({
       ...BASE_ARGS,
       input: { parts: [{ type: 'image', mimeType: 'image/png', data: 'DIFFERENT_IMAGE_BYTES' }] },
       meshContext,
@@ -221,7 +221,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
       sendOutcome: { success: false, error: 'pty is dead' },
     })
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       ...BASE_ARGS,
       input: IMAGE_INPUT,
     })).rejects.toThrow(/pty is dead/)
@@ -240,7 +240,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
       .mockResolvedValue({ success: true, status: 'delivered' })
     const meshContext = { meshId: 'mesh-1', nodeId: 'node-1', taskId: 'task-1' }
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       ...BASE_ARGS, input: IMAGE_INPUT, meshContext,
     })).rejects.toThrow(/pty is dead/)
 
@@ -248,7 +248,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
     // NOT be swallowed by PTY-SUBMIT-IDEMPOTENCY as a duplicate. Without the guard
     // release in the catch, this second dispatch returns duplicateSuppressed and
     // the body is lost for good.
-    const retry = await manager.handleCliCommand('agent_command', {
+    const retry = await manager.agentCommand({
       ...BASE_ARGS, input: IMAGE_INPUT, meshContext,
     })
     expect(retry).not.toMatchObject({ duplicateSuppressed: true })
@@ -261,7 +261,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
       sendOutcome: { success: true, status: 'queued' },
     })
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       ...BASE_ARGS,
       input: IMAGE_INPUT,
     })
@@ -279,7 +279,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
   it('reports a delivered send as submitted', async () => {
     const { manager, recordAcknowledgedUserInput } = createManager()
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       ...BASE_ARGS,
       input: IMAGE_INPUT,
     })
@@ -302,7 +302,7 @@ describe('cli-manager multipart dispatch — send/record symmetry', () => {
       return { success: true, status: 'delivered' }
     })
 
-    await manager.handleCliCommand('agent_command', { ...BASE_ARGS, input: IMAGE_INPUT })
+    await manager.agentCommand({ ...BASE_ARGS, input: IMAGE_INPUT })
 
     expect(resolved).toBe(true)
   })

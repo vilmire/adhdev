@@ -15,6 +15,7 @@ import { buildMeshRefineValidationPlan } from '../router.js';
 import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-submodule-preflight.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
     mesh_init: async (ctx: MedFamilyContext, args: any) => {
@@ -238,3 +239,5 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
         return ctx.startMeshRefineBatchJob(meshId, requestedNodeIds, args);
     },
 };
+
+export const fastForwardSpecs = defineCommandSpecs('med', fastForwardHandlers);

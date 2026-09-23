@@ -8,6 +8,7 @@
  * overrides never rewrite another's.
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
     /**
@@ -125,3 +126,5 @@ export const coordinatorPromptHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const coordinatorPromptSpecs = defineCommandSpecs('low', coordinatorPromptHandlers);

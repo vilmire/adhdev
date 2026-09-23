@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 
-// PTY-SUBMIT-IDEMPOTENCY: the guard in DaemonCliManager.handleCliCommand
+// PTY-SUBMIT-IDEMPOTENCY: the guard in DaemonCliManager.agentCommand
 // ('agent_command' → send_chat) must suppress a machine-driven redelivery of the
 // SAME mesh task (same session + taskId + identical content) BEFORE the second
 // PTY write, while never blocking a legitimate resend (new taskId, same-task
@@ -48,7 +48,7 @@ function createManager(adapterStatus = 'idle') {
 }
 
 function dispatch(manager: DaemonCliManager, opts: { message: string; taskId?: string; force?: boolean }) {
-  return manager.handleCliCommand('agent_command', {
+  return manager.agentCommand({
     targetSessionId: 'session-1',
     agentType: 'hermes-cli',
     cliType: 'hermes-cli',

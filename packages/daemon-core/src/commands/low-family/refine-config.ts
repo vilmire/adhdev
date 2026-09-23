@@ -25,6 +25,7 @@ import {
     MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA,
 } from '../../mesh/worktree-bootstrap-config.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const refineConfigHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_refine_config_schema: async (_ctx: LowFamilyContext, _args: any) => {
@@ -104,3 +105,5 @@ export const refineConfigHandlers: Record<string, LowFamilyHandler> = {
         };
     },
 };
+
+export const refineConfigSpecs = defineCommandSpecs('low', refineConfigHandlers);

@@ -30,6 +30,7 @@
  * cannot (design §4: "워커가 taskId 를 인자로 넣지 않는다").
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const workerReportHandlers: Record<string, LowFamilyHandler> = {
     /**
@@ -141,3 +142,5 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers);

@@ -27,6 +27,7 @@ import { readTerminalRedriveDiagnostics } from '../../mesh/mesh-terminal-redrive
 import { readQuotaCacheWithRevalidate } from '../../quota/index.js';
 import { forceRefreshQuota } from '../../quota/index.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
     set_user_name: async (_ctx: LowFamilyContext, args: any) => {
@@ -316,3 +317,9 @@ export const statusMetaHandlers: Record<string, LowFamilyHandler> = {
         };
     },
 };
+
+export const statusMetaSpecs = defineCommandSpecs('low', statusMetaHandlers, {
+    set_user_name: { invalidates: ['daemon.metadata'] },
+    // get_status_metadata is a READ: it invalidates nothing (ipc-load-audit row 8 —
+    // every internal/mesh/IPC poll used to force a daemon.metadata flush).
+});

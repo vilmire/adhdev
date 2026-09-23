@@ -34,6 +34,7 @@ import {
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { resolveCoordinatorRules, type CoordinatorRulesResolution } from '../../mesh/coordinator-rules.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /**
  * Resolve the repo-read coordinator rules layer for this mesh (best-effort —
@@ -144,6 +145,15 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 const initialThinkingLevel = typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim()
                     ? args.initialThinkingLevel.trim()
                     : null;
+                // Phase E launch provenance: a coordinator's model / thinking value is
+                // an explicit per-launch pick ('user') unless the dialog says it
+                // restored it from the last launch ('remembered'). Forwarded to
+                // launch_cli, which writes the session's launch record.
+                const coordinatorLaunchProvenance = {
+                    launchedBy: 'mesh' as const,
+                    ...(initialModel ? { modelSource: args?.modelSource === 'remembered' ? 'remembered' as const : 'user' as const } : {}),
+                    ...(initialThinkingLevel ? { thinkingLevelSource: args?.thinkingLevelSource === 'remembered' ? 'remembered' as const : 'user' as const } : {}),
+                };
                 // Optional per-launch approval-mode override, picked in the new-coordinator
                 // dialog. Takes precedence over the repo-declared providerDefaults inside
                 // delegatedWorkerAutoApproveSettings, same precedence rule as a delegated
@@ -561,7 +571,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             cliCmdArgs.push(...cliCmdProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                         }
 
-                        const cliCmdLaunch: any = await ctx.deps.cliManager.handleCliCommand('launch_cli', {
+                        const cliCmdLaunch: any = await ctx.execute('launch_cli', {
                             cliType,
                             dir: workspace,
                             cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
@@ -589,7 +599,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             },
                             ...(initialModel ? { initialModel } : {}),
                             ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
-                        });
+                            ...coordinatorLaunchProvenance,
+                        }, 'mesh');
 
                         // R48 inject-then-remove. Spawn was just kicked off above; agy and
                         // gemini-cli read AGENTS.md / GEMINI.md exactly once at startup and
@@ -841,7 +852,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // 3. Launch CLI session via existing cliManager.
                     // Provider-specific prompt injection remains fail-closed: Claude gets
                     // explicit CLI args, while Hermes reads HERMES_EPHEMERAL_SYSTEM_PROMPT.
-                    const launchResult: any = await ctx.deps.cliManager.handleCliCommand('launch_cli', {
+                    const launchResult: any = await ctx.execute('launch_cli', {
                         cliType,
                         dir: workspace,
                         cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
@@ -863,7 +874,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         },
                         ...(initialModel ? { initialModel } : {}),
                         ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
-                    });
+                        ...coordinatorLaunchProvenance,
+                    }, 'mesh');
 
                     // R48 inject-then-remove. See the cli_command branch for context;
                     // same idea: strip the wrapper from disk ~5s after launch so the
@@ -951,3 +963,5 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 }
     },
 };
+
+export const meshCoordinatorLaunchSpecs = defineCommandSpecs('high', meshCoordinatorLaunchHandlers);

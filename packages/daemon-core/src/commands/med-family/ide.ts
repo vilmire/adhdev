@@ -23,6 +23,7 @@ import { detectCLI } from '../../detection/cli-detector.js';
 import { LOG } from '../../logging/logger.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /**
  * IDE launch + CDP connect. Lifted verbatim from the original `launch_ide` switch
@@ -161,3 +162,8 @@ export const ideHandlers: Record<string, MedFamilyHandler> = {
         return { success: true, detectedInfo: results };
     },
 };
+
+export const ideSpecs = defineCommandSpecs('med', ideHandlers, {
+    restart_ide: { blockedDuringMandatoryUpdate: true },
+    launch_ide: { fastFlush: true, blockedDuringMandatoryUpdate: true },
+});

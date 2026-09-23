@@ -11,9 +11,9 @@
  * also needs `launchIde` to break the original `launch_ide`/`restart_*`
  * self-recursion through executeDaemonCommand.
  *
- * Registry dispatch: DaemonCommandRouter.executeDaemonCommand looks up the cmd in
- * medFamilyRegistry BEFORE its switch; a hit returns the handler result, a miss
- * falls through to the remaining switch (and ultimately CommandHandler delegation).
+ * Dispatch: each family file turns its handler table into command specs
+ * (defineCommandSpecs) and the router runs `getDaemonCommandRegistry().get(cmd)`
+ * with the context this family needs.
  */
 import type { CommandRouterDeps, CommandRouterResult, MeshGitProbeCache } from '../router.js';
 import type { RepoMeshSessionCleanupMode } from '../../repo-mesh-types.js';
@@ -181,8 +181,7 @@ export interface MedFamilyContext {
     meshGitProbeCache: MeshGitProbeCache;
 }
 
-export type MedFamilyHandler = (ctx: MedFamilyContext, args: any) => Promise<CommandRouterResult | null>;
+export type MedFamilyHandler = (ctx: MedFamilyContext, args: any) => Promise<CommandRouterResult>;
 
-export type MedFamilyRegistry = Map<string, MedFamilyHandler>;
 
 export type { WorktreeBootstrapState };

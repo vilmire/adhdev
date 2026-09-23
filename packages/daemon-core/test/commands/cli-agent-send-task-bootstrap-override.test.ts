@@ -33,7 +33,7 @@ const NODE_ID = 'node_worktree_bootstrapping'
 const SESSION_ID = 'target-session-1'
 
 function makeCtx(opts: { sessionState?: Record<string, unknown>; worktreeBootstrapStatus?: string }) {
-  const cliManagerHandleCliCommand = vi.fn(async () => ({ success: true, dispatched: true }))
+  const cliManagerAgentCommand = vi.fn(async () => ({ success: true, dispatched: true }))
   const instance = opts.sessionState
     ? { getState: () => opts.sessionState, updateSettings: vi.fn() }
     : undefined
@@ -42,7 +42,7 @@ function makeCtx(opts: { sessionState?: Record<string, unknown>; worktreeBootstr
       instanceManager: {
         getInstance: vi.fn((id: string) => (id === SESSION_ID ? instance : undefined)),
       },
-      cliManager: { handleCliCommand: cliManagerHandleCliCommand },
+      cliManager: { agentCommand: cliManagerAgentCommand },
     },
     getCachedInlineMesh: vi.fn(() => ({
       id: MESH_ID,
@@ -72,7 +72,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
 
     expect(result.success).toBe(false)
     expect(result.code).toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    expect(ctx.deps.cliManager.agentCommand).not.toHaveBeenCalled()
   })
 
   it('refuses (defers) dispatch when the pinned target session is UNREADY (starting)', async () => {
@@ -84,7 +84,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
 
     expect(result.success).toBe(false)
     expect(result.code).toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    expect(ctx.deps.cliManager.agentCommand).not.toHaveBeenCalled()
   })
 
   it('refuses (defers) dispatch when the pinned target session is at a modal (waiting_approval)', async () => {
@@ -96,7 +96,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
 
     expect(result.success).toBe(false)
     expect(result.code).toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    expect(ctx.deps.cliManager.agentCommand).not.toHaveBeenCalled()
   })
 
   it('refuses (defers) dispatch when the pinned target session is generating (busy, not ready)', async () => {
@@ -108,7 +108,7 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
 
     expect(result.success).toBe(false)
     expect(result.code).toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    expect(ctx.deps.cliManager.agentCommand).not.toHaveBeenCalled()
   })
 
   it('OVERRIDES the defer when the pinned target session is independently confirmed idle/ready', async () => {
@@ -118,9 +118,9 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
     })
     const result: any = await cliAgentHandlers.agent_command(ctx, sendTaskArgs())
 
-    // No false block — the dispatch proceeds to cliManager.handleCliCommand.
+    // No false block — the dispatch proceeds to cliManager.agentCommand.
     expect(result.code).not.toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).toHaveBeenCalledWith('agent_command', expect.anything())
+    expect(ctx.deps.cliManager.agentCommand).toHaveBeenCalledWith(expect.anything())
   })
 
   it('regression: dispatch proceeds normally when the node is NOT mid-bootstrap, regardless of session status', async () => {
@@ -130,6 +130,6 @@ describe('BOOTSTRAP-POLICY-CONSISTENCY — mesh_send_task session-aware override
     const result: any = await cliAgentHandlers.agent_command(ctx, sendTaskArgs())
 
     expect(result.code).not.toBe('mesh_node_bootstrap_pending')
-    expect(ctx.deps.cliManager.handleCliCommand).toHaveBeenCalledWith('agent_command', expect.anything())
+    expect(ctx.deps.cliManager.agentCommand).toHaveBeenCalledWith(expect.anything())
   })
 })

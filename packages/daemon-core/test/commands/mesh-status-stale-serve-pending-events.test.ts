@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
-import { DaemonCommandRouter } from '../../src/commands/router'
+import { DaemonCommandRouter, getDaemonCommandRegistry } from '../../src/commands/router'
 
 /**
  * mesh_status stale-serve while coordinator events are pending.
@@ -30,7 +30,7 @@ const STALE_MARKER = 'cached-node-health-marker'
 
 function createRouter(statusInstanceId = 'daemon-local') {
   return new DaemonCommandRouter({
-    commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
+    commandHandler: { handleSpec: vi.fn(async () => ({ success: false })) } as any,
     cliManager: { restoreHostedSessions: vi.fn(async () => {}) } as any,
     cdpManagers: new Map(),
     providerLoader: {} as any,
@@ -112,7 +112,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
       // Never let the real background freshen run during the assertions — it
       // would rewrite the cache we are inspecting. The SWR kick is the ONLY
       // caller of `execute` from this path (we drive the handler directly via
-      // executeDaemonCommand), so stubbing it is safe and also proves the kick
+      // the router's runSpec), so stubbing it is safe and also proves the kick
       // happened.
       const freshenCalls: any[] = []
       vi.spyOn(router, 'execute').mockImplementation(async (...callArgs: any[]) => {
@@ -120,7 +120,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
         return { success: true } as any
       })
 
-      const result: any = await router.executeDaemonCommand('mesh_status', { meshId: mesh.id })
+      const result: any = await (router as any).runSpec(getDaemonCommandRegistry().get('mesh_status')!, { meshId: mesh.id })
       await new Promise(resolve => setTimeout(resolve, 0)) // let the fire-and-forget kick land
 
       // (a) node health came from the cached snapshot — not a live rebuild.
@@ -209,7 +209,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
         queuedAt: Date.now(),
       } as any)
 
-      const result: any = await router.executeDaemonCommand('mesh_status', { meshId: mesh.id })
+      const result: any = await (router as any).runSpec(getDaemonCommandRegistry().get('mesh_status')!, { meshId: mesh.id })
 
       // Served from cache (node health stale)…
       expect(result.staleMarker).toBe(STALE_MARKER)
@@ -257,7 +257,7 @@ describe('mesh_status serves the stale aggregate while coordinator events are pe
         queuedAt: Date.now(),
       } as any)
 
-      const result: any = await router.executeDaemonCommand('mesh_status', { meshId: mesh.id })
+      const result: any = await (router as any).runSpec(getDaemonCommandRegistry().get('mesh_status')!, { meshId: mesh.id })
 
       // The stale snapshot was NOT served: the queueRevision guard is untouched by
       // the fix, so real state changes are always rebuilt from truth. This is the

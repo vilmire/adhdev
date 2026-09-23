@@ -13,6 +13,7 @@ import { readDaemonLogTail, MAX_TAIL_BYTES, MAX_GREP_PATTERN_LENGTH } from '../.
 import { redactLogLines } from '../../logging/log-redactor.js';
 import type { CommandRouterResult } from '../router.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
     get_mesh_node_logs: async (ctx: LowFamilyContext, args: any) => {
@@ -104,3 +105,5 @@ export const meshNodeLogsHandlers: Record<string, LowFamilyHandler> = {
         } as CommandRouterResult;
     },
 };
+
+export const meshNodeLogsSpecs = defineCommandSpecs('low', meshNodeLogsHandlers);

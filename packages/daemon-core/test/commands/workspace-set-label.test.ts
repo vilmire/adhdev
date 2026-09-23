@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { getDaemonCommandRegistry } from '../../src/commands/router.js';
 import { invalidateConfigFieldMemos } from '../../src/config/config.js';
 import { defaultWorkspaceLabel } from '../../src/config/workspaces.js';
 import {
@@ -74,11 +73,9 @@ describe('handleWorkspaceSetLabel', () => {
         expect(handleWorkspaceSetLabel({ label: 'X' })).toEqual({ success: false, error: 'path required' });
     });
 
-    it('handler.ts registers workspace_set_label', () => {
-        const src = readFileSync(
-            fileURLToPath(new URL('../../src/commands/handler.ts', import.meta.url)),
-            'utf8',
-        );
-        expect(src).toMatch(/case 'workspace_set_label':\s*return WorkspaceCmd\.handleWorkspaceSetLabel\(args\)/);
+    it('the command registry dispatches workspace_set_label to handleWorkspaceSetLabel', async () => {
+        const spec = getDaemonCommandRegistry().get('workspace_set_label');
+        expect(spec?.family).toBe('handler');
+        await expect(spec!.run({} as any, { label: 'X' })).resolves.toEqual({ success: false, error: 'path required' });
     });
 });

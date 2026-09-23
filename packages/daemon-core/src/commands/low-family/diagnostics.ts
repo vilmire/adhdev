@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import { getRecentLogs, getCurrentDaemonLogPath } from '../../logging/logger.js';
 import { getRecentDebugTrace } from '../../logging/debug-trace.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
     get_logs: async (_ctx: LowFamilyContext, args: any) => {
@@ -59,3 +60,5 @@ export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
         return { success: true, trace, count: trace.length };
     },
 };
+
+export const diagnosticsSpecs = defineCommandSpecs('low', diagnosticsHandlers);

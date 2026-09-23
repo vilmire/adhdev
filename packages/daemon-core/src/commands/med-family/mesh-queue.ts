@@ -11,6 +11,7 @@ import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { LOG } from '../../logging/logger.js';
 import type { CancelledTaskAssignment } from '../../mesh/mesh-work-queue.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /**
  * CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker a just-cancelled task was
@@ -34,14 +35,15 @@ async function stopCancelledTaskWorker(
         reason: 'mesh_task_cancelled',
     };
     try {
-        const cliManager = ctx.deps.cliManager as any;
+        const cliManager = ctx.deps.cliManager;
         const isLocal = cliManager?.adapters?.has?.(sessionId) === true;
         if (isLocal) {
             if (!stopArgs.cliType) {
-                const localType = cliManager?.adapters?.get?.(sessionId)?.cliType;
+                const localType = cliManager.adapters.get(sessionId)?.cliType;
                 if (localType) stopArgs.cliType = localType;
             }
-            await Promise.resolve(cliManager?.handleCliCommand?.('stop_cli', stopArgs))
+            await Promise.resolve()
+                .then(() => cliManager.stopCli(stopArgs))
                 .catch((e: any) => LOG.warn('MeshQueue', `Local stop of cancelled worker ${sessionId} failed: ${e?.message || e}`));
             return;
         }
@@ -246,3 +248,8 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshQueueSpecs = defineCommandSpecs('med', meshQueueHandlers, {
+    get_mesh_queue: { invalidates: ['daemon.metadata'] },
+    trigger_mesh_queue: { invalidates: ['daemon.metadata'] },
+});

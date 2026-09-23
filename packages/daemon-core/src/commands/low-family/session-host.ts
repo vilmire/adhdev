@@ -11,6 +11,7 @@ import type { HostedCliRuntimeDescriptor } from '../cli-manager.js';
 import { recordDebugTrace } from '../../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
     if (!record || typeof record !== 'object') return null;
@@ -280,3 +281,7 @@ export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
         return { success: true, record };
     },
 };
+
+export const sessionHostSpecs = defineCommandSpecs('low', sessionHostHandlers, {
+    session_host_restart_session: { blockedDuringMandatoryUpdate: true },
+});

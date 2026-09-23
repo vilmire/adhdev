@@ -66,6 +66,7 @@ import {
     MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
 } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
     mesh_status: async (ctx: HighFamilyContext, args: any) => {
@@ -1021,3 +1022,5 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                 }
     },
 };
+
+export const meshStatusSpecs = defineCommandSpecs('high', meshStatusHandlers);

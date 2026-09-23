@@ -9,6 +9,7 @@
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { getConfigDir } from '../../config/config.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 function resolveSpecPathInProviders(
     specPath: string,
@@ -217,3 +218,5 @@ export const specProviderDevHandlers: Record<string, LowFamilyHandler> = {
         }
     },
 };
+
+export const specProviderDevSpecs = defineCommandSpecs('low', specProviderDevHandlers);

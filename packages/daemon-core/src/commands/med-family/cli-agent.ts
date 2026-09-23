@@ -19,6 +19,7 @@ import { isIdleSessionState } from '../../mesh/mesh-queue-assignment.js';
 import { LOG } from '../../logging/logger.js';
 import { readStringValue } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 /**
  * Outcome of the coordinator-mirror refresh: not a mesh worker (no-op), refreshed via the remote
@@ -31,7 +32,7 @@ type MirrorForwardOutcome = 'skipped' | 'refreshed' | 'refreshed-local' | 'faile
 /**
  * MESH-WORKER-PREFS Fix B: when a mesh WORKER session's per-conversation Hide/Mute is toggled
  * (set_conversation_prefs, forwarded to the worker daemon by the coordinator's
- * MESH_FORWARDABLE_SESSION_COMMANDS router), the worker updates its own live-session
+ * router forwardToOwner spec attribute), the worker updates its own live-session
  * userHidden/userMuted but the COORDINATOR's mirror of that session (adhdev-daemon
  * meshOwnedSessions) is only refreshed by a `mesh_forward_event` carrying `sessionSettings`.
  * Without one the mirror stays stale, so when the coordinator re-emits the session metadata to
@@ -142,7 +143,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         // forward and leaving the event in the pending inbox until a read_chat
         // reconcile drains it. If the anchor is genuinely absent here, leave it
         // absent rather than poison the routing.
-        const launchResult = await ctx.deps.cliManager.handleCliCommand('launch_cli', args);
+        const launchResult = await ctx.deps.cliManager.launchCli(args);
         // Bug C fix (part 1): when launching a mesh node worker session, surface
         // bootstrapPending:true if the node's worktree bootstrap is still running.
         // This is informational — the launch is NOT blocked here (blocking is done
@@ -158,7 +159,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
                     : undefined;
                 const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
                 if (bootstrapStatus === 'running') {
-                    return { success: true, ...launchResult, bootstrapPending: true };
+                    return { ...launchResult, success: launchResult.success ?? true, bootstrapPending: true };
                 }
             } catch { /* best-effort — do not fail launch for bootstrap probe errors */ }
         }
@@ -166,13 +167,13 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
     },
 
     stop_cli: async (ctx: MedFamilyContext, args: any) => {
-        return ctx.deps.cliManager.handleCliCommand('stop_cli', args);
+        return ctx.deps.cliManager.stopCli(args);
     },
     set_cli_view_mode: async (ctx: MedFamilyContext, args: any) => {
-        return ctx.deps.cliManager.handleCliCommand('set_cli_view_mode', args);
+        return ctx.deps.cliManager.setCliViewMode(args);
     },
     record_provider_pty: async (ctx: MedFamilyContext, args: any) => {
-        return ctx.deps.cliManager.handleCliCommand('record_provider_pty', args);
+        return ctx.deps.cliManager.recordProviderPty(args);
     },
 
     // Daemon-owned per-session user Mute/Hide. Replaces the old browser-local
@@ -323,7 +324,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
                 }
             } catch { /* best-effort — if the bootstrap probe fails, fall through and dispatch */ }
         }
-        return ctx.deps.cliManager.handleCliCommand('agent_command', args);
+        return ctx.deps.cliManager.agentCommand(args);
     },
 
     // ─── Logs ───
@@ -413,6 +414,26 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         }
 
         // CLI/ACP restart: delegate to CliManager
-        return ctx.deps.cliManager.handleCliCommand('restart_session', args);
+        return ctx.deps.cliManager.restartSession(args);
     },
 };
+
+export const cliAgentSpecs = defineCommandSpecs('med', cliAgentHandlers, {
+    launch_cli: { invalidates: ['daemon.metadata'], fastFlush: true, blockedDuringMandatoryUpdate: true },
+    stop_cli: { invalidates: ['daemon.metadata'], session: { scope: 'optional', aliasSessionId: true } },
+    set_cli_view_mode: { session: { scope: 'optional', aliasSessionId: true } },
+    // Per-session user Hide/Mute lives on the OWNING session's live instance, so a remote
+    // worker session must be forwarded to its daemon (mission 6938892f: otherwise
+    // 'Session not found', the dashboard rolls back and the stale surfaceHidden flickers).
+    // HIDDEN-MUTE-STICK: without an immediate metadata flush the toggle visually reverts
+    // after the web-core 8s optimistic overlay expires.
+    set_conversation_prefs: { invalidates: ['daemon.metadata'], forwardToOwner: true },
+    // A command naming a targetSessionId MUST reach that session wherever it lives, never a
+    // different local session (TASKECHO coordinator self-echo).
+    agent_command: { forwardToOwner: true, session: { scope: 'optional', aliasSessionId: true } },
+    restart_session: {
+        invalidates: ['daemon.metadata'],
+        blockedDuringMandatoryUpdate: true,
+        session: { scope: 'optional', aliasSessionId: true },
+    },
+});

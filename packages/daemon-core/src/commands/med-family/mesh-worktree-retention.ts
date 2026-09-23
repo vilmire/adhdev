@@ -19,6 +19,7 @@
  */
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from '../../mesh/mesh-worktree-retention.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 function buildRetentionDeps(ctx: MedFamilyContext): WorktreeRetentionDeps {
     return {
@@ -74,3 +75,5 @@ export const meshWorktreeRetentionHandlers: Record<string, MedFamilyHandler> = {
         }
     },
 };
+
+export const meshWorktreeRetentionSpecs = defineCommandSpecs('med', meshWorktreeRetentionHandlers);

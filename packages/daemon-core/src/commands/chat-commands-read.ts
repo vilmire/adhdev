@@ -30,6 +30,7 @@ import {
     normalizeReadChatTailLimit,
 } from './read-chat-message-filters.js';
 import { decideCliReadChatSource, supportsCliNativeTranscript } from './read-chat-source-decision.js';
+import { nativeHistoryObservedModel } from '../providers/native-history/observed-model.js';
 // (NATIVE-TURN-SIGNAL) turn-terminal marker selection — pure-move extraction
 // (file-size gate); logic unchanged, see the module header.
 import {
@@ -1307,6 +1308,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 selectedCoverage = nativeHistory?.hasMore ? 'tail' : 'full';
                 if (selectedProviderSessionId && selectedProviderSessionId !== providerSessionId) {
                     adapter.updateRuntimeMeta?.({ providerSessionId: selectedProviderSessionId });
+                }
+                // Phase E: the selected transcript is this session's own, so the model
+                // its usage records name is an OBSERVATION for the launch record
+                // (monotonic on time inside observeLaunchAxis — re-reads cannot roll back).
+                const observedModel = nativeHistoryObservedModel(nativeHistory);
+                if (observedModel) {
+                    const observedSessionId = (typeof args?.targetSessionId === 'string' && args.targetSessionId.trim())
+                        || h.currentSession?.sessionId;
+                    h.ctx.sessionRegistry?.observeLaunchAxis?.(observedSessionId, 'model', observedModel.value, observedModel.at);
                 }
             } else if (supportsNative) {
                 // Native not selected. Two preserved v1 fallbacks before settling

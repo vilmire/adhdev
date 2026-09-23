@@ -55,7 +55,7 @@ function createManager() {
 
 async function launch(manager: DaemonCliManager, settings: Record<string, unknown> | undefined) {
   fs.mkdirSync(workspaceDir, { recursive: true })
-  return manager.handleCliCommand('launch_cli', {
+  return manager.launchCli({
     cliType: 'codex-cli',
     dir: workspaceDir,
     ...(settings ? { settings } : {}),

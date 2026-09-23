@@ -78,6 +78,7 @@ import {
 } from '../../config/state-store.js';
 import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { defineCommandSpecs } from '../command-registry.js';
 
 // Session states that must block a restart: an in-flight turn or a pending
 // approval would be lost when the daemon exits to re-spawn. Mirrors the
@@ -471,3 +472,5 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         return finishHere(await executeRestart(ctx.deps, args, { forced: false }));
     },
 };
+
+export const meshRestartSpecs = defineCommandSpecs('med', meshRestartHandlers);

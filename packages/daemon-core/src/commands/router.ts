@@ -1,37 +1,71 @@
 /**
- * DaemonCommandRouter — Unified command routing for daemon-level commands
+ * DaemonCommandRouter — the single command entry point of the daemon.
  *
- * Unified command routing for daemon-level commands.
- *
- * Routing flow:
- *   1. Daemon-level commands (launch_ide, stop_ide, restart_ide, etc.) → handled here
- *   2. CLI/ACP commands → delegated to cliManager
- *   3. Everything else → delegated to commandHandler.handle()
+ * Every command (dashboard WS/P2P, extension, API, standalone HTTP, local IPC,
+ * mesh-internal) runs through {@link DaemonCommandRouter.execute}, which looks
+ * the name up in the command registry and dispatches by the spec's family:
+ *   - low / med / high → the router family handlers (router-bound context)
+ *   - handler / git    → DaemonCommandHandler (route + session pre-checks)
+ * and then logs the command, runs the post-chat hooks and emits the
+ * dashboard invalidation — once, for every source.
  */
 
 
 import { DaemonCdpManager } from '../cdp/manager.js';
 import { DaemonCommandHandler } from './handler.js';
-import { lowFamilyRegistry } from './low-family/index.js';
-import { medFamilyRegistry } from './med-family/index.js';
 import { launchIde } from './med-family/ide.js';
 import { rearmPersistedDeferredRestarts } from './med-family/mesh-restart.js';
-import type { MedFamilyContext } from './med-family/index.js';
-import { highFamilyRegistry } from './high-family/index.js';
-import type { HighFamilyContext } from './high-family/index.js';
+import type { MedFamilyContext } from './med-family/types.js';
+import type { HighFamilyContext } from './high-family/types.js';
+import type { LowFamilyContext } from './low-family/types.js';
+import {
+    COMMAND_PREFIX_DEFAULTS,
+    CommandRegistry,
+    normalizeCommandSource,
+    type CommandSource,
+    type CommandSpec,
+} from './command-registry.js';
+import { InteractionContextMap } from './interaction-context.js';
+import { handlerSpecs, gitSpecs } from './handler-specs.js';
+import { sessionHostSpecs } from './low-family/session-host.js';
+import { specProviderDevSpecs } from './low-family/spec-providerdev.js';
+import { refineConfigSpecs } from './low-family/refine-config.js';
+import { diagnosticsSpecs } from './low-family/diagnostics.js';
+import { statusMetaSpecs } from './low-family/status-meta.js';
+import { coordinatorPromptSpecs } from './low-family/coordinator-prompt.js';
+import { notificationSpecs } from './low-family/notification.js';
+import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
+import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
+import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
+import { workerReportSpecs } from './low-family/worker-report.js';
+import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
+import { workerPeerContextSpecs } from './low-family/worker-peer-context.js';
+import { transcriptReplicaSpecs } from './low-family/transcript-replica.js';
+import { cliAgentSpecs } from './med-family/cli-agent.js';
+import { ideSpecs } from './med-family/ide.js';
+import { meshCrudSpecs } from './med-family/mesh-crud.js';
+import { meshHostPairingSpecs } from './med-family/mesh-host-pairing.js';
+import { meshQueueSpecs } from './med-family/mesh-queue.js';
+import { fastForwardSpecs } from './med-family/fast-forward.js';
+import { meshRestartSpecs } from './med-family/mesh-restart.js';
+import { meshOnboardingSpecs } from './med-family/mesh-onboarding.js';
+import { meshWorktreeRetentionSpecs } from './med-family/mesh-worktree-retention.js';
+import { meshGraphCommandSpecs } from './med-family/mesh-graph-commands.js';
+import { meshEventsSpecs } from './high-family/mesh-events.js';
+import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
+import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { DaemonCliManager } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { killIdeProcess, isIdeRunning } from '../launch.js';
 import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
+import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { LOG } from '../logging/logger.js';
 import { activateKnownMeshTopics } from '../seqscribe/mesh-dual-write.js';
-import { markTranscriptSessionDirty } from '../seqscribe/transcript-publisher.js';
 import type { PeerHandle } from 'seqscribe';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import { logCommand } from '../logging/command-log.js';
-import type { CommandLogEntry } from '../logging/command-log.js';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import { handleMeshForwardEvent, queuePendingMeshCoordinatorEvent } from '../mesh/mesh-events.js';
@@ -152,6 +186,14 @@ export interface CommandRouterDeps {
     onMeshStateChange?: (meshId: string) => void;
     /** Callback after chat-related commands */
     onPostChatCommand?: () => void;
+    /**
+     * Session lifecycle bus. The router emits one `command_executed` after
+     * EVERY executed command (any source, success or not; not when the command
+     * throws). Hosts flush the invalidated dashboard topics from that event —
+     * the router is the only place that decides which topics a command
+     * invalidates. Without a bus nothing is emitted.
+     */
+    bus?: SessionLifecycleBus | null;
     /** Get a connected CDP manager (for agent stream reset check) */
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
     /** Package name for upgrade detection ('adhdev' or '@adhdev/daemon-standalone') */
@@ -237,83 +279,54 @@ export interface CommandRouterResult {
     [key: string]: unknown;
 }
 
-// Commands that trigger post-chat status updates
-const CHAT_COMMANDS = [
-    'send_chat', 'new_chat', 'switch_chat', 'set_mode',
-    'change_model',
-];
+let daemonCommandRegistry: CommandRegistry | undefined;
 
-// [Z] Session-scoped commands that must be forwarded to the owning REMOTE worker daemon
-// when their target session is not hosted on this coordinator. These are the interactive
-// controlbar / modal mutations the dashboard issues against a specific session:
-//   - invoke_provider_script: controlbar Model/Mode selectors run a provider script
-//   - resolve_action:         approve/reject a modal prompt
-//   - set_mode / change_model / set_thought_level: direct control mutations
-// send_chat is intentionally NOT here — it already reaches the worker by its own route and
-// double-forwarding would be redundant. read_chat is also excluded: it can serve historical
-// transcript data locally and has its own inactive-session fallback in the CommandHandler.
-const MESH_FORWARDABLE_SESSION_COMMANDS = new Set([
-    'invoke_provider_script',
-    'resolve_action',
-    // cancel_queued_chat must reach the OWNING worker: the parked body lives in
-    // that daemon's driver FIFO, and the coordinator has no adapter to claim it
-    // from. Unlike send_chat (excluded above because it already reaches the
-    // worker by its own route), this command has no route of its own.
-    'cancel_queued_chat',
-    'set_mode',
-    'change_model',
-    'set_thought_level',
-    // set_conversation_prefs (per-session user Hide/Mute) is session-scoped: the daemon-owned
-    // userHidden/userMuted lives on the OWNING session's live instance (med-family handler
-    // getInstance → updateSettings). When the target is a REMOTE worker session the coordinator
-    // has no local instance, so without forwarding the handler returns 'Session not found', the
-    // dashboard's useConversationPrefs silently rolls back, and the stale worker surfaceHidden is
-    // re-stamped every snapshot tick (the "restore does nothing + flicker" defect, mission
-    // 6938892f). Forwarding to the owning worker lets it actually clear userHidden/userMuted and
-    // report a fresh surfaceHidden=false — which also resolves the re-stamp flicker at the source.
-    'set_conversation_prefs',
-    // agent_command (send_chat / clear_history / stop) is session-scoped too: a command
-    // explicitly naming a targetSessionId MUST reach that session wherever it lives, never a
-    // different local session. Without forwarding, a misrouted/relayed send_chat for a REMOTE
-    // worker session that reaches the wrong daemon used to fuzzy-inject the task body into that
-    // daemon's own CLI session (TASKECHO coordinator self-echo). Forwarding to the owning daemon
-    // delivers it to the real worker instead. (findAdapter is also fail-closed as the backstop.)
-    'agent_command',
-    // read_terminal (MESH-READ-TERMINAL feature 2): mesh_read_terminal reads the CURRENT
-    // rendered PTY viewport of a specific worker session. The live viewport lives ONLY on the
-    // OWNING session's adapter, so when the target is a REMOTE worker the coordinator has no
-    // local instance and the handler would return 'Session not found' — the exact
-    // remote-worker forwarding gap of mission 6938892f. Forward it to the owning worker daemon
-    // so it reads its own live screen. (It is read-only; unlike the mutations above it makes no
-    // state change, but it is session-scoped identically and must reach the owning daemon.)
-    'read_terminal',
-    // send_keys (MESH-SEND-KEYS feature 3): mesh_send_keys injects a structured key sequence
-    // into a specific worker session's PTY. The live PTY lives ONLY on the OWNING session's
-    // adapter, so a remote-worker target must be forwarded to the owning daemon or the handler
-    // returns 'Session not found' (same class as mission 6938892f). Unlike read_terminal this
-    // MUTATES the worker PTY, so forwarding to the real owner (not a wrong local session) is
-    // doubly important. The daemon re-enforces the destructive-key confirm gate after the forward.
-    'send_keys',
-    // interactive_prompt_response (mesh_answer_question, mission f1d25e11): the coordinator
-    // answers a REMOTE worker's AskUserQuestion (waiting_choice). The answer must reach the
-    // OWNING worker session's live instance — its activeInteractivePrompt (the authoritative
-    // prompt the labels/indexes resolve against) and its adapter.setInteractivePromptResponse
-    // live only there. Without forwarding, the coordinator's local high-family handler returns
-    // 'No running instance for session …' and the question is never answered — the exact
-    // remote-worker forwarding gap of mission 6938892f, now closed for questions too.
-    'interactive_prompt_response',
-]);
+/**
+ * The daemon's command registry. Built on first use: the family modules sit
+ * in an import cycle with this file, so their spec arrays are only complete
+ * once module evaluation has finished.
+ */
+export function getDaemonCommandRegistry(): CommandRegistry {
+    if (!daemonCommandRegistry) {
+        daemonCommandRegistry = CommandRegistry.build([
+            ...sessionHostSpecs,
+            ...specProviderDevSpecs,
+            ...refineConfigSpecs,
+            ...diagnosticsSpecs,
+            ...statusMetaSpecs,
+            ...coordinatorPromptSpecs,
+            ...notificationSpecs,
+            ...daemonLifecycleSpecs,
+            ...meshLedgerSpecs,
+            ...meshNodeLogsSpecs,
+            ...workerReportSpecs,
+            ...workerMailboxSpecs,
+            ...workerPeerContextSpecs,
+            ...transcriptReplicaSpecs,
+            ...cliAgentSpecs,
+            ...ideSpecs,
+            ...meshCrudSpecs,
+            ...meshHostPairingSpecs,
+            ...meshQueueSpecs,
+            ...fastForwardSpecs,
+            ...meshRestartSpecs,
+            ...meshOnboardingSpecs,
+            ...meshWorktreeRetentionSpecs,
+            ...meshGraphCommandSpecs,
+            ...meshEventsSpecs,
+            ...meshCoordinatorLaunchSpecs,
+            ...meshStatusSpecs,
+            ...handlerSpecs,
+            ...gitSpecs,
+        ], COMMAND_PREFIX_DEFAULTS);
+    }
+    return daemonCommandRegistry;
+}
 
-function normalizeCommandSource(source: string): CommandLogEntry['source'] {
-    switch (source) {
-        case 'ws':
-        case 'p2p':
-        case 'ext':
-        case 'api':
-        case 'standalone':
-            return source;
-        default:
-            return 'unknown';
+/** `sessionId` is accepted as an alias for `targetSessionId` on specs that opt in. */
+function applySessionIdAlias(args: Record<string, unknown>): void {
+    if (typeof args.targetSessionId !== 'string' && typeof args.sessionId === 'string' && args.sessionId.trim()) {
+        args.targetSessionId = args.sessionId.trim();
     }
 }
 
@@ -466,6 +479,9 @@ export class DaemonCommandRouter {
      */
     refineBaseLeases = new Map<string, string>();
 
+    /** Recent interaction ids per target session (bounded). */
+    readonly interactionContext = new InteractionContextMap();
+
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
     }
@@ -592,7 +608,7 @@ export class DaemonCommandRouter {
     // ─── Remote mesh-session owner resolution ───────────────────────────
     // Implementation lives in ./router-mesh-session-owner.ts (behavior-preserving
     // code move). resolveRemoteMeshSessionOwnerDaemonId stays public (the [Z]
-    // session-scoped forward in executeDaemonCommand and a unit test call it), so
+    // session-scoped forward in forwardToOwningDaemon and a unit test call it), so
     // it's kept here as a thin delegator.
 
     public resolveRemoteMeshSessionOwnerDaemonId(sessionId: string, ownerNodeIdHint?: string): string | undefined {
@@ -679,7 +695,7 @@ export class DaemonCommandRouter {
      * starters, IDE stop/launch) plus the inline-mesh and git-probe caches. The
      * `launchIde` field closes over the freshly-built context so restart_session /
      * restart_ide invoke the IDE launch directly instead of recursing through
-     * executeDaemonCommand('launch_ide').
+     * the router ('launch_ide').
      */
     private buildMedFamilyContext(): MedFamilyContext {
         const ctx: MedFamilyContext = {
@@ -1094,26 +1110,31 @@ export class DaemonCommandRouter {
         return cleanupMeshSessions(this, args);
     }
     /**
-     * Unified command routing.
-     * Returns result for all commands:
-     *   1. Daemon-level commands (launch_ide, stop_ide, etc.)
-     *   2. CLI commands (launch_cli, stop_cli, agent_command)
-     *   3. DaemonCommandHandler delegation (CDP/agent-stream/file commands)
+     * Execute one command.
+     *
+     * Pipeline: interaction id → mesh-topic reveal → spec lookup (unknown →
+     * `Unknown command`) → `sources` check → `sessionId` alias → forward to the
+     * owning remote daemon (`forwardToOwner`) → run → command log → post-chat
+     * hooks → {@link CommandRouterDeps.onCommandExecuted}.
      *
      * @param cmd Command name
      * @param args Command arguments
-     * @param source Log source ('ws' | 'p2p' | 'standalone' | etc.)
+     * @param source Where the command entered (`ws` | `p2p` | `ext` | `api` |
+     *   `standalone` | `ipc` | `mesh` | `internal`); any other string is logged
+     *   as `unknown`. Defaults to `internal` (an in-process re-entry).
      * @param opts.peerId Transport peer identifier for src:'p2p' commands (the
      *   DataChannel connection id) — recorded in the command audit log so a P2P
      *   command is attributable to a specific connected peer, not just "p2p".
      *   Identifier only; never a username/email.
      */
-    async execute(cmd: string, args: any, source: string = 'unknown', opts?: { peerId?: string }): Promise<CommandRouterResult> {
+    async execute(cmd: string, args: any, source: string = 'internal', opts?: { peerId?: string }): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
         const peerId = typeof opts?.peerId === 'string' && opts.peerId.length > 0 ? opts.peerId : undefined;
+        const spec = getDaemonCommandRegistry().get(cmd);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
-        const interactionId = typeof normalizedArgs._interactionId === 'string' ? normalizedArgs._interactionId : undefined;
+        if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
+        const interactionId = this.interactionContext.record(normalizedArgs);
 
         // REMOTE-MESH-TOPIC-DISCOVERY: meshes.json is machine-local and is
         // normally populated only on the coordinator. A remote daemon therefore
@@ -1140,48 +1161,63 @@ export class DaemonCommandRouter {
         });
 
         try {
-            // 1. Try daemon-level command
-            const daemonResult = await this.executeDaemonCommand(cmd, normalizedArgs);
-            if (daemonResult) {
-                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
-                recordDebugTrace({
-                    interactionId,
-                    category: 'command',
-                    stage: 'completed',
-                    level: daemonResult.success ? 'info' : 'warn',
-                    payload: { cmd, source: logSource, success: daemonResult.success, durationMs: Date.now() - cmdStart },
-                });
-                return daemonResult;
+            let result: CommandRouterResult;
+            let ranLocally = false;
+            if (!spec) {
+                result = await this.deps.commandHandler.rejectUnknown(cmd, normalizedArgs);
+            } else if (spec.sources && !spec.sources.includes(logSource as CommandSource)) {
+                result = {
+                    success: false,
+                    error: `Command '${cmd}' is not accepted from source '${logSource}'`,
+                    code: 'COMMAND_SOURCE_REJECTED',
+                };
+            } else {
+                const forwarded = spec.forwardToOwner ? await this.forwardToOwningDaemon(cmd, normalizedArgs) : null;
+                if (forwarded) {
+                    result = forwarded;
+                } else {
+                    result = await this.runSpec(spec, normalizedArgs);
+                    ranLocally = true;
+                }
             }
-
-            // 2. Delegate to DaemonCommandHandler
-            const handlerResult = await this.deps.commandHandler.handle(cmd, normalizedArgs);
-            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: result.success, durationMs: Date.now() - cmdStart });
             recordDebugTrace({
                 interactionId,
                 category: 'command',
                 stage: 'completed',
-                level: handlerResult.success ? 'info' : 'warn',
-                payload: { cmd, source: logSource, success: handlerResult.success, durationMs: Date.now() - cmdStart },
+                level: result.success ? 'info' : 'warn',
+                payload: { cmd, source: logSource, success: result.success, durationMs: Date.now() - cmdStart },
             });
 
-            // 3. Post-chat command callback
-            if (CHAT_COMMANDS.includes(cmd)) {
-                // §8 unit 3 dirty trigger (design §5.2's "post-chat hook" —
-                // this callback is literally that hook, already firing for
-                // every send_chat/new_chat/switch_chat/set_mode/change_model
-                // regardless of transport). Safe no-op until
-                // configureTranscriptProjection is armed (boot/daemon-
-                // lifecycle.ts) — same pattern as markChatOutputActivity's
-                // call in subscriptions/topic-registry.ts.
-                const dirtySessionId = typeof normalizedArgs?.targetSessionId === 'string'
-                    ? normalizedArgs.targetSessionId.trim()
-                    : '';
-                if (dirtySessionId) markTranscriptSessionDirty(dirtySessionId, 'post_chat');
+            // Post-chat hooks — only when the command ran here (a forwarded
+            // command runs them on the owning daemon).
+            const postChat = ranLocally && spec?.postChat === true;
+            if (postChat) {
+                // The §8 unit 3 transcript "post-chat" dirty trigger is a bus
+                // subscriber on the `command_executed{postChat}` emitted below
+                // (seqscribe/transcript-bus-subscriber.ts, wiring-unification B4).
                 this.deps.onPostChatCommand?.();
             }
 
-            return handlerResult;
+            const targetSessionId = typeof normalizedArgs.targetSessionId === 'string' && normalizedArgs.targetSessionId.trim()
+                ? normalizedArgs.targetSessionId.trim()
+                : undefined;
+            this.deps.bus?.emit({
+                kind: 'command_executed',
+                at: Date.now(),
+                command: cmd,
+                source: logSource,
+                ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+                success: result.success === true,
+                // Spec invalidations, or the prefix rules for an unknown name.
+                invalidates: getDaemonCommandRegistry().invalidationsFor(cmd),
+                // A successful fastFlush command: the host pushes status now and
+                // skips its own daemon.metadata topic flush.
+                fastFlush: spec?.fastFlush === true && result.success === true,
+                postChat,
+                interactionId: interactionId ?? '',
+            });
+            return result;
         } catch (e: any) {
             logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
             recordDebugTrace({
@@ -1195,6 +1231,25 @@ export class DaemonCommandRouter {
         }
     }
 
+    /** Run a spec in the context its family needs. */
+    private async runSpec(spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult> {
+        switch (spec.family) {
+            case 'low': {
+                const ctx: LowFamilyContext = {
+                    deps: this.deps,
+                    getMeshForCommand: this.getMeshForCommand.bind(this),
+                };
+                return (spec as CommandSpec<'low'>).run(ctx, args);
+            }
+            case 'med':
+                return (spec as CommandSpec<'med'>).run(this.buildMedFamilyContext(), args);
+            case 'high':
+                return (spec as CommandSpec<'high'>).run(this.buildHighFamilyContext(), args);
+            case 'handler':
+            case 'git':
+                return this.deps.commandHandler.handleSpec(spec, args);
+        }
+    }
 
     // ─── Refinery job orchestration ─────────────────────────────────────
     // Implementation lives in ./router-refine.ts (behavior-preserving code move).
@@ -1225,96 +1280,50 @@ export class DaemonCommandRouter {
         return startMeshRefineJob(this, meshId, nodeId, args);
     }
 
-    // ─── Daemon-level command core ───────────────────
+    // ─── Remote mesh worker session-scoped command forward ───────────────────
 
     /**
-     * Daemon-level command execution (IDE start/stop/restart, CLI, detect, logs).
-     * Returns null if not handled at this level → caller delegates to CommandHandler.
+     * [Z] Forward a `forwardToOwner` command to the daemon owning its target session.
+     *
+     * Session-scoped commands issued from the dashboard (the controlbar Model/Mode
+     * selectors → invoke_provider_script, and modal approval → resolve_action, plus the
+     * direct set_mode/change_model/set_thought_level mutations) target a session by
+     * targetSessionId. agent_command (send_chat / clear_history / stop) is included for the
+     * same reason: a command naming a session must reach THAT session, never a different
+     * local one. When that session is a mesh worker hosted on a REMOTE daemon, this
+     * coordinator never holds its live instance, so the CommandHandler delegation would
+     * fail with "Live session not found" — or, for agent_command, findAdapter would have
+     * fuzzy-injected the message into the coordinator's own CLI session (TASKECHO). Forward
+     * to the owning worker daemon — the same daemon that already executes send_chat for that
+     * session — so the command acts on the real worker. _meshDirectDispatch prevents
+     * re-forwarding once the call lands on the owning daemon (it then handles the session
+     * locally), and pins a local mesh dispatch to local execution. A locally-hosted worker
+     * (or any session this coordinator owns) resolves to undefined below and runs locally.
+     *
+     * Returns null when the command should run locally.
      */
-    private async executeDaemonCommand(cmd: string, args: any): Promise<CommandRouterResult | null> {
-        // [Z] Remote mesh worker session-scoped command forward.
-        //
-        // Session-scoped commands issued from the dashboard (the controlbar Model/Mode
-        // selectors → invoke_provider_script, and modal approval → resolve_action, plus the
-        // direct set_mode/change_model/set_thought_level mutations) target a session by
-        // targetSessionId. agent_command (send_chat / clear_history / stop) is included for the
-        // same reason: a command naming a session must reach THAT session, never a different
-        // local one. When that session is a mesh worker hosted on a REMOTE daemon, this
-        // coordinator never holds its live instance, so the CommandHandler delegation would
-        // fail with "Live session not found" — or, for agent_command, findAdapter would have
-        // fuzzy-injected the message into the coordinator's own CLI session (TASKECHO). Forward
-        // to the owning worker daemon — the same daemon that already executes send_chat for that
-        // session — so the command acts on the real worker. _meshDirectDispatch prevents
-        // re-forwarding once the call lands on the owning daemon (it then handles the session
-        // locally). A locally-hosted worker (or any session this coordinator owns) resolves to
-        // undefined below and falls through to normal local handling — no regression.
-        if (MESH_FORWARDABLE_SESSION_COMMANDS.has(cmd) && this.deps.dispatchMeshCommand && !args?._meshDirectDispatch) {
-            const targetSessionId = readStringValue(args?.targetSessionId, args?.sessionId, args?.instanceId);
-            if (targetSessionId) {
-                const localInstance = this.deps.instanceManager?.getInstance(targetSessionId);
-                const localRegistry = this.deps.sessionRegistry?.get?.(targetSessionId);
-                if (!localInstance && !localRegistry) {
-                    // CANCEL-STOP-RELAY: pass the authoritative owning nodeId (when the caller
-                    // shipped one in meshContext, e.g. mesh_queue_cancel's assignedNodeId) as the
-                    // deterministic owner-resolution fallback. The session-id cache scan stays the
-                    // primary path; the hint only kicks in when that scan misses (worktree-clone
-                    // worker session not yet in / form-mismatched against the cached snapshot).
-                    const meshContext = readObjectRecord(args?.meshContext);
-                    const ownerNodeIdHint = readStringValue(meshContext.nodeId);
-                    const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
-                    if (ownerDaemonId) {
-                        LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
-                        const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, {
-                            ...(typeof args === 'object' && args !== null ? args as Record<string, unknown> : {}),
-                            _meshDirectDispatch: true,
-                        });
-                        return (forwarded ?? { success: false, error: 'no response from remote worker daemon' }) as CommandRouterResult;
-                    }
-                }
-            }
-        }
-
-        // RF-ROUTER LOW family: low-coupling commands (session-host control, spec
-        // provider-dev, refine/change-impact config) are handled by the registry
-        // before the switch. A hit returns the same CommandRouterResult the inlined
-        // case used to; a miss falls through to the switch unchanged.
-        const lowFamilyHandler = lowFamilyRegistry.get(cmd);
-        if (lowFamilyHandler) {
-            return await lowFamilyHandler({
-                deps: this.deps,
-                getMeshForCommand: this.getMeshForCommand.bind(this),
-            }, args);
-        }
-
-        // RF-ROUTER MED family: medium-coupling commands (CLI/ACP agent, IDE
-        // lifecycle, mesh CRUD, mesh queue, mesh host pairing, fast-forward /
-        // refine convergence) are handled by the registry after the LOW family and
-        // before the switch. Unlike LOW handlers, MED handlers need router-private
-        // collaborators, so the context carries bound methods + the inline-mesh /
-        // git-probe caches + the launchIde helper (which breaks the original
-        // launch_ide ↔ restart_* self-recursion). A hit returns the same
-        // CommandRouterResult the inlined case used to; a miss falls through.
-        const medFamilyHandler = medFamilyRegistry.get(cmd);
-        if (medFamilyHandler) {
-            return await medFamilyHandler(this.buildMedFamilyContext(), args);
-        }
-
-        // RF-ROUTER HIGH family: high-coupling commands (mesh coordinator-event
-        // relay + interactive prompt, mesh coordinator launch, mesh aggregate
-        // status + review inbox) are handled by the registry after the LOW and
-        // MED families and before the (now empty) switch. HIGH handlers reach the
-        // most router-owned state — the aggregate-status memory cache and the
-        // running-refine-job table — so the context carries those plus bound
-        // read/write helpers and the router's own `execute` (the
-        // get_mesh_review_inbox mesh_status re-entry). A hit returns the same
-        // CommandRouterResult the inlined case used to; a miss falls through to
-        // CommandHandler delegation.
-        const highFamilyHandler = highFamilyRegistry.get(cmd);
-        if (highFamilyHandler) {
-            return await highFamilyHandler(this.buildHighFamilyContext(), args);
-        }
-
-        return null; // Not handled at this level → delegate to CommandHandler
+    private async forwardToOwningDaemon(cmd: string, args: Record<string, unknown>): Promise<CommandRouterResult | null> {
+        if (!this.deps.dispatchMeshCommand || args?._meshDirectDispatch) return null;
+        const targetSessionId = readStringValue(args?.targetSessionId, args?.sessionId, args?.instanceId);
+        if (!targetSessionId) return null;
+        const localInstance = this.deps.instanceManager?.getInstance(targetSessionId);
+        const localRegistry = this.deps.sessionRegistry?.get?.(targetSessionId);
+        if (localInstance || localRegistry) return null;
+        // CANCEL-STOP-RELAY: pass the authoritative owning nodeId (when the caller
+        // shipped one in meshContext, e.g. mesh_queue_cancel's assignedNodeId) as the
+        // deterministic owner-resolution fallback. The session-id cache scan stays the
+        // primary path; the hint only kicks in when that scan misses (worktree-clone
+        // worker session not yet in / form-mismatched against the cached snapshot).
+        const meshContext = readObjectRecord(args?.meshContext);
+        const ownerNodeIdHint = readStringValue(meshContext.nodeId);
+        const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
+        if (!ownerDaemonId) return null;
+        LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
+        const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, {
+            ...args,
+            _meshDirectDispatch: true,
+        });
+        return (forwarded ?? { success: false, error: 'no response from remote worker daemon' }) as CommandRouterResult;
     }
 
     /**
@@ -1333,7 +1342,7 @@ export class DaemonCommandRouter {
             if (cdp) {
                 try { cdp.disconnect(); } catch { /* noop */ }
                 this.deps.cdpManagers.delete(key);
-                this.deps.sessionRegistry.unregisterByManagerKey(key);
+                this.deps.sessionRegistry.terminateByManagerKey(key, 'ide_stopped');
                 LOG.info('StopIDE', `CDP disconnected: ${key}`);
             }
         }

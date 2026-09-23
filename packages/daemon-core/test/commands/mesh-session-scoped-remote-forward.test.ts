@@ -18,8 +18,8 @@ function createRouter(opts: {
     sessionRegistryGet?: (id: string) => unknown;
 }) {
     return new DaemonCommandRouter({
-        commandHandler: { handle: async () => ({ success: false, error: 'Live session not found' }) } as any,
-        cliManager: { handleCliCommand: async () => ({ success: false }) } as any,
+        commandHandler: { handleSpec: async () => ({ success: false, error: 'Live session not found' }) } as any,
+        cliManager: { agentCommand: async () => ({ success: false }) } as any,
         cdpManagers: new Map(),
         providerLoader: {} as any,
         instanceManager: {

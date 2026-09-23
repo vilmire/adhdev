@@ -60,7 +60,7 @@ describe('DaemonCliManager agent_command', () => {
   it('accepts send_chat while the runtime is generating and leaves queueing to the adapter', async () => {
     const { manager, sendMessage } = createManager('generating')
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -81,7 +81,7 @@ describe('DaemonCliManager agent_command', () => {
   it('force-sends while generating when requested', async () => {
     const { manager, adapter, sendMessage } = createManager('generating')
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -111,7 +111,7 @@ describe('DaemonCliManager agent_command', () => {
   it('dispatches send_chat when the target runtime is idle', async () => {
     const { manager, sendMessage } = createManager('idle')
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -129,7 +129,7 @@ describe('DaemonCliManager agent_command', () => {
       pending: true,
     })
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -154,7 +154,7 @@ describe('DaemonCliManager agent_command', () => {
         pending: false,
       })
 
-      const resultPromise = manager.handleCliCommand('agent_command', {
+      const resultPromise = manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'hermes-cli',
         cliType: 'hermes-cli',
@@ -182,7 +182,7 @@ describe('DaemonCliManager agent_command', () => {
       ],
     })
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -200,7 +200,7 @@ describe('DaemonCliManager agent_command', () => {
       pending: false,
     })
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       targetSessionId: 'session-1',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -219,7 +219,7 @@ describe('DaemonCliManager agent_command', () => {
   it('fails closed: an explicit targetSessionId that is not hosted locally is NOT fuzzy-redirected', async () => {
     const { manager, sendMessage } = createManager('idle')
 
-    await expect(manager.handleCliCommand('agent_command', {
+    await expect(manager.agentCommand({
       targetSessionId: 'session-on-another-daemon',
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
@@ -236,7 +236,7 @@ describe('DaemonCliManager agent_command', () => {
   it('still fuzzy-matches the single same-cliType session when no targetSessionId is given', async () => {
     const { manager, sendMessage } = createManager('idle')
 
-    const result = await manager.handleCliCommand('agent_command', {
+    const result = await manager.agentCommand({
       agentType: 'hermes-cli',
       cliType: 'hermes-cli',
       action: 'send_chat',
@@ -257,7 +257,7 @@ describe('DaemonCliManager agent_command', () => {
     it('interrupt_capability reports unsupported, not an exception', async () => {
       const { manager } = createManager('generating', { noInterruptSupport: true })
 
-      const result = await manager.handleCliCommand('agent_command', {
+      const result = await manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'hermes-cli',
         cliType: 'hermes-cli',
@@ -275,7 +275,7 @@ describe('DaemonCliManager agent_command', () => {
     it('interrupt_turn is REJECTED, not silently treated as success', async () => {
       const { manager, sendMessage } = createManager('generating', { noInterruptSupport: true })
 
-      const result = await manager.handleCliCommand('agent_command', {
+      const result = await manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'hermes-cli',
         cliType: 'hermes-cli',
@@ -295,7 +295,7 @@ describe('DaemonCliManager agent_command', () => {
 
   // ── interrupt_turn on an adapter that DOES support it — dispatch wiring only.
   // Capability resolution/PTY-write correctness itself is covered by
-  // cli-adapter-interrupt-turn.test.ts; this locks that handleCliCommand routes
+  // cli-adapter-interrupt-turn.test.ts; this locks that agentCommand routes
   // the adapter's outcome through verbatim rather than reshaping or swallowing it.
   describe('interrupt_capability / interrupt_turn on an adapter that supports it', () => {
     function createInterruptibleManager(outcome:
@@ -346,7 +346,7 @@ describe('DaemonCliManager agent_command', () => {
         ok: true, keyName: 'Ctrl-C', bytes: 1, confidence: 'proven',
       })
 
-      const result = await manager.handleCliCommand('agent_command', {
+      const result = await manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'claude-cli',
         cliType: 'claude-cli',
@@ -367,7 +367,7 @@ describe('DaemonCliManager agent_command', () => {
         ok: false, reason: 'not_busy', message: 'Session is idle; nothing to interrupt.',
       })
 
-      const result = await manager.handleCliCommand('agent_command', {
+      const result = await manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'claude-cli',
         cliType: 'claude-cli',
@@ -383,7 +383,7 @@ describe('DaemonCliManager agent_command', () => {
         ok: true, keyName: 'Ctrl-C', bytes: 1, confidence: 'declared',
       })
 
-      const result = await manager.handleCliCommand('agent_command', {
+      const result = await manager.agentCommand({
         targetSessionId: 'session-1',
         agentType: 'claude-cli',
         cliType: 'claude-cli',
