@@ -105,14 +105,15 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         // ★ SEND-NOW-AGENT-QUEUE. The flag routes the daemon to the split write
         // that the CLI's own input queue takes, leaving the turn in flight
         // running. Without it the daemon would simply park the body again.
-        expect(payload).toMatchObject({ message: 'urgent: stop', sendNow: true })
-        // ★ And it must NOT ask to interrupt. The two flags mean materially
-        // different things — one preserves the running turn, the other destroys
-        // it — so sending both would let the daemon pick the outcome in which
+        expect(payload).toMatchObject({ policy: { mode: 'send_now' }, input: { textFallback: 'urgent: stop' } })
+        // ★ And it must NOT ask to interrupt: `policy` is ONE closed mode, and the
+        // legacy booleans (sendNow / interrupt / force) are no longer sent at all
+        // (Phase D3 cut-compat) — so the daemon cannot pick the outcome in which
         // the owner loses the answer they are waiting for.
+        expect(payload.sendNow).toBeUndefined()
         expect(payload.interrupt).toBeUndefined()
-        // ★ Nor the retired force-inject spelling, which aliases to interrupt.
         expect(payload.force).toBeUndefined()
+        expect(payload.message).toBeUndefined()
         h.unmount()
     })
 
@@ -251,9 +252,8 @@ describe('SEND-NOW — handleSendNowQueued', () => {
  * (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Send
  * now must resubmit the SAME `OutboundMessage` — same `messageId`, same body
  * — under a different policy, not a fresh logical send. Both facts are wire
- * fields now: `messageId` (identity) and `policy` (admission mode), carried
- * alongside the legacy `sendNow`/`interrupt` booleans the current daemon
- * still reads (see `buildSendChatPayload`'s doc comment for why both exist).
+ * fields: `messageId` (identity) and `policy` (admission mode) — the legacy
+ * `sendNow`/`interrupt` booleans are no longer sent (Phase D3 cut-compat).
  *
  * 5-step gate check performed on this test (revert-and-confirm-red, per the
  * repo's gate-authoring checklist): reverting `handleSendNowQueued`'s
@@ -324,7 +324,7 @@ describe('SEND-NOW — same OutboundMessage identity and body (Phase D-web)', ()
         h.unmount()
     })
 
-    it('a text-only parked entry resubmits with no `input` field (no spurious envelope wrapper)', async () => {
+    it('a text-only parked entry resubmits the same one-part text envelope (the wire is always `input`)', async () => {
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
@@ -332,7 +332,11 @@ describe('SEND-NOW — same OutboundMessage identity and body (Phase D-web)', ()
 
         await act(async () => { await h.get().handleSendNowQueued() })
 
-        expect((send.mock.calls[1][2] as any).input).toBeUndefined()
+        const original = (send.mock.calls[0][2] as any).input
+        const resend = (send.mock.calls[1][2] as any).input
+        expect(resend).toEqual({ parts: [{ type: 'text', text: 'urgent: stop' }], textFallback: 'urgent: stop' })
+        expect(resend).toEqual(original)
+        expect((send.mock.calls[1][2] as any).message).toBeUndefined()
         h.unmount()
     })
 })

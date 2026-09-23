@@ -196,8 +196,9 @@ describe('CANCEL — per-item withdrawal', () => {
 
         const cancelCall = send.mock.calls.find(call => call[1] === 'cancel_queued_chat')
         expect(cancelCall).toBeTruthy()
-        // Content-keyed: the body identifies the FIFO entry to claim.
-        expect(cancelCall![2]).toMatchObject({ message: 'withdraw this' })
+        // (Phase D) Id-keyed: the bubble's messageId names the FIFO entry to
+        // withdraw; the body rides along only for a pre-D daemon's fallback.
+        expect(cancelCall![2]).toMatchObject({ messageId: target.id, message: 'withdraw this' })
     })
 
     it('★ clears the durable store too, so a restart cannot resurrect it', async () => {
@@ -435,11 +436,11 @@ describe('SEND-NOW stays correct with several entries queued', () => {
         send.mockResolvedValueOnce({ success: true, sent: true, queuedWithAgent: true })
         await act(async () => { await h.get().handleSendNowQueued(second.id) })
 
-        // SEND-NOW-AGENT-QUEUE: the press routes through `sendNow`, not
+        // SEND-NOW-AGENT-QUEUE: the press routes through policy send_now, not
         // `interrupt`. What this test pins is which ENTRY was acted on.
-        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.sendNow === true)
+        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.policy?.mode === 'send_now')
         expect(sendNowCall).toBeTruthy()
-        expect(sendNowCall![2].message).toBe('second')
+        expect(sendNowCall![2].input.textFallback).toBe('second')
     })
 
     it('falls back to the oldest queued entry when no id is given (legacy callers)', async () => {
@@ -450,8 +451,8 @@ describe('SEND-NOW stays correct with several entries queued', () => {
         send.mockResolvedValueOnce({ success: true, sent: true, queuedWithAgent: true })
         await act(async () => { await h.get().handleSendNowQueued() })
 
-        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.sendNow === true)
-        expect(sendNowCall![2].message).toBe('oldest')
+        const sendNowCall = send.mock.calls.reverse().find(call => call[1] === 'send_chat' && call[2]?.policy?.mode === 'send_now')
+        expect(sendNowCall![2].input.textFallback).toBe('oldest')
     })
 })
 
