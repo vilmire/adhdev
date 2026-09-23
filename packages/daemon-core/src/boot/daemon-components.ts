@@ -81,6 +81,8 @@ export interface DaemonBootConfig {
          * this path").
          */
         resolveTranscriptPeer?: (ownerDaemonId: string) => Promise<PeerHandle | null> | PeerHandle | null;
+        /** G2 transcript-transport `zombieRecovered` counter (cloud-only; the P2P router owns it). */
+        zombieRecovered?: () => number | null;
     };
     /**
      * Restore hosted CLI runtimes inside `startLoops`, after every bus subscriber

@@ -14,6 +14,7 @@ import type { SeqscribeStatusSummary } from '../shared-types.js';
 import type { SeqscribeRuntime } from './runtime.js';
 import { summarizeSeqscribeStats } from './stats.js';
 import { transcriptParityCounters } from './transcript-parity.js';
+import { transcriptTransportSelectionCounters } from './transcript-transport-selection.js';
 
 export interface LocalSeqscribeStatsInputs {
     /**
@@ -25,6 +26,18 @@ export interface LocalSeqscribeStatsInputs {
      * module may not value-import it. Null/absent → no turn ledger booted.
      */
     meshDelivery?: () => Record<string, number> | null;
+    /**
+     * G2 transcript-transport `zombieRecovered` count — sourced from
+     * `packages/daemon-cloud/src/daemon-p2p/data-channel-router.ts`
+     * `getZombiePeerRecoveryCount()`. Injected for the same reason
+     * `meshDelivery` is: the dial/redial loop it counts is daemon-cloud's,
+     * outside daemon-core, and this module may not value-import it
+     * (Key Conventions, CLAUDE.md: "Core never imports cloud/standalone").
+     * Null/absent (e.g. standalone, which has no P2P dial loop to zombie) →
+     * reported as 0, matching `replicaSelected`/`legacySelected`'s own
+     * zero-when-nothing-reported default rather than omitting the block.
+     */
+    zombieRecovered?: () => number | null;
 }
 
 export function buildLocalSeqscribeStats(
@@ -91,6 +104,16 @@ export function buildLocalSeqscribeStats(
             // comparison). Only three bucketed fields survive into the cloud
             // frame; the rest land on the local-only transcriptParityDetail.
             transcriptParity,
+            // G2 transport-selection + zombie-recovery — local-only, see
+            // `stats.ts`'s doc comment on `transcriptTransportSelection` for
+            // why. `replicaSelected`/`legacySelected` are this process's own
+            // counters (transcript-transport-selection.ts, fed by the
+            // `report_transcript_transport` low-family command);
+            // `zombieRecovered` is injected from daemon-cloud, see above.
+            transcriptTransportSelection: {
+                ...transcriptTransportSelectionCounters(),
+                zombieRecovered: inputs.zombieRecovered?.() ?? 0,
+            },
         });
     } catch (error) {
         LOG.warn(

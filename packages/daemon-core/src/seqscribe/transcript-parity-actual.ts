@@ -66,17 +66,22 @@ export function readLocalTranscriptParityActual(
 
     let entries: readonly TranscriptRevisionRow[];
     try {
-        // ★ NO `headOrder` PIN HERE — deliberately, and unlike `mesh-parity.ts`.
+        // ★ NO `headOrder` PIN HERE.
         //
         // `headOrder` is `store.maxOrderUpTo()`, a query over the durable
-        // `sq_log` table. `session.*.transcript` is a RING topic (`ring(500)`,
-        // topics.ts), and seqscribe's `persist()` writes NO `sq_log` row for a
-        // ring topic — its live entries are the in-memory tail and nothing else
-        // (`log.ts` `persist`, "ring/none: no durable log row"). So `headOrder`
-        // on this topic returns `null` unconditionally, and pinning to it made
-        // this reader return `{status:'missing'}` on EVERY call — a parity
-        // comparison that could never once succeed. `mesh-parity.ts` keeps its
-        // pin correctly: `mesh.*.events` is `retention: full`.
+        // `sq_log` table. G2b (2026-09-24) switched `session.*.transcript`
+        // from `ring(500)` to `full` retention (`topics.ts`), so this topic
+        // now DOES write durable `sq_log` rows and `headOrder` would no
+        // longer return `null` unconditionally the way it did under `ring`.
+        // This reader still does not pin to it, for the second, independent
+        // reason below (a topic-wide head is not necessarily this writer's
+        // own seq) — that reasoning was always true and does not depend on
+        // retention mode. Revisiting a `headOrder` pin here is future work,
+        // not required by the retention switch: the writer-form scan below
+        // is correct as-is under `full` retention too (`core.ringTail` is
+        // simply an empty no-op merge for a non-ring topic; the durable
+        // `entriesRange`/`archivedEntries` sources now actually hold rows
+        // instead of being unconditionally empty).
         //
         // A second, independent reason not to reuse that pin: `headOrder`
         // returns the TOPIC-WIDE max `Order`, whose `.seq` belongs to whichever

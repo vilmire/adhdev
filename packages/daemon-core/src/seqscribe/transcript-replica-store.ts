@@ -12,16 +12,25 @@
  * §8 unit 1) — this class owns the SUB lifecycle and the per-key assembler
  * instance, not a second copy of that bookkeeping.
  *
- * ── SUB is the only legal ring read here too ────────────────────────────────
- * Same constraint `fleet-status-peer-view.ts`'s header documents for
- * `fleet.status`: `session.*.transcript` is `retention: {mode:'ring'}`, and
- * the library rejects durable `onEntry` registration on ring/none retention
- * with ERR_MISUSE. So `ensureSubscription` below uses
- * `handle.node.subscribe(peer, {view:'tail', params:{topic}})` exclusively —
- * never `onEntry`, never `scanEntries` (that is
+ * ── SUB is the only legal live read here ────────────────────────────────────
+ * `session.*.transcript` is `retention: {mode:'full'}`, `replication:
+ * 'subscribe-only'` (G2b, landed 2026-09-24 — see `topics.ts
+ * #sessionTranscriptPolicy` for the full account). `ensureSubscription`
+ * below uses `handle.node.subscribe(peer, {view:'tail', params:{topic}})`
+ * exclusively — never `onEntry`, never `scanEntries` (that is
  * transcript-parity-actual.ts's job, and ONLY for parity/audit — design §3.3:
  * "live consumer는 built-in tail SUB/SNAP/DELTA를 사용하고 scanEntries로
- * polling하지 않는다").
+ * polling하지 않는다"). The vendor's `tail` view serves `full`+
+ * `subscribe-only` topics with the identical SNAP/DELTA/Row wire shape it
+ * always used for `ring` topics (`FULL_TAIL_DEFAULT = 500` in `subs.ts`
+ * mirrors the old ring size), so the code below needed no change for the
+ * retention switch — only this comment did. One behavioral note: because a
+ * `full`-retention topic keeps every row (bounded only by `writer-gc.ts`'s
+ * periodic prune, not by structural eviction), a SNAP `reset:true` can now
+ * arrive here either from a genuinely fresh subscription/reconnect (as
+ * before) OR after a prune has moved the tail window's floor — this class
+ * does not need to distinguish the two: either way the correct reaction is
+ * "resync from the SNAP", which is what it already does.
  *
  * ── Row payload is a JSON STRING here, unlike scanEntries' LogEntry ────────
  * SUB rows are seqscribe's flat `Row` shape (`Record<string, string | number |
