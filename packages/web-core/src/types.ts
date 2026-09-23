@@ -10,6 +10,7 @@ import type {
     DetectedIdeInfo,
     WorkspaceEntry,
     AvailableProviderInfo,
+    ProviderCategory,
     ProviderResumeCapability,
     SessionEntry,
     SessionTransport,
@@ -21,14 +22,23 @@ import type {
 } from '@adhdev/daemon-core';
 import type { InteractivePrompt } from '@adhdev/daemon-core';
 
+// Wiring-unification A4: daemon-core's dist/index.d.ts (what web-core resolves
+// types from) predates the LaunchableProviderCategory export, so it is derived
+// locally from the already-exported ProviderCategory rather than imported
+// directly. Once daemon-core is rebuilt and re-exports it, this can switch to
+// a plain `import type { LaunchableProviderCategory } from '@adhdev/daemon-core'`.
+type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
+
+// The one session status vocabulary (wiring-unification A1) — from the
+// dependency-free mesh-shared leaf, never from the daemon-core barrel.
+export type { SessionStatus, RecentSessionBucket } from '@adhdev/mesh-shared';
+
 // Re-export shared types for convenience
 export type {
     SessionEntry,
     SessionTransport,
     RuntimeWriteOwner,
     RuntimeAttachedClient,
-    SessionStatus,
-    RecentSessionBucket,
     TerminalBackendStatus,
     AgentSessionStream,
     ReadChatCursor,
@@ -56,7 +66,7 @@ export interface RecentLaunchEntry {
     id: string;
     providerType: string;
     providerName: string;
-    kind: 'ide' | 'cli' | 'acp';
+    kind: LaunchableProviderCategory;
     providerSessionId?: string;
     title?: string;
     workspace?: string | null;
@@ -207,7 +217,7 @@ export interface BaseDaemonData {
     /** Last activity timestamp used by daemon unread calculations */
     lastUpdated?: number;
     /** Inbox categorization bucket */
-    inboxBucket?: import('@adhdev/daemon-core').RecentSessionBucket;
+    inboxBucket?: import('@adhdev/mesh-shared').RecentSessionBucket;
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;

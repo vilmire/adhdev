@@ -20,11 +20,13 @@ export interface RuntimeAttachedClient {
     readOnly: boolean;
 }
 
-/** Session status union (used by SessionEntry.status, legacy recent-launch metadata, etc.) */
-export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'finalizing' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
-
-/** Inbox bucket categories for recent sessions */
-export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
+/**
+ * Session status union (SessionEntry.status, recent-launch metadata, …) and the
+ * recent-session inbox bucket. Wiring-unification A1: the canonical declaration
+ * is mesh-shared's `session-status.ts` (SESSION_STATUSES / RECENT_SESSION_BUCKETS);
+ * this file only re-exports it so existing import paths keep resolving.
+ */
+export type { SessionStatus, RecentSessionBucket } from '@adhdev/mesh-shared';
 
 /** Terminal backend status */
 export interface TerminalBackendStatus {

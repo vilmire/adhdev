@@ -11,6 +11,7 @@
 
 import * as path from 'path';
 import { createRequire } from 'node:module';
+import { isWorkingStatus } from '@adhdev/mesh-shared';
 import type { ProviderModule } from './contracts.js';
 
 export function isIdleStatus(value: unknown): boolean {
@@ -30,8 +31,14 @@ export function hasNonEmptyCliModalButtons(activeModal: unknown): boolean {
     return Array.isArray(buttons) && buttons.some((button) => String(button || '').trim().length > 0);
 }
 
+/**
+ * "The agent still owns the turn" — class `working` of the one status
+ * vocabulary (`generating`/`finalizing`/`starting` plus the raw spellings the
+ * stall monitor and legacy adapters emit, e.g. `streaming`, `no_progress`,
+ * `long_generating`). Kept under its historical name for the existing callers.
+ */
 export function isCliGeneratingLikeStatus(status: unknown): boolean {
-    return status === 'generating' || status === 'streaming' || status === 'no_progress' || status === 'long_generating' || status === 'starting';
+    return isWorkingStatus(status);
 }
 
 /**

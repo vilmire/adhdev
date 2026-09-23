@@ -210,9 +210,14 @@ export type TerminalBackendStatus = _TerminalBackendStatus;
 export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // Type aliases — rollup-dts cannot bundle re-exported type aliases at all.
-// Canonical definition lives in shared-types-extra.ts — keep these in sync.
+// Canonical definition is @adhdev/mesh-shared session-status.ts (SESSION_STATUSES /
+// RECENT_SESSION_BUCKETS); test/session-status-type-fork.test.ts pins these hand
+// copies to it member-for-member.
 export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'waiting_choice' | 'finalizing' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
 export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
+
+// Wiring-unification A4: the one ProviderCategory (web-core imports it type-only).
+export type { ProviderCategory, LaunchableProviderCategory } from './providers/contracts.js';
 
 // ── Core Interface ──
 export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
@@ -341,6 +346,8 @@ export { recordSessionUsage, readSessionUsage, summarizeMeshUsage, getUsageDir, 
 // publication in ListTools so a flag-off mesh coordinator sees the exact
 // pre-E-T0 tool count (design's "게이트 off ⇒ byte-identical" promise, §7.1).
 export { isWorkerMcpEnabled } from './mesh/worker-mcp-isolation.js';
+// Wiring-unification F1: the one seam that turns an authored task into a worker-delivered body.
+export { resolveDispatchMessage, type DispatchableTask } from './mesh/worker-handoff-dispatch.js';
 export type { MeshSessionUsage, MeshUsageSummary, EvictedUsageRollup } from './mesh/mesh-usage-store.js';
 export { foldUsageRecords, sumSessionUsage, makeUsage, totalTokens, isEmptyUsage, readTokenCount } from './shared/usage-normalize.js';
 export type { NativeUsage, NativeUsageRecord, NativeUsageMode, SessionUsageTotals } from './shared/usage-normalize.js';
@@ -352,7 +359,7 @@ export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence }
 export type { AnyLedgerSlice, MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, terminalizeSiblingDispatch, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
+export { summarizeQueueEntryInputForView, enqueueTask, enqueueTaskGraph, MESH_TASK_GRAPH_MAX_TASKS, recordDirectDispatchTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats, getMeshQueueRevision, normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, resolveConvergeRequiredTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags, insertDirectDispatch, getActiveDirectDispatches, updateDirectDispatchStatus, terminalizeSiblingDispatch, cleanupTerminalDirectDispatches, markStaleDirectDispatches, deleteDirectDispatchesByTaskId, recordMeshToolCall, assertNoDependencyCycle, hasPendingDependents, describeTaskDependencyState, taskDependenciesSatisfied, normalizeMeshTaskPriority, meshTaskPriorityRank, resolveNotBefore, meshTaskNotBeforeReady, MESH_TASK_PRIORITIES, NOT_BEFORE_RELATIVE_THRESHOLD_MS } from './mesh/mesh-work-queue.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
@@ -545,7 +552,7 @@ export { resolveMeshSurfacedSessionPreview, readMeshCompletionSummary, isWeakCom
 
 // ── Mesh Delivery Policy ──
 export { resolveDeliveryDecision, createSessionDelivery, updateSessionDeliveryStatus, getActiveSessionDeliveries, markSessionDeliveriesTerminal, normalizeDeliveryMode, DEFAULT_DELIVERY_MODE } from './mesh/mesh-delivery-policy.js';
-export type { MeshTaskDeliveryMode } from './mesh/mesh-delivery-policy.js';
+export type { MeshDeliveryMode } from './mesh/mesh-delivery-policy.js';
 export { resolveInterruptCapability, CTRL_C, ESC, STOP_CONTROL_ID } from './providers/spec/interrupt-capability.js';
 export type { InterruptCapability, InterruptUnsupportedReason } from './providers/spec/interrupt-capability.js';
 export type { MeshSessionDeliveryStatus, MeshSessionDeliveryKind, MeshDeliveryDecision, MeshDeliveryPolicyResult, SessionDeliveryRecord } from './mesh/mesh-delivery-policy.js';

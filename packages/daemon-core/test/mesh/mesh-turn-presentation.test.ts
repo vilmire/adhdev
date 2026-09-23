@@ -171,10 +171,11 @@ describe('Kimi/Codex mid-turn point samples cannot override the projection', () 
             expect(p.stage).toBe('generating');
         }
         const metrics = getTurnPresentationMetrics();
-        // normalizeManagedStatus collapses no_progress/long_generating to idle,
-        // so all three point samples record the same deterministic divergence.
-        expect(metrics.shadowDivergences['legacy_idle_turn_active|read_chat|kimi-cli']).toBe(3);
-        expect(metrics.shadowAgreements).toBe(0);
+        // normalizeManagedStatus folds no_progress/long_generating to generating
+        // through the shared alias table (wiring-unification A1), so those two
+        // samples AGREE with the projection; only the raw idle sample diverges.
+        expect(metrics.shadowDivergences['legacy_idle_turn_active|read_chat|kimi-cli']).toBe(1);
+        expect(metrics.shadowAgreements).toBe(2);
     });
 });
 

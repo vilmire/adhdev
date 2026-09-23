@@ -70,6 +70,7 @@
  * interruptTurn() refuses it with reason 'not_busy' before anything is written.
  */
 
+import { isBusyStatus, isDeadStatus } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 
 /** How long to wait for the FSM to observe busy→idle after the stop key lands.
@@ -145,12 +146,13 @@ export const INTERRUPT_SECOND_PRESS_MIN_BUSY_DWELL_MS = 260;
  *  the normal path releases it explicitly in a `finally`. */
 export const DRAIN_RESERVE_SLACK_MS = 5_000;
 
-/** Statuses that mean the session is not free to accept a new turn. */
-const BUSY_STATUSES = new Set(['generating', 'starting', 'waiting_approval', 'waiting_choice']);
-/** Statuses that mean the session is GONE — not merely busy, and never going to
- *  accept anything again.
+/** "Busy" here is `isBusyStatus` from the one status vocabulary — the session
+ *  is not free to accept a new turn (class `working` or `blocked`).
  *
- *  ★ These are not busy, so a plain "not busy ⇒ idle" test reports a dead
+ *  "Dead" is `isDeadStatus` — the session is GONE, not merely busy, and never
+ *  going to accept anything again.
+ *
+ *  ★ Dead statuses are not busy, so a plain "not busy ⇒ idle" test reports a dead
  *  session as a successful interrupt. That produced the self-contradictory live
  *  pair in the 10:25 trace: `status: generating → stopped` at 10:25:48.060,
  *  then `interrupt(Ctrl-C, proven) → idle → requeued` at 10:25:48.389 — the wait
@@ -160,8 +162,9 @@ const BUSY_STATUSES = new Set(['generating', 'starting', 'waiting_approval', 'wa
  *  dashboard was told the steer had succeeded.
  *
  *  Distinguishing them makes the report honest: `session_exited` says plainly
- *  that nothing was delivered and a retry needs a live session. */
-const TERMINAL_STATUSES = new Set(['stopped', 'error', 'exited', 'crashed']);
+ *  that nothing was delivered and a retry needs a live session. The dead check
+ *  therefore runs BEFORE the busy check in waitForIdleAfterInterrupt, and a dead
+ *  session is never reported as "successfully interrupted". */
 
 export type InterruptAndDeliverOutcome =
     | {
@@ -279,14 +282,12 @@ export async function waitForIdleAfterInterrupt(
     for (;;) {
         const status = readStatus(adapter);
         // A session that EXITED is not idle. Reporting it as idle is what let a
-        // send go into a dead adapter — see TERMINAL_STATUSES.
-        // A session that EXITED is not idle. Reporting it as idle is what let a
-        // send go into a dead adapter — see TERMINAL_STATUSES.
-        if (status !== undefined && TERMINAL_STATUSES.has(status)) {
+        // send go into a dead adapter — see the isDeadStatus note above.
+        if (status !== undefined && isDeadStatus(status)) {
             options?.onTerminalStatus?.(status);
             return false;
         }
-        if (status !== undefined && !BUSY_STATUSES.has(status)) return true;
+        if (status !== undefined && !isBusyStatus(status)) return true;
         const now = Date.now();
         // Track the busy run. `undefined` (adapter threw / no state yet) is not
         // a busy confirmation, so it resets the run rather than extending it.

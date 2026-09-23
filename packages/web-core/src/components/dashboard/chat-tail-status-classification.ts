@@ -13,22 +13,32 @@
  * substituting one for another.
  */
 
+import {
+  SESSION_STATUS_ALIASES,
+  isBusyStatus,
+  isWorkingStatus,
+  statusesOfClass,
+} from '@adhdev/mesh-shared'
+
 /**
- * Statuses that keep a session warm/active. Crucially includes
- * `waiting_approval` and `waiting_choice`, which `isBusyChatTailStatus` excludes.
+ * Statuses that keep a session warm/active: every spelling of class `working`
+ * or `blocked` (i.e. `isBusyStatus`). Crucially includes `waiting_approval` and
+ * `waiting_choice`, which `isBusyChatTailStatus` excludes. Derived from the one
+ * status vocabulary; kept as a Set for the `.has()` call in the controller.
  */
-export const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
-  'generating',
-  'waiting_approval',
-  'waiting_choice',
-  'starting',
-  'streaming',
-  'working',
+export const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES: ReadonlySet<string> = new Set<string>([
+  ...statusesOfClass('working'),
+  ...statusesOfClass('blocked'),
+  ...Object.keys(SESSION_STATUS_ALIASES).filter((alias) => isBusyStatus(alias)),
 ])
 
+/**
+ * "The agent is still producing" — class `working` only. A session parked on
+ * an approval or a question picker is NOT busy in this sense (see
+ * shouldGuardTailShrinkForStatus for the wider gate).
+ */
 export function isBusyChatTailStatus(status: unknown): boolean {
-  const value = typeof status === 'string' ? status.toLowerCase() : ''
-  return value === 'generating' || value === 'no_progress' || value === 'long_generating' || value === 'streaming' || value === 'working' || value === 'starting'
+  return isWorkingStatus(status)
 }
 
 /**
@@ -79,6 +89,5 @@ export function isTerminalChatTailStatusEvent(event: unknown): boolean {
  * its existing busy semantics untouched.
  */
 export function shouldGuardTailShrinkForStatus(status: unknown): boolean {
-  const value = typeof status === 'string' ? status.trim().toLowerCase() : ''
-  return WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES.has(value)
+  return isBusyStatus(status)
 }

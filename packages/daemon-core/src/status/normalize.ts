@@ -1,27 +1,18 @@
+import { normalizeSessionStatus, type SessionStatus } from '@adhdev/mesh-shared';
 import type { ActiveChatData } from '../providers/provider-instance.js';
 import type { SessionActiveChatData } from '../shared-types.js';
 
-export type ManagedStatus =
-    | 'idle'
-    | 'generating'
-    | 'waiting_approval'
-    | 'waiting_choice'
-    | 'finalizing'
-    | 'error'
-    | 'stopped'
-    | 'starting'
-    | 'panel_hidden'
-    | 'not_monitored'
-    | 'disconnected';
-
-const WORKING_STATUSES = new Set([
-    'generating',
-    'streaming',
-    'loading',
-    'loading_reference',
-    'thinking',
-    'active',
-]);
+/**
+ * Wiring-unification A1: `ManagedStatus` IS the one session status vocabulary.
+ * The raw spellings this normalizer used to fold by hand (`streaming`,
+ * `loading`, `thinking`, …) now come from mesh-shared's alias table, so the
+ * server (`daemon-status.ts`), web-core and daemon-core all normalize
+ * identically. This file is a separate tsup entry consumed by packages/server;
+ * mesh-shared is a dependency-free leaf that daemon-core bundles inline
+ * (`noExternal`) and the server already value-imports, so the value import is
+ * safe on every consumer.
+ */
+export type ManagedStatus = SessionStatus;
 
 export interface NormalizeActiveChatOptions {
     includeMessages?: boolean;
@@ -151,21 +142,12 @@ export function normalizeManagedStatus(
 ): ManagedStatus {
     if (hasApprovalButtons(opts?.activeModal)) return 'waiting_approval';
 
-    const normalized = String(status || 'idle').trim().toLowerCase();
-    if (normalized === 'waiting_approval') return 'waiting_approval';
-    if (normalized === 'waiting_choice') return 'waiting_choice';
-    // Stage 6: `finalizing` is a first-class managed status (the turn reducer is
-    // reconciling/committing terminal evidence). It must NOT collapse to `idle` —
-    // every surface keeps showing finalizing until the reducer commits terminal.
-    if (normalized === 'finalizing') return 'finalizing';
-    if (WORKING_STATUSES.has(normalized)) return 'generating';
-    if (normalized === 'error') return 'error';
-    if (normalized === 'stopped') return 'stopped';
-    if (normalized === 'starting') return 'starting';
-    if (normalized === 'panel_hidden') return 'panel_hidden';
-    if (normalized === 'not_monitored') return 'not_monitored';
-    if (normalized === 'disconnected') return 'disconnected';
-    return 'idle';
+    // Canonical members pass through verbatim — in particular `finalizing` is a
+    // first-class managed status (the turn reducer is reconciling/committing
+    // terminal evidence) and must NOT collapse to `idle`. Raw provider/status-lane
+    // spellings fold through the alias table; anything unrecognised is `idle`,
+    // exactly as before.
+    return normalizeSessionStatus(status) ?? 'idle';
 }
 
 export function isManagedStatusWorking(status?: string | null): boolean {
