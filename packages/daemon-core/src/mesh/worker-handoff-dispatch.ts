@@ -34,6 +34,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { isWorkerMcpEnabled } from './worker-mcp-isolation.js';
 import { composeTaskDispatchBody } from './worker-handoff-notes.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
+import { getMeshMission } from './mesh-missions.js';
 
 function readNonEmpty(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -127,11 +128,23 @@ export function resolveDispatchMessage(
         }
     }
 
+    // H2 (mission brief): render the owning mission's brief above the footer
+    // marker, when the task belongs to a mission that carries one. Best-effort —
+    // a lookup failure must not sink an otherwise-sound dispatch, same discipline
+    // as the handoff-note enclosure above.
+    let missionBrief: import('@adhdev/mesh-shared').MissionBrief | undefined;
+    if (task.missionId) {
+        try {
+            missionBrief = getMeshMission(meshId, task.missionId)?.brief;
+        } catch { /* best-effort — see comment above */ }
+    }
+
     return appendWorkerProtocolFooter(body, {
         taskId: task.id,
         ...(readNonEmpty(task.taskMode) ? { taskMode: task.taskMode!.trim() } : {}),
         ...(readNonEmpty(task.difficulty) ? { difficulty: task.difficulty!.trim() } : {}),
         ...(isTaskReadonly(task) ? { readonly: true } : {}),
         ...(enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {}),
+        ...(missionBrief ? { missionBrief } : {}),
     });
 }

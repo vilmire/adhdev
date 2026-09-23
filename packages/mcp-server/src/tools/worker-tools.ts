@@ -288,6 +288,14 @@ export async function reportCompletion(
         ? `Completion already recorded for task ${result.taskId} — this repeat was accepted as a duplicate.`
         : `Completion recorded for task ${result.taskId} (${result.outcome}).`,
     ];
+    if (result.ownedPathsMismatch) {
+      const { undeclaredTouched } = result.ownedPathsMismatch;
+      lines.push(
+        `Note: this task declared owned_paths, and touched_files included ${undeclaredTouched.length} `
+        + `file(s) outside that declaration (${undeclaredTouched.slice(0, 5).join(', ')}${undeclaredTouched.length > 5 ? ', …' : ''}). `
+        + 'This is informational — your completion was still recorded.',
+      );
+    }
     if (result.handoffNoteRecorded) {
       lines.push('Handoff note stored — it will be delivered to related future tasks automatically.');
     } else if (result.handoffNoteError) {

@@ -14,7 +14,7 @@ import { migrateTurnLedgerV3, type TurnLedgerMigrationV3Report } from './turn-le
 import { LocalRecordStore } from './mesh-local-record-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, findOwnershipConflicts, type InFlightOwnership } from '@adhdev/mesh-shared';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { selectClaimCandidate, type MeshClaimRefusal, type MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -787,6 +787,34 @@ export class MeshRuntimeStore {
                 return !nodeBusy;
             };
 
+            // H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-
+            // wiring-unification.md §7c): a write (non-readonly) candidate whose declared
+            // owned_paths overlaps another currently-ASSIGNED write task's declared
+            // owned_paths, scoped to the same daemon machine (assignedRowsForDaemon —
+            // daemonNodeIds when the caller resolved sibling worktree nodes, else this
+            // single node, mirroring the provider/slot cap scope above), is refused.
+            // Opt-in only: a candidate OR an in-flight task with no declaration never
+            // conflicts (findOwnershipConflicts' own backward-compat contract). This is a
+            // PATH-level refinement of the existing NODE-level nodeConflictAllows gate
+            // above — it catches the case that gate cannot: two DIFFERENT nodes (e.g. two
+            // worktrees of the same branch) racing on the same file, which nodeConflictAllows
+            // never sees because it only compares a candidate against ITS OWN node's busy bit.
+            const inFlightOwnership: InFlightOwnership[] = this.assignedRowsForDaemon(meshId, nodeId, opts?.daemonNodeIds)
+                .map((row): InFlightOwnership | null => {
+                    try {
+                        const parsed = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                        if (!parsed.ownedPaths || isTaskReadonly(parsed)) return null;
+                        return { taskId: parsed.id, paths: parsed.ownedPaths };
+                    } catch { return null; }
+                })
+                .filter((v): v is InFlightOwnership => v !== null);
+            const ownedPathsConflictFor = (candidate: MeshWorkQueueEntry) =>
+                candidate.ownedPaths && !isTaskReadonly(candidate)
+                    ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership)
+                    : [];
+            const ownedPathsAllows = (candidate: MeshWorkQueueEntry): boolean =>
+                ownedPathsConflictFor(candidate).length === 0;
+
             // G7: delayed execution. A task with a notBefore in the future is held pending
             // (skipped as a claim candidate) until the wall clock passes it. Fail-open on an
             // unparseable timestamp (meshTaskNotBeforeReady) so a bad value never strands work.
@@ -873,9 +901,21 @@ export class MeshRuntimeStore {
                 { reason: 'difficulty_floor_unmet', test: difficultyAllows },
                 { reason: 'parallel_cap_reached', test: parallelCapsAllow },
                 { reason: 'node_busy_with_active_assignment', test: nodeConflictAllows },
+                { reason: 'owned_paths_conflict', test: ownedPathsAllows },
             ]);
             if (!selected.entry) {
                 if (!candidates.length) return refuse('no_pending_candidates');
+                // H1: for an owned_paths_conflict refusal, name the specific conflicting
+                // task id(s) and path(s) rather than the generic "closest candidate"
+                // detail — that is exactly the diagnostic the design doc asks for
+                // ("refused ... instead of silently racing it").
+                if (selected.reason === 'owned_paths_conflict' && selected.deepest) {
+                    const conflicts = ownedPathsConflictFor(selected.deepest);
+                    const detail = conflicts.length
+                        ? `owned_paths overlap with task(s): ${conflicts.map(c => `${c.taskId} [${c.overlappingPaths.join(', ')}]`).join('; ')}`
+                        : undefined;
+                    return refuse('owned_paths_conflict', detail, selected.deepest);
+                }
                 return refuse(selected.reason, selected.deepest
                     ? `closest candidate ${selected.deepest.id} of ${candidates.length}` : undefined,
                     selected.deepest);
@@ -1150,6 +1190,11 @@ export class MeshRuntimeStore {
         goal?: string;
         status?: string;
         source?: string;
+        /** H2: JSON-encoded MissionBrief, or `null` to explicitly clear it. `undefined`
+         *  (the field omitted) preserves whatever brief the mission already had — same
+         *  write-once-unless-supplied convention as `source`, but via COALESCE on the
+         *  RAW incoming value (null is a legitimate "clear" input, unlike source). */
+        briefJson?: string | null;
     }): void {
         const now = new Date().toISOString();
         // `source` is a write-once provenance tag: on conflict we only overwrite it
@@ -1159,14 +1204,20 @@ export class MeshRuntimeStore {
         // close_candidate_emitted_at is deliberately NOT in the UPDATE set: the G3
         // idempotency marker is owned solely by setMissionCloseCandidateEmittedAt, so a
         // title/goal/status upsert here never clears or overwrites it.
+        // brief_json: `undefined` means "caller did not touch the brief" (preserve
+        // existing), so it binds SQL NULL for the bind param and the UPDATE SET
+        // COALESCEs against the existing column — same idea as `source` but the
+        // caller signals "preserve" with `undefined` specifically (not with `null`,
+        // which is a real "clear the brief" input) via the ternary below.
         this.db.prepare(
-            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, brief_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  goal = excluded.goal,
                  status = excluded.status,
                  source = COALESCE(excluded.source, mesh_missions.source),
+                 brief_json = CASE WHEN ? THEN mesh_missions.brief_json ELSE excluded.brief_json END,
                  updated_at = excluded.updated_at`
         ).run(
             mission.id,
@@ -1175,21 +1226,23 @@ export class MeshRuntimeStore {
             mission.goal ?? '',
             mission.status ?? 'active',
             mission.source ?? null,
+            mission.briefJson === undefined ? null : mission.briefJson,
             now,
             now,
+            mission.briefJson === undefined ? 1 : 0,
         );
         this.maybeCheckpointWal();
     }
 
-    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; createdAt: string; updatedAt: string } | null {
+    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string } | null {
         const row = this.db.prepare(
             'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
         ).get(meshId, missionId) as Record<string, string> | undefined;
         if (!row) return null;
-        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
-    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; createdAt: string; updatedAt: string }> {
+    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string }> {
         let rows: Array<Record<string, string>>;
         if (statuses?.length) {
             const placeholders = statuses.map(() => '?').join(', ');
@@ -1201,7 +1254,7 @@ export class MeshRuntimeStore {
                 'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
             ).all(meshId) as Array<Record<string, string>>;
         }
-        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
+        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
     }
 
     /**

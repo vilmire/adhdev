@@ -183,6 +183,103 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
     }
   })
 
+  it('owned_paths_conflict — a second code_change task overlapping an in-flight declaration on a SIBLING node is refused', () => {
+    // H1 (path ownership). Deliberately TWO DIFFERENT nodes (not the same node twice —
+    // that would just hit node_busy_with_active_assignment first): this is exactly the
+    // gap the design doc calls out — node_busy only ever compares a candidate against
+    // ITS OWN node's busy bit, so two worktrees of the same daemon racing on the same
+    // file were previously invisible to every existing gate.
+    const meshId = `mesh_refuse_ownedpaths_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      const first = enqueueTask(meshId, 'first work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/mesh/mesh-work-queue.ts'],
+      })
+      const claimed = claim(meshId, { daemonNodeIds })
+      expect(claimed.task?.id).toBe(first.id)
+
+      // Second task on a DIFFERENT node, overlapping subtree declaration.
+      const second = enqueueTask(meshId, 'second work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/mesh/**'],
+      })
+      const { task, refusal } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('owned_paths_conflict')
+      // Names the conflicting task id — not just "closest candidate N of M" prose.
+      expect(refusal.detail).toContain(first.id)
+      void second
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths non-overlapping declarations on sibling nodes both claim fine', () => {
+    const meshId = `mesh_refuse_ownedpaths_ok_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      const first = enqueueTask(meshId, 'first work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/a.ts'],
+      })
+      expect(claim(meshId, { daemonNodeIds }).task?.id).toBe(first.id)
+
+      const second = enqueueTask(meshId, 'second work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/b.ts'],
+      })
+      const { task, refusal } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
+      expect(task?.id).toBe(second.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths_conflict is OPT-IN — a candidate or in-flight task with no declaration never conflicts', () => {
+    const meshId = `mesh_refuse_ownedpaths_optin_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      // First task declares ownership; second declares NONE — must not conflict even
+      // though (hypothetically) they could touch the same files. Absent declaration
+      // performs no overlap check, by design (backward compat).
+      const first = enqueueTask(meshId, 'first work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/shared.ts'],
+      })
+      expect(claim(meshId, { daemonNodeIds }).task?.id).toBe(first.id)
+
+      const second = enqueueTask(meshId, 'second work', { taskMode: 'code_change', difficulty: 'medium' })
+      const { task } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
+      expect(task?.id).toBe(second.id)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('owned_paths overlap on a live_debug_readonly (non-write) task never refuses — H1 only gates writes', () => {
+    const meshId = `mesh_refuse_ownedpaths_readonly_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      const first = enqueueTask(meshId, 'first work', {
+        taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/shared.ts'],
+      })
+      expect(claim(meshId, { daemonNodeIds }).task?.id).toBe(first.id)
+
+      // A read-only candidate overlapping the in-flight write's declaration must still
+      // claim fine — read-only tasks are exempt from the node-busy family of gates and
+      // owned_paths_conflict is a refinement of that same family.
+      const second = enqueueTask(meshId, 'second work', {
+        taskMode: 'live_debug_readonly', difficulty: 'medium', ownedPaths: ['src/shared.ts'],
+      })
+      const { task, refusal } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
+      expect(task?.id).toBe(second.id)
+      expect(refusal.reason).toBeUndefined()
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
   it('reasons are DISTINCT — no two gates collapse onto the same string', () => {
     const meshId = `mesh_refuse_distinct_${randomUUID().slice(0, 8)}`
     try {

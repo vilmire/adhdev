@@ -20,6 +20,7 @@ import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/wor
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
+import { upsertMeshMission } from '../../src/mesh/mesh-missions'
 
 // Own mesh id per test: the handoff index (`turn_events`) is process-wide and
 // INSERT OR IGNORE — see worker-handoff-notes.test.ts.
@@ -146,5 +147,57 @@ describe('resolveDispatchMessage — worker protocol footer', () => {
     const task = { id: 'task_plain', message: 'Do it.', taskMode: 'code_change', difficulty: 'easy' }
     resolveDispatchMessage(task, MESH, null)
     expect(task.message).toBe('Do it.')
+  })
+
+  // H2 (mission brief, wiring-unification Phase H — docs/design/2026-09-23-
+  // wiring-unification.md §7c): renderWorkerProtocolFooter renders the owning
+  // mission's brief ABOVE the marker line (mesh-shared worker-protocol.ts).
+  describe('mission brief (H2)', () => {
+    afterEach(() => { MeshRuntimeStore.getInstance().clearMissionsForMesh(MESH) })
+
+    it('renders the mission brief above the footer marker when the task belongs to a briefed mission', () => {
+      const mission = upsertMeshMission(MESH, {
+        title: 'Briefed mission',
+        brief: { goal: 'Land the wiring cleanly', constraints: ['do not touch providers/**'] },
+      })
+      const body = resolveDispatchMessage(
+        { id: 'task_briefed', message: 'Do the assigned slice.', taskMode: 'code_change', difficulty: 'medium', missionId: mission.id },
+        MESH,
+        null,
+      )
+      const markerAt = body.indexOf(WORKER_PROTOCOL_FOOTER_MARKER)
+      const briefAt = body.indexOf('Mission goal: Land the wiring cleanly')
+      expect(briefAt).toBeGreaterThan(-1)
+      // Brief renders ABOVE the marker — the module doc's deliberate placement.
+      expect(briefAt).toBeLessThan(markerAt)
+      expect(body).toContain('do not touch providers/**')
+    })
+
+    it('renders no brief block when the task has no missionId', () => {
+      const body = resolveDispatchMessage(
+        { id: 'task_no_mission', message: 'Standalone task.', taskMode: 'code_change', difficulty: 'medium' },
+        MESH,
+        null,
+      )
+      expect(body).not.toContain('Mission goal:')
+    })
+
+    it('renders no brief block when the mission exists but carries no brief', () => {
+      const mission = upsertMeshMission(MESH, { title: 'Briefless mission' })
+      const body = resolveDispatchMessage(
+        { id: 'task_briefless', message: 'Task under a briefless mission.', taskMode: 'code_change', difficulty: 'medium', missionId: mission.id },
+        MESH,
+        null,
+      )
+      expect(body).not.toContain('Mission goal:')
+    })
+
+    it('a lookup failure (unknown missionId) degrades to no brief rather than throwing', () => {
+      expect(() => resolveDispatchMessage(
+        { id: 'task_bad_mission', message: 'Task under a nonexistent mission.', taskMode: 'code_change', difficulty: 'medium', missionId: 'mission_does_not_exist' },
+        MESH,
+        null,
+      )).not.toThrow()
+    })
   })
 })

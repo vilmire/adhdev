@@ -81,7 +81,7 @@ afterEach(() => {
  */
 function seedQueueRow(
   ids: ReturnType<typeof freshIds>,
-  opts: { readonly: boolean },
+  opts: { readonly: boolean; ownedPaths?: { paths: { path: string; subtree: boolean }[] } },
 ): string {
   const now = new Date().toISOString()
   const sessionId = `session-${ids.taskId}`
@@ -93,6 +93,7 @@ function seedQueueRow(
     assignedSessionId: sessionId,
     readonly: opts.readonly,
     ...(opts.readonly ? { taskMode: 'live_debug_readonly' as const } : {}),
+    ...(opts.ownedPaths ? { ownedPaths: opts.ownedPaths } : {}),
     createdAt: now,
     updatedAt: now,
   } as any)
@@ -398,5 +399,62 @@ describe('F6 — touchedFiles is validated against the task mode', () => {
     expect(result.accepted).toBe(false)
     expect(result.refusal).toBe('invalid_for_task_mode')
     expect(result.detail).toMatch(/non-empty/)
+  })
+})
+
+// H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-
+// wiring-unification.md §7c): report_completion.touchedFiles compared against
+// the task's declared owned_paths. Evidence, never a rejection.
+describe('H1 — ownedPathsMismatch is surfaced, never rejected', () => {
+  it('reports ownedPathsMismatch when touchedFiles escapes the declared owned_paths', () => {
+    const ids = freshIds()
+    const attemptId = seedQueueRow(ids, {
+      readonly: false,
+      ownedPaths: { paths: [{ path: 'src/a.ts', subtree: false }] },
+    })
+    __setHandoffNoteSinkForTests(() => {})
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
+    const result: any = acceptWorkerCompletionReport({ token: token.token }, {
+      outcome: 'completed',
+      summary: 'Touched more than I declared.',
+      touchedFiles: ['src/a.ts', 'src/b.ts'],
+    })
+    // The completion still commits — mismatch is evidence, not a validation failure.
+    expect(result.accepted).toBe(true)
+    expect(result.ownedPathsMismatch).toBeDefined()
+    expect(result.ownedPathsMismatch.declared).toEqual(['src/a.ts'])
+    expect(result.ownedPathsMismatch.undeclaredTouched).toEqual(['src/b.ts'])
+    expect(result.ownedPathsMismatch.touched).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+
+  it('omits ownedPathsMismatch when every touched file is covered', () => {
+    const ids = freshIds()
+    const attemptId = seedQueueRow(ids, {
+      readonly: false,
+      ownedPaths: { paths: [{ path: 'src/mesh', subtree: true }] },
+    })
+    __setHandoffNoteSinkForTests(() => {})
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
+    const result: any = acceptWorkerCompletionReport({ token: token.token }, {
+      outcome: 'completed',
+      summary: 'Stayed inside my declared subtree.',
+      touchedFiles: ['src/mesh/a.ts', 'src/mesh/b.ts'],
+    })
+    expect(result.accepted).toBe(true)
+    expect(result.ownedPathsMismatch).toBeUndefined()
+  })
+
+  it('omits ownedPathsMismatch when the task declared no owned_paths (opt-out)', () => {
+    const ids = freshIds()
+    const attemptId = seedQueueRow(ids, { readonly: false })
+    __setHandoffNoteSinkForTests(() => {})
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId })
+    const result: any = acceptWorkerCompletionReport({ token: token.token }, {
+      outcome: 'completed',
+      summary: 'No declaration was made, so nothing to compare against.',
+      touchedFiles: ['src/anywhere.ts'],
+    })
+    expect(result.accepted).toBe(true)
+    expect(result.ownedPathsMismatch).toBeUndefined()
   })
 })

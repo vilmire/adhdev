@@ -28,11 +28,13 @@ import {
     isMeshTaskPriority,
     MESH_TASK_DIFFICULTIES,
     normalizeNodeCapabilitySlots,
+    normalizeOwnedPaths,
     type MeshTaskDifficulty,
     type MeshTaskMode,
     type MeshTaskPriority,
     type MeshTaskStatus,
     type MeshTerminalTaskStatus,
+    type OwnedPathsDeclaration,
 } from '@adhdev/mesh-shared';
 // Type-only: the queue carries the multipart input envelope a task was dispatched
 // with. A VALUE import across the mesh → providers boundary is forbidden
@@ -428,6 +430,17 @@ export interface MeshWorkQueueEntry {
      * → daemon-level routing fallback (backward + version-skew safe).
      */
     sourceCoordinatorSessionId?: string;
+    /**
+     * H1 (wiring-unification Phase H, path ownership — docs/design/2026-09-23-wiring-unification.md
+     * §7c): the caller-declared set of repo-relative paths/subtrees this `code_change` task
+     * will touch, normalized by `normalizeOwnedPaths` (@adhdev/mesh-shared) at enqueue time.
+     * Rides in the payload JSON (no column) — same pattern as `requiredTags`/`missionId`.
+     * Absent/empty = opt-out: no overlap check is performed for this task (backward compat,
+     * mesh-shared's own doc). Read at claim time (claimNextQueueTask) to refuse a `code_change`
+     * claim that overlaps another in-flight task's declaration on the same node, and at
+     * report_completion time to compare against the worker's reported `touchedFiles`.
+     */
+    ownedPaths?: OwnedPathsDeclaration;
     createdAt: string;
     updatedAt: string;
 }
@@ -571,6 +584,13 @@ export interface MeshEnqueueTaskOptions {
     /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
     readonly?: boolean;
     requiredTags?: string[];
+    /**
+     * H1 (path ownership): repo-relative paths/subtrees this `code_change` task will
+     * touch, e.g. `['src/foo.ts', 'src/mesh/**']`. Raw caller input — normalized via
+     * `normalizeOwnedPaths` inside enqueueTask. Optional and opt-in (see
+     * MeshWorkQueueEntry.ownedPaths).
+     */
+    ownedPaths?: string[];
     /** M1: tasks that must complete before this one is claimable. */
     dependsOn?: string[];
     /** G6: task-level scheduling priority ('low' | 'normal' | 'high'). Absent → 'normal'. */
@@ -633,6 +653,11 @@ export function enqueueTask(
     }
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
+    // H1: normalize path ownership once, at the single enqueue choke point (mirrors
+    // dependsOn above). An absent/empty declaration stores nothing on the entry —
+    // opt-in only, per normalizeOwnedPaths's own backward-compat contract.
+    const ownedPathsResult = normalizeOwnedPaths(opts?.ownedPaths);
+    const ownedPaths = ownedPathsResult.declaration.paths.length > 0 ? ownedPathsResult.declaration : undefined;
     const priority = normalizeMeshTaskPriority(opts?.priority);
     const notBefore = resolveNotBefore(opts?.notBefore);
     const maxRetries = typeof opts?.maxRetries === 'number' && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
@@ -694,6 +719,7 @@ export function enqueueTask(
             targetNodeId: opts?.targetNodeId,
             targetSessionId: opts?.targetSessionId,
             requiredTags: resolvedRequiredTags,
+            ...(ownedPaths ? { ownedPaths } : {}),
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             // G6: only persist a non-default priority so legacy/normal rows stay minimal.
             ...(priority && priority !== 'normal' ? { priority } : {}),
@@ -858,6 +884,14 @@ export function recordDirectDispatchTask(
          * downgrade its own retry to no-difficulty routing. Required — see the guard below.
          */
         difficulty?: string;
+        /**
+         * H1 (path ownership): same raw-input shape and semantics as
+         * {@link MeshEnqueueTaskOptions.ownedPaths}. A direct dispatch already targets a
+         * specific node/session, so this is recorded for the same code_change overlap
+         * check against OTHER in-flight tasks (queued or direct) sharing this node, and
+         * for the report_completion.touched_files comparison — never a routing input.
+         */
+        ownedPaths?: string[];
         dispatchedAt?: string;
         /**
          * C2/C-W7: the attempt this dispatch delivers, opened by the CALLER before
@@ -897,6 +931,9 @@ export function recordDirectDispatchTask(
         throw new Error(buildMeshTaskModeViolationError(modeValidation));
     }
     const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : new Date().toISOString();
+    // H1: same normalization as enqueueTask (see the note on MeshEnqueueTaskOptions.ownedPaths).
+    const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
+    const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : undefined;
     return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
             // Already materialised (e.g. retry of the same dispatch) — leave it untouched.
@@ -910,6 +947,7 @@ export function recordDirectDispatchTask(
             ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
+            ...(directOwnedPaths ? { ownedPaths: directOwnedPaths } : {}),
             difficulty: taskDifficulty,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
             ...(opts.assignedSessionId ? { targetSessionId: opts.assignedSessionId, assignedSessionId: opts.assignedSessionId } : {}),

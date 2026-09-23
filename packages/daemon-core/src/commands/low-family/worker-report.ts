@@ -109,6 +109,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                 // ★F5: carries WHY a note did not persist, so the tool layer can
                 // warn instead of printing the unconditional "stored" line.
                 ...(result.handoffNoteError ? { handoffNoteError: result.handoffNoteError } : {}),
+                // H1 (path ownership): present only on a declared-but-mismatched report —
+                // evidence, never a refusal (the completion above already committed).
+                ...(result.ownedPathsMismatch ? { ownedPathsMismatch: result.ownedPathsMismatch } : {}),
             };
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
