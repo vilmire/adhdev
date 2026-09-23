@@ -27,7 +27,7 @@ function upsertSessionTarget(sessionRegistry: SessionRegistry, target: SessionRu
     ) {
         return;
     }
-    sessionRegistry.register(target);
+    sessionRegistry.register(target, 'reconcile');
 }
 
 /**
