@@ -3783,6 +3783,9 @@ var require_dist = __commonJS({
         },
         releaseWrite(payload) {
           return transport.request("release_write", payload);
+        },
+        getSnapshot(sessionId, sinceSeq) {
+          return transport.request("get_snapshot", { sessionId, sinceSeq });
         }
       };
     }
@@ -40074,14 +40077,18 @@ var require_dist3 = __commonJS({
       HOLD_REASONS: () => HOLD_REASONS2,
       LIVENESS_RESULTS: () => LIVENESS_RESULTS2,
       MAGI_RAW_ANSWER_CAP: () => MAGI_RAW_ANSWER_CAP3,
+      MAX_MESH_RECORD_STRING: () => MAX_MESH_RECORD_STRING,
+      MAX_OWNED_PATHS: () => MAX_OWNED_PATHS,
       MESH_CHUNK_KIND: () => MESH_CHUNK_KIND,
       MESH_CHUNK_PAYLOAD_CHARS: () => MESH_CHUNK_PAYLOAD_CHARS,
       MESH_CHUNK_TTL_MS: () => MESH_CHUNK_TTL_MS,
       MESH_DELIVERY_MODES: () => MESH_DELIVERY_MODES2,
+      MESH_INDEX_QUERY_WRITER_SCOPES: () => MESH_INDEX_QUERY_WRITER_SCOPES2,
       MESH_MAX_CHUNKS: () => MESH_MAX_CHUNKS,
       MESH_MAX_INLINE_FRAME_BYTES: () => MESH_MAX_INLINE_FRAME_BYTES,
       MESH_MAX_REASSEMBLED_BYTES: () => MESH_MAX_REASSEMBLED_BYTES,
       MESH_P2P_SIGNAL_TYPES: () => MESH_P2P_SIGNAL_TYPES2,
+      MESH_RECORD_PAYLOAD_KEYS: () => MESH_RECORD_PAYLOAD_KEYS2,
       MESH_SESSION_CLEANUP_MODES: () => MESH_SESSION_CLEANUP_MODES2,
       MESH_TASK_DIFFICULTIES: () => MESH_TASK_DIFFICULTIES2,
       MESH_TASK_MODES: () => MESH_TASK_MODES2,
@@ -40091,6 +40098,7 @@ var require_dist3 = __commonJS({
       MESH_THINKING_LEVELS: () => MESH_THINKING_LEVELS2,
       MESH_TOPIC_ENTRY_KINDS: () => MESH_TOPIC_ENTRY_KINDS2,
       MESH_TOPIC_PROTOCOL_VERSION: () => MESH_TOPIC_PROTOCOL_VERSION,
+      MISSION_BRIEF_RENDER_MAX_CHARS: () => MISSION_BRIEF_RENDER_MAX_CHARS2,
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
       MODEL_SELECTION_HISTORY_LIMIT: () => MODEL_SELECTION_HISTORY_LIMIT,
       MeshChunkAssembler: () => MeshChunkAssembler,
@@ -40100,6 +40108,8 @@ var require_dist3 = __commonJS({
       NPM_UPDATE_TAGS: () => NPM_UPDATE_TAGS,
       OPERATOR_STATUSES: () => OPERATOR_STATUSES2,
       OPERATOR_STATUS_REASONS: () => OPERATOR_STATUS_REASONS2,
+      OPERATOR_STATUS_REASON_VALUES: () => OPERATOR_STATUS_REASON_VALUES2,
+      OPERATOR_STATUS_VALUES: () => OPERATOR_STATUS_VALUES2,
       OUTBOUND_MESSAGE_ORIGINS: () => OUTBOUND_MESSAGE_ORIGINS,
       P2P_SIGNAL_TYPES: () => P2P_SIGNAL_TYPES2,
       PROVIDER_FAILURES: () => PROVIDER_FAILURES2,
@@ -40130,6 +40140,10 @@ var require_dist3 = __commonJS({
       TURN_EVIDENCE_FIELD_SPECS: () => TURN_EVIDENCE_FIELD_SPECS2,
       TURN_EVIDENCE_FLAGS: () => TURN_EVIDENCE_FLAGS,
       TURN_EVIDENCE_KINDS: () => TURN_EVIDENCE_KINDS2,
+      TURN_IPC_COMMANDS: () => TURN_IPC_COMMANDS2,
+      TURN_IPC_ERROR_CODES: () => TURN_IPC_ERROR_CODES2,
+      TURN_IPC_PROTOCOL_VERSION: () => TURN_IPC_PROTOCOL_VERSION,
+      TURN_OBSERVE_VERDICTS: () => TURN_OBSERVE_VERDICTS2,
       TURN_OUTCOMES: () => TURN_OUTCOMES2,
       TURN_REASONS: () => TURN_REASONS2,
       TURN_SCOPES: () => TURN_SCOPES2,
@@ -40154,7 +40168,19 @@ var require_dist3 = __commonJS({
       decodeDashboardToDaemonP2P: () => decodeDashboardToDaemonP2P,
       decodeDashboardToDaemonP2PChunk: () => decodeDashboardToDaemonP2PChunk,
       decodeDashboardToUserSession: () => decodeDashboardToUserSession,
+      decodeMeshIndexQueryRequest: () => decodeMeshIndexQueryRequest,
+      decodeMeshIndexQueryResponse: () => decodeMeshIndexQueryResponse,
+      decodeMeshRecordRequest: () => decodeMeshRecordRequest,
+      decodeMeshRecordResponse: () => decodeMeshRecordResponse,
+      decodeOperatorStatusRequest: () => decodeOperatorStatusRequest,
+      decodeOperatorStatusResponse: () => decodeOperatorStatusResponse,
       decodeServerToDaemon: () => decodeServerToDaemon,
+      decodeTurnCancelRequest: () => decodeTurnCancelRequest,
+      decodeTurnCancelResponse: () => decodeTurnCancelResponse,
+      decodeTurnObserveRequest: () => decodeTurnObserveRequest,
+      decodeTurnObserveResponse: () => decodeTurnObserveResponse,
+      decodeTurnQueryRequest: () => decodeTurnQueryRequest,
+      decodeTurnQueryResponse: () => decodeTurnQueryResponse,
       decodeTypeField: () => decodeTypeField,
       decodeUserSessionToDashboard: () => decodeUserSessionToDashboard,
       decodeViewerToSharedSession: () => decodeViewerToSharedSession,
@@ -40164,6 +40190,7 @@ var require_dist3 = __commonJS({
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       enumOf: () => enumOf2,
       expandDaemonIdForms: () => expandDaemonIdForms,
+      findOwnershipConflicts: () => findOwnershipConflicts,
       formatQuotaAccount: () => formatQuotaAccount,
       hasGitStatusEvidence: () => hasGitStatusEvidence,
       hasWorkerProtocolFooter: () => hasWorkerProtocolFooter2,
@@ -40192,7 +40219,13 @@ var require_dist3 = __commonJS({
       isHoldReason: () => isHoldReason2,
       isInputEnvelopeWire: () => isInputEnvelopeWire,
       isMeshDeliveryMode: () => isMeshDeliveryMode2,
+      isMeshIndexQueryRequest: () => isMeshIndexQueryRequest,
+      isMeshIndexQueryResponse: () => isMeshIndexQueryResponse,
+      isMeshIndexQueryWriterScope: () => isMeshIndexQueryWriterScope2,
       isMeshP2PSignalType: () => isMeshP2PSignalType2,
+      isMeshRecordPayload: () => isMeshRecordPayload,
+      isMeshRecordRequest: () => isMeshRecordRequest,
+      isMeshRecordResponse: () => isMeshRecordResponse,
       isMeshSessionCleanupMode: () => isMeshSessionCleanupMode2,
       isMeshTaskDifficulty: () => isMeshTaskDifficulty2,
       isMeshTaskMode: () => isMeshTaskMode2,
@@ -40206,6 +40239,10 @@ var require_dist3 = __commonJS({
       isModelAxisSource: () => isModelAxisSource,
       isNonEmptyString: () => isNonEmptyString,
       isNotifyKind: () => isNotifyKind2,
+      isOperatorStatusReasonValue: () => isOperatorStatusReasonValue2,
+      isOperatorStatusRequest: () => isOperatorStatusRequest,
+      isOperatorStatusResponse: () => isOperatorStatusResponse,
+      isOperatorStatusValue: () => isOperatorStatusValue2,
       isOutboundMessage: () => isOutboundMessage,
       isOutboundMessageOrigin: () => isOutboundMessageOrigin,
       isP2PSignalType: () => isP2PSignalType2,
@@ -40226,9 +40263,19 @@ var require_dist3 = __commonJS({
       isSummaryRef: () => isSummaryRef,
       isTerminalClassEvidenceKind: () => isTerminalClassEvidenceKind,
       isTurnAttemptRef: () => isTurnAttemptRef,
+      isTurnCancelRequest: () => isTurnCancelRequest,
+      isTurnCancelResponse: () => isTurnCancelResponse,
       isTurnEvidence: () => isTurnEvidence,
       isTurnEvidenceKind: () => isTurnEvidenceKind2,
+      isTurnIpcCommand: () => isTurnIpcCommand2,
+      isTurnIpcError: () => isTurnIpcError,
+      isTurnIpcErrorCode: () => isTurnIpcErrorCode2,
+      isTurnObserveRequest: () => isTurnObserveRequest,
+      isTurnObserveResponse: () => isTurnObserveResponse,
+      isTurnObserveVerdict: () => isTurnObserveVerdict2,
       isTurnOutcome: () => isTurnOutcome2,
+      isTurnQueryRequest: () => isTurnQueryRequest,
+      isTurnQueryResponse: () => isTurnQueryResponse,
       isTurnReason: () => isTurnReason2,
       isUserSessionToDashboardType: () => isUserSessionToDashboardType2,
       isViewerToSharedSessionType: () => isViewerToSharedSessionType2,
@@ -40254,13 +40301,16 @@ var require_dist3 = __commonJS({
       normalizeMeshNodeId: () => normalizeMeshNodeId,
       normalizeMeshSessionRecord: () => normalizeMeshSessionRecord,
       normalizeMeshWorkspaceForCompare: () => normalizeMeshWorkspaceForCompare,
+      normalizeMissionBrief: () => normalizeMissionBrief,
       normalizeNodeCapabilitySlot: () => normalizeNodeCapabilitySlot2,
       normalizeNodeCapabilitySlots: () => normalizeNodeCapabilitySlots2,
+      normalizeOwnedPaths: () => normalizeOwnedPaths,
       normalizeSessionStatus: () => normalizeSessionStatus,
       normalizeThinkingLevel: () => normalizeThinkingLevel,
       parseJsonRecord: () => parseJsonRecord,
       parseSemver: () => parseSemver,
       parseSessionLaunchRecord: () => parseSessionLaunchRecord,
+      pathsOverlap: () => pathsOverlap,
       pickBestTransitGitStatus: () => pickBestTransitGitStatus,
       projectTurnEvidenceEntry: () => projectTurnEvidenceEntry,
       readBoolean: () => readBoolean,
@@ -40271,6 +40321,7 @@ var require_dist3 = __commonJS({
       readString: () => readString22,
       readStringArray: () => readStringArray2,
       renderCoordinatorWorkerSection: () => renderCoordinatorWorkerSection,
+      renderMissionBriefBlock: () => renderMissionBriefBlock2,
       renderWorkerProtocolFooter: () => renderWorkerProtocolFooter2,
       sanitizeModelIdentifier: () => sanitizeModelIdentifier,
       scoreGitStatusCandidate: () => scoreGitStatusCandidate,
@@ -40282,6 +40333,7 @@ var require_dist3 = __commonJS({
       stripWorkerProtocolFooter: () => stripWorkerProtocolFooter,
       summarizeGitShape: () => summarizeGitShape,
       supportsQuota: () => supportsQuota,
+      touchedFilesOutsideOwnership: () => touchedFilesOutsideOwnership,
       withStatusProbeMarker: () => withStatusProbeMarker2
     });
     function readRecord(value) {
@@ -40352,12 +40404,12 @@ var require_dist3 = __commonJS({
       const submodules = value.map((entry) => {
         const submodule = readRecord(entry);
         const path74 = readString22(submodule.path);
-        const commit = readString22(submodule.commit);
+        const commit2 = readString22(submodule.commit);
         const repoPath = readString22(submodule.repoPath, submodule.repo_root) ?? joinRepoPath(parentRepoRoot, path74);
-        if (!path74 || !commit) return null;
+        if (!path74 || !commit2) return null;
         const result = {
           path: path74,
-          commit,
+          commit: commit2,
           dirty: readBoolean(submodule.dirty) ?? false,
           outOfSync: readBoolean(submodule.outOfSync, submodule.out_of_sync) ?? false
         };
@@ -40724,10 +40776,10 @@ var require_dist3 = __commonJS({
         };
       });
     }
-    function deriveProviderPriorityFromSlots2(slots) {
+    function deriveProviderPriorityFromSlots2(slots2) {
       const seen = /* @__PURE__ */ new Set();
       const out = [];
-      for (const slot of normalizeNodeCapabilitySlots2(slots)) {
+      for (const slot of normalizeNodeCapabilitySlots2(slots2)) {
         if (seen.has(slot.provider)) continue;
         seen.add(slot.provider);
         out.push(slot.provider);
@@ -41155,7 +41207,7 @@ var require_dist3 = __commonJS({
     function statusesOfClass(cls) {
       return SESSION_STATUSES2.filter((status) => SESSION_STATUS_CLASS[status] === cls);
     }
-    function makeGuard3(values) {
+    function makeGuard4(values) {
       const set3 = new Set(values);
       return (value) => typeof value === "string" && set3.has(value);
     }
@@ -41215,6 +41267,77 @@ var require_dist3 = __commonJS({
       const candidate = value;
       return isMessageId(candidate.messageId) && typeof candidate.sessionId === "string" && candidate.sessionId.length > 0 && isInputEnvelopeWire(candidate.input) && isOutboundMessageOrigin(candidate.origin) && isSendPolicy(candidate.policy) && typeof candidate.createdAt === "number";
     }
+    function truncateString2(value, max) {
+      if (value.length <= max) return value;
+      return `${value.slice(0, max - 1).trimEnd()}\u2026`;
+    }
+    function normalizeStringList(value, field2, truncated) {
+      if (value === void 0 || value === null) return void 0;
+      if (!Array.isArray(value)) return void 0;
+      const items = [];
+      let itemTruncated = false;
+      for (const raw of value) {
+        if (typeof raw !== "string") continue;
+        const trimmed2 = raw.trim();
+        if (!trimmed2) continue;
+        if (trimmed2.length > LIST_ITEM_MAX) itemTruncated = true;
+        items.push(truncateString2(trimmed2, LIST_ITEM_MAX));
+      }
+      if (itemTruncated) truncated.push({ field: field2, reason: "item_too_long" });
+      if (items.length > LIST_MAX_ITEMS) {
+        truncated.push({ field: field2, reason: "list_too_long" });
+        return items.slice(0, LIST_MAX_ITEMS);
+      }
+      return items.length > 0 ? items : void 0;
+    }
+    function normalizeMissionBrief(input) {
+      const truncated = [];
+      if (!input || typeof input !== "object") {
+        return { brief: null, truncated };
+      }
+      const raw = input;
+      const rawGoal = typeof raw.goal === "string" ? raw.goal.trim() : "";
+      if (!rawGoal) {
+        return { brief: null, truncated };
+      }
+      if (rawGoal.length > GOAL_MAX) truncated.push({ field: "goal", reason: "field_too_long" });
+      const goal = truncateString2(rawGoal, GOAL_MAX);
+      const constraints = normalizeStringList(raw.constraints, "constraints", truncated);
+      const doneCriteria = normalizeStringList(raw.doneCriteria ?? raw.done_criteria, "doneCriteria", truncated);
+      const handoffNotes = normalizeStringList(raw.handoffNotes ?? raw.handoff_notes, "handoffNotes", truncated);
+      const ownedPaths = normalizeStringList(raw.ownedPaths ?? raw.owned_paths, "ownedPaths", truncated);
+      const brief = { goal };
+      if (constraints) brief.constraints = constraints;
+      if (doneCriteria) brief.doneCriteria = doneCriteria;
+      if (handoffNotes) brief.handoffNotes = handoffNotes;
+      if (ownedPaths) brief.ownedPaths = ownedPaths;
+      return { brief, truncated };
+    }
+    function renderList2(heading, items) {
+      if (!items || items.length === 0) return [];
+      return [`${heading}:`, ...items.map((item) => `- ${item}`)];
+    }
+    function renderMissionBriefBlock2(brief) {
+      const sections = [`Mission goal: ${brief.goal}`];
+      sections.push(...renderList2("Constraints", brief.constraints));
+      sections.push(...renderList2("Done when", brief.doneCriteria));
+      sections.push(...renderList2("Owned paths", brief.ownedPaths));
+      sections.push(...renderList2("Handoff notes", brief.handoffNotes));
+      const full = sections.join("\n");
+      if (full.length <= MISSION_BRIEF_RENDER_MAX_CHARS2) return full;
+      const marker = "\n(brief truncated)";
+      const budget = MISSION_BRIEF_RENDER_MAX_CHARS2 - marker.length;
+      const lines = full.split("\n");
+      let acc = "";
+      for (const line of lines) {
+        const next = acc ? `${acc}
+${line}` : line;
+        if (next.length > budget) break;
+        acc = next;
+      }
+      if (!acc) acc = truncateString2(lines[0] ?? "", Math.max(budget, 0));
+      return `${acc}${marker}`;
+    }
     function isWorkerTool(value) {
       return typeof value === "string" && WORKER_TOOL_SET2.has(value);
     }
@@ -41222,7 +41345,8 @@ var require_dist3 = __commonJS({
       return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER2);
     }
     function renderWorkerProtocolFooter2(input = {}) {
-      const lines = [WORKER_PROTOCOL_FOOTER_MARKER2];
+      const briefBlock = input.missionBrief ? renderMissionBriefBlock2(input.missionBrief) : null;
+      const lines = briefBlock ? [briefBlock, "", WORKER_PROTOCOL_FOOTER_MARKER2] : [WORKER_PROTOCOL_FOOTER_MARKER2];
       const scope = [];
       if (input.taskId) scope.push(`task ${input.taskId}`);
       if (input.taskMode) scope.push(`mode ${input.taskMode}`);
@@ -41264,7 +41388,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         "- A worker finishes by calling `report_completion`; its structured report (outcome, summary, touched files, branch state, handoff notes) is what reaches you as the completion event. Read that report \u2014 do not re-derive the outcome from `mesh_read_chat` or the terminal unless the report is missing.",
         "- `progress_update` from a worker arrives as a lightweight progress note. Do NOT poll `mesh_status`, `mesh_view_queue` or `mesh_read_chat` to check on a running worker; completion, progress, blocked and failure all arrive as events.",
         "- To reach a busy worker mid-task use `mesh_notify_worker`: the memo is delivered on the worker's next tool call (or when it becomes idle). A worker that reports `blocked` is asking you for a decision \u2014 answer it with `mesh_send_task` to the same session.",
-        "- `mesh_status` is for node health and capacity before delegating, never for progress."
+        "- `mesh_status` is for node health and capacity before delegating, never for progress.",
+        "- A `code_change` task's declared `owned_paths` (H1) is enforced at claim time: a second `code_change` task whose `owned_paths` overlaps an already-claimed task's is refused rather than silently racing it. A worker's `report_completion.touched_files` is compared against its own task's declaration afterward and any mismatch is surfaced back to you as evidence \u2014 it is never a validation failure, since a worker often cannot know its exact final file list at enqueue time."
       ].join("\n");
     }
     function makeGuard22(values) {
@@ -41506,6 +41631,302 @@ ${renderWorkerProtocolFooter2(input)}`;
         ...autoApproveModeId ? { autoApproveModeId } : {}
       };
     }
+    function isFiniteNumber3(value) {
+      return typeof value === "number" && Number.isFinite(value);
+    }
+    function isNonNegativeInt(value) {
+      return Number.isSafeInteger(value) && value >= 0;
+    }
+    function isOptionalId2(value) {
+      return value === void 0 || isEvidenceIdentifier(value);
+    }
+    function hasOnlyKeys2(value, allowed) {
+      for (const key2 of Object.keys(value)) {
+        if (!allowed.includes(key2)) return false;
+      }
+      return true;
+    }
+    function makeGuard32(values) {
+      const set3 = new Set(values);
+      return (value) => typeof value === "string" && set3.has(value);
+    }
+    function isTurnIpcError(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["code", "detail"]) && isTurnIpcErrorCode2(value.code) && (value.detail === void 0 || typeof value.detail === "string");
+    }
+    function isTurnObserveRequest(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["v", "evidence"]) && value.v === TURN_IPC_PROTOCOL_VERSION && isTurnEvidence(value.evidence);
+    }
+    function decodeTurnObserveRequest(value) {
+      return isTurnObserveRequest(value) ? value : null;
+    }
+    function isTurnAttemptRefValue(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["attemptId", "generation"]) && isEvidenceIdentifier(value.attemptId) && isNonNegativeInt(value.generation);
+    }
+    function isTurnObserveResponse(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["verdict", "attemptRef", "outcome"]) && isTurnObserveVerdict2(value.verdict) && isTurnAttemptRefValue(value.attemptRef) && (value.outcome === void 0 || isTurnOutcomeValue(value.outcome));
+    }
+    function isTurnOutcomeValue(value) {
+      return typeof value === "string" && TURN_OUTCOMES_LOCAL.includes(value);
+    }
+    function decodeTurnObserveResponse(value) {
+      return isTurnObserveResponse(value) ? value : null;
+    }
+    function isProjectedScalarsValue(value) {
+      if (!isRecord(value)) return false;
+      for (const v of Object.values(value)) {
+        if (v === null) continue;
+        if (typeof v === "boolean" || typeof v === "number") continue;
+        if (typeof v === "string") {
+          if (v.length > MAX_MESH_RECORD_STRING) return false;
+          continue;
+        }
+        return false;
+      }
+      return true;
+    }
+    function isMeshRecordPayload(value) {
+      if (!isProjectedScalarsValue(value)) return false;
+      for (const key2 of Object.keys(value)) {
+        if (!MESH_RECORD_PAYLOAD_KEY_SET2.has(key2)) return false;
+      }
+      return true;
+    }
+    function isMeshRecordRequest(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["v", "meshId", "ledgerKind", "nodeId", "sessionId", "taskId", "payload"]) && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isEvidenceIdentifier(value.ledgerKind) && isOptionalId2(value.nodeId) && isOptionalId2(value.sessionId) && isOptionalId2(value.taskId) && isMeshRecordPayload(value.payload);
+    }
+    function decodeMeshRecordRequest(value) {
+      return isMeshRecordRequest(value) ? value : null;
+    }
+    function isMeshRecordResponse(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["eventId", "seq"]) && isEvidenceIdentifier(value.eventId) && isNonNegativeInt(value.seq);
+    }
+    function decodeMeshRecordResponse(value) {
+      return isMeshRecordResponse(value) ? value : null;
+    }
+    function isTurnCancelRequest(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, ["v", "attemptId", "taskId", "reason"])) return false;
+      if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false;
+      const hasAttempt = value.attemptId !== void 0;
+      const hasTask = value.taskId !== void 0;
+      if (hasAttempt === hasTask) return false;
+      if (hasAttempt && !isEvidenceIdentifier(value.attemptId)) return false;
+      if (hasTask && !isEvidenceIdentifier(value.taskId)) return false;
+      return isTurnReason2(value.reason);
+    }
+    function decodeTurnCancelRequest(value) {
+      return isTurnCancelRequest(value) ? value : null;
+    }
+    function isTurnCancelResponse(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["attemptRef", "verdict"]) && isTurnAttemptRefValue(value.attemptRef) && isTurnObserveVerdict2(value.verdict);
+    }
+    function decodeTurnCancelResponse(value) {
+      return isTurnCancelResponse(value) ? value : null;
+    }
+    function isOperatorStatusRequest(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["v", "taskId", "status", "reason"]) && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.taskId) && isOperatorStatusValue2(value.status) && isOperatorStatusReasonValue2(value.reason);
+    }
+    function decodeOperatorStatusRequest(value) {
+      return isOperatorStatusRequest(value) ? value : null;
+    }
+    function isOperatorStatusResponse(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["accepted"]) && value.accepted === true;
+    }
+    function decodeOperatorStatusResponse(value) {
+      return isOperatorStatusResponse(value) ? value : null;
+    }
+    function isTurnQueryRequest(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["v", "meshId", "taskId", "attemptId", "sessionId", "state", "since", "tail"]) && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isOptionalId2(value.taskId) && isOptionalId2(value.attemptId) && isOptionalId2(value.sessionId) && (value.state === void 0 || isEvidenceIdentifier(value.state)) && (value.since === void 0 || isFiniteNumber3(value.since)) && (value.tail === void 0 || isNonNegativeInt(value.tail));
+    }
+    function decodeTurnQueryRequest(value) {
+      return isTurnQueryRequest(value) ? value : null;
+    }
+    function isTurnQueryAttemptRow(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, TURN_QUERY_ATTEMPT_ROW_KEYS)) return false;
+      if (!isEvidenceIdentifier(value.attemptId) || !isNonNegativeInt(value.generation)) return false;
+      if (!isOptionalId2(value.meshId) || !isOptionalId2(value.taskId)) return false;
+      if (!isEvidenceIdentifier(value.sessionId)) return false;
+      if (!isOptionalId2(value.nodeId) || !isOptionalId2(value.providerType)) return false;
+      if (typeof value.state !== "string") return false;
+      if (value.terminalOutcome !== void 0 && !isTurnOutcomeValue(value.terminalOutcome)) return false;
+      if (value.terminalReason !== void 0 && !isTurnReason2(value.terminalReason)) return false;
+      if (!isFiniteNumber3(value.acceptedAt)) return false;
+      if (value.terminalAt !== void 0 && !isFiniteNumber3(value.terminalAt)) return false;
+      return true;
+    }
+    function isTurnQueryEventRow(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, TURN_QUERY_EVENT_ROW_KEYS)) return false;
+      if (!isEvidenceIdentifier(value.eventId)) return false;
+      if (!isOptionalId2(value.attemptId)) return false;
+      if (value.generation !== void 0 && !isNonNegativeInt(value.generation)) return false;
+      if (!isEvidenceIdentifier(value.sessionId)) return false;
+      if (typeof value.kind !== "string") return false;
+      if (typeof value.source !== "string") return false;
+      if (!TURN_QUERY_EVENT_VERDICTS.includes(value.verdict)) return false;
+      if (!isFiniteNumber3(value.atMs)) return false;
+      return true;
+    }
+    function isTurnQueryResponse(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, ["attempts", "events", "replicationPending"])) return false;
+      if (!Array.isArray(value.attempts) || !value.attempts.every(isTurnQueryAttemptRow)) return false;
+      if (!Array.isArray(value.events) || !value.events.every(isTurnQueryEventRow)) return false;
+      if (value.replicationPending !== void 0 && typeof value.replicationPending !== "boolean") return false;
+      return true;
+    }
+    function decodeTurnQueryResponse(value) {
+      return isTurnQueryResponse(value) ? value : null;
+    }
+    function isMeshIndexQueryRequest(value) {
+      return isRecord(value) && hasOnlyKeys2(value, ["v", "meshId", "ledgerKind", "sessionId", "taskId", "writer", "since", "tail"]) && value.v === TURN_IPC_PROTOCOL_VERSION && isEvidenceIdentifier(value.meshId) && isOptionalId2(value.ledgerKind) && isOptionalId2(value.sessionId) && isOptionalId2(value.taskId) && (value.writer === void 0 || isMeshIndexQueryWriterScope2(value.writer)) && (value.since === void 0 || isFiniteNumber3(value.since)) && (value.tail === void 0 || isNonNegativeInt(value.tail));
+    }
+    function decodeMeshIndexQueryRequest(value) {
+      return isMeshIndexQueryRequest(value) ? value : null;
+    }
+    function isMeshTopicIndexRow(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, MESH_TOPIC_INDEX_ROW_KEYS)) return false;
+      if (!isEvidenceIdentifier(value.writer) || !isNonNegativeInt(value.seq)) return false;
+      if (!isEvidenceIdentifier(value.meshId) || !isEvidenceIdentifier(value.eventId)) return false;
+      if (typeof value.kind !== "string") return false;
+      if (!isOptionalId2(value.ledgerKind) || !isOptionalId2(value.taskId) || !isOptionalId2(value.sessionId) || !isOptionalId2(value.nodeId)) return false;
+      if (!isFiniteNumber3(value.atMs)) return false;
+      if (!isMeshRecordPayload(value.payload)) return false;
+      return true;
+    }
+    function isMeshIndexQueryResponse(value) {
+      if (!isRecord(value) || !hasOnlyKeys2(value, ["rows", "replicationPending"])) return false;
+      if (!Array.isArray(value.rows) || !value.rows.every(isMeshTopicIndexRow)) return false;
+      if (value.replicationPending !== void 0 && typeof value.replicationPending !== "boolean") return false;
+      return true;
+    }
+    function decodeMeshIndexQueryResponse(value) {
+      return isMeshIndexQueryResponse(value) ? value : null;
+    }
+    function toPosix(raw) {
+      return raw.replace(/\\/g, "/");
+    }
+    function normalizeOne(raw, rejected) {
+      if (typeof raw !== "string") {
+        rejected.push({ input: String(raw), reason: "not_a_string" });
+        return null;
+      }
+      const trimmed2 = raw.trim();
+      if (!trimmed2) {
+        rejected.push({ input: raw, reason: "empty" });
+        return null;
+      }
+      let posix = toPosix(trimmed2);
+      if (posix.startsWith("/") || /^[a-zA-Z]:\//.test(posix) || posix.startsWith("~")) {
+        rejected.push({ input: raw, reason: "absolute_path" });
+        return null;
+      }
+      posix = posix.replace(/^\.\/+/, "");
+      const segments = posix.split("/").filter(Boolean);
+      if (segments.some((seg) => seg === "..")) {
+        rejected.push({ input: raw, reason: "parent_traversal" });
+        return null;
+      }
+      if (segments.length === 0) {
+        rejected.push({ input: raw, reason: "empty" });
+        return null;
+      }
+      let subtree = false;
+      if (segments[segments.length - 1] === "**") {
+        subtree = true;
+        segments.pop();
+        if (segments.length === 0) {
+        }
+      }
+      if (segments.some((seg) => seg.includes("*") || seg.includes("?"))) {
+        rejected.push({ input: raw, reason: "unsupported_glob" });
+        return null;
+      }
+      return { path: segments.join("/"), subtree };
+    }
+    function normalizeOwnedPaths(input) {
+      const rejected = [];
+      if (input === void 0 || input === null) {
+        return { declaration: { paths: [] }, rejected };
+      }
+      if (!Array.isArray(input)) {
+        return { declaration: { paths: [] }, rejected: [{ input: String(input), reason: "not_an_array" }] };
+      }
+      const byPath = /* @__PURE__ */ new Map();
+      for (const raw of input) {
+        const entry = normalizeOne(raw, rejected);
+        if (!entry) continue;
+        const existing = byPath.get(entry.path);
+        if (!existing) {
+          byPath.set(entry.path, entry);
+        } else if (entry.subtree && !existing.subtree) {
+          byPath.set(entry.path, entry);
+        }
+      }
+      const all = [...byPath.values()];
+      const kept = all.slice(0, MAX_OWNED_PATHS);
+      for (const dropped of all.slice(MAX_OWNED_PATHS)) {
+        rejected.push({ input: dropped.path, reason: "over_cap" });
+      }
+      return { declaration: { paths: kept }, rejected };
+    }
+    function entryContains(base, path74) {
+      if (path74 === base.path) return true;
+      if (base.subtree && (path74 === base.path || path74.startsWith(`${base.path}/`))) return true;
+      return false;
+    }
+    function entriesOverlap(a, b) {
+      if (a.path === b.path) return true;
+      if (a.subtree && (b.path === a.path || b.path.startsWith(`${a.path}/`))) return true;
+      if (b.subtree && (a.path === b.path || a.path.startsWith(`${b.path}/`))) return true;
+      return false;
+    }
+    function pathsOverlap(a, b) {
+      if (a.paths.length === 0 || b.paths.length === 0) return false;
+      for (const pa of a.paths) {
+        for (const pb of b.paths) {
+          if (entriesOverlap(pa, pb)) return true;
+        }
+      }
+      return false;
+    }
+    function findOwnershipConflicts(candidate, inFlight3) {
+      if (candidate.paths.length === 0) return [];
+      const conflicts = [];
+      for (const other of inFlight3) {
+        if (other.paths.paths.length === 0) continue;
+        const overlappingPaths = [];
+        for (const pa of candidate.paths) {
+          for (const pb of other.paths.paths) {
+            if (entriesOverlap(pa, pb)) {
+              const narrower = pa.path.length >= pb.path.length ? pa.path : pb.path;
+              if (!overlappingPaths.includes(narrower)) overlappingPaths.push(narrower);
+            }
+          }
+        }
+        if (overlappingPaths.length > 0) {
+          conflicts.push({ taskId: other.taskId, overlappingPaths });
+        }
+      }
+      return conflicts;
+    }
+    function touchedFilesOutsideOwnership(touched, owned) {
+      const undeclaredTouched = [];
+      const usedDeclarations = /* @__PURE__ */ new Set();
+      for (const raw of touched ?? []) {
+        const rejectedSink = [];
+        const entry = normalizeOne(raw, rejectedSink);
+        if (!entry) {
+          undeclaredTouched.push(raw);
+          continue;
+        }
+        const matches = owned.paths.filter((base) => entryContains(base, entry.path));
+        if (matches.length === 0) {
+          undeclaredTouched.push(entry.path);
+        } else {
+          for (const m of matches) usedDeclarations.add(m.path);
+        }
+      }
+      const unusedDeclarations = owned.paths.map((p) => p.path).filter((p) => !usedDeclarations.has(p));
+      return { undeclaredTouched, unusedDeclarations };
+    }
     var QUOTA_SUPPORTED_PROVIDERS;
     var DAEMON_ID_PREFIXES;
     var MAGI_RAW_ANSWER_CAP3;
@@ -41596,6 +42017,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     var SEND_POLICY_MODES;
     var SEND_REFUSAL_REASONS2;
     var SUBMIT_OUTCOME_KINDS;
+    var GOAL_MAX;
+    var LIST_ITEM_MAX;
+    var LIST_MAX_ITEMS;
+    var MISSION_BRIEF_RENDER_MAX_CHARS2;
     var WORKER_TOOLS2;
     var WORKER_TOOL_SET2;
     var WORKER_PROTOCOL_FOOTER_MARKER2;
@@ -41655,6 +42080,28 @@ ${renderWorkerProtocolFooter2(input)}`;
     var SESSION_LAUNCHED_BY;
     var MODEL_SELECTION_HISTORY_LIMIT;
     var MODEL_IDENTIFIER_PATTERN;
+    var TURN_IPC_PROTOCOL_VERSION;
+    var TURN_IPC_ERROR_CODES2;
+    var isTurnIpcErrorCode2;
+    var TURN_OBSERVE_VERDICTS2;
+    var isTurnObserveVerdict2;
+    var TURN_OUTCOMES_LOCAL;
+    var MESH_RECORD_PAYLOAD_KEYS2;
+    var MESH_RECORD_PAYLOAD_KEY_SET2;
+    var MAX_MESH_RECORD_STRING;
+    var OPERATOR_STATUS_VALUES2;
+    var isOperatorStatusValue2;
+    var OPERATOR_STATUS_REASON_VALUES2;
+    var isOperatorStatusReasonValue2;
+    var TURN_QUERY_ATTEMPT_ROW_KEYS;
+    var TURN_QUERY_EVENT_VERDICTS;
+    var TURN_QUERY_EVENT_ROW_KEYS;
+    var MESH_INDEX_QUERY_WRITER_SCOPES2;
+    var isMeshIndexQueryWriterScope2;
+    var MESH_TOPIC_INDEX_ROW_KEYS;
+    var TURN_IPC_COMMANDS2;
+    var isTurnIpcCommand2;
+    var MAX_OWNED_PATHS;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
         "use strict";
@@ -42118,15 +42565,15 @@ ${renderWorkerProtocolFooter2(input)}`;
           "cleanup_candidate",
           "not_mergeable"
         ];
-        isMeshTaskStatus2 = makeGuard3(MESH_TASK_STATUSES2);
-        isMeshTerminalTaskStatus2 = makeGuard3(MESH_TERMINAL_TASK_STATUSES2);
-        isMeshTaskMode2 = makeGuard3(MESH_TASK_MODES2);
-        isMeshTaskPriority2 = makeGuard3(MESH_TASK_PRIORITIES2);
-        isMeshThinkingLevel2 = makeGuard3(MESH_THINKING_LEVELS2);
-        isMeshDeliveryMode2 = makeGuard3(MESH_DELIVERY_MODES2);
-        isMeshSessionCleanupMode2 = makeGuard3(MESH_SESSION_CLEANUP_MODES2);
-        isWorkerReportOutcome2 = makeGuard3(WORKER_REPORT_OUTCOMES2);
-        isWorkerBranchState2 = makeGuard3(WORKER_BRANCH_STATES2);
+        isMeshTaskStatus2 = makeGuard4(MESH_TASK_STATUSES2);
+        isMeshTerminalTaskStatus2 = makeGuard4(MESH_TERMINAL_TASK_STATUSES2);
+        isMeshTaskMode2 = makeGuard4(MESH_TASK_MODES2);
+        isMeshTaskPriority2 = makeGuard4(MESH_TASK_PRIORITIES2);
+        isMeshThinkingLevel2 = makeGuard4(MESH_THINKING_LEVELS2);
+        isMeshDeliveryMode2 = makeGuard4(MESH_DELIVERY_MODES2);
+        isMeshSessionCleanupMode2 = makeGuard4(MESH_SESSION_CLEANUP_MODES2);
+        isWorkerReportOutcome2 = makeGuard4(WORKER_REPORT_OUTCOMES2);
+        isWorkerBranchState2 = makeGuard4(WORKER_BRANCH_STATES2);
         outboundMessageIdCounter = 0;
         MESSAGE_ID_PREFIX = "msg_";
         OUTBOUND_MESSAGE_ORIGINS = ["dashboard", "mcp", "mesh", "api", "cli"];
@@ -42149,6 +42596,10 @@ ${renderWorkerProtocolFooter2(input)}`;
           "internal_error"
         ];
         SUBMIT_OUTCOME_KINDS = ["delivered", "queued", "duplicate", "refused"];
+        GOAL_MAX = 500;
+        LIST_ITEM_MAX = 200;
+        LIST_MAX_ITEMS = 12;
+        MISSION_BRIEF_RENDER_MAX_CHARS2 = 1200;
         WORKER_TOOLS2 = [
           "report_completion",
           "progress_update",
@@ -42272,7 +42723,9 @@ ${renderWorkerProtocolFooter2(input)}`;
           "approval_resolved",
           "candidate",
           "no_progress",
-          "progress"
+          "progress",
+          "late_completion",
+          "mesh_event"
         ];
         id2 = { t: "id" };
         idOpt2 = { t: "id", optional: true };
@@ -42389,6 +42842,100 @@ ${renderWorkerProtocolFooter2(input)}`;
         SESSION_LAUNCHED_BY = ["dashboard", "mesh", "cli", "api", "restore"];
         MODEL_SELECTION_HISTORY_LIMIT = 20;
         MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,95}$/;
+        TURN_IPC_PROTOCOL_VERSION = 1;
+        TURN_IPC_ERROR_CODES2 = ["daemon_required", "turn_ledger_unavailable", "ledger_not_owner"];
+        isTurnIpcErrorCode2 = makeGuard32(TURN_IPC_ERROR_CODES2);
+        TURN_OBSERVE_VERDICTS2 = ["applied", "recorded", "rejected"];
+        isTurnObserveVerdict2 = makeGuard32(TURN_OBSERVE_VERDICTS2);
+        TURN_OUTCOMES_LOCAL = ["completed", "failed", "cancelled"];
+        MESH_RECORD_PAYLOAD_KEYS2 = [
+          // Identifiers
+          "taskId",
+          "deliveryId",
+          "attemptId",
+          "missionId",
+          "checkpointId",
+          "promptId",
+          "providerSessionId",
+          "targetNoteId",
+          // Routing / addressing
+          "nodeId",
+          "sessionId",
+          "providerType",
+          "transport",
+          "attemptedSessionId",
+          "holderSessionId",
+          // Outcome enums
+          "reason",
+          "status",
+          "outcome",
+          "terminalKind",
+          "event",
+          "source",
+          "intentionalStopReason",
+          // Booleans
+          "retryable",
+          "rebound",
+          "forced",
+          "fallback",
+          "membershipRemoved",
+          "requestedForce",
+          "removedByRemoteDaemon",
+          "completedViaReady",
+          "intentional",
+          "weak",
+          // Counters
+          "attempt",
+          "attemptCount",
+          "count"
+        ];
+        MESH_RECORD_PAYLOAD_KEY_SET2 = new Set(MESH_RECORD_PAYLOAD_KEYS2);
+        MAX_MESH_RECORD_STRING = 200;
+        OPERATOR_STATUS_VALUES2 = ["completed", "failed"];
+        isOperatorStatusValue2 = makeGuard32(OPERATOR_STATUS_VALUES2);
+        OPERATOR_STATUS_REASON_VALUES2 = ["operator_update", "refine_terminal", "validation_terminal"];
+        isOperatorStatusReasonValue2 = makeGuard32(OPERATOR_STATUS_REASON_VALUES2);
+        TURN_QUERY_ATTEMPT_ROW_KEYS = [
+          "attemptId",
+          "generation",
+          "meshId",
+          "taskId",
+          "sessionId",
+          "nodeId",
+          "providerType",
+          "state",
+          "terminalOutcome",
+          "terminalReason",
+          "acceptedAt",
+          "terminalAt"
+        ];
+        TURN_QUERY_EVENT_VERDICTS = ["applied", "recorded", "rejected", "forwarded"];
+        TURN_QUERY_EVENT_ROW_KEYS = ["eventId", "attemptId", "generation", "sessionId", "kind", "source", "verdict", "atMs"];
+        MESH_INDEX_QUERY_WRITER_SCOPES2 = ["own", "fleet"];
+        isMeshIndexQueryWriterScope2 = makeGuard32(MESH_INDEX_QUERY_WRITER_SCOPES2);
+        MESH_TOPIC_INDEX_ROW_KEYS = [
+          "writer",
+          "seq",
+          "meshId",
+          "eventId",
+          "kind",
+          "ledgerKind",
+          "taskId",
+          "sessionId",
+          "nodeId",
+          "atMs",
+          "payload"
+        ];
+        TURN_IPC_COMMANDS2 = [
+          "turn_observe",
+          "mesh_record",
+          "turn_cancel",
+          "operator_status",
+          "turn_query",
+          "mesh_index_query"
+        ];
+        isTurnIpcCommand2 = makeGuard32(TURN_IPC_COMMANDS2);
+        MAX_OWNED_PATHS = 64;
       }
     });
     function isKnownDangerousLaunchArg(arg) {
@@ -42674,12 +43221,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return false;
     }
-    function resolveProviderMaxParallel(slots, providerType) {
+    function resolveProviderMaxParallel(slots2, providerType) {
       const wanted = typeof providerType === "string" ? providerType.trim().toLowerCase() : "";
       if (!wanted) return void 0;
-      if (!Array.isArray(slots)) return void 0;
+      if (!Array.isArray(slots2)) return void 0;
       let total;
-      for (const slot of slots) {
+      for (const slot of slots2) {
         if (!slot || typeof slot !== "object") continue;
         const type2 = typeof slot.provider === "string" ? slot.provider.trim().toLowerCase() : "";
         if (!type2 || type2 !== wanted) continue;
@@ -42689,13 +43236,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return total;
     }
-    function resolveSlotMaxParallel(slots, providerType, model, modelMatchesSlot) {
+    function resolveSlotMaxParallel(slots2, providerType, model, modelMatchesSlot) {
       const wanted = typeof providerType === "string" ? providerType.trim().toLowerCase() : "";
       if (!wanted) return void 0;
-      if (!Array.isArray(slots)) return void 0;
+      if (!Array.isArray(slots2)) return void 0;
       const wantedModel = typeof model === "string" && model.trim() ? model.trim() : void 0;
       let total;
-      for (const slot of slots) {
+      for (const slot of slots2) {
         if (!slot || typeof slot !== "object") continue;
         const type2 = typeof slot.provider === "string" ? slot.provider.trim().toLowerCase() : "";
         if (!type2 || type2 !== wanted) continue;
@@ -43359,11 +43906,11 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function getDaemonBuildInfo() {
       if (cached2) return cached2;
-      const commit = readInjected(true ? "unknown" : void 0) ?? "unknown";
-      const commitShort = readInjected(true ? "unknown" : void 0) ?? (commit !== "unknown" ? commit.slice(0, 7) : "unknown");
+      const commit2 = readInjected(true ? "unknown" : void 0) ?? "unknown";
+      const commitShort = readInjected(true ? "unknown" : void 0) ?? (commit2 !== "unknown" ? commit2.slice(0, 7) : "unknown");
       const version2 = readInjected(true ? "1.0.59" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
       const builtAt = readInjected(true ? "unknown" : void 0);
-      cached2 = builtAt ? { commit, commitShort, version: version2, builtAt } : { commit, commitShort, version: version2 };
+      cached2 = builtAt ? { commit: commit2, commitShort, version: version2, builtAt } : { commit: commit2, commitShort, version: version2 };
       return cached2;
     }
     var cached2;
@@ -44080,9 +44627,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         const result = await runGit(repo, ["log", "-1", "--pretty=%h%x00%s"], options);
         const text = result.stdout.trimEnd();
         if (!text) return { commit: null, message: null };
-        const [commit, ...messageParts] = text.split("\0");
+        const [commit2, ...messageParts] = text.split("\0");
         return {
-          commit: commit || null,
+          commit: commit2 || null,
           message: messageParts.join("\0") || null
         };
       } catch {
@@ -44844,11 +45391,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       const raw = (stamped || (env2[BUILD_CHANNEL_ENV_VAR] ?? "").trim()).toLowerCase();
       return raw === "preview" || raw === "next" ? "preview" : "stable";
     }
-    function getTrackIdentity(track = TRACK) {
-      return track === "preview" ? PREVIEW_IDENTITY : STABLE_IDENTITY;
+    function getTrackIdentity(track2 = TRACK) {
+      return track2 === "preview" ? PREVIEW_IDENTITY : STABLE_IDENTITY;
     }
-    function getInstallOrigin(track = TRACK) {
-      return track === "preview" ? "https://dev.adhf.dev" : "https://adhf.dev";
+    function getInstallOrigin(track2 = TRACK) {
+      return track2 === "preview" ? "https://dev.adhf.dev" : "https://adhf.dev";
     }
     var BUILD_CHANNEL_ENV_VAR;
     var TRACK;
@@ -45737,8 +46284,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     async function credentialFileMtimeMs(filePath) {
       try {
         const stats = await (0, import_promises3.stat)(filePath);
-        const ms22 = stats.mtimeMs;
-        return Number.isFinite(ms22) ? ms22 : null;
+        const ms3 = stats.mtimeMs;
+        return Number.isFinite(ms3) ? ms3 : null;
       } catch {
         return null;
       }
@@ -45761,7 +46308,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           windowsHide: true
         })),
         readFile: overrides.readFile ?? ((filePath) => (0, import_promises3.readFile)(filePath, "utf-8")),
-        setTimeout: overrides.setTimeout ?? ((handler, ms22) => setTimeout(handler, ms22)),
+        setTimeout: overrides.setTimeout ?? ((handler, ms3) => setTimeout(handler, ms3)),
         clearTimeout: overrides.clearTimeout ?? ((handle) => clearTimeout(handle)),
         // Fail CLOSED: if the config cannot be read for any reason, treat the
         // option as off. A PII opt-in must never be enabled by an error path.
@@ -45912,8 +46459,8 @@ ${res.stderr}`);
       if (!match) return null;
       const [, stamp2] = match;
       const iso = `${stamp2.slice(0, 4)}-${stamp2.slice(4, 6)}-${stamp2.slice(6, 8)}T${stamp2.slice(8, 10)}:${stamp2.slice(10, 12)}:${stamp2.slice(12, 14)}Z`;
-      const ms22 = Date.parse(iso);
-      return Number.isFinite(ms22) ? ms22 : null;
+      const ms3 = Date.parse(iso);
+      return Number.isFinite(ms3) ? ms3 : null;
     }
     async function readWinCredBlob(deps) {
       const res = await runCredStoreCommand(deps, "powershell.exe", powershellArgs(WINCRED_READ_PS1));
@@ -45980,8 +46527,8 @@ ${res.stderr}`);
       const expiryRaw = token.expiry ?? token.expires_at;
       let expiresAtMs = null;
       if (typeof expiryRaw === "string" && expiryRaw.trim() !== "") {
-        const ms22 = new Date(expiryRaw).getTime();
-        expiresAtMs = Number.isNaN(ms22) ? null : ms22;
+        const ms3 = new Date(expiryRaw).getTime();
+        expiresAtMs = Number.isNaN(ms3) ? null : ms3;
       } else if (typeof expiryRaw === "number" && Number.isFinite(expiryRaw)) {
         expiresAtMs = expiryRaw < 1e11 ? expiryRaw * 1e3 : expiryRaw;
       }
@@ -46029,8 +46576,8 @@ ${res.stderr}`);
       if (typeof value !== "string" || value.trim() === "") {
         return null;
       }
-      const ms22 = new Date(value).getTime();
-      return Number.isNaN(ms22) ? null : ms22;
+      const ms3 = new Date(value).getTime();
+      return Number.isNaN(ms3) ? null : ms3;
     }
     function windowMinutes(value) {
       if (typeof value === "number" && Number.isFinite(value)) {
@@ -48066,8 +48613,8 @@ child.on('exit', () => process.exit(0));
         const expiresRaw = record2.expires_at;
         let expiresAtMs = null;
         if (typeof expiresRaw === "string" && expiresRaw.trim() !== "") {
-          const ms22 = new Date(expiresRaw).getTime();
-          expiresAtMs = Number.isNaN(ms22) ? null : ms22;
+          const ms3 = new Date(expiresRaw).getTime();
+          expiresAtMs = Number.isNaN(ms3) ? null : ms3;
         } else if (typeof expiresRaw === "number" && Number.isFinite(expiresRaw)) {
           expiresAtMs = expiresRaw < 1e11 ? expiresRaw * 1e3 : expiresRaw;
         }
@@ -48115,8 +48662,8 @@ child.on('exit', () => process.exit(0));
       if (typeof value !== "string" || value.trim() === "") {
         return null;
       }
-      const ms22 = new Date(value).getTime();
-      return Number.isNaN(ms22) ? null : ms22;
+      const ms3 = new Date(value).getTime();
+      return Number.isNaN(ms3) ? null : ms3;
     }
     function asRecord3(value) {
       return typeof value === "object" && value !== null ? value : null;
@@ -48346,8 +48893,8 @@ child.on('exit', () => process.exit(0));
       if (typeof value !== "string" || value.trim() === "") {
         return null;
       }
-      const ms22 = new Date(value).getTime();
-      return Number.isNaN(ms22) ? null : ms22;
+      const ms3 = new Date(value).getTime();
+      return Number.isNaN(ms3) ? null : ms3;
     }
     function windowMinutes2(window) {
       if (typeof window !== "object" || window === null) {
@@ -49879,13 +50426,13 @@ child.on('exit', () => process.exit(0));
       const build = (() => {
         try {
           const info = getDaemonBuildInfo();
-          const commit = typeof info.commit === "string" && info.commit && info.commit !== "unknown" ? info.commit : void 0;
+          const commit2 = typeof info.commit === "string" && info.commit && info.commit !== "unknown" ? info.commit : void 0;
           const commitShort = typeof info.commitShort === "string" && info.commitShort && info.commitShort !== "unknown" ? info.commitShort : void 0;
           const version2 = typeof info.version === "string" && info.version && info.version !== "unknown" ? info.version : void 0;
           const builtAt = typeof info.builtAt === "string" && info.builtAt ? info.builtAt : void 0;
-          if (!commit && !version2) return void 0;
+          if (!commit2 && !version2) return void 0;
           return {
-            ...commit ? { commit } : {},
+            ...commit2 ? { commit: commit2 } : {},
             ...commitShort ? { commitShort } : {},
             ...version2 ? { version: version2 } : {},
             ...builtAt ? { builtAt } : {}
@@ -50377,9 +50924,9 @@ child.on('exit', () => process.exit(0));
         { cwd: repoRoot }
       );
       const entries = result.stdout.split("\n").filter((line) => line.trim().length > 0).map((line) => {
-        const [commit = "", authorName, authorEmail, authoredAt, committedAt, ...messageParts] = line.split("\0");
+        const [commit2 = "", authorName, authorEmail, authoredAt, committedAt, ...messageParts] = line.split("\0");
         return {
-          commit,
+          commit: commit2,
           message: messageParts.join("\0"),
           authorName: authorName || void 0,
           authorEmail: authorEmail || void 0,
@@ -51370,8 +51917,8 @@ ${error48.message || ""}`;
       return value === "host" || value === "member" ? value : void 0;
     }
     function resolveMeshHostStatus(mesh, opts) {
-      const meshRecord = readObject(mesh);
-      const raw = readObject(meshRecord?.meshHost);
+      const meshRecord2 = readObject(mesh);
+      const raw = readObject(meshRecord2?.meshHost);
       const role = normalizeMeshDaemonRole(raw?.role) ?? "host";
       const pairing = readObject(raw?.pairing);
       const normalized = {
@@ -51384,7 +51931,7 @@ ${error48.message || ""}`;
       let hostNodeId = readString3(raw?.hostNodeId);
       const hostAddress = readString3(raw?.hostAddress);
       let hostSynthesized = false;
-      const nodes = Array.isArray(meshRecord?.nodes) ? meshRecord.nodes : [];
+      const nodes = Array.isArray(meshRecord2?.nodes) ? meshRecord2.nodes : [];
       const nodeDaemonIdOf = (node) => {
         const record2 = readObject(node);
         return readString3(record2?.daemonId) ?? readString3(record2?.daemon_id);
@@ -51501,9 +52048,9 @@ ${error48.message || ""}`;
     function getMeshConfigPath() {
       return (0, import_path5.join)(getConfigDir(), "meshes.json");
     }
-    function sleepBlockingMs(ms22) {
-      if (ms22 <= 0) return;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms22);
+    function sleepBlockingMs(ms3) {
+      if (ms3 <= 0) return;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms3);
     }
     function acquireMeshConfigLock() {
       const lockPath = `${getMeshConfigPath()}.lock`;
@@ -51643,12 +52190,12 @@ ${error48.message || ""}`;
         const difficultyBrains = ownerDifficultyBrains;
         const priority = Array.isArray(p.providerPriority) ? p.providerPriority.map((t) => typeof t === "string" ? t.trim() : "").filter(Boolean) : [];
         const derived = deriveSlotsFromLegacy({ providerPriority: priority, difficultyBrains });
-        const slots = derived.length ? derived : [...roleCap.values()].map((r) => ({ provider: r.provider }));
-        for (const slot of slots) {
+        const slots2 = derived.length ? derived : [...roleCap.values()].map((r) => ({ provider: r.provider }));
+        for (const slot of slots2) {
           const match = roleCap.get(slot.provider.trim().toLowerCase());
           if (match && slot.maxParallel === void 0) slot.maxParallel = match.cap;
         }
-        p.slots = slots;
+        p.slots = slots2;
       }
       delete p.providerRoles;
       return true;
@@ -52168,10 +52715,10 @@ ${error48.message || ""}`;
       }
       return s2;
     }
-    function collectIgnoredMagiSlotFields2(slots) {
-      if (!Array.isArray(slots)) return [];
+    function collectIgnoredMagiSlotFields2(slots2) {
+      if (!Array.isArray(slots2)) return [];
       const out = [];
-      slots.forEach((entry, idx) => {
+      slots2.forEach((entry, idx) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) return;
         for (const key2 of Object.keys(entry)) {
           if (MAGI_SLOT_KNOWN_KEYS.includes(key2)) continue;
@@ -52184,15 +52731,15 @@ ${error48.message || ""}`;
       });
       return out;
     }
-    function normalizeMagiSlots2(slots, knownNodeIds) {
+    function normalizeMagiSlots2(slots2, knownNodeIds) {
       const allowed = knownNodeIds ? new Set(knownNodeIds) : void 0;
-      if (!Array.isArray(slots) || slots.length === 0) {
+      if (!Array.isArray(slots2) || slots2.length === 0) {
         throw new Error("invalid_magi_kind_panel: slots must be a non-empty array");
       }
-      if (slots.length > MAX_MAGI_KIND_SLOTS) {
+      if (slots2.length > MAX_MAGI_KIND_SLOTS) {
         throw new Error(`invalid_magi_kind_panel: too many slots (max ${MAX_MAGI_KIND_SLOTS})`);
       }
-      return slots.map((entry, idx) => {
+      return slots2.map((entry, idx) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
           throw new Error(`invalid_magi_kind_panel: slot[${idx}] must be an object`);
         }
@@ -52249,7 +52796,7 @@ ${error48.message || ""}`;
     function setMagiKindPanel2(...args) {
       return withMeshConfigWriteLock(() => setMagiKindPanelUnlocked(...args));
     }
-    function setMagiKindPanelUnlocked(kind, slots, meshId) {
+    function setMagiKindPanelUnlocked(kind, slots2, meshId) {
       const key2 = normalizeMagiTaskKindKey(kind);
       const stored = loadMeshConfig();
       const mesh = resolveScopedMesh(stored, meshId);
@@ -52258,7 +52805,7 @@ ${error48.message || ""}`;
           meshId?.trim() ? `invalid_magi_kind_panel: mesh '${meshId.trim()}' not found` : `magi_kind_panel_mesh_ambiguous: this machine hosts ${stored.meshes.length} meshes, so a MAGI kind-panel write must name its mesh explicitly (meshId). Panels are per mesh.`
         );
       }
-      const normalized = normalizeMagiSlots2(slots, mesh.nodes.map((n) => n.id));
+      const normalized = normalizeMagiSlots2(slots2, mesh.nodes.map((n) => n.id));
       const map3 = mesh.magiKindPanels ?? {};
       map3[key2] = normalized;
       mesh.magiKindPanels = map3;
@@ -52289,10 +52836,10 @@ ${error48.message || ""}`;
       const panels = mesh.magiKindPanels;
       if (!panels) return false;
       let changed = false;
-      for (const [kind, slots] of Object.entries(panels)) {
-        if (!Array.isArray(slots)) continue;
-        const kept = slots.filter((slot) => slot.nodeId !== nodeId);
-        if (kept.length === slots.length) continue;
+      for (const [kind, slots2] of Object.entries(panels)) {
+        if (!Array.isArray(slots2)) continue;
+        const kept = slots2.filter((slot) => slot.nodeId !== nodeId);
+        if (kept.length === slots2.length) continue;
         changed = true;
         if (kept.length === 0) delete panels[kind];
         else panels[kind] = kept;
@@ -56228,13 +56775,7 @@ ${lines.join("\n")}
         if (priorTerminal && entry.status === terminal.status) {
           return { entry, committed: true, duplicate: true, materializedNodeIds: [] };
         }
-        const graphStore = store.graphStore();
-        const node = graphStore.findNodeByQueueTaskId(terminal.meshId, terminal.taskId);
-        persistOutputVersion(store, terminal, node, nowIso);
-        entry.status = terminal.status;
-        store.updateQueueEntry(entry);
-        endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
-        const materializedNodeIds = node ? advanceGraphForTerminalNode(store, node, terminal, nowIso) : [];
+        const { materializedNodeIds } = applyTaskTerminalSteps(store, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false, materializedNodeIds };
       });
       if (result.committed) {
@@ -56255,14 +56796,62 @@ ${lines.join("\n")}
       }
       return result;
     }
-    function persistOutputVersion(store, terminal, node, nowIso) {
+    function applyTaskTerminalSteps(store, entry, terminal, nowIso, attemptNo) {
+      const graphStore = store.graphStore();
+      const node = graphStore.findNodeByQueueTaskId(terminal.meshId, terminal.taskId);
+      persistOutputVersion(store, terminal, node, nowIso, attemptNo);
+      entry.status = terminal.status;
+      store.updateQueueEntry(entry);
+      endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
+      const materializedNodeIds = node ? advanceGraphForTerminalNode(store, node, terminal, nowIso) : [];
+      return { materializedNodeIds };
+    }
+    function applyTaskTerminalInTxn(input) {
+      const store = MeshRuntimeStore.getInstance();
+      return store.transaction(() => {
+        const entry = store.findQueueEntryById(input.meshId, input.taskId);
+        if (!entry) return { entry: null, transitioned: false, materializedNodeIds: [] };
+        if (entry.status === input.status) return { entry, transitioned: false, materializedNodeIds: [] };
+        const terminal = {
+          meshId: input.meshId,
+          taskId: input.taskId,
+          status: input.status,
+          ...input.sessionId ? { sessionId: input.sessionId } : {},
+          ...input.attemptId ? { attemptId: input.attemptId } : {},
+          occurredAtMs: input.occurredAtMs,
+          source: "provider_event",
+          ...input.reason ? { reason: input.reason } : {},
+          ...input.envelope ? { envelope: input.envelope } : {}
+        };
+        const nowIso = new Date(input.occurredAtMs).toISOString();
+        const { materializedNodeIds } = applyTaskTerminalSteps(store, entry, terminal, nowIso, input.attemptNo);
+        return { entry, transitioned: true, materializedNodeIds };
+      });
+    }
+    function afterTaskTerminalCommitted(meshId, taskId) {
+      try {
+        expireWorkerTaskTokensForTask(meshId, taskId);
+      } catch {
+      }
+      try {
+        discardWorkerMailboxForTask(meshId, taskId);
+      } catch {
+      }
+      try {
+        drainMeshGraphOutbox(meshId);
+      } catch {
+      }
+    }
+    function persistOutputVersion(store, terminal, node, nowIso, attemptNo) {
       const graphStore = store.graphStore();
       const latest = graphStore.getLatestOutput(terminal.taskId);
       const version2 = (latest?.version ?? 0) + 1;
-      let attemptSeq = 1;
-      try {
-        attemptSeq = store.getCurrentTurnAttempt(terminal.meshId, terminal.taskId)?.attemptSeq ?? 1;
-      } catch {
+      let attemptSeq = attemptNo !== void 0 ? attemptNo + 1 : 1;
+      if (attemptNo === void 0) {
+        try {
+          attemptSeq = store.getCurrentTurnAttempt(terminal.meshId, terminal.taskId)?.attemptSeq ?? 1;
+        } catch {
+        }
       }
       const envelopeJson = canonicalJson({
         task_id: terminal.taskId,
@@ -57310,13 +57899,13 @@ ${lines.join("\n")}
         GIT_STASH_READONLY_SUBCOMMANDS = /* @__PURE__ */ new Set(["list", "show"]);
       }
     });
-    function truncateString(value, maxChars) {
+    function truncateString22(value, maxChars) {
       if (value.length <= maxChars) return value;
       if (maxChars <= 12) return value.slice(0, Math.max(0, maxChars));
       return `${value.slice(0, maxChars - 12)}...[truncated]`;
     }
     function trimStructuredStrings(value, maxChars) {
-      if (typeof value === "string") return truncateString(value, maxChars);
+      if (typeof value === "string") return truncateString22(value, maxChars);
       if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));
       if (!value || typeof value !== "object") return value;
       return Object.fromEntries(
@@ -57394,12 +57983,12 @@ ${lines.join("\n")}
         ...rest,
         status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
         activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
-          message: truncateString(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
+          message: truncateString22(activeChat.activeModal.message || "", STATUS_MODAL_MESSAGE_LIMIT),
           buttons: (activeChat.activeModal.buttons || []).map(
-            (button) => truncateString(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
+            (button) => truncateString22(String(button || ""), STATUS_MODAL_BUTTON_LIMIT)
           )
         } : null,
-        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString(activeChat.inputContent, 2 * 1024) : void 0
+        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent ? truncateString22(activeChat.inputContent, 2 * 1024) : void 0
       };
       if (resolvedOptions.includeMessages) {
         normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions);
@@ -59746,18 +60335,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             this.H = SHA256_IV[7] | 0;
           }
           get() {
-            const { A, B, C, D, E, F, G, H } = this;
-            return [A, B, C, D, E, F, G, H];
+            const { A: A2, B, C: C2, D: D2, E, F: F2, G: G2, H } = this;
+            return [A2, B, C2, D2, E, F2, G2, H];
           }
           // prettier-ignore
-          set(A, B, C, D, E, F, G, H) {
-            this.A = A | 0;
+          set(A2, B, C2, D2, E, F2, G2, H) {
+            this.A = A2 | 0;
             this.B = B | 0;
-            this.C = C | 0;
-            this.D = D | 0;
+            this.C = C2 | 0;
+            this.D = D2 | 0;
             this.E = E | 0;
-            this.F = F | 0;
-            this.G = G | 0;
+            this.F = F2 | 0;
+            this.G = G2 | 0;
             this.H = H | 0;
           }
           process(view, offset) {
@@ -59770,30 +60359,30 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
               SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
             }
-            let { A, B, C, D, E, F, G, H } = this;
+            let { A: A2, B, C: C2, D: D2, E, F: F2, G: G2, H } = this;
             for (let i = 0; i < 64; i++) {
               const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
-              const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
-              const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
-              const T2 = sigma0 + Maj(A, B, C) | 0;
-              H = G;
-              G = F;
-              F = E;
-              E = D + T1 | 0;
-              D = C;
-              C = B;
-              B = A;
-              A = T1 + T2 | 0;
+              const T1 = H + sigma1 + Chi(E, F2, G2) + SHA256_K[i] + SHA256_W[i] | 0;
+              const sigma0 = rotr(A2, 2) ^ rotr(A2, 13) ^ rotr(A2, 22);
+              const T2 = sigma0 + Maj(A2, B, C2) | 0;
+              H = G2;
+              G2 = F2;
+              F2 = E;
+              E = D2 + T1 | 0;
+              D2 = C2;
+              C2 = B;
+              B = A2;
+              A2 = T1 + T2 | 0;
             }
-            A = A + this.A | 0;
+            A2 = A2 + this.A | 0;
             B = B + this.B | 0;
-            C = C + this.C | 0;
-            D = D + this.D | 0;
+            C2 = C2 + this.C | 0;
+            D2 = D2 + this.D | 0;
             E = E + this.E | 0;
-            F = F + this.F | 0;
-            G = G + this.G | 0;
+            F2 = F2 + this.F | 0;
+            G2 = G2 + this.G | 0;
             H = H + this.H | 0;
-            this.set(A, B, C, D, E, F, G, H);
+            this.set(A2, B, C2, D2, E, F2, G2, H);
           }
           roundClean() {
             clean(SHA256_W);
@@ -60796,7 +61385,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         utf82 = new globalThis.TextEncoder();
         g = globalThis;
         defaultTimers = {
-          setTimeout: (cb, ms22) => g.setTimeout(cb, ms22),
+          setTimeout: (cb, ms3) => g.setTimeout(cb, ms3),
           clearTimeout: (h) => g.clearTimeout(h)
         };
       }
@@ -62145,11 +62734,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 best = [ks.winner[1], ks.winner[2]];
                 bestOrder = ks.winnerOrder;
               }
-              for (const ms22 of ks.members.values()) {
-                if (bestOrder !== void 0 && orderCompare(ms22.order, bestOrder) <= 0)
+              for (const ms3 of ks.members.values()) {
+                if (bestOrder !== void 0 && orderCompare(ms3.order, bestOrder) <= 0)
                   continue;
-                best = [ms22.entry[1], ms22.entry[2]];
-                bestOrder = ms22.order;
+                best = [ms3.entry[1], ms3.entry[2]];
+                bestOrder = ms3.order;
               }
               if (best)
                 out[key2] = best;
@@ -62244,8 +62833,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const out = /* @__PURE__ */ new Map();
             for (const [k, ks] of keys) {
               const members = /* @__PURE__ */ new Map();
-              for (const [m, ms22] of ks.members)
-                members.set(m, { ...ms22, frontier: [...ms22.frontier], superseded: [...ms22.superseded] });
+              for (const [m, ms3] of ks.members)
+                members.set(m, { ...ms3, frontier: [...ms3.frontier], superseded: [...ms3.superseded] });
               out.set(k, {
                 ...ks,
                 members,
@@ -62275,16 +62864,16 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 k.superseded = [...ks.superseded];
               if (ks.members.size > 0) {
                 k.members = {};
-                for (const [m, ms22] of ks.members) {
+                for (const [m, ms3] of ks.members) {
                   const mm = {
-                    present: ms22.present,
-                    entry: ms22.entry,
-                    order: ms22.order
+                    present: ms3.present,
+                    entry: ms3.entry,
+                    order: ms3.order
                   };
-                  if (ms22.frontier.length > 0)
-                    mm.frontier = [...ms22.frontier];
-                  if (ms22.superseded.length > 0)
-                    mm.superseded = [...ms22.superseded];
+                  if (ms3.frontier.length > 0)
+                    mm.frontier = [...ms3.frontier];
+                  if (ms3.superseded.length > 0)
+                    mm.superseded = [...ms3.superseded];
                   k.members[m] = mm;
                 }
               }
@@ -62341,8 +62930,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (!ks)
               return void 0;
             if (member !== void 0) {
-              const ms22 = ks.members.get(member);
-              return ms22 ? [ms22.entry[1], ms22.entry[2]] : void 0;
+              const ms3 = ks.members.get(member);
+              return ms3 ? [ms3.entry[1], ms3.entry[2]] : void 0;
             }
             return ks.winner ? [ks.winner[1], ks.winner[2]] : void 0;
           }
@@ -62542,10 +63131,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               }
               case "resolve-member": {
                 const member = String(payload.member ?? "");
-                const ms22 = ks.members.get(member);
+                const ms3 = ks.members.get(member);
                 const supersedes = payload.supersedes ?? [];
-                if (ms22)
-                  this.applySupersedes(ms22.frontier, ms22.superseded, supersedes);
+                if (ms3)
+                  this.applySupersedes(ms3.frontier, ms3.superseded, supersedes);
                 this.foldMemberOp(topic, ks, e, id22, policy, member, Boolean(payload.present), events);
                 return;
               }
@@ -62584,26 +63173,26 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               ks.winner = id22;
               ks.winnerOrder = ord;
             }
-            let ms22 = ks.members.get(member);
-            if (!ms22) {
-              ms22 = { present, entry: id22, order: ord, frontier: [id22], superseded: [] };
-              ks.members.set(member, ms22);
+            let ms3 = ks.members.get(member);
+            if (!ms3) {
+              ms3 = { present, entry: id22, order: ord, frontier: [id22], superseded: [] };
+              ks.members.set(member, ms3);
               return;
             }
-            const prev = ms22.entry;
+            const prev = ms3.entry;
             let adopt;
             if (policy === "fww")
-              adopt = this.isAncestor(topic, ms22.entry, e);
+              adopt = this.isAncestor(topic, ms3.entry, e);
             else
-              adopt = orderCompare(ord, ms22.order) > 0;
-            ms22.frontier = ms22.frontier.filter((h) => !this.isAncestor(topic, h, e) && !this.sameId(h, id22));
-            ms22.frontier.push(id22);
+              adopt = orderCompare(ord, ms3.order) > 0;
+            ms3.frontier = ms3.frontier.filter((h) => !this.isAncestor(topic, h, e) && !this.sameId(h, id22));
+            ms3.frontier.push(id22);
             if (adopt) {
-              ms22.present = present;
-              ms22.entry = id22;
-              ms22.order = ord;
+              ms3.present = present;
+              ms3.entry = id22;
+              ms3.order = ord;
             }
-            if (ms22.frontier.length > 1 && !this.isAncestor(topic, prev, e)) {
+            if (ms3.frontier.length > 1 && !this.isAncestor(topic, prev, e)) {
               events.push(() => this.surfaceConflict(topic, e.key, ks, member));
             }
           }
@@ -62740,8 +63329,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 const hasScalar = ks.scalar && ks.value !== void 0;
                 const memberMap = {};
                 let hasMembers = false;
-                for (const [m, ms22] of ks.members) {
-                  if (ms22.present) {
+                for (const [m, ms3] of ks.members) {
+                  if (ms3.present) {
                     memberMap[m] = true;
                     hasMembers = true;
                   }
@@ -66200,7 +66789,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_views();
         g2 = globalThis;
         defaultTimers2 = {
-          setTimeout: (cb, ms22) => g2.setTimeout(cb, ms22),
+          setTimeout: (cb, ms3) => g2.setTimeout(cb, ms3),
           clearTimeout: (h) => g2.clearTimeout(h)
         };
       }
@@ -67046,38 +67635,63 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
       };
     }
+    function createAwaitedSlots(max) {
+      if (!Number.isInteger(max) || max < 1) throw new Error(`createAwaitedSlots: max must be a positive integer (got ${max})`);
+      let held = 0;
+      let generation = 0;
+      const waiters = [];
+      const grant = () => {
+        held++;
+        const grantedGeneration = generation;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          if (grantedGeneration === generation) held--;
+          pump();
+        };
+      };
+      const pump = () => {
+        while (held < max && waiters.length > 0) {
+          const next = waiters.shift();
+          next(grant());
+        }
+      };
+      return {
+        acquire() {
+          if (held < max && waiters.length === 0) return Promise.resolve(grant());
+          return new Promise((resolve36) => {
+            waiters.push(resolve36);
+          });
+        },
+        inflight: () => held,
+        waiting: () => waiters.length,
+        reset() {
+          generation++;
+          held = 0;
+          pump();
+        }
+      };
+    }
     var init_inflight_gate = __esm2({
       "src/seqscribe/inflight-gate.ts"() {
         "use strict";
       }
     });
-    function resolveMeshDualWriteMode(env2 = process.env) {
-      const raw = env2[MESH_DUAL_WRITE_ENV]?.trim().toLowerCase();
-      if (!raw) return "primary";
-      if (raw === "off") return "off";
-      if (raw === "shadow") return "shadow";
-      if (raw === "primary") return "primary";
-      warnOnce2(
-        `unrecognized ${MESH_DUAL_WRITE_ENV}=${raw}; treating as 'shadow' (reads stay on the ledger). Valid values are 'primary' (the default when unset), 'shadow' and 'off'.`
-      );
-      return "shadow";
-    }
     function warnOnce2(message) {
       if (warnedOnce2.has(message)) return;
       warnedOnce2.add(message);
       LOG.warn("Seqscribe", message);
+    }
+    function errorMessage(error48) {
+      return error48 instanceof Error ? error48.message : String(error48);
     }
     function listenersFor(node) {
       const host = node;
       let set3 = host[TOPIC_LISTENERS];
       if (!set3) {
         set3 = /* @__PURE__ */ new Set();
-        Object.defineProperty(node, TOPIC_LISTENERS, {
-          value: set3,
-          enumerable: false,
-          writable: false,
-          configurable: true
-        });
+        Object.defineProperty(node, TOPIC_LISTENERS, { value: set3, enumerable: false, writable: false, configurable: true });
       }
       return set3;
     }
@@ -67093,234 +67707,352 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         try {
           listener(topic);
         } catch (error48) {
-          warnOnce2(
-            `topic activation listener failed (further failures logged once) topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-          );
+          warnOnce2(`topic activation listener failed (further failures logged once) topic=${topic}: ${errorMessage(error48)}`);
         }
       }
     }
-    function configureMeshDualWrite(node, env2 = process.env) {
-      activeNode2 = node;
-      activeMode = resolveMeshDualWriteMode(env2);
-      definedTopics.clear();
-      inflightGate.reconfigure();
-      if (node && activeMode === "primary") {
-        LOG.info(
-          "Seqscribe",
-          `mesh dual-write armed in PRIMARY mode writer=${node.writerId} \u2014 reads cut over per mesh once the readiness gate passes`
-        );
-      } else if (node && activeMode === "shadow") {
-        LOG.info("Seqscribe", `mesh dual-write shadow armed writer=${node.writerId}`);
-      } else if (node) {
-        LOG.info("Seqscribe", `mesh dual-write disabled (${MESH_DUAL_WRITE_ENV}=off)`);
-      }
-      if (node && discoveredMeshIds.size > 0) {
-        activateMeshTopicsNow(discoveredMeshIds);
-      }
-    }
-    function ensureTopic(node, meshId) {
-      const topic = meshEventsTopic(meshId);
+    function defineOnce(node, topic, policy) {
       const known = definedTopics.get(topic);
-      if (known === true) return topic;
-      if (known === false) return null;
+      if (known !== void 0) return known;
       if (node.topics.some((d) => d.topic === topic)) {
         definedTopics.set(topic, true);
-        return topic;
+        return true;
       }
       try {
-        node.node.defineTopic(topic, meshEventsPolicy());
-        node.topics.push({ topic, policy: meshEventsPolicy() });
+        node.node.defineTopic(topic, policy);
+        node.topics.push({ topic, policy });
         definedTopics.set(topic, true);
-        LOG.info("Seqscribe", `mesh events topic defined topic=${topic}`);
+        LOG.info("Seqscribe", `mesh topic defined topic=${topic}`);
         announceTopicActivated(node, topic);
-        return topic;
+        return true;
       } catch (error48) {
         definedTopics.set(topic, false);
         counters2.topicErrors++;
-        LOG.warn(
-          "Seqscribe",
-          `mesh dual-write disabled for this mesh \u2014 defineTopic failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
-        return null;
+        LOG.error("Seqscribe", `mesh topic could not be defined topic=${topic}: ${errorMessage(error48)}`);
+        return false;
       }
+    }
+    function ensureEventsTopic(node, meshId) {
+      const topic = meshEventsTopic(meshId);
+      return defineOnce(node, topic, meshEventsPolicy()) ? topic : null;
     }
     function ensureHandoffTopic(node, meshId) {
       if (!node.authorityEnabled) return null;
       const topic = meshHandoffTopic(meshId);
-      const known = definedTopics.get(topic);
-      if (known === true) return topic;
-      if (known === false) return null;
-      if (node.topics.some((d) => d.topic === topic)) {
-        definedTopics.set(topic, true);
-        return topic;
-      }
-      try {
-        const policy = meshHandoffPolicy();
-        node.node.defineTopic(topic, policy);
-        node.topics.push({ topic, policy });
-        definedTopics.set(topic, true);
-        LOG.info("Seqscribe", `mesh handoff topic defined topic=${topic}`);
-        announceTopicActivated(node, topic);
-        return topic;
-      } catch (error48) {
-        definedTopics.set(topic, false);
-        counters2.topicErrors++;
-        LOG.warn(
-          "Seqscribe",
-          `handoff replication disabled for this mesh \u2014 defineTopic failed topic=${topic}: ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
-        return null;
-      }
+      return defineOnce(node, topic, meshHandoffPolicy()) ? topic : null;
     }
-    function activateMeshTopicsNow(meshIds) {
+    function activateNow(meshIds) {
       const node = activeNode2;
-      if (!node) return 0;
+      if (!node) return { activated: 0, failed: [] };
       let activated = 0;
+      const failed = [];
       for (const meshId of meshIds) {
-        const eventTopic = meshEventsTopic(meshId);
+        const eventsTopic = meshEventsTopic(meshId);
         const handoffTopic = meshHandoffTopic(meshId);
-        const eventWasKnown = definedTopics.has(eventTopic);
-        const handoffWasKnown = definedTopics.has(handoffTopic);
-        if (activeMode !== "off") ensureTopic(node, meshId);
+        const eventsKnown = definedTopics.get(eventsTopic) === true;
+        const handoffKnown = definedTopics.get(handoffTopic) === true;
+        if (!ensureEventsTopic(node, meshId)) failed.push(eventsTopic);
         ensureHandoffTopic(node, meshId);
-        if (!eventWasKnown && definedTopics.get(eventTopic) === true || !handoffWasKnown && definedTopics.get(handoffTopic) === true) {
+        if (!eventsKnown && definedTopics.get(eventsTopic) === true || !handoffKnown && definedTopics.get(handoffTopic) === true) {
           activated++;
         }
       }
-      return activated;
+      return { activated, failed };
     }
-    function activateKnownMeshTopics(meshIds) {
-      const normalizedMeshIds = [];
+    function normalizeMeshIds(meshIds) {
+      const out = [];
       for (const meshId of meshIds) {
         if (typeof meshId !== "string") continue;
         const normalized = meshId.trim();
         if (!normalized) continue;
         discoveredMeshIds.add(normalized);
-        normalizedMeshIds.push(normalized);
+        out.push(normalized);
       }
-      return activateMeshTopicsNow(normalizedMeshIds);
+      return out;
     }
-    function recordMeshEventShadow(meshId, entry) {
-      recordMeshEvent(meshId, entry, "inline");
+    function activateKnownMeshTopics(meshIds) {
+      return activateNow(normalizeMeshIds(meshIds)).activated;
     }
-    function backfillMeshEventShadow(meshId, entry) {
-      return recordMeshEvent(meshId, entry, "backfill");
+    function activateMeshTopicsAtBoot(meshIds) {
+      const { activated, failed } = activateNow(normalizeMeshIds(meshIds));
+      if (failed.length > 0) throw new MeshTopicActivationError(failed);
+      return activated;
     }
-    function recordMeshEvent(meshId, entry, origin) {
+    function configureMeshPublisher(node) {
+      activeNode2 = node;
+      definedTopics.clear();
+      slots.reset();
+      if (node) {
+        LOG.info("Seqscribe", `mesh publisher armed writer=${node.writerId}`);
+        if (discoveredMeshIds.size > 0) activateNow(discoveredMeshIds);
+      }
+    }
+    function isMeshPublisherArmed() {
+      return activeNode2 !== null;
+    }
+    function meshPublisherWriterId() {
+      return activeNode2?.writerId ?? null;
+    }
+    function track(promise2) {
+      outstanding.add(promise2);
+      const done = () => {
+        outstanding.delete(promise2);
+      };
+      promise2.then(done, done);
+      return promise2;
+    }
+    async function appendWithSlot(node, topic, kind, payload, ref) {
+      const release2 = await slots.acquire();
+      try {
+        return await node.node.log(topic).append(kind, payload, ref ? { ref } : void 0);
+      } finally {
+        release2();
+      }
+    }
+    function assertSize(topic, kind, payload) {
+      const estimated = estimateEntryBytes({ topic, kind, payload });
+      const ceiling = maxEntryBytes();
+      if (estimated > ceiling) {
+        counters2.oversized++;
+        throw new Error(`entry over the seqscribe size ceiling (${estimated}B > ${ceiling}B, kind=${kind}) \u2014 a projection bug`);
+      }
+    }
+    function summaryRefToEntryId(ref) {
+      return [ref.topic, ref.writer, ref.seq];
+    }
+    function projectTurnTopicEntry(entry) {
+      if (!isMeshTopicEntry(entry)) return null;
+      const head = { v: entry.v, eventId: entry.eventId, at: entry.at };
+      const opt = (key2, value) => value === void 0 ? {} : { [key2]: value };
+      switch (entry.k) {
+        case "turn.evidence":
+          return {
+            ...head,
+            k: entry.k,
+            attemptId: entry.attemptId,
+            generation: entry.generation,
+            ownerDaemonId: entry.ownerDaemonId,
+            ...opt("taskId", entry.taskId),
+            sessionId: entry.sessionId,
+            ev: entry.ev,
+            ...opt("strength", entry.strength),
+            ...opt("flags", entry.flags),
+            ...opt("evidence", entry.evidence)
+          };
+        case "turn.committed":
+          return {
+            ...head,
+            k: entry.k,
+            attemptId: entry.attemptId,
+            generation: entry.generation,
+            ...opt("taskId", entry.taskId),
+            outcome: entry.outcome,
+            strength: entry.strength,
+            reason: entry.reason
+          };
+        case "turn.notify":
+          return {
+            ...head,
+            k: entry.k,
+            ...opt("attemptId", entry.attemptId),
+            notify: entry.notify,
+            targetDaemonId: entry.targetDaemonId,
+            ...opt("targetSessionId", entry.targetSessionId),
+            ...opt("taskId", entry.taskId)
+          };
+        default:
+          return null;
+      }
+    }
+    function publishMeshTopicEntry(meshId, entry, opts = {}) {
+      const node = activeNode2;
+      if (!node) return Promise.reject(new Error("mesh publisher not armed (no seqscribe node)"));
+      const projected = projectTurnTopicEntry(entry);
+      if (!projected) {
+        counters2.invalidEntries++;
+        LOG.error("Seqscribe", `mesh publisher refused an entry that fails the content guard k=${entry?.k}`);
+        return Promise.reject(new Error("mesh topic entry failed the content-boundary guard"));
+      }
+      if (Object.keys(projected).length !== Object.keys(entry).length) {
+        counters2.invalidEntries++;
+        warnOnce2(`mesh publisher dropped undeclared field(s) from a ${entry.k} entry (allow-list projection; further occurrences logged once)`);
+      }
+      const topic = ensureEventsTopic(node, meshId);
+      if (!topic) return Promise.reject(new Error(`mesh events topic unavailable for mesh ${meshId}`));
+      const payload = sanitizeJson(projected);
+      try {
+        assertSize(topic, entry.k, payload);
+      } catch (error48) {
+        LOG.error("Seqscribe", `mesh publisher: ${errorMessage(error48)}`);
+        return Promise.reject(error48);
+      }
+      const ref = opts.ref ? summaryRefToEntryId(opts.ref) : void 0;
+      return track(appendWithSlot(node, topic, entry.k, payload, ref).then(
+        (id22) => {
+          counters2.published++;
+          return id22;
+        },
+        (error48) => {
+          counters2.publishFailed++;
+          LOG.error("Seqscribe", `mesh publish rejected topic=${topic} k=${entry.k} eventId=${entry.eventId}: ${errorMessage(error48)} \u2014 row stays pending for republish`);
+          throw error48;
+        }
+      ));
+    }
+    function appendMeshHandoff(meshId, kind, payload) {
+      const node = activeNode2;
+      if (!node) return Promise.reject(new Error("mesh publisher not armed (no seqscribe node)"));
+      const topic = ensureHandoffTopic(node, meshId);
+      if (!topic) return Promise.reject(new Error(`mesh handoff topic unavailable for mesh ${meshId} (authority ${node.authorityEnabled ? "on" : "off"})`));
+      const safe = sanitizeJson(payload);
+      try {
+        assertSize(topic, kind, safe);
+      } catch (error48) {
+        return Promise.reject(error48);
+      }
+      return track(appendWithSlot(node, topic, kind, safe).then((id22) => {
+        counters2.handoffWritten++;
+        return { topic: id22[0], writer: id22[1], seq: id22[2] };
+      }));
+    }
+    function projectMeshRecord(entry) {
+      const projected = projectMeshLedgerEntry(entry);
+      const at = Date.parse(projected.timestamp);
+      return {
+        ...toJsonValue(projected),
+        v: 2,
+        k: "mesh.record",
+        eventId: projected.id,
+        at: Number.isFinite(at) ? at : 0
+      };
+    }
+    function publishMeshRecord(meshId, entry) {
       try {
         const node = activeNode2;
-        if (!node || activeMode === "off") return false;
-        const topic = ensureTopic(node, meshId);
+        if (!node) return false;
+        const topic = ensureEventsTopic(node, meshId);
         if (!topic) return false;
-        const projected = projectMeshLedgerEntry(entry);
-        const estimated = estimateProjectedEntryBytes(topic, projected);
-        const ceiling = maxEntryBytes();
-        if (estimated > ceiling) {
-          counters2.oversized++;
-          warnOnce2(
-            `mesh dual-write skipped an oversized record (further occurrences logged once): estimated=${estimated}B ceiling=${ceiling}B ledgerKind=${projected.ledgerKind}. The projection is supposed to bound every field \u2014 this is a projection bug, not a transport one.`
-          );
+        const payload = projectMeshRecord(entry);
+        assertSize(topic, MESH_EVENT_ENTRY_KIND, payload);
+        if (slots.waiting() >= MESH_RECORD_MAX_WAITING) {
+          counters2.recordsRefused++;
+          LOG.error("Seqscribe", `mesh.record refused: ${slots.waiting()} publishes waiting for a slot (topic stalled?) ledgerKind=${entry.kind} mesh=${meshId}`);
           return false;
         }
-        const attempt = inflightGate.run(
-          () => node.node.log(topic).append(MESH_EVENT_ENTRY_KIND, toJsonValue(projected)),
+        void track(appendWithSlot(node, topic, MESH_EVENT_ENTRY_KIND, payload).then(
           () => {
-            if (origin === "backfill") counters2.backfilled++;
-            else counters2.written++;
+            counters2.recordsWritten++;
           },
           (error48) => {
-            if (origin === "backfill") counters2.backfillFailed++;
-            else counters2.failed++;
-            warnOnce2(
-              `mesh dual-write append failed (further failures logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
-            );
+            counters2.recordsFailed++;
+            LOG.error("Seqscribe", `mesh.record append rejected topic=${topic} ledgerKind=${entry.kind}: ${errorMessage(error48)}`);
           }
-        );
-        if (!attempt.admitted) {
-          if (attempt.reason === "shed") {
-            counters2.dropped++;
-            warnOnce2(
-              `mesh dual-write shedding load \u2014 ${MAX_INFLIGHT} appends in flight; records are being dropped from the SHADOW leg only (the ledger is unaffected)`
-            );
-            return false;
-          }
-          throw attempt.error;
-        }
+        ));
         return true;
       } catch (error48) {
-        if (origin === "backfill") counters2.backfillFailed++;
-        else counters2.failed++;
-        warnOnce2(
-          `mesh dual-write threw synchronously (further throws logged once): ${error48 instanceof Error ? error48.message : String(error48)}`
-        );
+        counters2.recordsFailed++;
+        LOG.error("Seqscribe", `mesh.record publish failed ledgerKind=${entry.kind}: ${errorMessage(error48)}`);
         return false;
       }
     }
-    function meshDualWriteCounters() {
+    async function flushMeshPublisher() {
+      while (outstanding.size > 0) {
+        await Promise.allSettled([...outstanding]);
+      }
+    }
+    function meshPublisherCounters() {
       return { ...counters2 };
     }
+    function meshPublisherInflight() {
+      return { inflight: slots.inflight(), waiting: slots.waiting() };
+    }
     function isMeshDualWriteActive() {
-      return activeNode2 !== null && (activeMode === "shadow" || activeMode === "primary");
+      return activeNode2 !== null;
     }
     function isMeshReadPrimary() {
-      return activeNode2 !== null && activeMode === "primary";
+      return forcedReadPrimary && activeNode2 !== null;
     }
-    function meshDualWriteMode() {
-      return activeMode;
+    function __forceMeshReadPrimaryForTests(on) {
+      forcedReadPrimary = on;
+    }
+    function meshDualWriteCounters() {
+      return {
+        written: counters2.recordsWritten + counters2.published,
+        failed: counters2.recordsFailed + counters2.publishFailed,
+        dropped: counters2.recordsRefused,
+        backfilled: 0,
+        oversized: counters2.oversized,
+        topicErrors: counters2.topicErrors
+      };
+    }
+    function configureMeshDualWrite(node, _env) {
+      configureMeshPublisher(node);
     }
     function meshDualWriteInflight() {
-      return inflightGate.count();
+      return slots.inflight() + slots.waiting();
     }
     function __resetMeshDualWriteForTests() {
+      __resetMeshPublisherForTests();
+    }
+    function __resetMeshPublisherForTests() {
       activeNode2 = null;
-      activeMode = "shadow";
       definedTopics.clear();
       discoveredMeshIds.clear();
-      inflightGate.reconfigure();
+      slots.reset();
+      outstanding.clear();
       warnedOnce2.clear();
-      counters2.written = 0;
-      counters2.failed = 0;
-      counters2.dropped = 0;
-      counters2.topicErrors = 0;
-      counters2.backfilled = 0;
-      counters2.backfillFailed = 0;
-      counters2.oversized = 0;
+      forcedReadPrimary = false;
+      for (const key2 of Object.keys(counters2)) counters2[key2] = 0;
     }
-    var MESH_DUAL_WRITE_ENV;
-    var MAX_INFLIGHT;
+    var MESH_PUBLISH_SLOTS;
+    var MESH_RECORD_MAX_WAITING;
     var counters2;
     var definedTopics;
     var discoveredMeshIds;
     var activeNode2;
-    var activeMode;
-    var inflightGate;
+    var slots;
+    var outstanding;
     var warnedOnce2;
+    var MeshTopicActivationError;
     var TOPIC_LISTENERS;
-    var init_mesh_dual_write = __esm2({
-      "src/seqscribe/mesh-dual-write.ts"() {
+    var forcedReadPrimary;
+    var init_mesh_publisher = __esm2({
+      "src/seqscribe/mesh-publisher.ts"() {
         "use strict";
+        init_dist();
         init_logger();
         init_inflight_gate();
         init_mesh_event_projection();
+        init_dist2();
         init_topics2();
-        MESH_DUAL_WRITE_ENV = "ADHDEV_SEQSCRIBE_MESH";
-        MAX_INFLIGHT = 512;
+        MESH_PUBLISH_SLOTS = 64;
+        MESH_RECORD_MAX_WAITING = 1e4;
         counters2 = {
-          written: 0,
-          failed: 0,
-          dropped: 0,
+          published: 0,
+          publishFailed: 0,
+          recordsWritten: 0,
+          recordsFailed: 0,
+          recordsRefused: 0,
+          invalidEntries: 0,
+          oversized: 0,
           topicErrors: 0,
-          backfilled: 0,
-          backfillFailed: 0,
-          oversized: 0
+          handoffWritten: 0
         };
         definedTopics = /* @__PURE__ */ new Map();
         discoveredMeshIds = /* @__PURE__ */ new Set();
         activeNode2 = null;
-        activeMode = "shadow";
-        inflightGate = createInflightGate(MAX_INFLIGHT);
+        slots = createAwaitedSlots(MESH_PUBLISH_SLOTS);
+        outstanding = /* @__PURE__ */ new Set();
         warnedOnce2 = /* @__PURE__ */ new Set();
+        MeshTopicActivationError = class extends Error {
+          constructor(failedTopics) {
+            super(`mesh topic activation failed for ${failedTopics.join(", ")} \u2014 the events topic is the only mesh event path (design C7-1)`);
+            this.failedTopics = failedTopics;
+            this.name = "MeshTopicActivationError";
+          }
+        };
         TOPIC_LISTENERS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.topicActivatedListeners");
+        forcedReadPrimary = false;
       }
     });
     function bindSeqscribeRuntime(runtime) {
@@ -67473,7 +68205,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       "src/seqscribe/mesh-read-readiness.ts"() {
         "use strict";
         init_logger();
-        init_mesh_dual_write();
+        init_mesh_publisher();
         init_mesh_parity();
         init_mesh_read_model();
         init_topics2();
@@ -68081,6 +68813,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       NOT_BEFORE_RELATIVE_THRESHOLD_MS: () => NOT_BEFORE_RELATIVE_THRESHOLD_MS,
       REDRIVE_RECLAIM_REASONS: () => REDRIVE_RECLAIM_REASONS,
       REDRIVE_SUPERSEDE_WINDOW_MS: () => REDRIVE_SUPERSEDE_WINDOW_MS,
+      TerminalStatusIsLedgerEffect: () => TerminalStatusIsLedgerEffect,
       __clearDirectDispatchesForTests: () => __clearDirectDispatchesForTests,
       __clearMeshQueueForTests: () => __clearMeshQueueForTests,
       __replaceMeshQueueForTests: () => __replaceMeshQueueForTests,
@@ -68112,6 +68845,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       isMeshTaskStatus: () => isMeshTaskStatus2,
       isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
       isTaskReadonly: () => isTaskReadonly2,
+      isTerminalQueueStatus: () => isTerminalQueueStatus,
       listDirectDispatchesForAutoPrune: () => listDirectDispatchesForAutoPrune,
       markStaleDirectDispatches: () => markStaleDirectDispatches3,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
@@ -68121,6 +68855,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       normalizeMeshTaskMode: () => normalizeMeshTaskMode,
       normalizeMeshTaskPriority: () => normalizeMeshTaskPriority2,
       parkTaskTargetPin: () => parkTaskTargetPin,
+      propagateLedgerDependencyFailure: () => propagateLedgerDependencyFailure,
       providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
       reclaimStrandedAssignedTask: () => reclaimStrandedAssignedTask,
       recordAckedHoldDispatchOutcome: () => recordAckedHoldDispatchOutcome,
@@ -68128,6 +68863,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       recordMeshToolCall: () => recordMeshToolCall2,
       recordTaskAutoLaunch: () => recordTaskAutoLaunch,
       requeueTask: () => requeueTask3,
+      requeueTaskForLedgerReclaim: () => requeueTaskForLedgerReclaim,
       resolveConvergeRequiredTags: () => resolveConvergeRequiredTags,
       resolveNotBefore: () => resolveNotBefore2,
       summarizeQueueEntryInputForView: () => summarizeQueueEntryInputForView3,
@@ -68533,7 +69269,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return { entry, cascaded: [] };
         }
         if (TERMINAL_TASK_STATUSES.has(status)) {
-          const commit = commitTaskTerminalAndAdvanceGraph({
+          const commit2 = commitTaskTerminalAndAdvanceGraph({
             meshId,
             taskId,
             status,
@@ -68543,7 +69279,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             envelope: opts?.envelope
           });
           const cascaded2 = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, taskId) : [];
-          return { entry: commit.entry ?? entry, cascaded: cascaded2 };
+          return { entry: commit2.entry ?? entry, cascaded: cascaded2 };
         }
         entry.status = status;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
@@ -68577,7 +69313,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         delete entry.attemptId;
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         terminalizeSiblingDispatch(meshId, taskId, "queue_task_cancelled");
-        const commit = commitTaskTerminalAndAdvanceGraph({
+        const commit2 = commitTaskTerminalAndAdvanceGraph({
           meshId,
           taskId,
           status: "cancelled",
@@ -68586,7 +69322,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           reason: opts?.reason ?? "operator_cancel"
         });
         const cascaded = propagateDependencyFailure(meshId, taskId);
-        return { entry: commit.entry ?? entry, cascaded, priorAssignment };
+        return { entry: commit2.entry ?? entry, cascaded, priorAssignment };
       });
       if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
       if (result?.priorAssignment) lastCancelledTaskAssignment.set(`${meshId}::${taskId}`, result.priorAssignment);
@@ -68815,7 +69551,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return null;
         }
         if (TERMINAL_TASK_STATUSES.has(status)) {
-          const commit = commitTaskTerminalAndAdvanceGraph({
+          const commit2 = commitTaskTerminalAndAdvanceGraph({
             meshId,
             taskId: entry.id,
             status,
@@ -68825,7 +69561,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             envelope: opts?.envelope
           });
           const cascaded = DEPENDENCY_FAILURE_TERMINALS.has(status) ? propagateDependencyFailure(meshId, entry.id) : [];
-          return { entry: commit.entry ?? entry, cascaded };
+          return { entry: commit2.entry ?? entry, cascaded };
         }
         entry.status = status;
         store.updateQueueEntry(entry);
@@ -68889,6 +69625,35 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function __resetMeshRuntimeStoreForTests() {
       MeshRuntimeStore.resetForTests();
     }
+    function isTerminalQueueStatus(status) {
+      return TERMINAL_TASK_STATUSES.has(status);
+    }
+    function propagateLedgerDependencyFailure(meshId, taskId, status) {
+      return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId)) : [];
+    }
+    function requeueTaskForLedgerReclaim(meshId, taskId, reason, nowIso) {
+      return withQueueLock(meshId, () => {
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findQueueEntryById(meshId, taskId);
+        if (!entry || TERMINAL_TASK_STATUSES.has(entry.status)) return entry;
+        delete entry.assignedNodeId;
+        delete entry.assignedSessionId;
+        delete entry.assignedProviderType;
+        delete entry.assignedModel;
+        delete entry.dispatchTimestamp;
+        delete entry.autoLaunch;
+        delete entry.attemptId;
+        entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+        entry.status = "pending";
+        entry.requeuedAt = nowIso;
+        entry.requeueReason = reason;
+        entry.updatedAt = nowIso;
+        store.updateQueueEntry(entry);
+        endTaskDispatchInFlight(meshId, taskId);
+        terminalizeSiblingDispatch(meshId, taskId, "queue_task_stranded_reclaimed");
+        return entry;
+      });
+    }
     var import_crypto11;
     var NOT_BEFORE_RELATIVE_THRESHOLD_MS;
     var MESH_TASK_GRAPH_MAX_TASKS3;
@@ -68901,6 +69666,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var MAX_STRANDED_RECLAIMS;
     var REDRIVE_RECLAIM_REASONS;
     var REDRIVE_SUPERSEDE_WINDOW_MS;
+    var TerminalStatusIsLedgerEffect;
     var init_mesh_work_queue = __esm2({
       "src/mesh/mesh-work-queue.ts"() {
         "use strict";
@@ -68941,6 +69707,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           "delivered_not_consumed_redrive"
         ]);
         REDRIVE_SUPERSEDE_WINDOW_MS = 5 * 6e4;
+        TerminalStatusIsLedgerEffect = class extends Error {
+          constructor(meshId, taskId, status) {
+            super(`mesh_queue ${meshId}/${taskId} \u2192 ${status}: terminal queue statuses are an effect of a turn-ledger commit; submit evidence (ledger.observe) instead`);
+            this.meshId = meshId;
+            this.taskId = taskId;
+            this.status = status;
+            this.name = "TerminalStatusIsLedgerEffect";
+          }
+          code = "terminal_status_is_ledger_effect";
+        };
       }
     });
     function mapGraphRow(r) {
@@ -69817,6 +70593,1156 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
       }
     });
+    function parseJsonObject(text) {
+      if (!text) return {};
+      try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    function parseSummary(text) {
+      if (!text) return void 0;
+      const parsed = parseJsonObject(text);
+      return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
+    }
+    function attemptFromRow(row) {
+      const summary = parseSummary(row.terminal_summary_json);
+      return {
+        attemptId: row.attempt_id,
+        scope: row.scope,
+        meshId: row.mesh_id,
+        taskId: row.task_id,
+        attemptNo: row.attempt_no,
+        sessionId: row.session_id,
+        nodeId: row.node_id,
+        providerType: row.provider_type,
+        ownerDaemonId: row.owner_daemon_id,
+        generation: row.generation,
+        prevGeneration: row.prev_gen_session_id !== null ? { sessionId: row.prev_gen_session_id, consumed: row.prev_gen_consumed === 1 } : null,
+        dispatchNonce: row.dispatch_nonce,
+        messageId: row.message_id,
+        consumeProfile: row.consume_profile === "native_source" ? "native_source" : "default",
+        maxTaskRetries: row.max_task_retries,
+        state: row.state,
+        suspension: row.suspension === "approval" || row.suspension === "choice" ? row.suspension : null,
+        redriveCount: row.redrive_count,
+        reclaimCount: row.reclaim_count,
+        hollowCount: row.hollow_count,
+        livenessFailStreak: row.liveness_fail_streak,
+        lastLiveness: row.last_liveness ?? null,
+        coordinator: { daemonId: row.coordinator_daemon_id, sessionId: row.coordinator_session_id },
+        acceptedAt: row.accepted_at,
+        deliveredAt: row.delivered_at,
+        consumedAt: row.consumed_at,
+        lastActivityAt: row.last_activity_at,
+        weakSince: row.weak_since,
+        candidateNotifiedGeneration: row.candidate_notified_generation,
+        lastNoProgressNoticeAt: row.last_no_progress_notice_at,
+        notifiedAt: row.notified_at,
+        terminal: row.terminal_outcome ? {
+          outcome: row.terminal_outcome,
+          reason: row.terminal_reason,
+          source: row.terminal_source,
+          strength: row.terminal_strength,
+          at: row.terminal_at ?? row.updated_at,
+          ...summary ? { summary } : {}
+        } : null,
+        data: parseJsonObject(row.data_json)
+      };
+    }
+    function eventFromRow(row) {
+      return {
+        eventId: row.event_id,
+        meshId: row.mesh_id,
+        attemptId: row.attempt_id,
+        generation: row.generation,
+        sessionId: row.session_id,
+        kind: row.kind,
+        source: row.source,
+        verdict: row.verdict,
+        rule: row.rule,
+        rejection: row.rejection,
+        dedupeKey: row.dedupe_key,
+        fromState: row.from_state,
+        toState: row.to_state,
+        payload: parseJsonObject(row.payload_json),
+        observedBy: row.observed_by,
+        srcWriter: row.src_writer,
+        srcSeq: row.src_seq,
+        publishState: row.publish_state,
+        publishedSeq: row.published_seq,
+        atMs: row.at_ms,
+        recordedAt: row.recorded_at
+      };
+    }
+    function holdFromRow(row) {
+      return {
+        holdId: row.hold_id,
+        attemptId: row.attempt_id,
+        generation: row.generation,
+        reason: row.reason,
+        until: row.until_ms,
+        onExpire: row.on_expire,
+        data: parseJsonObject(row.data_json),
+        createdAt: row.created_at
+      };
+    }
+    var TurnStore;
+    var init_store2 = __esm2({
+      "src/mesh/turn-ledger/store.ts"() {
+        "use strict";
+        TurnStore = class {
+          constructor(db) {
+            this.db = db;
+          }
+          stmts = /* @__PURE__ */ new Map();
+          stmt(sql) {
+            let s2 = this.stmts.get(sql);
+            if (!s2) {
+              s2 = this.db.prepare(sql);
+              this.stmts.set(sql, s2);
+            }
+            return s2;
+          }
+          // ── attempts ─────────────────────────────────────────────────────────
+          getAttempt(attemptId) {
+            const row = this.stmt("SELECT * FROM turn_attempts WHERE attempt_id = ?").get(attemptId);
+            return row ? attemptFromRow(row) : null;
+          }
+          /** The one open attempt a session holds (UNIQUE partial index), if any. */
+          findOpenAttemptForSession(sessionId) {
+            const row = this.stmt("SELECT * FROM turn_attempts WHERE session_id = ? AND terminal_outcome IS NULL").get(sessionId);
+            return row ? attemptFromRow(row) : null;
+          }
+          /** Latest attempt (highest attempt_no) of a task; meshId null = any mesh (evidence carries no mesh id). */
+          findLatestAttemptForTask(meshId, taskId) {
+            const row = meshId ? this.stmt("SELECT * FROM turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_no DESC LIMIT 1").get(meshId, taskId) : this.stmt("SELECT * FROM turn_attempts WHERE task_id = ? ORDER BY attempt_no DESC, created_at DESC LIMIT 1").get(taskId);
+            return row ? attemptFromRow(row) : null;
+          }
+          listOpenAttempts(opts = {}) {
+            const where = ["terminal_outcome IS NULL"];
+            const args = [];
+            if (opts.meshId) {
+              where.push("mesh_id = ?");
+              args.push(opts.meshId);
+            }
+            if (opts.ownerDaemonId) {
+              where.push("owner_daemon_id = ?");
+              args.push(opts.ownerDaemonId);
+            }
+            const rows = this.db.prepare(`SELECT * FROM turn_attempts WHERE ${where.join(" AND ")} ORDER BY accepted_at`).all(...args);
+            return rows.map(attemptFromRow);
+          }
+          listAttemptsForTask(meshId, taskId) {
+            const rows = this.stmt("SELECT * FROM turn_attempts WHERE mesh_id = ? AND task_id = ? ORDER BY attempt_no").all(meshId, taskId);
+            return rows.map(attemptFromRow);
+          }
+          /** null = unknown attempt. */
+          isTerminal(attemptId) {
+            const row = this.stmt("SELECT terminal_outcome FROM turn_attempts WHERE attempt_id = ?").get(attemptId);
+            return row ? row.terminal_outcome !== null : null;
+          }
+          /** `ExpireHoldsContext.sessionIdFor` — the store-side join (no turn_holds.session_id column). */
+          sessionIdForAttempt(attemptId) {
+            const row = this.stmt("SELECT session_id FROM turn_attempts WHERE attempt_id = ?").get(attemptId);
+            return row?.session_id ?? "";
+          }
+          upsertAttempt(attempt, nowMs, extras = {}) {
+            const t = attempt.terminal;
+            this.stmt(`INSERT INTO turn_attempts (
+                attempt_id, scope, mesh_id, task_id, attempt_no, session_id, node_id, provider_type, owner_daemon_id, generation,
+                prev_gen_session_id, prev_gen_consumed, dispatch_nonce, message_id, input_json, via, consume_profile, max_task_retries,
+                state, suspension, redrive_count, reclaim_count, hollow_count, liveness_fail_streak, last_liveness,
+                coordinator_daemon_id, coordinator_session_id, accepted_at, delivered_at, consumed_at, last_activity_at, weak_since,
+                candidate_notified_generation, last_no_progress_notice_at, notified_at,
+                terminal_outcome, terminal_reason, terminal_source, terminal_strength, terminal_at, terminal_summary_json,
+                data_json, created_at, updated_at)
+            VALUES (@attempt_id, @scope, @mesh_id, @task_id, @attempt_no, @session_id, @node_id, @provider_type, @owner_daemon_id, @generation,
+                @prev_gen_session_id, @prev_gen_consumed, @dispatch_nonce, @message_id, @input_json, @via, @consume_profile, @max_task_retries,
+                @state, @suspension, @redrive_count, @reclaim_count, @hollow_count, @liveness_fail_streak, @last_liveness,
+                @coordinator_daemon_id, @coordinator_session_id, @accepted_at, @delivered_at, @consumed_at, @last_activity_at, @weak_since,
+                @candidate_notified_generation, @last_no_progress_notice_at, @notified_at,
+                @terminal_outcome, @terminal_reason, @terminal_source, @terminal_strength, @terminal_at, @terminal_summary_json,
+                @data_json, @now, @now)
+            ON CONFLICT(attempt_id) DO UPDATE SET
+                scope = excluded.scope, mesh_id = excluded.mesh_id, task_id = excluded.task_id, attempt_no = excluded.attempt_no,
+                session_id = excluded.session_id, node_id = excluded.node_id, provider_type = excluded.provider_type,
+                owner_daemon_id = excluded.owner_daemon_id, generation = excluded.generation,
+                prev_gen_session_id = excluded.prev_gen_session_id, prev_gen_consumed = excluded.prev_gen_consumed,
+                dispatch_nonce = excluded.dispatch_nonce, message_id = excluded.message_id,
+                input_json = COALESCE(excluded.input_json, turn_attempts.input_json), via = COALESCE(excluded.via, turn_attempts.via),
+                consume_profile = excluded.consume_profile, max_task_retries = excluded.max_task_retries,
+                state = excluded.state, suspension = excluded.suspension, redrive_count = excluded.redrive_count,
+                reclaim_count = excluded.reclaim_count, hollow_count = excluded.hollow_count,
+                liveness_fail_streak = excluded.liveness_fail_streak, last_liveness = excluded.last_liveness,
+                coordinator_daemon_id = excluded.coordinator_daemon_id, coordinator_session_id = excluded.coordinator_session_id,
+                accepted_at = excluded.accepted_at, delivered_at = excluded.delivered_at, consumed_at = excluded.consumed_at,
+                last_activity_at = excluded.last_activity_at, weak_since = excluded.weak_since,
+                candidate_notified_generation = excluded.candidate_notified_generation,
+                last_no_progress_notice_at = excluded.last_no_progress_notice_at, notified_at = excluded.notified_at,
+                terminal_outcome = excluded.terminal_outcome, terminal_reason = excluded.terminal_reason,
+                terminal_source = excluded.terminal_source, terminal_strength = excluded.terminal_strength,
+                terminal_at = excluded.terminal_at, terminal_summary_json = excluded.terminal_summary_json,
+                data_json = excluded.data_json, updated_at = excluded.updated_at`).run({
+              attempt_id: attempt.attemptId,
+              scope: attempt.scope,
+              mesh_id: attempt.meshId,
+              task_id: attempt.taskId,
+              attempt_no: attempt.attemptNo,
+              session_id: attempt.sessionId,
+              node_id: attempt.nodeId,
+              provider_type: attempt.providerType,
+              owner_daemon_id: attempt.ownerDaemonId,
+              generation: attempt.generation,
+              prev_gen_session_id: attempt.prevGeneration?.sessionId ?? null,
+              prev_gen_consumed: attempt.prevGeneration ? attempt.prevGeneration.consumed ? 1 : 0 : null,
+              dispatch_nonce: attempt.dispatchNonce,
+              message_id: attempt.messageId,
+              input_json: extras.inputJson ?? null,
+              via: extras.via ?? null,
+              consume_profile: attempt.consumeProfile,
+              max_task_retries: attempt.maxTaskRetries,
+              state: attempt.state,
+              suspension: attempt.suspension,
+              redrive_count: attempt.redriveCount,
+              reclaim_count: attempt.reclaimCount,
+              hollow_count: attempt.hollowCount,
+              liveness_fail_streak: attempt.livenessFailStreak,
+              last_liveness: attempt.lastLiveness,
+              coordinator_daemon_id: attempt.coordinator.daemonId,
+              coordinator_session_id: attempt.coordinator.sessionId,
+              accepted_at: attempt.acceptedAt,
+              delivered_at: attempt.deliveredAt,
+              consumed_at: attempt.consumedAt,
+              last_activity_at: attempt.lastActivityAt,
+              weak_since: attempt.weakSince,
+              candidate_notified_generation: attempt.candidateNotifiedGeneration,
+              last_no_progress_notice_at: attempt.lastNoProgressNoticeAt,
+              notified_at: attempt.notifiedAt,
+              terminal_outcome: t?.outcome ?? null,
+              terminal_reason: t?.reason ?? null,
+              terminal_source: t?.source ?? null,
+              terminal_strength: t?.strength ?? null,
+              terminal_at: t?.at ?? null,
+              terminal_summary_json: t?.summary ? JSON.stringify(t.summary) : null,
+              data_json: JSON.stringify(attempt.data ?? {}),
+              now: nowMs
+            });
+          }
+          /** Scheduler probe bookkeeping (C4 probeDue); not a reducer field. */
+          markProbed(attemptId, nowMs) {
+            this.stmt("UPDATE turn_attempts SET last_probe_at = ?, updated_at = ? WHERE attempt_id = ?").run(nowMs, nowMs, attemptId);
+          }
+          /** C10-4: terminal plain attempts are local-only and pruned after 7 d (their events go with them). */
+          pruneTerminalPlainAttempts(olderThanMs, nowMs) {
+            const cutoff = nowMs - olderThanMs;
+            const ids = this.stmt(`SELECT attempt_id FROM turn_attempts WHERE scope = 'plain' AND terminal_outcome IS NOT NULL AND terminal_at < ?`).all(cutoff).map((r) => r.attempt_id);
+            let events = 0;
+            let holds = 0;
+            for (const id22 of ids) {
+              events += this.stmt("DELETE FROM turn_events WHERE attempt_id = ?").run(id22).changes;
+              holds += this.stmt("DELETE FROM turn_holds WHERE attempt_id = ?").run(id22).changes;
+              this.stmt("DELETE FROM turn_attempts WHERE attempt_id = ?").run(id22);
+            }
+            return { attempts: ids.length, events, holds };
+          }
+          // ── holds ────────────────────────────────────────────────────────────
+          activeHolds(attemptId) {
+            const rows = this.stmt(`SELECT * FROM turn_holds WHERE attempt_id = ? AND status = 'active' ORDER BY hold_id`).all(attemptId);
+            return rows.map(holdFromRow);
+          }
+          /**
+           * Make `holds` the attempt's exact active set: upsert every hold given
+           * (a re-armed hold keeps its id and gets its new deadline), resolve every
+           * active hold that is not in the set.
+           */
+          syncHolds(attemptId, holds, nowMs) {
+            const keep = new Set(holds.map((h) => h.holdId));
+            let resolved = 0;
+            for (const active of this.activeHolds(attemptId)) {
+              if (keep.has(active.holdId)) continue;
+              resolved += this.stmt(`UPDATE turn_holds SET status = 'resolved', resolved_at = ? WHERE hold_id = ? AND status = 'active'`).run(nowMs, active.holdId).changes;
+            }
+            for (const hold of holds) {
+              this.stmt(`INSERT INTO turn_holds (hold_id, attempt_id, generation, reason, until_ms, on_expire, data_json, status, created_at, resolved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+                ON CONFLICT(hold_id) DO UPDATE SET attempt_id = excluded.attempt_id, generation = excluded.generation, reason = excluded.reason,
+                    until_ms = excluded.until_ms, on_expire = excluded.on_expire, data_json = excluded.data_json, status = 'active',
+                    created_at = excluded.created_at, resolved_at = NULL`).run(hold.holdId, hold.attemptId, hold.generation, hold.reason, hold.until, hold.onExpire, JSON.stringify(hold.data ?? {}), hold.createdAt);
+            }
+            return { armed: holds.length, resolved };
+          }
+          /** Active holds whose deadline passed, in deadline order (scheduler `expiredHolds()`). */
+          dueHolds(nowMs, limit = 500) {
+            const rows = this.stmt(`SELECT * FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL AND until_ms <= ? ORDER BY until_ms, hold_id LIMIT ?`).all(nowMs, limit);
+            return rows.map(holdFromRow);
+          }
+          /** Earliest active deadline, for the scheduler's single setTimeout (C4). */
+          nextHoldDeadline() {
+            const row = this.stmt(`SELECT MIN(until_ms) AS next FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL`).get();
+            return row?.next ?? null;
+          }
+          // ── events ───────────────────────────────────────────────────────────
+          hasEvent(eventId) {
+            return !!this.stmt("SELECT 1 FROM turn_events WHERE event_id = ?").get(eventId);
+          }
+          getEvent(eventId) {
+            const row = this.stmt("SELECT * FROM turn_events WHERE event_id = ?").get(eventId);
+            return row ? eventFromRow(row) : null;
+          }
+          /** INSERT OR IGNORE — the PK (event_id) and UNIQUE(attempt, generation, kind, dedupe) collapse replays. Returns true when inserted. */
+          insertEvent(row) {
+            const info = this.stmt(`INSERT OR IGNORE INTO turn_events (
+                event_id, mesh_id, attempt_id, generation, session_id, kind, source, verdict, rule, rejection, dedupe_key,
+                from_state, to_state, payload_json, observed_by, src_writer, src_seq, publish_state, published_seq, at_ms, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`).run(
+              row.eventId,
+              row.meshId ?? null,
+              row.attemptId ?? null,
+              row.generation ?? null,
+              row.sessionId,
+              row.kind,
+              row.source,
+              row.verdict,
+              row.rule ?? null,
+              row.rejection ?? null,
+              row.dedupeKey ?? "",
+              row.fromState ?? null,
+              row.toState ?? null,
+              JSON.stringify(row.payload ?? {}),
+              row.observedBy ?? null,
+              row.srcWriter ?? null,
+              row.srcSeq ?? null,
+              row.publishState,
+              row.atMs,
+              row.recordedAt
+            );
+            return info.changes > 0;
+          }
+          listEvents(attemptId) {
+            const rows = this.stmt("SELECT * FROM turn_events WHERE attempt_id = ? ORDER BY recorded_at, rowid").all(attemptId);
+            return rows.map(eventFromRow);
+          }
+          /** `pending` rows in write order — the publisher's queue (C7-1) and the boot/tick republish input. */
+          pendingPublish(limit = 256) {
+            const rows = this.stmt(`SELECT * FROM turn_events WHERE publish_state = 'pending' ORDER BY recorded_at, rowid LIMIT ?`).all(limit);
+            return rows.map(eventFromRow);
+          }
+          countPendingPublish(olderThanMs) {
+            const row = olderThanMs === void 0 ? this.stmt(`SELECT COUNT(*) AS n FROM turn_events WHERE publish_state = 'pending'`).get() : this.stmt(`SELECT COUNT(*) AS n FROM turn_events WHERE publish_state = 'pending' AND recorded_at < ?`).get(olderThanMs);
+            return row.n;
+          }
+          /** `pending → published(src_seq)`. Idempotent; a republish of a published row is a no-op. */
+          markPublished(eventId, writer, seq2) {
+            return this.stmt(`UPDATE turn_events SET publish_state = 'published', published_seq = ?, src_writer = COALESCE(src_writer, ?)
+            WHERE event_id = ? AND publish_state = 'pending'`).run(seq2, writer, eventId).changes > 0;
+          }
+          // ── operating notes (C3: out of the legacy event ledger) ────────────
+          insertOperatingNote(note) {
+            return this.stmt(`INSERT OR IGNORE INTO mesh_operating_notes (note_id, mesh_id, text, category, tombstoned_at, caller_session_id, created_at)
+            VALUES (?, ?, ?, ?, NULL, ?, ?)`).run(note.noteId, note.meshId, note.text, note.category, note.callerSessionId, note.createdAt).changes > 0;
+          }
+          tombstoneOperatingNote(meshId, noteId, atMs) {
+            return this.stmt(`UPDATE mesh_operating_notes SET tombstoned_at = ? WHERE mesh_id = ? AND note_id = ? AND tombstoned_at IS NULL`).run(atMs, meshId, noteId).changes > 0;
+          }
+          listOperatingNotes(meshId, opts = {}) {
+            const rows = this.db.prepare(`SELECT * FROM mesh_operating_notes WHERE mesh_id = ?${opts.includeTombstoned ? "" : " AND tombstoned_at IS NULL"} ORDER BY created_at, note_id`).all(meshId);
+            return rows.map((r) => ({ noteId: r.note_id, meshId: r.mesh_id, text: r.text, category: r.category, tombstonedAt: r.tombstoned_at, callerSessionId: r.caller_session_id, createdAt: r.created_at }));
+          }
+        };
+      }
+    });
+    function holdTtlMs(p) {
+      return Math.round(1.5 * p.quietWindowMs);
+    }
+    function weakConfirmMs(p) {
+      return Math.round(1.5 * p.quietWindowMs);
+    }
+    function unknownLivenessGraceMs(p) {
+      return 3 * p.tickMs;
+    }
+    function awaitDeliveryMs(p) {
+      return 2 * p.deliveryCeilingMs;
+    }
+    function consumeGraceFor(p, profile) {
+      return profile === "native_source" ? 2 * p.consumeGraceMs : p.consumeGraceMs;
+    }
+    function readClamped(env2, name, min, max) {
+      const raw = env2[name];
+      if (typeof raw !== "string" || raw.trim() === "") return null;
+      const trimmed2 = raw.trim();
+      if (!/^\d+$/.test(trimmed2)) return null;
+      const parsed = Number.parseInt(trimmed2, 10);
+      if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
+      return parsed;
+    }
+    function resolveTurnPolicyDetailed(env2) {
+      const policy = { ...DEFAULT_TURN_POLICY };
+      const sources = {};
+      for (const binding of TURN_POLICY_ENV_BINDINGS) {
+        const canonical = readClamped(env2, binding.canonical, binding.min, binding.max);
+        if (canonical !== null) {
+          policy[binding.field] = canonical;
+          sources[binding.field] = binding.canonical;
+          continue;
+        }
+        for (const alias of binding.aliases) {
+          const value = readClamped(env2, alias.name, alias.min, alias.max);
+          if (value !== null) {
+            policy[binding.field] = value;
+            sources[binding.field] = alias.name;
+            break;
+          }
+        }
+      }
+      const ignored = RETIRED_TURN_ENV_NAMES.filter((name) => typeof env2[name] === "string" && env2[name].trim() !== "");
+      return { policy, sources, ignored: [...ignored] };
+    }
+    function resolveTurnPolicy(env2) {
+      return resolveTurnPolicyDetailed(env2).policy;
+    }
+    var DEFAULT_TURN_POLICY;
+    var RECLAIM_BUDGET;
+    var MAX_REDRIVES_PER_GENERATION;
+    var LIVENESS_FAIL_STREAK_LIMIT;
+    var DEFAULT_MAX_TASK_RETRIES;
+    var HOUR;
+    var TURN_POLICY_ENV_BINDINGS;
+    var RETIRED_TURN_ENV_NAMES;
+    var init_policy = __esm2({
+      "src/mesh/turn-ledger/policy.ts"() {
+        "use strict";
+        DEFAULT_TURN_POLICY = Object.freeze({
+          tickMs: 4e3,
+          quietWindowMs: 8e3,
+          consumeGraceMs: 9e4,
+          deliveryCeilingMs: 12e4,
+          livenessDeadlineMs: 48e4,
+          noTurnDeadlineMs: 9e5,
+          stallNoticeMs: 18e4,
+          hardCeilingMs: 54e5
+        });
+        RECLAIM_BUDGET = 3;
+        MAX_REDRIVES_PER_GENERATION = 1;
+        LIVENESS_FAIL_STREAK_LIMIT = 3;
+        DEFAULT_MAX_TASK_RETRIES = 1;
+        HOUR = 60 * 6e4;
+        TURN_POLICY_ENV_BINDINGS = [
+          {
+            field: "tickMs",
+            canonical: "ADHDEV_TURN_TICK_MS",
+            min: 100,
+            max: 6e4,
+            aliases: [{ name: "MESH_RECONCILE_INTERVAL_MS", min: 1e3, max: 6e4 }]
+          },
+          { field: "quietWindowMs", canonical: "ADHDEV_TURN_QUIET_WINDOW_MS", min: 0, max: 10 * 6e4, aliases: [] },
+          { field: "consumeGraceMs", canonical: "ADHDEV_TURN_CONSUME_GRACE_MS", min: 0, max: HOUR, aliases: [] },
+          {
+            field: "deliveryCeilingMs",
+            canonical: "ADHDEV_TURN_DELIVERY_CEILING_MS",
+            min: 0,
+            max: HOUR,
+            aliases: [{ name: "MESH_PENDING_HELD_CEILING_MS", min: 12e3, max: 30 * 6e4 }]
+          },
+          {
+            field: "livenessDeadlineMs",
+            canonical: "ADHDEV_TURN_LIVENESS_DEADLINE_MS",
+            min: 0,
+            max: HOUR,
+            aliases: [{ name: "MESH_INFLIGHT_ACKED_DEATH_DEADLINE_MS", min: 0, max: HOUR }]
+          },
+          { field: "noTurnDeadlineMs", canonical: "ADHDEV_TURN_NO_TURN_DEADLINE_MS", min: 0, max: 6 * HOUR, aliases: [] },
+          { field: "stallNoticeMs", canonical: "ADHDEV_TURN_STALL_NOTICE_MS", min: 0, max: HOUR, aliases: [] },
+          {
+            field: "hardCeilingMs",
+            canonical: "ADHDEV_TURN_HARD_CEILING_MS",
+            min: 0,
+            max: 24 * HOUR,
+            aliases: [{ name: "MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS", min: 0, max: 24 * HOUR }]
+          }
+        ];
+        RETIRED_TURN_ENV_NAMES = [
+          "MESH_PENDING_HELD_DRAIN_ESCALATE_MS",
+          "MESH_INFLIGHT_ACKED_TRANSCRIPT_FASTTRACK_GRACE_MS"
+        ];
+      }
+    });
+    function ensureTurnLedgerSchema(db) {
+      db.exec(TURN_LEDGER_DDL);
+    }
+    function readUserVersion(db) {
+      const value = db.pragma("user_version", { simple: true });
+      return typeof value === "number" ? value : Number(value) || 0;
+    }
+    function tableExists(db, table) {
+      const row = db.prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+      return row?.ok === 1;
+    }
+    var TURN_LEDGER_SCHEMA_VERSION;
+    var LEGACY_TURN_TABLES;
+    var TURN_LEDGER_DDL;
+    var init_schema2 = __esm2({
+      "src/mesh/turn-ledger/schema.ts"() {
+        "use strict";
+        TURN_LEDGER_SCHEMA_VERSION = 1;
+        LEGACY_TURN_TABLES = [
+          "mesh_turn_attempts",
+          "mesh_turn_events",
+          "mesh_turn_held_suspensions",
+          "mesh_session_delivery",
+          "mesh_direct_dispatches",
+          "mesh_completion_fingerprints",
+          "mesh_inflight_hold",
+          "mesh_pending_events",
+          "mesh_event_ledger"
+        ];
+        TURN_LEDGER_DDL = `
+    CREATE TABLE IF NOT EXISTS turn_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK (scope IN ('mesh_queue','mesh_direct','plain')),
+        mesh_id TEXT,
+        task_id TEXT,
+        attempt_no INTEGER NOT NULL DEFAULT 0,
+        session_id TEXT NOT NULL,
+        node_id TEXT,
+        provider_type TEXT,
+        owner_daemon_id TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 0,
+        prev_gen_session_id TEXT,
+        prev_gen_consumed INTEGER,
+        dispatch_nonce INTEGER,
+        message_id TEXT,
+        input_json TEXT,
+        via TEXT,
+        consume_profile TEXT NOT NULL DEFAULT 'default',
+        max_task_retries INTEGER NOT NULL DEFAULT 1,
+        state TEXT NOT NULL,
+        suspension TEXT,
+        redrive_count INTEGER NOT NULL DEFAULT 0,
+        reclaim_count INTEGER NOT NULL DEFAULT 0,
+        hollow_count INTEGER NOT NULL DEFAULT 0,
+        liveness_fail_streak INTEGER NOT NULL DEFAULT 0,
+        last_liveness TEXT,
+        coordinator_daemon_id TEXT,
+        coordinator_session_id TEXT,
+        accepted_at INTEGER NOT NULL,
+        delivered_at INTEGER,
+        consumed_at INTEGER,
+        last_activity_at INTEGER,
+        last_probe_at INTEGER,
+        weak_since INTEGER,
+        candidate_notified_generation INTEGER,
+        last_no_progress_notice_at INTEGER,
+        notified_at INTEGER,
+        terminal_outcome TEXT,
+        terminal_reason TEXT,
+        terminal_source TEXT,
+        terminal_strength TEXT,
+        terminal_at INTEGER,
+        terminal_summary_json TEXT,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_turn_attempts_task
+        ON turn_attempts(mesh_id, task_id, attempt_no) WHERE task_id IS NOT NULL;
+    -- \u22641 open attempt per session.
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_turn_attempts_open_session
+        ON turn_attempts(session_id) WHERE terminal_outcome IS NULL;
+    CREATE INDEX IF NOT EXISTS ix_turn_attempts_mesh_state
+        ON turn_attempts(mesh_id, state);
+    CREATE INDEX IF NOT EXISTS ix_turn_attempts_terminal_at
+        ON turn_attempts(scope, terminal_at) WHERE terminal_outcome IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS turn_events (
+        event_id TEXT PRIMARY KEY,
+        mesh_id TEXT,
+        attempt_id TEXT,
+        generation INTEGER,
+        session_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source TEXT NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('applied','recorded','rejected','forwarded')),
+        rule TEXT,
+        rejection TEXT,
+        dedupe_key TEXT NOT NULL DEFAULT '',
+        from_state TEXT,
+        to_state TEXT,
+        -- local-only; may hold summaries / notice text (never published as-is)
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        observed_by TEXT,
+        src_writer TEXT,
+        src_seq INTEGER,
+        publish_state TEXT NOT NULL DEFAULT 'none' CHECK (publish_state IN ('none','pending','published')),
+        published_seq INTEGER,
+        at_ms INTEGER NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        UNIQUE (attempt_id, generation, kind, dedupe_key)
+    );
+    CREATE INDEX IF NOT EXISTS ix_turn_events_unpublished
+        ON turn_events(recorded_at) WHERE publish_state = 'pending';
+    CREATE INDEX IF NOT EXISTS ix_turn_events_attempt
+        ON turn_events(attempt_id, recorded_at);
+    CREATE INDEX IF NOT EXISTS ix_turn_events_mesh_kind
+        ON turn_events(mesh_id, kind, at_ms);
+
+    CREATE TABLE IF NOT EXISTS turn_holds (
+        hold_id TEXT PRIMARY KEY,
+        attempt_id TEXT NOT NULL,
+        generation INTEGER,
+        reason TEXT NOT NULL,
+        until_ms INTEGER,
+        on_expire TEXT NOT NULL,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','resolved')),
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS ix_turn_holds_due ON turn_holds(status, until_ms);
+    CREATE INDEX IF NOT EXISTS ix_turn_holds_attempt ON turn_holds(attempt_id, status);
+
+    CREATE TABLE IF NOT EXISTS mesh_topic_index (
+        writer TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        mesh_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ledger_kind TEXT,
+        task_id TEXT,
+        session_id TEXT,
+        node_id TEXT,
+        at_ms INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (writer, seq, mesh_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_topic_index_ledger_kind
+        ON mesh_topic_index(mesh_id, ledger_kind, at_ms);
+    CREATE INDEX IF NOT EXISTS ix_topic_index_session
+        ON mesh_topic_index(mesh_id, session_id, at_ms);
+    CREATE INDEX IF NOT EXISTS ix_topic_index_task
+        ON mesh_topic_index(mesh_id, task_id, at_ms) WHERE task_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_topic_index_writer
+        ON mesh_topic_index(mesh_id, writer, at_ms);
+    CREATE INDEX IF NOT EXISTS ix_topic_index_event
+        ON mesh_topic_index(mesh_id, event_id);
+
+    CREATE TABLE IF NOT EXISTS mesh_operating_notes (
+        note_id TEXT PRIMARY KEY,
+        mesh_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        category TEXT,
+        tombstoned_at INTEGER,
+        caller_session_id TEXT,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_mesh_operating_notes_mesh
+        ON mesh_operating_notes(mesh_id, created_at);
+`;
+      }
+    });
+    function emptyReport() {
+      return {
+        skipped: false,
+        meshes: 0,
+        legacyAttempts: 0,
+        attempts: 0,
+        folds: 0,
+        retries: 0,
+        orphans: 0,
+        openAttempts: 0,
+        unmappedReasons: 0,
+        events: 0,
+        eventCollisions: 0,
+        heldSuspensions: 0,
+        holdsActive: 0,
+        inflightHolds: 0,
+        inflightHoldsDropped: 0,
+        deliveries: 0,
+        deliveriesMerged: 0,
+        deliveriesDropped: 0,
+        directDispatches: 0,
+        directDispatchesMerged: 0,
+        directDispatchesDropped: 0,
+        fingerprintsDropped: 0,
+        pendingEvents: 0,
+        pendingUndrained: 0,
+        pendingNotified: 0,
+        pendingDrainedAcked: 0,
+        ledgerRows: 0,
+        operatingNotes: 0,
+        operatingNoteTombstones: 0,
+        ledgerRowsDropped: 0,
+        exportedRows: 0,
+        exportPath: null,
+        droppedTables: []
+      };
+    }
+    function isFoldReason(reason) {
+      if (!reason) return false;
+      return reason.startsWith("reassigned:") || reason === "superseded_by_attempt" || reason === "superseded_by_queue_terminal";
+    }
+    function ms22(iso) {
+      if (!iso) return null;
+      const value = Date.parse(iso);
+      return Number.isFinite(value) ? value : null;
+    }
+    function mapStage(stage) {
+      switch (stage) {
+        case "accepted":
+        case "delivered":
+        case "consumed":
+        case "generating":
+        case "finalizing":
+          return { state: stage, suspension: null };
+        case "waiting_approval":
+          return { state: "suspended", suspension: "approval" };
+        case "waiting_choice":
+          return { state: "suspended", suspension: "choice" };
+        case "completed":
+        case "failed":
+        case "cancelled":
+          return { state: stage, suspension: null };
+        default:
+          return { state: "accepted", suspension: null };
+      }
+    }
+    function mapLegacyTerminal(reason, outcome) {
+      const r = (reason ?? "").trim();
+      const pick2 = (value, source, strength = "genuine") => ({ reason: value, source, strength, mapped: true });
+      if (r === "provider_event" || r === "task_completed") return pick2("turn_end", "fsm_edge");
+      if (r.startsWith("worker_reported")) return pick2("worker_reported", "worker_tool", "tool_report");
+      if (r === "redrive_deadline_transcript_evidence") return pick2("transcript_final", "coordinator_probe");
+      if (r.startsWith("task_status_terminal:") || r.startsWith("unsettled_attempt_safety_net")) return pick2("operator_update", "operator", "operator");
+      if (r === "operator_cancel") return pick2("operator_cancel", "operator", "operator");
+      if (r === "task_stalled") return pick2("hard_ceiling", "scheduler");
+      if (r === "reassigned:dispatch_failed") return pick2("dispatch_failed", "scheduler");
+      if (r === "reassigned:delivered_not_consumed_redrive") return pick2("delivered_not_consumed_redrive", "scheduler");
+      if (r === "reassigned:delivered_no_turn_deadline") return pick2("delivered_no_turn_deadline", "scheduler");
+      if (r === "reassigned:reclaim_after_unknown_grace") return pick2("session_dead", "scheduler");
+      if (r.startsWith("reassigned:")) return pick2("assigned_stranded_dispatch_unconfirmed", "scheduler");
+      if (r === "superseded_by_attempt" || r === "superseded_by_queue_terminal") return pick2("superseded", "scheduler", "operator");
+      const fallback = { completed: "turn_end", failed: "session_error", cancelled: "operator_cancel" };
+      return {
+        reason: fallback[outcome],
+        source: outcome === "cancelled" ? "operator" : "scheduler",
+        strength: outcome === "cancelled" ? "operator" : "genuine",
+        mapped: r === ""
+      };
+    }
+    function exportLegacyTurnTables(db, path74) {
+      (0, import_fs7.mkdirSync)((0, import_path7.dirname)(path74), { recursive: true });
+      const fd = (0, import_fs7.openSync)(path74, "a", 384);
+      let written = 0;
+      try {
+        for (const table of LEGACY_TURN_TABLES) {
+          if (!tableExists(db, table)) continue;
+          for (const row of db.prepare(`SELECT * FROM ${table}`).iterate()) {
+            (0, import_fs7.writeSync)(fd, `${JSON.stringify({ _table: table, ...row })}
+`);
+            written++;
+          }
+        }
+      } finally {
+        (0, import_fs7.closeSync)(fd);
+      }
+      return written;
+    }
+    function turnLedgerExportPath(ledgerDir, nowMs) {
+      return `${ledgerDir.replace(/[\\/]+$/, "")}/turn-ledger-premigrate-${nowMs}.jsonl`;
+    }
+    function parseObject(text) {
+      if (typeof text !== "string" || !text) return {};
+      try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    function legacyMeshIds(db) {
+      const ids = /* @__PURE__ */ new Set();
+      for (const table of LEGACY_TURN_TABLES) {
+        if (!tableExists(db, table)) continue;
+        for (const row of db.prepare(`SELECT DISTINCT mesh_id AS m FROM ${table}`).all()) {
+          ids.add(row.m ?? "");
+        }
+      }
+      return [...ids].sort();
+    }
+    function migrateMesh(db, store, meshId, opts, report) {
+      const has = (table) => tableExists(db, table);
+      const nowMs = opts.nowMs;
+      const chains = [];
+      const byLegacyId = /* @__PURE__ */ new Map();
+      const latestChainForTask = /* @__PURE__ */ new Map();
+      if (has("mesh_turn_attempts")) {
+        const rows = db.prepare(`SELECT * FROM mesh_turn_attempts WHERE mesh_id = ? ORDER BY task_id, attempt_seq, created_at`).all(meshId);
+        report.legacyAttempts += rows.length;
+        const queueRow = db.prepare(`SELECT 1 AS ok FROM mesh_queue WHERE mesh_id = ? AND id = ?`);
+        let prev = null;
+        let chain = null;
+        let attemptNo = 0;
+        for (const row of rows) {
+          const sameTask = prev !== null && prev.task_id === row.task_id;
+          const { state: state2, suspension } = mapStage(row.stage);
+          const session = row.session_id && row.session_id.length > 0 ? row.session_id : `unknown:${row.attempt_id}`;
+          const outcome = row.terminal_outcome ?? (TERMINAL_STAGES.has(row.stage) ? row.stage : null);
+          if (sameTask && chain && isFoldReason(prev.terminal_reason)) {
+            const a2 = chain.attempt;
+            a2.prevGeneration = { sessionId: a2.sessionId, consumed: a2.consumedAt !== null };
+            a2.generation += 1;
+            a2.reclaimCount += 1;
+            report.folds++;
+            chain.members.set(row.attempt_id, a2.generation);
+          } else {
+            if (sameTask) {
+              attemptNo += 1;
+              report.retries++;
+            } else attemptNo = 0;
+            const hasQueue = !!queueRow.get(meshId, row.task_id);
+            chain = {
+              attempt: {
+                attemptId: row.attempt_id,
+                scope: hasQueue ? "mesh_queue" : "mesh_direct",
+                meshId: meshId || null,
+                taskId: row.task_id,
+                attemptNo,
+                sessionId: session,
+                nodeId: row.node_id,
+                providerType: row.provider_type,
+                ownerDaemonId: opts.ownerDaemonId,
+                generation: 0,
+                prevGeneration: null,
+                dispatchNonce: row.dispatch_nonce,
+                messageId: null,
+                consumeProfile: "default",
+                maxTaskRetries: 1,
+                state: state2,
+                suspension,
+                redriveCount: 0,
+                reclaimCount: 0,
+                hollowCount: 0,
+                livenessFailStreak: 0,
+                lastLiveness: null,
+                coordinator: { daemonId: row.coordinator_daemon_id, sessionId: row.coordinator_session_id },
+                acceptedAt: ms22(row.accepted_at) ?? ms22(row.created_at) ?? nowMs,
+                deliveredAt: null,
+                consumedAt: null,
+                lastActivityAt: null,
+                weakSince: null,
+                candidateNotifiedGeneration: null,
+                lastNoProgressNoticeAt: null,
+                notifiedAt: null,
+                terminal: null,
+                data: {}
+              },
+              members: /* @__PURE__ */ new Map([[row.attempt_id, 0]]),
+              queueRow: hasQueue,
+              lastUpdatedMs: 0
+            };
+            chains.push(chain);
+          }
+          const a = chain.attempt;
+          a.sessionId = session;
+          a.nodeId = row.node_id ?? a.nodeId;
+          a.providerType = row.provider_type ?? a.providerType;
+          a.dispatchNonce = row.dispatch_nonce ?? a.dispatchNonce;
+          a.state = state2;
+          a.suspension = suspension;
+          a.redriveCount = row.redrive_count ?? 0;
+          a.deliveredAt = ms22(row.delivered_at);
+          a.consumedAt = ms22(row.consumed_at);
+          a.coordinator = { daemonId: row.coordinator_daemon_id ?? a.coordinator.daemonId, sessionId: row.coordinator_session_id ?? a.coordinator.sessionId };
+          if (outcome) {
+            const mapped = mapLegacyTerminal(row.terminal_reason, outcome);
+            if (!mapped.mapped) report.unmappedReasons++;
+            a.state = outcome;
+            a.suspension = null;
+            a.terminal = { outcome, reason: mapped.reason, source: mapped.source, strength: mapped.strength, at: ms22(row.terminal_at) ?? ms22(row.updated_at) ?? nowMs };
+          } else {
+            a.terminal = null;
+          }
+          chain.lastUpdatedMs = ms22(row.updated_at) ?? nowMs;
+          byLegacyId.set(row.attempt_id, chain);
+          latestChainForTask.set(row.task_id, chain);
+          prev = row;
+        }
+      }
+      const openBySession = /* @__PURE__ */ new Map();
+      for (const chain of chains) {
+        const a = chain.attempt;
+        if (a.terminal) continue;
+        const orphan = !chain.queueRow && nowMs - chain.lastUpdatedMs > opts.policy.hardCeilingMs;
+        const holder = openBySession.get(a.sessionId);
+        if (orphan || holder) {
+          const victim = orphan || !holder ? chain : holder.lastUpdatedMs <= chain.lastUpdatedMs ? holder : chain;
+          victim.attempt.state = "failed";
+          victim.attempt.suspension = null;
+          victim.attempt.terminal = { outcome: "failed", reason: "migration_orphan", source: "scheduler", strength: "genuine", at: nowMs };
+          report.orphans++;
+          if (victim === holder) openBySession.set(a.sessionId, chain);
+          continue;
+        }
+        openBySession.set(a.sessionId, chain);
+      }
+      for (const chain of chains) {
+        store.upsertAttempt(chain.attempt, nowMs);
+        report.attempts++;
+        if (!chain.attempt.terminal) {
+          report.openAttempts++;
+          store.syncHolds(chain.attempt.attemptId, [{
+            holdId: `${chain.attempt.attemptId}:hard_ceiling`,
+            attemptId: chain.attempt.attemptId,
+            generation: null,
+            reason: "hard_ceiling",
+            until: nowMs + opts.policy.hardCeilingMs,
+            onExpire: "escalate",
+            data: {},
+            createdAt: nowMs
+          }], nowMs);
+        }
+      }
+      if (has("mesh_turn_events")) {
+        const rows = db.prepare(`SELECT * FROM mesh_turn_events WHERE mesh_id = ?`).all(meshId);
+        for (const row of rows) {
+          const chain = byLegacyId.get(row.attempt_id);
+          const generation = chain?.members.get(row.attempt_id) ?? 0;
+          const verdict = row.kind.startsWith("rejected_") ? "rejected" : "applied";
+          const recordedAt = ms22(row.recorded_at) ?? nowMs;
+          const inserted = store.insertEvent({
+            eventId: row.event_id,
+            meshId: meshId || null,
+            attemptId: chain?.attempt.attemptId ?? row.attempt_id,
+            generation,
+            sessionId: chain?.attempt.sessionId ?? "",
+            kind: row.kind,
+            source: "migration",
+            verdict,
+            ...verdict === "rejected" ? { rejection: row.kind.slice("rejected_".length) } : {},
+            dedupeKey: row.dedupe_key ?? "",
+            payload: { ...meshId ? { meshId } : {}, legacy: parseObject(row.payload) },
+            publishState: "none",
+            atMs: row.occurred_at_ms ?? recordedAt,
+            recordedAt
+          });
+          if (inserted) report.events++;
+          else report.eventCollisions++;
+        }
+      }
+      if (has("mesh_turn_held_suspensions")) {
+        const rows = db.prepare(`SELECT * FROM mesh_turn_held_suspensions WHERE mesh_id = ?`).all(meshId);
+        const insert = db.prepare(`INSERT OR IGNORE INTO turn_holds (hold_id, attempt_id, generation, reason, until_ms, on_expire, data_json, status, created_at, resolved_at)
+            VALUES (?, ?, ?, 'suspension_before_consumed', NULL, 'release', ?, ?, ?, ?)`);
+        for (const row of rows) {
+          report.heldSuspensions++;
+          const chain = byLegacyId.get(row.attempt_id);
+          const attemptId = chain?.attempt.attemptId ?? row.attempt_id;
+          const modal = row.stage === "waiting_choice" ? "choice" : "approval";
+          const open = row.status === "held" && chain && !chain.attempt.terminal;
+          if (open) report.holdsActive++;
+          insert.run(
+            open ? `${attemptId}:suspension_before_consumed` : `legacy:${row.hold_id}`,
+            attemptId,
+            chain?.members.get(row.attempt_id) ?? null,
+            JSON.stringify({ modal, legacyStatus: row.status }),
+            open ? "active" : "resolved",
+            ms22(row.recorded_at) ?? nowMs,
+            open ? null : ms22(row.resolved_at) ?? nowMs
+          );
+        }
+      }
+      if (has("mesh_inflight_hold")) {
+        const rows = db.prepare(`SELECT * FROM mesh_inflight_hold WHERE mesh_id IS ?`).all(meshId || null);
+        for (const row of rows) {
+          report.inflightHolds++;
+          const chain = latestChainForTask.get(row.task_id);
+          if (!chain || chain.attempt.terminal) {
+            report.inflightHoldsDropped++;
+            continue;
+          }
+          const a = chain.attempt;
+          const holds = [...store.activeHolds(a.attemptId).filter((h) => h.reason !== "liveness"), {
+            holdId: `${a.attemptId}:liveness`,
+            attemptId: a.attemptId,
+            generation: a.generation,
+            reason: "liveness",
+            until: (row.held_at ?? nowMs) + opts.policy.livenessDeadlineMs,
+            onExpire: "escalate",
+            data: {},
+            createdAt: row.held_at ?? nowMs
+          }];
+          store.syncHolds(a.attemptId, holds, nowMs);
+        }
+      }
+      const setDelivery = db.prepare(`UPDATE turn_attempts SET delivered_at = COALESCE(delivered_at, ?), notified_at = COALESCE(notified_at, ?),
+        input_json = COALESCE(input_json, ?), updated_at = ? WHERE attempt_id = ?`);
+      if (has("mesh_session_delivery")) {
+        const rows = db.prepare(`SELECT * FROM mesh_session_delivery WHERE mesh_id = ?`).all(meshId);
+        for (const row of rows) {
+          report.deliveries++;
+          const chain = row.task_id ? latestChainForTask.get(row.task_id) : void 0;
+          if (!chain) {
+            report.deliveriesDropped++;
+            continue;
+          }
+          const delivered = ["delivered", "acked", "completed"].includes(row.status) ? ms22(row.created_at) : null;
+          const notified = ["acked", "completed"].includes(row.status) ? ms22(row.updated_at) : null;
+          setDelivery.run(delivered, notified, row.input, nowMs, chain.attempt.attemptId);
+          report.deliveriesMerged++;
+        }
+      }
+      if (has("mesh_direct_dispatches")) {
+        const rows = db.prepare(`SELECT * FROM mesh_direct_dispatches WHERE mesh_id = ?`).all(meshId);
+        const setDirect = db.prepare(`UPDATE turn_attempts SET input_json = COALESCE(input_json, ?), via = COALESCE(via, ?), data_json = ?, updated_at = ? WHERE attempt_id = ?`);
+        for (const row of rows) {
+          report.directDispatches++;
+          const chain = latestChainForTask.get(row.task_id);
+          if (!chain) {
+            report.directDispatchesDropped++;
+            continue;
+          }
+          const data = { ...chain.attempt.data, directDispatch: { status: row.status, idleSession: row.dispatched_to_idle_session === 1, ...row.task_mode ? { taskMode: row.task_mode } : {} } };
+          setDirect.run(row.input, row.via, JSON.stringify(data), nowMs, chain.attempt.attemptId);
+          report.directDispatchesMerged++;
+        }
+      }
+      if (has("mesh_completion_fingerprints")) {
+        report.fingerprintsDropped += db.prepare(`SELECT COUNT(*) AS n FROM mesh_completion_fingerprints WHERE mesh_id = ?`).get(meshId).n;
+      }
+      if (has("mesh_pending_events")) {
+        const rows = db.prepare(`SELECT * FROM mesh_pending_events WHERE mesh_id = ? ORDER BY queued_at, id`).all(meshId);
+        const markNotified = db.prepare(`UPDATE turn_attempts SET notified_at = COALESCE(notified_at, ?) WHERE attempt_id = ?`);
+        for (const row of rows) {
+          report.pendingEvents++;
+          const payload = parseObject(row.payload);
+          const taskId = typeof payload.taskId === "string" ? payload.taskId : void 0;
+          if (row.drained === 1) {
+            const chain = taskId ? latestChainForTask.get(taskId) : void 0;
+            if (chain && TERMINAL_EVENTS.has(row.event) && row.drained_at) {
+              markNotified.run(row.drained_at, chain.attempt.attemptId);
+              report.pendingDrainedAcked++;
+            }
+            continue;
+          }
+          report.pendingUndrained++;
+          const eventId = `migrated_pending:${row.id}`;
+          const target = row.coordinator_daemon_id && isEvidenceIdentifier(row.coordinator_daemon_id) ? row.coordinator_daemon_id : opts.ownerDaemonId;
+          const targetSession = row.intended_for && isEvidenceIdentifier(row.intended_for) ? row.intended_for : void 0;
+          const entry = {
+            v: MESH_TOPIC_PROTOCOL_VERSION,
+            eventId,
+            at: row.queued_at,
+            k: "turn.notify",
+            notify: "mesh_event",
+            targetDaemonId: target,
+            ...targetSession ? { targetSessionId: targetSession } : {},
+            ...taskId && isEvidenceIdentifier(taskId) ? { taskId } : {}
+          };
+          if (!meshId) continue;
+          const inserted = store.insertEvent({
+            eventId,
+            meshId,
+            attemptId: null,
+            generation: null,
+            sessionId: targetSession ?? "",
+            kind: "notify",
+            source: "migration",
+            verdict: "applied",
+            dedupeKey: eventId,
+            payload: { meshId, notify: "mesh_event", event: row.event, entry, local: { payload } },
+            publishState: "pending",
+            atMs: row.queued_at,
+            recordedAt: nowMs
+          });
+          if (inserted) report.pendingNotified++;
+        }
+      }
+      if (has("mesh_event_ledger")) {
+        report.ledgerRows += db.prepare(`SELECT COUNT(*) AS n FROM mesh_event_ledger WHERE mesh_id = ?`).get(meshId).n;
+        const notes = db.prepare(`SELECT * FROM mesh_event_ledger WHERE mesh_id = ? AND kind IN (?, ?) ORDER BY timestamp, rowid`).all(meshId, OPERATOR_CANCEL_KIND, OPERATOR_TOMBSTONE_KIND);
+        const byText = /* @__PURE__ */ new Map();
+        for (const row of notes) {
+          const payload = parseObject(row.payload);
+          const at = ms22(row.timestamp) ?? nowMs;
+          if (row.kind === OPERATOR_CANCEL_KIND) {
+            const text = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (!text) continue;
+            if (store.insertOperatingNote({ noteId: row.id, meshId, text, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row.session_id, createdAt: at })) {
+              report.operatingNotes++;
+              byText.set(text, [...byText.get(text) ?? [], row.id]);
+            }
+          } else {
+            report.operatingNoteTombstones++;
+            const targetId = typeof payload.targetNoteId === "string" ? payload.targetNoteId.trim() : "";
+            const targetFp = typeof payload.targetFingerprint === "string" ? payload.targetFingerprint.trim() : "";
+            if (targetId) store.tombstoneOperatingNote(meshId, targetId, at);
+            for (const id22 of targetFp ? byText.get(targetFp) ?? [] : []) store.tombstoneOperatingNote(meshId, id22, at);
+          }
+        }
+      }
+      for (const table of LEGACY_TURN_TABLES) {
+        if (!has(table)) continue;
+        const changes = db.prepare(`DELETE FROM ${table} WHERE mesh_id IS ?`).run(meshId || null).changes + (meshId ? 0 : db.prepare(`DELETE FROM ${table} WHERE mesh_id = ''`).run().changes);
+        if (table === "mesh_event_ledger") report.ledgerRowsDropped += changes;
+      }
+    }
+    function migrateTurnLedgerV1(db, options) {
+      const report = emptyReport();
+      ensureTurnLedgerSchema(db);
+      if (readUserVersion(db) >= TURN_LEDGER_SCHEMA_VERSION) {
+        report.skipped = true;
+        return report;
+      }
+      const nowMs = options.nowMs ?? Date.now();
+      const policy = options.policy ?? DEFAULT_TURN_POLICY;
+      options.beforeFold?.();
+      if (options.exportPath) {
+        report.exportedRows = exportLegacyTurnTables(db, options.exportPath);
+        report.exportPath = options.exportPath;
+      }
+      const store = new TurnStore(db);
+      const meshIds = legacyMeshIds(db);
+      for (const meshId of meshIds) {
+        db.transaction(() => migrateMesh(db, store, meshId, { ownerDaemonId: options.ownerDaemonId, nowMs, policy }, report)).immediate();
+        report.meshes++;
+      }
+      db.transaction(() => {
+        for (const table of LEGACY_TURN_TABLES) {
+          if (!tableExists(db, table)) continue;
+          db.exec(`DROP TABLE ${table}`);
+          report.droppedTables.push(table);
+        }
+        db.pragma(`user_version = ${TURN_LEDGER_SCHEMA_VERSION}`);
+      }).immediate();
+      return report;
+    }
+    function formatTurnLedgerMigrationLine(r) {
+      if (r.skipped) return `turn-ledger migration v1: already at user_version ${TURN_LEDGER_SCHEMA_VERSION}`;
+      return `turn-ledger migration v1: attempts ${r.legacyAttempts}\u2192${r.attempts} (${r.folds} folds, ${r.retries} retries, ${r.orphans} orphans, ${r.openAttempts} open, ${r.unmappedReasons} free-text reasons), events ${r.events} (+${r.eventCollisions} collisions), held ${r.heldSuspensions} (${r.holdsActive} active), inflight holds ${r.inflightHolds} (${r.inflightHoldsDropped} dropped), deliveries ${r.deliveriesMerged}/${r.deliveries} merged (${r.deliveriesDropped} dropped), direct ${r.directDispatchesMerged}/${r.directDispatches} merged (${r.directDispatchesDropped} dropped), fingerprints ${r.fingerprintsDropped} dropped, pending ${r.pendingEvents} (${r.pendingUndrained} undrained \u2192 ${r.pendingNotified} turn.notify pending, ${r.pendingDrainedAcked} acks), ledger ${r.ledgerRows} rows (${r.operatingNotes} notes, ${r.operatingNoteTombstones} tombstones kept; ${r.ledgerRowsDropped} dropped), meshes ${r.meshes}, exported ${r.exportedRows} rows${r.exportPath ? ` \u2192 ${r.exportPath}` : ""}, dropped [${r.droppedTables.join(",")}], user_version=${TURN_LEDGER_SCHEMA_VERSION}`;
+    }
+    var import_fs7;
+    var import_path7;
+    var OPERATOR_CANCEL_KIND;
+    var OPERATOR_TOMBSTONE_KIND;
+    var TERMINAL_EVENTS;
+    var TERMINAL_STAGES;
+    var init_migrate_v1 = __esm2({
+      "src/mesh/turn-ledger/migrate-v1.ts"() {
+        "use strict";
+        import_fs7 = require("fs");
+        import_path7 = require("path");
+        init_dist();
+        init_policy();
+        init_schema2();
+        init_store2();
+        OPERATOR_CANCEL_KIND = "coordinator_operating_note";
+        OPERATOR_TOMBSTONE_KIND = "coordinator_operating_note_tombstone";
+        TERMINAL_EVENTS = /* @__PURE__ */ new Set(["agent:generating_completed", "agent:stopped"]);
+        TERMINAL_STAGES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+      }
+    });
     function normalizeLiteral(model) {
       return model.toLowerCase().replace(/[_/\\().,]+/g, " ").replace(/-+/g, " ").replace(/\s+/g, " ").trim();
     }
@@ -69858,9 +71784,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return modelNamesEquivalent(requested, declared);
     }
     function decideSlotForModel(input) {
-      const { requestedModel, slots } = input;
+      const { requestedModel, slots: slots2 } = input;
       const wanted = typeof input.providerType === "string" ? input.providerType.trim() : "";
-      const candidates = wanted ? slots.filter((s2) => (s2.slot.provider?.trim() ?? "") === wanted) : slots;
+      const candidates = wanted ? slots2.filter((s2) => (s2.slot.provider?.trim() ?? "") === wanted) : slots2;
       const declaring = candidates.filter((s2) => isModelAllowedBySlot(requestedModel, s2.slot));
       if (!declaring.length) {
         const declaredModels = candidates.map((s2) => typeof s2.slot.model === "string" && s2.slot.model.trim() ? s2.slot.model.trim() : "(provider default)").filter((v, i, a) => a.indexOf(v) === i);
@@ -70006,7 +71932,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!dir) continue;
         for (const ext of WIN_EXEC_EXT) {
           const full = path23.join(dir, trimmed2 + ext);
-          if ((0, import_fs7.existsSync)(full)) return full;
+          if ((0, import_fs8.existsSync)(full)) return full;
         }
       }
       return null;
@@ -70023,7 +71949,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (process.platform !== "win32") return command;
       const trimmed2 = (command || "").trim();
       if (!trimmed2) return command;
-      if (path23.isAbsolute(trimmed2) && (0, import_fs7.existsSync)(trimmed2)) return trimmed2;
+      if (path23.isAbsolute(trimmed2) && (0, import_fs8.existsSync)(trimmed2)) return trimmed2;
       try {
         const out = (0, import_child_process3.execFileSync)("where", [trimmed2], {
           encoding: "utf8",
@@ -70072,7 +71998,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
     }
     var import_child_process3;
-    var import_fs7;
+    var import_fs8;
     var path23;
     var DIRECT_EXEC_EXT;
     var SHIM_EXEC_EXT;
@@ -70081,7 +72007,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       "src/cli-adapters/resolve-executable.ts"() {
         "use strict";
         import_child_process3 = require("child_process");
-        import_fs7 = require("fs");
+        import_fs8 = require("fs");
         path23 = __toESM2(require("path"));
         DIRECT_EXEC_EXT = /* @__PURE__ */ new Set([".exe", ".com"]);
         SHIM_EXEC_EXT = /* @__PURE__ */ new Set([".cmd", ".bat"]);
@@ -70219,10 +72145,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
       for (const relative9 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path7.join)(workspace, relative9);
-        if (!(0, import_fs8.existsSync)(configPath)) continue;
+        const configPath = (0, import_path8.join)(workspace, relative9);
+        if (!(0, import_fs9.existsSync)(configPath)) continue;
         try {
-          const parsed = parseConfigText(configPath, (0, import_fs8.readFileSync)(configPath, "utf-8"));
+          const parsed = parseConfigText(configPath, (0, import_fs9.readFileSync)(configPath, "utf-8"));
           const validation = validateMeshRefineConfig(parsed, relative9);
           if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
           return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
@@ -70238,7 +72164,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readPackageScripts(workspace) {
       try {
-        const parsed = JSON.parse((0, import_fs8.readFileSync)((0, import_path7.join)(workspace, "package.json"), "utf-8"));
+        const parsed = JSON.parse((0, import_fs9.readFileSync)((0, import_path8.join)(workspace, "package.json"), "utf-8"));
         return isRecord5(parsed?.scripts) ? parsed.scripts : {};
       } catch {
         return {};
@@ -70313,8 +72239,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         unavailableReason: validation.commands.length ? void 0 : "validation_unavailable: repo mesh/refine config has no validation.commands"
       };
     }
-    var import_fs8;
-    var import_path7;
+    var import_fs9;
+    var import_path8;
     var MESH_REFINE_VALIDATION_CATEGORIES;
     var MESH_REFINE_VALIDATION_SCOPES;
     var MESH_REFINE_CONFIG_LOCATIONS;
@@ -70326,8 +72252,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_refine_config = __esm2({
       "src/mesh/refine-config.ts"() {
         "use strict";
-        import_fs8 = require("fs");
-        import_path7 = require("path");
+        import_fs9 = require("fs");
+        import_path8 = require("path");
         init_config_text();
         MESH_REFINE_VALIDATION_CATEGORIES = ["typecheck", "test", "lint", "build"];
         MESH_REFINE_VALIDATION_SCOPES = ["none", "web", "daemon"];
@@ -70554,7 +72480,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!Number.isFinite(startedMs)) return false;
       if (nowMs - startedMs <= WORKTREE_BOOTSTRAP_STALE_RUNNING_MS) return false;
       const workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
-      if (!workspace || !(0, import_fs9.existsSync)(workspace)) return false;
+      if (!workspace || !(0, import_fs10.existsSync)(workspace)) return false;
       try {
         const out = (0, import_node_child_process4.execFileSync)(resolveWin32Executable("git"), ["status", "--porcelain"], {
           cwd: workspace,
@@ -70590,7 +72516,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!Number.isFinite(startedMs)) return false;
       if (nowMs - startedMs <= WORKTREE_BOOTSTRAP_STALE_RUNNING_MS) return false;
       const workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
-      if (!workspace || (0, import_fs9.existsSync)(workspace)) return false;
+      if (!workspace || (0, import_fs10.existsSync)(workspace)) return false;
       const rawGit = readRecord3(node?.lastGit) ?? readRecord3(node?.last_git);
       const checkedAt = typeof rawGit?.checkedAt === "number" ? rawGit.checkedAt : void 0;
       if (checkedAt === void 0 || checkedAt <= startedMs) return false;
@@ -70643,10 +72569,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
       for (const relative9 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path8.join)(workspace, relative9);
-        if (!(0, import_fs9.existsSync)(configPath)) continue;
+        const configPath = (0, import_path9.join)(workspace, relative9);
+        if (!(0, import_fs10.existsSync)(configPath)) continue;
         try {
-          const parsed = parseConfigText(configPath, (0, import_fs9.readFileSync)(configPath, "utf-8"));
+          const parsed = parseConfigText(configPath, (0, import_fs10.readFileSync)(configPath, "utf-8"));
           const validation = validateMeshWorktreeBootstrapConfig(parsed, relative9);
           if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
           return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
@@ -70659,9 +72585,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest = {};
       for (const relative9 of staleInputs ?? []) {
-        const filePath = (0, import_path8.join)(workspace, relative9);
+        const filePath = (0, import_path9.join)(workspace, relative9);
         try {
-          digest[relative9] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs9.readFileSync)(filePath)).digest("hex");
+          digest[relative9] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs10.readFileSync)(filePath)).digest("hex");
         } catch {
           digest[relative9] = "absent";
         }
@@ -70754,10 +72680,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         staleInputs: loaded.config.staleInputs
       };
       const staleInputPaths = loaded.config.staleInputs ?? [];
-      const initiallyAbsent = staleInputPaths.filter((p) => !(0, import_fs9.existsSync)((0, import_path8.join)(workspace, p)));
+      const initiallyAbsent = staleInputPaths.filter((p) => !(0, import_fs10.existsSync)((0, import_path9.join)(workspace, p)));
       for (const command of validation.commands) {
         if (initiallyAbsent.length > 0) {
-          const appearedNow = initiallyAbsent.filter((p) => (0, import_fs9.existsSync)((0, import_path8.join)(workspace, p)));
+          const appearedNow = initiallyAbsent.filter((p) => (0, import_fs10.existsSync)((0, import_path9.join)(workspace, p)));
           if (appearedNow.length > 0) {
             state2.status = "stale";
             state2.completedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -70765,7 +72691,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return state2;
           }
         }
-        const cwd = command.cwd ? (0, import_path8.resolve)(workspace, command.cwd) : workspace;
+        const cwd = command.cwd ? (0, import_path9.resolve)(workspace, command.cwd) : workspace;
         const startedAt = Date.now();
         state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
@@ -70825,8 +72751,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       return state2;
     }
-    var import_fs9;
-    var import_path8;
+    var import_fs10;
+    var import_path9;
     var import_node_child_process4;
     var import_node_crypto22;
     var import_node_util3;
@@ -70842,8 +72768,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_worktree_bootstrap_config = __esm2({
       "src/mesh/worktree-bootstrap-config.ts"() {
         "use strict";
-        import_fs9 = require("fs");
-        import_path8 = require("path");
+        import_fs10 = require("fs");
+        import_path9 = require("path");
         import_node_child_process4 = require("child_process");
         import_node_crypto22 = require("crypto");
         import_node_util3 = require("util");
@@ -72625,13 +74551,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         CLAIM_DEFERRAL_MAX_ENTRIES = 2e3;
       }
     });
-    var import_fs10;
+    var import_fs11;
     var DEFAULT_WAL_CHECKPOINT_POLICY;
     var WalCheckpointScheduler;
     var init_mesh_runtime_store_wal = __esm2({
       "src/mesh/mesh-runtime-store-wal.ts"() {
         "use strict";
-        import_fs10 = require("fs");
+        import_fs11 = require("fs");
         init_logger();
         DEFAULT_WAL_CHECKPOINT_POLICY = {
           intervalMs: 3e4,
@@ -72672,7 +74598,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (writes === 0 && !this.truncatePending) return "none";
             this.writesSinceTick = 0;
             try {
-              const size = (0, import_fs10.existsSync)(this.walPath) ? (0, import_fs10.statSync)(this.walPath).size : 0;
+              const size = (0, import_fs11.existsSync)(this.walPath) ? (0, import_fs11.statSync)(this.walPath).size : 0;
               const overThreshold = size >= this.policy.maxBytes;
               const idle = now - this.lastWriteAt >= this.policy.idleMs;
               if (overThreshold && idle) {
@@ -73340,12 +75266,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     `).all(meshId, status);
       return rows.map(meshTurnHeldSuspensionFromRow);
     }
-    function resolveHeldTurnSuspension(self, holdId, status, resolution, resolvedAt) {
+    function resolveHeldTurnSuspension(self, holdId2, status, resolution, resolvedAt) {
       const res = self.db.prepare(`
         UPDATE mesh_turn_held_suspensions
         SET status = ?, resolution = ?, resolved_at = ?
         WHERE hold_id = ? AND status = 'held'
-    `).run(status, resolution, resolvedAt, holdId);
+    `).run(status, resolution, resolvedAt, holdId2);
       self.maybeCheckpointWal();
       return res.changes > 0;
     }
@@ -73953,6 +75879,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     `);
       migrateMeshIsolationColumns(self);
       migrateMeshGraphSchema(self.db);
+      ensureTurnLedgerSchema(self.db);
     }
     function tableColumns(self, table) {
       const rows = self.db.prepare(`PRAGMA table_info(${table})`).all();
@@ -74043,6 +75970,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "use strict";
         init_logger();
         init_mesh_graph_schema();
+        init_schema2();
         loggedMigrationFailureFlag = false;
       }
     });
@@ -74574,15 +76502,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return meshId.replace(/[^a-zA-Z0-9_-]/g, "_");
     }
     function legacyQueuePath(meshId) {
-      return (0, import_path9.join)(getLedgerDir2(), `${safeMeshId2(meshId)}.queue.json`);
+      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId2(meshId)}.queue.json`);
     }
     function cleanupStrayRootRuntimeDb(canonicalPath2) {
       try {
-        const strayPath = (0, import_path9.join)(getConfigDir(), "mesh-runtime.db");
+        const strayPath = (0, import_path10.join)(getConfigDir(), "mesh-runtime.db");
         if (strayPath === canonicalPath2) return;
-        if (!(0, import_fs11.existsSync)(strayPath)) return;
-        if ((0, import_fs11.statSync)(strayPath).size !== 0) return;
-        (0, import_fs11.unlinkSync)(strayPath);
+        if (!(0, import_fs12.existsSync)(strayPath)) return;
+        if ((0, import_fs12.statSync)(strayPath).size !== 0) return;
+        (0, import_fs12.unlinkSync)(strayPath);
         if (!loggedStrayCleanup) {
           loggedStrayCleanup = true;
           LOG.info("MeshRuntimeStore", `Removed stray 0-byte root mesh-runtime.db at ${strayPath}`);
@@ -74596,17 +76524,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function meshRuntimeStorePath() {
       const dir = getLedgerDir2();
-      const nextPath = (0, import_path9.join)(dir, "mesh-runtime.db");
+      const nextPath = (0, import_path10.join)(dir, "mesh-runtime.db");
       cleanupStrayRootRuntimeDb(nextPath);
-      if ((0, import_fs11.existsSync)(nextPath)) return nextPath;
-      const legacyPath = (0, import_path9.join)(dir, "beads.db");
-      if (!(0, import_fs11.existsSync)(legacyPath)) return nextPath;
+      if ((0, import_fs12.existsSync)(nextPath)) return nextPath;
+      const legacyPath = (0, import_path10.join)(dir, "beads.db");
+      if (!(0, import_fs12.existsSync)(legacyPath)) return nextPath;
       try {
-        (0, import_fs11.renameSync)(legacyPath, nextPath);
+        (0, import_fs12.renameSync)(legacyPath, nextPath);
         for (const suffix of ["-wal", "-shm"]) {
           const legacyCompanion = `${legacyPath}${suffix}`;
-          if ((0, import_fs11.existsSync)(legacyCompanion)) {
-            (0, import_fs11.renameSync)(legacyCompanion, `${nextPath}${suffix}`);
+          if ((0, import_fs12.existsSync)(legacyCompanion)) {
+            (0, import_fs12.renameSync)(legacyCompanion, `${nextPath}${suffix}`);
           }
         }
       } catch (err) {
@@ -74617,20 +76545,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             `Legacy beads.db\u2192mesh-runtime.db migration failed; using existing DB in-place to avoid data loss: ${err?.message || err}`
           );
         }
-        return (0, import_fs11.existsSync)(nextPath) ? nextPath : legacyPath;
+        return (0, import_fs12.existsSync)(nextPath) ? nextPath : legacyPath;
       }
       return nextPath;
     }
-    var import_fs11;
-    var import_path9;
+    var import_fs12;
+    var import_path10;
     var DatabaseCtor;
     var loggedStrayCleanup;
     var MeshRuntimeStore;
     var init_mesh_runtime_store = __esm2({
       "src/mesh/mesh-runtime-store.ts"() {
         "use strict";
-        import_fs11 = require("fs");
-        import_path9 = require("path");
+        import_fs12 = require("fs");
+        import_path10 = require("path");
         init_logger();
         init_load_better_sqlite3();
         init_config();
@@ -74638,6 +76566,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_work_queue();
         init_mesh_task_parking();
         init_mesh_graph_store();
+        init_store2();
+        init_migrate_v1();
         init_slot_model_enforcement();
         init_mesh_daemon_slot_axis();
         init_dist();
@@ -74676,8 +76606,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           // counter: sharing makes each chore's threshold drift by the other's write volume.
           toolCallLogCounter = 0;
           constructor(dbPath) {
-            const dir = (0, import_path9.dirname)(dbPath);
-            if (!(0, import_fs11.existsSync)(dir)) (0, import_fs11.mkdirSync)(dir, { recursive: true });
+            const dir = (0, import_path10.dirname)(dbPath);
+            if (!(0, import_fs12.existsSync)(dir)) (0, import_fs12.mkdirSync)(dir, { recursive: true });
             this.db = new (loadDatabaseCtor())(dbPath);
             this.db.pragma("journal_mode = WAL");
             this.db.pragma("synchronous = NORMAL");
@@ -74746,6 +76676,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (!this.graphStoreInstance) this.graphStoreInstance = new MeshGraphStore(this.db);
             return this.graphStoreInstance;
           }
+          /** Wiring-unification C3: turn-ledger row CRUD on THIS handle (one txn with mesh_queue). */
+          turnStoreInstance;
+          turnStore() {
+            if (!this.turnStoreInstance) this.turnStoreInstance = new TurnStore(this.db);
+            return this.turnStoreInstance;
+          }
+          /** C3 one-way fold of the legacy turn/outbox/ledger tables (user_version 0 → 1). Boot calls it once. */
+          runTurnLedgerMigrationV1(opts) {
+            const nowMs = opts.nowMs ?? Date.now();
+            return migrateTurnLedgerV1(this.db, { ...opts, nowMs, exportPath: opts.exportPath === void 0 ? turnLedgerExportPath(getLedgerDir2(), nowMs) : opts.exportPath });
+          }
           // ── Schema DDL + column migrations ───────────────────────────────────────
           // Implementation lives in ./mesh-runtime-store-schema.ts (behavior-preserving
           // code move, file-size gate). Kept here as thin delegators so the constructor
@@ -74794,9 +76735,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const count = this.db.prepare("SELECT COUNT(*) AS count FROM mesh_queue WHERE mesh_id = ?").get(meshId);
             if (count.count > 0) return;
             const path74 = legacyQueuePath(meshId);
-            if (!(0, import_fs11.existsSync)(path74)) return;
+            if (!(0, import_fs12.existsSync)(path74)) return;
             try {
-              const entries = JSON.parse((0, import_fs11.readFileSync)(path74, "utf-8"));
+              const entries = JSON.parse((0, import_fs12.readFileSync)(path74, "utf-8"));
               if (!Array.isArray(entries)) return;
               const insert = this.db.prepare(`
                 INSERT OR REPLACE INTO mesh_queue (
@@ -76260,8 +78201,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           listHeldTurnSuspensionsForMesh(meshId, status) {
             return listHeldTurnSuspensionsForMesh(this, meshId, status);
           }
-          resolveHeldTurnSuspension(holdId, status, resolution, resolvedAt) {
-            return resolveHeldTurnSuspension(this, holdId, status, resolution, resolvedAt);
+          resolveHeldTurnSuspension(holdId2, status, resolution, resolvedAt) {
+            return resolveHeldTurnSuspension(this, holdId2, status, resolution, resolvedAt);
           }
         };
       }
@@ -76270,35 +78211,35 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return meshId.replace(/[^a-zA-Z0-9_-]/g, "_");
     }
     function getLedgerDir2() {
-      const dir = (0, import_path10.join)(getConfigDir(), LEDGER_DIR_NAME);
-      if (!(0, import_fs12.existsSync)(dir)) {
-        (0, import_fs12.mkdirSync)(dir, { recursive: true, mode: 448 });
+      const dir = (0, import_path11.join)(getConfigDir(), LEDGER_DIR_NAME);
+      if (!(0, import_fs13.existsSync)(dir)) {
+        (0, import_fs13.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
       return dir;
     }
     function getLedgerPath(meshId) {
-      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.jsonl`);
+      return (0, import_path11.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.jsonl`);
     }
     function getRotatedPath(meshId, index) {
-      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.${index}.jsonl`);
+      return (0, import_path11.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.${index}.jsonl`);
     }
     function getArchivePath(meshId) {
-      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archive.jsonl`);
+      return (0, import_path11.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archive.jsonl`);
     }
     function getRotatedArchivePath(meshId, index) {
-      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archive.${index}.jsonl`);
+      return (0, import_path11.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archive.${index}.jsonl`);
     }
     function getArchivedTerminalKeysPath(meshId) {
-      return (0, import_path10.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archived-terminal-keys.json`);
+      return (0, import_path11.join)(getLedgerDir2(), `${safeMeshId3(meshId)}.archived-terminal-keys.json`);
     }
-    var import_fs12;
-    var import_path10;
+    var import_fs13;
+    var import_path11;
     var LEDGER_DIR_NAME;
     var init_mesh_ledger_paths = __esm2({
       "src/mesh/mesh-ledger-paths.ts"() {
         "use strict";
-        import_fs12 = require("fs");
-        import_path10 = require("path");
+        import_fs13 = require("fs");
+        import_path11 = require("path");
         init_config();
         LEDGER_DIR_NAME = "mesh-ledger";
       }
@@ -76310,10 +78251,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readLedgerFile(meshId) {
       const filePath = getLedgerPath(meshId);
-      if (!(0, import_fs13.existsSync)(filePath)) return [];
+      if (!(0, import_fs14.existsSync)(filePath)) return [];
       let content;
       try {
-        content = (0, import_fs13.readFileSync)(filePath, "utf-8");
+        content = (0, import_fs14.readFileSync)(filePath, "utf-8");
       } catch {
         return [];
       }
@@ -76518,7 +78459,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       ledgerReadCache.clear();
       filteredLedgerReadCache.clear();
     }
-    var import_fs13;
+    var import_fs14;
     var ledgerReadCache;
     var filteredLedgerReadCache;
     var LEDGER_CACHE_TTL_MS;
@@ -76529,7 +78470,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_ledger_read_cache = __esm2({
       "src/mesh/mesh-ledger-read-cache.ts"() {
         "use strict";
-        import_fs13 = require("fs");
+        import_fs14 = require("fs");
         init_mesh_runtime_store();
         init_mesh_runtime_store_turn_rows();
         init_logger();
@@ -76549,6 +78490,36 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
         LEDGER_SCAN_SUMMARY_INTERVAL_MS = 6e4;
         registerLedgerBulkChangeListener(invalidateAllLedgerCaches);
+      }
+    });
+    var mesh_record_exports = {};
+    __export2(mesh_record_exports, {
+      meshRecord: () => meshRecord,
+      meshRecordEntry: () => meshRecordEntry
+    });
+    function meshRecord(meshId, kind, scalars = {}) {
+      const eventId = scalars.id ?? (0, import_crypto12.randomUUID)();
+      const entry = {
+        id: eventId,
+        timestamp: new Date(scalars.at ?? Date.now()).toISOString(),
+        kind,
+        ...scalars.nodeId ? { nodeId: scalars.nodeId } : {},
+        ...scalars.sessionId ? { sessionId: scalars.sessionId } : {},
+        ...scalars.providerType ? { providerType: scalars.providerType } : {},
+        ...scalars.taskId ? { taskId: scalars.taskId } : {},
+        ...scalars.payload ? { payload: scalars.payload } : {}
+      };
+      return { eventId, published: publishMeshRecord(meshId, entry) };
+    }
+    function meshRecordEntry(meshId, entry) {
+      return publishMeshRecord(meshId, entry);
+    }
+    var import_crypto12;
+    var init_mesh_record = __esm2({
+      "src/mesh/mesh-record.ts"() {
+        "use strict";
+        import_crypto12 = require("crypto");
+        init_mesh_publisher();
       }
     });
     var mesh_ledger_exports = {};
@@ -76631,9 +78602,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readArchivedTerminalKeys(meshId) {
       const path74 = getArchivedTerminalKeysPath(meshId);
-      if (!(0, import_fs14.existsSync)(path74)) return /* @__PURE__ */ new Set();
+      if (!(0, import_fs15.existsSync)(path74)) return /* @__PURE__ */ new Set();
       try {
-        const parsed = JSON.parse((0, import_fs14.readFileSync)(path74, "utf-8"));
+        const parsed = JSON.parse((0, import_fs15.readFileSync)(path74, "utf-8"));
         return new Set(Array.isArray(parsed?.keys) ? parsed.keys.filter((k) => typeof k === "string") : []);
       } catch {
         return /* @__PURE__ */ new Set();
@@ -76655,23 +78626,23 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           keys = keys.slice(keys.length - ARCHIVED_TERMINAL_KEYS_MAX);
         }
         const index = { keys, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        (0, import_fs14.writeFileSync)(getArchivedTerminalKeysPath(meshId), JSON.stringify(index), { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.writeFileSync)(getArchivedTerminalKeysPath(meshId), JSON.stringify(index), { encoding: "utf-8", mode: 384 });
       } catch {
       }
     }
     function getArchivedCountsPath(meshId) {
       const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      return (0, import_path11.join)(getLedgerDir2(), `${safe}.archived-counts.json`);
+      return (0, import_path12.join)(getLedgerDir2(), `${safe}.archived-counts.json`);
     }
     function rotateArchiveFile(meshId, archivePath) {
       let index = 1;
-      while ((0, import_fs14.existsSync)(getRotatedArchivePath(meshId, index))) {
+      while ((0, import_fs15.existsSync)(getRotatedArchivePath(meshId, index))) {
         index++;
         if (index > 5) break;
       }
       if (index > 5) index = 5;
       try {
-        (0, import_fs14.renameSync)(archivePath, getRotatedArchivePath(meshId, index));
+        (0, import_fs15.renameSync)(archivePath, getRotatedArchivePath(meshId, index));
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Archive rotation failed for mesh ${meshId}: ${e?.message || e}
 `);
@@ -76679,15 +78650,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readArchivedCounts(meshId) {
       const path74 = getArchivedCountsPath(meshId);
-      if (!(0, import_fs14.existsSync)(path74)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
+      if (!(0, import_fs15.existsSync)(path74)) return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
       try {
-        return JSON.parse((0, import_fs14.readFileSync)(path74, "utf-8"));
+        return JSON.parse((0, import_fs15.readFileSync)(path74, "utf-8"));
       } catch {
         return { taskCompleted: 0, taskFailed: 0, taskStalled: 0, recoveryAttempted: 0, totalArchived: 0, lastArchivedAt: "" };
       }
     }
     function writeArchivedCounts(meshId, counts) {
-      (0, import_fs14.writeFileSync)(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: "utf-8", mode: 384 });
+      (0, import_fs15.writeFileSync)(getArchivedCountsPath(meshId), JSON.stringify(counts), { encoding: "utf-8", mode: 384 });
     }
     function updateArchivedCounts(meshId, archived) {
       const counts = readArchivedCounts(meshId);
@@ -76723,7 +78694,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     function compactLedger(meshId) {
       const filePath = getLedgerPath(meshId);
-      if (!(0, import_fs14.existsSync)(filePath)) return { archivedCount: 0, retainedCount: 0 };
+      if (!(0, import_fs15.existsSync)(filePath)) return { archivedCount: 0, retainedCount: 0 };
       const cutoff = Date.now() - ARCHIVE_TERMINAL_OLDER_THAN_MS;
       const entries = readLedgerEntries3(meshId);
       const retainedDispatchKeys = /* @__PURE__ */ new Set();
@@ -76752,11 +78723,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (archive.length === 0) return { archivedCount: 0, retainedCount: keep.length };
       const archivePath = getArchivePath(meshId);
       try {
-        if ((0, import_fs14.existsSync)(archivePath) && (0, import_fs14.statSync)(archivePath).size > 50 * 1024 * 1024) {
+        if ((0, import_fs15.existsSync)(archivePath) && (0, import_fs15.statSync)(archivePath).size > 50 * 1024 * 1024) {
           rotateArchiveFile(meshId, archivePath);
         }
         const archiveLines = archive.map((e) => JSON.stringify(e)).join("\n") + "\n";
-        (0, import_fs14.appendFileSync)(archivePath, archiveLines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.appendFileSync)(archivePath, archiveLines, { encoding: "utf-8", mode: 384 });
         updateArchivedCounts(meshId, archive);
         recordArchivedTerminalKeys(meshId, archive);
       } catch (e) {
@@ -76766,7 +78737,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const keepLines = keep.length ? keep.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
-        (0, import_fs14.writeFileSync)(filePath, keepLines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.writeFileSync)(filePath, keepLines, { encoding: "utf-8", mode: 384 });
         invalidateLedgerCache(meshId);
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Ledger compaction rewrite failed for mesh ${meshId}: ${e?.message || e}
@@ -76938,7 +78909,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         }
       }
       const entry = {
-        id: (0, import_crypto12.randomUUID)(),
+        id: (0, import_crypto13.randomUUID)(),
         meshId,
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         ...partial2
@@ -76948,9 +78919,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         if (derived) entry.taskId = derived;
       }
       const filePath = getLedgerPath(meshId);
-      if ((0, import_fs14.existsSync)(filePath)) {
+      if ((0, import_fs15.existsSync)(filePath)) {
         try {
-          const stat2 = (0, import_fs14.statSync)(filePath);
+          const stat2 = (0, import_fs15.statSync)(filePath);
           if (stat2.size >= MAX_FILE_SIZE_BYTES) {
             rotateLedgerFile(meshId, filePath);
           } else if (stat2.size >= COMPACT_THRESHOLD_BYTES) {
@@ -76976,11 +78947,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const line = JSON.stringify(entry) + "\n";
-        (0, import_fs14.appendFileSync)(filePath, line, { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.appendFileSync)(filePath, line, { encoding: "utf-8", mode: 384 });
         recordLedgerAppend(meshId, [entry]);
         meshLedgerEvents.emit("append", meshId, entry);
         try {
-          recordMeshEventShadow(meshId, entry);
+          meshRecordEntry(meshId, entry);
         } catch {
         }
         if (entry.kind === OPERATING_NOTE_KIND || entry.kind === OPERATING_NOTE_TOMBSTONE_KIND) {
@@ -77072,7 +79043,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         const remaining = readLedgerFile(meshId).filter((e) => !removeIds.includes(e.id));
         const filePath = getLedgerPath(meshId);
         const lines = remaining.length ? remaining.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
-        (0, import_fs14.writeFileSync)(filePath, lines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.writeFileSync)(filePath, lines, { encoding: "utf-8", mode: 384 });
       } catch {
       }
       invalidateLedgerCache(meshId);
@@ -77129,7 +79100,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       try {
         const lines = validEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-        (0, import_fs14.appendFileSync)(ledgerPath, lines, { encoding: "utf-8", mode: 384 });
+        (0, import_fs15.appendFileSync)(ledgerPath, lines, { encoding: "utf-8", mode: 384 });
         recordLedgerAppend(meshId, validEntries);
         for (const entry of validEntries) {
           meshLedgerEvents.emit("append", meshId, entry);
@@ -77431,13 +79402,13 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     function rotateLedgerFile(meshId, currentPath) {
       let index = 1;
-      while ((0, import_fs14.existsSync)(getRotatedPath(meshId, index))) {
+      while ((0, import_fs15.existsSync)(getRotatedPath(meshId, index))) {
         index++;
         if (index > 10) break;
       }
       if (index > 10) index = 10;
       try {
-        (0, import_fs14.renameSync)(currentPath, getRotatedPath(meshId, index));
+        (0, import_fs15.renameSync)(currentPath, getRotatedPath(meshId, index));
       } catch (e) {
         process.stderr.write(`[adhdev-mesh] Ledger rotation failed for mesh ${meshId}: ${e?.message || e}. File will continue to grow.
 `);
@@ -77473,7 +79444,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     function readRotationEntriesTolerant(filePath) {
       let text;
       try {
-        text = (0, import_fs14.readFileSync)(filePath, "utf-8");
+        text = (0, import_fs15.readFileSync)(filePath, "utf-8");
       } catch {
         return [];
       }
@@ -77492,14 +79463,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       return out;
     }
     function evictClosedRotationFile(safe, dir, entry) {
-      const filePath = (0, import_path11.join)(dir, entry.name);
+      const filePath = (0, import_path12.join)(dir, entry.name);
       const counts = readArchivedCounts(safe);
       const alreadyFolded = new Set(counts.evictedRotations ?? []);
       if (alreadyFolded.has(entry.name)) {
-        if ((0, import_fs14.existsSync)(filePath)) (0, import_fs14.unlinkSync)(filePath);
+        if ((0, import_fs15.existsSync)(filePath)) (0, import_fs15.unlinkSync)(filePath);
         return;
       }
-      if (closedRotationKind(safe, entry.name) === "active" && (0, import_fs14.existsSync)(filePath)) {
+      if (closedRotationKind(safe, entry.name) === "active" && (0, import_fs15.existsSync)(filePath)) {
         const entries = readRotationEntriesTolerant(filePath);
         for (const e of entries) {
           if (e.kind === "task_completed") counts.taskCompleted++;
@@ -77512,7 +79483,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       counts.evictedRotations = [...alreadyFolded, entry.name];
       counts.lastArchivedAt = (/* @__PURE__ */ new Date()).toISOString();
       writeArchivedCounts(safe, counts);
-      if ((0, import_fs14.existsSync)(filePath)) (0, import_fs14.unlinkSync)(filePath);
+      if ((0, import_fs15.existsSync)(filePath)) (0, import_fs15.unlinkSync)(filePath);
     }
     function enforceLedgerRotationCap(meshId, opts) {
       const maxFiles = opts?.maxFiles ?? resolveLedgerRotationMaxFiles();
@@ -77523,14 +79494,14 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const stats = [];
       let names = [];
       try {
-        names = (0, import_fs14.readdirSync)(dir);
+        names = (0, import_fs15.readdirSync)(dir);
       } catch {
         names = [];
       }
       for (const name of names) {
         if (!closedRotationKind(safe, name)) continue;
         try {
-          const st = (0, import_fs14.statSync)((0, import_path11.join)(dir, name));
+          const st = (0, import_fs15.statSync)((0, import_path12.join)(dir, name));
           if (st.isFile()) stats.push({ name, sizeBytes: st.size, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -77563,7 +79534,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const dir = getLedgerDir2();
       let names = [];
       try {
-        names = (0, import_fs14.readdirSync)(dir);
+        names = (0, import_fs15.readdirSync)(dir);
       } catch {
         return result;
       }
@@ -77589,9 +79560,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return result;
     }
-    var import_fs14;
-    var import_path11;
-    var import_crypto12;
+    var import_fs15;
+    var import_path12;
+    var import_crypto13;
     var import_events;
     var TASK_LIFECYCLE_LEDGER_KINDS;
     var MAX_FILE_SIZE_BYTES;
@@ -77617,16 +79588,16 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     var init_mesh_ledger = __esm2({
       "src/mesh/mesh-ledger.ts"() {
         "use strict";
-        import_fs14 = require("fs");
-        import_path11 = require("path");
-        import_crypto12 = require("crypto");
+        import_fs15 = require("fs");
+        import_path12 = require("path");
+        import_crypto13 = require("crypto");
         init_mesh_retention_config();
         init_dist();
         import_events = require("events");
         init_mesh_runtime_store();
         init_mesh_ledger_paths();
         init_mesh_ledger_read_cache();
-        init_mesh_dual_write();
+        init_mesh_record();
         init_contracts();
         init_mesh_ledger_paths();
         init_mesh_ledger_read_cache();
@@ -78158,7 +80129,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
     }
     function buildMagiKindPanelsSection(panels) {
       if (!panels) return null;
-      const configured = Object.entries(panels).filter(([, slots]) => Array.isArray(slots) && slots.length > 0);
+      const configured = Object.entries(panels).filter(([, slots2]) => Array.isArray(slots2) && slots2.length > 0);
       if (configured.length === 0) return null;
       const lines = [
         "## Configured MAGI panels",
@@ -78166,10 +80137,10 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
         "These machine-local MAGI kind-panels are configured on this mesh \u2014 read-only cross-verification quorums:",
         ""
       ];
-      for (const [kind, slots] of configured) {
-        const replicaCount = slots.reduce((sum, s2) => sum + (s2.n && s2.n > 0 ? s2.n : 1), 0);
-        const label = replicaCount === slots.length ? `${slots.length} ${slots.length === 1 ? "slot" : "slots"}` : `${replicaCount} replicas`;
-        const rendered = slots.map(renderMagiSlot).join(", ");
+      for (const [kind, slots2] of configured) {
+        const replicaCount = slots2.reduce((sum, s2) => sum + (s2.n && s2.n > 0 ? s2.n : 1), 0);
+        const label = replicaCount === slots2.length ? `${slots2.length} ${slots2.length === 1 ? "slot" : "slots"}` : `${replicaCount} replicas`;
+        const rendered = slots2.map(renderMagiSlot).join(", ");
         lines.push(`- **${kind}** (${label}): ${rendered}`);
       }
       lines.push("");
@@ -78670,22 +80641,22 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
       }
     });
     function writeConfigFile(workspace, relativePath, config2) {
-      const target = (0, import_path12.join)(workspace, relativePath);
-      (0, import_fs15.mkdirSync)((0, import_path12.dirname)(target), { recursive: true });
-      (0, import_fs15.writeFileSync)(target, `${JSON.stringify(config2, null, 2)}
+      const target = (0, import_path13.join)(workspace, relativePath);
+      (0, import_fs16.mkdirSync)((0, import_path13.dirname)(target), { recursive: true });
+      (0, import_fs16.writeFileSync)(target, `${JSON.stringify(config2, null, 2)}
 `, "utf-8");
       return target;
     }
     function suggestMeshWorktreeBootstrapConfig(workspace) {
       const commands = [];
-      const hasPackageJson = (0, import_fs15.existsSync)((0, import_path12.join)(workspace, "package.json"));
-      const hasNpmLock = (0, import_fs15.existsSync)((0, import_path12.join)(workspace, "package-lock.json"));
+      const hasPackageJson = (0, import_fs16.existsSync)((0, import_path13.join)(workspace, "package.json"));
+      const hasNpmLock = (0, import_fs16.existsSync)((0, import_path13.join)(workspace, "package-lock.json"));
       if (hasPackageJson) {
         commands.push(
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs15.existsSync)((0, import_path12.join)(workspace, relative9)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs16.existsSync)((0, import_path13.join)(workspace, relative9)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -78783,7 +80754,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     }
     function applyConfigSuggestion(input) {
       const { workspace, relativePath, existing, suggestedConfig, validate, write, overwrite } = input;
-      const absolute = (0, import_path12.join)(workspace, relativePath);
+      const absolute = (0, import_path13.join)(workspace, relativePath);
       if (existing !== void 0 && !overwrite) {
         return { path: absolute, relativePath, written: false, skippedReason: "already_exists", config: existing };
       }
@@ -78796,8 +80767,8 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
       const writtenPath = writeConfigFile(workspace, relativePath, suggestedConfig);
       return { path: writtenPath, relativePath, written: true, config: suggestedConfig };
     }
-    var import_fs15;
-    var import_path12;
+    var import_fs16;
+    var import_path13;
     var MESH_INIT_REFINE_CONFIG_PATH;
     var MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH;
     var MESH_INIT_CHANGE_IMPACT_CONFIG_PATH;
@@ -78806,8 +80777,8 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     var init_mesh_init = __esm2({
       "src/mesh/mesh-init.ts"() {
         "use strict";
-        import_fs15 = require("fs");
-        import_path12 = require("path");
+        import_fs16 = require("fs");
+        import_path13 = require("path");
         init_refine_config();
         init_worktree_bootstrap_config();
         init_change_impact_config();
@@ -79849,13 +81820,13 @@ ${rendered}`, "utf-8");
       }
     });
     function getRegistryPath() {
-      return (0, import_path13.join)(getDaemonDataDir(), "mesh-coordinators.json");
+      return (0, import_path14.join)(getDaemonDataDir(), "mesh-coordinators.json");
     }
     function loadMeshCoordinatorRegistry() {
       const path74 = getRegistryPath();
-      if (!(0, import_fs16.existsSync)(path74)) return;
+      if (!(0, import_fs17.existsSync)(path74)) return;
       try {
-        const raw = JSON.parse((0, import_fs16.readFileSync)(path74, "utf-8"));
+        const raw = JSON.parse((0, import_fs17.readFileSync)(path74, "utf-8"));
         if (!Array.isArray(raw)) return;
         _registry.clear();
         for (const entry of raw) {
@@ -79868,7 +81839,7 @@ ${rendered}`, "utf-8");
     }
     function saveRegistry() {
       try {
-        (0, import_fs16.writeFileSync)(
+        (0, import_fs17.writeFileSync)(
           getRegistryPath(),
           JSON.stringify([..._registry.values()], null, 2),
           { encoding: "utf-8", mode: 384 }
@@ -79921,14 +81892,14 @@ ${rendered}`, "utf-8");
     function listCoordinatorsForMesh(meshId) {
       return [..._registry.values()].filter((e) => e.meshId === meshId).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
     }
-    var import_path13;
-    var import_fs16;
+    var import_path14;
+    var import_fs17;
     var _registry;
     var init_coordinator_registry = __esm2({
       "src/mesh/coordinator-registry.ts"() {
         "use strict";
-        import_path13 = require("path");
-        import_fs16 = require("fs");
+        import_path14 = require("path");
+        import_fs17 = require("fs");
         init_config();
         _registry = /* @__PURE__ */ new Map();
       }
@@ -80384,7 +82355,7 @@ ${rendered}`, "utf-8");
       if (identity.attemptId) {
         try {
           evidenceRecorded = store.insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
+            eventId: (0, import_crypto14.randomUUID)(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
             taskId: identity.taskId,
@@ -80427,9 +82398,9 @@ ${rendered}`, "utf-8");
         handoffNoteError = noteResult.error;
       }
       const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
-      let commit;
+      let commit2;
       try {
-        commit = commitTaskTerminalAndAdvanceGraph({
+        commit2 = commitTaskTerminalAndAdvanceGraph({
           meshId: identity.meshId,
           taskId: identity.taskId,
           status: terminalStatus,
@@ -80462,22 +82433,22 @@ ${rendered}`, "utf-8");
         LOG.warn("WorkerReport", `Terminal commit threw for task ${identity.taskId}: ${e?.message || e}`);
         return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
       }
-      if (!commit.committed) {
-        if (commit.rejectionReason) {
-          return { accepted: false, refusal: "rejected_by_reducer", detail: commit.rejectionReason };
+      if (!commit2.committed) {
+        if (commit2.rejectionReason) {
+          return { accepted: false, refusal: "rejected_by_reducer", detail: commit2.rejectionReason };
         }
         return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity.taskId}` };
       }
       LOG.info(
         "WorkerReport",
-        `Accepted ${report.outcome} report for task ${identity.taskId}` + (identity.attemptId ? ` attempt ${identity.attemptId}` : "") + (commit.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+        `Accepted ${report.outcome} report for task ${identity.taskId}` + (identity.attemptId ? ` attempt ${identity.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       );
       return {
         accepted: true,
         taskId: identity.taskId,
         ...identity.attemptId ? { attemptId: identity.attemptId } : {},
         outcome: report.outcome,
-        duplicate: commit.duplicate,
+        duplicate: commit2.duplicate,
         handoffNoteRecorded,
         // ★The completion itself still stands — the terminal committed, and
         // discarding a valid completion because its optional note failed would
@@ -80501,7 +82472,7 @@ ${rendered}`, "utf-8");
       let recorded = false;
       try {
         recorded = MeshRuntimeStore.getInstance().insertTurnEvent({
-          eventId: (0, import_crypto13.randomUUID)(),
+          eventId: (0, import_crypto14.randomUUID)(),
           meshId: identity.meshId,
           attemptId: identity.attemptId,
           taskId: identity.taskId,
@@ -80590,7 +82561,7 @@ ${rendered}`, "utf-8");
       {
         try {
           MeshRuntimeStore.getInstance().insertTurnEvent({
-            eventId: (0, import_crypto13.randomUUID)(),
+            eventId: (0, import_crypto14.randomUUID)(),
             meshId: identity.meshId,
             attemptId: identity.attemptId,
             taskId: identity.taskId,
@@ -80631,7 +82602,7 @@ ${rendered}`, "utf-8");
       }
       return { recorded: true, error: null };
     }
-    var import_crypto13;
+    var import_crypto14;
     var WORKER_REPORT_EVENT_KIND;
     var WORKER_PROGRESS_EVENT_KIND;
     var WORKER_HANDOFF_EVENT_KIND;
@@ -80651,7 +82622,7 @@ ${rendered}`, "utf-8");
     var init_worker_report = __esm2({
       "src/mesh/worker-report.ts"() {
         "use strict";
-        import_crypto13 = require("crypto");
+        import_crypto14 = require("crypto");
         init_dist();
         init_logger();
         init_mesh_runtime_store();
@@ -81646,9 +83617,8 @@ ${block2.text}`,
       if (!result.meshId) return;
       if (outcome === "noop") return;
       try {
-        const { appendLedgerEntry: appendLedgerEntry32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-        appendLedgerEntry32(result.meshId, {
-          kind: "direct_fast_forward",
+        const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
+        meshRecord2(result.meshId, "direct_fast_forward", {
           ...result.nodeId ? { nodeId: result.nodeId } : {},
           payload: {
             operation: "mesh_fast_forward_node",
@@ -82358,7 +84328,7 @@ ${block2.text}`,
       try {
         const fingerprint = buildPendingEventFingerprint(event);
         MeshRuntimeStore.getInstance().insertPendingEvent({
-          id: (0, import_crypto14.randomUUID)(),
+          id: (0, import_crypto15.randomUUID)(),
           meshId: event.meshId,
           coordinatorDaemonId: event.targetCoordinatorDaemonId ?? null,
           event: event.event,
@@ -82391,31 +84361,31 @@ ${block2.text}`,
       } catch {
         return result;
       }
-      if (!(0, import_fs18.existsSync)(dir)) return result;
+      if (!(0, import_fs19.existsSync)(dir)) return result;
       let names;
       try {
-        names = (0, import_fs18.readdirSync)(dir);
+        names = (0, import_fs19.readdirSync)(dir);
       } catch (e) {
         LOG.warn("MeshEvents", `Pending-events migration: cannot read ledger dir: ${e?.message || e}`);
         return result;
       }
       for (const name of names) {
         if (!isPendingEventsFile(name)) continue;
-        const path74 = (0, import_path15.join)(dir, name);
+        const path74 = (0, import_path16.join)(dir, name);
         result.filesScanned++;
         const claimed = `${path74}.migrating`;
         try {
-          (0, import_fs18.renameSync)(path74, claimed);
+          (0, import_fs19.renameSync)(path74, claimed);
         } catch {
           continue;
         }
         let content;
         try {
-          content = (0, import_fs18.readFileSync)(claimed, "utf-8");
+          content = (0, import_fs19.readFileSync)(claimed, "utf-8");
         } catch (e) {
           LOG.warn("MeshEvents", `Pending-events migration: cannot read ${name}; leaving it for the next boot: ${e?.message || e}`);
           try {
-            (0, import_fs18.renameSync)(claimed, path74);
+            (0, import_fs19.renameSync)(claimed, path74);
           } catch {
           }
           result.filesRetained++;
@@ -82430,14 +84400,14 @@ ${block2.text}`,
         }
         if (!allImported) {
           try {
-            (0, import_fs18.renameSync)(claimed, path74);
+            (0, import_fs19.renameSync)(claimed, path74);
           } catch {
           }
           result.filesRetained++;
           continue;
         }
         try {
-          (0, import_fs18.unlinkSync)(claimed);
+          (0, import_fs19.unlinkSync)(claimed);
           result.filesRemoved++;
         } catch (e) {
           LOG.warn("MeshEvents", `Pending-events migration: imported ${name} but could not unlink it: ${e?.message || e}`);
@@ -82452,16 +84422,16 @@ ${block2.text}`,
       }
       return result;
     }
-    var import_fs18;
-    var import_path15;
-    var import_crypto14;
+    var import_fs19;
+    var import_path16;
+    var import_crypto15;
     var PENDING_EVENTS_SUFFIX;
     var init_mesh_events_pending_migration = __esm2({
       "src/mesh/mesh-events-pending-migration.ts"() {
         "use strict";
-        import_fs18 = require("fs");
-        import_path15 = require("path");
-        import_crypto14 = require("crypto");
+        import_fs19 = require("fs");
+        import_path16 = require("path");
+        import_crypto15 = require("crypto");
         init_logger();
         init_mesh_ledger();
         init_mesh_runtime_store();
@@ -83473,15 +85443,15 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           return value > 1e10 ? value : value * 1e3;
         }
         if (typeof value === "string" && value.trim()) {
-          const ms22 = new Date(value.trim()).getTime();
-          if (Number.isFinite(ms22)) return ms22;
+          const ms3 = new Date(value.trim()).getTime();
+          if (Number.isFinite(ms3)) return ms3;
         }
       }
       return void 0;
     }
     function readChatMessageTimestampIso(message) {
-      const ms22 = readChatMessageTimestampMs(message);
-      return typeof ms22 === "number" ? new Date(ms22).toISOString() : void 0;
+      const ms3 = readChatMessageTimestampMs(message);
+      return typeof ms3 === "number" ? new Date(ms3).toISOString() : void 0;
     }
     function extractFinalSummaryFromMessagesAfter(messages, minTimestampMs, maxChars = DEFAULT_FINAL_SUMMARY_MAX_CHARS) {
       if (!Array.isArray(messages) || messages.length === 0) return "";
@@ -83502,11 +85472,11 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       return "";
     }
     function extractFinalAssistantSummaryEvidence(messages, maxChars = DEFAULT_FINAL_SUMMARY_MAX_CHARS, opts) {
-      const turnEnd = selectFinalAssistantTurnEndMessage(messages, opts);
-      if (!turnEnd) return { finalSummary: "" };
+      const turnEnd2 = selectFinalAssistantTurnEndMessage(messages, opts);
+      if (!turnEnd2) return { finalSummary: "" };
       return {
-        finalSummary: flattenContent(turnEnd.content).trim().slice(0, maxChars),
-        transcriptMessageAt: readChatMessageTimestampIso(turnEnd)
+        finalSummary: flattenContent(turnEnd2.content).trim().slice(0, maxChars),
+        transcriptMessageAt: readChatMessageTimestampIso(turnEnd2)
       };
     }
     function selectFinalAssistantTurnEndMessage(messages, opts) {
@@ -84583,9 +86553,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function getSavedHistoryIndexLockPath(dir) {
       return `${getSavedHistoryIndexFilePath(dir)}${SAVED_HISTORY_INDEX_LOCK_SUFFIX}`;
     }
-    function sleepBlocking(ms22) {
-      if (ms22 <= 0) return;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms22);
+    function sleepBlocking(ms3) {
+      if (ms3 <= 0) return;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms3);
     }
     function loadPersistedSavedHistoryIndexFromFile(dir) {
       try {
@@ -86498,9 +88468,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function taskRequiresDifficultyFloor(node, task) {
       return isMeshTaskDifficulty2(task.difficulty) && task.difficulty !== "freeform" && normalizeNodeCapabilitySlots2(node?.policy?.slots).length > 0;
     }
-    function slotsMeetingTaskDifficultyFloor(node, slots, task) {
-      if (!taskRequiresDifficultyFloor(node, task)) return slots;
-      return slots.filter((slot) => slotDifficultyTierForTask(slot, task.difficulty) !== void 0);
+    function slotsMeetingTaskDifficultyFloor(node, slots2, task) {
+      if (!taskRequiresDifficultyFloor(node, task)) return slots2;
+      return slots2.filter((slot) => slotDifficultyTierForTask(slot, task.difficulty) !== void 0);
     }
     function scoreSlotForTaskBreakdown(slot, task, quotaBonus = 0) {
       const base = 1;
@@ -86531,18 +88501,18 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function scoreSlotForTask(slot, task, quotaBonus = 0) {
       return scoreSlotForTaskBreakdown(slot, task, quotaBonus).total;
     }
-    function orderSlotsForProviderSelection(slots, meshId, nodeId, node, task, quotaBonusByProvider, meshNodes) {
-      return [...slotsMeetingTaskDifficultyFloor(node, slots, task)].sort((a, b) => {
+    function orderSlotsForProviderSelection(slots2, meshId, nodeId, node, task, quotaBonusByProvider, meshNodes) {
+      return [...slotsMeetingTaskDifficultyFloor(node, slots2, task)].sort((a, b) => {
         const capDelta = Number(slotHasCapacity(meshId, nodeId, node, b, meshNodes)) - Number(slotHasCapacity(meshId, nodeId, node, a, meshNodes));
         if (capDelta !== 0) return capDelta;
         return scoreSlotForTask(b, task, quotaBonusByProvider?.[b.provider] ?? 0) - scoreSlotForTask(a, task, quotaBonusByProvider?.[a.provider] ?? 0);
       });
     }
     function bestSlotForTask(node, task, meshId, quotaBonusByProvider) {
-      const slots = slotsMeetingTaskDifficultyFloor(node, resolveNodeCapabilitySlots(node, meshId), task);
-      if (!slots.length) return null;
+      const slots2 = slotsMeetingTaskDifficultyFloor(node, resolveNodeCapabilitySlots(node, meshId), task);
+      if (!slots2.length) return null;
       let best = null;
-      for (const slot of slots) {
+      for (const slot of slots2) {
         const score = scoreSlotForTask(slot, task, quotaBonusByProvider?.[slot.provider] ?? 0);
         if (!best || score > best.score) best = { slot, score };
       }
@@ -86625,14 +88595,14 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     function slotCapacityRemaining(meshId, nodeId, node, slot, meshNodes, forReadonlyTask = false) {
       const providerType = typeof slot.provider === "string" ? slot.provider.trim() : "";
       if (!providerType) return { available: false };
-      const slots = resolveNodeCapabilitySlots(node, meshId);
+      const slots2 = resolveNodeCapabilitySlots(node, meshId);
       const daemonNodeIds = resolveDaemonSiblingNodeIds(nodeId, meshNodes ?? nodesForMesh(meshId));
-      const slotCap = resolveSlotMaxParallel(slots, providerType, slot.model, isModelAllowedBySlot);
+      const slotCap = resolveSlotMaxParallel(slots2, providerType, slot.model, isModelAllowedBySlot);
       const effSlotCap = effectiveSlotCap(slotCap, forReadonlyTask);
       if (effSlotCap !== void 0 && activeSlotAssignedCount(meshId, nodeId, providerType, slot, daemonNodeIds) >= effSlotCap) {
         return { available: false, slotCap };
       }
-      const providerCap = resolveProviderMaxParallel(slots, providerType);
+      const providerCap = resolveProviderMaxParallel(slots2, providerType);
       const effProviderCap = effectiveSlotCap(providerCap, forReadonlyTask);
       if (effProviderCap !== void 0 && activeProviderAssignedCount(meshId, nodeId, providerType, daemonNodeIds) >= effProviderCap) {
         return { available: false, slotCap, providerCap };
@@ -86940,9 +88910,9 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       }, -1) ?? -1;
       return highest < 0 ? [] : CLASSIFIED_DIFFICULTIES.slice(0, highest + 1);
     }
-    function allowedClassifiedDifficultiesForSession(node, slots, providerType, model) {
+    function allowedClassifiedDifficultiesForSession(node, slots2, providerType, model) {
       if (normalizeNodeCapabilitySlots2(node?.policy?.slots).length === 0) return void 0;
-      const providerSlots = slots.filter((slot) => slot.provider?.trim() === providerType);
+      const providerSlots = slots2.filter((slot) => slot.provider?.trim() === providerType);
       const possibleSlots = model ? providerSlots.filter((slot) => isModelAllowedBySlot(model, slot)) : providerSlots;
       if (possibleSlots.length === 0) return [];
       const supported = possibleSlots.map((slot) => new Set(classifiedDifficultiesForSlot(slot)));
@@ -86952,8 +88922,8 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
       return allowed.includes(task.difficulty);
     }
-    function launchSideDifficultyFloorMismatch(node, slots, providerType, model, task, nodeId) {
-      const allowed = allowedClassifiedDifficultiesForSession(node, slots, providerType, model);
+    function launchSideDifficultyFloorMismatch(node, slots2, providerType, model, task, nodeId) {
+      const allowed = allowedClassifiedDifficultiesForSession(node, slots2, providerType, model);
       if (taskMeetsSessionDifficultyFloor(task, allowed)) return void 0;
       LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
       return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
@@ -87539,7 +89509,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
       if (now - lastAttempt < IDLE_AUTO_FAST_FORWARD_THROTTLE_MS) return;
       idleAutoFastForwardLastAttempt.set(throttleKey, now);
       if (isLocalAutoLaunchNode(node)) {
-        if (!(0, import_fs19.existsSync)(workspace)) return;
+        if (!(0, import_fs20.existsSync)(workspace)) return;
         await executeLocalAutoFastForward({ meshId: args.meshId, nodeId: args.nodeId, node, workspace, policy, trigger: "idle_auto" });
         return;
       }
@@ -87693,7 +89663,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         }
       }
     }
-    var import_fs19;
+    var import_fs20;
     var IDLE_AUTO_FAST_FORWARD_THROTTLE_MS;
     var idleAutoFastForwardLastAttempt;
     var continuousAutoFastForwardScanState;
@@ -87704,7 +89674,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
     var init_mesh_auto_fast_forward = __esm2({
       "src/mesh/mesh-auto-fast-forward.ts"() {
         "use strict";
-        import_fs19 = require("fs");
+        import_fs20 = require("fs");
         init_logger();
         init_config();
         init_mesh_config();
@@ -87722,8 +89692,8 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
         continuousAutoFastForwardLastScan = continuousAutoFastForwardScanState;
         autoFastForwardWorkspaceLease = /* @__PURE__ */ new Set();
         AutoFastForwardCallTimeoutError = class extends Error {
-          constructor(ms22) {
-            super(`auto fast-forward call timed out after ${ms22}ms`);
+          constructor(ms3) {
+            super(`auto fast-forward call timed out after ${ms3}ms`);
             this.name = "AutoFastForwardCallTimeoutError";
           }
         };
@@ -88253,7 +90223,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep4 = opts.sleep ?? ((ms22) => new Promise((resolve36) => setTimeout(resolve36, ms22)));
+      const sleep4 = opts.sleep ?? ((ms3) => new Promise((resolve36) => setTimeout(resolve36, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready = false;
@@ -88813,10 +90783,10 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     async function resolveUsableProvider(components, nodeId, node, meshId, requiredTags, task, quotaRouting, quotaFactsContext, taskId) {
       const providerLoader = components.providerLoader;
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
-      const slots = resolveNodeCapabilitySlots(node, meshId);
-      if (!slots.length) return { reason: "missing_provider_priority" };
+      const slots2 = resolveNodeCapabilitySlots(node, meshId);
+      if (!slots2.length) return { reason: "missing_provider_priority" };
       const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext) : void 0;
-      const orderedSlots = task ? orderSlotsForProviderSelection(slots, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots;
+      const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
       const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
       if (difficultyFloorRequired && !orderedSlots.length) {
         return { reason: `task_difficulty_floor_unavailable:${task.difficulty}` };
@@ -89432,9 +91402,9 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     }
     function isConfigPathInsideWorkspace(configPath, workspace) {
       if (typeof configPath !== "string" || !configPath) return false;
-      const toPosix = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
-      const ws = toPosix(workspace);
-      const target = toPosix(configPath);
+      const toPosix2 = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+      const ws = toPosix2(workspace);
+      const target = toPosix2(configPath);
       return !!ws && (target === ws || target.startsWith(`${ws}/`));
     }
     function warnUnreadableRepoConfigForNode(node, providerType) {
@@ -90536,7 +92506,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       const fingerprint = `${target}::${buildPendingEventFingerprint(fingerprintSource)}`;
       try {
         const inserted = store.insertPendingEvent({
-          id: (0, import_crypto15.randomUUID)(),
+          id: (0, import_crypto16.randomUUID)(),
           meshId: UNRESOLVED_FORWARD_OUTBOX_MESH_ID,
           coordinatorDaemonId: target,
           event,
@@ -90599,14 +92569,14 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
         return 0;
       }
     }
-    var import_crypto15;
+    var import_crypto16;
     var UNRESOLVED_FORWARD_OUTBOX_MESH_ID;
     var UNRESOLVED_FORWARD_MAX_AGE_MS;
     var retryNudgeHandler;
     var init_mesh_unresolved_forward_outbox = __esm2({
       "src/mesh/mesh-unresolved-forward-outbox.ts"() {
         "use strict";
-        import_crypto15 = require("crypto");
+        import_crypto16 = require("crypto");
         init_logger();
         init_mesh_runtime_store();
         init_mesh_events_pending();
@@ -90622,7 +92592,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function getStatePath() {
-      return (0, import_path16.join)(getConfigDir(), "state.json");
+      return (0, import_path17.join)(getConfigDir(), "state.json");
     }
     function normalizeState(raw) {
       const parsed = isPlainObject22(raw) ? raw : {};
@@ -90673,11 +92643,11 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     }
     function loadState() {
       const statePath = getStatePath();
-      if (!(0, import_fs20.existsSync)(statePath)) {
+      if (!(0, import_fs21.existsSync)(statePath)) {
         return { ...DEFAULT_STATE };
       }
       try {
-        const raw = (0, import_fs20.readFileSync)(statePath, "utf-8");
+        const raw = (0, import_fs21.readFileSync)(statePath, "utf-8");
         return normalizeState(JSON.parse(raw));
       } catch {
         return { ...DEFAULT_STATE };
@@ -90686,7 +92656,7 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
     function saveState(state2) {
       const statePath = getStatePath();
       const normalized = normalizeState(state2);
-      (0, import_fs20.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
+      (0, import_fs21.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
     }
     function resetState() {
       saveState({ ...DEFAULT_STATE });
@@ -90726,14 +92696,14 @@ Re-target now if the pin is stale: mesh_queue_requeue(task_id='${taskId}', targe
       delete next[key2];
       saveState({ ...state2, deferredRestartSchedules: next });
     }
-    var import_fs20;
-    var import_path16;
+    var import_fs21;
+    var import_path17;
     var DEFAULT_STATE;
     var init_state_store = __esm2({
       "src/config/state-store.ts"() {
         "use strict";
-        import_fs20 = require("fs");
-        import_path16 = require("path");
+        import_fs21 = require("fs");
+        import_path17 = require("path");
         init_config();
         DEFAULT_STATE = {
           recentActivity: [],
@@ -95674,10 +97644,10 @@ ${statusLine}`;
         });
         flushPendingForMeshIdleCoordinators(components, routing.meshId);
       };
-      if (components.bus) {
-        return components.bus.on("provider_event", (e) => onProviderEvent(e.event), { name: "mesh.forwarding" });
+      if (!components.bus) {
+        throw new Error("setupMeshEventForwarding requires components.bus (wiring-unification B residue cleanup removed the bus-less instanceManager.onEvent fallback)");
       }
-      return components.instanceManager.onEvent(onProviderEvent);
+      return components.bus.on("provider_event", (e) => onProviderEvent(e.event), { name: "mesh.forwarding" });
     }
     var REMOTE_IDLE_SESSION_TTL_MS;
     var meshByWorkspaceCache;
@@ -96327,7 +98297,7 @@ ${statusLine}`;
     }
     function readDiskSpace(path74) {
       try {
-        const stats = (0, import_fs21.statfsSync)(path74);
+        const stats = (0, import_fs22.statfsSync)(path74);
         const blockSize = Number(stats.bsize);
         const freeBytes = Number(stats.bavail) * blockSize;
         const totalBytes = Number(stats.blocks) * blockSize;
@@ -96374,7 +98344,7 @@ ${statusLine}`;
       }
       return status;
     }
-    var import_fs21;
+    var import_fs22;
     var DISK_CRITICAL_PERCENT_FREE;
     var DISK_CRITICAL_FREE_BYTES;
     var DISK_WARNING_PERCENT_FREE;
@@ -96383,7 +98353,7 @@ ${statusLine}`;
     var init_disk_space_preflight = __esm2({
       "src/diagnostics/disk-space-preflight.ts"() {
         "use strict";
-        import_fs21 = require("fs");
+        import_fs22 = require("fs");
         init_logger();
         DISK_CRITICAL_PERCENT_FREE = 2;
         DISK_CRITICAL_FREE_BYTES = 1 * 1024 * 1024 * 1024;
@@ -96435,7 +98405,7 @@ ${statusLine}`;
     }
     function safeUnlink(path74) {
       try {
-        (0, import_fs22.unlinkSync)(path74);
+        (0, import_fs23.unlinkSync)(path74);
         return true;
       } catch (e) {
         LOG.warn("DiskRetention", `Failed to delete ${path74}: ${e?.message || e}`);
@@ -96443,18 +98413,18 @@ ${statusLine}`;
       }
     }
     function listDirFiles(dir) {
-      if (!(0, import_fs22.existsSync)(dir)) return [];
+      if (!(0, import_fs23.existsSync)(dir)) return [];
       const out = [];
       let names;
       try {
-        names = (0, import_fs22.readdirSync)(dir);
+        names = (0, import_fs23.readdirSync)(dir);
       } catch {
         return [];
       }
       for (const name of names) {
-        const path74 = (0, import_path17.join)(dir, name);
+        const path74 = (0, import_path18.join)(dir, name);
         try {
-          const st = (0, import_fs22.statSync)(path74);
+          const st = (0, import_fs23.statSync)(path74);
           if (st.isFile()) out.push({ path: path74, mtimeMs: st.mtimeMs });
         } catch {
         }
@@ -96480,23 +98450,23 @@ ${statusLine}`;
       return deleted;
     }
     function pruneExpiredSessionHostRuntimes(now = Date.now()) {
-      const root = (0, import_path17.join)(getConfigDir(), "session-host");
-      if (!(0, import_fs22.existsSync)(root)) return 0;
+      const root = (0, import_path18.join)(getConfigDir(), "session-host");
+      if (!(0, import_fs23.existsSync)(root)) return 0;
       let apps;
       try {
-        apps = (0, import_fs22.readdirSync)(root);
+        apps = (0, import_fs23.readdirSync)(root);
       } catch {
         return 0;
       }
       const candidates = [];
       for (const app of apps) {
-        const runtimesDir = (0, import_path17.join)(root, app, "runtimes");
-        if (!(0, import_fs22.existsSync)(runtimesDir)) continue;
+        const runtimesDir = (0, import_path18.join)(root, app, "runtimes");
+        if (!(0, import_fs23.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
           let record2 = null;
           try {
-            const parsed = JSON.parse((0, import_fs22.readFileSync)(f.path, "utf-8"));
+            const parsed = JSON.parse((0, import_fs23.readFileSync)(f.path, "utf-8"));
             const rec = parsed && typeof parsed === "object" ? parsed.record : null;
             record2 = rec && typeof rec === "object" ? rec : null;
           } catch {
@@ -96610,8 +98580,8 @@ ${statusLine}`;
       }
       return signalled;
     }
-    var import_fs22;
-    var import_path17;
+    var import_fs23;
+    var import_path18;
     var DAY_MS2;
     var LEDGER_JSONL_MAX_AGE_MS;
     var SESSION_HOST_RUNTIME_MAX_AGE_MS;
@@ -96620,8 +98590,8 @@ ${statusLine}`;
     var init_mesh_disk_retention = __esm2({
       "src/mesh/mesh-disk-retention.ts"() {
         "use strict";
-        import_fs22 = require("fs");
-        import_path17 = require("path");
+        import_fs23 = require("fs");
+        import_path18 = require("path");
         init_config();
         init_mesh_ledger();
         init_runtime_surface();
@@ -96637,7 +98607,7 @@ ${statusLine}`;
       }
     });
     function retentionStatePath() {
-      return (0, import_path18.join)(getLedgerDir2(), "worktree-node-retention-state.json");
+      return (0, import_path19.join)(getLedgerDir2(), "worktree-node-retention-state.json");
     }
     function stateKey(meshId, nodeId) {
       return `${meshId}::${nodeId}`;
@@ -96702,7 +98672,7 @@ ${statusLine}`;
       return String(stdout || "");
     }
     function normalizePathForCompare(value) {
-      const resolved = (0, import_path18.resolve)(value);
+      const resolved = (0, import_path19.resolve)(value);
       try {
         return fs19.realpathSync(resolved);
       } catch {
@@ -96755,7 +98725,7 @@ ${statusLine}`;
       if (workspace && ctx.processCwd) {
         const normalizedWorkspace = normalizePathForCompare(workspace);
         const normalizedCwd = normalizePathForCompare(ctx.processCwd);
-        if (normalizedCwd === normalizedWorkspace || normalizedCwd.startsWith(normalizedWorkspace + import_path18.sep)) {
+        if (normalizedCwd === normalizedWorkspace || normalizedCwd.startsWith(normalizedWorkspace + import_path19.sep)) {
           return skip("process_cwd_reference", "Worktree path is (or contains) the current process working directory; an open-runtime/cwd reference blocks removal.");
         }
       }
@@ -97136,7 +99106,7 @@ ${statusLine}`;
     }
     var fs19;
     var import_os3;
-    var import_path18;
+    var import_path19;
     var LOG_CATEGORY;
     var metrics2;
     var init_mesh_worktree_retention = __esm2({
@@ -97144,7 +99114,7 @@ ${statusLine}`;
         "use strict";
         fs19 = __toESM2(require("fs"));
         import_os3 = require("os");
-        import_path18 = require("path");
+        import_path19 = require("path");
         init_dist();
         init_logger();
         init_config();
@@ -97318,7 +99288,7 @@ ${statusLine}`;
     function isPlainObject3(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
-    function isFiniteNumber3(value) {
+    function isFiniteNumber4(value) {
       return typeof value === "number" && Number.isFinite(value);
     }
     function validateStatus(status, source) {
@@ -97363,14 +99333,14 @@ ${statusLine}`;
       if (typeof message.bubbleId === "string") normalized.bubbleId = message.bubbleId;
       if (typeof message.providerUnitKey === "string") normalized.providerUnitKey = message.providerUnitKey;
       if (message.bubbleState !== void 0) normalized.bubbleState = validateBubbleState(message.bubbleState, source, index);
-      if (isFiniteNumber3(message.index)) normalized.index = message.index;
-      if (isFiniteNumber3(message.timestamp)) normalized.timestamp = message.timestamp;
-      if (isFiniteNumber3(message.receivedAt)) normalized.receivedAt = message.receivedAt;
-      if (isFiniteNumber3(message.sequence)) normalized.sequence = message.sequence;
+      if (isFiniteNumber4(message.index)) normalized.index = message.index;
+      if (isFiniteNumber4(message.timestamp)) normalized.timestamp = message.timestamp;
+      if (isFiniteNumber4(message.receivedAt)) normalized.receivedAt = message.receivedAt;
+      if (isFiniteNumber4(message.sequence)) normalized.sequence = message.sequence;
       if (typeof message._turnKey === "string") normalized._turnKey = message._turnKey;
       if (isPlainObject3(message.toolBlockRef)) {
         const ref = message.toolBlockRef;
-        if (isFiniteNumber3(ref.sourceMtimeMs) && isFiniteNumber3(ref.recordIndex) && isFiniteNumber3(ref.blockIndex)) {
+        if (isFiniteNumber4(ref.sourceMtimeMs) && isFiniteNumber4(ref.recordIndex) && isFiniteNumber4(ref.blockIndex)) {
           normalized.toolBlockRef = {
             sourceMtimeMs: ref.sourceMtimeMs,
             recordIndex: ref.recordIndex,
@@ -97413,8 +99383,8 @@ ${statusLine}`;
         message: activeModal.message,
         buttons: activeModal.buttons.map((button) => button.trim())
       };
-      if (isFiniteNumber3(activeModal.width)) normalized.width = activeModal.width;
-      if (isFiniteNumber3(activeModal.height)) normalized.height = activeModal.height;
+      if (isFiniteNumber4(activeModal.width)) normalized.width = activeModal.width;
+      if (isFiniteNumber4(activeModal.height)) normalized.height = activeModal.height;
       return normalized;
     }
     function validateTurnTerminalMarkers(value, source) {
@@ -97425,7 +99395,7 @@ ${statusLine}`;
         if (!isPlainObject3(marker)) {
           throw new Error(`${source}: turnTerminalMarkers[${index}] must be an object`);
         }
-        if (!isFiniteNumber3(marker.receivedAt)) {
+        if (!isFiniteNumber4(marker.receivedAt)) {
           throw new Error(`${source}: turnTerminalMarkers[${index}].receivedAt must be a finite number`);
         }
         if (marker.outcome !== "completed" && marker.outcome !== "aborted") {
@@ -97657,7 +99627,7 @@ ${statusLine}`;
           dataBase64: bytesToBase64(slice)
         });
       }
-      const commit = {
+      const commit2 = {
         v: 1,
         ...identity,
         snapshotBytes: bytes.length,
@@ -97665,7 +99635,7 @@ ${statusLine}`;
         snapshotSha256,
         committedAt: now()
       };
-      return { ok: true, begin, chunks, commit };
+      return { ok: true, begin, chunks, commit: commit2 };
     }
     function validateSnapshotBody(parsed, identity) {
       const snapshot = parsed;
@@ -97786,16 +99756,16 @@ ${statusLine}`;
             return { status: "chunk_accepted" };
           }
           ingestCommit(payload) {
-            const commit = payload;
-            if (!commit || commit.v !== 1) return { status: "rejected", reason: "schema_version_unsupported" };
+            const commit2 = payload;
+            if (!commit2 || commit2.v !== 1) return { status: "rejected", reason: "schema_version_unsupported" };
             const inFlight3 = this.inFlight;
             if (!inFlight3) return { status: "rejected", reason: "commit_without_begin" };
             this.inFlight = null;
-            if (commit.sessionId !== inFlight3.identity.sessionId || commit.producerDaemonId !== inFlight3.identity.producerDaemonId || // canon-ok: begin/commit envelope self-consistency (one identity object, one encode call), not cross-path daemon-id resolution — see comment above
-            commit.producerWriterId !== inFlight3.identity.producerWriterId || commit.producerEpoch !== inFlight3.identity.producerEpoch || commit.revision !== inFlight3.identity.revision) {
+            if (commit2.sessionId !== inFlight3.identity.sessionId || commit2.producerDaemonId !== inFlight3.identity.producerDaemonId || // canon-ok: begin/commit envelope self-consistency (one identity object, one encode call), not cross-path daemon-id resolution — see comment above
+            commit2.producerWriterId !== inFlight3.identity.producerWriterId || commit2.producerEpoch !== inFlight3.identity.producerEpoch || commit2.revision !== inFlight3.identity.revision) {
               return { status: "rejected", reason: "revision_identity_mismatch" };
             }
-            if (commit.chunks !== inFlight3.totalChunks || commit.snapshotBytes !== inFlight3.snapshotBytes || commit.snapshotSha256 !== inFlight3.snapshotSha256) {
+            if (commit2.chunks !== inFlight3.totalChunks || commit2.snapshotBytes !== inFlight3.snapshotBytes || commit2.snapshotSha256 !== inFlight3.snapshotSha256) {
               return { status: "rejected", reason: "chunk_count_mismatch" };
             }
             if (inFlight3.chunkBuffers.size !== inFlight3.totalChunks) {
@@ -98059,12 +100029,12 @@ ${statusLine}`;
           next = 0;
           filled = 0;
           maxSeen = 0;
-          record(ms22) {
-            if (!Number.isFinite(ms22) || ms22 < 0) return;
-            this.values[this.next] = ms22;
+          record(ms3) {
+            if (!Number.isFinite(ms3) || ms3 < 0) return;
+            this.values[this.next] = ms3;
             this.next = (this.next + 1) % SAMPLE_CAPACITY;
             if (this.filled < SAMPLE_CAPACITY) this.filled++;
-            if (ms22 > this.maxSeen) this.maxSeen = ms22;
+            if (ms3 > this.maxSeen) this.maxSeen = ms3;
           }
           get count() {
             return this.filled;
@@ -101012,7 +102982,7 @@ ${statusLine}`;
         } else {
           takeoverFromClaimed = priorState === "claimed";
           generation = gate.leaseGeneration + 1;
-          fencingToken = (0, import_crypto16.randomUUID)();
+          fencingToken = (0, import_crypto17.randomUUID)();
         }
         const deadlineAt = input.extendDeadlineSeconds && input.extendDeadlineSeconds > 0 ? isoAfter(nowMs, input.extendDeadlineSeconds) : gate.deadlineAt;
         const won = graphStore.patchGate(gate.gateId, {
@@ -101497,14 +103467,14 @@ ${statusLine}`;
         updatedAt: nowIso
       });
     }
-    var import_crypto16;
+    var import_crypto17;
     var MESH_GATE_DEFAULT_LEASE_SECONDS;
     var MESH_GATE_NAMED_OUTCOMES;
     var MESH_GATE_RELEASE_PATCH_KEYS;
     var init_mesh_graph_gates = __esm2({
       "src/mesh/mesh-graph-gates.ts"() {
         "use strict";
-        import_crypto16 = require("crypto");
+        import_crypto17 = require("crypto");
         init_mesh_runtime_store();
         init_logger();
         init_mesh_graph_input_binding();
@@ -103656,9 +105626,6 @@ ${statusLine}`;
         };
       }
     });
-    function markDeliveredThroughPort(event) {
-      PORT_DELIVERED_EVENTS.add(event);
-    }
     function guard(what, sessionId, fn) {
       try {
         fn();
@@ -103683,9 +105650,8 @@ ${statusLine}`;
       const snapshot = prompt ? structuredClone(prompt) : null;
       guard("prompt", sessionId, () => port.prompt(sessionId, snapshot, snapshot ? transport : null));
     }
-    function forwardProviderEvent(port, sessionId, bufferedEvent, enriched) {
+    function forwardProviderEvent(port, sessionId, enriched) {
       if (!port || !sessionId) return;
-      markDeliveredThroughPort(bufferedEvent);
       guard("providerEvent", sessionId, () => port.providerEvent(sessionId, enriched));
     }
     function promptFingerprint(prompt) {
@@ -103706,13 +105672,11 @@ ${statusLine}`;
       if (input.adapterCause === "provider_failure") return "provider_failure";
       return "fsm_state";
     }
-    var PORT_DELIVERED_EVENTS;
     var init_provider_event_port = __esm2({
       "src/providers/provider-event-port.ts"() {
         "use strict";
         init_dist();
         init_logger();
-        PORT_DELIVERED_EVENTS = /* @__PURE__ */ new WeakSet();
       }
     });
     var ExtensionProviderInstance;
@@ -103733,7 +105697,6 @@ ${statusLine}`;
           provider;
           context = null;
           settings = {};
-          events = [];
           /** Lifecycle port (wiring-unification B2); null until boot wires it. */
           lifecyclePort = null;
           parentContext = null;
@@ -103806,8 +105769,7 @@ ${statusLine}`;
               agentStreams: this.agentStreams,
               instanceId: this.instanceId,
               lastUpdated: Date.now(),
-              settings: this.settings,
-              pendingEvents: this.flushEvents()
+              settings: this.settings
             };
           }
           getSessionModalState(sessionId) {
@@ -103934,9 +105896,8 @@ ${statusLine}`;
             }
           }
           pushEvent(event) {
-            this.events.push(event);
             const parent = this.parentContext?.();
-            forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            forwardProviderEvent(this.lifecyclePort, this.instanceId, {
               ...event,
               providerType: this.type,
               instanceId: this.instanceId,
@@ -104116,11 +106077,6 @@ ${effect.notification.body || ""}`.trim();
             }
             return `provider_effect:toast:${effect.toast?.message || ""}`;
           }
-          flushEvents() {
-            const events = [...this.events];
-            this.events = [];
-            return events;
-          }
           resolveChatTitle(data) {
             const title = typeof data?.title === "string" && data.title.trim() ? data.title.trim() : this.chatTitle;
             return title || this.agentName || this.provider.name;
@@ -104285,7 +106241,6 @@ ${effect.notification.body || ""}`.trim();
           provider;
           context = null;
           settings = {};
-          events = [];
           /** Lifecycle port (wiring-unification B2); null until boot wires it. */
           lifecyclePort = null;
           tickErrorCount = 0;
@@ -104380,8 +106335,7 @@ ${effect.notification.body || ""}`.trim();
               summaryMetadata: surface.summaryMetadata,
               instanceId: this.instanceId,
               lastUpdated: Date.now(),
-              settings: this.settings,
-              pendingEvents: this.flushEvents()
+              settings: this.settings
             };
           }
           getSessionModalState(sessionId) {
@@ -104659,8 +106613,7 @@ ${effect.notification.body || ""}`.trim();
             }
           }
           pushEvent(event) {
-            this.events.push(event);
-            forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            forwardProviderEvent(this.lifecyclePort, this.instanceId, {
               ...event,
               providerType: this.type,
               instanceId: this.instanceId,
@@ -104819,11 +106772,6 @@ ${effect.notification.body || ""}`.trim();
             }
             return `provider_effect:toast:${effect.toast?.message || ""}`;
           }
-          flushEvents() {
-            const events = [...this.events];
-            this.events = [];
-            return events;
-          }
           // ─── external access ─────────────────────────────────
           updateCdp(cdp) {
             if (this.context) this.context.cdp = cdp;
@@ -104980,7 +106928,7 @@ ${effect.notification.body || ""}`.trim();
       if (path27.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\") || trimmed2.startsWith("~")) {
         const candidate = trimmed2.startsWith("~") ? path27.join((0, import_os4.homedir)(), trimmed2.slice(1)) : trimmed2;
         const resolved = path27.isAbsolute(candidate) ? candidate : path27.resolve(candidate);
-        return (0, import_fs23.existsSync)(resolved) ? resolved : null;
+        return (0, import_fs24.existsSync)(resolved) ? resolved : null;
       }
       const isWin = (0, import_os4.platform)() === "win32";
       const paths = (process.env.PATH || "").split(isWin ? ";" : ":");
@@ -104990,8 +106938,8 @@ ${effect.notification.body || ""}`.trim();
         for (const ext of exes) {
           const fullPath = path27.join(p, trimmed2 + ext);
           try {
-            if ((0, import_fs23.existsSync)(fullPath)) {
-              const stat2 = (0, import_fs23.statSync)(fullPath);
+            if ((0, import_fs24.existsSync)(fullPath)) {
+              const stat2 = (0, import_fs24.statSync)(fullPath);
               if (stat2.isFile() && (isWin || stat2.mode & 73)) {
                 return fullPath;
               }
@@ -105009,9 +106957,9 @@ ${effect.notification.body || ""}`.trim();
         if (normalized.includes("*")) {
           const username = home.split(/[\\/]/).pop() || "";
           const resolved = normalized.replace("*", username);
-          if ((0, import_fs23.existsSync)(resolved)) return resolved;
+          if ((0, import_fs24.existsSync)(resolved)) return resolved;
         } else {
-          if ((0, import_fs23.existsSync)(normalized)) return normalized;
+          if ((0, import_fs24.existsSync)(normalized)) return normalized;
         }
       }
       return null;
@@ -105025,11 +106973,11 @@ ${effect.notification.body || ""}`.trim();
         let resolvedCli = cliPath;
         if (!resolvedCli && appPath && os40 === "darwin") {
           const bundledCli = `${appPath}/Contents/Resources/app/bin/${def.cli}`;
-          if ((0, import_fs23.existsSync)(bundledCli)) resolvedCli = bundledCli;
+          if ((0, import_fs24.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os40 === "win32") {
-          const { dirname: dirname33 } = await import("path");
-          const appDir = dirname33(appPath);
+          const { dirname: dirname34 } = await import("path");
+          const appDir = dirname34(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -105038,7 +106986,7 @@ ${effect.notification.body || ""}`.trim();
             `${appDir}\\\\resources\\\\app\\\\bin\\\\${def.cli}.cmd`
           ];
           for (const c of candidates) {
-            if ((0, import_fs23.existsSync)(c)) {
+            if ((0, import_fs24.existsSync)(c)) {
               resolvedCli = c;
               break;
             }
@@ -105059,7 +107007,7 @@ ${effect.notification.body || ""}`.trim();
       }
       return results;
     }
-    var import_fs23;
+    var import_fs24;
     var import_os4;
     var path27;
     var BUILTIN_IDE_DEFINITIONS;
@@ -105067,7 +107015,7 @@ ${effect.notification.body || ""}`.trim();
     var init_ide_detector = __esm2({
       "src/detection/ide-detector.ts"() {
         "use strict";
-        import_fs23 = require("fs");
+        import_fs24 = require("fs");
         import_os4 = require("os");
         path27 = __toESM2(require("path"));
         BUILTIN_IDE_DEFINITIONS = [];
@@ -105344,7 +107292,7 @@ ${effect.notification.body || ""}`.trim();
     var path29;
     var crypto5;
     var ProviderChannelStore;
-    var init_store2 = __esm2({
+    var init_store3 = __esm2({
       "src/providers/channel/store.ts"() {
         "use strict";
         fs22 = __toESM2(require("fs"));
@@ -105690,7 +107638,7 @@ ${effect.notification.body || ""}`.trim();
         );
       }
       relPaths.sort();
-      const hash2 = (0, import_crypto17.createHash)("sha256");
+      const hash2 = (0, import_crypto18.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path30.join(rootDir, ...relPath.split("/"));
         const bytes = fs23.readFileSync(absPath);
@@ -105732,14 +107680,14 @@ ${effect.notification.body || ""}`.trim();
     }
     var fs23;
     var path30;
-    var import_crypto17;
+    var import_crypto18;
     var TREE_DIGEST_ALGORITHM;
     var init_tree_digest = __esm2({
       "src/providers/channel/tree-digest.ts"() {
         "use strict";
         fs23 = __toESM2(require("fs"));
         path30 = __toESM2(require("path"));
-        import_crypto17 = require("crypto");
+        import_crypto18 = require("crypto");
         init_contract();
         TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
       }
@@ -105839,8 +107787,8 @@ ${effect.notification.body || ""}`.trim();
       }
       return e?.message || String(e);
     }
-    function delay(ms22) {
-      return new Promise((resolve36) => setTimeout(resolve36, ms22));
+    function delay(ms3) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms3));
     }
     function toSyncError(e, fallbackCode, providerType) {
       if (e instanceof ProviderChannelError) {
@@ -112112,8 +114060,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         else if (f.field === 2) nanos = f.varint;
       }
       if (!(seconds > 15e8 && seconds < 25e8)) return null;
-      const ms22 = seconds * 1e3 + Math.floor(nanos / 1e6);
-      return Number.isFinite(ms22) ? ms22 : null;
+      const ms3 = seconds * 1e3 + Math.floor(nanos / 1e6);
+      return Number.isFinite(ms3) ? ms3 : null;
     }
     function isSqliteBusyError(err) {
       if (!err) return false;
@@ -112122,8 +114070,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const msg = err instanceof Error ? err.message : String(err);
       return /SQLITE_BUSY|database is locked|database table is locked/i.test(msg);
     }
-    function sleepBusy(ms22) {
-      const end = Date.now() + ms22;
+    function sleepBusy(ms3) {
+      const end = Date.now() + ms3;
       while (Date.now() < end) {
       }
     }
@@ -114153,7 +116101,7 @@ ${result.stderr}`, result.code);
         init_contract();
         init_track_identity();
         init_config_dir();
-        init_store2();
+        init_store3();
         init_runtime();
         init_provider_loader_support();
         init_provider_loader_manifest_scan();
@@ -118902,8 +120850,8 @@ ${marker}`,
             const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
             let nodeDaemonId;
             if (meshId && nodeId) {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const node = meshRecord?.mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
             }
             const selfDaemonId = ctx.deps.statusInstanceId;
@@ -120072,8 +122020,8 @@ ${marker}`,
       if (args.adapter.cliType !== "codex-cli") {
         return;
       }
-      const ms22 = args.messageSourceRef.get();
-      const fallbackReason = typeof ms22.fallbackReason === "string" ? ms22.fallbackReason : "";
+      const ms3 = args.messageSourceRef.get();
+      const fallbackReason = typeof ms3.fallbackReason === "string" ? ms3.fallbackReason : "";
       if (!isUnsafeNativeTranscriptFallback(fallbackReason)) {
         return;
       }
@@ -120092,7 +122040,7 @@ ${marker}`,
           coverage: args.coverage || "current-turn",
           status: args.returnedStatus
         });
-        const next2 = { ...ms22, selectedDaemonSource: "current-runtime-pty", transcriptAuthority: "daemon", runtimeMappingSafe: true };
+        const next2 = { ...ms3, selectedDaemonSource: "current-runtime-pty", transcriptAuthority: "daemon", runtimeMappingSafe: true };
         args.messageSourceRef.set(next2);
         return;
       }
@@ -120104,7 +122052,7 @@ ${marker}`,
           coverage: "tail",
           status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal)
         });
-        const next2 = { ...ms22, ptyStatusApprovalOnly: true };
+        const next2 = { ...ms3, ptyStatusApprovalOnly: true };
         args.messageSourceRef.set(next2);
         return;
       }
@@ -120122,7 +122070,7 @@ ${marker}`,
           coverage: "tail",
           status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal)
         });
-        const next2 = { ...ms22, selectedDaemonSource: "exact-runtime-mirror", transcriptAuthority: "daemon", ptyStatusApprovalOnly: true };
+        const next2 = { ...ms3, selectedDaemonSource: "exact-runtime-mirror", transcriptAuthority: "daemon", ptyStatusApprovalOnly: true };
         args.messageSourceRef.set(next2);
         return;
       }
@@ -120131,7 +122079,7 @@ ${marker}`,
         coverage: args.coverage,
         status: coerceUnsafeNativeFallbackStatus(args.returnedStatus, args.activeModal)
       });
-      const next = { ...ms22, ptyStatusApprovalOnly: true };
+      const next = { ...ms3, ptyStatusApprovalOnly: true };
       args.messageSourceRef.set(next);
     }
     function isUnsafeNativeTranscriptFallback(reason) {
@@ -121709,8 +123657,8 @@ ${marker}`,
         return void 0;
       }
     }
-    function sleep2(ms22) {
-      return new Promise((resolve36) => setTimeout(resolve36, ms22));
+    function sleep2(ms3) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms3));
     }
     async function waitForIdleAfterInterrupt(adapter, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -121906,8 +123854,8 @@ ${marker}`,
     function getSendChatInputEnvelope(args) {
       return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
     }
-    function sleep22(ms22) {
-      return new Promise((resolve36) => setTimeout(resolve36, ms22));
+    function sleep22(ms3) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms3));
     }
     async function waitOnceForFreshHermesCliStart(adapter, log) {
       if (adapter.cliType !== "hermes-cli") return;
@@ -124407,10 +126355,33 @@ ${marker}`,
               clientId
             }), (result) => summarizeSessionHostRecord(result));
             return { success: true, record: record2 };
+          },
+          /**
+           * `get_runtime_snapshot`: a PTY snapshot for a CLI session, over the
+           * session-host control plane. Moved off cloud's `cloud-command-transports.ts`
+           * P2P-only special case (wiring-unification B residue cleanup, deliverable
+           * 7) onto the shared command registry — `sources: ['p2p']` below preserves
+           * the original "never relayed by the server" property.
+           */
+          get_runtime_snapshot: async (ctx, args) => {
+            if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
+            const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
+            if (!sessionId) return { success: false, error: "sessionId is required" };
+            if (typeof ctx.deps.sessionHostControl.getSnapshot !== "function") {
+              return { success: false, error: "Runtime snapshot unavailable", code: "CLI_RUNTIME_UNAVAILABLE" };
+            }
+            const sinceSeq = typeof args?.sinceSeq === "number" ? args.sinceSeq : void 0;
+            const result = await traceSessionHostAction("get_runtime_snapshot", args, () => ctx.deps.sessionHostControl.getSnapshot(sessionId, sinceSeq), (value) => ({
+              hasResult: !!value,
+              truncated: value?.truncated
+            }));
+            if (!result) return { success: false, error: "Runtime snapshot unavailable" };
+            return { success: true, result };
           }
         };
         sessionHostSpecs = defineCommandSpecs("low", sessionHostHandlers, {
-          session_host_restart_session: { blockedDuringMandatoryUpdate: true }
+          session_host_restart_session: { blockedDuringMandatoryUpdate: true },
+          get_runtime_snapshot: { sources: ["p2p"] }
         });
       }
     });
@@ -125566,15 +127537,179 @@ ${marker}`,
         refineConfigSpecs = defineCommandSpecs("low", refineConfigHandlers);
       }
     });
+    function maskArgs(args) {
+      if (!args || typeof args !== "object") return void 0;
+      const masked = {};
+      for (const [key2, value] of Object.entries(args)) {
+        if (SENSITIVE_KEYS.has(key2)) {
+          masked[key2] = typeof value === "string" ? `[${value.length} chars]` : "[masked]";
+        } else if (key2.startsWith("_")) {
+          masked[key2] = value;
+        } else if (typeof value === "object" && value !== null) {
+          masked[key2] = Array.isArray(value) ? `[Array(${value.length})]` : `[Object]`;
+        } else {
+          masked[key2] = value;
+        }
+      }
+      return masked;
+    }
+    function getDateStr2() {
+      return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    }
+    function refreshCurrentFile() {
+      const today = getDateStr2();
+      const dir = resolveConfigLogsDir();
+      if (today === currentDate2 && dir === currentDir) return;
+      const dirChanged = dir !== currentDir;
+      currentDate2 = today;
+      currentDir = dir;
+      currentFile = path52.join(dir, `commands-${today}.jsonl`);
+      if (dirChanged) {
+        try {
+          fs46.mkdirSync(dir, { recursive: true });
+        } catch {
+        }
+        cleanOldFiles();
+      }
+    }
+    function cleanOldFiles() {
+      try {
+        const files = fs46.readdirSync(currentDir).filter((f) => f.startsWith("commands-") && f.endsWith(".jsonl"));
+        const cutoff = /* @__PURE__ */ new Date();
+        cutoff.setDate(cutoff.getDate() - MAX_DAYS);
+        const cutoffStr = cutoff.toISOString().slice(0, 10);
+        for (const file2 of files) {
+          const dateMatch = file2.match(/commands-(\d{4}-\d{2}-\d{2})/);
+          if (dateMatch && dateMatch[1] < cutoffStr) {
+            try {
+              fs46.unlinkSync(path52.join(currentDir, file2));
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+    }
+    function checkSize() {
+      try {
+        const stat2 = fs46.statSync(currentFile);
+        if (stat2.size > MAX_FILE_SIZE) {
+          const backup = currentFile.replace(".jsonl", ".1.jsonl");
+          try {
+            fs46.unlinkSync(backup);
+          } catch {
+          }
+          fs46.renameSync(currentFile, backup);
+        }
+      } catch {
+      }
+    }
+    function shouldLogCommand(cmd) {
+      return !SKIP_COMMANDS.has(cmd);
+    }
+    function logCommand(entry) {
+      if (!shouldLogCommand(entry.cmd)) return;
+      try {
+        refreshCurrentFile();
+        if (++writeCount2 % 500 === 0) {
+          checkSize();
+        }
+        const line = JSON.stringify({
+          ts: entry.ts,
+          cmd: entry.cmd,
+          src: entry.source,
+          ...entry.peerId ? { peer: entry.peerId } : {},
+          ...entry.interactionId ? { interactionId: entry.interactionId } : {},
+          ...entry.args ? { args: maskArgs(entry.args) } : {},
+          ...entry.success !== void 0 ? { ok: entry.success } : {},
+          ...entry.error ? { err: entry.error } : {},
+          ...entry.durationMs !== void 0 ? { ms: entry.durationMs } : {}
+        });
+        fs46.appendFileSync(currentFile, line + "\n");
+      } catch {
+      }
+    }
+    function getRecentCommands(count = 50) {
+      try {
+        refreshCurrentFile();
+        if (!fs46.existsSync(currentFile)) return [];
+        const content = fs46.readFileSync(currentFile, "utf-8");
+        const lines = content.trim().split("\n").filter(Boolean);
+        return lines.slice(-count).map((line) => {
+          try {
+            const parsed = JSON.parse(line);
+            return {
+              ts: parsed.ts,
+              cmd: parsed.cmd,
+              source: parsed.src,
+              peerId: parsed.peer,
+              interactionId: parsed.interactionId,
+              args: parsed.args,
+              success: parsed.ok,
+              error: parsed.err,
+              durationMs: parsed.ms
+            };
+          } catch {
+            return { ts: "", cmd: "parse_error", source: "unknown" };
+          }
+        });
+      } catch {
+        return [];
+      }
+    }
     var fs46;
+    var path52;
+    var MAX_FILE_SIZE;
+    var MAX_DAYS;
+    var SENSITIVE_KEYS;
+    var currentDate2;
+    var currentDir;
+    var currentFile;
+    var writeCount2;
+    var SKIP_COMMANDS;
+    var init_command_log = __esm2({
+      "src/logging/command-log.ts"() {
+        "use strict";
+        fs46 = __toESM2(require("fs"));
+        path52 = __toESM2(require("path"));
+        init_config_dir();
+        MAX_FILE_SIZE = 5 * 1024 * 1024;
+        MAX_DAYS = 7;
+        SENSITIVE_KEYS = /* @__PURE__ */ new Set([
+          "token",
+          "password",
+          "secret",
+          "apiKey",
+          "api_key",
+          "connectionToken",
+          "content",
+          "message",
+          "text"
+        ]);
+        currentDate2 = "";
+        currentDir = "";
+        currentFile = "";
+        writeCount2 = 0;
+        SKIP_COMMANDS = /* @__PURE__ */ new Set([
+          "heartbeat",
+          "status_report",
+          "read_chat",
+          "mark_session_seen",
+          "delete_notification",
+          "mark_notification_unread"
+        ]);
+      }
+    });
+    var fs47;
     var diagnosticsHandlers;
     var diagnosticsSpecs;
     var init_diagnostics = __esm2({
       "src/commands/low-family/diagnostics.ts"() {
         "use strict";
-        fs46 = __toESM2(require("fs"));
+        fs47 = __toESM2(require("fs"));
         init_logger();
         init_debug_trace();
+        init_command_log();
         init_command_registry();
         diagnosticsHandlers = {
           get_logs: async (_ctx, args) => {
@@ -125593,8 +127728,8 @@ ${marker}`,
                 return { success: true, logs: [], totalBuffered: 0 };
               }
               const logPath = getCurrentDaemonLogPath();
-              if (fs46.existsSync(logPath)) {
-                const content = fs46.readFileSync(logPath, "utf-8");
+              if (fs47.existsSync(logPath)) {
+                const content = fs47.readFileSync(logPath, "utf-8");
                 const allLines = content.split("\n");
                 const recent = allLines.slice(-count).join("\n");
                 return { success: true, logs: recent, totalLines: allLines.length };
@@ -125611,9 +127746,22 @@ ${marker}`,
             const category = typeof args?.category === "string" ? args.category : void 0;
             const trace = getRecentDebugTrace({ interactionId, category, limit: count }).filter((entry) => !sinceTs || entry.ts > sinceTs);
             return { success: true, trace, count: trace.length };
+          },
+          /**
+           * `get_command_history`: the process-local command log ring buffer. Moved
+           * off cloud's `cloud-command-transports.ts` P2P-only special case
+           * (wiring-unification B residue cleanup, deliverable 7) onto the shared
+           * command registry — `sources: ['p2p']` in the specs below preserves the
+           * original "never relayed by the server" property.
+           */
+          get_command_history: async (_ctx, args) => {
+            const count = parseInt(args?.count) || 50;
+            return { success: true, history: getRecentCommands(count) };
           }
         };
-        diagnosticsSpecs = defineCommandSpecs("low", diagnosticsHandlers);
+        diagnosticsSpecs = defineCommandSpecs("low", diagnosticsHandlers, {
+          get_command_history: { sources: ["p2p"] }
+        });
       }
     });
     var mesh_refine_executor_liveness_exports = {};
@@ -126544,9 +128692,9 @@ ${marker}`,
       return Math.min(Math.floor(tailBytes), MAX_TAIL_BYTES2);
     }
     function readByteBoundedTail(filePath, limitBytes) {
-      const fd = fs47.openSync(filePath, "r");
+      const fd = fs48.openSync(filePath, "r");
       try {
-        const stat2 = fs47.fstatSync(fd);
+        const stat2 = fs48.fstatSync(fd);
         const size = stat2.size;
         if (size === 0) return { text: "", truncated: false, bytesReturned: 0 };
         const want = Math.min(limitBytes, size);
@@ -126557,7 +128705,7 @@ ${marker}`,
         while (position < size) {
           const chunkSize = Math.min(READ_CHUNK_BYTES, size - position);
           const chunk = Buffer.alloc(chunkSize);
-          fs47.readSync(fd, chunk, 0, chunkSize, position);
+          fs48.readSync(fd, chunk, 0, chunkSize, position);
           buffers.push(chunk);
           position += chunkSize;
         }
@@ -126570,7 +128718,7 @@ ${marker}`,
         }
         return { text: buf.toString("utf-8"), truncated, bytesReturned: buf.length };
       } finally {
-        fs47.closeSync(fd);
+        fs48.closeSync(fd);
       }
     }
     function splitLogLines(text) {
@@ -126653,8 +128801,8 @@ ${marker}`,
       const limitBytes = clampTailBytes(args.tailBytes);
       const primaryPath = resolveLogPath(args.date);
       const backupPaths = sizeRotationPaths(primaryPath);
-      const primaryExists = fs47.existsSync(primaryPath);
-      const existingBackupPaths = backupPaths.filter((backupPath2) => fs47.existsSync(backupPath2));
+      const primaryExists = fs48.existsSync(primaryPath);
+      const existingBackupPaths = backupPaths.filter((backupPath2) => fs48.existsSync(backupPath2));
       if (!primaryExists && existingBackupPaths.length === 0) {
         return errorResult(
           `No daemon log file at ${primaryPath} (dir: ${getDaemonLogDir()})`,
@@ -126693,7 +128841,7 @@ ${marker}`,
       try {
         for (const p of [...existingBackupPaths].reverse().concat(primaryExists ? [primaryPath] : [])) {
           if (!p) continue;
-          const buf = fs47.readFileSync(p);
+          const buf = fs48.readFileSync(p);
           scannedBytes += buf.length;
           allLines = allLines.concat(splitLogLines(buf.toString("utf-8")));
         }
@@ -126744,7 +128892,7 @@ ${marker}`,
         ...grepMode ? { grepMode } : {}
       };
     }
-    var fs47;
+    var fs48;
     var DEFAULT_TAIL_BYTES;
     var MAX_TAIL_BYTES2;
     var READ_CHUNK_BYTES;
@@ -126752,7 +128900,7 @@ ${marker}`,
     var init_log_tail_reader = __esm2({
       "src/logging/log-tail-reader.ts"() {
         "use strict";
-        fs47 = __toESM2(require("fs"));
+        fs48 = __toESM2(require("fs"));
         init_logger();
         init_regex_safety();
         DEFAULT_TAIL_BYTES = 64 * 1024;
@@ -126776,8 +128924,8 @@ ${marker}`,
             const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
             let nodeDaemonId;
             if (meshId && nodeId && ctx.getMeshForCommand) {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const node = meshRecord?.mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
             }
             const selfDaemonId = ctx.deps.statusInstanceId;
@@ -127524,11 +129672,11 @@ ${marker}`,
           }
           onChunk(chunk) {
             this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
+            this.screen.write(chunk);
             try {
               this.handlers.on_pty_data?.(chunk);
             } catch {
             }
-            this.screen.write(chunk);
             if (this.screenTimer) return;
             this.screenTimer = setTimeout(() => {
               this.screenTimer = null;
@@ -127628,9 +129776,9 @@ ${marker}`,
       );
       let shellCmd;
       let shellArgs;
-      const useShellUnix = !isWin && (!!shell || !path52.isAbsolute(binaryPath) || isScriptBinary(binaryPath) || !looksLikeMachOOrElf(binaryPath));
+      const useShellUnix = !isWin && (!!shell || !path53.isAbsolute(binaryPath) || isScriptBinary(binaryPath) || !looksLikeMachOOrElf(binaryPath));
       const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
-      const useShellWin = !!shell || isCmdShim || !path52.isAbsolute(binaryPath) || isScriptBinary(binaryPath);
+      const useShellWin = !!shell || isCmdShim || !path53.isAbsolute(binaryPath) || isScriptBinary(binaryPath);
       const useShell = isWin ? useShellWin : useShellUnix;
       if (useShell) {
         shellCmd = isWin ? "cmd.exe" : process.env.SHELL || "/bin/zsh";
@@ -127666,14 +129814,14 @@ ${marker}`,
       };
     }
     var os27;
-    var path52;
+    var path53;
     var import_session_host_core8;
     var SPAWN_LOG_ARG_MAX_CHARS;
     var init_provider_cli_runtime = __esm2({
       "src/cli-adapters/provider-cli-runtime.ts"() {
         "use strict";
         os27 = __toESM2(require("os"));
-        path52 = __toESM2(require("path"));
+        path53 = __toESM2(require("path"));
         init_logger();
         import_session_host_core8 = require_dist();
         init_provider_cli_shared();
@@ -128449,13 +130597,13 @@ ${marker}`,
     });
     function kimiHome2(env2 = process.env) {
       const override = env2.KIMI_CODE_HOME?.trim();
-      return override ? override : path53.join(os28.homedir(), ".kimi-code");
+      return override ? override : path54.join(os28.homedir(), ".kimi-code");
     }
     function realWorkspacePath(workingDir) {
       try {
-        return fs48.realpathSync(workingDir);
+        return fs49.realpathSync(workingDir);
       } catch {
-        return path53.resolve(workingDir);
+        return path54.resolve(workingDir);
       }
     }
     function slugify2(input) {
@@ -128466,7 +130614,7 @@ ${marker}`,
     }
     function workspaceTrustKey(realPath) {
       const normalized = realPath.replace(/\\/g, "/").replace(/\/+$/, "");
-      const slug = slugify2(path53.basename(normalized));
+      const slug = slugify2(path54.basename(normalized));
       const hash2 = crypto6.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
       return `wd_${slug}_${hash2}`;
     }
@@ -128476,15 +130624,15 @@ ${marker}`,
     function applyKimiWorkspaceTrust(workingDir, env2 = process.env) {
       const real = realWorkspacePath(workingDir);
       const key2 = workspaceTrustKey(real);
-      const trustDir = path53.join(kimiHome2(env2), "workspace-trust");
-      const trustFile = path53.join(trustDir, key2);
+      const trustDir = path54.join(kimiHome2(env2), "workspace-trust");
+      const trustFile = path54.join(trustDir, key2);
       try {
-        if (fs48.existsSync(trustFile)) {
+        if (fs49.existsSync(trustFile)) {
           LOG.debug("kimi-workspace-trust", `${real} already trusted (${key2}) \u2014 no change`);
           return null;
         }
-        fs48.mkdirSync(trustDir, { recursive: true });
-        fs48.writeFileSync(trustFile, serializeKimiWorkspaceTrust(real), "utf8");
+        fs49.mkdirSync(trustDir, { recursive: true });
+        fs49.writeFileSync(trustFile, serializeKimiWorkspaceTrust(real), "utf8");
         LOG.info("kimi-workspace-trust", `pre-trusted workspace ${real} (${key2})`);
         return real;
       } catch (err) {
@@ -128492,17 +130640,17 @@ ${marker}`,
         return null;
       }
     }
-    var fs48;
+    var fs49;
     var os28;
-    var path53;
+    var path54;
     var crypto6;
     var MAX_SLUG_LENGTH;
     var init_kimi_workspace_trust = __esm2({
       "src/providers/kimi-workspace-trust.ts"() {
         "use strict";
-        fs48 = __toESM2(require("fs"));
+        fs49 = __toESM2(require("fs"));
         os28 = __toESM2(require("os"));
-        path53 = __toESM2(require("path"));
+        path54 = __toESM2(require("path"));
         crypto6 = __toESM2(require("crypto"));
         init_logger();
         MAX_SLUG_LENGTH = 40;
@@ -128512,22 +130660,22 @@ ${marker}`,
       const override = env2.GROK_HOME?.trim();
       if (override) return override;
       const home = env2.HOME?.trim();
-      return path54.join(home || os29.homedir(), ".grok");
+      return path55.join(home || os29.homedir(), ".grok");
     }
     function realWorkspacePath2(workingDir) {
       try {
-        return fs49.realpathSync(workingDir);
+        return fs50.realpathSync(workingDir);
       } catch {
-        return path54.resolve(workingDir);
+        return path55.resolve(workingDir);
       }
     }
     function isOverBroadRoot(real, env2 = process.env) {
-      if (!path54.isAbsolute(real)) return true;
+      if (!path55.isAbsolute(real)) return true;
       const normalized = real.replace(/\/+$/, "") || "/";
-      if (normalized === "/" || path54.dirname(normalized) === normalized) return true;
+      if (normalized === "/" || path55.dirname(normalized) === normalized) return true;
       const home = (() => {
         try {
-          return fs49.realpathSync(os29.homedir());
+          return fs50.realpathSync(os29.homedir());
         } catch {
           return os29.homedir();
         }
@@ -128555,11 +130703,11 @@ decided_at = ${decidedAt}
         LOG.warn("grok-workspace-trust", `refusing to pre-trust over-broad root ${real}`);
         return null;
       }
-      const storePath = path54.join(grokHome2(env2), "trusted_folders.toml");
+      const storePath = path55.join(grokHome2(env2), "trusted_folders.toml");
       try {
         let existing = "";
         try {
-          existing = fs49.readFileSync(storePath, "utf8");
+          existing = fs50.readFileSync(storePath, "utf8");
         } catch (err) {
           if (err?.code !== "ENOENT") throw err;
         }
@@ -128569,8 +130717,8 @@ decided_at = ${decidedAt}
         }
         const entry = serializeGrokWorkspaceTrust(real);
         const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-        fs49.mkdirSync(path54.dirname(storePath), { recursive: true });
-        fs49.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
+        fs50.mkdirSync(path55.dirname(storePath), { recursive: true });
+        fs50.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
         LOG.info("grok-workspace-trust", `pre-trusted workspace ${real}`);
         return real;
       } catch (err) {
@@ -128578,15 +130726,15 @@ decided_at = ${decidedAt}
         return null;
       }
     }
-    var fs49;
+    var fs50;
     var os29;
-    var path54;
+    var path55;
     var init_grok_workspace_trust = __esm2({
       "src/providers/grok-workspace-trust.ts"() {
         "use strict";
-        fs49 = __toESM2(require("fs"));
+        fs50 = __toESM2(require("fs"));
         os29 = __toESM2(require("os"));
-        path54 = __toESM2(require("path"));
+        path55 = __toESM2(require("path"));
         init_logger();
       }
     });
@@ -128594,22 +130742,22 @@ decided_at = ${decidedAt}
       const override = env2.CODEX_HOME?.trim();
       if (override) return override;
       const home = env2.HOME?.trim();
-      return path55.join(home || os30.homedir(), ".codex");
+      return path56.join(home || os30.homedir(), ".codex");
     }
     function realWorkspacePath3(workingDir) {
       try {
-        return fs50.realpathSync(workingDir);
+        return fs51.realpathSync(workingDir);
       } catch {
-        return path55.resolve(workingDir);
+        return path56.resolve(workingDir);
       }
     }
     function isOverBroadRoot2(real, env2 = process.env) {
-      if (!path55.isAbsolute(real)) return true;
+      if (!path56.isAbsolute(real)) return true;
       const normalized = real.replace(/\/+$/, "") || "/";
-      if (normalized === "/" || path55.dirname(normalized) === normalized) return true;
+      if (normalized === "/" || path56.dirname(normalized) === normalized) return true;
       const home = (() => {
         try {
-          return fs50.realpathSync(os30.homedir());
+          return fs51.realpathSync(os30.homedir());
         } catch {
           return os30.homedir();
         }
@@ -128631,7 +130779,7 @@ trust_level = "trusted"
 `;
     }
     function codexTrustStorePath(env2 = process.env) {
-      return path55.join(codexHome2(env2), "config.toml");
+      return path56.join(codexHome2(env2), "config.toml");
     }
     function applyCodexWorkspaceTrust(workingDir, env2 = process.env) {
       const real = realWorkspacePath3(workingDir);
@@ -128643,7 +130791,7 @@ trust_level = "trusted"
       try {
         let existing = "";
         try {
-          existing = fs50.readFileSync(storePath, "utf8");
+          existing = fs51.readFileSync(storePath, "utf8");
         } catch (err) {
           if (err?.code !== "ENOENT") throw err;
         }
@@ -128653,8 +130801,8 @@ trust_level = "trusted"
         }
         const entry = serializeCodexWorkspaceTrust(real);
         const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-        fs50.mkdirSync(path55.dirname(storePath), { recursive: true });
-        fs50.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
+        fs51.mkdirSync(path56.dirname(storePath), { recursive: true });
+        fs51.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
         LOG.info("codex-workspace-trust", `pre-trusted workspace ${real}`);
         return real;
       } catch (err) {
@@ -128662,37 +130810,37 @@ trust_level = "trusted"
         return null;
       }
     }
-    var fs50;
+    var fs51;
     var os30;
-    var path55;
+    var path56;
     var init_codex_workspace_trust = __esm2({
       "src/providers/codex-workspace-trust.ts"() {
         "use strict";
-        fs50 = __toESM2(require("fs"));
+        fs51 = __toESM2(require("fs"));
         os30 = __toESM2(require("os"));
-        path55 = __toESM2(require("path"));
+        path56 = __toESM2(require("path"));
         init_logger();
       }
     });
     function applyPreLaunchTrust(trust, plan) {
       const settingsPath = plan.storePath;
       const real = plan.workspaceRealpath;
-      if (!path56.isAbsolute(settingsPath) || !path56.isAbsolute(real)) {
+      if (!path57.isAbsolute(settingsPath) || !path57.isAbsolute(real)) {
         LOG.warn("pre-launch-trust", "refusing unresolved trust plan with non-absolute paths");
         return null;
       }
       try {
         if ("scheme" in trust) {
           if (trust.scheme === "kimi_workspace_file") {
-            if (fs51.existsSync(settingsPath)) return null;
-            fs51.mkdirSync(path56.dirname(settingsPath), { recursive: true });
-            fs51.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), "utf8");
+            if (fs52.existsSync(settingsPath)) return null;
+            fs52.mkdirSync(path57.dirname(settingsPath), { recursive: true });
+            fs52.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), "utf8");
             return real;
           }
           if (trust.scheme === "grok_toml_file") {
             let existing2 = "";
             try {
-              existing2 = fs51.readFileSync(settingsPath, "utf8");
+              existing2 = fs52.readFileSync(settingsPath, "utf8");
             } catch (err) {
               if (err?.code !== "ENOENT") throw err;
             }
@@ -128702,8 +130850,8 @@ trust_level = "trusted"
               return null;
             }
             const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs51.mkdirSync(path56.dirname(settingsPath), { recursive: true });
-            fs51.appendFileSync(
+            fs52.mkdirSync(path57.dirname(settingsPath), { recursive: true });
+            fs52.appendFileSync(
               settingsPath,
               `${separator}${serializeGrokWorkspaceTrust(real)}`,
               { encoding: "utf8", mode: 384 }
@@ -128714,7 +130862,7 @@ trust_level = "trusted"
           if (trust.scheme === "codex_toml_file") {
             let existing2 = "";
             try {
-              existing2 = fs51.readFileSync(settingsPath, "utf8");
+              existing2 = fs52.readFileSync(settingsPath, "utf8");
             } catch (err) {
               if (err?.code !== "ENOENT") throw err;
             }
@@ -128724,8 +130872,8 @@ trust_level = "trusted"
               return null;
             }
             const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs51.mkdirSync(path56.dirname(settingsPath), { recursive: true });
-            fs51.appendFileSync(
+            fs52.mkdirSync(path57.dirname(settingsPath), { recursive: true });
+            fs52.appendFileSync(
               settingsPath,
               `${separator}${serializeCodexWorkspaceTrust(real)}`,
               { encoding: "utf8", mode: 384 }
@@ -128737,8 +130885,8 @@ trust_level = "trusted"
         }
         const key2 = trust.key;
         let parsed = {};
-        if (fs51.existsSync(settingsPath)) {
-          const text = fs51.readFileSync(settingsPath, "utf8");
+        if (fs52.existsSync(settingsPath)) {
+          const text = fs52.readFileSync(settingsPath, "utf8");
           if (text.trim().length > 0) {
             const json3 = JSON.parse(text);
             if (json3 && typeof json3 === "object" && !Array.isArray(json3)) {
@@ -128754,8 +130902,8 @@ trust_level = "trusted"
         }
         list.push(real);
         parsed[key2] = list;
-        fs51.mkdirSync(path56.dirname(settingsPath), { recursive: true });
-        fs51.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
+        fs52.mkdirSync(path57.dirname(settingsPath), { recursive: true });
+        fs52.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
 `, "utf8");
         LOG.info("pre-launch-trust", `materialized ${plan.origin} workspace trust in ${settingsPath} (key="${key2}")`);
         return real;
@@ -128764,13 +130912,13 @@ trust_level = "trusted"
         return null;
       }
     }
-    var fs51;
-    var path56;
+    var fs52;
+    var path57;
     var init_pre_launch_trust = __esm2({
       "src/providers/spec/pre-launch-trust.ts"() {
         "use strict";
-        fs51 = __toESM2(require("fs"));
-        path56 = __toESM2(require("path"));
+        fs52 = __toESM2(require("fs"));
+        path57 = __toESM2(require("path"));
         init_kimi_workspace_trust();
         init_grok_workspace_trust();
         init_codex_workspace_trust();
@@ -128912,9 +131060,9 @@ trust_level = "trusted"
       if (end <= start) return null;
       return { start, end };
     }
-    var fs52;
+    var fs53;
     var os31;
-    var path57;
+    var path58;
     var import_session_host_core9;
     var DEFAULT_SPAWN_PRIME_MAX_WAIT_MS;
     var STALL_REFOCUS_INFO_LIMIT;
@@ -128923,9 +131071,9 @@ trust_level = "trusted"
     var init_fsm_driver = __esm2({
       "src/providers/spec/fsm-driver.ts"() {
         "use strict";
-        fs52 = __toESM2(require("fs"));
+        fs53 = __toESM2(require("fs"));
         os31 = __toESM2(require("os"));
-        path57 = __toESM2(require("path"));
+        path58 = __toESM2(require("path"));
         init_adapter();
         init_provider_cli_runtime();
         import_session_host_core9 = require_dist();
@@ -129529,9 +131677,9 @@ trust_level = "trusted"
           }
           armSpecWatcher() {
             try {
-              const dir = path57.dirname(this.opts.specPath);
-              const base = path57.basename(this.opts.specPath);
-              this.specWatcher = fs52.watch(dir, { persistent: false }, (_event, filename) => {
+              const dir = path58.dirname(this.opts.specPath);
+              const base = path58.basename(this.opts.specPath);
+              this.specWatcher = fs53.watch(dir, { persistent: false }, (_event, filename) => {
                 if (filename && filename !== base) return;
                 const res = loadFsmSpec(this.opts.specPath);
                 if (!res.ok) {
@@ -129953,8 +132101,8 @@ trust_level = "trusted"
           /** True when this spec opts into stall recovery (declares a positive
            *  refocus window AND a wake sequence to re-inject). */
           stallRecoveryEnabled() {
-            const ms22 = this.spec.refocus_when_stalled_ms;
-            return typeof ms22 === "number" && ms22 > 0 && Array.isArray(this.spec.send_on_spawn) && this.spec.send_on_spawn.length > 0;
+            const ms3 = this.spec.refocus_when_stalled_ms;
+            return typeof ms3 === "number" && ms3 > 0 && Array.isArray(this.spec.send_on_spawn) && this.spec.send_on_spawn.length > 0;
           }
           /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling
            *  back to state entry when it has not changed since (i.e. fully stalled
@@ -130280,9 +132428,9 @@ trust_level = "trusted"
             const ctl = (this.spec.control_bar ?? []).find((c) => c.action.type === "attach_image");
             if (!ctl || ctl.action.type !== "attach_image") return;
             const ext = guessExt(mime);
-            const tmp = path57.join(os31.tmpdir(), `adhdev-attach-${Date.now()}${ext}`);
+            const tmp = path58.join(os31.tmpdir(), `adhdev-attach-${Date.now()}${ext}`);
             try {
-              fs52.writeFileSync(tmp, Buffer.from(blob, "base64"));
+              fs53.writeFileSync(tmp, Buffer.from(blob, "base64"));
             } catch {
               return;
             }
@@ -130346,8 +132494,8 @@ trust_level = "trusted"
         };
       }
     });
-    function delay2(ms22) {
-      return new Promise((resolve36) => setTimeout(resolve36, ms22));
+    function delay2(ms3) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -130930,7 +133078,7 @@ trust_level = "trusted"
     function readTailJsonlLines(filePath, maxBytes) {
       let stat2;
       try {
-        stat2 = fs53.statSync(filePath);
+        stat2 = fs54.statSync(filePath);
       } catch {
         return [];
       }
@@ -130952,14 +133100,14 @@ trust_level = "trusted"
         return out2;
       }
       let text;
-      const fd = fs53.openSync(filePath, "r");
+      const fd = fs54.openSync(filePath, "r");
       try {
         const buf = Buffer.alloc(length);
-        const bytes = fs53.readSync(fd, buf, 0, length, start);
+        const bytes = fs54.readSync(fd, buf, 0, length, start);
         text = buf.subarray(0, bytes).toString("utf8");
         tailJsonlCacheStats.fileReads++;
       } finally {
-        fs53.closeSync(fd);
+        fs54.closeSync(fd);
       }
       tailJsonlCacheStats.parsePasses++;
       const rawLines = text.split("\n");
@@ -130976,7 +133124,7 @@ trust_level = "trusted"
       storeTailJsonlCache(filePath, { signature, maxBytes, sourceBytes: size, lines: out });
       return out;
     }
-    var fs53;
+    var fs54;
     var EMPTY;
     var TRACKED_AGENT_TYPES;
     var TAIL_BYTES;
@@ -130989,7 +133137,7 @@ trust_level = "trusted"
     var init_background_task_detector = __esm2({
       "src/providers/spec/background-task-detector.ts"() {
         "use strict";
-        fs53 = __toESM2(require("fs"));
+        fs54 = __toESM2(require("fs"));
         init_logger();
         init_native_history_executor();
         init_dispatcher();
@@ -131696,7 +133844,7 @@ ${text}` : text;
         LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
       }
     });
-    var fs54;
+    var fs55;
     var import_node_crypto5;
     var SpecCliAdapter;
     var init_cli_adapter = __esm2({
@@ -131710,7 +133858,7 @@ ${text}` : text;
         init_native_history_jsonl_cache();
         init_background_task_detector();
         init_antigravity_screen_messages();
-        fs54 = __toESM2(require("fs"));
+        fs55 = __toESM2(require("fs"));
         import_node_crypto5 = require("crypto");
         init_interrupt_capability();
         init_provider_cli_shared();
@@ -131847,7 +133995,7 @@ ${text}` : text;
            *  (claude-cli specs/4.0.json), which previously stubbed the method to false. */
           lastApprovalResolvedAt = 0;
           constructor(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, manifestTuning, resolvedTrustPlan) {
-            const raw = JSON.parse(fs54.readFileSync(specPath, "utf8"));
+            const raw = JSON.parse(fs55.readFileSync(specPath, "utf8"));
             this.spec = {
               id: raw.id,
               name: raw.name,
@@ -133432,15 +135580,15 @@ ${text}` : text;
     function createCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId, removeArgs, resolvedTrustPlan) {
       const resolvedSpecPath = provider._resolvedSpecPath;
       const dir = provider._resolvedProviderDir;
-      let specPath = resolvedSpecPath && fs55.existsSync(resolvedSpecPath) ? resolvedSpecPath : void 0;
+      let specPath = resolvedSpecPath && fs56.existsSync(resolvedSpecPath) ? resolvedSpecPath : void 0;
       if (!specPath && dir) {
-        const legacy = path58.join(dir, "spec.json");
-        if (fs55.existsSync(legacy)) specPath = legacy;
+        const legacy = path59.join(dir, "spec.json");
+        if (fs56.existsSync(legacy)) specPath = legacy;
       }
       if (!specPath) {
         throw new Error(formatNoResolvableSpecError(provider.type, dir));
       }
-      LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path58.relative(dir || "", specPath) || specPath})`);
+      LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path59.relative(dir || "", specPath) || specPath})`);
       return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
         sendDelayMs: provider.sendDelayMs,
         removeArgs,
@@ -133455,13 +135603,13 @@ ${text}` : text;
         providerVersion: provider.providerVersion
       }, resolvedTrustPlan);
     }
-    var fs55;
-    var path58;
+    var fs56;
+    var path59;
     var init_route = __esm2({
       "src/providers/spec/route.ts"() {
         "use strict";
-        fs55 = __toESM2(require("fs"));
-        path58 = __toESM2(require("path"));
+        fs56 = __toESM2(require("fs"));
+        path59 = __toESM2(require("path"));
         init_cli_adapter();
         init_logger();
         init_track_identity();
@@ -133706,7 +135854,7 @@ ${text}` : text;
     }
     function getDatabaseSync() {
       if (CachedDatabaseSync) return CachedDatabaseSync;
-      const requireFn = typeof require === "function" ? require : (0, import_node_module2.createRequire)(path59.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
+      const requireFn = typeof require === "function" ? require : (0, import_node_module2.createRequire)(path60.join(process.cwd(), "__adhdev_sqlite_loader__.js"));
       const sqliteModule = requireFn(`node:${"sqlite"}`);
       CachedDatabaseSync = sqliteModule.DatabaseSync;
       if (!CachedDatabaseSync) {
@@ -133748,13 +135896,13 @@ ${text}` : text;
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
-    var path59;
+    var path60;
     var import_node_module2;
     var CachedDatabaseSync;
     var init_cli_provider_status_helpers = __esm2({
       "src/providers/cli-provider-status-helpers.ts"() {
         "use strict";
-        path59 = __toESM2(require("path"));
+        path60 = __toESM2(require("path"));
         import_node_module2 = require("module");
         init_dist();
         CachedDatabaseSync = null;
@@ -134279,7 +136427,7 @@ ${buttons.join("\n")}`;
           return uri.slice("file://".length);
         }
       }
-      if (path60.isAbsolute(uri)) return uri;
+      if (path61.isAbsolute(uri)) return uri;
       return null;
     }
     function extensionForImageMime(mimeType) {
@@ -134294,10 +136442,10 @@ ${buttons.join("\n")}`;
       if (!part.data) return null;
       const rawData = part.data.includes(",") ? part.data.split(",").pop() || "" : part.data;
       if (!rawData) return null;
-      fs56.mkdirSync(dir, { recursive: true });
-      const filePath = path60.join(dir, safeInputImageBasename(index, part.mimeType));
+      fs57.mkdirSync(dir, { recursive: true });
+      const filePath = path61.join(dir, safeInputImageBasename(index, part.mimeType));
       const bytes = Buffer.from(rawData, "base64");
-      fs56.writeFileSync(filePath, bytes);
+      fs57.writeFileSync(filePath, bytes);
       LOG.debug("CLI", `materializeImageDataPart path=${filePath} bytes=${bytes.length} partIndex=${index}`);
       cleanupStaleMaterializedImages(dir);
       return filePath;
@@ -134307,14 +136455,14 @@ ${buttons.join("\n")}`;
       if (now - lastMaterializedImageCleanupAt < MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS) return;
       lastMaterializedImageCleanupAt = now;
       try {
-        const entries = fs56.readdirSync(dir);
+        const entries = fs57.readdirSync(dir);
         for (const entry of entries) {
           if (!entry.startsWith("adhdev-input-image-")) continue;
-          const fullPath = path60.join(dir, entry);
+          const fullPath = path61.join(dir, entry);
           try {
-            const stat2 = fs56.statSync(fullPath);
+            const stat2 = fs57.statSync(fullPath);
             if (now - stat2.mtimeMs > MATERIALIZED_IMAGE_MAX_AGE_MS) {
-              fs56.unlinkSync(fullPath);
+              fs57.unlinkSync(fullPath);
             }
           } catch {
           }
@@ -134357,7 +136505,7 @@ ${buttons.join("\n")}`;
       return { text: ordered.join("\n"), imageRefs, resourceRefs };
     }
     function buildCliStructuredInputPrompt(input, options = {}) {
-      const materializeDir = options.materializeDir || path60.join(os322.tmpdir(), "adhdev-input-media");
+      const materializeDir = options.materializeDir || path61.join(os322.tmpdir(), "adhdev-input-media");
       const { text, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
         const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
         const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
@@ -134376,9 +136524,9 @@ ${buttons.join("\n")}`;
       }).text;
     }
     var os322;
-    var path60;
+    var path61;
     var crypto7;
-    var fs56;
+    var fs57;
     var IMAGE_MIME_EXTENSIONS;
     var MATERIALIZED_IMAGE_MAX_AGE_MS;
     var MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS;
@@ -134387,9 +136535,9 @@ ${buttons.join("\n")}`;
       "src/providers/cli-provider-input-prompt.ts"() {
         "use strict";
         os322 = __toESM2(require("os"));
-        path60 = __toESM2(require("path"));
+        path61 = __toESM2(require("path"));
         crypto7 = __toESM2(require("crypto"));
-        fs56 = __toESM2(require("fs"));
+        fs57 = __toESM2(require("fs"));
         init_logger();
         IMAGE_MIME_EXTENSIONS = {
           "image/png": ".png",
@@ -134759,7 +136907,7 @@ ${buttons.join("\n")}`;
       };
       addDir(workingDir);
       try {
-        addDir(fs57.realpathSync.native(workingDir));
+        addDir(fs58.realpathSync.native(workingDir));
       } catch {
       }
       return Array.from(dirs);
@@ -134787,7 +136935,7 @@ ${buttons.join("\n")}`;
       const resolvedDbPath = probe.dbPath.replace(/^~/, os33.homedir());
       const now = Date.now();
       if (host.sqliteProbeCache.missingUntil > now) return null;
-      if (!fs57.existsSync(resolvedDbPath)) {
+      if (!fs58.existsSync(resolvedDbPath)) {
         host.sqliteProbeCache.missingUntil = now + 1e4;
         return null;
       }
@@ -134811,12 +136959,12 @@ ${buttons.join("\n")}`;
       }
     }
     var os33;
-    var fs57;
+    var fs58;
     var init_transcript_probe = __esm2({
       "src/providers/completion/transcript-probe.ts"() {
         "use strict";
         os33 = __toESM2(require("os"));
-        fs57 = __toESM2(require("fs"));
+        fs58 = __toESM2(require("fs"));
         init_cli_provider_status_helpers();
       }
     });
@@ -135181,7 +137329,7 @@ ${buttons.join("\n")}`;
       }
       if (host.lastExternalCompletionProbe?.sourcePath) {
         try {
-          fs58.statSync(host.lastExternalCompletionProbe.sourcePath);
+          fs59.statSync(host.lastExternalCompletionProbe.sourcePath);
         } catch {
         }
       }
@@ -135349,12 +137497,12 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var fs58;
+    var fs59;
     var NATIVE_SUMMARY_WRITE_WAIT_MAX_MS;
     var init_evidence = __esm2({
       "src/providers/completion/evidence.ts"() {
         "use strict";
-        fs58 = __toESM2(require("fs"));
+        fs59 = __toESM2(require("fs"));
         init_contracts2();
         init_chat_message_normalization();
         init_approval_utils();
@@ -136793,7 +138941,6 @@ ${buttons.join("\n")}`;
         providerSessionId: host.providerSessionId,
         lastUpdated: Date.now(),
         settings: host.settings,
-        pendingEvents: host.flushEvents(),
         runtime: runtime ? {
           runtimeId: runtime.runtimeId,
           runtimeKey: runtime.runtimeKey,
@@ -136863,8 +139010,7 @@ ${buttons.join("\n")}`;
       if (host.context?.emitProviderEvent) {
         host.context.emitProviderEvent(enrichedEvent);
       } else {
-        host.events.push(enrichedEvent);
-        forwardProviderEvent(host.lifecyclePort, String(enrichedEvent.targetSessionId || host.instanceId), enrichedEvent, {
+        forwardProviderEvent(host.lifecyclePort, String(enrichedEvent.targetSessionId || host.instanceId), {
           ...enrichedEvent,
           providerType: enrichedEvent.providerType
         });
@@ -136878,11 +139024,6 @@ ${buttons.join("\n")}`;
           }
         }
       }
-    }
-    function flushEvents(host) {
-      const events = [...host.events];
-      host.events = [];
-      return events;
     }
     function applyProviderResponse(host, data, options) {
       if (!data || typeof data !== "object") return;
@@ -137319,7 +139460,6 @@ ${buttons.join("\n")}`;
           static MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
           adapter;
           context = null;
-          events = [];
           lastStatus = "starting";
           // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
           // sole signal the mesh coordinator's tryAssignQueueTask waits on to hand a
@@ -137894,11 +140034,6 @@ ${buttons.join("\n")}`;
               const prompt = normalizeInteractivePrompt(data);
               if (prompt) {
                 this.activeInteractivePrompt = prompt;
-                this.events.push({
-                  event: "interactive_prompt",
-                  timestamp: Date.now(),
-                  promptId: prompt.promptId
-                });
               }
             } else if (event === "interactive_prompt_response" && data) {
               this.activeInteractivePrompt = applyInteractivePromptAnswerFireAndForget({
@@ -138913,9 +141048,6 @@ ${buttons.join("\n")}`;
             }
             pushEvent(this, event);
           }
-          flushEvents() {
-            return flushEvents(this);
-          }
           applyProviderResponse(data, options) {
             applyProviderResponse(this, data, options);
           }
@@ -139145,7 +141277,7 @@ ${buttons.join("\n")}`;
       }
       return promptParts;
     }
-    var path61;
+    var path62;
     var import_stream;
     var import_child_process10;
     var import_sdk;
@@ -139153,7 +141285,7 @@ ${buttons.join("\n")}`;
     var init_acp_provider_instance = __esm2({
       "src/providers/acp-provider-instance.ts"() {
         "use strict";
-        path61 = __toESM2(require("path"));
+        path62 = __toESM2(require("path"));
         import_stream = require("stream");
         import_child_process10 = require("child_process");
         import_sdk = (init_acp(), __toCommonJS(acp_exports));
@@ -139181,7 +141313,6 @@ ${buttons.join("\n")}`;
           provider;
           context = null;
           settings = {};
-          events = [];
           /** Lifecycle port (wiring-unification B2); null until boot wires it. */
           lifecyclePort = null;
           monitor;
@@ -139295,7 +141426,6 @@ ${buttons.join("\n")}`;
               instanceId: this.instanceId,
               lastUpdated: Date.now(),
               settings: this.settings,
-              pendingEvents: this.flushEvents(),
               messageInput: getEffectiveMessageInputSupport(this.provider, this.agentCapabilities),
               // ACP-specific: expose available models/modes for dashboard
               acpConfigOptions: this.configOptions,
@@ -139873,7 +142003,7 @@ ${buttons.join("\n")}`;
                 return b.uri ? {
                   type: "resource_link",
                   uri: b.uri,
-                  name: path61.basename(b.uri),
+                  name: path62.basename(b.uri),
                   mimeType: b.mimeType,
                   ...b.transcript ? { description: b.transcript } : {}
                 } : { type: "text", text: b.transcript || `[Video attachment: ${b.mimeType}]` };
@@ -140302,8 +142432,7 @@ ${rawInput}` : rawInput;
             }
           }
           pushEvent(event) {
-            this.events.push(event);
-            forwardProviderEvent(this.lifecyclePort, this.instanceId, event, {
+            forwardProviderEvent(this.lifecyclePort, this.instanceId, {
               ...event,
               providerType: this.type,
               instanceId: this.instanceId,
@@ -140325,11 +142454,6 @@ ${rawInput}` : rawInput;
             if (this.messages.length > 200) {
               this.messages = this.messages.slice(-100);
             }
-          }
-          flushEvents() {
-            const events = [...this.events];
-            this.events = [];
-            return events;
           }
           // ─── external access ─────────────────────────────────
           get cliType() {
@@ -140431,23 +142555,23 @@ ${rawInput}` : rawInput;
     });
     function resolveWorkspaceRealpath(workspace) {
       try {
-        return fs59.realpathSync(workspace);
+        return fs60.realpathSync(workspace);
       } catch {
-        return path62.resolve(workspace);
+        return path63.resolve(workspace);
       }
     }
     function resolveSettingsStorePath(declaredPath, storeHome, workspaceRealpath) {
       const trimmed2 = declaredPath.trim();
-      if (trimmed2 === "~") return path62.resolve(storeHome);
-      if (trimmed2.startsWith("~/")) return path62.resolve(storeHome, trimmed2.slice(2));
-      if (path62.isAbsolute(trimmed2)) return path62.resolve(trimmed2);
-      return path62.resolve(workspaceRealpath, trimmed2);
+      if (trimmed2 === "~") return path63.resolve(storeHome);
+      if (trimmed2.startsWith("~/")) return path63.resolve(storeHome, trimmed2.slice(2));
+      if (path63.isAbsolute(trimmed2)) return path63.resolve(trimmed2);
+      return path63.resolve(workspaceRealpath, trimmed2);
     }
     function resolveLaunchTrustPlan(input) {
       if ("scheme" in input.trust) return null;
       const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
       const storePath = resolveSettingsStorePath(input.trust.settings_path, input.storeHome, workspaceRealpath);
-      if (!path62.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
+      if (!path63.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
       return {
         provider: input.provider,
         workspaceRealpath,
@@ -140461,7 +142585,7 @@ ${rawInput}` : rawInput;
     function loadPreLaunchTrustFromSpecPath(specPath) {
       if (typeof specPath !== "string" || !specPath.trim()) return null;
       try {
-        const parsed = JSON.parse(fs59.readFileSync(specPath, "utf8"));
+        const parsed = JSON.parse(fs60.readFileSync(specPath, "utf8"));
         const trust = parsed?.pre_launch_trust;
         if (!trust || typeof trust !== "object" || Array.isArray(trust)) return null;
         const candidate = trust;
@@ -140477,11 +142601,11 @@ ${rawInput}` : rawInput;
       }
     }
     function resolveWorkerTrustLedgerPath(env2 = process.env, homeDir2) {
-      return path62.join(resolveConfigDir(env2, homeDir2), "trust", "worker-auto-grants.json");
+      return path63.join(resolveConfigDir(env2, homeDir2), "trust", "worker-auto-grants.json");
     }
     function readLedger(ledgerPath) {
       try {
-        const parsed = JSON.parse(fs59.readFileSync(ledgerPath, "utf8"));
+        const parsed = JSON.parse(fs60.readFileSync(ledgerPath, "utf8"));
         if (parsed?.version !== 1 || !Array.isArray(parsed.grants)) {
           throw new Error("unsupported trust ledger format");
         }
@@ -140500,16 +142624,16 @@ ${rawInput}` : rawInput;
       return ledger.grants.find((grant) => grant.provider === plan.provider && grant.workspaceRealpath === plan.workspaceRealpath && grant.scope === "worker" && grant.origin === "worker_auto" && !lifecycleExpired(grant.lifecycle, nowMs)) || null;
     }
     function writeLedger(ledgerPath, ledger) {
-      fs59.mkdirSync(path62.dirname(ledgerPath), { recursive: true, mode: 448 });
+      fs60.mkdirSync(path63.dirname(ledgerPath), { recursive: true, mode: 448 });
       const temporaryPath = `${ledgerPath}.${process.pid}.${crypto9.randomUUID()}.tmp`;
       try {
-        fs59.writeFileSync(temporaryPath, `${JSON.stringify(ledger, null, 2)}
+        fs60.writeFileSync(temporaryPath, `${JSON.stringify(ledger, null, 2)}
 `, { encoding: "utf8", mode: 384 });
-        fs59.renameSync(temporaryPath, ledgerPath);
-        if (process.platform !== "win32") fs59.chmodSync(ledgerPath, 384);
+        fs60.renameSync(temporaryPath, ledgerPath);
+        if (process.platform !== "win32") fs60.chmodSync(ledgerPath, 384);
       } catch (err) {
         try {
-          fs59.rmSync(temporaryPath, { force: true });
+          fs60.rmSync(temporaryPath, { force: true });
         } catch {
         }
         throw err;
@@ -140519,7 +142643,7 @@ ${rawInput}` : rawInput;
       if (plan.scope !== "worker" || plan.origin !== "worker_auto") {
         throw new Error("worker trust ledger accepts only worker_auto/worker plans");
       }
-      if (!path62.isAbsolute(plan.storePath) || !path62.isAbsolute(plan.workspaceRealpath)) {
+      if (!path63.isAbsolute(plan.storePath) || !path63.isAbsolute(plan.workspaceRealpath)) {
         throw new Error("worker trust ledger requires absolute resolved paths");
       }
       const nowMs = opts.nowMs ?? Date.now();
@@ -140565,14 +142689,14 @@ ${rawInput}` : rawInput;
       return { ledgerPath, grant, reused };
     }
     var crypto9;
-    var fs59;
-    var path62;
+    var fs60;
+    var path63;
     var init_trust_provenance_ledger = __esm2({
       "src/providers/trust-provenance-ledger.ts"() {
         "use strict";
         crypto9 = __toESM2(require("crypto"));
-        fs59 = __toESM2(require("fs"));
-        path62 = __toESM2(require("path"));
+        fs60 = __toESM2(require("fs"));
+        path63 = __toESM2(require("path"));
         init_config_dir();
       }
     });
@@ -140599,11 +142723,11 @@ ${rawInput}` : rawInput;
       return false;
     }
     function ensureEmptyDelegatedMcpConfig(workspace) {
-      const baseDir = path63.join(os34.tmpdir(), "adhdev-delegated-agent-empty-mcp");
-      (0, import_fs24.mkdirSync)(baseDir, { recursive: true });
-      const workspaceHash = shortHash(path63.resolve(workspace || os34.tmpdir()));
-      const filePath = path63.join(baseDir, `${workspaceHash}.json`);
-      (0, import_fs24.writeFileSync)(filePath, JSON.stringify({ mcpServers: {} }, null, 2), "utf-8");
+      const baseDir = path64.join(os34.tmpdir(), "adhdev-delegated-agent-empty-mcp");
+      (0, import_fs25.mkdirSync)(baseDir, { recursive: true });
+      const workspaceHash = shortHash(path64.resolve(workspace || os34.tmpdir()));
+      const filePath = path64.join(baseDir, `${workspaceHash}.json`);
+      (0, import_fs25.writeFileSync)(filePath, JSON.stringify({ mcpServers: {} }, null, 2), "utf-8");
       return filePath;
     }
     function renderWorkerMcpConfigOverrideTemplate(template, delivery) {
@@ -140692,7 +142816,7 @@ ${rawInput}` : rawInput;
         if (storeHome) {
           const lifecycle = input.trustLifecycle || {
             kind: "worktree",
-            worktreePath: path63.resolve(input.workspace),
+            worktreePath: path64.resolve(input.workspace),
             ...input.trustContext?.meshId ? { meshId: input.trustContext.meshId } : {},
             ...input.trustContext?.nodeId ? { nodeId: input.trustContext.nodeId } : {},
             ...input.trustContext?.taskId ? { taskId: input.trustContext.taskId } : {},
@@ -140815,15 +142939,15 @@ ${rawInput}` : rawInput;
       };
     }
     var os34;
-    var path63;
-    var import_fs24;
+    var path64;
+    var import_fs25;
     var DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS;
     var init_cli_delegated_launch = __esm2({
       "src/commands/cli-delegated-launch.ts"() {
         "use strict";
         os34 = __toESM2(require("os"));
-        path63 = __toESM2(require("path"));
-        import_fs24 = require("fs");
+        path64 = __toESM2(require("path"));
+        import_fs25 = require("fs");
         init_hash();
         init_worker_mcp_isolation();
         init_mesh_coordinator();
@@ -140839,17 +142963,17 @@ ${rawInput}` : rawInput;
     });
     function isExplicitCommand(command) {
       const trimmed2 = command.trim();
-      return path64.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\") || trimmed2.startsWith("~");
+      return path65.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\") || trimmed2.startsWith("~");
     }
     function expandExecutable(command) {
       const trimmed2 = command.trim();
-      return trimmed2.startsWith("~") ? path64.join(os35.homedir(), trimmed2.slice(1)) : trimmed2;
+      return trimmed2.startsWith("~") ? path65.join(os35.homedir(), trimmed2.slice(1)) : trimmed2;
     }
     function commandExists(command) {
       const trimmed2 = command.trim();
       if (!trimmed2) return false;
       if (isExplicitCommand(trimmed2)) {
-        return (0, import_fs25.existsSync)(expandExecutable(trimmed2));
+        return (0, import_fs26.existsSync)(expandExecutable(trimmed2));
       }
       try {
         (0, import_child_process11.execFileSync)(process.platform === "win32" ? "where" : "which", [trimmed2], {
@@ -140952,8 +143076,8 @@ ${rawInput}` : rawInput;
       }
     }
     var os35;
-    var path64;
-    var import_fs25;
+    var path65;
+    var import_fs26;
     var import_child_process11;
     var BUSY_AGENT_STATUSES;
     var ZERO_MESSAGE_STARTING_SEND_WAIT_MS;
@@ -140961,8 +143085,8 @@ ${rawInput}` : rawInput;
       "src/commands/cli-manager-agent-status.ts"() {
         "use strict";
         os35 = __toESM2(require("os"));
-        path64 = __toESM2(require("path"));
-        import_fs25 = require("fs");
+        path65 = __toESM2(require("path"));
+        import_fs26 = require("fs");
         import_child_process11 = require("child_process");
         init_dist();
         BUSY_AGENT_STATUSES = /* @__PURE__ */ new Set([
@@ -141153,7 +143277,7 @@ ${rawInput}` : rawInput;
       return buildLegacyModelModeSummaryMetadata({ model: record2.model.requested });
     }
     var os36;
-    var path65;
+    var path66;
     var crypto11;
     var import_chalk;
     var chalkModule;
@@ -141165,7 +143289,7 @@ ${rawInput}` : rawInput;
       "src/commands/cli-manager.ts"() {
         "use strict";
         os36 = __toESM2(require("os"));
-        path65 = __toESM2(require("path"));
+        path66 = __toESM2(require("path"));
         crypto11 = __toESM2(require("crypto"));
         import_chalk = __toESM2((init_source(), __toCommonJS(source_exports)));
         init_route();
@@ -141349,11 +143473,9 @@ ${rawInput}` : rawInput;
                 LOG.warn("CLI", `pre-cleanup mesh completion flush failed for ${key2}: ${e?.message || e}`);
               }
               this.adapters.delete(key2);
-              this.deps.removeAgentTracking(key2);
               this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key2, "auto_clean");
               instanceManager?.removeInstance(key2);
               LOG.info("CLI", `\u{1F9F9} Auto-cleaned ${terminalStatus} CLI: ${adapter.cliType} (session=${key2})`);
-              this.deps.onStatusChange();
             }, AUTO_CLEAN_DELAY_MS);
           }
           startCliExitMonitor(key2) {
@@ -141403,7 +143525,6 @@ ${rawInput}` : rawInput;
             const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key2, transportFactory, options);
             try {
               await instanceManager.addInstance(key2, cliInstance, {
-                serverConn: this.deps.getServerConn(),
                 settings,
                 onPtyData: (data) => {
                   this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
@@ -141469,7 +143590,7 @@ ${rawInput}` : rawInput;
           async startSession(cliType, workingDir, cliArgs, initialModel, options) {
             const trimmed2 = (workingDir || "").trim();
             if (!trimmed2) throw new Error("working directory required");
-            const resolvedDir = trimmed2.startsWith("~") ? trimmed2.replace(/^~/, os36.homedir()) : path65.resolve(trimmed2);
+            const resolvedDir = trimmed2.startsWith("~") ? trimmed2.replace(/^~/, os36.homedir()) : path66.resolve(trimmed2);
             const normalizedType = this.providerLoader.resolveAlias(cliType);
             const rawProvider = this.providerLoader.getByAlias(cliType);
             const provider = rawProvider ? this.providerLoader.resolve(normalizedType) || rawProvider : void 0;
@@ -141628,7 +143749,6 @@ ${installInfo}`
                 sessionId,
                 title: provider.displayName || provider.name || normalizedType
               });
-              this.deps.onStatusChange();
               return { runtimeSessionId: sessionId };
             }
             const cliInfo = await detectCLI(cliType, this.providerLoader);
@@ -141755,12 +143875,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 LOG.error("CLI", `[${cliType}] Spawn failed: ${spawnErr?.message}`);
                 throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
               }
-              const serverConn = this.deps.getServerConn();
-              if (serverConn && typeof adapter.setServerConn === "function") {
-                adapter.setServerConn(serverConn);
-              }
               adapter.setOnStatusChange(() => {
-                this.deps.onStatusChange();
                 const status = adapter.getStatus?.();
                 if (status?.status === "stopped" || status?.status === "error") {
                   this.scheduleAutoClean(key2, adapter, status.status);
@@ -141784,7 +143899,6 @@ Run 'adhdev doctor' for detailed diagnostics.`
               sessionId: key2,
               title: provider?.displayName || provider?.name || normalizedType
             });
-            this.deps.onStatusChange();
             return {
               runtimeSessionId: key2,
               providerSessionId: sessionBinding.providerSessionId
@@ -141806,19 +143920,15 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 LOG.warn("CLI", `Shutdown error for ${adapter.cliType}: ${e?.message} (force-cleaning)`);
               }
               this.adapters.delete(key2);
-              this.deps.removeAgentTracking(key2);
               this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key2, "stop_requested");
               this.deps.getInstanceManager()?.removeInstance(key2);
               LOG.info("CLI", `\u{1F6D1} Agent stopped: ${adapter.cliType} in ${adapter.workingDir}`);
-              this.deps.onStatusChange();
             } else {
               const im = this.deps.getInstanceManager();
               if (im) {
                 this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key2, "stop_requested");
                 im.removeInstance(key2);
-                this.deps.removeAgentTracking(key2);
                 LOG.warn("CLI", `\u{1F9F9} Force-removed orphan entry: ${key2}`);
-                this.deps.onStatusChange();
               }
             }
           }
@@ -141975,9 +144085,6 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   `\u{1F9F9} Pruned stale mesh coordinator entry ${entry.sessionId} (mesh ${entry.meshId}${entry.workspace ? ` @ ${entry.workspace}` : ""}, started ${new Date(entry.startedAt || 0).toISOString()}): session is not among the ${liveSessionIds.size} live hosted runtime(s) after daemon restart`
                 );
               }
-            }
-            if (restored > 0) {
-              this.deps.onStatusChange();
             }
             return restored;
           }
@@ -142264,7 +144371,6 @@ Run 'adhdev doctor' for detailed diagnostics.`
               return { success: false, error: "CLI instance not found", code: "CLI_INSTANCE_NOT_FOUND" };
             }
             instance.setPresentationMode(mode);
-            this.deps.onStatusChange();
             return { success: true, id: found.key, mode };
           }
           /** `record_provider_pty`: return the accumulated raw PTY buffer of a running CLI session. */
@@ -142842,8 +144948,8 @@ Run 'adhdev doctor' for detailed diagnostics.`
           get_mesh_host_pairing: async (ctx, args) => {
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
-            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-            const mesh = meshRecord?.mesh;
+            const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            const mesh = meshRecord2?.mesh;
             if (!mesh) return { success: false, error: "Mesh not found" };
             const meshHost = resolveMeshHostStatus(mesh);
             const pairingStatus = meshHost.pairing?.status || "not_configured";
@@ -142968,8 +145074,8 @@ Run 'adhdev doctor' for detailed diagnostics.`
             const token = typeof args?.token === "string" ? args.token.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             if (!token) return { success: false, error: "token required because raw pairing tokens are not persisted" };
-            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-            const mesh = meshRecord?.mesh;
+            const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            const mesh = meshRecord2?.mesh;
             if (!mesh) return { success: false, error: "Mesh not found" };
             const meshHost = resolveMeshHostStatus(mesh);
             if (meshHost.role !== "member") {
@@ -143017,7 +145123,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
               if (!hostResult?.success) {
                 return { success: false, code: hostResult?.code || "mesh_host_join_rejected", meshId, meshHost, transport, error: hostResult?.error || "Mesh Host rejected join request", hostResult };
               }
-              const joined = meshRecord.inline ? null : markMeshHostPairingJoined2(meshId, {
+              const joined = meshRecord2.inline ? null : markMeshHostPairingJoined2(meshId, {
                 tokenId: hostResult.tokenId || tokenId,
                 hostDaemonId: hostResult.meshHost?.hostDaemonId || hostDaemonId,
                 hostNodeId: hostResult.meshHost?.hostNodeId,
@@ -143312,7 +145418,7 @@ ${tail}`;
     }
     function probeGitAncestry(cwd, ancestor, descendant) {
       try {
-        if (!fs60.existsSync(cwd)) return "undeterminable";
+        if (!fs61.existsSync(cwd)) return "undeterminable";
       } catch {
         return "undeterminable";
       }
@@ -143326,8 +145432,8 @@ ${tail}`;
     }
     function probeSubmoduleGitlinkReachability(input) {
       const { path: path74, baseCommit, branchCommit, probeRoot, baseRepoRoot, defaultBranch } = input;
-      const submoduleRepo = (0, import_path19.resolve)(probeRoot, path74);
-      const baseSubmoduleRepo = (0, import_path19.resolve)(baseRepoRoot, path74);
+      const submoduleRepo = (0, import_path20.resolve)(probeRoot, path74);
+      const baseSubmoduleRepo = (0, import_path20.resolve)(baseRepoRoot, path74);
       if (baseCommit) ensureSubmoduleCommitLocal(submoduleRepo, baseSubmoduleRepo, baseCommit);
       if (branchCommit) ensureSubmoduleCommitLocal(submoduleRepo, baseSubmoduleRepo, branchCommit);
       let fastForward;
@@ -143362,20 +145468,20 @@ ${tail}`;
       const message = buildSubmoduleReachabilityUndeterminableWarning(nodeId, evidence);
       if (message) LOG.warn("Mesh", message);
     }
-    function submoduleCommitPresent(submoduleRepoPath, commit) {
-      if (!commit) return false;
+    function submoduleCommitPresent(submoduleRepoPath, commit2) {
+      if (!commit2) return false;
       try {
-        (0, import_node_child_process9.execFileSync)(GIT2, ["cat-file", "-e", `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        (0, import_node_child_process9.execFileSync)(GIT2, ["cat-file", "-e", `${commit2}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         return true;
       } catch {
         return false;
       }
     }
-    function ensureSubmoduleCommitLocal(submoduleRepoPath, baseSubmoduleRepoPath, commit) {
-      if (!commit) return false;
+    function ensureSubmoduleCommitLocal(submoduleRepoPath, baseSubmoduleRepoPath, commit2) {
+      if (!commit2) return false;
       const present = () => {
         try {
-          (0, import_node_child_process9.execFileSync)(GIT2, ["cat-file", "-e", `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+          (0, import_node_child_process9.execFileSync)(GIT2, ["cat-file", "-e", `${commit2}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
           return true;
         } catch {
           return false;
@@ -143383,7 +145489,7 @@ ${tail}`;
       };
       if (present()) return true;
       try {
-        if (!fs60.existsSync(submoduleRepoPath) || !fs60.existsSync(baseSubmoduleRepoPath)) return false;
+        if (!fs61.existsSync(submoduleRepoPath) || !fs61.existsSync(baseSubmoduleRepoPath)) return false;
       } catch {
         return false;
       }
@@ -143393,7 +145499,7 @@ ${tail}`;
         // 2. The base checkout's detached HEAD plus every ref it has.
         ["fetch", "-q", baseSubmoduleRepoPath, "HEAD", "+refs/*:refs/adhdev-refine-base-all/*"],
         // 3. The exact object, allowing a bare-sha want on the source side.
-        ["fetch", "-q", "--upload-pack", "git -c uploadpack.allowAnySHA1InWant=true upload-pack", baseSubmoduleRepoPath, commit]
+        ["fetch", "-q", "--upload-pack", "git -c uploadpack.allowAnySHA1InWant=true upload-pack", baseSubmoduleRepoPath, commit2]
       ];
       for (const args of strategies) {
         try {
@@ -143456,7 +145562,7 @@ ${tail}`;
         return [];
       }
     }
-    async function verifyRemoteBranchContainsCommit(runGit4, submodulePath, commit, branch = "main") {
+    async function verifyRemoteBranchContainsCommit(runGit4, submodulePath, commit2, branch = "main") {
       try {
         await runGit4(submodulePath, ["-c", "protocol.file.allow=always", "fetch", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
       } catch (fetchError) {
@@ -143469,12 +145575,12 @@ ${tail}`;
         return { state: "undeterminable", error: resolveError };
       }
       try {
-        await runGit4(submodulePath, ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`]);
+        await runGit4(submodulePath, ["rev-parse", "--verify", "--quiet", `${commit2}^{commit}`]);
       } catch (missingCandidate) {
         return { state: "absent", error: missingCandidate };
       }
       try {
-        await runGit4(submodulePath, ["merge-base", "--is-ancestor", commit, remoteRef]);
+        await runGit4(submodulePath, ["merge-base", "--is-ancestor", commit2, remoteRef]);
         return { state: "contained" };
       } catch (ancestryError) {
         return ancestryError?.code === 1 ? { state: "absent", error: ancestryError } : { state: "undeterminable", error: ancestryError };
@@ -143519,9 +145625,9 @@ ${tail}`;
           });
           return String(stdout || "");
         };
-        const verifyRemoteMainContainsCommit = (submodulePath, commit, branch = "main") => verifyRemoteBranchContainsCommit(runGit4, submodulePath, commit, branch);
-        const publishCommitToRemoteMain = async (submodulePath, commit, branch = "main") => {
-          const refspec = `${commit}:refs/heads/${branch}`;
+        const verifyRemoteMainContainsCommit = (submodulePath, commit2, branch = "main") => verifyRemoteBranchContainsCommit(runGit4, submodulePath, commit2, branch);
+        const publishCommitToRemoteMain = async (submodulePath, commit2, branch = "main") => {
+          const refspec = `${commit2}:refs/heads/${branch}`;
           const { stdout, stderr } = await execFileAsync8(GIT2, ["push", "origin", refspec], {
             cwd: submodulePath,
             encoding: "utf8",
@@ -143532,20 +145638,20 @@ ${tail}`;
           });
           return { stdout: String(stdout || ""), stderr: String(stderr || ""), refspec };
         };
-        const importCommitFromWorktreeSubmodule = async (submodulePath, worktreeSubmodulePath, commit) => {
-          if (!fs60.existsSync(worktreeSubmodulePath)) return false;
+        const importCommitFromWorktreeSubmodule = async (submodulePath, worktreeSubmodulePath, commit2) => {
+          if (!fs61.existsSync(worktreeSubmodulePath)) return false;
           try {
-            await runGit4(worktreeSubmodulePath, ["cat-file", "-e", `${commit}^{commit}`]);
+            await runGit4(worktreeSubmodulePath, ["cat-file", "-e", `${commit2}^{commit}`]);
           } catch {
             return false;
           }
-          await runGit4(submodulePath, ["-c", "protocol.file.allow=always", "fetch", worktreeSubmodulePath, commit]);
-          await runGit4(submodulePath, ["cat-file", "-e", `${commit}^{commit}`]);
+          await runGit4(submodulePath, ["-c", "protocol.file.allow=always", "fetch", worktreeSubmodulePath, commit2]);
+          await runGit4(submodulePath, ["cat-file", "-e", `${commit2}^{commit}`]);
           return true;
         };
-        const findEquivalentPublishedCommit = async (submodulePath, commit, remoteRef) => {
+        const findEquivalentPublishedCommit = async (submodulePath, commit2, remoteRef) => {
           try {
-            const targetTree = (await runGit4(submodulePath, ["rev-parse", `${commit}^{tree}`])).trim();
+            const targetTree = (await runGit4(submodulePath, ["rev-parse", `${commit2}^{tree}`])).trim();
             if (!targetTree) return void 0;
             const candidates = (await runGit4(submodulePath, ["rev-list", "--max-count=100", remoteRef])).split("\n").map((s2) => s2.trim()).filter(Boolean);
             for (const candidate of candidates) {
@@ -143567,7 +145673,7 @@ ${tail}`;
           return match ? { commit: match[1], path: match[2] } : null;
         }).filter((entry) => !!entry);
         for (const gitlink of gitlinks) {
-          const submodulePath = (0, import_path19.resolve)(repoRoot, gitlink.path);
+          const submodulePath = (0, import_path20.resolve)(repoRoot, gitlink.path);
           const entry = {
             path: gitlink.path,
             commit: gitlink.commit,
@@ -143575,7 +145681,7 @@ ${tail}`;
           };
           let submoduleDefaultBranch = "main";
           try {
-            if (!fs60.existsSync(submodulePath)) {
+            if (!fs61.existsSync(submodulePath)) {
               entry.error = `Submodule checkout missing at ${gitlink.path}`;
               entry.publishRequired = true;
               if (options.allowAutoPublishSubmoduleMainCommits === true) {
@@ -143594,7 +145700,7 @@ ${tail}`;
               entry.localReachable = false;
               if (options.allowAutoPublishSubmoduleMainCommits === true && options.worktreeRoot) {
                 try {
-                  const imported = await importCommitFromWorktreeSubmodule(submodulePath, (0, import_path19.resolve)(options.worktreeRoot, gitlink.path), gitlink.commit);
+                  const imported = await importCommitFromWorktreeSubmodule(submodulePath, (0, import_path20.resolve)(options.worktreeRoot, gitlink.path), gitlink.commit);
                   if (imported) {
                     entry.localReachable = true;
                     entry.importedFromWorktree = true;
@@ -143740,9 +145846,9 @@ ${tail}`;
         };
       }
     }
-    var fs60;
+    var fs61;
     var import_node_child_process9;
-    var import_path19;
+    var import_path20;
     var GIT2;
     var REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES;
     var REFINE_VALIDATION_SUMMARY_HEAD_CHARS;
@@ -143751,9 +145857,9 @@ ${tail}`;
     var init_mesh_refine_gitlink_utils = __esm2({
       "src/mesh/mesh-refine-gitlink-utils.ts"() {
         "use strict";
-        fs60 = __toESM2(require("fs"));
+        fs61 = __toESM2(require("fs"));
         import_node_child_process9 = require("child_process");
-        import_path19 = require("path");
+        import_path20 = require("path");
         init_logger();
         init_git_locale();
         init_resolve_executable();
@@ -143836,7 +145942,7 @@ ${tail}`;
       if (!baseCommit || !branchCommit) return "undeterminable";
       if (baseCommit === branchCommit) return "not_diverged";
       try {
-        if (!fs61.existsSync(submoduleRepoPath)) return "undeterminable";
+        if (!fs62.existsSync(submoduleRepoPath)) return "undeterminable";
         (0, import_node_child_process10.execFileSync)(GIT2, ["cat-file", "-e", `${baseCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
         (0, import_node_child_process10.execFileSync)(GIT2, ["cat-file", "-e", `${branchCommit}^{commit}`], { cwd: submoduleRepoPath, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
       } catch {
@@ -143921,9 +146027,9 @@ ${tail}`;
         return false;
       }
     }
-    function probeCommitReachableFromRemoteMain(submoduleRepoPath, commit, remoteMainRef) {
+    function probeCommitReachableFromRemoteMain(submoduleRepoPath, commit2, remoteMainRef) {
       if (!remoteMainRef) return "undeterminable";
-      return probeGitAncestry(submoduleRepoPath, commit, remoteMainRef);
+      return probeGitAncestry(submoduleRepoPath, commit2, remoteMainRef);
     }
     function unmergedPathsIn(repoPath) {
       try {
@@ -144001,9 +146107,9 @@ ${tail}`;
       for (const path74 of changed) {
         const baseCommit = readTreeObject(baseRepoRoot, baseHead, path74);
         const branchCommit = readTreeObject(worktreeRoot, branchHead, path74);
-        const submoduleRepoPath = (0, import_path20.resolve)(worktreeRoot, path74);
+        const submoduleRepoPath = (0, import_path21.resolve)(worktreeRoot, path74);
         if (baseCommit) {
-          ensureSubmoduleCommitLocal(submoduleRepoPath, (0, import_path20.resolve)(baseRepoRoot, path74), baseCommit);
+          ensureSubmoduleCommitLocal(submoduleRepoPath, (0, import_path21.resolve)(baseRepoRoot, path74), baseCommit);
         }
         const markUndeterminable = () => {
           const unavailable = [];
@@ -144232,9 +146338,9 @@ ${tail}`;
           return abort(allGitlink && unresolvableGitlink ? "unexpected_gitlink" : "non_gitlink_conflict", conflicts);
         }
         for (const p of remaining) {
-          const commit = resolveByPath.get(p);
+          const commit2 = resolveByPath.get(p);
           try {
-            (0, import_node_child_process10.execFileSync)(GIT2, ["checkout", "-q", "--detach", commit], { cwd: (0, import_path20.resolve)(worktreeRoot, p), stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
+            (0, import_node_child_process10.execFileSync)(GIT2, ["checkout", "-q", "--detach", commit2], { cwd: (0, import_path21.resolve)(worktreeRoot, p), stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS2, windowsHide: true, env: gitChildEnv() });
           } catch {
           }
           try {
@@ -144256,8 +146362,8 @@ ${tail}`;
         ...resolvedGeneratedBundlePaths.length > 0 ? { resolvedGeneratedBundlePaths } : {}
       };
     }
-    var fs61;
-    var import_path20;
+    var fs62;
+    var import_path21;
     var import_node_child_process10;
     var GIT_NETWORK_TIMEOUT_MS2;
     var GIT_LOCAL_TIMEOUT_MS2;
@@ -144266,8 +146372,8 @@ ${tail}`;
     var init_mesh_refine_submodule_converge = __esm2({
       "src/mesh/mesh-refine-submodule-converge.ts"() {
         "use strict";
-        fs61 = __toESM2(require("fs"));
-        import_path20 = require("path");
+        fs62 = __toESM2(require("fs"));
+        import_path21 = require("path");
         import_node_child_process10 = require("child_process");
         init_git_locale();
         init_mesh_refine_gitlink_utils();
@@ -144285,13 +146391,13 @@ ${tail}`;
     }
     function writeValidationFailureLog(workspace, index, candidate, streams, now = () => /* @__PURE__ */ new Date()) {
       try {
-        const dir = (0, import_path21.join)(workspace, REFINE_VALIDATION_LOG_DIR);
-        fs62.mkdirSync(dir, { recursive: true });
+        const dir = (0, import_path22.join)(workspace, REFINE_VALIDATION_LOG_DIR);
+        fs63.mkdirSync(dir, { recursive: true });
         const stamp2 = now().toISOString().replace(/[:.]/g, "-");
-        const file2 = (0, import_path21.join)(dir, `refine-${stamp2}-${index}.log`);
+        const file2 = (0, import_path22.join)(dir, `refine-${stamp2}-${index}.log`);
         const asText = (v) => typeof v === "string" ? v : v == null ? "" : String(v);
         const shown = candidate.displayCommand || [candidate.command, ...candidate.args || []].join(" ");
-        fs62.writeFileSync(
+        fs63.writeFileSync(
           file2,
           `# refine validation failure
 # command: ${shown}
@@ -144355,13 +146461,13 @@ ${asText(streams.stderr)}
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path74) => `:(exclude)${path74}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync11, closeSync: closeSync11 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync13, openSync: openSync12, closeSync: closeSync12 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join82 } = await import("path");
       const scratch = mkdtempSync3(join82(tmpdir8(), "adhdev-patchid-"));
       const patchFile = join82(scratch, "patch.diff");
       try {
-        const out = openSync11(patchFile, "w");
+        const out = openSync12(patchFile, "w");
         let diffRun;
         try {
           diffRun = hiddenSpawnSync2(GIT2, diffArgs, {
@@ -144370,7 +146476,7 @@ ${asText(streams.stderr)}
             encoding: "utf8"
           });
         } finally {
-          closeSync11(out);
+          closeSync12(out);
         }
         if (diffRun.error) throw diffRun.error;
         if (diffRun.status !== 0) {
@@ -144378,7 +146484,7 @@ ${asText(streams.stderr)}
             `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
           );
         }
-        const patchIn = openSync11(patchFile, "r");
+        const patchIn = openSync12(patchFile, "r");
         let patchIdRun;
         try {
           patchIdRun = hiddenSpawnSync2(GIT2, ["patch-id", "--stable"], {
@@ -144388,7 +146494,7 @@ ${asText(streams.stderr)}
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
           });
         } finally {
-          closeSync11(patchIn);
+          closeSync12(patchIn);
         }
         if (patchIdRun.error) throw patchIdRun.error;
         if (patchIdRun.status !== 0) {
@@ -144567,7 +146673,7 @@ ${e?.stderr || ""}`
             let gitlinkDefaultBranch;
             try {
               gitlinkDefaultBranch = await resolveSubmoduleDefaultBranch({
-                submoduleRepoPath: (0, import_path21.resolve)(submoduleProbeRoot, p),
+                submoduleRepoPath: (0, import_path22.resolve)(submoduleProbeRoot, p),
                 superprojectWorkspace: repoRoot,
                 submodulePath: p
               });
@@ -144815,7 +146921,7 @@ ${mergeTreeErr?.stderr || ""}`;
         const baseCommit = readTreeObject(repoRoot, baseHead, path74);
         const branchCommit = readTreeObject(repoRoot, branchHead, path74);
         if (!baseCommit || !branchCommit) return false;
-        return isSubmoduleFastForward((0, import_path21.resolve)(repoRoot, path74), baseCommit, branchCommit);
+        return isSubmoduleFastForward((0, import_path22.resolve)(repoRoot, path74), baseCommit, branchCommit);
       });
     }
     function collectTrivialFastForwardGitlinkResolutions(worktreeRoot, baseRepoRoot, baseHead, branchHead) {
@@ -144824,8 +146930,8 @@ ${mergeTreeErr?.stderr || ""}`;
         const baseCommit = readTreeObject(baseRepoRoot, baseHead, path74);
         const branchCommit = readTreeObject(worktreeRoot, branchHead, path74);
         if (!baseCommit || !branchCommit) continue;
-        const submoduleRepoPath = (0, import_path21.resolve)(worktreeRoot, path74);
-        ensureSubmoduleCommitLocal(submoduleRepoPath, (0, import_path21.resolve)(baseRepoRoot, path74), baseCommit);
+        const submoduleRepoPath = (0, import_path22.resolve)(worktreeRoot, path74);
+        ensureSubmoduleCommitLocal(submoduleRepoPath, (0, import_path22.resolve)(baseRepoRoot, path74), baseCommit);
         if (baseCommit === branchCommit) {
           continue;
         }
@@ -144841,7 +146947,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const changedGitlinks = readChangedGitlinkPaths(repoRoot, baseHead, branchHead).map((path74) => {
         const baseCommit = readTreeObject(repoRoot, baseHead, path74);
         const branchCommit = readTreeObject(repoRoot, branchHead, path74);
-        const submoduleRepoPath = (0, import_path21.resolve)(repoRoot, path74);
+        const submoduleRepoPath = (0, import_path22.resolve)(repoRoot, path74);
         const probe = !!baseCommit && !!branchCommit ? probeSubmoduleFastForward(submoduleRepoPath, baseCommit, branchCommit) : "undeterminable";
         return {
           path: path74,
@@ -144904,7 +147010,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (!tree) return void 0;
         const updates = paths.map((path74) => `160000 commit ${placeholderCommit}	${path74}`).join("\n");
         if (!updates) return tree;
-        const tmpIndex = (0, import_path21.join)(resolveGitDir(repoRoot), `adhdev-refine-eq-${commitish.slice(0, 12)}.index`);
+        const tmpIndex = (0, import_path22.join)(resolveGitDir(repoRoot), `adhdev-refine-eq-${commitish.slice(0, 12)}.index`);
         const env2 = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
           hiddenExecFileSync(GIT2, ["read-tree", tree], { cwd: repoRoot, env: env2, stdio: "ignore" });
@@ -144920,7 +147026,7 @@ ${mergeTreeErr?.stderr || ""}`;
           return newTree || void 0;
         } finally {
           try {
-            fs62.rmSync(tmpIndex, { force: true });
+            fs63.rmSync(tmpIndex, { force: true });
           } catch {
           }
         }
@@ -144979,7 +147085,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (!contentTree) return void 0;
         const updates = branchGitlinks.map((entry) => `160000 commit ${entry.branchCommit}	${entry.path}`).join("\n");
         if (!updates) return contentTree;
-        const tmpIndex = (0, import_path21.join)(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
+        const tmpIndex = (0, import_path22.join)(resolveGitDir(repoRoot), `adhdev-refine-ff-${baseHead.slice(0, 12)}-${branchHead.slice(0, 12)}.index`);
         const env2 = { ...process.env, GIT_INDEX_FILE: tmpIndex };
         try {
           hiddenExecFileSync(GIT2, ["read-tree", contentTree], { cwd: repoRoot, env: env2, stdio: "ignore" });
@@ -144995,7 +147101,7 @@ ${mergeTreeErr?.stderr || ""}`;
           return newTree || void 0;
         } finally {
           try {
-            fs62.rmSync(tmpIndex, { force: true });
+            fs63.rmSync(tmpIndex, { force: true });
           } catch {
           }
         }
@@ -145197,13 +147303,13 @@ ${mergeTreeErr?.stderr || ""}`;
         ...extras
       });
       const isPackageManagerValidation = (candidate) => {
-        const command = (0, import_path21.basename)(candidate.command).replace(/\.(?:cmd|exe)$/i, "");
+        const command = (0, import_path22.basename)(candidate.command).replace(/\.(?:cmd|exe)$/i, "");
         return ["npm", "pnpm", "yarn", "bun"].includes(command) && candidate.args.some((arg) => arg === "run" || arg === "test" || arg === "exec");
       };
       const dependenciesLikelyMissing = (cwd) => {
-        if (!fs62.existsSync((0, import_path21.join)(cwd, "package.json"))) return false;
-        if (fs62.existsSync((0, import_path21.join)(cwd, "node_modules"))) return false;
-        return ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"].some((lock) => fs62.existsSync((0, import_path21.join)(cwd, lock)));
+        if (!fs63.existsSync((0, import_path22.join)(cwd, "package.json"))) return false;
+        if (fs63.existsSync((0, import_path22.join)(cwd, "node_modules"))) return false;
+        return ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"].some((lock) => fs63.existsSync((0, import_path22.join)(cwd, lock)));
       };
       const needsNodeModules = (candidate, cwd) => isPackageManagerValidation(candidate) && dependenciesLikelyMissing(cwd);
       const isDaemonScopedCommand = (candidate) => {
@@ -145270,7 +147376,7 @@ ${mergeTreeErr?.stderr || ""}`;
         summary.bootstrap = { stage: "legacy" };
         for (const candidate of selection.bootstrapCommands) {
           const startedAt = Date.now();
-          const cwd = candidate.cwd ? (0, import_path21.resolve)(workspace, candidate.cwd) : workspace;
+          const cwd = candidate.cwd ? (0, import_path22.resolve)(workspace, candidate.cwd) : workspace;
           const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
           const resolvedCommand = resolveWin32Executable(candidate.command);
           const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
@@ -145304,7 +147410,7 @@ ${mergeTreeErr?.stderr || ""}`;
       let missingDepsBlocked = false;
       for (const candidate of commandsToRun) {
         const startedAt = Date.now();
-        const cwd = candidate.cwd ? (0, import_path21.resolve)(workspace, candidate.cwd) : workspace;
+        const cwd = candidate.cwd ? (0, import_path22.resolve)(workspace, candidate.cwd) : workspace;
         const timeout = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
         const bootstrapProvidedDependencies = summary.bootstrap?.stage === "cached" || summary.bootstrap?.stage === "ran" || summary.bootstrap?.stage === "legacy";
         if (!bootstrapProvidedDependencies && needsNodeModules(candidate, cwd)) {
@@ -145384,8 +147490,8 @@ ${mergeTreeErr?.stderr || ""}`;
       summary.status = "passed";
       return summary;
     }
-    var import_path21;
-    var fs62;
+    var import_path22;
+    var fs63;
     var REFINE_VALIDATION_TIMEOUT_MS;
     var REFINE_VALIDATION_OUTPUT_LIMIT_BYTES;
     var REFINE_VALIDATION_LOG_DIR;
@@ -145395,8 +147501,8 @@ ${mergeTreeErr?.stderr || ""}`;
         init_git_status();
         init_refine_config();
         init_worktree_bootstrap_config();
-        import_path21 = require("path");
-        fs62 = __toESM2(require("fs"));
+        import_path22 = require("path");
+        fs63 = __toESM2(require("fs"));
         init_hidden_spawn();
         init_resolve_executable();
         init_mesh_refine_worker_cap();
@@ -145407,7 +147513,7 @@ ${mergeTreeErr?.stderr || ""}`;
         init_mesh_refine_gitlink_utils();
         REFINE_VALIDATION_TIMEOUT_MS = 12e4;
         REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
-        REFINE_VALIDATION_LOG_DIR = (0, import_path21.join)(".adhdev", "logs");
+        REFINE_VALIDATION_LOG_DIR = (0, import_path22.join)(".adhdev", "logs");
       }
     });
     async function runMeshRefineSubmoduleReachabilityPreflight(args) {
@@ -145416,9 +147522,9 @@ ${mergeTreeErr?.stderr || ""}`;
       if (touched.length === 0) return void 0;
       const entries = [];
       for (const path74 of touched) {
-        const probedRepo = (0, import_path22.resolve)(args.worktreeRoot, path74);
-        const commit = readTreeObject(args.worktreeRoot, args.branchRef, path74);
-        if (!commit) {
+        const probedRepo = (0, import_path23.resolve)(args.worktreeRoot, path74);
+        const commit2 = readTreeObject(args.worktreeRoot, args.branchRef, path74);
+        if (!commit2) {
           entries.push({
             path: path74,
             verdict: "undeterminable",
@@ -145436,13 +147542,13 @@ ${mergeTreeErr?.stderr || ""}`;
           });
         } catch {
         }
-        const verdict = await verifyRemoteBranchContainsCommit(runGit2, probedRepo, commit, remoteMainBranch);
+        const verdict = await verifyRemoteBranchContainsCommit(runGit2, probedRepo, commit2, remoteMainBranch);
         if (verdict.state === "contained") {
-          entries.push({ path: path74, commit, verdict: "reachable", remoteMainBranch, probedRepo });
+          entries.push({ path: path74, commit: commit2, verdict: "reachable", remoteMainBranch, probedRepo });
         } else if (verdict.state === "absent") {
           entries.push({
             path: path74,
-            commit,
+            commit: commit2,
             verdict: "unreachable",
             remoteMainBranch,
             probedRepo,
@@ -145451,7 +147557,7 @@ ${mergeTreeErr?.stderr || ""}`;
         } else {
           entries.push({
             path: path74,
-            commit,
+            commit: commit2,
             verdict: "undeterminable",
             remoteMainBranch,
             probedRepo,
@@ -145571,7 +147677,7 @@ ${mergeTreeErr?.stderr || ""}`;
     }
     var import_node_child_process11;
     var import_node_util5;
-    var import_path22;
+    var import_path23;
     var execFileAsync4;
     var runGit2;
     var init_mesh_refine_submodule_preflight = __esm2({
@@ -145579,7 +147685,7 @@ ${mergeTreeErr?.stderr || ""}`;
         "use strict";
         import_node_child_process11 = require("child_process");
         import_node_util5 = require("util");
-        import_path22 = require("path");
+        import_path23 = require("path");
         init_dist();
         init_git_locale();
         init_mesh_refine_gitlink_utils();
@@ -145629,8 +147735,8 @@ ${mergeTreeErr?.stderr || ""}`;
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
             if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-            const mesh = meshRecord?.mesh;
+            const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            const mesh = meshRecord2?.mesh;
             const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
             if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
             const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
@@ -145657,8 +147763,8 @@ ${mergeTreeErr?.stderr || ""}`;
               let nodeDaemonId;
               let allowAutoPublishSubmoduleMainCommits = false;
               if (meshId && nodeId) {
-                const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-                const mesh = meshRecord?.mesh;
+                const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                const mesh = meshRecord2?.mesh;
                 const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
                 if (!workspace) {
                   workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
@@ -145694,7 +147800,7 @@ ${mergeTreeErr?.stderr || ""}`;
               });
               return result;
             } catch (e) {
-              const errorMessage = e?.message || String(e);
+              const errorMessage2 = e?.message || String(e);
               return {
                 success: false,
                 code: "fast_forward_safety_gate_error",
@@ -145708,8 +147814,8 @@ ${mergeTreeErr?.stderr || ""}`;
                 // Surface the throw as a blocking reason instead of an opaque IPC crash
                 // so the coordinator gets the same structured shape a clean node returns.
                 blockingReasons: ["fast_forward_safety_gate_error"],
-                operationError: errorMessage,
-                error: errorMessage
+                operationError: errorMessage2,
+                error: errorMessage2
               };
             }
           },
@@ -145735,8 +147841,8 @@ ${mergeTreeErr?.stderr || ""}`;
             }
             const isDryRun = args?.dryRun !== false && args?.execute !== true;
             if (isDryRun) {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
               const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
@@ -145831,8 +147937,8 @@ ${mergeTreeErr?.stderr || ""}`;
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: `mesh '${meshId}' not found` };
               const dryRun = args?.dryRun !== false && args?.dry_run !== false;
               const nodeId = typeof args?.nodeId === "string" && args.nodeId.trim() ? args.nodeId.trim() : void 0;
@@ -146308,7 +148414,7 @@ ${mergeTreeErr?.stderr || ""}`;
         ...args.quotaFactsContext ?? {},
         suppressObservabilityLogs: true
       };
-      const slots = resolveNodeCapabilitySlots(args.node, args.meshId);
+      const slots2 = resolveNodeCapabilitySlots(args.node, args.meshId);
       const quotaBonusByProvider = quotaSpreadBonusByProvider(
         args.node,
         args.quotaRouting,
@@ -146316,7 +148422,7 @@ ${mergeTreeErr?.stderr || ""}`;
         quotaFactsContext
       );
       const orderedSlots = orderSlotsForProviderSelection(
-        slots,
+        slots2,
         args.meshId,
         args.nodeId,
         args.node,
@@ -146791,13 +148897,13 @@ ${mergeTreeErr?.stderr || ""}`;
             } catch (e) {
               const describeActive = instance.describeActiveInteractivePrompt;
               const active = typeof describeActive === "function" ? describeActive.call(instance) : null;
-              const errorMessage = e?.message || String(e);
-              const isScreenMismatch = /does not match the active interactive prompt/.test(errorMessage);
+              const errorMessage2 = e?.message || String(e);
+              const isScreenMismatch = /does not match the active interactive prompt/.test(errorMessage2);
               return {
                 success: false,
                 delivered: false,
                 submitted: false,
-                error: errorMessage,
+                error: errorMessage2,
                 ...active ? { activePrompt: active, waitingChoice: true } : {},
                 nextStep: isScreenMismatch ? "The on-screen question did not match what mesh_answer_question expected \u2014 retrying the same label/index will fail identically. Re-read the session status to see the CURRENT on-screen question, then re-answer only if it still matches activePrompt." : active ? "The question is STILL open. Re-answer with mesh_answer_question using a label or 1-based index from activePrompt.questions[].options." : "The question was not answered. Re-read the session status to see whether a prompt is still open."
               };
@@ -146842,19 +148948,19 @@ ${mergeTreeErr?.stderr || ""}`;
       }
     }
     function isWorkspaceLocalPath(configPath, workspace) {
-      const resolvedConfig = (0, import_path23.resolve)(configPath);
-      const resolvedWorkspace = (0, import_path23.resolve)(workspace);
-      return resolvedConfig === resolvedWorkspace || resolvedConfig.startsWith(resolvedWorkspace + import_path23.sep);
+      const resolvedConfig = (0, import_path24.resolve)(configPath);
+      const resolvedWorkspace = (0, import_path24.resolve)(workspace);
+      return resolvedConfig === resolvedWorkspace || resolvedConfig.startsWith(resolvedWorkspace + import_path24.sep);
     }
-    var import_path23;
-    var fs63;
+    var import_path24;
+    var fs64;
     var meshCoordinatorLaunchHandlers;
     var meshCoordinatorLaunchSpecs;
     var init_mesh_coordinator_launch = __esm2({
       "src/commands/high-family/mesh-coordinator-launch.ts"() {
         "use strict";
-        import_path23 = require("path");
-        fs63 = __toESM2(require("fs"));
+        import_path24 = require("path");
+        fs64 = __toESM2(require("fs"));
         init_logger();
         init_mesh_host_ownership();
         init_coordinator_registry();
@@ -147130,16 +149236,16 @@ ${ptyResult.output.slice(-2e3)}`);
                   };
                 }
                 if (cliType === "codex-cli") {
-                  const repoMcpConfigPath = (0, import_path23.join)(workspace, ".mcp.json");
-                  if (fs63.existsSync(repoMcpConfigPath)) {
+                  const repoMcpConfigPath = (0, import_path24.join)(workspace, ".mcp.json");
+                  if (fs64.existsSync(repoMcpConfigPath)) {
                     try {
                       const repoMcpConfig = parseMeshCoordinatorMcpConfig(
-                        fs63.readFileSync(repoMcpConfigPath, "utf-8"),
+                        fs64.readFileSync(repoMcpConfigPath, "utf-8"),
                         "claude_mcp_json"
                       );
                       const existingServers2 = repoMcpConfig.mcpServers;
                       if (existingServers2 && typeof existingServers2 === "object" && !Array.isArray(existingServers2) && existingServers2[coordinatorSetup.serverName]) {
-                        fs63.writeFileSync(repoMcpConfigPath, serializeMeshCoordinatorMcpConfig({
+                        fs64.writeFileSync(repoMcpConfigPath, serializeMeshCoordinatorMcpConfig({
                           ...repoMcpConfig,
                           mcpServers: {
                             ...existingServers2,
@@ -147304,8 +149410,8 @@ ${ptyResult.output.slice(-2e3)}`);
                   workspace
                 };
               }
-              const { existsSync: existsSync80, readFileSync: readFileSync66, writeFileSync: writeFileSync35, copyFileSync: copyFileSync4, mkdirSync: mkdirSync39 } = await import("fs");
-              const { dirname: dirname33 } = await import("path");
+              const { existsSync: existsSync80, readFileSync: readFileSync66, writeFileSync: writeFileSync35, copyFileSync: copyFileSync4, mkdirSync: mkdirSync40 } = await import("fs");
+              const { dirname: dirname34 } = await import("path");
               const mcpConfigPath = coordinatorSetup.configPath;
               const hermesManualFallback = cliType === "hermes-cli" && configFormat === "hermes_config_yaml" ? createHermesManualMeshCoordinatorSetup(meshId, workspace) : null;
               let hermesBaseConfig = null;
@@ -147342,7 +149448,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 ...mcpServerEnv ? { env: mcpServerEnv } : {}
               });
               try {
-                mkdirSync39(dirname33(mcpConfigPath), { recursive: true });
+                mkdirSync40(dirname34(mcpConfigPath), { recursive: true });
               } catch (error48) {
                 const message = `Could not prepare MCP config path for automatic setup: ${error48?.message || error48}`;
                 LOG.error("MeshCoordinator", message);
@@ -147352,7 +149458,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const hadExistingMcpConfig = existsSync80(mcpConfigPath);
               let existingMcpConfig = hermesBaseConfig?.config || {};
               if (hermesBaseConfig) {
-                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname33(mcpConfigPath));
+                copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname34(mcpConfigPath));
               }
               if (hadExistingMcpConfig) {
                 try {
@@ -147390,7 +149496,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const cliArgs = [];
               const launchEnv = {};
               if (configFormat === "hermes_config_yaml") {
-                launchEnv.HERMES_HOME = dirname33(mcpConfigPath);
+                launchEnv.HERMES_HOME = dirname34(mcpConfigPath);
                 launchEnv.HERMES_IGNORE_USER_CONFIG = "";
               }
               let autoImportContextFilePath;
@@ -147561,11 +149667,11 @@ ${ptyResult.output.slice(-2e3)}`);
       const result = {};
       for (const targetName of ["npm", "server", "web"]) {
         const targetRecord = targets[targetName] && typeof targets[targetName] === "object" && !Array.isArray(targets[targetName]) ? targets[targetName] : {};
-        const commit = normalizeCommit(targetRecord.commit);
+        const commit2 = normalizeCommit(targetRecord.commit);
         result[targetName] = {
-          commit,
+          commit: commit2,
           deployedAt: typeof targetRecord.deployedAt === "string" ? targetRecord.deployedAt : void 0,
-          status: commit && currentCommit ? commit === currentCommit ? "fresh" : "stale" : "unknown"
+          status: commit2 && currentCommit ? commit2 === currentCommit ? "fresh" : "stale" : "unknown"
         };
       }
       return result;
@@ -147674,22 +149780,22 @@ ${ptyResult.output.slice(-2e3)}`);
         if (globalWriteCapReached) capReasons.push("global_max_parallel_tasks_reached");
         if ((writeAssignedByNode.get(nodeId) ?? 0) > 0) capReasons.push("node_has_active_assignment");
         let providerRoles;
-        const slots = resolveNodeCapabilitySlots(rawNode);
+        const slots2 = resolveNodeCapabilitySlots(rawNode);
         const cappedProviders = [];
         const seenProvider = /* @__PURE__ */ new Set();
-        for (const slot of slots) {
+        for (const slot of slots2) {
           const providerType = typeof slot?.provider === "string" ? slot.provider.trim() : "";
           if (!providerType) continue;
           const key2 = providerType.toLowerCase();
           if (seenProvider.has(key2)) continue;
           seenProvider.add(key2);
-          if (resolveProviderMaxParallel(slots, providerType) !== void 0) cappedProviders.push(providerType);
+          if (resolveProviderMaxParallel(slots2, providerType) !== void 0) cappedProviders.push(providerType);
         }
         if (cappedProviders.length) {
           const byProvider = providerCountByNode.get(nodeId);
           providerRoles = [];
           for (const providerType of cappedProviders) {
-            const maxParallel = resolveProviderMaxParallel(slots, providerType);
+            const maxParallel = resolveProviderMaxParallel(slots2, providerType);
             const activeAssigned = byProvider?.get(providerType) ?? 0;
             const capReached = maxParallel !== void 0 && activeAssigned >= maxParallel;
             providerRoles.push({
@@ -147864,14 +149970,14 @@ ${ptyResult.output.slice(-2e3)}`);
         RECENT_MAGI_CAP = 6;
       }
     });
-    var fs64;
+    var fs65;
     var import_os5;
     var meshStatusHandlers;
     var meshStatusSpecs;
     var init_mesh_status = __esm2({
       "src/commands/high-family/mesh-status.ts"() {
         "use strict";
-        fs64 = __toESM2(require("fs"));
+        fs65 = __toESM2(require("fs"));
         import_os5 = require("os");
         init_config();
         init_git_status();
@@ -147891,8 +149997,8 @@ ${ptyResult.output.slice(-2e3)}`);
             if (!meshId) return { success: false, error: "meshId required" };
             const startedAtMs = Date.now();
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const meshHost = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
               const refreshRequested = args?.refresh === true || args?.forceRefresh === true;
@@ -148006,7 +150112,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const meshGitProbeCache = ctx.meshGitProbeCache;
               const directTruth = requireDirectPeerTruth ? await hydrateInlineMeshDirectTruth({
                 mesh,
-                meshSource: meshRecord.source,
+                meshSource: meshRecord2.source,
                 dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
                 getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
                 statusInstanceId: ctx.deps.statusInstanceId,
@@ -148036,7 +150142,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   code: "mesh_direct_peer_truth_unavailable",
                   error: "Selected coordinator could not confirm direct mesh truth yet. Bootstrap inventory stays unavailable until direct mesh_status probes succeed.",
                   sourceOfTruth: {
-                    membership: meshRecord.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
+                    membership: meshRecord2.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord2.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
                     coordinatorOwnsLiveTruth: false,
                     currentStatus: "direct_peer_truth_unavailable",
                     directPeerTruth: {
@@ -148054,7 +150160,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   meshId,
                   command: "mesh_status",
                   refreshRequested,
-                  meshSource: meshRecord.source,
+                  meshSource: meshRecord2.source,
                   directTruth
                 });
                 return failureResult;
@@ -148065,7 +150171,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 mesh.coordinator?.preferredNodeId,
                 normalizeMeshNodeId(mesh.nodes?.[0])
               );
-              const inlineCoordinatorNodeId = meshRecord?.inline && Array.isArray(mesh.nodes) ? selectedCoordinatorNodeId : void 0;
+              const inlineCoordinatorNodeId = meshRecord2?.inline && Array.isArray(mesh.nodes) ? selectedCoordinatorNodeId : void 0;
               const refreshedAt = (/* @__PURE__ */ new Date()).toISOString();
               const renderMeshNode = async (nodeIndex, node) => {
                 const nodeId = normalizeMeshNodeId(node) ?? "";
@@ -148081,7 +150187,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId
                 ) || Boolean(
                   daemonId && (daemonIdsEquivalent4(daemonId, localMachineId) || daemonIdsEquivalent4(daemonId, ctx.deps.statusInstanceId))
-                ) || Boolean(meshRecord?.inline && nodeIndex === 0) || sparseConfiguredCoordinatorNode;
+                ) || Boolean(meshRecord2?.inline && nodeIndex === 0) || sparseConfiguredCoordinatorNode;
                 if ((isSelfNode || node.isLocalWorktree === true) && localMachineNickname && !readStringValue(node.machineNickname, node.machine_nickname)) {
                   node.machineNickname = localMachineNickname;
                 }
@@ -148198,7 +150304,7 @@ ${ptyResult.output.slice(-2e3)}`);
                   }
                 }
                 if (workspace) {
-                  if (!fs64.existsSync(workspace)) {
+                  if (!fs65.existsSync(workspace)) {
                     const inlineTransitGit = buildInlineMeshTransitGitStatus(node);
                     let remoteProbeApplied = false;
                     if (inlineTransitGit) {
@@ -148235,7 +150341,7 @@ ${ptyResult.output.slice(-2e3)}`);
                           status.connection = buildLivePeerGitConnection(connection, refreshedAt);
                         }
                         const reporter = recordInlineMeshDirectGitTruth(node, remoteGit, "selected_coordinator_mesh_p2p_git");
-                        persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
+                        persistNodeReporterPlatform(meshRecord2.source, mesh, nodeId, reporter);
                         remoteProbeApplied = true;
                       }
                     }
@@ -148255,7 +150361,7 @@ ${ptyResult.output.slice(-2e3)}`);
                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         return status;
                       }
-                      if (meshRecord?.source === "inline_cache" && !isSelfNode) {
+                      if (meshRecord2?.source === "inline_cache" && !isSelfNode) {
                         applyInlineMeshBranchConvergence(mesh, node, status);
                         finalizeMeshNodeStatus({ status, node, daemonId, isSelfNode, directTruthUnavailable: directTruthUnavailableNodeIds.has(nodeId) });
                         return status;
@@ -148269,7 +150375,7 @@ ${ptyResult.output.slice(-2e3)}`);
                       status.git = gitStatus2;
                       status[MESH_NODE_LIVE_TRUTH_MARKER] = true;
                       const reporter = recordInlineMeshDirectGitTruth(node, gitStatus2, "selected_coordinator_local_git");
-                      persistNodeReporterPlatform(meshRecord.source, mesh, nodeId, reporter);
+                      persistNodeReporterPlatform(meshRecord2.source, mesh, nodeId, reporter);
                       if (gitStatus2.isGitRepo) {
                         status.health = deriveMeshNodeHealthFromGit(gitStatus2);
                       } else {
@@ -148339,7 +150445,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const pendingRetentionCounters2 = { ...getPendingRetentionCounters() };
               const turnPresentationCounters = getTurnPresentationMetrics();
               const previewFreshness = (() => {
-                const localRepoRoot = nodeStatuses.map((node) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace)).find((candidate) => !!candidate && fs64.existsSync(candidate));
+                const localRepoRoot = nodeStatuses.map((node) => readStringValue(node?.git?.repoRoot, node?.repoRoot, node?.workspace)).find((candidate) => !!candidate && fs65.existsSync(candidate));
                 return localRepoRoot ? buildPreviewFreshness(localRepoRoot) : void 0;
               })();
               const asyncRefineJobs = buildMeshAsyncRefineJobs3({
@@ -148370,7 +150476,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 refreshedAt,
                 meshHost,
                 sourceOfTruth: {
-                  membership: meshRecord?.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord?.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
+                  membership: meshRecord2?.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord2?.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
                   coordinatorOwnsLiveTruth: directTruthSatisfied,
                   meshHost: {
                     owner: "mesh_host_daemon",
@@ -148454,7 +150560,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 command: "mesh_status",
                 refreshRequested,
                 refreshReason,
-                meshSource: meshRecord.source,
+                meshSource: meshRecord2.source,
                 directTruth,
                 durationMs: Date.now() - startedAtMs,
                 summary: summarizeRepoMeshStatusDebug(returnedStatus)
@@ -148472,8 +150578,8 @@ ${ptyResult.output.slice(-2e3)}`);
               const { readLedgerEntries: readLedgerEntries32 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
               const { existsSync: existsSync80 } = await import("fs");
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const inlineNodes = args?.inlineMesh && Array.isArray(args.inlineMesh?.nodes) ? args.inlineMesh.nodes : null;
               let cachedStatus = !inlineNodes ? ctx.getCachedAggregateMeshStatus(meshId, mesh, {}) : null;
@@ -148529,169 +150635,6 @@ ${ptyResult.output.slice(-2e3)}`);
           }
         };
         meshStatusSpecs = defineCommandSpecs("high", meshStatusHandlers);
-      }
-    });
-    function maskArgs(args) {
-      if (!args || typeof args !== "object") return void 0;
-      const masked = {};
-      for (const [key2, value] of Object.entries(args)) {
-        if (SENSITIVE_KEYS.has(key2)) {
-          masked[key2] = typeof value === "string" ? `[${value.length} chars]` : "[masked]";
-        } else if (key2.startsWith("_")) {
-          masked[key2] = value;
-        } else if (typeof value === "object" && value !== null) {
-          masked[key2] = Array.isArray(value) ? `[Array(${value.length})]` : `[Object]`;
-        } else {
-          masked[key2] = value;
-        }
-      }
-      return masked;
-    }
-    function getDateStr2() {
-      return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-    }
-    function refreshCurrentFile() {
-      const today = getDateStr2();
-      const dir = resolveConfigLogsDir();
-      if (today === currentDate2 && dir === currentDir) return;
-      const dirChanged = dir !== currentDir;
-      currentDate2 = today;
-      currentDir = dir;
-      currentFile = path66.join(dir, `commands-${today}.jsonl`);
-      if (dirChanged) {
-        try {
-          fs65.mkdirSync(dir, { recursive: true });
-        } catch {
-        }
-        cleanOldFiles();
-      }
-    }
-    function cleanOldFiles() {
-      try {
-        const files = fs65.readdirSync(currentDir).filter((f) => f.startsWith("commands-") && f.endsWith(".jsonl"));
-        const cutoff = /* @__PURE__ */ new Date();
-        cutoff.setDate(cutoff.getDate() - MAX_DAYS);
-        const cutoffStr = cutoff.toISOString().slice(0, 10);
-        for (const file2 of files) {
-          const dateMatch = file2.match(/commands-(\d{4}-\d{2}-\d{2})/);
-          if (dateMatch && dateMatch[1] < cutoffStr) {
-            try {
-              fs65.unlinkSync(path66.join(currentDir, file2));
-            } catch {
-            }
-          }
-        }
-      } catch {
-      }
-    }
-    function checkSize() {
-      try {
-        const stat2 = fs65.statSync(currentFile);
-        if (stat2.size > MAX_FILE_SIZE) {
-          const backup = currentFile.replace(".jsonl", ".1.jsonl");
-          try {
-            fs65.unlinkSync(backup);
-          } catch {
-          }
-          fs65.renameSync(currentFile, backup);
-        }
-      } catch {
-      }
-    }
-    function shouldLogCommand(cmd) {
-      return !SKIP_COMMANDS.has(cmd);
-    }
-    function logCommand(entry) {
-      if (!shouldLogCommand(entry.cmd)) return;
-      try {
-        refreshCurrentFile();
-        if (++writeCount2 % 500 === 0) {
-          checkSize();
-        }
-        const line = JSON.stringify({
-          ts: entry.ts,
-          cmd: entry.cmd,
-          src: entry.source,
-          ...entry.peerId ? { peer: entry.peerId } : {},
-          ...entry.interactionId ? { interactionId: entry.interactionId } : {},
-          ...entry.args ? { args: maskArgs(entry.args) } : {},
-          ...entry.success !== void 0 ? { ok: entry.success } : {},
-          ...entry.error ? { err: entry.error } : {},
-          ...entry.durationMs !== void 0 ? { ms: entry.durationMs } : {}
-        });
-        fs65.appendFileSync(currentFile, line + "\n");
-      } catch {
-      }
-    }
-    function getRecentCommands(count = 50) {
-      try {
-        refreshCurrentFile();
-        if (!fs65.existsSync(currentFile)) return [];
-        const content = fs65.readFileSync(currentFile, "utf-8");
-        const lines = content.trim().split("\n").filter(Boolean);
-        return lines.slice(-count).map((line) => {
-          try {
-            const parsed = JSON.parse(line);
-            return {
-              ts: parsed.ts,
-              cmd: parsed.cmd,
-              source: parsed.src,
-              peerId: parsed.peer,
-              interactionId: parsed.interactionId,
-              args: parsed.args,
-              success: parsed.ok,
-              error: parsed.err,
-              durationMs: parsed.ms
-            };
-          } catch {
-            return { ts: "", cmd: "parse_error", source: "unknown" };
-          }
-        });
-      } catch {
-        return [];
-      }
-    }
-    var fs65;
-    var path66;
-    var MAX_FILE_SIZE;
-    var MAX_DAYS;
-    var SENSITIVE_KEYS;
-    var currentDate2;
-    var currentDir;
-    var currentFile;
-    var writeCount2;
-    var SKIP_COMMANDS;
-    var init_command_log = __esm2({
-      "src/logging/command-log.ts"() {
-        "use strict";
-        fs65 = __toESM2(require("fs"));
-        path66 = __toESM2(require("path"));
-        init_config_dir();
-        MAX_FILE_SIZE = 5 * 1024 * 1024;
-        MAX_DAYS = 7;
-        SENSITIVE_KEYS = /* @__PURE__ */ new Set([
-          "token",
-          "password",
-          "secret",
-          "apiKey",
-          "api_key",
-          "connectionToken",
-          "content",
-          "message",
-          "text"
-        ]);
-        currentDate2 = "";
-        currentDir = "";
-        currentFile = "";
-        writeCount2 = 0;
-        SKIP_COMMANDS = /* @__PURE__ */ new Set([
-          "heartbeat",
-          "status_report",
-          "read_chat",
-          "mark_session_seen",
-          "delete_notification",
-          "mark_notification_unread"
-        ]);
       }
     });
     async function execChangeAreaGit(callSite, gitArgs, cwd, inputs) {
@@ -149654,9 +151597,9 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         const job = e.payload?.refineJob;
         if (job?.jobId !== jobId) continue;
         const ts2 = Date.parse(e.timestamp);
-        const ms22 = Number.isFinite(ts2) ? ts2 : Number.MAX_SAFE_INTEGER;
-        if (ms22 < earliestMs) {
-          earliestMs = ms22;
+        const ms3 = Number.isFinite(ts2) ? ts2 : Number.MAX_SAFE_INTEGER;
+        if (ms3 < earliestMs) {
+          earliestMs = ms3;
           earliest = {
             kind: e.kind,
             interactionId: typeof job?.interactionId === "string" ? job.interactionId : void 0,
@@ -150539,8 +152482,8 @@ ${hintLines.join("\n")}` : "",
       emitRefineProgress(context, event);
     }
     async function batchRefineMeshNodes(self, meshId, requestedNodeIds, args) {
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
+      const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord2?.mesh;
       if (!mesh) return { success: false, error: `Mesh '${meshId}' not found` };
       const allNodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
       const isConvergeable = (n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace;
@@ -151037,8 +152980,8 @@ ${hintLines.join("\n")}` : "",
       }
       const order = Array.isArray(planRecord.order) ? planRecord.order.filter((v) => typeof v === "string") : [];
       const nodeIds = order.slice();
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
+      const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord2?.mesh;
       const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
       const orderedNodes = nodeIds.map((id22) => allNodes.find((n) => meshNodeIdMatches5(n, id22))).filter((n) => !!n);
       if (nodeIds.length === 0 || orderedNodes.length === 0) {
@@ -151280,8 +153223,8 @@ ${hintLines.join("\n")}` : "",
       }
     }
     async function refineResolveRefsStage(self, meshId, nodeId, args, refineStages) {
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
+      const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord2?.mesh;
       const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
       if (!node) return { kind: "terminal", result: { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages } };
       if (!node.isLocalWorktree || !node.workspace) {
@@ -152355,8 +154298,8 @@ ${e?.stderr || ""}`;
       const interactionId = createInteractionId();
       const placeholder = buildRefineJobHandle(self, { meshId, nodeId, jobId, interactionId, retryOfJobId: terminal?.jobId });
       self.runningRefineJobs.set(key2, placeholder);
-      const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-      const mesh = meshRecord?.mesh;
+      const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+      const mesh = meshRecord2?.mesh;
       const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
       if (!node) {
         self.runningRefineJobs.delete(key2);
@@ -152446,7 +154389,7 @@ ${e?.stderr || ""}`;
     function acceptableManagedWorktreePaths(resolveWorktreePath2, normalizePath2, repoRoot, meshName, branch, worktreeBaseDir) {
       const safeBranch = branch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
       const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
-      const legacyPath = (0, import_path24.join)((0, import_path24.dirname)(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+      const legacyPath = (0, import_path25.join)((0, import_path25.dirname)(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
       const candidates = [
         resolveWorktreePath2(repoRoot, meshName, branch, worktreeBaseDir),
         legacyPath
@@ -152472,8 +154415,8 @@ ${e?.stderr || ""}`;
     function looksLikeCrossTrackWorktreePath(actualPath, normalizePath2) {
       const home = normalizePath2((0, import_node_os22.homedir)());
       return TRACK_CONFIG_DIR_NAMES.some((trackDirName) => {
-        const trackWorktreesDir = (0, import_path24.join)(home, trackDirName, "worktrees");
-        return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path24.sep);
+        const trackWorktreesDir = (0, import_path25.join)(home, trackDirName, "worktrees");
+        return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path25.sep);
       });
     }
     function unexpectedPathRecoveryHint(actualPath, normalizePath2, suffix) {
@@ -152532,7 +154475,7 @@ ${e?.stderr || ""}`;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs66.existsSync(dir)) return { removed: true, residue: false };
-      const sleep4 = (ms22) => new Promise((resolve36) => setTimeout(resolve36, ms22));
+      const sleep4 = (ms3) => new Promise((resolve36) => setTimeout(resolve36, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -152583,7 +154526,7 @@ ${e?.stderr || ""}`;
       }
       const { resolveWorktreePath: resolveWorktreePath2, listWorktrees: listWorktrees2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
       const normalizePath2 = (value) => {
-        const resolved = (0, import_path24.resolve)(value);
+        const resolved = (0, import_path25.resolve)(value);
         try {
           return fs66.realpathSync(resolved);
         } catch {
@@ -152710,7 +154653,7 @@ ${e?.stderr || ""}`;
       }
       const { resolveWorktreePath: resolveWorktreePath2, listWorktrees: listWorktrees2, removeWorktree: removeWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
       const normalizePath2 = (value) => {
-        const resolved = (0, import_path24.resolve)(value);
+        const resolved = (0, import_path25.resolve)(value);
         try {
           return fs66.realpathSync(resolved);
         } catch {
@@ -152970,24 +154913,24 @@ ${e?.stderr || ""}`;
       for (const ref of candidateRefs) {
         if (!ref || seen.has(ref)) continue;
         seen.add(ref);
-        let commit = "";
+        let commit2 = "";
         try {
-          commit = await runGit4(["rev-parse", "--verify", `${ref}^{commit}`], args.repoRoot);
+          commit2 = await runGit4(["rev-parse", "--verify", `${ref}^{commit}`], args.repoRoot);
         } catch {
           continue;
         }
         checkedRefs.push(ref);
-        resolvedRefCommits.push({ ref, commit });
+        resolvedRefCommits.push({ ref, commit: commit2 });
         try {
-          await runGit4(["merge-base", "--is-ancestor", head, commit], args.repoRoot);
+          await runGit4(["merge-base", "--is-ancestor", head, commit2], args.repoRoot);
           return { allow: true, status: "merged_to_default_ref", source: "git_merge_base", ref };
         } catch {
         }
       }
-      for (const { ref, commit } of resolvedRefCommits) {
+      for (const { ref, commit: commit2 } of resolvedRefCommits) {
         let containment;
         try {
-          containment = await checkWorktreeChangesPatchEquivalentInRef(args.repoRoot, commit, head);
+          containment = await checkWorktreeChangesPatchEquivalentInRef(args.repoRoot, commit2, head);
         } catch {
           continue;
         }
@@ -153206,7 +155149,7 @@ ${e?.stderr || ""}`;
     }
     var fs66;
     var import_node_os22;
-    var import_path24;
+    var import_path25;
     var LEGACY_WORKTREE_DIR_NAME;
     var TRACK_CONFIG_DIR_NAMES;
     var init_router_worktree_cleanup = __esm2({
@@ -153214,7 +155157,7 @@ ${e?.stderr || ""}`;
         "use strict";
         fs66 = __toESM2(require("fs"));
         import_node_os22 = require("os");
-        import_path24 = require("path");
+        import_path25 = require("path");
         init_logger();
         init_git_locale();
         init_dist();
@@ -153542,7 +155485,7 @@ ${e?.stderr || ""}`;
         init_launch();
         init_dist();
         init_logger();
-        init_mesh_dual_write();
+        init_mesh_publisher();
         init_command_log();
         init_debug_trace();
         init_mesh_host_ownership();
@@ -153850,8 +155793,8 @@ ${e?.stderr || ""}`;
             };
           }
           async requireMeshHostMutationOwner(meshId, inlineMesh, operation) {
-            const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
-            const mesh = meshRecord?.mesh;
+            const meshRecord2 = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
+            const mesh = meshRecord2?.mesh;
             if (!mesh) return { success: false, error: "Mesh not found" };
             const meshHost = resolveMeshHostStatus(mesh);
             if (!meshHost.canOwnCoordinator || !meshHost.canOwnQueue) {
@@ -154375,8 +156318,8 @@ ${e?.stderr || ""}`;
       if (await isAncestor3(worktreeOssSha, sourceSha)) return "advance";
       return "skip_diverged";
     }
-    function syncProviderPriorityFromSlots(policy, slots = policy.slots) {
-      const derived = deriveProviderPriorityFromSlots2(slots);
+    function syncProviderPriorityFromSlots(policy, slots2 = policy.slots) {
+      const derived = deriveProviderPriorityFromSlots2(slots2);
       if (derived.length) policy.providerPriority = derived;
     }
     async function syncClonedWorktreeSubmodules(worktreePath, sourceWorkspace, rg) {
@@ -154457,13 +156400,13 @@ ${e?.stderr || ""}`;
           get_mesh: async (ctx, args) => {
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
-            const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-            if (!meshRecord?.mesh) return { success: false, error: "Mesh not found" };
+            const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            if (!meshRecord2?.mesh) return { success: false, error: "Mesh not found" };
             const requireDirectPeerTruth = args?.requireDirectPeerTruth === true;
             const probeRemotePeers = args?.refresh === true || args?.forceRefresh === true;
             const directTruth = await hydrateInlineMeshDirectTruth({
-              mesh: meshRecord.mesh,
-              meshSource: meshRecord.source,
+              mesh: meshRecord2.mesh,
+              meshSource: meshRecord2.source,
               dispatchMeshCommand: ctx.deps.dispatchMeshCommand,
               getMeshPeerConnectionStatus: ctx.deps.getMeshPeerConnectionStatus,
               statusInstanceId: ctx.deps.statusInstanceId,
@@ -154471,9 +156414,9 @@ ${e?.stderr || ""}`;
               probeRemotePeers,
               probeCache: ctx.meshGitProbeCache
             });
-            const directTruthSatisfied = meshRecord.source !== "inline_bootstrap" || directTruth.directEvidenceCount > 0;
+            const directTruthSatisfied = meshRecord2.source !== "inline_bootstrap" || directTruth.directEvidenceCount > 0;
             const sourceOfTruth = {
-              membership: meshRecord.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
+              membership: meshRecord2.source === "inline_cache" ? "coordinator_inline_mesh_cache" : meshRecord2.source === "local_config" ? "local_mesh_config" : "inline_bootstrap_snapshot",
               coordinatorOwnsLiveTruth: directTruthSatisfied,
               directPeerTruth: {
                 required: requireDirectPeerTruth,
@@ -154493,7 +156436,7 @@ ${e?.stderr || ""}`;
                 sourceOfTruth
               };
             }
-            return { success: true, mesh: meshRecord.mesh, sourceOfTruth };
+            return { success: true, mesh: meshRecord2.mesh, sourceOfTruth };
           },
           create_mesh: async (ctx, args) => {
             const name = typeof args?.name === "string" ? args.name.trim() : "";
@@ -154650,8 +156593,8 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { mkdirSync: mkdirSync39, writeFileSync: writeFileSync35 } = await import("fs");
-              const { dirname: dirname33, join: join82 } = await import("path");
+              const { mkdirSync: mkdirSync40, writeFileSync: writeFileSync35 } = await import("fs");
+              const { dirname: dirname34, join: join82 } = await import("path");
               const scaffold = buildMeshJsonConfigScaffold2(mesh);
               const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -154691,7 +156634,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
                 };
               }
-              mkdirSync39(dirname33(absolutePath), { recursive: true });
+              mkdirSync40(dirname34(absolutePath), { recursive: true });
               writeFileSync35(absolutePath, `${scaffoldJson}
 `, "utf-8");
               return {
@@ -154761,8 +156704,8 @@ ${e?.stderr || ""}`;
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-              const { existsSync: existsSync80, readFileSync: readFileSync66, mkdirSync: mkdirSync39, writeFileSync: writeFileSync35 } = await import("fs");
-              const { dirname: dirname33, join: join82 } = await import("path");
+              const { existsSync: existsSync80, readFileSync: readFileSync66, mkdirSync: mkdirSync40, writeFileSync: writeFileSync35 } = await import("fs");
+              const { dirname: dirname34, join: join82 } = await import("path");
               const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
               const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
               let baseDoc = { version: 1 };
@@ -154826,7 +156769,7 @@ ${e?.stderr || ""}`;
                   note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
                 };
               }
-              mkdirSync39(dirname33(absolutePath), { recursive: true });
+              mkdirSync40(dirname34(absolutePath), { recursive: true });
               writeFileSync35(absolutePath, serialized, "utf-8");
               return {
                 success: true,
@@ -154896,12 +156839,12 @@ ${e?.stderr || ""}`;
             try {
               const { setMagiKindPanel: setMagiKindPanel22, resolveScopedMeshId: resolveScopedMeshId2, collectIgnoredMagiSlotFields: collectIgnoredMagiSlotFields22 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
               const ignoredFields = collectIgnoredMagiSlotFields22(args?.slots);
-              const slots = setMagiKindPanel22(kind, args?.slots, requestedMeshId || void 0);
+              const slots2 = setMagiKindPanel22(kind, args?.slots, requestedMeshId || void 0);
               const meshId = requestedMeshId || resolveScopedMeshId2();
               return {
                 success: true,
                 kind,
-                slots,
+                slots: slots2,
                 meshId: meshId ?? null,
                 ...ignoredFields.length ? { ignoredFields } : {}
               };
@@ -155027,12 +156970,12 @@ ${e?.stderr || ""}`;
               const providerPriority = Array.isArray(args?.providerPriority) ? args.providerPriority.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean) : [];
               const readOnly = args?.readOnly === true;
               const providerRoles = normalizeProviderRoles(args?.providerRoles);
-              const slots = normalizeNodeCapabilitySlots2(args?.slots);
+              const slots2 = normalizeNodeCapabilitySlots2(args?.slots);
               const policy = {
                 ...readOnly ? { readOnly: true } : {},
                 ...providerPriority.length ? { providerPriority } : {},
                 ...providerRoles.length ? { providerRoles } : {},
-                ...slots.length ? { slots } : {}
+                ...slots2.length ? { slots: slots2 } : {}
               };
               if (providerRoles.length) migrateProviderRolesToSlots2(policy);
               syncProviderPriorityFromSlots(policy);
@@ -155104,8 +157047,8 @@ ${e?.stderr || ""}`;
                 ctx.invalidateAggregateMeshStatus(meshId);
                 return { success: true, node };
               }
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const inlineNode = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches5(n, nodeId)) : void 0;
               if (!inlineNode) return { success: false, error: "Mesh node not found" };
@@ -155137,8 +157080,8 @@ ${e?.stderr || ""}`;
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "node removal");
             if (ownerFailure) return ownerFailure;
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
@@ -155170,8 +157113,8 @@ ${e?.stderr || ""}`;
             const nodeId = typeof args?.nodeId === "string" ? args.nodeId.trim() : "";
             if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               const node = mesh?.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               if (node && !args?._meshDirectDispatch && node.isLocalWorktree !== true && args?.force !== true) {
                 const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : "";
@@ -155263,7 +157206,7 @@ ${e?.stderr || ""}`;
                 worktreeCleanup = cleanupResult;
               }
               let removed = false;
-              if (meshRecord?.inline) {
+              if (meshRecord2?.inline) {
                 removed = ctx.removeInlineMeshNode(meshId, mesh, nodeId);
                 if (removed) ctx.invalidateAggregateMeshStatus(meshId);
                 try {
@@ -155380,8 +157323,8 @@ ${e?.stderr || ""}`;
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone");
             if (ownerFailure) return ownerFailure;
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches5(n, sourceNodeId));
               if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
@@ -155422,12 +157365,12 @@ ${e?.stderr || ""}`;
               }
               let node;
               const { migrateProviderRolesToSlots: migrateProviderRolesToSlots2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
-              if (meshRecord.inline) {
-                const { randomUUID: randomUUID25 } = await import("crypto");
+              if (meshRecord2.inline) {
+                const { randomUUID: randomUUID27 } = await import("crypto");
                 const clonedPolicy = { ...sourceNode.policy || {} };
                 migrateProviderRolesToSlots2(clonedPolicy);
                 node = {
-                  id: `node_${randomUUID25().replace(/-/g, "")}`,
+                  id: `node_${randomUUID27().replace(/-/g, "")}`,
                   workspace: result.worktreePath,
                   repoRoot: result.worktreePath,
                   daemonId: effectiveDaemonId,
@@ -155478,7 +157421,7 @@ ${e?.stderr || ""}`;
               if (typeof node?.id === "string" && node.id) noteRecentlyClonedNode(node.id);
               const persistWorktreeSetupState = async (bootstrapState2) => {
                 node.worktreeBootstrap = bootstrapState2;
-                if (meshRecord.inline) {
+                if (meshRecord2.inline) {
                   ctx.updateInlineMeshNode(meshId, mesh, node);
                   return;
                 }
@@ -155673,8 +157616,8 @@ ${e?.stderr || ""}`;
             const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "bootstrap retry");
             if (ownerFailure) return ownerFailure;
             try {
-              const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const mesh = meshRecord?.mesh;
+              const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
               const node = mesh.nodes?.find((n) => meshNodeIdMatches5(n, nodeId));
               if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
@@ -155703,7 +157646,7 @@ ${e?.stderr || ""}`;
               };
               const persistState = async (bootstrapState2) => {
                 node.worktreeBootstrap = bootstrapState2;
-                if (meshRecord.inline) {
+                if (meshRecord2.inline) {
                   ctx.updateInlineMeshNode(meshId, mesh, node);
                   return;
                 }
@@ -156294,7 +158237,7 @@ ${e?.stderr || ""}`;
       const nowMs = ports.nowMs();
       const nowIso = new Date(nowMs).toISOString();
       const leaseUntil = new Date(nowMs + WORKSPACE_SAGA_LEASE_MS).toISOString();
-      const fencingToken = (0, import_crypto18.randomUUID)();
+      const fencingToken = (0, import_crypto19.randomUUID)();
       const claimed = store.transaction(() => {
         const graphStore = store.graphStore();
         const intent2 = graphStore.getWorkspaceIntent(graphId, workspaceRef);
@@ -156793,13 +158736,13 @@ ${e?.stderr || ""}`;
         return void 0;
       }
     }
-    var import_crypto18;
+    var import_crypto19;
     var LEASE_OWNER;
     var ACTIVE_SAGA_STATES;
     var init_mesh_graph_workspace_saga = __esm2({
       "src/mesh/mesh-graph-workspace-saga.ts"() {
         "use strict";
-        import_crypto18 = require("crypto");
+        import_crypto19 = require("crypto");
         init_mesh_runtime_store();
         init_mesh_graph_types();
         init_mesh_graph_transition_runner();
@@ -156934,6 +158877,7 @@ ${e?.stderr || ""}`;
       InteractionContextMap: () => InteractionContextMap,
       IpcConnectionLoadGuard: () => IpcConnectionLoadGuard,
       KNOWN_DIGEST_ALGORITHMS: () => KNOWN_DIGEST_ALGORITHMS,
+      LEGACY_TURN_TABLES: () => LEGACY_TURN_TABLES,
       LEGACY_UNVERIFIED_ALGORITHM: () => LEGACY_UNVERIFIED_ALGORITHM,
       LOG: () => LOG,
       LowDiskSpaceError: () => LowDiskSpaceError,
@@ -156942,7 +158886,6 @@ ${e?.stderr || ""}`;
       MAX_BEACON_GET_QUERIES: () => MAX_BEACON_GET_QUERIES,
       MAX_CAPTURE_LOG_GENERATIONS: () => MAX_CAPTURE_LOG_GENERATIONS,
       MAX_CAPTURE_LOG_SIZE: () => MAX_CAPTURE_LOG_SIZE,
-      MAX_INFLIGHT: () => MAX_INFLIGHT,
       MAX_LEDGER_SLICE_LIMIT: () => MAX_LEDGER_SLICE_LIMIT,
       MAX_PROJECTED_STRING: () => MAX_PROJECTED_STRING,
       MAX_SESSIONS_PER_MESH: () => MAX_SESSIONS_PER_MESH,
@@ -156951,7 +158894,6 @@ ${e?.stderr || ""}`;
       MESH_CONVERGE_REFINE_TAG: () => MESH_CONVERGE_REFINE_TAG,
       MESH_DECLARED_ELIGIBLE_SINGLE_HINT: () => MESH_DECLARED_ELIGIBLE_SINGLE_HINT3,
       MESH_DIRECT_REASONS: () => MESH_DIRECT_REASONS,
-      MESH_DUAL_WRITE_ENV: () => MESH_DUAL_WRITE_ENV,
       MESH_EVENT_ENTRY_KIND: () => MESH_EVENT_ENTRY_KIND,
       MESH_GATE_DEFAULT_LEASE_SECONDS: () => MESH_GATE_DEFAULT_LEASE_SECONDS,
       MESH_GATE_NAMED_OUTCOMES: () => MESH_GATE_NAMED_OUTCOMES,
@@ -156967,6 +158909,8 @@ ${e?.stderr || ""}`;
       MESH_NODE_LIVE_TRUTH_MARKER: () => MESH_NODE_LIVE_TRUTH_MARKER,
       MESH_NODE_PATCH_KEYS: () => MESH_NODE_PATCH_KEYS3,
       MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT: () => MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
+      MESH_PUBLISH_SLOTS: () => MESH_PUBLISH_SLOTS,
+      MESH_RECORD_MAX_WAITING: () => MESH_RECORD_MAX_WAITING,
       MESH_REFINE_CONFIG_LOCATIONS: () => MESH_REFINE_CONFIG_LOCATIONS,
       MESH_REFINE_CONFIG_SCHEMA: () => MESH_REFINE_CONFIG_SCHEMA,
       MESH_SCHEDULING_STRATEGIES: () => MESH_SCHEDULING_STRATEGIES,
@@ -156986,6 +158930,7 @@ ${e?.stderr || ""}`;
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
       MeshGraphPlanError: () => MeshGraphPlanError3,
       MeshGraphPolicyError: () => MeshGraphPolicyError3,
+      MeshTopicActivationError: () => MeshTopicActivationError,
       NOT_BEFORE_RELATIVE_THRESHOLD_MS: () => NOT_BEFORE_RELATIVE_THRESHOLD_MS,
       NodePtyTransportFactory: () => NodePtyTransportFactory,
       OPERATING_NOTE_DEDUPE_WINDOW: () => OPERATING_NOTE_DEDUPE_WINDOW,
@@ -157039,9 +158984,12 @@ ${e?.stderr || ""}`;
       StatuslineInstallError: () => StatuslineInstallError,
       TRACK: () => TRACK,
       TREE_DIGEST_ALGORITHM: () => TREE_DIGEST_ALGORITHM,
+      TURN_LEDGER_SCHEMA_VERSION: () => TURN_LEDGER_SCHEMA_VERSION,
+      TURN_WIRE_EVENT_NAMES: () => TURN_WIRE_EVENT_NAMES,
       TerminalAdapter: () => TerminalAdapter,
       TopicSubscriptionRegistry: () => TopicSubscriptionRegistry,
       TurnSnapshotTracker: () => TurnSnapshotTracker,
+      TurnStore: () => TurnStore,
       USAGE_MAX_AGE_MS: () => USAGE_MAX_AGE_MS,
       V1_ALL_PRIMITIVES: () => V1_ALL_PRIMITIVES,
       V1_CONTRACT_VERSION: () => V1_CONTRACT_VERSION,
@@ -157052,9 +159000,11 @@ ${e?.stderr || ""}`;
       WORKSPACE_SAGA_LEASE_MS: () => WORKSPACE_SAGA_LEASE_MS,
       WRITER_ID_PREFIX: () => WRITER_ID_PREFIX,
       WorkspaceSagaPermanentError: () => WorkspaceSagaPermanentError,
+      __forceMeshReadPrimaryForTests: () => __forceMeshReadPrimaryForTests,
       __resetFleetStatusParityForTests: () => __resetFleetStatusParityForTests,
       __resetMeshDualWriteForTests: () => __resetMeshDualWriteForTests,
       __resetMeshParityForTests: () => __resetMeshParityForTests,
+      __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
       __resetMeshReadModelForTests: () => __resetMeshReadModelForTests,
       __resetMeshReadReadinessForTests: () => __resetMeshReadReadinessForTests,
       __resetTerminalRedriveConsumerForTests: () => __resetTerminalRedriveConsumerForTests,
@@ -157062,10 +159012,13 @@ ${e?.stderr || ""}`;
       __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
       abandonMeshGraphGate: () => abandonMeshGraphGate3,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
+      activateMeshTopicsAtBoot: () => activateMeshTopicsAtBoot,
       activeTranscriptProjectionService: () => activeTranscriptProjectionService,
       addNode: () => addNode,
+      announceTopicActivated: () => announceTopicActivated,
       appendAssistantJournal: () => appendAssistantJournal,
       appendLedgerEntry: () => appendLedgerEntry3,
+      appendMeshHandoff: () => appendMeshHandoff,
       appendRecentActivity: () => appendRecentActivity,
       appendRemoteLedgerEntries: () => appendRemoteLedgerEntries3,
       applyBoundedRetention: () => applyBoundedRetention,
@@ -157076,7 +159029,6 @@ ${e?.stderr || ""}`;
       assertNoPlaintextHintTopics: () => assertNoPlaintextHintTopics,
       assertRedriveConsumerNameIsPruneSafe: () => assertRedriveConsumerNameIsPruneSafe,
       assistantJournalPolicy: () => assistantJournalPolicy,
-      backfillMeshEventShadow: () => backfillMeshEventShadow,
       baseTopicDefinitions: () => baseTopicDefinitions,
       bindSeqscribeRuntime: () => bindSeqscribeRuntime,
       bootDaemonRuntime: () => bootDaemonRuntime,
@@ -157168,6 +159120,7 @@ ${e?.stderr || ""}`;
       configureDebugTraceStore: () => configureDebugTraceStore,
       configureFleetStatusParity: () => configureFleetStatusParity,
       configureMeshDualWrite: () => configureMeshDualWrite,
+      configureMeshPublisher: () => configureMeshPublisher,
       configureMeshReadModel: () => configureMeshReadModel,
       configureTerminalRedrive: () => configureTerminalRedrive,
       connectCdpManager: () => connectCdpManager,
@@ -157193,11 +159146,13 @@ ${e?.stderr || ""}`;
       createInteractionId: () => createInteractionId,
       createManagedSessionHost: () => createManagedSessionHost,
       createMesh: () => createMesh,
+      createMeshRuntimeTurnLedger: () => createMeshRuntimeTurnLedger,
       createNativeHistoryDispatcher: () => createNativeHistoryDispatcher,
       createSessionDelivery: () => createSessionDelivery,
       createSessionEventPort: () => createSessionEventPort,
       createSessionLifecycleBus: () => createSessionLifecycleBus,
       createStatusEventEmitter: () => createStatusEventEmitter,
+      createTurnLedger: () => createTurnLedger,
       createWorktree: () => createWorktree,
       daemonIdsEquivalent: () => daemonIdsEquivalent4,
       decideMissingSessionAttempt: () => decideMissingSessionAttempt,
@@ -157236,6 +159191,7 @@ ${e?.stderr || ""}`;
       evaluateProviderQuotaGate: () => evaluateProviderQuotaGate2,
       execNpmCommandSync: () => execNpmCommandSync,
       expandDaemonIdForms: () => expandDaemonIdForms,
+      exportLegacyTurnTables: () => exportLegacyTurnTables,
       extractScriptPathFromCommand: () => extractScriptPathFromCommand,
       failRetentionExpiredParkedTask: () => failRetentionExpiredParkedTask,
       fastForwardMeshNode: () => fastForwardMeshNode,
@@ -157256,12 +159212,14 @@ ${e?.stderr || ""}`;
       flattenMessageParts: () => flattenMessageParts,
       fleetStatusParityCounters: () => fleetStatusParityCounters,
       fleetStatusPolicy: () => fleetStatusPolicy,
+      flushMeshPublisher: () => flushMeshPublisher,
       foldUsageRecords: () => foldUsageRecords,
       forceRefreshQuota: () => forceRefreshQuota,
       formatBytes: () => formatBytes,
       formatLifecycleTraceLine: () => formatLifecycleTraceLine,
       formatManifestValidationIssues: () => formatManifestValidationIssues,
       formatMeshTaskModeViolations: () => formatMeshTaskModeViolations,
+      formatTurnLedgerMigrationLine: () => formatTurnLedgerMigrationLine,
       forwardAgentStreamsToIdeInstance: () => forwardAgentStreamsToIdeInstance,
       getAIExtensions: () => getAIExtensions,
       getActiveDirectDispatches: () => getActiveDirectDispatches3,
@@ -157345,6 +159303,7 @@ ${e?.stderr || ""}`;
       isActivityChatMessage: () => isActivityChatMessage,
       isAdvancedGraphTask: () => isAdvancedGraphTask,
       isAlwaysOnTraceCategory: () => isAlwaysOnTraceCategory,
+      isAttemptTerminal: () => isAttemptTerminal,
       isBuiltinChatMessageKind: () => isBuiltinChatMessageKind,
       isCdpConnected: () => isCdpConnected,
       isCommandSource: () => isCommandSource,
@@ -157361,6 +159320,7 @@ ${e?.stderr || ""}`;
       isMeshDualWriteActive: () => isMeshDualWriteActive,
       isMeshHostOwner: () => isMeshHostOwner,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable3,
+      isMeshPublisherArmed: () => isMeshPublisherArmed,
       isMeshQuarantined: () => isMeshQuarantined,
       isMeshReadModelReady: () => isMeshReadModelReady,
       isMeshReadPrimary: () => isMeshReadPrimary,
@@ -157424,19 +159384,24 @@ ${e?.stderr || ""}`;
       mergeAndNormalizePolicy: () => mergeAndNormalizePolicy,
       meshDualWriteCounters: () => meshDualWriteCounters,
       meshDualWriteInflight: () => meshDualWriteInflight,
-      meshDualWriteMode: () => meshDualWriteMode,
       meshEventsPolicy: () => meshEventsPolicy,
       meshEventsTopic: () => meshEventsTopic,
       meshNodeIdMatches: () => meshNodeIdMatches5,
       meshParityCounters: () => meshParityCounters,
+      meshPublisherCounters: () => meshPublisherCounters,
+      meshPublisherInflight: () => meshPublisherInflight,
+      meshPublisherWriterId: () => meshPublisherWriterId,
       meshReadModelConsumerName: () => meshReadModelConsumerName,
       meshReadModelMeshIds: () => meshReadModelMeshIds,
       meshReadModelNode: () => meshReadModelNode,
       meshReadModelStats: () => meshReadModelStats,
       meshReadRoutingCounters: () => meshReadRoutingCounters,
+      meshRecord: () => meshRecord,
+      meshRecordEntry: () => meshRecordEntry,
       meshReplicaDiagnostics: () => meshReplicaDiagnostics,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
       meshTaskPriorityRank: () => meshTaskPriorityRank2,
+      migrateTurnLedgerV1: () => migrateTurnLedgerV1,
       missionSetHash: () => missionSetHash,
       namedKeyToAnsi: () => namedKeyToAnsi,
       namedKeysToAnsi: () => namedKeysToAnsi,
@@ -157506,12 +159471,17 @@ ${e?.stderr || ""}`;
       projectFleetStatusEntry: () => projectFleetStatusEntry,
       projectGraphPublicPolicy: () => projectGraphPublicPolicy,
       projectMeshLedgerEntry: () => projectMeshLedgerEntry,
+      projectMeshRecord: () => projectMeshRecord,
       projectP2PStatusEvent: () => projectP2PStatusEvent,
       projectServerStatusEvent: () => projectServerStatusEvent,
+      projectTurnTopicEntry: () => projectTurnTopicEntry,
+      projectTurnWireEvent: () => projectTurnWireEvent,
       providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
       pruneDeadMeshCoordinators: () => pruneDeadMeshCoordinators,
       pruneOperatingNotes: () => pruneOperatingNotes,
       pruneStaleDirectDispatches: () => pruneStaleDirectDispatches3,
+      publishMeshRecord: () => publishMeshRecord,
+      publishMeshTopicEntry: () => publishMeshTopicEntry,
       queryMeshReadModel: () => queryMeshReadModel,
       queryMeshReadModelBySession: () => queryMeshReadModelBySession,
       queuePendingMeshCoordinatorEvent: () => queuePendingMeshCoordinatorEvent,
@@ -157554,7 +159524,6 @@ ${e?.stderr || ""}`;
       recordGraphGateExpired: () => recordGraphGateExpired,
       recordGraphGateReleased: () => recordGraphGateReleased3,
       recordGraphNodePatched: () => recordGraphNodePatched3,
-      recordMeshEventShadow: () => recordMeshEventShadow,
       recordMeshToolCall: () => recordMeshToolCall2,
       recordMissingSessionAttempt: () => recordMissingSessionAttempt,
       recordSessionUsage: () => recordSessionUsage,
@@ -157599,7 +159568,6 @@ ${e?.stderr || ""}`;
       resolveInterruptCapability: () => resolveInterruptCapability,
       resolveMagiSessionCleanupMode: () => resolveMagiSessionCleanupMode2,
       resolveMaxParallelTasks: () => resolveMaxParallelTasks,
-      resolveMeshDualWriteMode: () => resolveMeshDualWriteMode,
       resolveMeshHostStatus: () => resolveMeshHostStatus,
       resolveMeshNodeAttribution: () => resolveMeshNodeAttribution,
       resolveMeshRefineValidationPlan: () => resolveMeshRefineValidationPlan,
@@ -157677,6 +159645,7 @@ ${e?.stderr || ""}`;
       summarizeQueueEntryInputForView: () => summarizeQueueEntryInputForView3,
       summarizeSeqscribeStats: () => summarizeSeqscribeStats,
       summarizeSoleCopy: () => summarizeSoleCopy,
+      summaryRefToEntryId: () => summaryRefToEntryId,
       supportsUnicodeSymbols: () => supportsUnicodeSymbols,
       sweepMeshGraphGateTimeouts: () => sweepMeshGraphGateTimeouts,
       taskDependenciesSatisfied: () => taskDependenciesSatisfied3,
@@ -157691,6 +159660,7 @@ ${e?.stderr || ""}`;
       triggerMeshQueue: () => triggerMeshQueue,
       tryOpenDaemonSeqscribeNode: () => tryOpenDaemonSeqscribeNode,
       turnStageToSurfaceStatus: () => turnStageToSurfaceStatus,
+      turnWireEventName: () => turnWireEventName,
       uninstallClaudeStatusline: () => uninstallClaudeStatusline,
       unregisterMeshCoordinator: () => unregisterMeshCoordinator,
       updateConfig: () => updateConfig,
@@ -157971,8 +159941,8 @@ ${e?.stderr || ""}`;
     function isMeshTestPollution(args) {
       return isSyntheticTestMeshId(args.meshId) || isSyntheticTestCoordinatorSession(args.coordinatorSessionId);
     }
-    var import_fs17 = require("fs");
-    var import_path14 = require("path");
+    var import_fs18 = require("fs");
+    var import_path15 = require("path");
     init_config();
     init_usage_normalize();
     var USAGE_DIR_NAME = "mesh-usage";
@@ -157987,13 +159957,13 @@ ${e?.stderr || ""}`;
       lastEvictedAt: 0
     };
     function getUsageDir() {
-      const dir = (0, import_path14.join)(getConfigDir(), USAGE_DIR_NAME);
-      if (!(0, import_fs17.existsSync)(dir)) (0, import_fs17.mkdirSync)(dir, { recursive: true, mode: 448 });
+      const dir = (0, import_path15.join)(getConfigDir(), USAGE_DIR_NAME);
+      if (!(0, import_fs18.existsSync)(dir)) (0, import_fs18.mkdirSync)(dir, { recursive: true, mode: 448 });
       return dir;
     }
     function getUsagePath(meshId) {
       const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      return (0, import_path14.join)(getUsageDir(), `${safe}.json`);
+      return (0, import_path15.join)(getUsageDir(), `${safe}.json`);
     }
     function emptyFile(meshId) {
       return { version: 1, meshId, sessions: {} };
@@ -158003,7 +159973,7 @@ ${e?.stderr || ""}`;
       const path74 = getUsagePath(meshId);
       let stat2;
       try {
-        const s2 = (0, import_fs17.statSync)(path74);
+        const s2 = (0, import_fs18.statSync)(path74);
         stat2 = { mtimeMs: s2.mtimeMs, size: s2.size };
       } catch {
         usageFileCache.delete(path74);
@@ -158014,7 +159984,7 @@ ${e?.stderr || ""}`;
         return cached5.file;
       }
       try {
-        const parsed = JSON.parse((0, import_fs17.readFileSync)(path74, "utf-8"));
+        const parsed = JSON.parse((0, import_fs18.readFileSync)(path74, "utf-8"));
         if (!parsed || typeof parsed !== "object" || !parsed.sessions) {
           usageFileCache.delete(path74);
           return emptyFile(meshId);
@@ -158029,19 +159999,19 @@ ${e?.stderr || ""}`;
     function writeUsageFile(meshId, file2) {
       const path74 = getUsagePath(meshId);
       const tmp = `${path74}.tmp`;
-      (0, import_fs17.writeFileSync)(tmp, JSON.stringify(file2), { encoding: "utf-8", mode: 384 });
+      (0, import_fs18.writeFileSync)(tmp, JSON.stringify(file2), { encoding: "utf-8", mode: 384 });
       try {
-        (0, import_fs17.renameSync)(tmp, path74);
+        (0, import_fs18.renameSync)(tmp, path74);
       } catch (e) {
         try {
-          (0, import_fs17.unlinkSync)(tmp);
+          (0, import_fs18.unlinkSync)(tmp);
         } catch {
         }
         usageFileCache.delete(path74);
         throw e;
       }
       try {
-        const s2 = (0, import_fs17.statSync)(path74);
+        const s2 = (0, import_fs18.statSync)(path74);
         usageFileCache.set(path74, { file: file2, mtimeMs: s2.mtimeMs, size: s2.size });
       } catch {
         usageFileCache.delete(path74);
@@ -158241,7 +160211,7 @@ ${e?.stderr || ""}`;
     init_mesh_graph_gates();
     init_mesh_graph_transition_runner();
     init_mesh_graph_gate_evidence();
-    var import_crypto19 = require("crypto");
+    var import_crypto20 = require("crypto");
     init_logger();
     init_mesh_runtime_store();
     init_mesh_graph_input_binding();
@@ -158309,7 +160279,7 @@ ${e?.stderr || ""}`;
         })),
         on_dependency_failure: parseOnDependencyFailurePolicy3(req.onDependencyFailure)
       };
-      return (0, import_crypto19.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
+      return (0, import_crypto20.createHash)("sha256").update(canonicalJson(normalized)).digest("hex");
     }
     function commitMeshGraphPlan3(req) {
       const store = MeshRuntimeStore.getInstance();
@@ -161500,6 +163470,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return active;
       }
       /**
+       * Drop a terminated session's chat-output-activity entry immediately,
+       * instead of waiting out the hot-window expiry above (wiring-unification
+       * B2 item 14 / B residue cleanup). Purely an eager-cleanup optimization —
+       * the lazy expiry in {@link getRecentlyOutputActiveChatSessionIds} already
+       * makes a stale entry harmless (bounded by `activityHotMs`, default 8s),
+       * so this is safe to call from a `terminated` bus subscriber the host
+       * wires (see REQUESTED EDIT in the wiring-unification B report — this
+       * registry has no bus access itself). A no-op for an unknown sessionId.
+       */
+      purgeChatOutputActivity(sessionId) {
+        this.chatOutputActiveAt.delete(sessionId);
+      }
+      /**
        * Per-subscription chat_tail build engine: read (daemon source) →
        * missing-session backoff bookkeeping → prepare (seq/dedup) →
        * cursor/seq/signature mutation → hooks. The caller (daemon fan-out) sends
@@ -161612,7 +163595,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_logger();
     init_runtime_defaults();
     init_snapshot3();
-    init_builders();
     init_runtime_slot();
     init_dist();
     function buildCloudP2PSummary(p2p) {
@@ -161870,139 +163852,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           }, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS - elapsed);
         }
       }
-      toDaemonStatusEventName(value) {
-        switch (value) {
-          case "agent:generating_started":
-          case "agent:waiting_approval":
-          case "agent:waiting_choice":
-          case "agent:generating_completed":
-          case "agent:stopped":
-          case "monitor:no_progress":
-            return value;
-          default:
-            return null;
-        }
-      }
-      /**
-       * Resolve the target session's dashboard visibility at event time, straight
-       * from the live provider instance's `settings` — the same source of truth
-       * `buildSessionEntries` uses for the snapshot path (builders.ts), so an event
-       * and a snapshot emitted for the same session always agree.
-       *
-       * Reading the LIVE instance (rather than a cached projection) is what closes
-       * the race: a hide/mute toggle or a coordinator-spawned worker's default is
-       * visible here immediately, whereas the derived caches only refresh on the
-       * 5s/30s heartbeat.
-       *
-       * Returns undefined when the session has no local instance (a genuinely remote
-       * mesh worker hosted by a different daemon, or an event with no targetSessionId).
-       * The event then omits the flags and the server falls back to its snapshot join.
-       */
-      resolveEventHideMute(sessionId) {
-        if (!sessionId) return void 0;
-        const getInstance = this.deps.instanceManager?.getInstance;
-        if (typeof getInstance !== "function") return void 0;
-        let state2;
-        try {
-          state2 = getInstance.call(this.deps.instanceManager, sessionId)?.getState?.();
-        } catch {
-          return void 0;
-        }
-        const settings = state2?.settings;
-        if (!settings) return void 0;
-        return {
-          surfaceHidden: resolveSurfaceHidden(settings),
-          // Status-gated exactly as builders.ts does: pass the session's live status so a
-          // one-shot silent-idle arm mutes only the idle/completion frame and never an
-          // approval/choice frame in the same turn.
-          muted: resolveMuted(settings, state2?.status)
-        };
-      }
-      buildServerStatusEvent(event) {
-        const eventName = this.toDaemonStatusEventName(event.event);
-        if (!eventName) return null;
-        if (eventName.startsWith("provider:")) {
-          return null;
-        }
-        const payload = {
-          event: eventName,
-          timestamp: typeof event.timestamp === "number" && Number.isFinite(event.timestamp) ? event.timestamp : Date.now()
-        };
-        if (typeof event.targetSessionId === "string" && event.targetSessionId.trim()) {
-          payload.targetSessionId = event.targetSessionId.trim();
-        }
-        const providerType = typeof event.providerType === "string" && event.providerType.trim() ? event.providerType.trim() : typeof event.ideType === "string" && event.ideType.trim() ? event.ideType.trim() : "";
-        if (providerType) {
-          payload.providerType = providerType;
-        }
-        if (typeof event.providerSessionId === "string" && event.providerSessionId.trim()) {
-          payload.providerSessionId = event.providerSessionId.trim();
-        }
-        if (typeof event.workspaceName === "string" && event.workspaceName.trim()) {
-          payload.workspaceName = event.workspaceName.trim();
-        }
-        if (typeof event.duration === "number" && Number.isFinite(event.duration)) {
-          payload.duration = event.duration;
-        }
-        if (typeof event.elapsedSec === "number" && Number.isFinite(event.elapsedSec)) {
-          payload.elapsedSec = event.elapsedSec;
-        }
-        if (typeof event.modalMessage === "string" && event.modalMessage.trim()) {
-          payload.modalMessage = event.modalMessage;
-        }
-        if (Array.isArray(event.modalButtons)) {
-          const modalButtons = event.modalButtons.filter((button) => typeof button === "string" && button.trim().length > 0);
-          if (modalButtons.length > 0) {
-            payload.modalButtons = modalButtons;
-          }
-        }
-        if (payload.targetSessionId) {
-          const hideMute = this.resolveEventHideMute(payload.targetSessionId);
-          if (hideMute) {
-            payload.surfaceHidden = hideMute.surfaceHidden;
-            payload.muted = hideMute.muted;
-          }
-        }
-        return payload;
-      }
-      /**
-       * Enrich the P2P copy of a status event with the structured AskUserQuestion
-       * payload. The dashboard hydrates `activeInteractivePrompt` from these
-       * fields (web-core EventManager.hydrateInteractivePromptFromEvent) so the
-       * STRUCTURED picker renders even when the P2P rich status sync — previously
-       * the only carrier of that field — is degraded.
-       *
-       * P2P-only by design: `interactivePrompt` is agent-authored free text, so
-       * it must NOT join the server-bound payload built above (see
-       * P2PStatusEventPayload in shared-types — the server spreads the event into
-       * external webhook dispatch, and its dashboard relay strips unlisted fields
-       * anyway). Guards mirror buildRelayMetadataEvent (mesh-event-delivery.ts).
-       */
-      buildP2PStatusEvent(rawEvent, serverEvent) {
-        const payload = { ...serverEvent };
-        if (rawEvent.interactivePrompt && typeof rawEvent.interactivePrompt === "object" && !Array.isArray(rawEvent.interactivePrompt)) {
-          payload.interactivePrompt = rawEvent.interactivePrompt;
-        }
-        if (typeof rawEvent.promptId === "string" && rawEvent.promptId.trim()) {
-          payload.promptId = rawEvent.promptId.trim();
-        }
-        if (rawEvent.multiSelect === true) {
-          payload.multiSelect = true;
-        }
-        return payload;
-      }
-      emitStatusEvent(event) {
-        LOG.info("StatusEvent", `${event.event} (${event.providerType || event.ideType || ""})`);
-        const serverEvent = this.buildServerStatusEvent(event);
-        if (!serverEvent) return;
-        this.deps.p2p?.sendStatusEvent(this.buildP2PStatusEvent(event, serverEvent));
-        this.deps.serverConn?.sendMessage("status_event", serverEvent);
-      }
-      removeAgentTracking(_key) {
-      }
-      // (agent-stream polling backward compat)
-      updateAgentStreams(_ideType, _streams) {
-      }
+      // toDaemonStatusEventName / resolveEventHideMute / buildServerStatusEvent /
+      // buildP2PStatusEvent / emitStatusEvent moved to status/status-event.ts as
+      // projectServerStatusEvent / projectP2PStatusEvent / createStatusEventEmitter
+      // (wiring-unification B5, shared by both hosts). removeAgentTracking and
+      // updateAgentStreams were dead no-ops with no caller; deleted with them
+      // (wiring-unification B residue cleanup).
       /** Reset P2P dedup hash — forces next send to transmit even if content unchanged */
       resetP2PHash() {
         this.lastP2PStatusHash = "";
@@ -163190,7 +165045,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_provider_loader();
     init_contract();
     init_tree_digest();
-    init_store2();
+    init_store3();
     init_runtime();
     init_logger();
     function projectHotChatSessionStatesFromProviderState(state2) {
@@ -163388,17 +165243,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
       }
       // ─── event ────────────────────────────────────
-      /**
-       * @deprecated Wiring-unification B5 — every provider event consumer is a bus
-       * subscriber (`provider_event`). Kept only as a thin adapter over the bus for
-       * mesh-event-forwarding's bus-less test fallback; there is no listener array
-       * and no buffer drain behind it any more.
-       */
-      onEvent(listener) {
-        if (!this.bus) return () => {
-        };
-        return this.bus.on("provider_event", (e) => listener(e.event), { name: "instance-manager.onEvent" });
-      }
       /**
        * Forward every provider event to the lifecycle bus as the transitional
        * `provider_event` (wiring-unification B1). Pass null to detach.
@@ -165827,8 +167671,8 @@ async (params) => {
       if (!adapter) return null;
       return { target, instance, adapter };
     }
-    function sleep3(ms22) {
-      return new Promise((resolve36) => setTimeout(resolve36, ms22));
+    function sleep3(ms3) {
+      return new Promise((resolve36) => setTimeout(resolve36, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -166189,7 +168033,6 @@ async (params) => {
         messageCount: s2.activeChat?.messages?.length || 0,
         lastMessage: s2.activeChat?.messages?.slice(-1)[0] || null,
         activeModal: s2.activeChat?.activeModal || null,
-        pendingEvents: s2.pendingEvents || [],
         settings: s2.settings
       }));
       ctx.json(res, 200, { instances: result, count: result.length });
@@ -169371,7 +171214,7 @@ data: ${JSON.stringify(msg.data)}
         });
       }
     };
-    var import_crypto20 = require("crypto");
+    var import_crypto21 = require("crypto");
     var import_session_host_core12 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -169469,7 +171312,7 @@ data: ${JSON.stringify(msg.data)}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto20.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto21.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -170712,8 +172555,8 @@ data: ${JSON.stringify(msg.data)}
 \u2717 ${message}
 `));
     }
-    var import_fs27 = require("fs");
-    var import_path26 = require("path");
+    var import_fs28 = require("fs");
+    var import_path27 = require("path");
     init_dist2();
     init_config();
     init_logger();
@@ -170759,20 +172602,20 @@ data: ${JSON.stringify(msg.data)}
       const authority = createFleetAuthority({ secret });
       return { authority, hooks: authority };
     }
-    var import_fs26 = require("fs");
-    var import_path25 = require("path");
+    var import_fs27 = require("fs");
+    var import_path26 = require("path");
     init_config();
     init_logger();
     var FLEET_SECRET_FILE = "seqscribe-fleet-secret.json";
     function fleetSecretPath(env2) {
-      return (0, import_path25.join)(getConfigDir(env2), FLEET_SECRET_FILE);
+      return (0, import_path26.join)(getConfigDir(env2), FLEET_SECRET_FILE);
     }
     function loadStoredFleetSecret(env2) {
       const path74 = fleetSecretPath(env2);
-      if (!(0, import_fs26.existsSync)(path74)) return null;
+      if (!(0, import_fs27.existsSync)(path74)) return null;
       let raw;
       try {
-        raw = (0, import_fs26.readFileSync)(path74, "utf-8");
+        raw = (0, import_fs27.readFileSync)(path74, "utf-8");
       } catch (err) {
         LOG.warn(
           "Seqscribe",
@@ -170799,26 +172642,26 @@ data: ${JSON.stringify(msg.data)}
         throw new Error("storeFleetSecret requires an integer version >= 1");
       }
       const dir = getConfigDir(env2);
-      if (!(0, import_fs26.existsSync)(dir)) {
-        (0, import_fs26.mkdirSync)(dir, { recursive: true, mode: 448 });
+      if (!(0, import_fs27.existsSync)(dir)) {
+        (0, import_fs27.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
-      const path74 = (0, import_path25.join)(dir, FLEET_SECRET_FILE);
+      const path74 = (0, import_path26.join)(dir, FLEET_SECRET_FILE);
       const tmp = `${path74}.tmp-${process.pid}`;
-      (0, import_fs26.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
+      (0, import_fs27.writeFileSync)(tmp, JSON.stringify({ secret, version: version2 }, null, 2), {
         encoding: "utf-8",
         mode: 384
       });
       try {
-        (0, import_fs26.renameSync)(tmp, path74);
+        (0, import_fs27.renameSync)(tmp, path74);
       } catch (err) {
         try {
-          (0, import_fs26.unlinkSync)(tmp);
+          (0, import_fs27.unlinkSync)(tmp);
         } catch {
         }
         throw err;
       }
       try {
-        (0, import_fs26.chmodSync)(path74, 384);
+        (0, import_fs27.chmodSync)(path74, 384);
       } catch {
       }
       LOG.info("Seqscribe", `fleet secret stored (v${version2})`);
@@ -170827,12 +172670,12 @@ data: ${JSON.stringify(msg.data)}
     var SEQSCRIBE_DB_NAME = "seqscribe.db";
     var WRITER_ID_PREFIX = "adhdev";
     function getSeqscribeDbPath() {
-      return (0, import_path26.join)(getConfigDir(), SEQSCRIBE_DB_NAME);
+      return (0, import_path27.join)(getConfigDir(), SEQSCRIBE_DB_NAME);
     }
     function openSeqscribeNode(opts = {}) {
       const dbPath = opts.dbPath ?? getSeqscribeDbPath();
-      const dir = (0, import_path26.dirname)(dbPath);
-      if (!(0, import_fs27.existsSync)(dir)) (0, import_fs27.mkdirSync)(dir, { recursive: true, mode: 448 });
+      const dir = (0, import_path27.dirname)(dbPath);
+      if (!(0, import_fs28.existsSync)(dir)) (0, import_fs28.mkdirSync)(dir, { recursive: true, mode: 448 });
       const Database = loadBetterSqlite3();
       const db = new Database(dbPath);
       db.pragma("journal_mode = WAL");
@@ -171681,6 +173524,13 @@ data: ${JSON.stringify(msg.data)}
               quarantined: opts.terminalRedrive.quarantined
             }
           } : {},
+          ...opts.transcriptTransportSelection ? {
+            transcriptTransportSelection: {
+              replicaSelected: opts.transcriptTransportSelection.replicaSelected,
+              legacySelected: opts.transcriptTransportSelection.legacySelected,
+              zombieRecovered: opts.transcriptTransportSelection.zombieRecovered
+            }
+          } : {},
           ...snap ? {
             throughput: {
               intervalMs: snap.intervalMs,
@@ -171816,7 +173666,1687 @@ data: ${JSON.stringify(msg.data)}
         remoteSeen: () => remoteSeen
       };
     }
-    init_mesh_dual_write();
+    init_mesh_publisher();
+    init_mesh_record();
+    var import_crypto22 = require("crypto");
+    init_dist();
+    init_dist();
+    init_policy();
+    init_dist();
+    init_policy();
+    function evaluateTerminalAdmission2(input) {
+      if (input.activeModalPresent) return { admit: false, reason: "active_modal" };
+      if (input.providerObservedStatus !== void 0 && input.providerObservedStatus.trim().toLowerCase() !== "idle") {
+        return { admit: false, reason: "session_not_idle" };
+      }
+      if (input.nativeMarkerScoped) return { admit: true, evidenceLevel: "strong", reason: "native_turn_terminal_marker" };
+      if (input.selfAttributing) return { admit: true, evidenceLevel: "strong", reason: "self_attributing_summary" };
+      if (input.nativeReadHappened) return { admit: false, reason: "native_marker_absent" };
+      if (input.trailingActivityCount > 0) return { admit: false, reason: "trailing_tool_activity" };
+      if (!input.finalAssistantPresent) return { admit: false, reason: "no_final_assistant_summary" };
+      if (isTranscriptGrowing(input.newestActivityAtMs, input.observedAtMs, input.quietWindowMs)) {
+        return { admit: false, reason: "transcript_growing" };
+      }
+      return { admit: true, evidenceLevel: "weak", reason: "message_shape_fallback" };
+    }
+    function isTranscriptGrowing(newestActivityAtMs, observedAtMs, quietWindowMs) {
+      return typeof newestActivityAtMs === "number" && Number.isFinite(newestActivityAtMs) && observedAtMs - newestActivityAtMs < quietWindowMs;
+    }
+    function holdReasonForDecline(reason) {
+      switch (reason) {
+        case "active_modal":
+        case "session_not_idle":
+        case "trailing_tool_activity":
+          return "live_pending";
+        case "transcript_growing":
+          return "transcript_quiet";
+        case "native_marker_absent":
+        case "no_final_assistant_summary":
+          return null;
+      }
+    }
+    function fromVerdict(verdict) {
+      if (verdict.admit) return { kind: verdict.evidenceLevel };
+      const holdReason = holdReasonForDecline(verdict.reason);
+      return holdReason ? { kind: "hold", reason: verdict.reason, holdReason } : { kind: "decline", reason: verdict.reason };
+    }
+    function admitTranscriptFinal(ev, policy) {
+      return fromVerdict(evaluateTerminalAdmission2({
+        activeModalPresent: ev.live.modal,
+        providerObservedStatus: ev.live.adapterPending ? "generating" : "idle",
+        nativeReadHappened: ev.nativeRead,
+        nativeMarkerScoped: ev.nativeMarker !== void 0,
+        selfAttributing: ev.selfAttributing,
+        trailingActivityCount: ev.live.trailingTool ? 1 : 0,
+        finalAssistantPresent: ev.summary !== void 0 || ev.messageAt !== void 0,
+        newestActivityAtMs: ev.live.newestActivityAt,
+        observedAtMs: ev.at,
+        quietWindowMs: policy.quietWindowMs
+      }));
+    }
+    function admitTurnEnd(ev, policy) {
+      const live = ev.live;
+      if (live) {
+        if (live.modal) return { kind: "hold", reason: "active_modal", holdReason: "live_pending" };
+        if (live.adapterPending) return { kind: "hold", reason: "session_not_idle", holdReason: "live_pending" };
+        if (live.trailingTool) return { kind: "hold", reason: "trailing_tool_activity", holdReason: "live_pending" };
+        if (isTranscriptGrowing(live.newestActivityAt, ev.at, policy.quietWindowMs)) {
+          return { kind: "hold", reason: "transcript_growing", holdReason: "transcript_quiet" };
+        }
+      }
+      return { kind: ev.strength === "genuine" ? "strong" : "weak" };
+    }
+    function admissionHoldUntil(admission, live, observedAtMs, policy, nowMs) {
+      const ttl = holdTtlMs(policy);
+      if (admission.holdReason === "transcript_quiet" && live && typeof live.newestActivityAt === "number") {
+        const remaining = live.newestActivityAt + policy.quietWindowMs - observedAtMs;
+        return nowMs + Math.min(Math.max(0, remaining), ttl);
+      }
+      return nowMs + ttl;
+    }
+    init_policy();
+    init_dist();
+    var A = "accepted";
+    var D = "delivered";
+    var C = "consumed";
+    var G = "generating";
+    var S = "suspended";
+    var F = "finalizing";
+    var ALL_KINDS = TURN_EVIDENCE_KINDS2;
+    var AWAITS = ["await_delivery", "await_consume", "await_turn"];
+    var livenessExtend = { e: "hold", reason: "liveness", until: "liveness", onExpire: "escalate" };
+    var weakCandidate = [
+      { e: "act", act: "weak_candidate" },
+      { e: "hold", reason: "weak_candidate", until: "weak_confirm", onExpire: "commit" },
+      { e: "notify", notify: "candidate", when: "candidate_once" }
+    ];
+    var TRANSITIONS = [
+      // ── lane none: no attempt resolved ──────────────────────────────────
+      { id: "R1", lane: "none", from: "none", on: ["dispatch_accepted"], to: A, verdict: "applied", effects: [
+        { e: "act", act: "open_dispatch" },
+        { e: "hold", reason: "await_delivery", until: "await_delivery", onExpire: "reclaim", meshOnly: true },
+        { e: "hold", reason: "hard_ceiling", until: "hard_ceiling", onExpire: "escalate", meshOnly: true, generationAgnostic: true }
+      ] },
+      { id: "R0a", lane: "none", from: "none", on: ["turn_started"], guard: "unbound", to: G, verdict: "applied", effects: [
+        { e: "act", act: "open_plain" },
+        { e: "act", act: "consume" },
+        { e: "bus", phase: "started" }
+      ] },
+      { id: "R0b", lane: "none", from: "none", on: ["turn_started"], guard: "bound", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "no_attempt" }
+      ] },
+      { id: "R0", lane: "none", from: "none", on: ALL_KINDS.filter((k) => k !== "dispatch_accepted" && k !== "turn_started"), to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "no_attempt" }
+      ] },
+      // ── lane stale: another generation (owner revision 2026-09-23) ──────
+      // g has no turn_started yet (accepted/delivered): adopt g−1's genuine
+      // completion — commit it, cancel g's dispatch, one notice.
+      { id: "R27a", lane: "stale", from: [A, D], on: ["turn_end", "worker_report", "transcript_final"], guard: "prev_generation_completion", to: "outcome", verdict: "applied", effects: [
+        { e: "adopt_prev_generation" }
+      ] },
+      // g is running (or already terminal): never mutate g; record g−1's verdict
+      // and tell the coordinator, who decides whether to salvage g−1's work.
+      { id: "R27", lane: "stale", from: [C, G, S, F, "completed", "failed", "cancelled"], on: ["turn_end", "worker_report", "transcript_final"], guard: "prev_generation_completion", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "late_completion_prev_generation" },
+        { e: "notify", notify: "late_completion", generation: "evidence" }
+      ] },
+      { id: "R28a", lane: "stale", from: "any", on: ["turn_started"], guard: "stale_session_distinct", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "stale_generation" },
+        { e: "cancel_dispatch", target: "evidence_session" }
+      ] },
+      { id: "R28", lane: "stale", from: "any", on: ALL_KINDS, guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "stale_generation" }
+      ] },
+      // ── dispatch / delivery ─────────────────────────────────────────────
+      { id: "R2", lane: "current", from: [A, D], on: ["delivered"], to: D, verdict: "applied", effects: [
+        { e: "act", act: "mark_delivered" },
+        { e: "release", reasons: ["await_delivery"] },
+        { e: "hold", reason: "await_consume", until: "await_consume", onExpire: "redeliver", meshOnly: true },
+        { e: "hold", reason: "await_turn", until: "await_turn", onExpire: "reclaim", meshOnly: true }
+      ] },
+      { id: "R2a", lane: "current", from: [C, G, S, F], on: ["delivered"], to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "late_delivery_ack" }
+      ] },
+      { id: "R3", lane: "current", from: [A, D], on: ["delivery_refused"], guard: "reclaiming_refusal", to: A, verdict: "applied", effects: [
+        { e: "reclaim", reason: "from_refusal" }
+      ] },
+      { id: "R3a", lane: "current", from: [A, D], on: ["delivery_refused"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "delivery_refused_retryable" }
+      ] },
+      { id: "R24", lane: "current", from: [A, D], on: ["dispatch_failed"], to: A, verdict: "applied", effects: [
+        { e: "act", act: "worker_absent" },
+        { e: "reclaim", reason: "dispatch_failed" }
+      ] },
+      { id: "R25", lane: "current", from: [A, D], on: ["duplicate_dispatch_refusal"], guard: "holder_is_this_attempt", to: C, verdict: "applied", effects: [
+        { e: "act", act: "rebind_to_holder" },
+        { e: "act", act: "consume" },
+        { e: "release", reasons: AWAITS },
+        livenessExtend
+      ] },
+      { id: "R25a", lane: "current", from: [A, D], on: ["duplicate_dispatch_refusal"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "foreign_holder" }
+      ] },
+      { id: "R26", lane: "current", from: "nonterminal", on: ["session_rebound"], to: "same", verdict: "applied", effects: [
+        { e: "act", act: "rebind" }
+      ] },
+      // ── turn start / suspension ─────────────────────────────────────────
+      { id: "R4", lane: "current", from: [A, D, C], on: ["turn_started"], to: G, verdict: "applied", effects: [
+        { e: "act", act: "consume" },
+        { e: "release", reasons: AWAITS },
+        livenessExtend,
+        { e: "bus", phase: "started" },
+        { e: "act", act: "apply_held_suspension" }
+      ] },
+      { id: "R5", lane: "current", from: [A, D], on: ["suspension"], to: "same", verdict: "applied", effects: [
+        { e: "hold", reason: "suspension_before_consumed", until: "none", onExpire: "release" }
+      ] },
+      { id: "R5b", lane: "current", from: [A, D], on: ["suspension_resolved"], to: "same", verdict: "applied", effects: [
+        { e: "release", reasons: ["suspension_before_consumed"] }
+      ] },
+      { id: "R6", lane: "current", from: [C, G, F], on: ["suspension"], to: S, verdict: "applied", effects: [
+        { e: "act", act: "suspend" },
+        { e: "release", reasons: ["weak_candidate", "live_pending", "transcript_quiet"] },
+        { e: "bus", phase: "suspended" },
+        { e: "notify", notify: "from_modal" }
+      ] },
+      { id: "R6s", lane: "current", from: [S], on: ["suspension"], guard: "suspension_changed", to: S, verdict: "applied", effects: [
+        { e: "act", act: "suspend" },
+        { e: "bus", phase: "suspended" },
+        { e: "notify", notify: "from_modal" }
+      ] },
+      { id: "R6d", lane: "current", from: [S], on: ["suspension"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "duplicate_suspension" }
+      ] },
+      { id: "R7", lane: "current", from: [S], on: ["suspension_resolved"], to: G, verdict: "applied", effects: [
+        { e: "act", act: "resume" },
+        { e: "bus", phase: "resumed" },
+        { e: "notify", notify: "approval_resolved" }
+      ] },
+      { id: "R8", lane: "current", from: [S], on: ["turn_started", "transcript_activity"], to: G, verdict: "applied", effects: [
+        { e: "act", act: "resume_by_activity" },
+        { e: "release", reasons: ["live_pending", "transcript_quiet", "weak_candidate"] },
+        livenessExtend,
+        { e: "bus", phase: "resumed" }
+      ] },
+      // ── turn end ────────────────────────────────────────────────────────
+      { id: "R9", lane: "current", from: [C, G, S], on: ["turn_end"], guard: "end_genuine", to: "completed", verdict: "applied", effects: [
+        { e: "commit", outcome: "completed", strength: "genuine", reason: "turn_end" }
+      ] },
+      { id: "R10", lane: "current", from: [C, G, S], on: ["turn_end"], guard: "end_weak", to: F, verdict: "applied", effects: weakCandidate },
+      { id: "R10a", lane: "current", from: [F], on: ["turn_end", "transcript_final"], guard: "weak_end_or_final", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "duplicate_weak_end" }
+      ] },
+      { id: "R11", lane: "current", from: [F], on: ["turn_end", "transcript_final"], guard: "genuine_end_or_strong_final", to: "completed", verdict: "applied", effects: [
+        { e: "commit", outcome: "completed", strength: "genuine", reason: "transcript_final" }
+      ] },
+      { id: "R12", lane: "current", from: [F], on: ["turn_started", "transcript_activity"], guard: "after_weak_since", to: G, verdict: "applied", effects: [
+        { e: "act", act: "clear_weak" },
+        { e: "act", act: "activity" },
+        { e: "release", reasons: ["weak_candidate"] },
+        livenessExtend
+      ] },
+      { id: "R13b", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "end_weak_after_timeout", to: "failed", verdict: "applied", effects: [
+        { e: "commit", outcome: "failed", strength: "weak", reason: "finalization_timeout_no_response" }
+      ] },
+      { id: "R14", lane: "current", from: [C, G, S], on: ["transcript_final"], guard: "final_strong", to: "completed", verdict: "applied", effects: [
+        { e: "commit", outcome: "completed", strength: "genuine", reason: "transcript_final" }
+      ] },
+      { id: "R15", lane: "current", from: [C, G, S], on: ["transcript_final"], guard: "final_weak", to: F, verdict: "applied", effects: weakCandidate },
+      { id: "R16", lane: "current", from: [C, G, S, F], on: ["turn_end", "transcript_final"], guard: "admission_hold", to: "same", verdict: "applied", effects: [
+        { e: "hold", reason: "from_admission", until: "admission", onExpire: "reevaluate" }
+      ] },
+      { id: "R16a", lane: "current", from: [C, G, S, F], on: ["transcript_final"], guard: "admission_decline", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "from_admission" }
+      ] },
+      { id: "R33", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "hollow_retry", to: A, verdict: "applied", effects: [
+        { e: "act", act: "hollow" },
+        { e: "reclaim", reason: "hollow_completion" }
+      ] },
+      { id: "R33f", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "hollow_exhausted", to: "failed", verdict: "applied", effects: [
+        { e: "act", act: "hollow" },
+        { e: "commit", outcome: "failed", strength: "genuine", reason: "hollow_max_retries" }
+      ] },
+      // ── worker MCP (F2): the report is the primary completion evidence ──
+      { id: "R17", lane: "current", from: "nonterminal", on: ["worker_report"], to: "outcome", verdict: "applied", effects: [
+        { e: "commit", outcome: "from_report", strength: "tool_report", reason: "worker_reported" }
+      ] },
+      { id: "R17p", lane: "current", from: "nonterminal", on: ["worker_progress"], to: "same", verdict: "applied", effects: [
+        { e: "bus", phase: "progress" },
+        { e: "notify", notify: "progress" }
+      ] },
+      // ── terminal attempts ───────────────────────────────────────────────
+      { id: "R18", lane: "current", from: "terminal", on: ["turn_end", "transcript_final", "no_progress"], guard: "reported_terminal", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "after_report" }
+      ] },
+      { id: "R19", lane: "current", from: "terminal", on: TERMINAL_CLASS_EVIDENCE_KINDS, guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "from_terminal_compare" }
+      ] },
+      { id: "R34", lane: "current", from: "any", on: ["coordinator_ack"], to: "same", verdict: "applied", effects: [
+        { e: "act", act: "mark_notified" }
+      ] },
+      // ── session end / errors / operator ─────────────────────────────────
+      { id: "R20", lane: "current", from: "nonterminal", on: ["process_exit"], guard: "no_provider_failure", to: A, verdict: "applied", effects: [
+        { e: "reclaim", reason: "from_exit_state" }
+      ] },
+      { id: "R20f", lane: "current", from: "nonterminal", on: ["process_exit"], guard: "provider_failure", to: "failed", verdict: "applied", effects: [
+        { e: "commit", outcome: "failed", strength: "genuine", reason: "from_provider_failure" }
+      ] },
+      { id: "R21", lane: "current", from: "nonterminal", on: ["session_error"], to: "failed", verdict: "applied", effects: [
+        { e: "commit", outcome: "failed", strength: "genuine", reason: "session_error" }
+      ] },
+      { id: "R22", lane: "current", from: "nonterminal", on: ["cancel"], to: "cancelled", verdict: "applied", effects: [
+        { e: "cancel_dispatch", target: "current", when: "not_intentional_cleanup" },
+        { e: "commit", outcome: "cancelled", strength: "operator", reason: "from_cancel" }
+      ] },
+      { id: "R23", lane: "current", from: "nonterminal", on: ["operator_status"], to: "outcome", verdict: "applied", effects: [
+        { e: "commit", outcome: "from_operator", strength: "operator", reason: "from_operator" }
+      ] },
+      // ── progress / liveness ─────────────────────────────────────────────
+      { id: "R29", lane: "current", from: [C, G], on: ["no_progress"], guard: "final_present", to: F, verdict: "applied", effects: weakCandidate },
+      { id: "R30", lane: "current", from: [C, G, S, F], on: ["no_progress"], guard: "otherwise", to: "same", verdict: "applied", effects: [
+        { e: "notify", notify: "no_progress", when: "no_progress_due" }
+      ] },
+      { id: "R31", lane: "current", from: [C, G, S, F], on: ["liveness"], guard: "liveness_fatal", to: A, verdict: "applied", effects: [
+        { e: "act", act: "liveness_failure" },
+        { e: "reclaim", reason: "session_dead" }
+      ] },
+      { id: "R31a", lane: "current", from: [C, G, S, F], on: ["liveness"], guard: "liveness_failed_nonfatal", to: "same", verdict: "applied", effects: [
+        { e: "act", act: "liveness_failure" }
+      ] },
+      { id: "R32", lane: "current", from: [C, G, S, F], on: ["liveness", "transcript_activity", "turn_started"], guard: "activity_keeps_state", to: "same", verdict: "applied", effects: [
+        { e: "act", act: "activity" },
+        livenessExtend
+      ] },
+      { id: "R32u", lane: "current", from: [C, G, S, F], on: ["liveness"], guard: "liveness_unknown", to: "same", verdict: "applied", effects: [
+        { e: "act", act: "liveness_unknown" },
+        { e: "hold", reason: "liveness", until: "unknown_grace", onExpire: "escalate" }
+      ] },
+      { id: "R35", lane: "current", from: [C, G, S, F], on: ["git_side_effect"], to: "same", verdict: "applied", effects: [
+        { e: "act", act: "store_git" }
+      ] },
+      // ── hold expiry ─────────────────────────────────────────────────────
+      { id: "H1", lane: "current", from: [A], on: ["hold_expired"], guard: "hold_await_delivery", to: A, verdict: "applied", effects: [
+        { e: "reclaim", reason: "assigned_stranded_dispatch_unconfirmed" }
+      ] },
+      { id: "H2", lane: "current", from: [D], on: ["hold_expired"], guard: "hold_await_consume_redrive", to: D, verdict: "applied", effects: [
+        { e: "act", act: "redrive" },
+        { e: "redeliver" },
+        { e: "hold", reason: "await_consume", until: "await_consume", onExpire: "redeliver", meshOnly: true }
+      ] },
+      { id: "H2r", lane: "current", from: [D], on: ["hold_expired"], guard: "hold_await_consume_exhausted", to: A, verdict: "applied", effects: [
+        { e: "reclaim", reason: "delivered_not_consumed_redrive" }
+      ] },
+      { id: "H3", lane: "current", from: [D], on: ["hold_expired"], guard: "hold_await_turn", to: A, verdict: "applied", effects: [
+        { e: "reclaim", reason: "delivered_no_turn_deadline" }
+      ] },
+      { id: "H4", lane: "current", from: [C, G, S, F], on: ["hold_expired"], guard: "hold_liveness", to: "same", verdict: "applied", effects: [
+        { e: "probe" },
+        { e: "hold", reason: "liveness", until: "unknown_grace", onExpire: "escalate" }
+      ] },
+      { id: "H5", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_hard_ceiling", to: "failed", verdict: "applied", effects: [
+        { e: "commit", outcome: "failed", strength: "genuine", reason: "hard_ceiling" }
+      ] },
+      { id: "H6", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_suspension_before_consumed", to: "same", verdict: "applied", effects: [
+        { e: "release", reasons: "expired_hold" }
+      ] },
+      { id: "H7", lane: "current", from: [C, G, S, F], on: ["hold_expired"], guard: "hold_admission", to: "same", verdict: "applied", effects: [
+        { e: "release", reasons: "expired_hold" },
+        { e: "reevaluate" }
+      ] },
+      { id: "R13a", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_weak_candidate", to: "completed", verdict: "applied", effects: [
+        { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
+      ] },
+      { id: "H0", lane: "current", from: "any", on: ["hold_expired"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
+        { e: "record", note: "hold_stale" }
+      ] }
+    ];
+    var NONTERMINAL = [A, D, C, G, S, F];
+    var TERMINAL = ["completed", "failed", "cancelled"];
+    function ruleAdmitsState(from, state2) {
+      if (state2 === null) return from === "none";
+      if (from === "none") return false;
+      if (from === "any") return true;
+      if (from === "nonterminal") return NONTERMINAL.includes(state2);
+      if (from === "terminal") return TERMINAL.includes(state2);
+      return from.includes(state2);
+    }
+    var TERMINAL_TURN_STATES = ["completed", "failed", "cancelled"];
+    function isTerminalTurnState(state2) {
+      return TERMINAL_TURN_STATES.includes(state2);
+    }
+    var SESSION_PRODUCED_KINDS = /* @__PURE__ */ new Set([
+      "turn_started",
+      "suspension",
+      "suspension_resolved",
+      "turn_end",
+      "transcript_final",
+      "transcript_activity",
+      "no_progress",
+      "process_exit",
+      "session_error",
+      "worker_report",
+      "worker_progress"
+    ]);
+    function classifyLane(attempt, evidence, holds = []) {
+      if (!attempt) return { lane: "none", effectiveGeneration: null };
+      if (evidence.kind === "hold_expired") {
+        const hold = holds.find((h) => h.holdId === evidence.holdId);
+        const generation = evidence.attemptRef?.generation ?? hold?.generation ?? null;
+        if (evidence.attemptRef && evidence.attemptRef.attemptId !== attempt.attemptId) return { rejection: "attempt_mismatch" };
+        if (generation !== null && generation !== attempt.generation) return { lane: "stale", effectiveGeneration: generation };
+        return { lane: "current", effectiveGeneration: attempt.generation };
+      }
+      const sessionProduced = SESSION_PRODUCED_KINDS.has(evidence.kind);
+      const ref = evidence.attemptRef;
+      if (ref) {
+        if (ref.attemptId !== attempt.attemptId) return { rejection: "attempt_mismatch" };
+        if (ref.generation !== attempt.generation) return { lane: "stale", effectiveGeneration: ref.generation };
+        if (sessionProduced && !sessionIdsEquivalent(evidence.sessionId, attempt.sessionId)) return { rejection: "session_mismatch" };
+        return { lane: "current", effectiveGeneration: ref.generation };
+      }
+      if (!sessionProduced) return { lane: "current", effectiveGeneration: attempt.generation };
+      if (sessionIdsEquivalent(evidence.sessionId, attempt.sessionId)) return { lane: "current", effectiveGeneration: attempt.generation };
+      if (attempt.prevGeneration && sessionIdsEquivalent(evidence.sessionId, attempt.prevGeneration.sessionId)) {
+        return { lane: "stale", effectiveGeneration: attempt.generation - 1 };
+      }
+      return { rejection: "session_mismatch" };
+    }
+    function admissionOf(ctx) {
+      const ev = ctx.evidence;
+      if (ev.kind === "transcript_final") return admitTranscriptFinal(ev, ctx.policy);
+      if (ev.kind === "turn_end") return admitTurnEnd(ev, ctx.policy);
+      return null;
+    }
+    function expiredHold(ctx) {
+      const ev = ctx.evidence;
+      if (ev.kind !== "hold_expired") return void 0;
+      const hold = ctx.holds.find((h) => h.holdId === ev.holdId);
+      if (!hold || hold.reason !== ev.reason || ctx.attempt && hold.attemptId !== ctx.attempt.attemptId) return void 0;
+      return hold;
+    }
+    function holdIs(ctx, ...reasons) {
+      const hold = expiredHold(ctx);
+      return !!hold && reasons.includes(hold.reason);
+    }
+    function activityAt(ev) {
+      return ev.kind === "transcript_activity" ? ev.newestActivityAt : ev.at;
+    }
+    function afterWeakSince(ctx) {
+      const since = ctx.attempt?.weakSince;
+      return since !== null && since !== void 0 && activityAt(ctx.evidence) > since;
+    }
+    function turnEnd(ctx) {
+      return ctx.evidence.kind === "turn_end" ? ctx.evidence : null;
+    }
+    function notHeld(ctx) {
+      return admissionOf(ctx)?.kind !== "hold";
+    }
+    var GUARDS = {
+      unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
+      bound: (ctx) => !!ctx.evidence.attemptRef || !!ctx.evidence.taskId,
+      prev_generation_completion: (ctx) => {
+        const attempt = ctx.attempt;
+        if (!attempt || !attempt.prevGeneration || ctx.effectiveGeneration !== attempt.generation - 1) return false;
+        if (!sessionIdsEquivalent(ctx.evidence.sessionId, attempt.prevGeneration.sessionId)) return false;
+        const ev = ctx.evidence;
+        if (ev.kind === "worker_report") return true;
+        if (ev.kind === "turn_end") return ev.strength === "genuine" && !ev.hollow;
+        if (ev.kind === "transcript_final") return admitTranscriptFinal(ev, ctx.policy).kind === "strong";
+        return false;
+      },
+      stale_session_distinct: (ctx) => !!ctx.attempt && !sessionIdsEquivalent(ctx.evidence.sessionId, ctx.attempt.sessionId),
+      reclaiming_refusal: (ctx) => ctx.evidence.kind === "delivery_refused" && RECLAIMING_SEND_REFUSALS.includes(ctx.evidence.reason),
+      suspension_changed: (ctx) => ctx.evidence.kind === "suspension" && ctx.attempt?.suspension !== ctx.evidence.modal,
+      end_genuine: (ctx) => {
+        const e = turnEnd(ctx);
+        return !!e && e.strength === "genuine" && !e.hollow && notHeld(ctx);
+      },
+      end_weak: (ctx) => {
+        const e = turnEnd(ctx);
+        return !!e && e.strength === "weak" && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx);
+      },
+      end_weak_after_timeout: (ctx) => {
+        const e = turnEnd(ctx);
+        return !!e && e.strength === "weak" && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx);
+      },
+      hollow_retry: (ctx) => {
+        const e = turnEnd(ctx);
+        return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt.hollowCount < ctx.attempt.maxTaskRetries;
+      },
+      hollow_exhausted: (ctx) => {
+        const e = turnEnd(ctx);
+        return !!e && !!e.hollow && notHeld(ctx) && ctx.attempt.hollowCount >= ctx.attempt.maxTaskRetries;
+      },
+      final_strong: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong",
+      final_weak: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "weak",
+      genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || GUARDS.final_strong(ctx),
+      weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
+      admission_hold: (ctx) => admissionOf(ctx)?.kind === "hold",
+      admission_decline: (ctx) => admissionOf(ctx)?.kind === "decline",
+      after_weak_since: afterWeakSince,
+      activity_keeps_state: (ctx) => {
+        const ev = ctx.evidence;
+        const state2 = ctx.attempt?.state;
+        if (ev.kind === "liveness") return ev.result === "alive";
+        if (ev.kind === "transcript_activity") return state2 === "consumed" || state2 === "generating" || state2 === "finalizing" && !afterWeakSince(ctx);
+        if (ev.kind === "turn_started") return state2 === "generating" || state2 === "finalizing" && !afterWeakSince(ctx);
+        return false;
+      },
+      liveness_unknown: (ctx) => ctx.evidence.kind === "liveness" && ctx.evidence.result === "unknown",
+      liveness_fatal: (ctx) => ctx.evidence.kind === "liveness" && (ctx.evidence.result === "dead" || ctx.evidence.result === "read_failed" && ctx.attempt.livenessFailStreak + 1 >= LIVENESS_FAIL_STREAK_LIMIT),
+      liveness_failed_nonfatal: (ctx) => ctx.evidence.kind === "liveness" && ctx.evidence.result === "read_failed" && ctx.attempt.livenessFailStreak + 1 < LIVENESS_FAIL_STREAK_LIMIT,
+      reported_terminal: (ctx) => ctx.attempt?.terminal?.strength === "tool_report",
+      provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !!ctx.evidence.providerFailure,
+      no_provider_failure: (ctx) => ctx.evidence.kind === "process_exit" && !ctx.evidence.providerFailure,
+      holder_is_this_attempt: (ctx) => ctx.evidence.kind === "duplicate_dispatch_refusal" && ctx.evidence.holderAttemptId === ctx.attempt?.attemptId,
+      final_present: (ctx) => ctx.evidence.kind === "no_progress" && ctx.evidence.finalAssistantPresent,
+      hold_await_delivery: (ctx) => holdIs(ctx, "await_delivery"),
+      hold_await_consume_redrive: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount < MAX_REDRIVES_PER_GENERATION,
+      hold_await_consume_exhausted: (ctx) => holdIs(ctx, "await_consume") && ctx.attempt.redriveCount >= MAX_REDRIVES_PER_GENERATION,
+      hold_await_turn: (ctx) => holdIs(ctx, "await_turn"),
+      hold_liveness: (ctx) => holdIs(ctx, "liveness"),
+      hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling"),
+      hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
+      hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate"),
+      hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet")
+    };
+    function laneCandidates(lane, state2, kind) {
+      return TRANSITIONS.filter((rule) => rule.lane === lane && ruleAdmitsState(rule.from, state2) && rule.on.includes(kind));
+    }
+    function matchingRules(input) {
+      const lane = classifyLane(input.attempt, input.evidence, input.holds);
+      if ("rejection" in lane) return [];
+      const ctx = { ...input, effectiveGeneration: lane.effectiveGeneration };
+      const candidates = laneCandidates(lane.lane, input.attempt?.state ?? null, input.evidence.kind);
+      const specific = candidates.filter((rule) => rule.guard !== "otherwise" && (!rule.guard || GUARDS[rule.guard](ctx)));
+      if (specific.length > 0) return specific;
+      return candidates.filter((rule) => rule.guard === "otherwise");
+    }
+    function cloneAttempt(attempt) {
+      return {
+        ...attempt,
+        prevGeneration: attempt.prevGeneration ? { ...attempt.prevGeneration } : null,
+        coordinator: { ...attempt.coordinator },
+        terminal: attempt.terminal ? { ...attempt.terminal } : null,
+        data: { ...attempt.data, ...attempt.data.gitSideEffect ? { gitSideEffect: { ...attempt.data.gitSideEffect } } : {} }
+      };
+    }
+    function holdId(attemptId, reason) {
+      return `${attemptId}:${reason}`;
+    }
+    function isMeshScope(attempt) {
+      return attempt.scope !== "plain";
+    }
+    function resolveUntil(expr, draft) {
+      const { policy, nowMs, evidence } = draft.ctx;
+      const attempt = draft.attempt;
+      switch (expr) {
+        case "none":
+          return null;
+        case "await_delivery":
+          return nowMs + awaitDeliveryMs(policy);
+        case "await_consume":
+          return nowMs + consumeGraceFor(policy, attempt.consumeProfile);
+        case "await_turn":
+          return nowMs + policy.noTurnDeadlineMs;
+        case "liveness":
+          return nowMs + policy.livenessDeadlineMs;
+        case "hard_ceiling":
+          return nowMs + policy.hardCeilingMs;
+        case "weak_confirm":
+          return nowMs + weakConfirmMs(policy);
+        case "unknown_grace":
+          return nowMs + unknownLivenessGraceMs(policy);
+        case "admission": {
+          const admission = admissionOf(draft.ctx);
+          if (admission?.kind !== "hold") return nowMs;
+          const live = evidence.kind === "transcript_final" || evidence.kind === "turn_end" ? evidence.live : void 0;
+          return admissionHoldUntil(admission, live, evidence.at, policy, nowMs);
+        }
+      }
+    }
+    function addHold(draft, hold) {
+      draft.holds.set(hold.holdId, hold);
+      draft.effects.push({ kind: "hold", hold });
+    }
+    function releaseHolds(draft, reasons, keep = []) {
+      const attempt = draft.attempt;
+      const released = [];
+      for (const [key2, hold] of draft.holds) {
+        if (keep.includes(hold.reason)) continue;
+        if (reasons === "*" || reasons.includes(hold.reason)) {
+          draft.holds.delete(key2);
+          released.push(hold.reason);
+        }
+      }
+      if (released.length > 0) {
+        draft.effects.push({ kind: "release_hold", attemptId: attempt.attemptId, reasons: reasons === "*" && keep.length === 0 ? "*" : released });
+      }
+    }
+    function notify(draft, kind, opts = {}) {
+      const attempt = draft.attempt;
+      if (!isMeshScope(attempt)) return;
+      draft.effects.push({
+        kind: "notify_coordinator",
+        attemptId: attempt.attemptId,
+        generation: opts.generation ?? attempt.generation,
+        notify: kind,
+        taskId: attempt.taskId,
+        coordinatorDaemonId: attempt.coordinator.daemonId,
+        coordinatorSessionId: attempt.coordinator.sessionId,
+        ...opts.summary ? { summary: opts.summary } : {}
+      });
+    }
+    function summaryOf(ev) {
+      if (ev.kind === "turn_end" || ev.kind === "transcript_final" || ev.kind === "worker_report") return ev.summary;
+      return void 0;
+    }
+    function commit(draft, outcome, strength, reason) {
+      const attempt = draft.attempt;
+      const ev = draft.ctx.evidence;
+      const summary = summaryOf(ev);
+      attempt.state = outcome;
+      attempt.suspension = null;
+      attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...summary ? { summary } : {} };
+      draft.effects.push({
+        kind: "commit",
+        attemptId: attempt.attemptId,
+        generation: attempt.generation,
+        outcome,
+        strength,
+        reason,
+        source: ev.source,
+        ...summary ? { summary } : {}
+      });
+      releaseHolds(draft, "*");
+      if (attempt.scope === "mesh_queue" && attempt.meshId && attempt.taskId) {
+        draft.effects.push({ kind: "queue_status", meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
+        draft.effects.push({ kind: "graph_advance", meshId: attempt.meshId, taskId: attempt.taskId, outcome });
+      }
+      draft.effects.push({ kind: "bus", event: { kind: "turn", phase: "committed", sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
+      notify(draft, outcome, summary ? { summary } : {});
+      draft.effects.push({ kind: "release_attempt_ref", attemptId: attempt.attemptId, sessionId: attempt.sessionId });
+      draft.committed = true;
+    }
+    function reclaim(draft, reason) {
+      const attempt = draft.attempt;
+      if (attempt.scope === "plain") {
+        commit(draft, "failed", "genuine", reason);
+        return;
+      }
+      if (attempt.reclaimCount >= RECLAIM_BUDGET) {
+        commit(draft, "failed", "genuine", "reclaim_budget_exhausted");
+        return;
+      }
+      const prevSession = attempt.sessionId;
+      const prevMessageId = attempt.messageId;
+      const fromGeneration = attempt.generation;
+      const alreadyCut = attempt.state === "accepted" && attempt.prevGeneration !== null && sessionIdsEquivalent(attempt.sessionId, attempt.prevGeneration.sessionId);
+      attempt.prevGeneration = { sessionId: prevSession, consumed: attempt.consumedAt !== null };
+      attempt.generation = fromGeneration + 1;
+      attempt.reclaimCount += 1;
+      attempt.state = "accepted";
+      attempt.suspension = null;
+      attempt.deliveredAt = null;
+      attempt.consumedAt = null;
+      attempt.weakSince = null;
+      attempt.redriveCount = 0;
+      attempt.livenessFailStreak = 0;
+      attempt.lastLiveness = null;
+      draft.effects.push({ kind: "reclaim", attemptId: attempt.attemptId, fromGeneration, toGeneration: attempt.generation, reason });
+      releaseHolds(draft, "*", ["hard_ceiling"]);
+      if (!alreadyCut) {
+        draft.effects.push({ kind: "cancel_dispatch", attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession, messageId: prevMessageId, revokeBind: true });
+      }
+      if (attempt.scope === "mesh_queue" && attempt.meshId && attempt.taskId) {
+        draft.effects.push({ kind: "queue_status", meshId: attempt.meshId, taskId: attempt.taskId, status: "pending", reason });
+      }
+      addHold(draft, {
+        holdId: holdId(attempt.attemptId, "await_delivery"),
+        attemptId: attempt.attemptId,
+        generation: attempt.generation,
+        reason: "await_delivery",
+        until: draft.ctx.nowMs + awaitDeliveryMs(draft.ctx.policy),
+        onExpire: "reclaim",
+        data: {},
+        createdAt: draft.ctx.nowMs
+      });
+    }
+    function newAttempt(ev, fields) {
+      return {
+        meshId: null,
+        taskId: ev.taskId ?? null,
+        attemptNo: 0,
+        sessionId: ev.sessionId,
+        nodeId: null,
+        providerType: null,
+        ownerDaemonId: ev.observedBy,
+        generation: ev.attemptRef?.generation ?? 0,
+        prevGeneration: null,
+        dispatchNonce: null,
+        messageId: null,
+        consumeProfile: "default",
+        maxTaskRetries: DEFAULT_MAX_TASK_RETRIES,
+        state: "accepted",
+        suspension: null,
+        redriveCount: 0,
+        reclaimCount: 0,
+        hollowCount: 0,
+        livenessFailStreak: 0,
+        lastLiveness: null,
+        coordinator: { daemonId: null, sessionId: null },
+        acceptedAt: ev.at,
+        deliveredAt: null,
+        consumedAt: null,
+        lastActivityAt: null,
+        weakSince: null,
+        candidateNotifiedGeneration: null,
+        lastNoProgressNoticeAt: null,
+        notifiedAt: null,
+        terminal: null,
+        data: {},
+        ...fields
+      };
+    }
+    var TERMINAL_NOTIFY_KINDS = ["completed", "failed", "cancelled", "stopped"];
+    function adoptedTerminal(ev) {
+      if (ev.kind === "worker_report") {
+        return { outcome: ev.outcome === "completed" ? "completed" : "failed", strength: "tool_report", reason: "worker_reported" };
+      }
+      if (ev.kind === "transcript_final") return { outcome: "completed", strength: "genuine", reason: "transcript_final" };
+      return { outcome: "completed", strength: "genuine", reason: "turn_end" };
+    }
+    var ACTIONS = {
+      open_dispatch: (draft) => {
+        const ev = draft.ctx.evidence;
+        draft.attempt = newAttempt(ev, {
+          attemptId: ev.attemptRef?.attemptId ?? `${ev.scope}:${ev.eventId}`,
+          scope: ev.scope,
+          meshId: ev.meshId ?? null,
+          attemptNo: ev.attemptNo ?? 0,
+          nodeId: ev.nodeId ?? null,
+          providerType: ev.providerType ?? null,
+          dispatchNonce: ev.dispatchNonce ?? null,
+          messageId: ev.messageId,
+          consumeProfile: ev.consumeProfile ?? "default",
+          maxTaskRetries: ev.maxTaskRetries ?? DEFAULT_MAX_TASK_RETRIES,
+          coordinator: { daemonId: ev.coordinator?.daemonId ?? null, sessionId: ev.coordinator?.sessionId ?? null }
+        });
+      },
+      open_plain: (draft) => {
+        const ev = draft.ctx.evidence;
+        draft.attempt = newAttempt(ev, { attemptId: `plain:${ev.sessionId}:${ev.eventId}`, scope: "plain" });
+      },
+      mark_delivered: (draft) => {
+        const attempt = draft.attempt;
+        const ev = draft.ctx.evidence;
+        attempt.deliveredAt = attempt.deliveredAt ?? ev.at;
+        attempt.sessionId = ev.sessionId;
+        attempt.messageId = ev.messageId;
+      },
+      consume: (draft) => {
+        const attempt = draft.attempt;
+        const at = draft.ctx.evidence.at;
+        attempt.deliveredAt = attempt.deliveredAt ?? at;
+        attempt.consumedAt = attempt.consumedAt ?? at;
+        attempt.lastActivityAt = at;
+      },
+      apply_held_suspension: (draft) => {
+        const attempt = draft.attempt;
+        const held = draft.holds.get(holdId(attempt.attemptId, "suspension_before_consumed"));
+        if (!held) return;
+        const modal = held.data.modal === "choice" ? "choice" : "approval";
+        releaseHolds(draft, ["suspension_before_consumed"]);
+        attempt.state = "suspended";
+        attempt.suspension = modal;
+        draft.effects.push({ kind: "bus", event: { kind: "turn", phase: "suspended", sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation } });
+        notify(draft, modal);
+      },
+      suspend: (draft) => {
+        const attempt = draft.attempt;
+        attempt.suspension = draft.ctx.evidence.modal;
+        attempt.weakSince = null;
+      },
+      resume: (draft) => {
+        draft.attempt.suspension = null;
+      },
+      resume_by_activity: (draft) => {
+        const attempt = draft.attempt;
+        attempt.suspension = null;
+        attempt.lastActivityAt = activityAt(draft.ctx.evidence);
+        attempt.livenessFailStreak = 0;
+      },
+      weak_candidate: (draft) => {
+        const attempt = draft.attempt;
+        attempt.weakSince = draft.ctx.evidence.at;
+      },
+      clear_weak: (draft) => {
+        draft.attempt.weakSince = null;
+      },
+      activity: (draft) => {
+        const attempt = draft.attempt;
+        const ev = draft.ctx.evidence;
+        attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(ev));
+        attempt.livenessFailStreak = 0;
+        if (ev.kind === "liveness") attempt.lastLiveness = ev.result;
+      },
+      liveness_unknown: (draft) => {
+        draft.attempt.lastLiveness = "unknown";
+      },
+      liveness_failure: (draft) => {
+        const attempt = draft.attempt;
+        attempt.livenessFailStreak += 1;
+        attempt.lastLiveness = draft.ctx.evidence.result;
+      },
+      worker_absent: (draft) => {
+        if (draft.ctx.evidence.workerAbsent) draft.attempt.livenessFailStreak += 1;
+      },
+      rebind_to_holder: (draft) => {
+        draft.attempt.sessionId = draft.ctx.evidence.holderSessionId;
+      },
+      rebind: (draft) => {
+        draft.attempt.sessionId = draft.ctx.evidence.toSessionId;
+      },
+      hollow: (draft) => {
+        draft.attempt.hollowCount += 1;
+      },
+      mark_notified: (draft) => {
+        const ev = draft.ctx.evidence;
+        if (TERMINAL_NOTIFY_KINDS.includes(ev.notify) && isTerminalTurnState(draft.attempt.state)) {
+          draft.attempt.notifiedAt = draft.attempt.notifiedAt ?? ev.at;
+        }
+      },
+      store_git: (draft) => {
+        const ev = draft.ctx.evidence;
+        draft.attempt.data = { ...draft.attempt.data, gitSideEffect: { dirty: ev.dirty, commitsSinceDispatch: ev.commitsSinceDispatch, attributable: ev.attributable, at: ev.at } };
+      },
+      redrive: (draft) => {
+        draft.attempt.redriveCount += 1;
+      },
+      stamp_no_progress_notice: (draft) => {
+        draft.attempt.lastNoProgressNoticeAt = draft.ctx.nowMs;
+      }
+    };
+    function resolveNote(note, draft) {
+      if (note === "from_admission") {
+        const admission = admissionOf(draft.ctx);
+        return admission && admission.kind === "decline" ? `admission_declined:${admission.reason}` : "admission_declined";
+      }
+      if (note === "from_terminal_compare") {
+        const terminal = draft.attempt?.terminal;
+        const proposed = proposedOutcome(draft.ctx.evidence);
+        return terminal && proposed === terminal.outcome ? "duplicate" : "already_terminal";
+      }
+      return note;
+    }
+    function proposedOutcome(ev) {
+      switch (ev.kind) {
+        case "turn_end":
+          return ev.afterFinalizationTimeout || ev.hollow ? "failed" : "completed";
+        case "transcript_final":
+        case "no_progress":
+          return "completed";
+        case "worker_report":
+          return ev.outcome === "completed" ? "completed" : "failed";
+        case "session_error":
+          return "failed";
+        case "process_exit":
+          return "failed";
+        case "cancel":
+          return "cancelled";
+        case "operator_status":
+          return ev.status;
+        default:
+          return null;
+      }
+    }
+    function exitReclaimReason(state2) {
+      return state2 === "accepted" || state2 === "delivered" ? "session_exit_before_turn" : "session_exit";
+    }
+    function applyTemplate(template, draft) {
+      if (draft.committed) return;
+      const { evidence: ev, nowMs } = draft.ctx;
+      switch (template.e) {
+        case "act":
+          ACTIONS[template.act](draft);
+          return;
+        case "hold": {
+          const attempt = draft.attempt;
+          if (template.meshOnly && !isMeshScope(attempt)) return;
+          let reason;
+          const data = {};
+          if (template.reason === "from_admission") {
+            const admission = admissionOf(draft.ctx);
+            if (admission?.kind !== "hold") return;
+            reason = admission.holdReason;
+            data.evidenceId = ev.eventId;
+            data.decline = admission.reason;
+          } else {
+            reason = template.reason;
+          }
+          if (reason === "suspension_before_consumed" && ev.kind === "suspension") data.modal = ev.modal;
+          addHold(draft, {
+            holdId: holdId(attempt.attemptId, reason),
+            attemptId: attempt.attemptId,
+            generation: template.generationAgnostic ? null : attempt.generation,
+            reason,
+            until: resolveUntil(template.until, draft),
+            onExpire: template.onExpire,
+            data,
+            createdAt: nowMs
+          });
+          return;
+        }
+        case "release": {
+          if (template.reasons === "expired_hold") {
+            if (ev.kind === "hold_expired") releaseHolds(draft, [ev.reason]);
+            return;
+          }
+          releaseHolds(draft, template.reasons);
+          return;
+        }
+        case "commit": {
+          let outcome;
+          if (template.outcome === "from_report") {
+            outcome = ev.outcome === "completed" ? "completed" : "failed";
+          } else if (template.outcome === "from_operator") {
+            outcome = ev.status;
+          } else {
+            outcome = template.outcome;
+          }
+          let reason;
+          if (template.reason === "from_cancel") reason = ev.reason;
+          else if (template.reason === "from_operator") reason = ev.reason;
+          else if (template.reason === "from_provider_failure") {
+            reason = ev.providerFailure === "billing_failed" ? "provider_billing_failed" : "provider_auth_failed";
+          } else reason = template.reason;
+          commit(draft, outcome, template.strength, reason);
+          return;
+        }
+        case "reclaim": {
+          let reason;
+          if (template.reason === "from_refusal") reason = `dispatch_refused_${ev.reason}`;
+          else if (template.reason === "from_exit_state") reason = exitReclaimReason(draft.attempt.state);
+          else reason = template.reason;
+          reclaim(draft, reason);
+          return;
+        }
+        case "notify": {
+          const attempt = draft.attempt;
+          if (template.when === "candidate_once") {
+            if (attempt.candidateNotifiedGeneration === attempt.generation) return;
+            attempt.candidateNotifiedGeneration = attempt.generation;
+          }
+          if (template.when === "no_progress_due") {
+            const last = attempt.lastNoProgressNoticeAt;
+            if (last !== null && nowMs - last < draft.ctx.policy.livenessDeadlineMs) return;
+            ACTIONS.stamp_no_progress_notice(draft);
+          }
+          const kind = template.notify === "from_modal" ? ev.modal : template.notify;
+          const summary = summaryOf(ev);
+          notify(draft, kind, {
+            ...template.generation === "evidence" && draft.ctx.effectiveGeneration !== null ? { generation: draft.ctx.effectiveGeneration } : {},
+            ...summary ? { summary } : {}
+          });
+          return;
+        }
+        case "adopt_prev_generation": {
+          const attempt = draft.attempt;
+          const prev = attempt.prevGeneration;
+          if (!sessionIdsEquivalent(attempt.sessionId, prev.sessionId)) {
+            draft.effects.push({
+              kind: "cancel_dispatch",
+              attemptId: attempt.attemptId,
+              generation: attempt.generation,
+              sessionId: attempt.sessionId,
+              messageId: attempt.messageId,
+              revokeBind: true
+            });
+          }
+          attempt.sessionId = prev.sessionId;
+          attempt.consumedAt = attempt.consumedAt ?? ev.at;
+          const adopted = adoptedTerminal(ev);
+          commit(draft, adopted.outcome, adopted.strength, adopted.reason);
+          return;
+        }
+        case "bus": {
+          const attempt = draft.attempt;
+          draft.effects.push({ kind: "bus", event: { kind: "turn", phase: template.phase, sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation } });
+          return;
+        }
+        case "record":
+          draft.effects.push({ kind: "record", note: resolveNote(template.note, draft) });
+          return;
+        case "cancel_dispatch": {
+          const attempt = draft.attempt;
+          if (template.when === "not_intentional_cleanup" && ev.kind === "cancel" && ev.reason === "intentional_cleanup") return;
+          if (template.target === "evidence_session") {
+            draft.effects.push({ kind: "cancel_dispatch", attemptId: attempt.attemptId, generation: draft.ctx.effectiveGeneration ?? attempt.generation, sessionId: ev.sessionId });
+          } else {
+            draft.effects.push({ kind: "cancel_dispatch", attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId });
+          }
+          return;
+        }
+        case "redeliver": {
+          const attempt = draft.attempt;
+          draft.effects.push({ kind: "redeliver", attemptId: attempt.attemptId, generation: attempt.generation, messageId: attempt.messageId, sessionId: attempt.sessionId });
+          return;
+        }
+        case "probe": {
+          const attempt = draft.attempt;
+          draft.effects.push({ kind: "probe", attemptId: attempt.attemptId, sessionId: attempt.sessionId });
+          return;
+        }
+        case "reevaluate": {
+          const attempt = draft.attempt;
+          const hold = expiredHold(draft.ctx);
+          const evidenceId = typeof hold?.data.evidenceId === "string" ? hold.data.evidenceId : "";
+          draft.effects.push({ kind: "reevaluate", attemptId: attempt.attemptId, evidenceId, forceLiveFalse: true });
+          return;
+        }
+      }
+    }
+    function reduce(input) {
+      const { attempt, holds, evidence } = input;
+      const lane = classifyLane(attempt, evidence, holds);
+      if ("rejection" in lane) {
+        return { attempt, holds: [...holds], effects: [{ kind: "record", note: lane.rejection }], verdict: "rejected", rejection: lane.rejection };
+      }
+      const matches = matchingRules(input);
+      const rule = matches[0];
+      if (!rule) {
+        const rejection = attempt && isTerminalTurnState(attempt.state) ? "already_terminal" : "illegal_transition";
+        return { attempt, holds: [...holds], effects: [{ kind: "record", note: rejection }], verdict: "rejected", rejection };
+      }
+      const draft = {
+        attempt: attempt ? cloneAttempt(attempt) : null,
+        holds: new Map(holds.map((h) => [h.holdId, h])),
+        effects: [],
+        ctx: { ...input, effectiveGeneration: lane.effectiveGeneration },
+        rule,
+        committed: false
+      };
+      for (const template of rule.effects) applyTemplate(template, draft);
+      if (rule.verdict === "applied" && draft.attempt && !draft.committed) {
+        const target = rule.to;
+        if (target !== "same" && target !== "outcome" && draft.attempt.state === (attempt?.state ?? draft.attempt.state)) {
+          draft.attempt.state = target;
+        }
+      }
+      return {
+        attempt: draft.attempt,
+        holds: [...draft.holds.values()],
+        effects: draft.effects,
+        verdict: rule.verdict,
+        rule: rule.id
+      };
+    }
+    function expireHolds(holds, nowMs, ctx) {
+      return holds.filter((hold) => hold.until !== null && hold.until <= nowMs).sort((a, b) => a.until - b.until || (a.holdId < b.holdId ? -1 : a.holdId > b.holdId ? 1 : 0)).map((hold) => ({
+        eventId: `hold_expired:${hold.holdId}:${hold.until}`,
+        at: nowMs,
+        source: "scheduler",
+        sessionId: ctx.sessionIdFor(hold.attemptId),
+        ...hold.generation !== null ? { attemptRef: { attemptId: hold.attemptId, generation: hold.generation } } : {},
+        observedBy: ctx.observedBy,
+        kind: "hold_expired",
+        holdId: hold.holdId,
+        reason: hold.reason
+      }));
+    }
+    init_store2();
+    init_dist();
+    function isPublishableAttempt(attempt) {
+      return !!attempt && attempt.scope !== "plain" && typeof attempt.meshId === "string" && attempt.meshId.length > 0;
+    }
+    var TERMINAL_NOTIFY = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "stopped"]);
+    function commitEventId(evidenceEventId) {
+      return `${evidenceEventId}#committed`;
+    }
+    function notifyEventId(evidenceEventId, notify2) {
+      return `${evidenceEventId}#notify:${notify2}`;
+    }
+    function buildCommittedEntry(effect, attempt, eventId, at) {
+      return {
+        v: MESH_TOPIC_PROTOCOL_VERSION,
+        eventId,
+        at,
+        k: "turn.committed",
+        attemptId: effect.attemptId,
+        generation: effect.generation,
+        ...attempt.taskId ? { taskId: attempt.taskId } : {},
+        outcome: effect.outcome,
+        strength: effect.strength,
+        reason: effect.reason
+      };
+    }
+    function buildNotifyEntry(effect, attempt, eventId, at) {
+      return {
+        v: MESH_TOPIC_PROTOCOL_VERSION,
+        eventId,
+        at,
+        k: "turn.notify",
+        attemptId: effect.attemptId,
+        notify: effect.notify,
+        targetDaemonId: effect.coordinatorDaemonId ?? attempt.ownerDaemonId,
+        ...effect.coordinatorSessionId ? { targetSessionId: effect.coordinatorSessionId } : {},
+        ...effect.taskId ? { taskId: effect.taskId } : {}
+      };
+    }
+    function buildForwardedEvidenceEntry(evidence, target) {
+      return projectTurnEvidenceEntry(evidence, target);
+    }
+    function refOf(summary) {
+      return summary ? { ref: summary } : {};
+    }
+    function effectEventRows(input) {
+      const { evidence, attempt, effects, nowMs, observedBy } = input;
+      if (!attempt) return [];
+      const publishable = isPublishableAttempt(attempt);
+      const meshId = attempt.meshId;
+      const base = {
+        meshId,
+        attemptId: attempt.attemptId,
+        source: evidence.source,
+        verdict: "applied",
+        observedBy,
+        atMs: evidence.at,
+        recordedAt: nowMs
+      };
+      const rows = [];
+      for (const effect of effects) {
+        switch (effect.kind) {
+          case "commit": {
+            const eventId = commitEventId(evidence.eventId);
+            const entry = publishable ? buildCommittedEntry(effect, attempt, eventId, evidence.at) : void 0;
+            rows.push({
+              ...base,
+              eventId,
+              generation: effect.generation,
+              sessionId: attempt.sessionId,
+              kind: "committed",
+              dedupeKey: "",
+              toState: effect.outcome,
+              payload: { ...meshId ? { meshId } : {}, outcome: effect.outcome, strength: effect.strength, reason: effect.reason, ...entry ? { entry } : {}, ...refOf(effect.summary) },
+              publishState: publishable ? "pending" : "none"
+            });
+            break;
+          }
+          case "notify_coordinator": {
+            if (!publishable) break;
+            const eventId = notifyEventId(evidence.eventId, effect.notify);
+            const entry = buildNotifyEntry(effect, attempt, eventId, evidence.at);
+            rows.push({
+              ...base,
+              eventId,
+              generation: effect.generation,
+              sessionId: attempt.sessionId,
+              kind: "notify",
+              // One terminal notice per generation; repeatable notices are keyed by their cause.
+              dedupeKey: TERMINAL_NOTIFY.has(effect.notify) ? effect.notify : `${effect.notify}:${evidence.eventId}`,
+              payload: { meshId, notify: effect.notify, entry, ...refOf(effect.summary) },
+              publishState: "pending"
+            });
+            break;
+          }
+          case "reclaim":
+            rows.push({
+              ...base,
+              eventId: `${evidence.eventId}#reclaim`,
+              generation: effect.toGeneration,
+              sessionId: attempt.sessionId,
+              kind: "reclaim",
+              dedupeKey: `${effect.fromGeneration}->${effect.toGeneration}`,
+              payload: { ...meshId ? { meshId } : {}, fromGeneration: effect.fromGeneration, toGeneration: effect.toGeneration, reason: effect.reason },
+              publishState: "none"
+            });
+            break;
+          case "cancel_dispatch":
+            rows.push({
+              ...base,
+              eventId: `${evidence.eventId}#cancel:${effect.generation}:${effect.sessionId}`,
+              generation: effect.generation,
+              sessionId: effect.sessionId,
+              kind: "cancel_dispatch",
+              dedupeKey: `${effect.sessionId}:${evidence.eventId}`,
+              payload: {
+                ...meshId ? { meshId } : {},
+                messageId: effect.messageId ?? null,
+                revokeBind: effect.revokeBind === true
+              },
+              publishState: "none"
+            });
+            break;
+          case "redeliver":
+            rows.push({
+              ...base,
+              eventId: `${evidence.eventId}#redeliver`,
+              generation: effect.generation,
+              sessionId: effect.sessionId,
+              kind: "redeliver",
+              dedupeKey: evidence.eventId,
+              payload: { ...meshId ? { meshId } : {}, messageId: effect.messageId },
+              publishState: "none"
+            });
+            break;
+          default:
+            break;
+        }
+      }
+      return rows;
+    }
+    function recordNotes(effects) {
+      return effects.filter((e) => e.kind === "record").map((e) => e.note);
+    }
+    function applyHostEffects(host, effects, ctx) {
+      const terminalTasks = [];
+      if (!host) return { terminalTasks };
+      for (const effect of effects) {
+        if (effect.kind === "queue_status" && effect.status === "pending") {
+          host.requeue(effect, ctx);
+        } else if (effect.kind === "graph_advance") {
+          const { transitioned } = host.graphAdvance(effect, ctx);
+          if (transitioned) terminalTasks.push({ meshId: effect.meshId, taskId: effect.taskId });
+        }
+      }
+      return { terminalTasks };
+    }
+    function cancelRequest(effect, attempt) {
+      return {
+        attemptId: effect.attemptId,
+        generation: effect.generation,
+        sessionId: effect.sessionId,
+        messageId: effect.messageId ?? null,
+        meshId: attempt?.meshId ?? null,
+        taskId: attempt?.taskId ?? null,
+        nodeId: attempt?.nodeId ?? null,
+        revokeBind: effect.revokeBind === true
+      };
+    }
+    function runPostCommitEffects(ports, effects, ctx) {
+      const counters7 = { executed: 0, missingPort: 0, failed: 0 };
+      const run2 = (kind, fn) => {
+        if (!fn) {
+          counters7.missingPort++;
+          return;
+        }
+        try {
+          const result = fn();
+          if (result && typeof result.then === "function") {
+            result.then(void 0, (error48) => {
+              counters7.failed++;
+              ctx.onError(kind, error48);
+            });
+          }
+          counters7.executed++;
+        } catch (error48) {
+          counters7.failed++;
+          ctx.onError(kind, error48);
+        }
+      };
+      const attempt = ctx.attempt;
+      for (const effect of effects) {
+        switch (effect.kind) {
+          case "bus":
+            run2("bus", ports.bus ? () => ports.bus(effect.event, ctx.nowMs) : void 0);
+            break;
+          case "cancel_dispatch": {
+            const request = cancelRequest(effect, attempt);
+            if (request.revokeBind) run2("cancel_dispatch", ports.revokeWorkerBind ? () => ports.revokeWorkerBind(request) : void 0);
+            run2("cancel_dispatch", ports.cancelDispatch ? () => ports.cancelDispatch(request) : void 0);
+            break;
+          }
+          case "release_attempt_ref":
+            run2("release_attempt_ref", ports.releaseAttemptRef ? () => ports.releaseAttemptRef({ attemptId: effect.attemptId, sessionId: effect.sessionId }) : void 0);
+            break;
+          case "redeliver":
+            run2("redeliver", ports.redeliver ? () => ports.redeliver({ ...effect, meshId: attempt?.meshId ?? null, taskId: attempt?.taskId ?? null, nodeId: attempt?.nodeId ?? null }) : void 0);
+            break;
+          case "probe":
+            run2("probe", ports.probe ? () => ports.probe({ attemptId: effect.attemptId, sessionId: effect.sessionId, meshId: attempt?.meshId ?? null, taskId: attempt?.taskId ?? null }) : void 0);
+            break;
+          default:
+            break;
+        }
+      }
+      for (const task of ctx.terminalTasks) {
+        run2("graph_advance", ports.afterTaskTerminal ? () => ports.afterTaskTerminal(task.meshId, task.taskId) : void 0);
+      }
+      return counters7;
+    }
+    var DEFAULT_LOG = { info: () => {
+    }, warn: () => {
+    }, error: () => {
+    } };
+    var PUBLISH_BATCH = 256;
+    function holdAttemptId(holdId2) {
+      const at = holdId2.lastIndexOf(":");
+      return at > 0 ? holdId2.slice(0, at) : holdId2;
+    }
+    function forceLiveFalse(evidence, eventId) {
+      const idle = { modal: false, adapterPending: false, trailingTool: false };
+      if (evidence.kind === "transcript_final") return { ...evidence, eventId, live: idle };
+      if (evidence.kind === "turn_end") return { ...evidence, eventId, live: idle };
+      return null;
+    }
+    function createTurnLedger(deps) {
+      const store = deps.store ?? new TurnStore(deps.db);
+      const policy = deps.policy ?? DEFAULT_TURN_POLICY;
+      const now = deps.now ?? (() => Date.now());
+      const log = deps.log ?? DEFAULT_LOG;
+      const ports = deps.ports ?? {};
+      const autoFlush = deps.autoFlush !== false;
+      const counters7 = {
+        observed: 0,
+        applied: 0,
+        recorded: 0,
+        rejected: 0,
+        forwarded: 0,
+        duplicates: 0,
+        published: 0,
+        publishFailed: 0,
+        postCommitFailed: 0,
+        missingPorts: 0
+      };
+      const txn = (fn) => deps.db.transaction(fn).immediate();
+      function resolveAttempt(evidence) {
+        if (evidence.attemptRef) return store.getAttempt(evidence.attemptRef.attemptId);
+        if (evidence.kind === "dispatch_accepted") return store.getAttempt(`${evidence.scope}:${evidence.eventId}`);
+        if (evidence.kind === "hold_expired") return store.getAttempt(holdAttemptId(evidence.holdId));
+        if (evidence.taskId) return store.findLatestAttemptForTask(null, evidence.taskId);
+        return store.findOpenAttemptForSession(evidence.sessionId);
+      }
+      function evidenceRow(evidence, result, nowMs, opts, publish) {
+        const attempt = result.attempt;
+        const meshId = publish?.meshId ?? attempt?.meshId ?? opts.owner?.meshId ?? null;
+        return {
+          eventId: evidence.eventId,
+          meshId,
+          attemptId: attempt?.attemptId ?? evidence.attemptRef?.attemptId ?? null,
+          generation: attempt?.generation ?? evidence.attemptRef?.generation ?? null,
+          sessionId: evidence.sessionId,
+          kind: evidence.kind,
+          source: evidence.source,
+          verdict: result.verdict === "duplicate" ? "recorded" : result.verdict,
+          rule: result.rule ?? null,
+          rejection: result.rejection ?? null,
+          dedupeKey: evidence.eventId,
+          fromState: result.fromState,
+          toState: result.toState,
+          payload: {
+            ...meshId ? { meshId } : {},
+            evidence,
+            ...result.notes.length > 0 ? { notes: result.notes } : {},
+            ...opts.envelope ? { local: { envelope: opts.envelope } } : {},
+            ...publish ? { entry: publish.entry } : {}
+          },
+          observedBy: evidence.observedBy,
+          srcWriter: opts.src?.writer ?? null,
+          srcSeq: opts.src?.seq ?? null,
+          publishState: publish ? "pending" : "none",
+          atMs: evidence.at,
+          recordedAt: nowMs
+        };
+      }
+      function applyStep(evidence, attempt, opts, nowMs, nested = false) {
+        const steps = [];
+        const holds = attempt ? store.activeHolds(attempt.attemptId) : [];
+        let result = reduce({ attempt, holds, evidence, policy, nowMs });
+        const opened = !attempt && result.attempt && result.verdict === "applied";
+        if (opened && result.attempt) result = { ...result, attempt: { ...result.attempt, ownerDaemonId: deps.selfDaemonId } };
+        if (nested) result = { ...result, effects: result.effects.filter((e) => e.kind !== "cancel_dispatch") };
+        if (opened && result.attempt) {
+          const conflicting = store.findOpenAttemptForSession(result.attempt.sessionId);
+          if (conflicting && conflicting.attemptId !== result.attempt.attemptId) {
+            if (conflicting.scope === "plain") {
+              const supersede = {
+                eventId: `${evidence.eventId}#supersede:${conflicting.attemptId}`,
+                at: evidence.at,
+                source: "dispatch",
+                sessionId: conflicting.sessionId,
+                observedBy: evidence.observedBy,
+                attemptRef: { attemptId: conflicting.attemptId, generation: conflicting.generation },
+                kind: "cancel",
+                reason: "superseded"
+              };
+              steps.push(...applyStep(supersede, conflicting, {}, nowMs, true));
+            } else {
+              log.warn(`turn-ledger: refused ${evidence.kind} ${evidence.eventId} \u2014 session ${conflicting.sessionId} already holds open attempt ${conflicting.attemptId}`);
+              result = { attempt: null, holds: [], effects: [{ kind: "record", note: "open_attempt_conflict" }], verdict: "rejected", rejection: "illegal_transition" };
+            }
+          }
+        }
+        const next = result.attempt;
+        if (result.verdict === "applied" && next) {
+          store.upsertAttempt(next, nowMs);
+          store.syncHolds(next.attemptId, result.holds, nowMs);
+        }
+        const inserted = store.insertEvent(evidenceRow(evidence, {
+          verdict: result.verdict,
+          ...result.rule ? { rule: result.rule } : {},
+          ...result.rejection ? { rejection: result.rejection } : {},
+          fromState: attempt?.state ?? null,
+          toState: next?.state ?? null,
+          attempt: next ?? attempt,
+          notes: recordNotes(result.effects)
+        }, nowMs, opts));
+        if (!inserted) {
+          throw new DuplicateEvidence(evidence.eventId);
+        }
+        const subject = next ?? attempt;
+        if (result.verdict === "rejected" || !subject) {
+          steps.push({ evidence, result, host: { terminalTasks: [] } });
+          return steps;
+        }
+        for (const row of effectEventRows({ evidence, attempt: subject, effects: result.effects, nowMs, observedBy: evidence.observedBy })) {
+          if (!store.insertEvent(row)) {
+            if (row.kind === "committed") throw new Error(`turn-ledger invariant: second commit for ${subject.attemptId} g${row.generation}`);
+          }
+        }
+        const host = result.verdict === "applied" && next ? applyHostEffects(deps.host ?? null, result.effects, { attempt: next, evidence, nowMs, ...opts.envelope ? { envelope: opts.envelope } : {} }) : { terminalTasks: [] };
+        steps.push({ evidence, result, host });
+        return steps;
+      }
+      function forward(evidence, owner, nowMs, opts) {
+        const ref = evidence.attemptRef;
+        if (!ref) {
+          txn(() => store.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs, opts)));
+          counters7.rejected++;
+          return { verdict: "rejected", rejection: "no_attempt", attempt: null, effects: [] };
+        }
+        const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref.attemptId, generation: ref.generation, ownerDaemonId: owner.daemonId });
+        txn(() => store.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs, opts, { meshId: owner.meshId, entry })));
+        counters7.forwarded++;
+        if (autoFlush) void flushPublish();
+        return { verdict: "forwarded", attempt: null, effects: [] };
+      }
+      function observe(evidence, opts = {}) {
+        counters7.observed++;
+        if (!isTurnEvidence(evidence)) {
+          counters7.rejected++;
+          log.error(`turn-ledger: refused malformed evidence (${String(evidence?.kind)}) \u2014 fails the mesh-shared content guard`);
+          return { verdict: "rejected", rejection: "invalid_evidence", attempt: null, effects: [] };
+        }
+        if (store.hasEvent(evidence.eventId)) {
+          counters7.duplicates++;
+          return { verdict: "duplicate", attempt: null, effects: [] };
+        }
+        const nowMs = now();
+        const attempt = resolveAttempt(evidence);
+        const ownerDaemonId = attempt ? attempt.ownerDaemonId : opts.owner?.daemonId;
+        const ownerMeshId = attempt?.meshId ?? opts.owner?.meshId;
+        if (ownerDaemonId && !daemonIdsEquivalent4(ownerDaemonId, deps.selfDaemonId) && ownerMeshId) {
+          return forward(evidence, { daemonId: ownerDaemonId, meshId: ownerMeshId }, nowMs, opts);
+        }
+        let steps;
+        try {
+          steps = txn(() => applyStep(evidence, attempt, opts, nowMs));
+        } catch (error48) {
+          if (error48 instanceof DuplicateEvidence) {
+            counters7.duplicates++;
+            return { verdict: "duplicate", attempt: null, effects: [] };
+          }
+          throw error48;
+        }
+        const { result } = steps[steps.length - 1];
+        if (result.verdict === "applied") counters7.applied++;
+        else if (result.verdict === "recorded") counters7.recorded++;
+        else counters7.rejected++;
+        let publish = false;
+        for (const step of steps) {
+          if (step.result.verdict === "rejected") continue;
+          const post = runPostCommitEffects(ports, step.result.effects, {
+            attempt: step.result.attempt,
+            nowMs,
+            terminalTasks: step.host.terminalTasks,
+            onError: (kind, error48) => {
+              counters7.postCommitFailed++;
+              log.error(`turn-ledger: post-commit ${kind} failed for ${step.evidence.eventId}: ${error48 instanceof Error ? error48.message : String(error48)}`);
+            }
+          });
+          counters7.missingPorts += post.missingPort;
+          if (isPublishableAttempt(step.result.attempt)) publish = true;
+          for (const effect of step.result.effects) {
+            if (effect.kind !== "reevaluate" || !effect.evidenceId) continue;
+            const held = store.getEvent(effect.evidenceId)?.payload.evidence;
+            const again = isTurnEvidence(held) ? forceLiveFalse(held, `${effect.evidenceId}#reeval:${step.evidence.eventId}`) : null;
+            if (again) observe(again, opts);
+          }
+        }
+        if (autoFlush && publish) void flushPublish();
+        return {
+          verdict: result.verdict,
+          ...result.rule ? { rule: result.rule } : {},
+          ...result.rejection ? { rejection: result.rejection } : {},
+          attempt: result.attempt,
+          effects: result.effects
+        };
+      }
+      function notifyMeshEvent(notice) {
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto22.randomUUID)()}`;
+        const at = notice.at ?? now();
+        const entry = {
+          v: MESH_TOPIC_PROTOCOL_VERSION,
+          eventId,
+          at,
+          k: "turn.notify",
+          notify: "mesh_event",
+          targetDaemonId: notice.targetDaemonId,
+          ...notice.targetSessionId ? { targetSessionId: notice.targetSessionId } : {},
+          ...notice.taskId ? { taskId: notice.taskId } : {}
+        };
+        const inserted = txn(() => store.insertEvent({
+          eventId,
+          meshId: notice.meshId,
+          attemptId: null,
+          generation: null,
+          sessionId: notice.targetSessionId ?? "",
+          kind: "notify",
+          source: "mesh_event",
+          verdict: "applied",
+          dedupeKey: eventId,
+          payload: { meshId: notice.meshId, notify: "mesh_event", event: notice.event, entry, ...notice.payload !== void 0 ? { local: { payload: notice.payload } } : {} },
+          publishState: "pending",
+          atMs: at,
+          recordedAt: now()
+        }));
+        if (inserted && autoFlush) void flushPublish();
+        return { eventId, inserted };
+      }
+      function claimDelivery(input) {
+        const nowMs = now();
+        return txn(() => store.insertEvent({
+          eventId: `delivered:${input.writer}:${input.seq}`,
+          meshId: input.meshId ?? null,
+          attemptId: null,
+          generation: null,
+          sessionId: input.sessionId,
+          kind: "delivered",
+          source: "input_service",
+          verdict: "recorded",
+          dedupeKey: `${input.writer}:${input.seq}`,
+          payload: { ...input.meshId ? { meshId: input.meshId } : {}, ...input.outcome ? { outcome: input.outcome } : {} },
+          srcWriter: input.writer,
+          srcSeq: input.seq,
+          publishState: "none",
+          atMs: nowMs,
+          recordedAt: nowMs
+        }));
+      }
+      let flushing = null;
+      let flushAgain = false;
+      function publishable(row) {
+        const entry = row.payload.entry;
+        const meshId = row.meshId ?? (typeof row.payload.meshId === "string" ? row.payload.meshId : null);
+        if (!entry || !meshId) return null;
+        const ref = row.payload.ref;
+        return { meshId, entry, ...ref ? { ref } : {} };
+      }
+      async function drain() {
+        const report = { published: 0, failed: 0, pending: 0 };
+        const publisher = deps.publisher;
+        if (!publisher) {
+          report.pending = store.countPendingPublish();
+          return report;
+        }
+        const blocked = /* @__PURE__ */ new Set();
+        for (; ; ) {
+          flushAgain = false;
+          const rows = store.pendingPublish(PUBLISH_BATCH);
+          let progressed = 0;
+          for (const row of rows) {
+            const target = publishable(row);
+            if (!target) {
+              log.error(`turn-ledger: pending row ${row.eventId} has no publishable entry \u2014 left pending`);
+              continue;
+            }
+            if (blocked.has(target.meshId)) continue;
+            try {
+              const id22 = await publisher.publish(target.meshId, target.entry, target.ref ? { ref: target.ref } : void 0);
+              store.markPublished(row.eventId, id22.writer, id22.seq);
+              report.published++;
+              counters7.published++;
+              progressed++;
+            } catch (error48) {
+              blocked.add(target.meshId);
+              report.failed++;
+              counters7.publishFailed++;
+              log.error(`turn-ledger: publish failed mesh=${target.meshId} eventId=${row.eventId}: ${error48 instanceof Error ? error48.message : String(error48)} \u2014 stays pending`);
+            }
+          }
+          if (!flushAgain && (rows.length < PUBLISH_BATCH || progressed === 0)) break;
+        }
+        report.pending = store.countPendingPublish();
+        return report;
+      }
+      function flushPublish() {
+        if (flushing) {
+          flushAgain = true;
+          return flushing;
+        }
+        flushing = drain().finally(() => {
+          flushing = null;
+        });
+        return flushing;
+      }
+      return {
+        store,
+        selfDaemonId: deps.selfDaemonId,
+        observe,
+        notifyMeshEvent,
+        claimDelivery,
+        isTerminal: (attemptId) => store.isTerminal(attemptId),
+        getAttempt: (attemptId) => store.getAttempt(attemptId),
+        openAttemptForSession: (sessionId) => store.findOpenAttemptForSession(sessionId),
+        sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId),
+        expiredHoldEvidence: (nowMs = now()) => expireHolds(store.dueHolds(nowMs), nowMs, {
+          observedBy: deps.selfDaemonId,
+          sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId)
+        }),
+        sweepExpiredHolds(nowMs = now()) {
+          return expireHolds(store.dueHolds(nowMs), nowMs, {
+            observedBy: deps.selfDaemonId,
+            sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId)
+          }).map((evidence) => observe(evidence));
+        },
+        nextHoldDeadline: () => store.nextHoldDeadline(),
+        flushPublish,
+        republishPending: flushPublish,
+        pendingPublishCount: (olderThanMs) => store.countPendingPublish(olderThanMs),
+        counters: () => ({ ...counters7 })
+      };
+    }
+    var DuplicateEvidence = class extends Error {
+      constructor(eventId) {
+        super(`duplicate evidence ${eventId}`);
+      }
+    };
+    function isAttemptTerminal(attempt) {
+      return !!attempt && isTerminalTurnState(attempt.state);
+    }
+    init_store2();
+    init_migrate_v1();
+    init_schema2();
+    var TURN_WIRE_EVENT_NAMES = ["agent:generating_completed", "agent:stopped"];
+    function turnWireEventName(outcome) {
+      return outcome === "completed" ? "agent:generating_completed" : "agent:stopped";
+    }
+    function projectTurnWireEvent(event, at) {
+      if (event.phase !== "committed" || !event.outcome || !event.strength) return null;
+      return {
+        event: turnWireEventName(event.outcome),
+        sessionId: event.sessionId,
+        attemptId: event.attemptId,
+        generation: event.generation,
+        outcome: event.outcome,
+        strength: event.strength,
+        timestamp: at
+      };
+    }
+    init_mesh_runtime_store();
+    init_mesh_graph_transition_runner();
+    init_mesh_work_queue();
+    init_worker_mcp_isolation();
+    init_mesh_publisher();
+    init_logger();
+    init_policy();
+    var meshRuntimeTxnHost = {
+      requeue(effect, ctx) {
+        requeueTaskForLedgerReclaim(effect.meshId, effect.taskId, effect.reason, new Date(ctx.nowMs).toISOString());
+      },
+      graphAdvance(effect, ctx) {
+        const result = applyTaskTerminalInTxn({
+          meshId: effect.meshId,
+          taskId: effect.taskId,
+          status: effect.outcome,
+          sessionId: ctx.attempt.sessionId,
+          attemptId: ctx.attempt.attemptId,
+          attemptNo: ctx.attempt.attemptNo,
+          occurredAtMs: ctx.attempt.terminal?.at ?? ctx.nowMs,
+          ...ctx.attempt.terminal ? { reason: ctx.attempt.terminal.reason } : {},
+          ...ctx.envelope ? { envelope: ctx.envelope } : {}
+        });
+        if (result.transitioned) propagateLedgerDependencyFailure(effect.meshId, effect.taskId, effect.outcome);
+        return { transitioned: result.transitioned };
+      }
+    };
+    function revokeCutSessionWorkerBind(request) {
+      revokeWorkerSessionBindsForSession(request.sessionId);
+      if (!request.meshId || !request.taskId) return;
+      for (let guard2 = 0; guard2 < 16; guard2++) {
+        const token = findWorkerTaskTokenForSession(request.meshId, request.taskId, request.sessionId);
+        if (!token || token.sessionId !== request.sessionId) return;
+        revokeWorkerTaskToken(token.token);
+      }
+    }
+    var meshRuntimePublisher = {
+      async publish(meshId, entry, opts) {
+        const [, writer, seq2] = await publishMeshTopicEntry(meshId, entry, opts ?? {});
+        return { writer, seq: seq2 };
+      }
+    };
+    function createMeshRuntimeTurnLedger(options) {
+      const store = MeshRuntimeStore.getInstance();
+      return createTurnLedger({
+        db: store.db,
+        store: store.turnStore(),
+        selfDaemonId: options.selfDaemonId,
+        policy: options.policy ?? resolveTurnPolicy(process.env),
+        host: meshRuntimeTxnHost,
+        publisher: options.publisher === void 0 ? meshRuntimePublisher : options.publisher,
+        ports: {
+          revokeWorkerBind: revokeCutSessionWorkerBind,
+          afterTaskTerminal: afterTaskTerminalCommitted,
+          ...options.ports
+        },
+        ...options.now ? { now: options.now } : {},
+        log: {
+          info: (m) => LOG.info("TurnLedger", m),
+          warn: (m) => LOG.warn("TurnLedger", m),
+          error: (m) => LOG.error("TurnLedger", m)
+        }
+      });
+    }
     init_mesh_read_model();
     init_mesh_read_readiness();
     init_mesh_read_model_consumers();
@@ -171912,7 +175442,7 @@ data: ${JSON.stringify(msg.data)}
     init_topics2();
     var FLEET_STATUS_ENV = "ADHDEV_SEQSCRIBE_FLEET_STATUS";
     var FLEET_STATUS_ENTRY_KIND = "adhdev.fleet.status";
-    var MAX_INFLIGHT2 = 32;
+    var MAX_INFLIGHT = 32;
     function resolveFleetStatusMode(env2 = process.env) {
       const raw = env2[FLEET_STATUS_ENV]?.trim().toLowerCase();
       if (!raw) return "shadow";
@@ -171930,8 +175460,8 @@ data: ${JSON.stringify(msg.data)}
       oversized: 0
     };
     var activeNode4 = null;
-    var activeMode2 = "off";
-    var inflightGate2 = createInflightGate(MAX_INFLIGHT2);
+    var activeMode = "off";
+    var inflightGate = createInflightGate(MAX_INFLIGHT);
     var topicUsable = null;
     var configurationGeneration = 0;
     var appendGeneration = 0;
@@ -171956,18 +175486,18 @@ data: ${JSON.stringify(msg.data)}
     }
     function configureFleetStatusShadow(node, env2 = process.env) {
       activeNode4 = node;
-      activeMode2 = resolveFleetStatusMode(env2);
+      activeMode = resolveFleetStatusMode(env2);
       topicUsable = null;
-      inflightGate2.reconfigure();
+      inflightGate.reconfigure();
       configurationGeneration++;
       appendGeneration = 0;
       lastAppendedGeneration = 0;
       lastAppendedEntryForParity = null;
-      if (node && activeMode2 === "shadow") {
+      if (node && activeMode === "shadow") {
         LOG.info("Seqscribe", `fleet.status shadow armed writer=${node.writerId}`);
       }
     }
-    function ensureTopic2(node) {
+    function ensureTopic(node) {
       if (topicUsable !== null) return topicUsable;
       const present = node.topics.some((d) => d.topic === FLEET_STATUS_TOPIC);
       topicUsable = present;
@@ -171982,8 +175512,8 @@ data: ${JSON.stringify(msg.data)}
     function recordFleetStatusShadow(entry) {
       try {
         const node = activeNode4;
-        if (!node || activeMode2 === "off") return false;
-        if (!ensureTopic2(node)) return false;
+        if (!node || activeMode === "off") return false;
+        if (!ensureTopic(node)) return false;
         const payload = sanitizeJson(entry);
         const estimated = estimateEntryBytes({
           topic: FLEET_STATUS_TOPIC,
@@ -172002,11 +175532,11 @@ data: ${JSON.stringify(msg.data)}
         const configuredGeneration = configurationGeneration;
         const thisAppendGeneration = ++appendGeneration;
         const paritySnapshot = freezeParitySnapshot(entry);
-        const attempt = inflightGate2.run(
+        const attempt = inflightGate.run(
           () => node.node.log(FLEET_STATUS_TOPIC).append(FLEET_STATUS_ENTRY_KIND, payload),
           () => {
             counters5.written++;
-            if (activeNode4 === configuredNode && activeMode2 === "shadow" && configurationGeneration === configuredGeneration && thisAppendGeneration >= lastAppendedGeneration) {
+            if (activeNode4 === configuredNode && activeMode === "shadow" && configurationGeneration === configuredGeneration && thisAppendGeneration >= lastAppendedGeneration) {
               lastAppendedGeneration = thisAppendGeneration;
               lastAppendedEntryForParity = paritySnapshot;
             }
@@ -172022,7 +175552,7 @@ data: ${JSON.stringify(msg.data)}
           if (attempt.reason === "shed") {
             counters5.dropped++;
             warnOnce5(
-              `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT2} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
+              `fleet.status shadow shedding load \u2014 ${MAX_INFLIGHT} appends in flight; status records are being dropped from the RING only (the WS status_report is unaffected)`
             );
             return false;
           }
@@ -172038,10 +175568,10 @@ data: ${JSON.stringify(msg.data)}
       }
     }
     function isFleetStatusShadowActive() {
-      return activeNode4 !== null && activeMode2 === "shadow";
+      return activeNode4 !== null && activeMode === "shadow";
     }
     function getLastAppendedEntryForParity() {
-      if (activeMode2 !== "shadow" || activeNode4 === null) return null;
+      if (activeMode !== "shadow" || activeNode4 === null) return null;
       return lastAppendedEntryForParity;
     }
     var FLEET_STATUS_PARITY_INTERVAL_MS = 6e4;
@@ -172412,7 +175942,7 @@ data: ${JSON.stringify(msg.data)}
     init_mesh_config();
     init_logger();
     init_mesh_parity();
-    init_mesh_dual_write();
+    init_mesh_publisher();
     init_mesh_ledger();
     var PARITY_INTERVAL_MS = 15 * 60 * 1e3;
     var PARITY_TAIL = 500;
@@ -172457,8 +175987,8 @@ data: ${JSON.stringify(msg.data)}
             skipped++;
             continue;
           }
-          if (backfillMeshEventShadow(meshId, entry)) mirrored++;
-          else failed++;
+          void entry;
+          failed++;
         }
         if (mirrored > 0) backfillFailures.delete(meshId);
         else if (failed > 0) backfillFailures.set(meshId, (backfillFailures.get(meshId) ?? 0) + 1);
@@ -172865,17 +176395,7 @@ ${notice.notice}${supersededHint}`;
       s2.stalenessProbe.onStale(() => emitFacts("provider_staleness"));
       const outputFanout = new SessionOutputFanout();
       const cliManager = new DaemonCliManager({
-        // Dead dependency (plan C16): no adapter reads the server connection.
-        getServerConn: () => null,
         getP2p: () => outputFanout,
-        // Every cli-manager poke is a registry edge now (registered / terminated,
-        // emitted by the registry itself) or the view-mode fact above; hosts
-        // subscribe to the bus instead of this callback.
-        onStatusChange: () => {
-        },
-        // Tracking lives on the instance; both hosts passed a no-op.
-        removeAgentTracking: () => {
-        },
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {},
@@ -173088,7 +176608,7 @@ ${notice.notice}${supersededHint}`;
     init_dist();
     init_logger();
     init_logger();
-    init_mesh_dual_write();
+    init_mesh_publisher();
     init_topics2();
     var DEFINED_TRANSCRIPT_TOPICS = /* @__PURE__ */ Symbol.for("adhdev.seqscribe.definedTranscriptTopics");
     function definedTopicsFor(node) {
@@ -173481,7 +177001,7 @@ ${notice.notice}${supersededHint}`;
     init_git_commands();
     init_cli_detector();
     init_logger();
-    init_mesh_dual_write();
+    init_mesh_publisher();
     init_mesh_parity();
     init_mesh_read_readiness();
     init_transcript_parity();
@@ -173672,7 +177192,7 @@ ${notice.notice}${supersededHint}`;
     init_logger();
     init_mesh_config();
     init_native_history_executor();
-    init_mesh_dual_write();
+    init_mesh_publisher();
     init_mesh_read_model();
     init_transcript_publisher();
     init_logger();
@@ -173804,9 +177324,9 @@ ${notice.notice}${supersededHint}`;
       bindSeqscribeRuntime(rt);
       step("slot");
       undo.push(["slot", () => bindSeqscribeRuntime(null)]);
-      tryStep("Seqscribe", "mesh dual-write", () => configureMeshDualWrite(node));
-      step("dual-write");
-      undo.push(["dual-write", () => configureMeshDualWrite(null)]);
+      tryStep("Seqscribe", "mesh publisher", () => configureMeshPublisher(node));
+      step("publisher");
+      undo.push(["publisher", () => configureMeshPublisher(null)]);
       tryStep("Seqscribe", "mesh read model", () => configureMeshReadModel(node));
       step("read-model");
       undo.push(["read-model", () => configureMeshReadModel(null)]);
@@ -173867,13 +177387,22 @@ ${notice.notice}${supersededHint}`;
         configureTranscriptProjection(null);
         s5.sessionRegistry.setTranscriptTopicRelease(null);
       }]);
-      tryStep("Seqscribe", "boot mesh topic activation", () => {
+      try {
         const meshIds = listMeshesReadOnly().map((m) => m.id).filter(Boolean);
-        const activated = activateKnownMeshTopics(meshIds);
+        const activated = activateMeshTopicsAtBoot(meshIds);
         if (activated > 0) {
           LOG.info("Seqscribe", `activated ${activated} known mesh topic scope(s) at boot \u2014 consumers converge without waiting for a local write`);
         }
-      });
+      } catch (error48) {
+        LOG.error("Seqscribe", `mesh boot failure: ${error48 instanceof Error ? error48.message : String(error48)}`);
+        for (const [, fn] of [...undo].reverse()) {
+          try {
+            fn();
+          } catch {
+          }
+        }
+        throw error48;
+      }
       step("activate-topics");
       tryStep("Seqscribe", "stale consumer prune", () => pruneStaleConsumersAtBoot());
       step("prune-consumers");
@@ -173897,13 +177426,7 @@ ${notice.notice}${supersededHint}`;
       });
       step("terminal-redrive");
       undo.push(["terminal-redrive", () => configureTerminalRedrive(null)]);
-      let parityLoop = null;
-      tryStep("Seqscribe", "mesh parity loop", () => {
-        parityLoop = startMeshParityLoop(node);
-      });
-      step("parity-loop");
-      undo.push(["parity-loop", () => parityLoop?.stop()]);
-      rt.attachProjections({ transcript, parityLoop });
+      rt.attachProjections({ transcript, parityLoop: null });
       undo.push(["attach", () => rt.attachProjections(null)]);
       let disarmed = false;
       return () => {
@@ -174875,6 +178398,15 @@ ${notice.notice}${supersededHint}`;
     function subscribeHostModal(bus, topics) {
       return bus.on(["modal", "prompt"], () => flushTopic(topics, "session.modal"), { name: "host.modal" });
     }
+    function subscribeHostSessionPurge(bus, topics) {
+      return bus.on("terminated", (e) => {
+        try {
+          topics.purgeChatOutputActivity?.(e.sessionId);
+        } catch (err) {
+          swallow("purge chat output activity")(err);
+        }
+      }, { name: "host.session-purge" });
+    }
     function subscribeHostCommandTopics(bus, topics, onCommandExecuted) {
       return bus.on("command_executed", (e) => {
         const fastFlushed = e.fastFlush && e.success;
@@ -174994,6 +178526,7 @@ ${notice.notice}${supersededHint}`;
           ...transport.chatTail.flushCompleted ? { flushCompleted: (ids) => transport.chatTail.flushCompleted(ids) } : {}
         }),
         subscribeHostModal(bus, topics),
+        subscribeHostSessionPurge(bus, topics),
         subscribeHostCommandTopics(bus, topics, transport.onCommandExecuted?.bind(transport)),
         subscribeHostMeshState(bus, topics, transport.onMeshState?.bind(transport)),
         subscribeHostTurnSnapshots(bus, {
@@ -175148,6 +178681,9 @@ ${notice.notice}${supersededHint}`;
       }
       releaseWrite(payload) {
         return this.plane.releaseWrite(payload);
+      }
+      getSnapshot(sessionId, sinceSeq) {
+        return this.plane.getSnapshot(sessionId, sinceSeq);
       }
       async request(request) {
         await this.ensureConnected();
@@ -175829,6 +179365,36 @@ var SEND_REFUSAL_REASONS = [
   "duplicate_dispatch",
   "internal_error"
 ];
+var MISSION_BRIEF_RENDER_MAX_CHARS = 1200;
+function truncateString(value, max) {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).trimEnd()}\u2026`;
+}
+function renderList(heading, items) {
+  if (!items || items.length === 0) return [];
+  return [`${heading}:`, ...items.map((item) => `- ${item}`)];
+}
+function renderMissionBriefBlock(brief) {
+  const sections = [`Mission goal: ${brief.goal}`];
+  sections.push(...renderList("Constraints", brief.constraints));
+  sections.push(...renderList("Done when", brief.doneCriteria));
+  sections.push(...renderList("Owned paths", brief.ownedPaths));
+  sections.push(...renderList("Handoff notes", brief.handoffNotes));
+  const full = sections.join("\n");
+  if (full.length <= MISSION_BRIEF_RENDER_MAX_CHARS) return full;
+  const marker = "\n(brief truncated)";
+  const budget = MISSION_BRIEF_RENDER_MAX_CHARS - marker.length;
+  const lines = full.split("\n");
+  let acc = "";
+  for (const line of lines) {
+    const next = acc ? `${acc}
+${line}` : line;
+    if (next.length > budget) break;
+    acc = next;
+  }
+  if (!acc) acc = truncateString(lines[0] ?? "", Math.max(budget, 0));
+  return `${acc}${marker}`;
+}
 var WORKER_TOOLS = [
   "report_completion",
   "progress_update",
@@ -175843,7 +179409,8 @@ function hasWorkerProtocolFooter(body) {
   return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
 }
 function renderWorkerProtocolFooter(input = {}) {
-  const lines = [WORKER_PROTOCOL_FOOTER_MARKER];
+  const briefBlock = input.missionBrief ? renderMissionBriefBlock(input.missionBrief) : null;
+  const lines = briefBlock ? [briefBlock, "", WORKER_PROTOCOL_FOOTER_MARKER] : [WORKER_PROTOCOL_FOOTER_MARKER];
   const scope = [];
   if (input.taskId) scope.push(`task ${input.taskId}`);
   if (input.taskMode) scope.push(`mode ${input.taskMode}`);
@@ -175982,7 +179549,9 @@ var NOTIFY_KINDS = [
   "approval_resolved",
   "candidate",
   "no_progress",
-  "progress"
+  "progress",
+  "late_completion",
+  "mesh_event"
 ];
 var id = { t: "id" };
 var idOpt = { t: "id", optional: true };
@@ -176074,6 +179643,71 @@ var isTurnOutcome = makeGuard2(TURN_OUTCOMES);
 var isCommitStrength = makeGuard2(COMMIT_STRENGTHS);
 var MESH_TOPIC_ENTRY_KINDS = ["turn.evidence", "turn.committed", "turn.notify", "mesh.record"];
 var isMeshTopicEntryKind = makeGuard2(MESH_TOPIC_ENTRY_KINDS);
+var TURN_IPC_ERROR_CODES = ["daemon_required", "turn_ledger_unavailable", "ledger_not_owner"];
+function makeGuard3(values) {
+  const set3 = new Set(values);
+  return (value) => typeof value === "string" && set3.has(value);
+}
+var isTurnIpcErrorCode = makeGuard3(TURN_IPC_ERROR_CODES);
+var TURN_OBSERVE_VERDICTS = ["applied", "recorded", "rejected"];
+var isTurnObserveVerdict = makeGuard3(TURN_OBSERVE_VERDICTS);
+var MESH_RECORD_PAYLOAD_KEYS = [
+  // Identifiers
+  "taskId",
+  "deliveryId",
+  "attemptId",
+  "missionId",
+  "checkpointId",
+  "promptId",
+  "providerSessionId",
+  "targetNoteId",
+  // Routing / addressing
+  "nodeId",
+  "sessionId",
+  "providerType",
+  "transport",
+  "attemptedSessionId",
+  "holderSessionId",
+  // Outcome enums
+  "reason",
+  "status",
+  "outcome",
+  "terminalKind",
+  "event",
+  "source",
+  "intentionalStopReason",
+  // Booleans
+  "retryable",
+  "rebound",
+  "forced",
+  "fallback",
+  "membershipRemoved",
+  "requestedForce",
+  "removedByRemoteDaemon",
+  "completedViaReady",
+  "intentional",
+  "weak",
+  // Counters
+  "attempt",
+  "attemptCount",
+  "count"
+];
+var MESH_RECORD_PAYLOAD_KEY_SET = new Set(MESH_RECORD_PAYLOAD_KEYS);
+var OPERATOR_STATUS_VALUES = ["completed", "failed"];
+var isOperatorStatusValue = makeGuard3(OPERATOR_STATUS_VALUES);
+var OPERATOR_STATUS_REASON_VALUES = ["operator_update", "refine_terminal", "validation_terminal"];
+var isOperatorStatusReasonValue = makeGuard3(OPERATOR_STATUS_REASON_VALUES);
+var MESH_INDEX_QUERY_WRITER_SCOPES = ["own", "fleet"];
+var isMeshIndexQueryWriterScope = makeGuard3(MESH_INDEX_QUERY_WRITER_SCOPES);
+var TURN_IPC_COMMANDS = [
+  "turn_observe",
+  "mesh_record",
+  "turn_cancel",
+  "operator_status",
+  "turn_query",
+  "mesh_index_query"
+];
+var isTurnIpcCommand = makeGuard3(TURN_IPC_COMMANDS);
 
 // src/transports/ipc.ts
 var import_daemon_core = __toESM(require_dist3());
@@ -177249,6 +180883,8 @@ var MESH_ENQUEUE_TASK_TOOL = {
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
       requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu." },
       required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
+      owned_paths: { type: "array", items: { type: "string" }, description: `H1 (path ownership). Repo-relative files/dirs this code_change task will touch, e.g. ["src/foo.ts", "src/mesh/**"] (a trailing /** claims the whole subtree; a bare directory with no /** claims only that literal path, not its contents). Absolute paths and ".." segments are rejected. For code_change only: at claim time, a candidate whose owned_paths overlaps another in-flight code_change task's declared paths is refused (owned_paths_conflict) instead of silently racing it. Optional and opt-in \u2014 an omitted declaration performs no overlap check for this task. Your report_completion.touched_files is compared against this declaration afterward and any mismatch is surfaced back to you as evidence, never rejected.` },
+      ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
       target_node_id: { type: "string", description: "Optional HARD constraint: ONLY this node may claim the task. No other node (especially a different machine) will ever claim it \u2014 if the target node has no idle session the task stays pending until it does. Use to route a queued task to a specific (e.g. freshly cloned) worktree node instead of letting the first idle base node claim it. Takes priority over prefer_worktree. An unresolvable target id is rejected at enqueue (no silent unpin)." },
       targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
       target_node: { type: "string", description: "Alias for target_node_id." },
@@ -177306,6 +180942,8 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             read_only: { type: "boolean", description: "Snake-case alias for readonly." },
             requiredTags: { type: "array", items: { type: "string" }, description: "Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>." },
             required_tags: { type: "array", items: { type: "string" }, description: "Snake_case alias for requiredTags." },
+            owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in \u2014 for code_change only, an overlapping declaration against another in-flight code_change task is refused at claim time." },
+            ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
             target_node_id: { type: "string", description: "Optional HARD pin: only this node may claim the task. An unresolvable id rejects the WHOLE batch (atomic)." },
             targetNodeId: { type: "string", description: "CamelCase alias for target_node_id." },
             prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op when none exists)." },
@@ -177589,6 +181227,8 @@ var MESH_SEND_TASK_TOOL = {
       taskMode: { ...enumOf(MESH_TASK_MODES), description: "CamelCase alias for task_mode." },
       readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
       read_only: { type: "boolean", description: "Snake-case alias for readonly." },
+      owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (a trailing /** claims the subtree). Optional and opt-in. A direct dispatch already targets a specific node/session, so this is recorded for the same code_change overlap check against OTHER in-flight tasks (queued or direct) and for the report_completion.touched_files comparison \u2014 it is not itself a routing input." },
+      ownedPaths: { type: "array", items: { type: "string" }, description: "CamelCase alias for owned_paths." },
       mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
       missionId: { type: "string", description: "CamelCase alias for mission_id." },
       difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE \u2014 it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry." },
@@ -177791,7 +181431,18 @@ var MESH_MISSION_UPSERT_TOOL = {
       missionIds: { type: "array", items: { type: "string" }, description: "CamelCase alias for mission_ids." },
       title: { type: "string", description: "Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode." },
       goal: { type: "string", description: "Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode." },
-      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." }
+      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." },
+      brief: {
+        type: "object",
+        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array. Ignored in bulk (mission_ids) mode. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
+        properties: {
+          goal: { type: "string", description: "What this mission is trying to accomplish. Required for the brief to be stored \u2014 an object with no goal is treated as no brief." },
+          constraints: { type: "array", items: { type: "string" }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
+          doneCriteria: { type: "array", items: { type: "string" }, description: "How to know the mission is actually done." },
+          handoffNotes: { type: "array", items: { type: "string" }, description: "Standing notes for whoever picks up mission work next." },
+          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." }
+        }
+      }
     },
     // No hard-required field: the single path requires `title` and the bulk path
     // requires `mission_ids` + `status`; the handler enforces the mode-specific rule
