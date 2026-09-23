@@ -106,3 +106,43 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
         expect(registry.oldestLastSentAt('session.modal')).toBe(0);
     });
 });
+
+describe('TopicSubscriptionRegistry.oldestLastFlushedAt (reconciliation reads this, not lastSentAt)', () => {
+    it('advances on a session.modal flush that dedups to no-op, while oldestLastSentAt stays at the last real send', async () => {
+        // Live false positive (2026-09-25 standalone pass): `session.modal`'s
+        // flush only stamped `lastSentAt` when it SENT; a healthy subscriber
+        // whose state had not changed since its last send looked stale to the
+        // WARN-only reconciliation forever. `lastFlushedAt` records every
+        // throttle-cleared pass, sent or deduped.
+        let clock = 1_000;
+        const modalState = { status: 'idle', title: 'Session One' };
+        const sink: TopicSink = { send: () => true, isDeliverable: () => true, isAlive: () => true };
+        const registry = new TopicSubscriptionRegistry(sink, {
+            now: () => clock,
+            sources: {
+                daemonMetadataBody: () => ({ daemonId: 'd1', status: {} as any }),
+                sessionModalState: () => modalState as never,
+            },
+            chatTail: { isCliSession: () => true, scheduleGate: () => true, onDebouncedFlush: () => {} },
+        });
+        registry.subscribe('conn-1', { type: 'subscribe', topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } } as any);
+        expect(registry.oldestLastFlushedAt('session.modal')).toBe(0);
+
+        await registry.flushNow('session.modal');
+        expect(registry.oldestLastSentAt('session.modal')).toBe(1_000);
+        expect(registry.oldestLastFlushedAt('session.modal')).toBe(1_000);
+
+        // Same state again: the flush pass runs, dedups, sends nothing.
+        clock = 61_000;
+        await registry.flushNow('session.modal');
+        expect(registry.oldestLastSentAt('session.modal')).toBe(1_000);
+        expect(registry.oldestLastFlushedAt('session.modal')).toBe(61_000);
+    });
+
+    it('returns null with no subscribers and 0 before the first flush pass', () => {
+        const registry = makeRegistry(() => 1_000);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBeNull();
+        registry.subscribe('conn-1', { type: 'subscribe', topic: 'daemon.metadata', key: 'k1', params: {} } as any);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(0);
+    });
+});
