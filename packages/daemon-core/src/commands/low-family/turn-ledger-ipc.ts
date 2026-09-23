@@ -8,6 +8,8 @@
  * (C-W8: + `note_upsert` / `note_forget` — operating notes over local IPC.)
  * (C-W9b/C-W9a: + the thirteen store commands of mesh-store-ipc.ts — records,
  * queue composites, missions list, active work, recovery hints.)
+ * (C-W9c: + the eight commands of mesh-graph-ipc.ts — graph gates/plan/patch,
+ * task/mission stats, prune audit, orphaned-pin notify.)
  *
  * SCOPE: this file is the RESPONDER side. `mcp-server/src/ipc/turn-commands.ts`
  * (C-W6 pre-work, landed) is the CLIENT — it calls `transport.command(name,
@@ -106,6 +108,7 @@ import { LOG } from '../../logging/logger.js';
 import { forgetOperatingNote, readOperatingNotes, recordOperatingNote } from '../../mesh/mesh-operating-notes.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
 import { meshStoreIpcHandlers } from './mesh-store-ipc.js';
+import { meshGraphIpcHandlers } from './mesh-graph-ipc.js';
 
 // ─── late-binding slot (see file header) ────────────────────────────────────
 
@@ -471,6 +474,9 @@ function toWireMission(record: MeshMissionRecord): MeshMissionRecordWire {
         goal: record.goal,
         status: record.status,
         ...(record.source ? { source: record.source } : {}),
+        // H2: `record.brief` is already normalized (mesh-missions.ts) — a structural
+        // mirror is enough for the wire, not a re-normalize.
+        ...(record.brief ? { brief: record.brief } : {}),
     };
 }
 
@@ -484,6 +490,10 @@ const missionUpsert: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any
             ...(req.goal !== undefined ? { goal: req.goal } : {}),
             ...(req.status ? { status: req.status } : {}),
             ...(req.source ? { source: req.source } : {}),
+            // H2: `undefined` (field omitted) preserves the existing brief; `null`
+            // (explicit clear) and a MissionBriefWire object both forward as-is —
+            // upsertMeshMission's own normalizeMissionBrief call does the real work.
+            ...(req.brief !== undefined ? { brief: req.brief } : {}),
         });
         const response: MissionUpsertResponse = { mission: toWireMission(record) };
         return { success: true, ...response };
@@ -565,6 +575,9 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     // C-W9b / C-W9a: the mcp-server's store access (records, queue, missions,
     // active work) — mesh-store-ipc.ts.
     ...meshStoreIpcHandlers,
+    // C-W9c: graph gates/plan/patch, task/mission stats, prune audit and
+    // orphaned-pin notify — mesh-graph-ipc.ts.
+    ...meshGraphIpcHandlers,
 };
 
 export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandlers, {
@@ -579,4 +592,5 @@ export const turnLedgerIpcSpecs = defineCommandSpecs('low', turnLedgerIpcHandler
     note_upsert: { sources: ['ipc'] },
     note_forget: { sources: ['ipc'] },
     ...Object.fromEntries(Object.keys(meshStoreIpcHandlers).map((name) => [name, { sources: ['ipc'] as const }])),
+    ...Object.fromEntries(Object.keys(meshGraphIpcHandlers).map((name) => [name, { sources: ['ipc'] as const }])),
 });

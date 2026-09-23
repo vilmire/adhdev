@@ -15,6 +15,7 @@ import { workerReportHandlers } from '../../src/commands/low-family/worker-repor
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
 import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
+import { transcriptTransportReportHandlers } from '../../src/commands/low-family/transcript-transport-report.js'
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
 
 // RF-ROUTER LOW family: the command registry must carry exactly the low-family
@@ -90,6 +91,10 @@ const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 // "별도 프로세스 경계") — mcp-server reaches the seqscribe-node-owning
 // daemon through these two commands instead of opening seqscribe.db itself.
 const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcript_replica']
+// wiring-unification G2b (2026-09-24): the dashboard reports which transport
+// (replica vs legacy) it actually used, once per subscription health
+// transition, over P2P — see transcript-transport-report.ts's header.
+const TRANSCRIPT_TRANSPORT_REPORT_CMDS = ['report_transcript_transport']
 // wiring-unification C2 / C-W6: the MCP server's turn-ledger IPC surface
 // (mesh-runtime.db is the daemon's alone — check:boundaries C8).
 const TURN_LEDGER_IPC_CMDS = [
@@ -99,19 +104,26 @@ const TURN_LEDGER_IPC_CMDS = [
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
   'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
   'graph_audit_record', 'active_work_query', 'recovery_context_query',
+  // C-W9c store commands (mesh-graph-ipc.ts, merged into the same map): the last
+  // mcp-server in-process daemon-core paths — graph gates/plan/patch, task/mission
+  // stats, one prune audit, orphaned-pin notify.
+  'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
+  'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ]
 
 describe('low-family registry', () => {
-  it('registers all 81 LOW family commands once, no overlap', () => {
+  it('registers all 90 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
-      ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS,
+      ...TRANSCRIPT_REPLICA_CMDS, ...TRANSCRIPT_TRANSPORT_REPORT_CMDS, ...TURN_LEDGER_IPC_CMDS,
     ]
-    // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands = 81.
-    expect(all).toHaveLength(81)
+    // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
+    // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
+    // orphaned-pin commands = 90.
+    expect(all).toHaveLength(90)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -131,6 +143,7 @@ describe('low-family registry', () => {
     expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
     expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
     expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
+    expect(Object.keys(transcriptTransportReportHandlers)).toEqual(TRANSCRIPT_TRANSPORT_REPORT_CMDS)
     expect(Object.keys(turnLedgerIpcHandlers)).toEqual(TURN_LEDGER_IPC_CMDS)
   })
 
@@ -150,7 +163,8 @@ describe('low-family registry', () => {
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
       meshNodeLogsHandlers, workerReportHandlers, workerMailboxHandlers,
-      workerPeerContextHandlers, transcriptReplicaHandlers, turnLedgerIpcHandlers,
+      workerPeerContextHandlers, transcriptReplicaHandlers, transcriptTransportReportHandlers,
+      turnLedgerIpcHandlers,
     ].flatMap((handlers) => Object.keys(handlers))
 
     expect(new Set(union).size).toBe(union.length)
