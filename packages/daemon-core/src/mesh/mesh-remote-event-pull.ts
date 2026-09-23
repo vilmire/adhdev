@@ -27,6 +27,7 @@ import {
     readTranscriptForDaemonConsumer,
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
 } from './transcript-daemon-consumer-read.js';
+import { resolveRemotePullSlowDaemonSkipMs } from './mesh-reconcile-config.js';
 
 // ─── Pull pacing (RECONCILE-PULL-FLOOD, M-MESH-INFRA-0829 follow-up) ────────
 // Live measurement (2026-08-30, preview coordinator, rc.45): the 4s reconcile
@@ -82,10 +83,25 @@ interface RemotePullBackoff { emptyRounds: number; nextPullAtMs: number; lastTou
 const remotePullBackoffByDaemon = new Map<string, RemotePullBackoff>();
 const lastRedrivePullAtMs = new Map<string, number>();
 
+// ─── Per-daemon slow-pull skip (P6, 2026-09-23 IPC-load audit, finding 6/(f)) ──
+// pullRemoteNodeQueues already parallelizes across daemons WITHIN one mesh
+// (Promise.allSettled above), but the reconcile tick's PHASE 1 still awaits
+// pullRemoteNodeQueues once per HOSTED MESH, serially. A daemon that answers
+// slowly (a degraded peer, a large queue) can therefore stretch every mesh's
+// PHASE 1 pass, not just its own. Track how long each daemon's LAST pull took;
+// if it exceeded the budget, skip that daemon's pull entirely on the NEXT round
+// (this tick) rather than awaiting it again immediately — it gets one chance per
+// tick, never zero forever. LOSSLESS in the same sense as the empty-backoff
+// skip: the remote queue keeps whatever it hasn't drained, so a skip delays
+// delivery, it never drops it.
+interface RemotePullDuration { durationMs: number; touchedAtMs: number; }
+const lastPullDurationMsByDaemon = new Map<string, RemotePullDuration>();
+
 /** @internal Test-only: clear pacing state between cases. */
 export function __resetRemoteEventPullPacingForTests(): void {
     remotePullBackoffByDaemon.clear();
     lastRedrivePullAtMs.clear();
+    lastPullDurationMsByDaemon.clear();
 }
 
 /**
@@ -137,6 +153,37 @@ function pullBackoffKey(meshId: string, daemonId: string): string {
 function isRemotePullBackedOff(meshId: string, daemonId: string, nowMs: number): boolean {
     const state = remotePullBackoffByDaemon.get(pullBackoffKey(meshId, daemonId));
     return !!state && nowMs < state.nextPullAtMs;
+}
+
+/** True when this daemon's MOST RECENT pull round exceeded the per-daemon slow-pull
+ *  budget. A first-ever pull (no recorded duration) is never considered slow.
+ *
+ *  DELETES the entry as it consumes it (skip-then-clear, not skip-then-remember):
+ *  a skip round never re-measures the duration (the pull didn't run), so leaving
+ *  the stale "was slow" verdict in place would skip that daemon FOREVER. Clearing
+ *  it here guarantees the very next round gets a fresh attempt — "one skip, then
+ *  retried" rather than a permanent wedge — while a genuinely-still-slow daemon
+ *  simply re-records a slow duration and earns another single skip. */
+function isRemotePullDaemonSlow(meshId: string, daemonId: string): boolean {
+    const key = pullBackoffKey(meshId, daemonId);
+    const entry = lastPullDurationMsByDaemon.get(key);
+    if (entry === undefined) return false;
+    lastPullDurationMsByDaemon.delete(key);
+    return entry.durationMs > resolveRemotePullSlowDaemonSkipMs();
+}
+
+function noteRemotePullDurationMs(meshId: string, daemonId: string, durationMs: number, nowMs: number): void {
+    const key = pullBackoffKey(meshId, daemonId);
+    lastPullDurationMsByDaemon.set(key, { durationMs, touchedAtMs: nowMs });
+    // Shares the same TTL/cap rationale as the other pacing maps (MEM-4): pure
+    // pacing state on a seconds-to-minutes timescale, safe to drop once stale —
+    // dropping just re-allows a pull next round, it never loses queued events.
+    applyBoundedRetention(lastPullDurationMsByDaemon, {
+        ttlMs: REMOTE_PULL_PACING_TTL_MS,
+        maxEntries: REMOTE_PULL_PACING_MAX_ENTRIES,
+        readTimestamp: (value) => value.touchedAtMs,
+        now: nowMs,
+    });
 }
 
 function noteRemotePullResult(meshId: string, daemonId: string, result: PullFromNodeResult, nowMs: number): void {
@@ -235,8 +282,21 @@ export async function pullRemoteNodeQueues(
     await Promise.allSettled(uniqueNodes.map(node => (async () => {
         const nodeDaemonId = readNonEmptyString(node.daemonId);
         if (nodeDaemonId && isRemotePullBackedOff(meshId, nodeDaemonId, Date.now())) return;
+        // SLOW-DAEMON SKIP (P6, 2026-09-23 IPC-load audit, finding 6/(f)): this
+        // daemon's LAST pull exceeded the budget — skip it THIS round rather than
+        // awaiting it again immediately. Best-effort pacing only: a daemon that
+        // never gets to run also never gets to update its duration, so this can
+        // never wedge a daemon out forever — the very next round it is NOT skipped
+        // (no fresher duration was recorded), giving it one fresh chance every
+        // round, worst case. Lossless: the remote queue keeps undrained rows.
+        if (nodeDaemonId && isRemotePullDaemonSlow(meshId, nodeDaemonId)) return;
+        const startedAtMs = Date.now();
         const result = await pullPendingEventsFromNode(components, meshId, node, localDaemonId, candidateDaemonIds, pulls);
-        if (nodeDaemonId) noteRemotePullResult(meshId, nodeDaemonId, result, Date.now());
+        const finishedAtMs = Date.now();
+        if (nodeDaemonId) {
+            noteRemotePullResult(meshId, nodeDaemonId, result, finishedAtMs);
+            noteRemotePullDurationMs(meshId, nodeDaemonId, finishedAtMs - startedAtMs, finishedAtMs);
+        }
     })()));
 }
 

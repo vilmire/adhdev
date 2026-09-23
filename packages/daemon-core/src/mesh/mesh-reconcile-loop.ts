@@ -82,7 +82,8 @@ import {
     reconcileUnterminatedDirectDispatches,
     autoPruneStaleDirectDispatches,
 } from './mesh-completion-synthesis.js';
-import { runContinuousAutoFastForwardScan, runPendingCoordinatorCatchupScan, getMeshWithCache } from './mesh-queue-assignment.js';
+import { runPendingCoordinatorCatchupScan, getMeshWithCache } from './mesh-queue-assignment.js';
+import { startContinuousAutoFastForwardScheduler } from './mesh-auto-fast-forward.js';
 import {
     reclaimOrphanedTurnAttempts,
     reclaimQueueTerminatedTurnAttempts,
@@ -408,25 +409,26 @@ export async function runMeshReconcileTick(components: DaemonComponents): Promis
         }
     }
 
-    // ── PHASE 2.7: continuous remote auto fast-forward (opt-in, default OFF) ────
-    // mode:"continuous" + remoteNodes:true only. Catch up an online/clean/behind
-    // REMOTE base node that emits no fresh idle edge (e.g. a long-idle base node while
-    // upstream advanced). Runs BEFORE PHASE 3's queue claim so a node it advances is
-    // caught up before any new task is dispatched onto it. Cloud-only (dispatchMeshCommand);
-    // a per-node cooldown + workspace lease inside the scan keep the 4s cadence from
-    // hammering peers. No-op for every mesh that has not opted into continuous mode, so
-    // the default (idle-edge only) path is byte-for-byte unchanged.
-    if (dispatchMeshCommand) {
-        for (const mesh of meshesSnapshot) {
-            const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
-            if (!daemonHostsMesh(mesh, selfIds)) continue;
-            try {
-                await runContinuousAutoFastForwardScan(components, mesh);
-            } catch (e: any) {
-                LOG.warn('MeshReconcile', `Continuous auto fast-forward scan failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-        }
-    }
+    // ── PHASE 2.7 REMOVED (P6, 2026-09-23 IPC-load audit) ──────────────────────
+    // Continuous remote auto fast-forward (mode:"continuous" + remoteNodes:true)
+    // no longer runs inside this tick. It used to be awaited here, serially, once
+    // per hosted mesh, before PHASE 3's queue claim — measured cost: 15,177 of
+    // 16,040 logged P2P mesh sends over ~3.5 days (94.6%, ~4,300/day, ~1.2s each),
+    // 23% of daemon log lines, and the 13-34s event-loop spikes coincided with
+    // this traffic. It now runs on its OWN scheduler
+    // (startContinuousAutoFastForwardScheduler in mesh-auto-fast-forward.ts,
+    // started/stopped alongside this loop in setupMeshReconcileLoop below) with a
+    // per-node exponential backoff and a cache-only precheck, so it is never
+    // awaited by — and can never stall — this tick.
+    //
+    // Losing "runs BEFORE PHASE 3 in the same tick" only removes an optimization,
+    // not a correctness guarantee: the workspace lease
+    // (isWorkspaceAutoFastForwardInFlight, consulted independently by the queue
+    // claim path in mesh-queue-assignment.ts / mesh-queue-autolaunch.ts) is what
+    // actually prevents a task claim from racing an in-flight ff mutation, and
+    // that lease is orthogonal to which scheduler triggered the ff. The only
+    // observable effect of decoupling is that a continuous catch-up may now land
+    // up to one auto-ff scheduler interval later relative to a claim, never a race.
 
     // ── PHASE 3: recover pending queue claims for newly-idle sessions ──────────
     // The event-driven claim paths (agent:ready / agent:generating_completed in
@@ -1122,10 +1124,15 @@ export function setupMeshReconcileLoop(components: DaemonComponents): ReconcileL
     // (forwardUnresolvedDelegateEvent) fires it after persisting an outbox row so
     // the PHASE 0 retry runs early instead of waiting for the next periodic tick.
     registerUnresolvedForwardRetryNudge(() => scheduleUnresolvedForwardNudge(components));
+    // P6 (2026-09-23 IPC-load audit): continuous auto-fast-forward runs on its OWN
+    // timer now, started/stopped alongside this loop but NEVER awaited by its tick
+    // — see the PHASE 2.7 REMOVED comment above runMeshReconcileTick's PHASE 3.
+    const autoFastForwardScheduler = startContinuousAutoFastForwardScheduler(components);
     LOG.info('MeshReconcile', `Mesh reconcile loop started (interval ${intervalMs}ms)`);
     return {
         stop() {
             clearInterval(timer);
+            autoFastForwardScheduler.stop();
             registerUnresolvedForwardRetryNudge(undefined);
             clearUnresolvedForwardNudge();
             LOG.info('MeshReconcile', 'Mesh reconcile loop stopped');

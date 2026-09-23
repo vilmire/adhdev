@@ -1,13 +1,20 @@
 // ---------------------------------------------------------------------------
 // mesh-reconcile-config — reconcile-loop timing tunables + env resolvers
 // ---------------------------------------------------------------------------
-// Extracted from mesh-reconcile-loop.ts (A-3 god-module decomposition, pure move,
-// no behavior change). Holds the loop-cadence tunables and their env-override
-// resolvers. Each resolver reads MESH_*_MS from the environment and clamps the
-// value so a mis-set env cannot make the loop pathological. Single-consumer
-// deadline constants that live next to their sole reader (e.g.
-// ASSIGNED_STRANDED_DEADLINE_MS, STRICT_SESSION_MATCH_TTL_MS) intentionally stay
-// in mesh-reconcile-loop.ts — only the shared loop-cadence tunables move here.
+// Originally extracted from mesh-reconcile-loop.ts (A-3 god-module decomposition,
+// pure move, no behavior change). Holds loop-cadence tunables and their
+// env-override resolvers, PLUS tunables for schedulers that run ALONGSIDE the
+// reconcile tick but are NOT part of it (e.g. the continuous auto-fast-forward
+// scanner — see mesh-auto-fast-forward.ts). Each resolver reads MESH_*_MS from
+// the environment and clamps the value so a mis-set env cannot make the loop (or
+// a sibling scheduler) pathological. Single-consumer deadline constants that
+// live next to their sole reader (e.g. ASSIGNED_STRANDED_DEADLINE_MS,
+// STRICT_SESSION_MATCH_TTL_MS) intentionally stay in mesh-reconcile-loop.ts —
+// only the shared loop-cadence tunables (and other cross-file scheduler
+// tunables promoted here for the same reason) live in this file. Not every
+// timing constant in the mesh package lives here — this module is a place for
+// tunables that benefit from a shared, audited env-clamp pattern, not a
+// mandatory registry.
 // ---------------------------------------------------------------------------
 
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -101,4 +108,80 @@ export function resolveReconcileIntervalMs(): number {
         if (Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 60_000) return parsed;
     }
     return DEFAULT_RECONCILE_INTERVAL_MS;
+}
+
+// ---------------------------------------------------------------------------
+// Continuous auto-fast-forward SCHEDULER (own timer, NOT the reconcile tick)
+// ---------------------------------------------------------------------------
+// P6 (2026-09-23 IPC-load audit, finding 6): the continuous auto-ff scan used to
+// run INSIDE the 4s reconcile tick, awaited serially — one P2P dry-run per remote
+// base node, every ~4s subject only to a 45s per-node cooldown. Measured: 15,177
+// of 16,040 logged P2P mesh sends over ~3.5 days (94.6%, ~4,300/day, ~1.2s each),
+// 23% of daemon log lines, and the 13-34s event-loop spikes coincided with this
+// traffic. Two changes:
+//   1. The scan now runs on its OWN scheduler (see startContinuousAutoFastForwardScheduler
+//      in mesh-auto-fast-forward.ts) — never awaited by the reconcile tick — so a
+//      slow/degraded peer cannot stall queue-claim or event-pull phases.
+//   2. Per-node backoff GROWS when a dry-run reports nothing to do (no upstream
+//      movement), instead of re-polling every fixed interval forever. This is the
+//      dominant cost: most dry-runs are no-ops (nothing changed since last scan).
+
+// Base interval between successive scans of a single node's backoff cursor. Same
+// order of magnitude as the historical 45s cooldown, so a genuinely-behind node is
+// still caught up within roughly one tick of it falling behind. Only a node whose
+// LAST scan was a confirmed no-op backs off past this floor.
+export const DEFAULT_AUTO_FF_SCAN_BASE_MS = 45_000; // 45s
+
+// Ceiling for the exponential backoff below. 10 minutes bounds the worst-case
+// staleness of a long-idle, never-changing remote base node while still keeping
+// the eventual catch-up latency well inside a normal work session.
+export const DEFAULT_AUTO_FF_SCAN_MAX_MS = 10 * 60_000; // 10m
+
+// Multiplier applied per consecutive confirmed-no-op round: 45s → 90s → 180s →
+// 360s → 600s(capped). Any round that finds real movement (or executes an ff)
+// resets the node back to the base interval — see noteAutoFastForwardScanResult.
+export const AUTO_FF_SCAN_BACKOFF_MULTIPLIER = 2;
+
+export function resolveAutoFastForwardScanBaseMs(): number {
+    // Floor 5s so a mis-set env cannot turn this into a busy-loop; ceiling 5min so
+    // the base itself cannot be tuned past the max below (resolveAutoFastForwardScanMaxMs
+    // still wins as the hard ceiling regardless).
+    return resolveTunedReconcileMs('MESH_AUTO_FF_SCAN_BASE_MS', DEFAULT_AUTO_FF_SCAN_BASE_MS, 5_000, 5 * 60_000);
+}
+
+export function resolveAutoFastForwardScanMaxMs(): number {
+    // Floor = the base default, so the ceiling can never be tuned below the floor
+    // it bounds; ceiling 1h so a mis-set env cannot disable catch-up altogether.
+    return resolveTunedReconcileMs('MESH_AUTO_FF_SCAN_MAX_MS', DEFAULT_AUTO_FF_SCAN_MAX_MS, DEFAULT_AUTO_FF_SCAN_BASE_MS, 60 * 60_000);
+}
+
+// Per-call budget for a single remote fast_forward_mesh_node dry-run dispatch.
+// Bounds a slow/degraded peer so it cannot stall the scheduler tick for other
+// nodes — see runAutoFastForwardScanTick's per-node Promise.race in
+// mesh-auto-fast-forward.ts. Below the historical measured ~1.2s typical
+// round-trip there would be false timeouts on a healthy peer, so the floor
+// leaves ample headroom.
+export const DEFAULT_AUTO_FF_CALL_TIMEOUT_MS = 8_000; // 8s
+
+export function resolveAutoFastForwardCallTimeoutMs(): number {
+    // Floor 2s (still >> the ~1.2s measured healthy round-trip) so the timeout
+    // cannot be tuned into spurious failures; ceiling 60s so a mis-set env cannot
+    // let one stuck peer occupy the scheduler for a full minute per node.
+    return resolveTunedReconcileMs('MESH_AUTO_FF_CALL_TIMEOUT_MS', DEFAULT_AUTO_FF_CALL_TIMEOUT_MS, 2_000, 60_000);
+}
+
+// Per-tick wall-clock budget for the reconcile tick's remote-RPC-awaiting phases
+// (PHASE 1 pullRemoteNodeQueues). A daemon whose LAST pull took longer than this
+// is skipped until the NEXT tick rather than awaited again immediately — see
+// mesh-remote-event-pull.ts's per-daemon last-duration tracking. This bounds one
+// slow/degraded daemon's ability to stretch every tick for every OTHER daemon's
+// pull, without changing delivery semantics (a skipped pull just retries next
+// tick; the remote queue is unaffected).
+export const DEFAULT_REMOTE_PULL_SLOW_DAEMON_SKIP_MS = 3_000; // 3s
+
+export function resolveRemotePullSlowDaemonSkipMs(): number {
+    // Floor 500ms so a mis-set env cannot make every daemon look "slow"; ceiling
+    // equal to the reconcile interval ceiling (60s) so a mis-set env cannot make
+    // the skip threshold exceed a whole tick's worth of budget anyway.
+    return resolveTunedReconcileMs('MESH_REMOTE_PULL_SLOW_DAEMON_SKIP_MS', DEFAULT_REMOTE_PULL_SLOW_DAEMON_SKIP_MS, 500, 60_000);
 }

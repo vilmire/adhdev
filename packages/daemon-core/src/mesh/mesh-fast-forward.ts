@@ -831,6 +831,9 @@ function formatGitError(error: unknown): string {
 
 async function appendFastForwardLedger(result: MeshFastForwardResult, outcome: 'noop' | 'blocked' | 'dry_run' | 'executed' | 'failed'): Promise<void> {
   if (!result.meshId) return;
+  // A no-op check (already up to date) is not an event: on preview 34,025 of ~38k replica
+  // rows were other daemons' noop fast-forward entries (seqscribe usage audit, 2026-09-23).
+  if (outcome === 'noop') return;
   try {
     const { appendLedgerEntry } = await import('./mesh-ledger.js');
     appendLedgerEntry(result.meshId, {
