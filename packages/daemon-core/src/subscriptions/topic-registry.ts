@@ -276,6 +276,8 @@ interface WorkspaceGitSubscriptionEntry {
     subscription: GitWorkspaceSubscription;
     seq: number;
     lastSentAt: number;
+    /** Last flush PASS that reached this entry (throttle cleared), whether or not it sent — a dedup no-op still counts. Reconciliation reads this, not `lastSentAt`. */
+    lastFlushedAt: number;
 }
 
 /** Registry-stored push-style topics (subscription storage owned here). */
@@ -289,6 +291,8 @@ interface PushTopicEntry {
     params: Record<string, unknown>;
     seq: number;
     lastSentAt: number;
+    /** Last flush PASS that reached this entry (throttle cleared), whether or not it sent — a dedup no-op still counts. Reconciliation reads this, not `lastSentAt`. */
+    lastFlushedAt: number;
     lastDeliveredSignature: string;
 }
 
@@ -378,6 +382,7 @@ export class TopicSubscriptionRegistry {
                 subscription: this.gitMonitor.createSubscription(normalized),
                 seq: 0,
                 lastSentAt: 0,
+                lastFlushedAt: 0,
             });
             return true;
         }
@@ -398,6 +403,7 @@ export class TopicSubscriptionRegistry {
             params,
             seq: 0,
             lastSentAt: 0,
+            lastFlushedAt: 0,
             lastDeliveredSignature: '',
         });
         return true;
@@ -486,6 +492,29 @@ export class TopicSubscriptionRegistry {
         return oldest;
     }
 
+    /** Oldest `lastFlushedAt` across every subscriber of `topic` (see the field doc) — what the WARN-only reconciliation compares against. */
+    oldestLastFlushedAt(topic: TransportTopic): number | null {
+        if (topic === 'workspace.git') {
+            let oldest: number | null = null;
+            for (const subs of this.gitSubscriptions.values()) {
+                for (const entry of subs.values()) {
+                    if (oldest === null || entry.lastFlushedAt < oldest) oldest = entry.lastFlushedAt;
+                }
+            }
+            return oldest;
+        }
+        if (!this.isPushTopic(topic)) return null;
+        const byConn = this.pushSubscriptions.get(topic);
+        if (!byConn) return null;
+        let oldest: number | null = null;
+        for (const subs of byConn.values()) {
+            for (const entry of subs.values()) {
+                if (oldest === null || entry.lastFlushedAt < oldest) oldest = entry.lastFlushedAt;
+            }
+        }
+        return oldest;
+    }
+
     /**
      * Consume a `command_executed.invalidates` set (from the command registry): run a flush pass for each
      * invalidated topic the registry owns. NOTE: matches both daemons' historic
@@ -569,6 +598,7 @@ export class TopicSubscriptionRegistry {
             if (entry.lastSentAt > 0 && (now - entry.lastSentAt) < intervalMs) continue;
             entry.seq += 1;
             entry.lastSentAt = now;
+            entry.lastFlushedAt = now;
             this.sink.send(entry.connectionId, 'machine.runtime', {
                 topic: 'machine.runtime',
                 key: entry.key,
@@ -604,6 +634,7 @@ export class TopicSubscriptionRegistry {
             const diagnostics = await pending;
             entry.seq += 1;
             entry.lastSentAt = now;
+            entry.lastFlushedAt = now;
             // Standalone re-checked ws OPEN after the await; cloud's send is a
             // no-op on a disconnected peer — the recheck is safe for both.
             if (!this.sink.isDeliverable(entry.connectionId)) continue;
@@ -648,6 +679,7 @@ export class TopicSubscriptionRegistry {
             });
             entry.seq = prepared.seq;
             entry.lastDeliveredSignature = prepared.lastDeliveredSignature;
+            entry.lastFlushedAt = now;
             if (!prepared.update) continue;
             entry.lastSentAt = now;
             this.opts.recordTrace?.({
@@ -727,6 +759,7 @@ export class TopicSubscriptionRegistry {
             const now = this.now();
             entry.seq += 1;
             entry.lastSentAt = now;
+            entry.lastFlushedAt = now;
             const body = bodyFor((entry.params as DaemonMetadataSubscriptionParams | undefined)?.includeSessions === true);
             this.sink.send(entry.connectionId, 'daemon.metadata', {
                 topic: 'daemon.metadata',
@@ -926,6 +959,7 @@ export class TopicSubscriptionRegistry {
                 if (current !== entry || !this.sink.isDeliverable(entry.connectionId)) return;
                 entry.seq += 1;
                 entry.lastSentAt = monitorUpdate.timestamp;
+                entry.lastFlushedAt = now;
                 this.sink.send(entry.connectionId, 'workspace.git', {
                     ...monitorUpdate,
                     key: entry.key,
