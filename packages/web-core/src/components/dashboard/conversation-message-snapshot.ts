@@ -110,19 +110,11 @@ function echoContentMatchesTarget(content: unknown, target: string): boolean {
 }
 
 /**
- * Fast path for the `messageId`-based match below: does this live message
- * carry `meta.sourceMessageId` naming the given pending entry?
- *
- * ★ (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Before
- * this, matching was TEXT-ONLY, deliberately, per this file's own comment:
- * "the client cannot know the id the daemon will mint". That is no longer
- * true — `recordAcknowledgedUserInput` is now called with the SAME
- * `OutboundMessage.messageId` the web side minted (once D-daemon's
- * `SessionInputService` lands; see this workstream's REQUESTED EDITS), so a
- * daemon build past that point CAN stamp the ack with `meta.sourceMessageId`.
- * A daemon build that has not picked this up yet never sets the field, so
- * `message.meta` is simply absent here and every caller falls through to the
- * text match unchanged — this is additive, not a replacement.
+ * Does this live message carry `meta.sourceMessageId` naming the given pending
+ * entry? (Phase D) The daemon's SessionInputService stamps the runtime ack of
+ * every submit with the `OutboundMessage.messageId` the dashboard minted, so an
+ * id-tagged echo is matched by EXACT IDENTITY — no text or image-token
+ * normalization.
  */
 function echoMatchesByMessageId(message: DashboardMessage, pendingId: string | undefined): boolean {
     if (!pendingId) return false
@@ -145,16 +137,14 @@ function hasSourceMessageId(message: DashboardMessage): boolean {
  * *stand-in* for that echo, never an addition to it — if both rendered, the
  * owner would see their message twice, which is worse than seeing it late.
  *
- * ★ (Phase D-web) Matches by `messageId` FIRST when the live message carries
- * `meta.sourceMessageId` (see `echoMatchesByMessageId`) — an exact identity
- * match needs no text/image-token normalization at all. Falls back to the
- * TRIMMED-CONTENT match below for a daemon build that has not stamped the id
- * yet: this fallback is TEMPORARY and is deleted in the same "cut compat"
- * step that removes `SendChatCommandPayload`'s legacy `message?` field
- * (phase-D-plan.md §7.1 step 12) once every daemon in the fleet stamps
- * `sourceMessageId`. Until then, content is the identity the two sides share,
- * and the daemon's own 60s dedup window (USER_INPUT_ACK_DEDUP_WINDOW_MS) is
- * likewise content-keyed.
+ * ★ (Phase D) Identity first, and ONLY identity for an id-tagged echo: a live
+ * message that carries `meta.sourceMessageId` retires exactly the pending entry
+ * with that id and is never text-matched against any other — the text-match
+ * fallback for id-capable echoes is gone (D3 cut-compat), which is what stops a
+ * "continue" ack for one bubble from retiring a second "continue" bubble.
+ * Content matching remains ONLY for echoes that structurally cannot carry the
+ * id: provider-authored transcript turns (ACP, IDE/extension, a CLI's own
+ * parsed user message) and acks from a daemon older than Phase D.
  *
  * Suppression is one-directional and conservative: ANY matching user bubble in
  * the live tail retires the pending one. A false match (the owner sent the same
@@ -171,7 +161,10 @@ export function hasEchoedPendingMessage(
     for (let i = liveMessages.length - 1; i >= 0; i -= 1) {
         const message = liveMessages[i]
         if (String(message.role || '').toLowerCase() !== 'user') continue
-        if (echoMatchesByMessageId(message, pending.id)) return true
+        if (hasSourceMessageId(message)) {
+            if (echoMatchesByMessageId(message, pending.id)) return true
+            continue
+        }
         if (echoContentMatchesTarget(message.content, target)) return true
     }
     return false

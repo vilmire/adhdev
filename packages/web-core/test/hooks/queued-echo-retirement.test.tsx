@@ -36,7 +36,7 @@ import {
     writePendingQueuedMessages,
     PENDING_QUEUED_MESSAGE_STALE_AFTER_MS,
 } from '../../src/utils/pendingQueuedMessages'
-import { retirePendingLocalMessages } from '../../src/components/dashboard/conversation-message-snapshot'
+import { hasEchoedPendingMessage, retirePendingLocalMessages } from '../../src/components/dashboard/conversation-message-snapshot'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -290,6 +290,25 @@ describe('(d) echo retirement by messageId, with a text-match fallback', () => {
         expect(result.changed).toBe(false)
         expect(result.retiredByEcho).toBe(0)
         expect(result.entries).toHaveLength(1)
+    })
+})
+
+describe('(d2) hasEchoedPendingMessage — an id-tagged echo retires by identity ONLY (Phase D3 cut-compat)', () => {
+    function ackWithId(content: string, sourceMessageId: string) {
+        return { id: `ack-${sourceMessageId}`, role: 'user', kind: 'standard', content, meta: { sourceMessageId } } as any
+    }
+
+    it('★ an ack for ANOTHER message with the same text does not count as this bubble\'s echo', () => {
+        // "continue" sent twice: the first ack must not make the second bubble vanish.
+        expect(hasEchoedPendingMessage([ackWithId('continue', 'msg_first')], { id: 'msg_second', content: 'continue', sentAt: 1 })).toBe(false)
+    })
+
+    it('an ack carrying THIS bubble\'s id is its echo, whatever its text', () => {
+        expect(hasEchoedPendingMessage([ackWithId('[image: image/png]\nlook', 'msg_1')], { id: 'msg_1', content: 'look', sentAt: 1 })).toBe(true)
+    })
+
+    it('a provider-authored transcript turn (no id possible: ACP / IDE / parsed CLI) still retires by text', () => {
+        expect(hasEchoedPendingMessage([userEcho('look')], { id: 'msg_1', content: 'look', sentAt: 1 })).toBe(true)
     })
 })
 

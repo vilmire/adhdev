@@ -166,8 +166,8 @@ export function unwrapCommandResult(raw: any): any {
  *
  * The daemon reports the distinction precisely — `chat-commands-write.ts`
  * answers `{sent:false, queued:true, submitted:false}` when the driver's
- * in-memory FIFO took the body, and `cli-manager.ts` adds
- * `{queued:true, queuedReason:'agent_runtime_busy'}` on the mesh path. Until
+ * in-memory FIFO took the body (SessionInputService `queued` outcome), and the
+ * mesh path reports `{queued:true, queuedReason:'driver_fifo_parked'}`. Until
  * now NOTHING on the web side read either field, so that contract was dead and
  * the user-visible defect it was meant to fix was still live.
  *
@@ -323,78 +323,37 @@ function buildInputEnvelope(message: string, attachments: ImageAttachment[] | un
 }
 
 /**
- * Map the UI's `sendNow`/`interrupt` intent onto Phase D's closed `SendPolicy`
- * union (`@adhdev/mesh-shared`). See `buildSendChatPayload` for why `sendNow`
- * wins when both are set.
- */
-function toSendPolicy(options: { interrupt?: boolean; sendNow?: boolean }): SendPolicy {
-    if (options.sendNow) return { mode: 'send_now' }
-    if (options.interrupt) return { mode: 'interrupt' }
-    return { mode: 'queue' }
-}
-
-/**
- * Build the payload for a send_chat command.
+ * Build the payload for a send_chat command — one `OutboundMessage` on the wire.
  *
- * ★ (Phase D-web, docs/design/2026-09-23-wiring-unification.md §6 D1/D4) Every
- * send now carries `messageId` and `policy` — the typed identity/admission
- * fields `OutboundMessage` names — ALONGSIDE the legacy `sendNow`/`interrupt`
- * booleans. The daemon this ships against today (pre Phase D-daemon) still
- * only reads the booleans (`chat-commands-write.ts:237,287` read
- * `args.sendNow`/`args.interrupt`/`args.force`/`args.forceSend` directly) and
- * silently ignores unrecognized top-level fields — `normalizeInputEnvelope`
- * only ever looks at `input`/`parts`/`prompt`, confirmed read-only against
- * `oss/packages/daemon-core/src/providers/io-contracts.ts` — so this is
- * additive, not a breaking change to the wire shape. The booleans are deleted
- * only once D-daemon lands and reads `policy` instead (see this workstream's
- * REQUESTED EDITS).
+ * ★ (Phase D, docs/design/2026-09-23-wiring-unification.md §6 D1/D3/D4) The
+ * payload is exactly `{ messageId, input, policy }` (+ the provider routing
+ * args). The daemon's SessionInputService reads `messageId` and `policy` only;
+ * the legacy `sendNow`/`interrupt` booleans and the top-level `message`
+ * back-compat field are gone (D3 cut-compat — the daemon still maps them for
+ * one release for OLDER dashboards, not for this one).
  *
  * `messageId` is the SAME id used for the entry's optimistic local bubble and
- * its `pendingQueuedMessages` row (§4.2 of the plan) — minted once, passed
- * through unchanged, never re-derived — so identity survives the whole round
- * trip.
+ * its `pendingQueuedMessages` row — minted once, never re-derived — so the
+ * daemon's FIFO entry, its ack echo (`meta.sourceMessageId`) and this bubble
+ * share one identity.
  *
  * ★ Takes an already-built `envelope` rather than re-deriving one from
- * `message`/`attachments`, specifically so a send-now resubmit
- * (`handleSendNowQueued`) can pass the ORIGINAL parked envelope straight
- * through — including any image parts. Re-deriving from `message` alone on
- * resubmit is the exact "triple-bubble" regression the design doc's D section
- * exists to close (phase-D-plan.md §6.3): an image send that parks, then gets
- * Send-Now'd, must carry the SAME body, not a text-only reconstruction of it.
+ * `message`/`attachments`, so a send-now resubmit (`handleSendNowQueued`)
+ * passes the ORIGINAL parked envelope straight through — including image
+ * parts. Re-deriving from `message` alone on resubmit is the "triple-bubble"
+ * regression the D section exists to close.
  */
 function buildSendChatPayload(
     messageId: string,
     message: string,
     envelope: PendingInputEnvelope | undefined,
     activeConv: ActiveConversation,
-    options: { interrupt?: boolean; sendNow?: boolean } = {},
+    policy: SendPolicy = { mode: 'queue' },
 ): Record<string, unknown> {
-    const providerArgs = getProviderArgs(activeConv)
-    const policy = toSendPolicy(options)
-    // ★ SEND-NOW-AGENT-QUEUE and `interrupt` are mutually exclusive flags, not
-    // two spellings of one intent: `sendNow` preserves the turn in flight and
-    // hands the body to the agent's own input queue, `interrupt` destroys that
-    // turn. Emitting both would let a daemon pick either one, and the two
-    // outcomes differ by whether the owner loses the answer they are waiting
-    // for — so `sendNow` wins and `interrupt` is dropped when both are set.
-    const modeArgs = options.sendNow
-        ? { sendNow: true }
-        : (options.interrupt ? { interrupt: true } : {})
-    if (!envelope) {
-        return { message, messageId, policy, ...modeArgs, ...providerArgs }
-    }
-
-    return {
-        message,          // kept for backward-compat with older daemons
-        messageId,
-        input: {
-            parts: envelope.parts,
-            textFallback: envelope.textFallback,
-        },
-        policy,
-        ...modeArgs,
-        ...providerArgs,
-    }
+    const input = envelope
+        ? { parts: envelope.parts, textFallback: envelope.textFallback }
+        : { parts: [{ type: 'text', text: message }], textFallback: message }
+    return { messageId, input, policy, ...getProviderArgs(activeConv) }
 }
 
 export function useDashboardConversationCommands({
@@ -701,7 +660,7 @@ export function useDashboardConversationCommands({
      * CLI never consumed. Live A/B (2026-09-12, claude-cli v2.1.220) showed the
      * failure belonged to that combined write: the same body written as text,
      * then a gap, then the submit key IS taken by the CLI's queue. The daemon's
-     * `sendNow` flag performs only that split shape, on POSIX only — win32's
+     * `send_now` policy performs only that split shape, on POSIX only — win32's
      * ConPTY absorbs a delayed lone CR and has not been re-measured, so it
      * refuses rather than guessing.
      *
@@ -756,7 +715,7 @@ export function useDashboardConversationCommands({
             const raw = await sendDaemonCommand(
                 routeTarget,
                 'send_chat',
-                buildSendChatPayload(targetId, message, pending.input, activeConv, { sendNow: true }),
+                buildSendChatPayload(targetId, message, pending.input, activeConv, { mode: 'send_now' }),
             )
             const res = unwrapCommandResult(raw)
 
@@ -827,8 +786,9 @@ export function useDashboardConversationCommands({
      * time later. So the local entry is dropped only AFTER the daemon confirms
      * it actually removed the body from its queue.
      *
-     * The daemon side reuses `claimQueuedSends(text)`, the same primitive the
-     * interrupt path already uses to take a body out of the FIFO.
+     * The daemon side withdraws the FIFO entry parked under this bubble's
+     * `messageId` (SessionInputService.withdraw) — the same id-keyed claim the
+     * send-now / interrupt routes use.
      *
      * ★ Failure is NOT silent. If the daemon cannot find the body — most often
      * because it already drained and is being answered right now — the bubble
@@ -890,7 +850,11 @@ export function useDashboardConversationCommands({
                 return false
             }
 
+            // ★ (Phase D) Cancelled by `messageId` — the daemon FIFO entry carries
+            // the same id, so the withdrawal is exact. `message` rides along only
+            // for a pre-D daemon's one-release text fallback.
             const raw = await sendDaemonCommand(routeTarget, 'cancel_queued_chat', {
+                messageId: pendingId,
                 message,
                 ...getProviderArgs(activeConv),
             })
