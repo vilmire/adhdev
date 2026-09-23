@@ -38,6 +38,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { getMeshWithCache } from '../../src/mesh/mesh-queue-assignment.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const BASE_NODE_ID = 'node_base'
 const WORKTREE_NODE_ID = 'node_worktree'
@@ -53,7 +54,7 @@ function createComponents(opts: {
   dispatchMeshCommand?: any
 }) {
   const dispatchMeshCommand = opts.dispatchMeshCommand ?? vi.fn(async () => ({ success: true }))
-  return {
+  return withMeshRouter({
     instanceManager: {
       // No local CLI sessions — the bug and fix are about the REMOTE idle drain,
       // which is the path gated on mesh.nodes membership visibility.
@@ -74,7 +75,7 @@ function createComponents(opts: {
     dispatchMeshCommand,
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function cleanup(meshId: string) {

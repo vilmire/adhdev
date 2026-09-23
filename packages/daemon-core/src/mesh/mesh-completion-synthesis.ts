@@ -15,7 +15,7 @@
 // loop imports reconcileUnterminatedDirectDispatches + autoPruneStaleDirectDispatches.
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -831,9 +831,9 @@ export async function reconcileUnterminatedDirectDispatches(
 // Orphan detection needs the SAME live-session evidence the manual MCP prune uses: a node still
 // in mesh.nodes whose session list no longer contains the dispatched sessionId is "session not
 // present" (prunable); a node missing from mesh.nodes entirely is "node no longer in live mesh"
-// (prunable). We obtain live sessions per node via get_status_metadata — local nodes through the
-// local commandHandler, remote nodes over P2P (dispatchMeshCommand) — exactly the transports
-// PHASE 4 already uses. A node we cannot probe (offline) keeps an empty session list; combined
+// (prunable). Live sessions per node: local nodes from the session registry (no
+// get_status_metadata re-entry — wiring-unification B4), remote nodes via the per-daemon cached
+// get_status_metadata P2P probe (collectLiveNodesWithSessions). A node we cannot probe (offline) keeps an empty session list; combined
 // with the age gate that only matters once the orphan is genuinely old.
 //
 // O(1) fast exit: when there are no active direct dispatches at all there is nothing to prune,

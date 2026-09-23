@@ -14,7 +14,7 @@
 // forward-handling functions that DO call back (handleMeshForwardEvent and
 // forwardUnresolvedDelegateEvent) deliberately stayed behind.
 // ---------------------------------------------------------------------------
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';

@@ -42,6 +42,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 // THIS daemon's node (isLocalAutoLaunchNode resolves 'test-machine' as local when the node
 // carries no foreign daemonId/machineId). Session-liveness for a LOCAL node is trusted.
@@ -62,7 +63,7 @@ function liveSession(meshId: string, sessionId: string, status: string) {
 }
 
 function createComponents(cliInstances: any[] = []) {
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
       getInstance: vi.fn(() => undefined),
@@ -80,7 +81,7 @@ function createComponents(cliInstances: any[] = []) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 // Mesh whose ONLY node is NODE_ID (the coordinator's local node).

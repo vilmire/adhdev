@@ -1,8 +1,8 @@
 /**
  * PROVIDER-SIGNAL → coordinator bridge (mesh half).
  *
- * The mesh side of the inverted dependency described in
- * `shared/provider-signal-sink.ts`: the provider layer reports that a declared
+ * The mesh side of an inverted dependency: the provider layer reports (through
+ * its SessionEventPort → the lifecycle bus `signal` event) that a declared
  * screen-signal rule matched, without knowing what a mesh is; this module
  * applies the mesh meaning — resolve the binding, drop non-mesh sessions, and
  * page the coordinator through the SAME pendingCoordinatorEvents channel task
@@ -39,10 +39,41 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import {
-    configureProviderSignalObserver,
-    type ProviderSignalObservation,
-} from '../shared/provider-signal-sink.js';
+import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
+import type { EventOf } from '../sessions/lifecycle-events.js';
+import type { SignalRuleKind } from '../providers/spec/signal-rules.js';
+
+/**
+ * A matched provider signal as the mesh sees it — flattened from the bus
+ * `signal` event (wiring-unification B4 replaced the neutral
+ * `shared/provider-signal-sink`).
+ */
+export interface ProviderSignalObservation {
+    sessionId: string;
+    providerType?: string;
+    workspace?: string;
+    ruleId: string;
+    kind: SignalRuleKind;
+    /** Named-capture values, already sanitized and capped by the detector. */
+    params: Record<string, string>;
+    detectedAt: number;
+    /** The provider instance's runtime settings, forwarded opaquely (carries the mesh binding). */
+    runtimeSettings: Readonly<Record<string, unknown>>;
+}
+
+/** Flatten a bus `signal` event into the observation the pager takes. */
+export function toProviderSignalObservation(event: EventOf<'signal'>): ProviderSignalObservation {
+    return {
+        sessionId: event.sessionId,
+        ...(event.providerType ? { providerType: event.providerType } : {}),
+        ...(event.workspace ? { workspace: event.workspace } : {}),
+        ruleId: event.signal.ruleId,
+        kind: event.signal.kind,
+        params: event.signal.params,
+        detectedAt: event.signal.detectedAt,
+        runtimeSettings: event.runtimeSettings,
+    };
+}
 import { resolveMeshTerminationBinding } from './mesh-termination-bridge.js';
 import { queuePendingMeshCoordinatorEvent } from './mesh-events-pending.js';
 
@@ -149,14 +180,13 @@ export function handleProviderSignalObservation(observation: ProviderSignalObser
     }
 }
 
-/** Wire the provider→mesh signal seam at daemon boot. The handler's boolean
- *  return is for callers/tests that want to know whether an event was queued;
- *  the sink's observer contract is void, so it is discarded here. */
-export function installMeshProviderSignalObserver(): void {
-    configureProviderSignalObserver((observation) => { handleProviderSignalObservation(observation); });
-}
-
-/** Unwire the seam at daemon shutdown (and between tests). */
-export function uninstallMeshProviderSignalObserver(): void {
-    configureProviderSignalObserver(null);
+/**
+ * Subscribe the coordinator pager to the lifecycle bus (wiring-unification B4).
+ * Sync lane: queueing a pending event is a local SQLite insert, and today's
+ * sink delivered it synchronously from the adapter's frame evaluation.
+ */
+export function subscribeMeshProviderSignals(bus: SessionLifecycleBus): Unsubscribe {
+    return bus.on('signal', (event) => {
+        handleProviderSignalObservation(toProviderSignalObservation(event));
+    }, { name: 'mesh.signal-pager' });
 }

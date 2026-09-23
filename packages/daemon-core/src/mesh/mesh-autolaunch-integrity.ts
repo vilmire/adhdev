@@ -32,7 +32,7 @@
 // Split out of mesh-queue-assignment (a frozen file-size baseline entry) rather than grown
 // inside it. It must NOT import back from mesh-queue-assignment — that module calls into this
 // one, so the pair would cycle; see the local isIdleSessionState copy below.
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';

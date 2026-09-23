@@ -41,11 +41,11 @@ import {
   resolveMeshTerminationBinding,
   resolveTerminationSignal,
   handleSessionTerminationObservation,
-  installMeshTerminationObserver,
-  uninstallMeshTerminationObserver,
+  subscribeMeshTermination,
 } from '../../src/mesh/mesh-termination-bridge.js'
 import { appendLedgerEntry, isIntentionalCleanupStopEntry, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
-import { publishSessionTermination } from '../../src/shared/session-termination-sink.js'
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
+import { SessionRegistry } from '../../src/sessions/registry.js'
 
 /** The real 249e9979 tombstone, field for field. */
 const SIGTERM_TERMINATION: SessionTermination = {
@@ -338,32 +338,48 @@ describe('session termination seam', () => {
     expect(readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')).toHaveLength(0)
   })
 
-  it('is inert until installed, and again after uninstall', async () => {
+  it('reaches the ledger only through a subscribed bus, never on daemon_shutdown or without a tombstone', async () => {
     const meshId = `mesh_seamwire_${randomUUID().slice(0, 8)}`
-    const observation = {
-      sessionId: 'sess_wire',
-      runtimeSettings: { meshNodeFor: meshId },
-      termination: SIGTERM_TERMINATION,
-    }
-    const stops = () => readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped').length
-    // publishSessionTermination is deliberately fire-and-forget, so let the
-    // subscriber's async ledger write settle before reading.
-    const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+    const bus = createSessionLifecycleBus()
+    const registry = new SessionRegistry(bus)
+    const register = (sessionId: string) => registry.register({
+      sessionId, parentSessionId: null, providerType: 'claude-cli', transport: 'pty', instanceKey: sessionId, workspace: '/tmp/ws',
+    }, 'launch')
+    const detail = { termination: SIGTERM_TERMINATION, runtimeSettings: { meshNodeFor: meshId, meshNodeId: 'node_bus' } }
+    const stops = () => readLedgerEntries(meshId).filter(e => e.kind === 'session_stopped')
+    // The subscriber runs on the bus's async lane and the ledger write is
+    // itself async (dynamic import), so let both settle before reading.
+    const flush = () => new Promise(resolve => setTimeout(resolve, 20))
 
-    // No observer wired: publishing must be a silent no-op, not a throw — this
-    // runs on the PTY exit path in a daemon that may have no mesh at all.
-    publishSessionTermination(observation)
+    // Not subscribed: a terminated event must be a silent no-op.
+    register('sess_unsubscribed')
+    registry.terminate('sess_unsubscribed', 'pty_exit', detail)
     await flush()
-    expect(stops()).toBe(0)
+    expect(stops()).toHaveLength(0)
 
-    installMeshTerminationObserver()
-    publishSessionTermination(observation)
+    const unsubscribe = subscribeMeshTermination(bus)
+    register('sess_wire')
+    registry.terminate('sess_wire', 'pty_exit', detail)
     await flush()
-    expect(stops()).toBe(1)
+    expect(stops()).toHaveLength(1)
+    // Field-for-field what the deleted sink delivered: session id, provider
+    // type and workspace from the registry entry, binding from runtimeSettings.
+    expect(stops()[0]).toMatchObject({ sessionId: 'sess_wire', nodeId: 'node_bus', providerType: 'claude-cli' })
+    expect(stops()[0].payload).toMatchObject({ reason: 'external_signal', signalName: 'SIGTERM', workspace: '/tmp/ws' })
 
-    uninstallMeshTerminationObserver()
-    publishSessionTermination(observation)
+    // A termination with no session-host tombstone (explicit stop, auto-clean) is not an observed death.
+    register('sess_stop')
+    registry.terminate('sess_stop', 'stop_requested', { runtimeSettings: detail.runtimeSettings })
     await flush()
-    expect(stops()).toBe(1)
+    expect(stops()).toHaveLength(1)
+
+    // Sessions torn down because the daemon is going away are not deaths.
+    register('sess_shutdown')
+    registry.beginShutdown()
+    registry.terminate('sess_shutdown', 'pty_exit', detail)
+    await flush()
+    expect(stops()).toHaveLength(1)
+
+    unsubscribe()
   })
 })

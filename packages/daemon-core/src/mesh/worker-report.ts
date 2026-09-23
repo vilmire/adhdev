@@ -56,6 +56,11 @@ import {
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+// Direct imports (B4): the boot-time sinks existed only to break a boot
+// ordering dependency the staged boot no longer has. Both are only called at
+// report time, so the worker-handoff-notes ↔ worker-report cycle is safe.
+import { storeHandoffNote } from './worker-handoff-notes.js';
+import { queueWorkerProgressNotice } from './worker-progress-notify.js';
 import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runner.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import {
@@ -497,11 +502,20 @@ export type HandoffNoteSink = (note: {
     recordedAtIso: string;
 }) => void;
 
-let handoffSink: HandoffNoteSink | null = null;
+/** `undefined` = the production sink (`storeHandoffNote`); `null` = disabled. TESTS set it. */
+let handoffSinkOverride: HandoffNoteSink | null | undefined;
 
-/** Wire the content sink at daemon boot; pass null to disable (tests, no seqscribe). */
-export function configureHandoffNoteSink(sink: HandoffNoteSink | null): void {
-    handoffSink = sink;
+/**
+ * TESTS ONLY — replace the handoff-note content sink (`null` disables it,
+ * `undefined` restores production). Wiring-unification B4 deleted the boot-time
+ * `configureHandoffNoteSink`: production imports `storeHandoffNote` directly.
+ */
+export function __setHandoffNoteSinkForTests(sink: HandoffNoteSink | null | undefined): void {
+    handoffSinkOverride = sink;
+}
+
+function currentHandoffSink(): HandoffNoteSink | null {
+    return handoffSinkOverride === undefined ? storeHandoffNote : handoffSinkOverride;
 }
 
 /**
@@ -890,11 +904,12 @@ export type WorkerProgressNoticeSink = (notice: {
     nowMs: number;
 }) => void;
 
-let progressNoticeSink: WorkerProgressNoticeSink | null = null;
+/** `undefined` = the production sink (`queueWorkerProgressNotice`); `null` = disabled. TESTS set it. */
+let progressNoticeSinkOverride: WorkerProgressNoticeSink | null | undefined;
 
-/** Wire the coordinator progress sink at daemon boot; null disables surfacing. */
-export function configureWorkerProgressNoticeSink(sink: WorkerProgressNoticeSink | null): void {
-    progressNoticeSink = sink;
+/** TESTS ONLY — replace the progress-notice sink; see `__setHandoffNoteSinkForTests`. */
+export function __setWorkerProgressNoticeSinkForTests(sink: WorkerProgressNoticeSink | null | undefined): void {
+    progressNoticeSinkOverride = sink;
 }
 
 function notifyCoordinatorOfProgress(
@@ -910,7 +925,7 @@ function notifyCoordinatorOfProgress(
     })) {
         return false;
     }
-    const sink = progressNoticeSink;
+    const sink = progressNoticeSinkOverride === undefined ? queueWorkerProgressNotice : progressNoticeSinkOverride;
     if (!sink) return false;
     try {
         sink({
@@ -988,6 +1003,7 @@ function recordHandoffNote(
     // NOT an error — a daemon without seqscribe still gets the meta index and the
     // auto-enclosure below reads intent from the note store, so the feature
     // degrades rather than failing the report.
+    const handoffSink = currentHandoffSink();
     if (handoffSink) {
         try {
             handoffSink({

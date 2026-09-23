@@ -40,6 +40,7 @@ import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery, updateSessionDeliveryStatus } from '../../src/mesh/mesh-delivery-policy.js'
 import { recordTurnAck, recordTurnStage, openTurnAttempt, proposeTurnCompletion, getTurnLedgerMetrics, __resetTurnLedgerMetricsForTests, evaluateRedrive } from '../../src/mesh/mesh-turn-ledger.js'
 import { CONSUME_GRACE_FLOOR_MS, CONSUME_GRACE_NATIVE_SOURCE_MS } from '../../src/mesh/mesh-consume-grace.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -71,7 +72,7 @@ function makeIdleWorkerComponents(meshId: string, nodeId: string, sessionId: str
   }
   return {
     handleCliCommand,
-    components: {
+    components: withMeshRouter({
       instanceManager: {
         getByCategory: (category: string) => (category === 'cli' ? [workerInstance] : []),
         getInstance: (id: string) => (id === sessionId ? workerInstance : undefined),
@@ -80,7 +81,7 @@ function makeIdleWorkerComponents(meshId: string, nodeId: string, sessionId: str
         adapters: new Map([[sessionId, {}]]),
         handleCliCommand,
       },
-    } as any,
+    } as any),
   }
 }
 
@@ -2664,26 +2665,29 @@ describe('runMeshReconcileTick', () => {
     const HOUR = 60 * 60_000
     const DAY = 24 * HOUR
 
-    // A components surface with no live coordinators and no remote transport — PHASE 5 only
-    // needs commandHandler.handle('get_status_metadata') for live-session probing.
+    // A components surface with no live coordinators and no remote transport.
+    // Since wiring-unification B4 the LOCAL node's live sessions come from the
+    // session registry (+ the owning instance's status) — PHASE 5 must never
+    // re-enter get_status_metadata for this daemon. `execute`/`handle` are kept
+    // as spies so the tests below can prove exactly that.
     function makeAutoPruneComponents(statusSessions: any[] = []) {
       const handle = vi.fn(async (cmd: string) => {
         if (cmd === 'get_status_metadata') return { success: true, status: { sessions: statusSessions } }
         return { success: true }
       })
-      // Local get_status_metadata is a LOW-family registry command, so the
-      // reconcile status probe dispatches it through router.execute (not the
-      // bare commandHandler.handle, which has no such case and would return
-      // "Unknown command"). Mirror that here: router delegates to the same
-      // handle fn so the probe resolves.
       const execute = vi.fn(async (cmd: string) => handle(cmd))
+      const instances = new Map(statusSessions.map((s: any) => [s.id, { getState: () => ({ status: s.status }) }]))
       return {
         components: {
-          instanceManager: { getByCategory: () => [], getInstance: () => undefined },
+          instanceManager: { getByCategory: () => [], getInstance: (id: string) => instances.get(id) },
+          sessionRegistry: {
+            list: () => statusSessions.map((s: any) => ({ sessionId: s.id, parentSessionId: null, providerType: 'claude-cli', transport: 'pty', instanceKey: s.id })),
+          },
           commandHandler: { handle },
-          router: { execute },
+          router: { execute, getCachedInlineMesh: () => undefined },
         } as any,
         handle,
+        execute,
       }
     }
 
@@ -2767,6 +2771,56 @@ describe('runMeshReconcileTick', () => {
         // Active work is never an orphan → preserved, no prune.
         expect(getActiveDirectDispatches(meshId).some(d => d.taskId === taskId)).toBe(true)
         expect(readLedgerEntries(meshId).some(e => e.kind === 'direct_dispatch_pruned')).toBe(false)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('B4: per 60 s prune tick the LOCAL node costs 0 get_status_metadata calls (was 1) and a remote daemon 1 probe per daemon, not per node', async () => {
+      const meshId = `mesh_reconcile_phase5_callcount_${Date.now()}`
+      try {
+        // An active dispatch keeps the O(1) exit from firing, so the probe path runs.
+        seedDispatch(meshId, 'task_count', 'node_live', 'sess-live', 3 * DAY)
+        const remoteDaemon = 'daemon_remote_machine'
+        meshConfigMocks.listMeshes.mockReturnValue([
+          {
+            id: meshId,
+            nodes: [
+              { id: 'node_live', workspace: '/repo/live' },
+              // Two worktree nodes on ONE remote daemon (bare + prefixed id forms).
+              { id: 'node_remote_a', workspace: '/r/a', daemonId: remoteDaemon },
+              { id: 'node_remote_b', workspace: '/r/b', daemonId: 'remote_machine' },
+            ],
+          },
+        ])
+        const { components, execute, handle } = makeAutoPruneComponents([{ id: 'sess-live', status: 'generating' }])
+        const dispatchMeshCommand = vi.fn(async () => ({ success: true, status: { sessions: [] } }))
+        components.dispatchMeshCommand = dispatchMeshCommand
+        await runMeshReconcileTick(components)
+
+        const localProbes = [...execute.mock.calls, ...handle.mock.calls].filter(c => c[0] === 'get_status_metadata')
+        expect(localProbes).toHaveLength(0)
+        const remoteProbes = dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === 'get_status_metadata')
+        expect(remoteProbes).toHaveLength(1)
+        // The live local session still counts as live (from the registry): not pruned.
+        expect(getActiveDirectDispatches(meshId).some(d => d.taskId === 'task_count')).toBe(true)
+      } finally {
+        cleanup(meshId)
+      }
+    })
+
+    it('B4: an idle mesh (no active direct dispatches) takes the O(1) exit — zero probes of any kind', async () => {
+      const meshId = `mesh_reconcile_phase5_o1_${Date.now()}`
+      try {
+        meshConfigMocks.listMeshes.mockReturnValue([
+          { id: meshId, nodes: [{ id: 'node_r', workspace: '/r', daemonId: 'daemon_remote_x' }] },
+        ])
+        const { components, execute, handle } = makeAutoPruneComponents()
+        const dispatchMeshCommand = vi.fn(async () => ({ success: true }))
+        components.dispatchMeshCommand = dispatchMeshCommand
+        await runMeshReconcileTick(components)
+        expect([...execute.mock.calls, ...handle.mock.calls].filter(c => c[0] === 'get_status_metadata')).toHaveLength(0)
+        expect(dispatchMeshCommand.mock.calls.filter((c: any[]) => c[1] === 'get_status_metadata')).toHaveLength(0)
       } finally {
         cleanup(meshId)
       }
@@ -3820,14 +3874,16 @@ describe('runMeshReconcileTick', () => {
         // Give the old worker a local adapter so the stale-worker stop takes the local
         // stop_cli path (production shape for a co-hosted worker).
         const handleCliCommand = vi.fn(async () => ({ success: true }))
-        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'kimi' }]]), handleCliCommand }
+        // stop_cli is cli-manager's public `stopCli` since B3 (mesh-event-suppression).
+        const stopCli = vi.fn(async () => ({ success: true }))
+        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'kimi' }]]), handleCliCommand, stopCli }
 
         await runMeshReconcileTick(components)
         // The stop is ordered through the per-session destructive-action chain — let it flush.
         await new Promise(resolve => setImmediate(resolve))
         await new Promise(resolve => setImmediate(resolve))
 
-        expect(handleCliCommand).toHaveBeenCalledWith('stop_cli', expect.objectContaining({
+        expect(stopCli).toHaveBeenCalledWith(expect.objectContaining({
           targetSessionId: sessionId,
           mode: 'hard',
           reason: 'stale_mesh_dispatch_reclaimed',
@@ -3853,7 +3909,8 @@ describe('runMeshReconcileTick', () => {
           { type: 'claude-cli', category: 'cli' },
         )
         const handleCliCommand = vi.fn(async () => ({ success: true }))
-        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'claude-cli' }]]), handleCliCommand }
+        const stopCli = vi.fn(async () => ({ success: true }))
+        components.cliManager = { adapters: new Map([[sessionId, { cliType: 'claude-cli' }]]), handleCliCommand, stopCli }
 
         await runMeshReconcileTick(components)
         await new Promise(resolve => setImmediate(resolve))
@@ -3863,7 +3920,7 @@ describe('runMeshReconcileTick', () => {
         // no proactive stop (it would race a legitimate same-session re-dispatch).
         const reclaimed = readLedgerEntries(meshId).filter(e => e.kind === 'task_reclaimed')
         expect(reclaimed).toHaveLength(1)
-        expect(handleCliCommand.mock.calls.some(call => call[0] === 'stop_cli')).toBe(false)
+        expect(stopCli).not.toHaveBeenCalled()
       } finally {
         cleanup(meshId)
       }

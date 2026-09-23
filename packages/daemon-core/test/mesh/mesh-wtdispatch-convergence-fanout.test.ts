@@ -47,6 +47,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const WT_A = 'node_wta'
 const WT_B = 'node_wtb'
@@ -66,7 +67,7 @@ function createComponents(meshId: string, sessions: Sess[]) {
       updateSettings: vi.fn(),
     }
   })
-  return {
+  return withMeshRouter({
     instanceManager: {
       getInstance: vi.fn((sid: string) => instances.find((i) => i.getState().instanceId === sid)),
       getByCategory: vi.fn((category: string) => (category === 'cli' ? instances : [])),
@@ -81,7 +82,7 @@ function createComponents(meshId: string, sessions: Sess[]) {
     },
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, nodes: any[]) {

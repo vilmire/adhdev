@@ -306,7 +306,7 @@ const MIGRATED_TOPICS: ReadonlySet<TransportTopic> = new Set<TransportTopic>([
 
 /**
  * Topics the registry flushes when {@link TopicSubscriptionRegistry.invalidate}
- * consumes a commandInvalidations set (machine.runtime is never in the
+ * consumes a CommandSpec.invalidates set (machine.runtime is never in the
  * invalidation table; chat_tail is not invalidation-driven in either daemon).
  */
 const INVALIDATABLE_TOPICS: ReadonlyArray<TransportTopic> = [
@@ -457,7 +457,7 @@ export class TopicSubscriptionRegistry {
     }
 
     /**
-     * Consume a {@link commandInvalidations} result: run a flush pass for each
+     * Consume a `command_executed.invalidates` set (from the command registry): run a flush pass for each
      * invalidated topic the registry owns. NOTE: matches both daemons' historic
      * behavior — invalidation triggers a flush PASS, it does not bypass the
      * per-subscription interval throttle. `skip` lets cloud's launch fastpath

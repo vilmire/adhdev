@@ -1,4 +1,4 @@
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { getQueueEntryById } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';

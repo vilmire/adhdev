@@ -18,6 +18,8 @@ import {
     type TopicSink,
 } from '../../src/subscriptions/topic-registry.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
+import { subscribeTranscriptProjection } from '../../src/seqscribe/transcript-bus-subscriber.js';
 
 async function flushProjection(): Promise<void> {
     await Promise.resolve();
@@ -71,7 +73,10 @@ describe('Transcript stat polling instead of PTY', () => {
             },
         });
         const topicRegistry = makeRegistry();
-        const sessionRegistry = new SessionRegistry();
+        // B4: stat polling starts/stops from the bus (`registered`/`terminated`), not from the registry.
+        const bus = createSessionLifecycleBus({ log: () => {} });
+        const sessionRegistry = new SessionRegistry(bus);
+        subscribeTranscriptProjection(bus, service);
 
         // 1. Session register starts the polling loop, but path is not known yet.
         sessionRegistry.register({
@@ -131,7 +136,7 @@ describe('Transcript stat polling instead of PTY', () => {
 
         // 5. 세션 unregister 시 타이머가 정리된다.
         // We can assert this by checking the active timer count, or by advancing and seeing no crash/stat calls.
-        sessionRegistry.unregister(sessionId);
+        sessionRegistry.terminate(sessionId, 'stop_requested');
         
         // Timer should be cleared. We can verify by deleting the file and advancing timer.
         // If timer was running, it would throw or do something, but it's cleared.

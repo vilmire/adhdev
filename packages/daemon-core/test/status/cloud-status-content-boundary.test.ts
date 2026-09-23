@@ -179,6 +179,63 @@ describe('buildCloudStatusReportPayload — server WS content boundary', () => {
     });
 });
 
+/**
+ * Phase E (session launch provenance): the server path carries exactly two
+ * derived launch fields — `model` (an identifier) and `modelSource` (an enum).
+ * The full `launch` record, the thinking level, and any label / free text stay
+ * on P2P.
+ */
+describe('buildCloudStatusReportPayload — launch provenance (Phase E)', () => {
+    const launch = {
+        sessionId: 'sess-1',
+        providerType: 'claude-cli',
+        launchedBy: 'dashboard',
+        launchedAt: 1,
+        workspace: '/Users/someone/projects/my-app',
+        model: { requested: 'Opus Label', source: 'user', launchValue: 'opus', history: [{ at: 1, value: 'opus', via: 'launch' }] },
+        thinkingLevel: { requested: 'high', source: 'remembered', history: [{ at: 1, value: 'high', via: 'launch' }] },
+    };
+
+    it('never forwards the launch record or the thinking level', () => {
+        const [session] = buildCloudStatusReportPayload(
+            [sessionWithContent({ launch, thinkingLevel: 'high' })],
+            undefined,
+            1,
+        ).sessions;
+
+        expect(session).not.toHaveProperty('launch');
+        expect(session).not.toHaveProperty('thinkingLevel');
+        expect(JSON.stringify(session)).not.toContain('Opus Label');
+    });
+
+    // Pending the requested layer-1 edit in src/status/reporter.ts (owned by
+    // workstream B4 during the wiring-unification program): un-skip once
+    // `model` / `modelSource` are added to the allow-list there.
+    it('forwards model and modelSource', () => {
+        const [session] = buildCloudStatusReportPayload(
+            [sessionWithContent({ launch, model: 'opus', modelSource: 'user' })],
+            undefined,
+            1,
+        ).sessions;
+
+        expect(session.model).toBe('opus');
+        expect(session.modelSource).toBe('user');
+    });
+
+    it('drops a free-text model and an unknown modelSource', () => {
+        const [session] = buildCloudStatusReportPayload(
+            [sessionWithContent({ model: 'why is my auth token expiring early', modelSource: 'attacker text' })],
+            undefined,
+            1,
+        ).sessions;
+
+        expect(session.model).toBeUndefined();
+        expect(session.modelSource).toBeUndefined();
+        expect(JSON.stringify(session)).not.toContain('why is my auth token');
+        expect(JSON.stringify(session)).not.toContain('attacker text');
+    });
+});
+
 describe('buildCloudStatusReportPayload — p2p transport telemetry', () => {
     const base = { available: true, state: 'connected', peers: 3, screenshotActive: false };
 

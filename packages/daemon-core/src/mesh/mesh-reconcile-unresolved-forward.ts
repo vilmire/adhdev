@@ -17,7 +17,7 @@
 // stay in mesh-reconcile-loop.ts.
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import {
     peekUnresolvedDelegateForwards,

@@ -44,11 +44,12 @@ import { triggerMeshQueue, handleMeshForwardEvent } from '../../src/mesh/mesh-ev
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_worktree_bootstrapping'
 
 function createComponents() {
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? [] : [])),
       getInstance: vi.fn(() => undefined),
@@ -67,7 +68,7 @@ function createComponents() {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, worktreeBootstrapStatus?: string, requiredTags?: string[]) {

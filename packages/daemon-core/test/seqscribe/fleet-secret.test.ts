@@ -2,10 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-    shutdownDaemonComponents,
-    tryOpenDaemonSeqscribeNode,
-} from '../../src/boot/daemon-lifecycle.js';
+import { openSeqscribeRuntime, tryOpenDaemonSeqscribeNode } from '../../src/seqscribe/runtime.js';
 import { ADHDEV_AUTHORITY_ID, resolveFleetSecret } from '../../src/seqscribe/authority.js';
 import {
     FLEET_SECRET_FILE,
@@ -233,22 +230,22 @@ describe('daemon lifecycle seqscribe boot', () => {
     });
 
     it('closes the node during shared daemon shutdown', async () => {
+        // B4: the node belongs to the SeqscribeRuntime; DaemonRuntime.shutdown
+        // quiesces its producers and then closes it (order pinned by
+        // test/boot/boot-stages.test.ts). This pins the runtime half.
         let seqscribeClosed = false;
-        await shutdownDaemonComponents({
-            poller: { stop() {} },
-            cdpInitializer: { stop() {} },
-            agentStreamManager: { async dispose() {} },
-            cliManager: { detachAll() {} },
-            instanceManager: {
-                removeByCategory() {},
-                disposeAll() {},
-            },
-            cdpManagers: new Map(),
-            seqscribeNode: {
+        const rt = openSeqscribeRuntime({
+            version: 'test',
+            openNode: () => ({
+                node: { stats: () => ({ topics: {} }), drainSyncInterval: () => undefined },
+                writerId: 'w', daemonId: null, dbPath: '', topics: [], authorityEnabled: false, finalityLoop: null,
                 async close() { seqscribeClosed = true; },
-            },
-        } as any);
-
+            }) as any,
+        });
+        expect(rt).not.toBeNull();
+        rt!.quiesce();
+        await rt!.close();
+        await rt!.close(); // idempotent
         expect(seqscribeClosed).toBe(true);
     });
 });

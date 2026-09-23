@@ -121,6 +121,7 @@ import {
 } from './mesh-read-model.js';
 import { meshEventsTopic } from './topics.js';
 import type { SeqscribeThroughputCollector } from './throughput-collector.js';
+import { seqscribeSlot } from './runtime-slot.js';
 
 /** Why a mesh is not serving reads from the replica. */
 export type MeshReadFallbackReason =
@@ -279,7 +280,9 @@ function countFallback(reason: MeshReadFallbackReason): void {
 const loggedTransitions = new Map<string, string>();
 
 /**
- * The process's throughput collector, if one is running.
+ * The process's throughput collector, if one is running — read from the one
+ * seqscribe runtime slot (wiring-unification B4 deleted the separate
+ * `configureMeshReadReadinessCollector` global).
  *
  * The readiness gate reads seqscribe stats through THIS collector's snapshot.
  * Before SPEC v3.7 this was load-bearing for correctness — a `stats()` call
@@ -289,19 +292,8 @@ const loggedTransitions = new Map<string, string>();
  * snapshot remains the preferred source simply because it is already
  * assembled. See seqscribe/throughput-collector.ts.
  */
-let seqscribeCollectorRef: SeqscribeThroughputCollector | null = null;
-
-/**
- * Attach the throughput collector. Called from daemon boot alongside
- * `configureMeshReadModel`; `null` detaches on shutdown.
- *
- * With no collector attached the gate reports `stats_error` and reads fall back
- * to the ledger — the same fail-safe direction as any other readiness miss.
- */
-export function configureMeshReadReadinessCollector(
-    collector: SeqscribeThroughputCollector | null,
-): void {
-    seqscribeCollectorRef = collector;
+function readinessCollector(): Pick<SeqscribeThroughputCollector, 'snapshot'> | null {
+    return seqscribeSlot.current()?.collector ?? null;
 }
 
 /**
@@ -364,6 +356,7 @@ export function evaluateMeshReadReadiness(meshId: string): MeshReadReadiness {
     // direct read, which under v3.7 consumes nothing. Failing the gate instead
     // would turn "no telemetry" into "no replica reads", a far worse trade.
     let topicStats: { quarantined: number } | undefined;
+    const seqscribeCollectorRef = readinessCollector();
     if (seqscribeCollectorRef) {
         const snapshot = seqscribeCollectorRef.snapshot();
         if (!snapshot) return { ready: false, reason: 'stats_error' };

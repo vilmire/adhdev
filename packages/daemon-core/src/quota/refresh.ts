@@ -34,6 +34,7 @@
  */
 'use strict';
 
+import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
@@ -1094,10 +1095,10 @@ const WORKING_STATUSES = new Set([
  *     recently, and the post-turn reading is the one worth capturing).
  *
  * Read through `collectHotChatSessionStates()` — the explicitly CHEAP
- * projection. The richer `collectAllStates()` would be wrong here twice over:
- * it can run transcript parsing, and it DRAINS each instance's pendingEvents
- * into event listeners, so polling it on a timer would consume events out from
- * under the real consumer.
+ * projection. The richer `collectAllStates()` would be wrong here: it can run
+ * transcript parsing on every tick. (It used to also DRAIN each instance's
+ * pendingEvents into event listeners; since wiring-unification B5 provider
+ * events reach consumers only through the lifecycle bus.)
  */
 export function hasRecentCliActivity(
     sessions: ReadonlyArray<{ status?: unknown; lastMessageAt?: unknown }>,
@@ -1497,7 +1498,7 @@ export function setupQuotaRefreshLoop(components: {
  * this one still goes through the unmodified idle gate via
  * startQuotaRefreshLoop.
  *
- * Fire-and-forget by design — the caller (initDaemonComponents) must not
+ * Fire-and-forget by design — the caller (the boot's startLoops stage) must not
  * await this. Codex's fetcher spawns an `codex app-server` child (~900ms);
  * that cost must never be added to daemon startup latency, which is exactly
  * the cost this module's cache exists to keep off any synchronous path (see
@@ -1600,9 +1601,8 @@ const QUOTA_REFRESH_EVENTS = new Set(['agent:generating_completed', 'agent:stopp
  */
 export function setupQuotaEventRefresh(
     components: {
-        instanceManager: {
-            onEvent(listener: (event: { event?: unknown; providerType?: unknown }) => void): void;
-        };
+        /** Provider events arrive as the bus's `provider_event` (wiring-unification B5). */
+        bus: Pick<SessionLifecycleBus, 'on'>;
         providerLoader?: {
             isMachineProviderEnabled(providerType: string): boolean;
             isMachineQuotaEnabled?(providerType: string): boolean;
@@ -1617,7 +1617,8 @@ export function setupQuotaEventRefresh(
     const now = options.now ?? Date.now;
     const lastRefreshAt = new Map<string, number>();
     let stopped = false;
-    components.instanceManager.onEvent((event) => {
+    const off = components.bus.on('provider_event', (e) => {
+        const event = e.event as { event?: unknown; providerType?: unknown };
         if (stopped) return;
         if (typeof event.event !== 'string' || !QUOTA_REFRESH_EVENTS.has(event.event)) return;
         const refresher = typeof event.providerType === 'string'
@@ -1633,12 +1634,13 @@ export function setupQuotaEventRefresh(
         if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
         lastRefreshAt.set(refresher.provider, at);
         void refreshQuotaCacheOnce([refresher], isEnabled)
-            .catch((e: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${e?.message || e}`));
-    });
+            .catch((err: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${err?.message || err}`));
+    }, { name: 'quota.event-refresh' });
     LOG.info('Quota', `Event-driven quota refresh armed (${[...QUOTA_REFRESH_EVENTS].join(', ')}, ${debounceMs}ms debounce)`);
     return {
         stop() {
             stopped = true;
+            try { off(); } catch { /* bus already closed */ }
             LOG.info('Quota', 'Event-driven quota refresh stopped');
         },
     };

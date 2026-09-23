@@ -136,6 +136,8 @@ function capture(payload) {
         sevenDay,
     };
     if (typeof payload.version === 'string') snapshot.cliVersion = payload.version;
+    // Phase E: the running model id (never the display name) — see snapshot.ts header.
+    if (payload.model && typeof payload.model.id === 'string' && payload.model.id.trim()) snapshot.model = payload.model.id.trim();
 
     // Fan out to every track's snapshot path (the primary plus the sibling
     // tracks discovered at install time). Claude Code's statusLine slot is

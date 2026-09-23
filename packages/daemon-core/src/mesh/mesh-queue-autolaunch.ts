@@ -13,7 +13,7 @@
  * unaffected, and imports maybeAutoLaunchOneQueueSession back for triggerMeshQueue —
  * a function-level circular import mirroring the earlier splits from this file.
  */
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
@@ -29,6 +29,7 @@ import { quotaSpreadBonusByProvider, recordLastQuotaRanking, quotaFactsContextFo
 import { readNonEmptyString } from './mesh-events-utils.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
+import { classifyMeshLaunchAxisSource } from '../sessions/launch-record.js';
 import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcement.js';
 import { noteTargetPinCleared } from './mesh-turn-ledger.js';
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode } from './mesh-auto-fast-forward.js';
@@ -103,7 +104,7 @@ function sweepExpiredCooldowns(): void {
 /**
  * Resolve how a pending queue task should be auto-launched onto a node.
  *
- * - `local`: spawn directly on this daemon via cliManager.handleCliCommand('launch_cli').
+ * - `local`: spawn directly on this daemon via router.execute('launch_cli', …, 'mesh').
  * - `remote`: forward `launch_cli` to the node's daemon via dispatchMeshCommand
  *   (mirrors what mesh_launch_session does). Requires dispatchMeshCommand AND a
  *   resolvable coordinator daemonId for relay-safe completion routing.
@@ -916,6 +917,26 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                     const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType)
                         ? rawEffectiveModel
                         : undefined;
+                    // Phase E launch provenance: WHERE the final model / thinking value came
+                    // from, forwarded on launch_cli (both the local and the remote leg) so the
+                    // launched session's launch record says task_override vs mesh_slot. A
+                    // dropped / absent value claims no source — the launching daemon then
+                    // records provider_default / unspecified itself.
+                    const launchModelSource = classifyMeshLaunchAxisSource({
+                        taskValue: task.model,
+                        taskSource: (task as any).modelSource,
+                        effectiveValue: effectiveModel,
+                    });
+                    const launchThinkingLevelSource = classifyMeshLaunchAxisSource({
+                        taskValue: task.thinkingLevel,
+                        taskSource: (task as any).thinkingLevelSource,
+                        effectiveValue: effectiveThinkingLevel,
+                    });
+                    const launchProvenance = {
+                        launchedBy: 'mesh' as const,
+                        ...(launchModelSource ? { modelSource: launchModelSource } : {}),
+                        ...(launchThinkingLevelSource ? { thinkingLevelSource: launchThinkingLevelSource } : {}),
+                    };
                     if (rawEffectiveModel && effectiveModel === undefined) {
                         LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
                     }
@@ -1026,6 +1047,8 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                                 ...(effectiveModel ? { initialModel: effectiveModel } : {}),
                                 // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
                                 ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
+                                // Phase E: launchedBy + modelSource / thinkingLevelSource.
+                                ...launchProvenance,
                             }));
                         } catch (e: any) {
                             // SPAWN-CAP-TRANSPORT-AWARE: the dispatch never reached the target
@@ -1089,7 +1112,8 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
 
                     // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
                     markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
-                    const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
+                    // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
+                    const launchResult: any = await components.router.execute('launch_cli', {
                         cliType: effectiveProviderType,
                         dir: node.workspace,
                         settings: launchSettings,
@@ -1098,7 +1122,9 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                         ...(effectiveModel ? { initialModel: effectiveModel } : {}),
                         // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
                         ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
-                    });
+                        // Phase E: launchedBy + modelSource / thinkingLevelSource.
+                        ...launchProvenance,
+                    }, 'mesh');
                     if (!launchResult?.success) {
                         const reason = launchResult?.error || 'launch_cli_failed';
                         markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });

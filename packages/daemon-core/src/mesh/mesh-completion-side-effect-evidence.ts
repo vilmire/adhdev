@@ -36,7 +36,7 @@
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import * as path from 'node:path';
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';

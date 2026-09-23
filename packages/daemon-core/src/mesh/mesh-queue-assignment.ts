@@ -1,4 +1,4 @@
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh } from '../config/mesh-config.js';
@@ -419,7 +419,7 @@ export function remoteSessionReadyProbe(meshId: string, nodeId: string, sessionI
 }
 
 // CONS scope 3: the SINGLE source of truth for dispatching a claimed task to its
-// session. The remote (P2P dispatchMeshCommand) and local (cliManager.handleCliCommand)
+// session. The remote (P2P dispatchMeshCommand) and local (router.execute, src:mesh)
 // branches differ ONLY in the transport call — the delivery record, the delivered/failed
 // transitions, the pending-requeue-on-failure, the dispatch_failed ledger entry, AND the
 // Bug B hang timeout are identical and live here once so a future change to the dispatch
@@ -1331,8 +1331,8 @@ export function tryAssignQueueTask(
     // whose daemonId arrives in a non-top-level-camelCase serialization form (daemon_id /
     // machine.daemonId / lastProbe.machine.daemon_id / …) is still recognized as remote.
     // Reading raw `node.daemonId` here made the guard false for those forms, so the remote
-    // block was skipped and execution fell through to the LOCAL cliManager.handleCliCommand
-    // path — which has no adapter for the remote sessionId and threw
+    // block was skipped and execution fell through to the LOCAL dispatch
+    // path (then cliManager.handleCliCommand) — which has no adapter for the remote sessionId and threw
     // 'Cannot read properties of undefined (reading handleCliCommand)'.
     const remoteDaemonId = readMeshNodeDaemonId(node ?? {});
     if (remoteDaemonId && components.dispatchMeshCommand) {
@@ -1462,14 +1462,17 @@ export function tryAssignQueueTask(
     } catch { /* best-effort — dispatch still proceeds */ }
 
     // CONS3: same shared dispatch lifecycle as the remote branch — only the transport
-    // (cliManager.handleCliCommand) differs.
+    // (the local router, src:mesh) differs. `_meshDirectDispatch` pins local execution:
+    // the router must not forward to an "owner" if the session vanished between claim
+    // and dispatch (wiring-unification B4).
     // ARCH-REFACTOR R1: carry meshContext (incl. taskId) on the LOCAL dispatch too, so
-    // handleCliCommand's send_chat path binds this task to its turn (per-turn identity).
+    // agent_command's send_chat path binds this task to its turn (per-turn identity).
     // Previously only the remote branch shipped meshContext.taskId; the local path relied
     // on the last-write-wins session scalar, which races a follow-up task and made the
     // completion echo the wrong taskId (the standalone NOTIF-MISDELIVER repro).
     deliverTaskToSession(
-        () => components.cliManager.handleCliCommand('agent_command', {
+        () => components.router.execute('agent_command', {
+            _meshDirectDispatch: true,
             targetSessionId: sessionId,
             cliType: providerType,
             action: 'send_chat',
@@ -1491,7 +1494,7 @@ export function tryAssignQueueTask(
                 ...(readNonEmptyString(task.sourceCoordinatorSessionId) ? { coordinatorSessionId: readNonEmptyString(task.sourceCoordinatorSessionId) } : {}),
                 ...(silentIdlePushOnDispatch ? { silentIdlePush: true } : {}),
             },
-        }),
+        }, 'mesh'),
         {
             meshId,
             nodeId,

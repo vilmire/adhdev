@@ -34,6 +34,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../../src/mesh/mesh-events-pending.js'
 import { noteRecentlyClonedNode, __resetCloneBootstrapGraceForTests } from '../../src/mesh/mesh-clone-grace.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const WT_A = 'node_wt_a'
 const WT_B = 'node_wt_b'
@@ -43,7 +44,7 @@ const BASE_NODE = 'node_base'
 // after the (empty) idle drain. The skip reason is recorded onto task.autoLaunch and an
 // actionable skip is surfaced as a pending coordinator event.
 function createComponents(meshId: string) {
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? [] : [])),
       getInstance: vi.fn(() => undefined),
@@ -59,7 +60,7 @@ function createComponents(meshId: string) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, nodes: any[]) {

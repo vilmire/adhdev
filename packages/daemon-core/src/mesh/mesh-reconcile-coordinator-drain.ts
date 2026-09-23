@@ -13,7 +13,7 @@
 // mesh-reconcile-loop.ts (runMeshReconcileTick PHASE 2).
 // ---------------------------------------------------------------------------
 
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG, getLogLevel } from '../logging/logger.js';
 import {

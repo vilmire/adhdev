@@ -28,13 +28,14 @@ import type { ChildProcess } from 'child_process';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import type { DaemonCliManager } from '../commands/cli-manager.js';
+import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFiles } from './scaffold-template.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
 import { findCdpManager } from '../status/builders.js';
 import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from '../commands/provider-script-resolver.js';
-import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
+import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE, releaseCliSSEBusListener } from './dev-cli-debug.js';
 import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
 export const DEV_SERVER_PORT = 19280;
@@ -103,6 +104,7 @@ export class DevServer implements DevServerContext {
   public cdpManagers: Map<string, DaemonCdpManager>;
   public instanceManager: ProviderInstanceManager | null;
   public cliManager: DaemonCliManager | null;
+  public readonly bus: Pick<SessionLifecycleBus, 'on'> | null;
   public onProviderSourceConfigChanged: (() => Promise<void> | void) | null;
   private logFn: (msg: string) => void;
   private sseClients: http.ServerResponse[] = [];
@@ -123,6 +125,7 @@ export class DevServer implements DevServerContext {
     cdpManagers: Map<string, DaemonCdpManager>;
     instanceManager?: ProviderInstanceManager;
     cliManager?: DaemonCliManager;
+    bus?: Pick<SessionLifecycleBus, 'on'> | null;
     logFn?: (msg: string) => void;
     onProviderSourceConfigChanged?: () => Promise<void> | void;
   }) {
@@ -130,6 +133,7 @@ export class DevServer implements DevServerContext {
     this.cdpManagers = options.cdpManagers;
     this.instanceManager = options.instanceManager || null;
     this.cliManager = options.cliManager || null;
+    this.bus = options.bus ?? null;
     this.onProviderSourceConfigChanged = options.onProviderSourceConfigChanged || null;
     this.logFn = options.logFn || LOG.forComponent('DevServer').asLogFn();
   }
@@ -275,6 +279,7 @@ export class DevServer implements DevServerContext {
   stop(): void {
     this.server?.close();
     this.server = null;
+    releaseCliSSEBusListener(this.bus);
   }
 
   // ─── Handlers ───

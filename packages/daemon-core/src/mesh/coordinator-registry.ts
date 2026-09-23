@@ -11,6 +11,7 @@
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { getDaemonDataDir } from '../config/config.js';
+import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
 export interface CoordinatorRegistryEntry {
     meshId: string;
@@ -109,6 +110,21 @@ export function unregisterMeshCoordinator(sessionId: string): void {
         const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
         stripCoordinatorWrapperFile(filePath, owned);
     } catch { /* best-effort cleanup; never throw out of unregister */ }
+}
+
+/**
+ * Drop a coordinator's entry when its session terminates (wiring-unification
+ * B4). The registry is PERSISTED so a coordinator re-attaches after a daemon
+ * restart — which is exactly why `daemon_shutdown` must never unregister: a
+ * session torn down because the daemon is going away is not a dead coordinator.
+ * Entries left by a previous daemon generation are pruned after restore instead
+ * (`pruneDeadMeshCoordinators`).
+ */
+export function subscribeCoordinatorRegistryRemoval(bus: SessionLifecycleBus): Unsubscribe {
+    return bus.on('terminated', (event) => {
+        if (event.cause === 'daemon_shutdown') return;
+        unregisterMeshCoordinator(event.sessionId);
+    }, { name: 'mesh.coordinator-registry' });
 }
 
 /** Look up a coordinator entry by session ID. Returns undefined if not registered. */

@@ -1,4 +1,4 @@
-import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
@@ -1542,7 +1542,8 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                             if (gateLog) LOG.info('MeshRecovery', gateLog);
                         }
                         if (node && relaunchProviderType) {
-                            components.cliManager.handleCliCommand('launch_cli', {
+                            // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
+                            components.router.execute('launch_cli', {
                                 cliType: relaunchProviderType,
                                 dir: node.workspace,
                                 settings: {
@@ -1572,7 +1573,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                                     ),
                                     launchedByCoordinator: true,
                                 }
-                            }).catch((e: any) => LOG.error('MeshRecovery', `Failed to auto-relaunch session for ${node.id}: ${e?.message}`));
+                            }, 'mesh').catch((e: any) => LOG.error('MeshRecovery', `Failed to auto-relaunch session for ${node.id}: ${e?.message}`));
                         }
                     } catch (e: any) {
                         LOG.warn('MeshRecovery', `Failed to execute auto-recovery: ${e?.message}`);
@@ -1903,7 +1904,7 @@ function forwardUnresolvedDelegateEvent(
 }
 
 
-export function setupMeshEventForwarding(components: DaemonComponents) {
+export function setupMeshEventForwarding(components: DaemonComponents): () => void {
     // GRAPH-ORCHESTRATION Phase B: drain target for the graph outbox's queue_wake
     // events (design :323-327 step 9). The wake rides the ORDINARY triggerMeshQueue —
     // the graph engine never dispatches directly. Registered here because this module
@@ -1956,7 +1957,11 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             LOG.warn('MeshGraph', `Gate notify enqueue failed (mesh ${notification.meshId}, gate ${notification.gateId}): ${e?.message || e}`);
         }
     });
-    components.instanceManager.onEvent((event) => {
+    // Wiring-unification B4: a lifecycle-bus subscriber (sync lane — preserves
+    // today's in-tick ordering). Components assembled without a bus (unit tests
+    // that stub instanceManager.onEvent) keep the legacy listener. TRANSITIONAL:
+    // the body is rewritten in Phase C.
+    const onProviderEvent = (event: any) => {
         // --- Coordinator idle auto-flush (fast path) ---
         // When a coordinator session becomes idle, immediately flush any pending
         // coordinator events that accumulated while it was generating, rather than
@@ -2131,5 +2136,9 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         // instead of waiting up to a full reconcile interval (event-driven, mirrors the
         // worker-claim path). No-op when no idle coordinator is present (held for reconcile).
         flushPendingForMeshIdleCoordinators(components, routing.meshId);
-    });
+    };
+    if (components.bus) {
+        return components.bus.on('provider_event', (e) => onProviderEvent(e.event), { name: 'mesh.forwarding' });
+    }
+    return components.instanceManager.onEvent(onProviderEvent);
 }

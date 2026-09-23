@@ -196,25 +196,15 @@ describe('fleet.status parity — producer append snapshot', () => {
 });
 
 describe('fleet.status parity — production wiring', () => {
-    it('arms after the shadow and detaches before it in daemon lifecycle', () => {
-        const here = dirname(fileURLToPath(import.meta.url));
-        const source = readFileSync(join(here, '../../src/boot/daemon-lifecycle.ts'), 'utf8');
-        const armShadow = source.indexOf('configureFleetStatusShadow(components.seqscribeNode ?? null)');
-        const armParity = source.indexOf('configureFleetStatusParity(components.seqscribeNode ?? null)');
-        const detachParity = source.indexOf('configureFleetStatusParity(null)');
-        const detachShadow = source.indexOf('configureFleetStatusShadow(null)');
-
-        expect(armShadow).toBeGreaterThan(-1);
-        expect(armParity).toBeGreaterThan(armShadow);
-        expect(detachParity).toBeGreaterThan(armParity);
-        expect(detachShadow).toBeGreaterThan(detachParity);
-    });
+    // The arm/disarm ORDER (shadow before parity, parity detached first) is
+    // pinned behaviourally by test/boot/seqscribe-projections-order.test.ts
+    // since wiring-unification B4 moved it out of daemon-lifecycle.ts.
 
     it('builds the expectation through buildCloudStatusReportPayload without changing server fields', () => {
         const here = dirname(fileURLToPath(import.meta.url));
         const source = readFileSync(join(here, '../../src/status/reporter.ts'), 'utf8');
-        const observer = source.indexOf('observeFleetStatusWsProjection(() => {');
-        const shadow = source.indexOf('recordFleetStatusShadow(fleetStatusEntry({', observer);
+        const observer = source.indexOf('fleetStatus?.observeWsProjection(() => {');
+        const shadow = source.indexOf('fleetStatus.record(fleetStatusEntry({', observer);
         const block = source.slice(observer, shadow);
 
         expect(observer).toBeGreaterThan(-1);

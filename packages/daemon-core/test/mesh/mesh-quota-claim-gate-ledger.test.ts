@@ -45,6 +45,7 @@ import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { evaluateQuotaClaimGateForAssignment } from '../../src/mesh/mesh-queue-claim-gate.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { __clearMeshLedgerForTests, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_quota_ledger'
 const NODE_WS = '/repo/quota-ledger'
@@ -77,7 +78,7 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
       updateSettings: vi.fn(),
     }
   })
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
       getInstance: vi.fn((sid: string) => cliInstances.find((i) => i.getState().instanceId === sid)),
@@ -93,7 +94,7 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string, nodes: any[], quotaRouting?: Record<string, unknown>) {

@@ -78,6 +78,7 @@ import {
 } from '../../src/mesh/mesh-autolaunch-spawn-cap.js'
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { notifyCoordinatorOfActionableSkip } from '../../src/mesh/mesh-skip-notify.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_remote'
 const REMOTE_DAEMON_ID = 'daemon_mach_remote_node'
@@ -113,7 +114,7 @@ function createComponents(dispatch: 'throws' | 'spawns') {
   const dispatchMeshCommand = dispatch === 'throws'
     ? vi.fn(async () => { throw new Error('SIGNAL_RATE_LIMIT: mesh signalling rate limit exceeded') })
     : vi.fn(async () => ({ payload: { success: true, sessionId: `remote-${randomUUID().slice(0, 6)}` } }))
-  return {
+  return withMeshRouter({
     instanceManager: { getByCategory: vi.fn(() => []), getInstance: vi.fn(() => undefined) },
     cliManager: { adapters: new Map(), handleCliCommand: vi.fn(async () => ({ success: true })) },
     providerLoader: {
@@ -125,7 +126,7 @@ function createComponents(dispatch: 'throws' | 'spawns') {
     dispatchMeshCommand,
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function insertPendingTask(meshId: string): { id: string } {

@@ -2,7 +2,7 @@
  * Parity harness for the TopicSubscriptionRegistry (design S1 gate).
  *
  * Feeds a synthetic event sequence — subscribe → flushes under throttle →
- * command invalidation via the CORE `commandInvalidations` table →
+ * command invalidation via the CORE command registry (`invalidationsFor`) →
  * unsubscribe — into the registry and pins the sink call sequence as an
  * INLINE golden (explicit expected arrays, no snapshot files).
  *
@@ -15,7 +15,7 @@
  * - first flush after subscribe always sends (lastSentAt === 0): both daemons.
  * - invalidation triggers a flush PASS but does NOT bypass the throttle:
  *   both daemons called their plain flush function from the
- *   commandInvalidations gate — golden pins the "invalidate inside the
+ *   command-invalidation gate — golden pins the "invalidate inside the
  *   throttle window sends nothing" behavior.
  * - seq = per-subscription monotonic counter: CLOUD semantics (union decision
  *   #2 in the module header). Standalone previously stamped the
@@ -32,7 +32,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { commandInvalidations } from '../../src/commands/command-invalidations.js';
+import { getDaemonCommandRegistry } from '../../src/commands/router.js';
 import { createGitWorkspaceMonitor } from '../../src/git/git-monitor.js';
 import type { GitRepoStatus } from '../../src/git/git-types.js';
 import type { TopicEngineOptions, TopicSink } from '../../src/subscriptions/topic-registry.js';
@@ -152,18 +152,18 @@ describe('TopicSubscriptionRegistry — workspace.git parity golden', () => {
         //    invalidates workspace.git per the CORE table, but invalidation only
         //    triggers a flush pass — the throttle still applies → nothing sent.
         now = 15_001;
-        const invalidatedByStash = commandInvalidations('git_stash_push');
+        const invalidatedByStash = getDaemonCommandRegistry().invalidationsFor('git_stash_push');
         expect(invalidatedByStash.has('workspace.git')).toBe(true);
         await registry.invalidate(invalidatedByStash);
 
         // 6. A non-git command invalidates nothing for workspace.git.
         now = 30_000;
-        const invalidatedByChat = commandInvalidations('read_chat');
+        const invalidatedByChat = getDaemonCommandRegistry().invalidationsFor('read_chat');
         expect(invalidatedByChat.has('workspace.git')).toBe(false);
         await registry.invalidate(invalidatedByChat);
 
         // 7. Command invalidation outside the throttle window → sends.
-        const invalidatedByPush = commandInvalidations('git_push');
+        const invalidatedByPush = getDaemonCommandRegistry().invalidationsFor('git_push');
         expect(invalidatedByPush.has('workspace.git')).toBe(true);
         await registry.invalidate(invalidatedByPush);
 
@@ -394,7 +394,7 @@ describe('TopicSubscriptionRegistry — daemon.metadata parity golden', () => {
 
         // Command invalidation drives a flush pass through the CORE table
         // (both daemons routed set_conversation_prefs → metadata flush).
-        const invalidated = commandInvalidations('set_conversation_prefs');
+        const invalidated = getDaemonCommandRegistry().invalidationsFor('set_conversation_prefs');
         expect(invalidated.has('daemon.metadata')).toBe(true);
         await registry.invalidate(invalidated);
 

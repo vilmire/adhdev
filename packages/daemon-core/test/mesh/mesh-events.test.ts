@@ -77,6 +77,7 @@ import { peekUnresolvedDelegateForwards } from '../../src/mesh/mesh-unresolved-f
 import { markRemoteSessionGenerating, __resetRemoteGeneratingMarksForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { LOG } from '../../src/logging/logger.js'
 import { hasWorkerProtocolFooter } from '@adhdev/mesh-shared'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<string, unknown>, opts?: { coordinatorStatus?: 'idle' | 'generating' | 'waiting_approval'; statusInstanceId?: string }) {
   let listener: ((event: any) => void) | undefined
@@ -114,7 +115,8 @@ function createComponents(meshId = 'mesh_inline_1', workerSettings?: Record<stri
   }
 
   return {
-    components: { instanceManager, ...(opts?.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}) } as any,
+    // Tests assign `components.cliManager` later; the mesh router stub resolves it at call time.
+    components: withMeshRouter({ instanceManager, ...(opts?.statusInstanceId ? { statusInstanceId: opts.statusInstanceId } : {}) } as any),
     emit: (event: any) => {
       if (!listener) throw new Error('listener was not registered')
       listener(event)
@@ -172,7 +174,7 @@ function createQueueAutoLaunchComponents(args?: {
     }),
   }
   return {
-    components: {
+    components: withMeshRouter({
       instanceManager: {
         getByCategory: vi.fn((category: string) => category === 'cli' ? (args?.existingCliInstances || []) : []),
       },
@@ -188,7 +190,7 @@ function createQueueAutoLaunchComponents(args?: {
         getMeta: vi.fn(() => undefined),
       },
       onStatusChange: vi.fn(),
-    } as any,
+    } as any),
     cliManager,
   }
 }
@@ -2011,7 +2013,7 @@ describe('setupMeshEventForwarding', () => {
 
       const queued = enqueueTask(meshId, 'local task that transiently fails to dispatch', { difficulty: 'medium' })
 
-      const components = {
+      const components = withMeshRouter({
         instanceManager: {
           // Skip the best-effort updateSettings stamping; not relevant to this path.
           getInstance: vi.fn(() => undefined),
@@ -2022,7 +2024,7 @@ describe('setupMeshEventForwarding', () => {
             throw new Error('adapter busy: send_chat rejected mid-generation')
           }),
         },
-      } as any
+      } as any)
 
       const assigned = tryAssignQueueTask(components, meshId, 'node_child_1', 'runtime-session-1', 'codex-cli')
       expect(assigned).toBe(true)
@@ -3312,14 +3314,14 @@ describe('setupMeshEventForwarding', () => {
         providerType: 'hermes-cli',
         payload: { taskId: queued.id, message: 'retryable failed task' },
       })
-      const components = {
+      const components = withMeshRouter({
         instanceManager: {
           getByCategory: vi.fn((category: string) => category === 'cli' ? [] : []),
         },
         cliManager: {
           handleCliCommand: vi.fn(() => Promise.resolve({ success: true, sessionId: 'retry-session-1' })),
         },
-      } as any
+      } as any)
 
       const stopped = handleMeshForwardEvent(components, {
         event: 'agent:stopped',
@@ -3351,6 +3353,52 @@ describe('setupMeshEventForwarding', () => {
     }
   })
 
+  it('B4: the recovery relaunch goes through router.execute(launch_cli, …, \'mesh\') — command log, invalidation, launch annotations', async () => {
+    const meshId = `mesh_recovery_router_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 1 },
+      })
+      const queued = enqueueTask(meshId, 'retryable failed task', { difficulty: 'medium' })
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      appendLedgerEntry(meshId, {
+        kind: 'task_dispatched',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        payload: { taskId: queued.id, message: 'retryable failed task' },
+      })
+      const execute = vi.fn(async () => ({ success: true, sessionId: 'retry-session-1' }))
+      const components = {
+        instanceManager: { getByCategory: vi.fn(() => []) },
+        cliManager: { adapters: new Map() },
+        router: { execute, getCachedInlineMesh: () => undefined },
+      } as any
+
+      handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+      })
+      await new Promise(resolve => setImmediate(resolve))
+
+      const launches = execute.mock.calls.filter((c: any[]) => c[0] === 'launch_cli')
+      expect(launches).toHaveLength(1)
+      expect(launches[0][2]).toBe('mesh')
+      expect(launches[0][1]).toMatchObject({
+        cliType: 'hermes-cli',
+        dir: '/repo/worktree-a',
+        settings: expect.objectContaining({ meshNodeFor: meshId, meshNodeId: 'node_child_1', meshLaunchSource: 'recovery_relaunch' }),
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('KIMI-AUTH-BILLING-LIVE: records the assigned task failed but suppresses blind recovery/relaunch for a typed billing stop', () => {
     const meshId = `mesh_kimi_billing_stop_${Date.now()}`
     try {
@@ -3372,10 +3420,10 @@ describe('setupMeshEventForwarding', () => {
         payload: { taskId: queued.id, message: 'task blocked by expired Kimi subscription' },
       })
       const launch = vi.fn(() => Promise.resolve({ success: true, sessionId: 'must-not-launch' }))
-      const components = {
+      const components = withMeshRouter({
         instanceManager: { getByCategory: vi.fn(() => []) },
         cliManager: { handleCliCommand: launch },
-      } as any
+      } as any)
 
       expect(handleMeshForwardEvent(components, {
         event: 'agent:stopped',
@@ -3425,10 +3473,10 @@ describe('setupMeshEventForwarding', () => {
         providerType: 'kimi',
         payload: { taskId: queued.id, message: 'task blocked by exhausted Kimi usage window' },
       })
-      const components = {
+      const components = withMeshRouter({
         instanceManager: { getByCategory: vi.fn(() => []) },
         cliManager: { handleCliCommand: vi.fn(() => Promise.resolve({ success: true, sessionId: 'retry-session-1' })) },
-      } as any
+      } as any)
 
       expect(handleMeshForwardEvent(components, {
         event: 'agent:stopped',
@@ -3590,7 +3638,7 @@ describe('setupMeshEventForwarding', () => {
           },
         })),
       }
-      const components = {
+      const components = withMeshRouter({
         instanceManager: {
           getByCategory: vi.fn((category: string) => category === 'cli' ? [stoppedSource] : []),
         },
@@ -3598,7 +3646,7 @@ describe('setupMeshEventForwarding', () => {
           adapters: new Map(),
           handleCliCommand: vi.fn(),
         },
-      } as any
+      } as any)
 
       triggerMeshQueue(components, meshId)
 
@@ -3640,7 +3688,7 @@ describe('setupMeshEventForwarding', () => {
           },
         })),
       }
-      const components = {
+      const components = withMeshRouter({
         instanceManager: {
           getByCategory: vi.fn((category: string) => category === 'cli' ? [stoppedSource] : []),
         },
@@ -3648,7 +3696,7 @@ describe('setupMeshEventForwarding', () => {
           adapters: new Map(),
           handleCliCommand: vi.fn(),
         },
-      } as any
+      } as any)
 
       const result = await triggerMeshQueue(components, meshId)
 
@@ -5389,14 +5437,14 @@ describe('M1-3 — dependent wake on completion (event-based, no polling)', () =
         adapters: new Map([['runtime-session-1', {}], ['runtime-session-2', {}]]),
         handleCliCommand: vi.fn(() => Promise.resolve({ success: true })),
       }
-      const components = {
+      const components = withMeshRouter({
         instanceManager: {
           onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
           getInstance: vi.fn((id: string) => id === 'runtime-session-1' ? completing : id === 'runtime-session-2' ? idleWorker : undefined),
           getByCategory: vi.fn((category: string) => category === 'cli' ? [completing, idleWorker] : []),
         },
         cliManager,
-      } as any
+      } as any)
 
       // Task A assigned to session-1; B depends on A and targets session-2.
       const a = enqueueTask(meshId, 'task A', { difficulty: 'medium' })

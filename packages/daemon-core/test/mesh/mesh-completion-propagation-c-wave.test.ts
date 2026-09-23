@@ -51,6 +51,7 @@ import { runMeshReconcileTick, __resetReclaimUnknownStreakForTests } from '../..
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 function cleanup(meshId: string) {
   try { __clearMeshQueueForTests(meshId) } catch { /* best-effort */ }
@@ -351,14 +352,14 @@ describe('COMPLETION-PROPAGATION F6/F7: bootstrap gate reads inline-cache SSOT f
     return {
       handleCliCommand,
       updateSettings: workerInstance.updateSettings,
-      components: {
+      components: withMeshRouter({
         instanceManager: {
           getByCategory: (c: string) => (c === 'cli' ? [workerInstance] : []),
           getInstance: (id: string) => (id === sessionId ? workerInstance : undefined),
         },
         cliManager: { adapters: new Map([[sessionId, {}]]), handleCliCommand },
         router: { getCachedInlineMesh: (id: string) => (id === meshId ? inlineMesh : undefined) },
-      } as any,
+      } as any),
     }
   }
 
@@ -431,13 +432,13 @@ describe('COMPLETION-PROPAGATION F5: claim-adopt coordinator session anchor', ()
     meshConfigMocks.listMeshes.mockReturnValue([mesh])
     return {
       updateSettings,
-      components: {
+      components: withMeshRouter({
         instanceManager: {
           getByCategory: (c: string) => (c === 'cli' ? [workerInstance] : []),
           getInstance: (id: string) => (id === sessionId ? workerInstance : undefined),
         },
         cliManager: { adapters: new Map([[sessionId, {}]]), handleCliCommand },
-      } as any,
+      } as any),
     }
   }
 

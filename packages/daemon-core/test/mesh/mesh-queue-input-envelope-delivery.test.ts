@@ -50,6 +50,7 @@ import {
   getQueue,
   type MeshTaskInputEnvelope,
 } from '../../src/mesh/mesh-work-queue.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE = 'node_base'
 const WS = '/repo/main'
@@ -70,7 +71,7 @@ function createComponents(meshId: string) {
   }
   const handleCliCommand = vi.fn(async () => ({ success: true }))
   return {
-    components: {
+    components: withMeshRouter({
       instanceManager: {
         getInstance: vi.fn((sid: string) => (sid === SESSION ? instance : undefined)),
         getByCategory: vi.fn((category: string) => (category === 'cli' ? [instance] : [])),
@@ -85,7 +86,7 @@ function createComponents(meshId: string) {
       },
       statusInstanceId: 'daemon-local',
       onStatusChange: vi.fn(),
-    } as any,
+    } as any),
     handleCliCommand,
   }
 }
@@ -132,6 +133,11 @@ describe('MESH-IMAGE-DISPATCH: an input envelope queued for a busy target surviv
       //     same top-level `input` slot the direct-dispatch path uses.
       expect(handleCliCommand).toHaveBeenCalledTimes(1)
       const [command, payload] = handleCliCommand.mock.calls[0] as [string, Record<string, unknown>]
+      // B4: the local claim dispatch goes through router.execute(…, 'mesh') (the
+      // stub router rejects any other source) and pins local execution so the
+      // router never forwards a session that vanished between claim and dispatch.
+      expect(components.router.execute).toHaveBeenCalledWith('agent_command', expect.any(Object), 'mesh')
+      expect(payload._meshDirectDispatch).toBe(true)
       expect(command).toBe('agent_command')
       expect(payload.action).toBe('send_chat')
       expect(payload.targetSessionId).toBe(SESSION)

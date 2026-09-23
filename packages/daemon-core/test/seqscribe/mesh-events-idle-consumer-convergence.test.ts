@@ -173,8 +173,8 @@ function topicEntryCount(handle: SeqscribeNodeHandle, topic: string): number {
 
 function createRemoteCommandRouter(): DaemonCommandRouter {
     return new DaemonCommandRouter({
-        commandHandler: { handle: async () => ({ success: false }) } as any,
-        cliManager: { handleCliCommand: async () => ({ success: true }) } as any,
+        commandHandler: { handleSpec: async () => ({ success: false }) } as any,
+        cliManager: { agentCommand: async () => ({ success: true }) } as any,
         cdpManagers: new Map(),
         providerLoader: { resolve: () => null, getMeta: () => null } as any,
         instanceManager: {

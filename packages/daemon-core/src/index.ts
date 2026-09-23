@@ -612,8 +612,10 @@ export { DaemonCommandHandler } from './commands/handler.js';
 export type { CommandResult, CommandContext } from './commands/handler.js';
 export { DaemonCommandRouter, readCachedInlineMeshActiveSessionDetails, resolveMeshNodeAttribution, buildMeshNodeDataFreshness, buildMeshNodeProbeFreshness, MESH_NODE_LIVE_TRUTH_MARKER } from './commands/router.js';
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
-export { commandInvalidations, commandMayAffectMeshGraphStatus } from './commands/command-invalidations.js';
-export type { CommandInvalidationTopic } from './commands/command-invalidations.js';
+export { CommandRegistry, COMMAND_PREFIX_DEFAULTS, defineCommandSpecs, isCommandSource, normalizeCommandSource } from './commands/command-registry.js';
+export type { CommandInvalidationTopic, CommandSource, CommandSpec, CommandFamily, CommandSessionAttributes, PrefixDefault } from './commands/command-registry.js';
+export { getDaemonCommandRegistry } from './commands/router.js';
+export { InteractionContextMap } from './commands/interaction-context.js';
 
 // ── Dashboard subscription topic engine (shared cloud/standalone) ──
 export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY, DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS } from './subscriptions/topic-registry.js';
@@ -823,6 +825,16 @@ export type { ActivationRef, ActivationPointer, ActivateResult } from './provide
 export { ProviderChannelRuntime, collectSyncTargetTypes } from './providers/channel/runtime.js';
 export type { ChannelSyncReport, ChannelSyncError, ProviderChannelRuntimeOptions } from './providers/channel/runtime.js';
 export { ProviderInstanceManager } from './providers/provider-instance-manager.js';
+export type { ProviderEventListener } from './providers/provider-instance-manager.js';
+// Session lifecycle bus (wiring-unification B1)
+export { createSessionLifecycleBus } from './sessions/lifecycle-bus.js';
+export type { SessionLifecycleBus, Unsubscribe, SubscribeOptions, AsyncSubscribeOptions, BusStats, CreateSessionLifecycleBusOptions } from './sessions/lifecycle-bus.js';
+export { BUS_EVENT_KINDS, assertNeverBusEvent } from './sessions/lifecycle-events.js';
+export type { SessionLifecycleEvent, DaemonEvent as DaemonBusEvent, BusEvent, BusEventKind, EventOf, RegisterOrigin, StatusCause, TerminationCause, DaemonFactsCause, PromptTransport, EnrichedProviderEvent } from './sessions/lifecycle-events.js';
+export { createSessionEventPort } from './sessions/session-port.js';
+export type { SessionEventPort, SessionSignalDetail, CreateSessionEventPortOptions } from './sessions/session-port.js';
+export { SessionRegistry } from './sessions/registry.js';
+export type { SessionRuntimeTarget, TerminateDetail } from './sessions/registry.js';
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
@@ -906,9 +918,8 @@ export { shouldAutoRestoreHostedSessionsOnStartup } from './session-host/startup
 export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
 export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 
-// ── Boot / Lifecycle ──
-export { initDaemonComponents, startDaemonDevSupport, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
-export type { DaemonInitConfig, DaemonComponents, DaemonDevSupportOptions } from './boot/daemon-lifecycle.js';
+// ── Boot / Lifecycle ── (staged boot: bootDaemonRuntime below; host surface: createDaemonHostRuntime)
+export type { DaemonComponents } from './boot/daemon-components.js';
 
 // ── Local IPC server (shared between cloud + standalone daemons) ──
 export {
@@ -1349,3 +1360,98 @@ export {
   hiddenExecFileSync,
   hiddenExecSync,
 } from './process/hidden-spawn.js';
+
+// Wiring-unification B4 — staged daemon boot + seqscribe runtime.
+export { bootDaemonRuntime, DEFAULT_DAEMON_BOOT_STAGES } from './boot/daemon-runtime.js';
+export type { DaemonBootStages } from './boot/daemon-runtime.js';
+export type {
+  DaemonBootConfig,
+  DaemonRuntime,
+  SessionHostBoot,
+  Disposer,
+} from './boot/daemon-components.js';
+export { buildDaemonHealthSummary } from './boot/health-summary.js';
+export type { DaemonHealthSummary } from './boot/health-summary.js';
+export { openSeqscribeRuntime, createBeaconSlot, tryOpenDaemonSeqscribeNode } from './seqscribe/runtime.js';
+export type {
+  SeqscribeRuntime,
+  SeqscribeProjectionsView,
+  BeaconSlot,
+  BeaconHandleLike,
+  FleetStatusProducer,
+} from './seqscribe/runtime.js';
+export { bindSeqscribeRuntime, seqscribeSlot } from './seqscribe/runtime-slot.js';
+export { buildLocalSeqscribeStats } from './seqscribe/local-stats.js';
+export { subscribeTranscriptProjection } from './seqscribe/transcript-bus-subscriber.js';
+// ─── Session launch provenance (wiring-unification Phase E) ───
+export {
+  buildSessionLaunchRecord,
+  buildRestoredLaunchRecord,
+  buildModelSelection,
+  classifyMeshLaunchAxisSource,
+  resolveProviderDefaultModel,
+  readLaunchProvenanceArgs,
+  inferLaunchedBy,
+} from './sessions/launch-record.js';
+export type { LaunchAxis, LaunchAxisInput, LaunchProvenanceArgs, SessionLaunchRecordInput } from './sessions/launch-record.js';
+export type { LaunchUpdateCause } from './sessions/lifecycle-events.js';
+export {
+  MODEL_AXIS_SOURCES,
+  SESSION_LAUNCHED_BY,
+  isModelAxisSource,
+  isSessionLaunchedBy,
+  sanitizeModelIdentifier,
+  parseSessionLaunchRecord,
+  describeModelSelection,
+  effectiveModelSelectionValue,
+  launchModelSelectionValue,
+} from '@adhdev/mesh-shared';
+export type {
+  ModelAxisSource,
+  ModelSelection,
+  ModelSelectionHistoryEntry,
+  ModelSelectionVia,
+  ModelSelectionDisplay,
+  SessionLaunchRecord,
+  SessionLaunchedBy,
+} from '@adhdev/mesh-shared';
+export { resolveModelLaunchValue } from './commands/model-launch-args.js';
+export { nativeHistoryObservedModel } from './providers/native-history/observed-model.js';
+export type { ObservedModel } from './providers/native-history/observed-model.js';
+export { buildSessionLaunchFields } from './status/builders.js';
+
+// ─── Host absorption (wiring-unification B5) ───
+export { createDaemonHostRuntime } from './boot/host-runtime.js';
+export type {
+  DaemonHostRuntime,
+  DaemonHostTransport,
+  HostAdmissionContext,
+  HostSnapshotProfile,
+  HostStatusSnapshot,
+} from './boot/host-runtime.js';
+export {
+  isTurnCompletionEdge,
+  subscribeHostChatTail,
+  subscribeHostCommandTopics,
+  subscribeHostMeshState,
+  subscribeHostModal,
+  subscribeHostStatusFacts,
+  subscribeHostTurnSnapshots,
+} from './boot/host-subscribers.js';
+export type { StatusFactsEvent, ChatTailHooks, TurnSnapshotDeps } from './boot/host-subscribers.js';
+export { SessionOutputFanout } from './boot/session-output-fanout.js';
+export type { SessionOutputSink } from './boot/session-output-fanout.js';
+export { bootSessionHost } from './session-host/host-bootstrap.js';
+export type { SessionHostBootOptions, SessionHostHandle, SessionHostManagedBy } from './session-host/host-bootstrap.js';
+export { SessionHostController } from './session-host/session-host-controller.js';
+export {
+  createStatusEventEmitter,
+  createInstanceHideMuteResolver,
+  projectP2PStatusEvent,
+  projectServerStatusEvent,
+  toDaemonStatusEventName,
+} from './status/status-event.js';
+export type { StatusEventEmitterDeps, StatusEventHideMute, ResolveStatusEventHideMute } from './status/status-event.js';
+export type { HotChatSessionState, SessionModalState } from './providers/provider-instance.js';
+export { subscribeLifecycleTrace, formatLifecycleTraceLine } from './sessions/lifecycle-trace.js';
+export type { LifecycleTraceLog } from './sessions/lifecycle-trace.js';

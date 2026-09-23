@@ -65,6 +65,7 @@ import {
 } from './mesh-coordinator-config.js';
 import type { MeshCoordinatorConfigFormat } from './mesh-refine-gates.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js';
+import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
 // ─── Flag gate ──────────────────────────────────────────────────────────
 // Moved to ../runtime-defaults.ts (layer-neutral — import-boundary gate blocks
@@ -362,6 +363,28 @@ function bindsForSession(meshId: string, sessionId: string): WorkerSessionBindin
 export function verifyWorkerSessionBind(bind: unknown): WorkerSessionBinding | null {
     if (typeof bind !== 'string' || !bind.trim()) return null;
     return LIVE_BINDS.get(bind.trim()) || null;
+}
+
+/**
+ * Revoke every bind naming `sessionId`, in any mesh (wiring-unification B4).
+ * A dead worker's bind otherwise stayed live until a re-mint — a zombie
+ * process could keep exchanging it for tokens. Returns how many were revoked.
+ */
+export function revokeWorkerSessionBindsForSession(sessionId: string): number {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return 0;
+    let revoked = 0;
+    for (const binding of [...LIVE_BINDS.values()]) {
+        if (binding.sessionId === sid && revokeWorkerSessionBind(binding.bind)) revoked += 1;
+    }
+    return revoked;
+}
+
+/** Revoke a session's binds when it terminates, whatever the cause (binds are in-memory only). */
+export function subscribeWorkerBindRevocation(bus: SessionLifecycleBus): Unsubscribe {
+    return bus.on('terminated', (event) => {
+        revokeWorkerSessionBindsForSession(event.sessionId);
+    }, { name: 'mesh.worker-binds' });
 }
 
 export function revokeWorkerSessionBind(bind: string): boolean {

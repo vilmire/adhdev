@@ -52,6 +52,7 @@ import { triggerMeshQueue, DIFFICULTY_FLOOR_REPORT_AFTER_MS } from '../../src/me
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { drainPendingMeshCoordinatorEvents } from '../../src/mesh/mesh-events-pending.js'
 import { resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
+import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_difficulty_claim'
 const NODE_WS = '/repo/difficulty-claim'
@@ -68,7 +69,7 @@ function createComponents(meshId: string) {
     }),
     updateSettings: vi.fn(),
   }
-  return {
+  return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? [cliInstance] : [])),
       getInstance: vi.fn(() => cliInstance),
@@ -84,7 +85,7 @@ function createComponents(meshId: string) {
     dispatchMeshCommand: vi.fn(async () => ({ success: true })),
     statusInstanceId: 'daemon-local',
     onStatusChange: vi.fn(),
-  } as any
+  } as any)
 }
 
 function setMesh(meshId: string) {
@@ -227,14 +228,14 @@ describe('claim-path difficulty-floor pager (tryAssignQueueTask → handleDiffic
           policy: { slots: [{ provider: 'claude-cli', model: 'sonnet', difficulty: ['easy', 'medium'], maxParallel: 4 }] },
         }],
       })
-      const components = {
+      const components = withMeshRouter({
         instanceManager: { getByCategory: vi.fn(() => []), getInstance: vi.fn(() => undefined) },
         cliManager: { adapters: new Map(), handleCliCommand: vi.fn(async () => ({ success: true })) },
         providerLoader: { resolveAlias: vi.fn((t: string) => t), isMachineProviderEnabled: vi.fn(() => true) },
         dispatchMeshCommand: vi.fn(async () => ({ success: true })),
         statusInstanceId: 'daemon-local',
         onStatusChange: vi.fn(),
-      } as any
+      } as any)
       const task = enqueueTask(meshId, 'hard work, no session at all', {
         targetNodeId: NODE_ID,
         taskMode: 'code_change',
