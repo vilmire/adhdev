@@ -129,15 +129,23 @@ export type TurnEffect =
     /** Terminal write: attempt terminal columns + `committed` event row. */
     | { kind: 'commit'; attemptId: string; generation: number; outcome: TurnOutcome; strength: CommitStrength; reason: TurnReason; source: EvidenceSourceId; summary?: SummaryRef }
     /** Publish a `turn.notify` for the attempt's coordinator (mesh scopes only). */
-    | { kind: 'notify_coordinator'; attemptId: string; generation: number; notify: NotifyKind; taskId: string | null; coordinatorDaemonId: string | null; coordinatorSessionId: string | null }
+    | { kind: 'notify_coordinator'; attemptId: string; generation: number; notify: NotifyKind; taskId: string | null; coordinatorDaemonId: string | null; coordinatorSessionId: string | null
+        /** Text pointer (published as the entry's append `ref`, never inline). */
+        summary?: SummaryRef }
     | { kind: 'hold'; hold: TurnHold }
     | { kind: 'release_hold'; attemptId: string; reasons: readonly HoldReason[] | '*' }
     /** Generation + 1, state accepted, reclaimCount + 1 (the attempt returned already reflects it). */
     | { kind: 'reclaim'; attemptId: string; fromGeneration: number; toGeneration: number; reason: TurnReason }
     /** Same generation re-submit of the dispatch `messageId` (D's driver dedupes). */
     | { kind: 'redeliver'; attemptId: string; generation: number; messageId: string | null; sessionId: string }
-    /** Withdraw a queued prompt / stop a superseded session. */
-    | { kind: 'cancel_dispatch'; attemptId: string; generation: number; sessionId: string }
+    /**
+     * Withdraw a queued prompt / stop a superseded session. `revokeBind` (C1
+     * owner revision 2026-09-23): a reclaim or an R27a adoption also revokes
+     * that session's worker bind + task tokens, so the cut generation cannot
+     * report through the MCP after the cut. The decision is recorded inside
+     * the ledger txn; the in-memory revocation runs post-commit.
+     */
+    | { kind: 'cancel_dispatch'; attemptId: string; generation: number; sessionId: string; messageId?: string | null; revokeBind?: boolean }
     | { kind: 'bus'; event: TurnBusEvent }
     /** Audit-only `turn_events` note (recorded / rejected verdicts). */
     | { kind: 'record'; note: string }

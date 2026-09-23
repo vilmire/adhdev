@@ -56,7 +56,8 @@ const FIRES: Record<string, Fixture> = {
     R0a: { attempt: null, evidence: ev('turn_started', { retro: false }, noRef), state: 'generating', effects: ['bus'] },
     R0b: { attempt: null, evidence: ev('turn_started', { retro: false }), state: null, effects: ['record'] },
     R0: { attempt: null, evidence: ev('liveness', { result: 'alive' }), state: null, effects: ['record'] },
-    R27: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record'] },
+    R27a: { attempt: makeAttempt('delivered'), evidence: ev('turn_end', { strength: 'genuine', summary: REF }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'completed', generation: 1, effects: ['cancel_dispatch', 'commit', 'queue_status', 'graph_advance', 'notify_coordinator', 'release_attempt_ref'] },
+    R27: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'notify_coordinator'] },
     R28a: { attempt: G(), evidence: ev('turn_started', { retro: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'cancel_dispatch'] },
     R28: { attempt: G(), evidence: ev('liveness', { result: 'dead' }, { attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record'] },
     R2: { attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'p2p' }), state: 'delivered', effects: ['release_hold', 'hold', 'hold'] },
@@ -139,7 +140,9 @@ describe('TRANSITIONS table', () => {
             if (rule.verdict === 'recorded') {
                 // A recorded verdict never changes the attempt.
                 expect(result.attempt).toEqual(fx.attempt);
-                expect(result.effects.every((e) => e.kind === 'record' || e.kind === 'cancel_dispatch')).toBe(true);
+                // Allowed side channels of a recorded verdict: the audit note, R28a's
+                // cancel of a stale session, R27's late_completion notice.
+                expect(result.effects.every((e) => e.kind === 'record' || e.kind === 'cancel_dispatch' || e.kind === 'notify_coordinator')).toBe(true);
             }
             if (fx.generation !== undefined) expect(result.attempt?.generation).toBe(fx.generation);
             const kinds = result.effects.map((e) => e.kind);

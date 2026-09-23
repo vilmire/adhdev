@@ -21,6 +21,8 @@ import {
     sessionIdsEquivalent,
     type HoldReason,
     type NotifyKind,
+    type SummaryRef,
+    type CommitStrength as TurnCommitStrength,
     type TurnEvidence,
     type TurnEvidenceKind,
     type TurnEvidenceOf,
@@ -317,21 +319,22 @@ function releaseHolds(draft: Draft, reasons: readonly HoldReason[] | '*', keep: 
     }
 }
 
-function notify(draft: Draft, kind: NotifyKind): void {
+function notify(draft: Draft, kind: NotifyKind, opts: { generation?: number; summary?: SummaryRef } = {}): void {
     const attempt = draft.attempt!;
     if (!isMeshScope(attempt)) return;
     draft.effects.push({
         kind: 'notify_coordinator',
         attemptId: attempt.attemptId,
-        generation: attempt.generation,
+        generation: opts.generation ?? attempt.generation,
         notify: kind,
         taskId: attempt.taskId,
         coordinatorDaemonId: attempt.coordinator.daemonId,
         coordinatorSessionId: attempt.coordinator.sessionId,
+        ...(opts.summary ? { summary: opts.summary } : {}),
     });
 }
 
-function summaryOf(ev: TurnEvidence) {
+function summaryOf(ev: TurnEvidence): SummaryRef | undefined {
     if (ev.kind === 'turn_end' || ev.kind === 'transcript_final' || ev.kind === 'worker_report') return ev.summary;
     return undefined;
 }
@@ -358,7 +361,7 @@ function commit(
         draft.effects.push({ kind: 'graph_advance', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
     }
     draft.effects.push({ kind: 'bus', event: { kind: 'turn', phase: 'committed', sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
-    notify(draft, outcome);
+    notify(draft, outcome, summary ? { summary } : {});
     draft.effects.push({ kind: 'release_attempt_ref', attemptId: attempt.attemptId, sessionId: attempt.sessionId });
     draft.committed = true;
 }
@@ -367,6 +370,19 @@ function commit(
  * generation + 1 and back to `accepted` — or `failed` when the reclaim budget
  * is spent. A plain attempt has no dispatcher to re-claim it, so its
  * "reclaim" is a failure too.
+ *
+ * Reclaim CUTS the old generation first (owner revision 2026-09-23): the
+ * `cancel_dispatch` for g−1's session is emitted unconditionally — an
+ * `accepted` attempt's prompt may still sit in the worker's input queue, and
+ * withdrawing it by messageId is exactly what stops a late start — and it
+ * carries `revokeBind`, so g−1's worker can no longer report through the MCP.
+ * A late g−1 completion can then only arrive inside the window between this
+ * txn and the cancel landing (R27/R27a).
+ *
+ * The one skip: an `accepted` generation ≥ 1 that was never delivered still
+ * names the ALREADY-CUT previous session (a reclaim does not rebind; the next
+ * `delivered` does) — cutting it again would stop a session that is no longer
+ * this attempt's, so no cancel is emitted for it.
  */
 function reclaim(draft: Draft, reason: TurnReason): void {
     const attempt = draft.attempt!;
@@ -378,9 +394,11 @@ function reclaim(draft: Draft, reason: TurnReason): void {
         commit(draft, 'failed', 'genuine', 'reclaim_budget_exhausted');
         return;
     }
-    const prevState = attempt.state;
     const prevSession = attempt.sessionId;
+    const prevMessageId = attempt.messageId;
     const fromGeneration = attempt.generation;
+    const alreadyCut = attempt.state === 'accepted' && attempt.prevGeneration !== null
+        && sessionIdsEquivalent(attempt.sessionId, attempt.prevGeneration.sessionId);
     attempt.prevGeneration = { sessionId: prevSession, consumed: attempt.consumedAt !== null };
     attempt.generation = fromGeneration + 1;
     attempt.reclaimCount += 1;
@@ -394,8 +412,8 @@ function reclaim(draft: Draft, reason: TurnReason): void {
     attempt.lastLiveness = null;
     draft.effects.push({ kind: 'reclaim', attemptId: attempt.attemptId, fromGeneration, toGeneration: attempt.generation, reason });
     releaseHolds(draft, '*', ['hard_ceiling']);
-    if (prevState !== 'accepted') {
-        draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession });
+    if (!alreadyCut) {
+        draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession, messageId: prevMessageId, revokeBind: true });
     }
     if (attempt.scope === 'mesh_queue' && attempt.meshId && attempt.taskId) {
         draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: 'pending', reason });
@@ -421,6 +439,15 @@ function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAt
 }
 
 const TERMINAL_NOTIFY_KINDS: readonly NotifyKind[] = ['completed', 'failed', 'cancelled', 'stopped'];
+
+/** The terminal a genuine g−1 completion commits when R27a adopts it. */
+function adoptedTerminal(ev: TurnEvidence): { outcome: TurnOutcome; strength: TurnCommitStrength; reason: TurnReason } {
+    if (ev.kind === 'worker_report') {
+        return { outcome: ev.outcome === 'completed' ? 'completed' : 'failed', strength: 'tool_report', reason: 'worker_reported' };
+    }
+    if (ev.kind === 'transcript_final') return { outcome: 'completed', strength: 'genuine', reason: 'transcript_final' };
+    return { outcome: 'completed', strength: 'genuine', reason: 'turn_end' };
+}
 
 const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     open_dispatch: (draft) => {
@@ -646,7 +673,32 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 ACTIONS.stamp_no_progress_notice(draft);
             }
             const kind: NotifyKind = template.notify === 'from_modal' ? (ev as TurnEvidenceOf<'suspension'>).modal : template.notify;
-            notify(draft, kind);
+            const summary = summaryOf(ev);
+            notify(draft, kind, {
+                ...(template.generation === 'evidence' && draft.ctx.effectiveGeneration !== null ? { generation: draft.ctx.effectiveGeneration } : {}),
+                ...(summary ? { summary } : {}),
+            });
+            return;
+        }
+        case 'adopt_prev_generation': {
+            // R27a: g has not started — cut it, rebind the attempt to the g−1
+            // session that did the work, and commit that work. The generation
+            // number stays g (monotonic); the committed row names g.
+            const attempt = draft.attempt!;
+            const prev = attempt.prevGeneration!;
+            // g was re-delivered to another session → cut it. Still `accepted` on
+            // the g−1 session (not yet re-delivered) → there is no g session to cut,
+            // and the g−1 session is the one whose work is being adopted.
+            if (!sessionIdsEquivalent(attempt.sessionId, prev.sessionId)) {
+                draft.effects.push({
+                    kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: attempt.generation,
+                    sessionId: attempt.sessionId, messageId: attempt.messageId, revokeBind: true,
+                });
+            }
+            attempt.sessionId = prev.sessionId;
+            attempt.consumedAt = attempt.consumedAt ?? ev.at;
+            const adopted = adoptedTerminal(ev);
+            commit(draft, adopted.outcome, adopted.strength, adopted.reason);
             return;
         }
         case 'bus': {

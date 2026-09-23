@@ -281,6 +281,62 @@ describe('summarizeSeqscribeStats', () => {
     });
 
     /**
+     * G2 handshake RCA (design §7e, `scratchpad/transcript-handshake-rca.md`
+     * finding #5): before this field there was no daemon-side counter for how
+     * often a dashboard peer's session used the seqscribe replica transport
+     * versus the legacy chat-tail fallback, or how often a zombie peer
+     * connection was recovered — see `packages/daemon-cloud/src/daemon-p2p/
+     * data-channel-router.ts` `getZombiePeerRecoveryCount`. Same
+     * local-only/dedup-safe discipline as `readRouting` above: this test file
+     * pins that this field follows the identical opt-in and copy-on-read
+     * contract as every other local-only counter here.
+     */
+    describe('transcript-transport selection + zombie-recovery counters (G2)', () => {
+        const selection = {
+            replicaSelected: 205,
+            legacySelected: 3,
+            zombieRecovered: 1,
+        };
+
+        it('surfaces the counters when local diagnostics are requested', () => {
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptTransportSelection: selection },
+            );
+
+            expect(summary.transcriptTransportSelection).toEqual(selection);
+            expect(summary.transcriptTransportSelection?.zombieRecovered).toBe(1);
+        });
+
+        it('omits the counters unless local diagnostics are requested', () => {
+            // These are RAW monotonic counters (like readRouting/terminalRedrive
+            // above them in stats.ts) — if they rode the deduped status frame,
+            // every heartbeat would hash differently and an idle daemon would
+            // transmit forever. `buildCloudSeqscribeSummary` (status/reporter.ts)
+            // is a fixed-key allow-list that does not name this key either way.
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, transcriptTransportSelection: selection },
+            );
+            expect(summary).not.toHaveProperty('transcriptTransportSelection');
+        });
+
+        it('copies the counters so a later read cannot mutate a held snapshot', () => {
+            const live = { replicaSelected: 1, legacySelected: 0, zombieRecovered: 0 };
+            const summary = summarizeSeqscribeStats(
+                { topics: { t: topic() }, peers: [] },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptTransportSelection: live },
+            );
+
+            live.replicaSelected = 99;
+            live.zombieRecovered = 99;
+
+            expect(summary.transcriptTransportSelection?.replicaSelected).toBe(1);
+            expect(summary.transcriptTransportSelection?.zombieRecovered).toBe(0);
+        });
+    });
+
+    /**
      * ★ §8 unit 2 transcript parity, RAW — the numbers §5.6's last open gate
      * condition (`persistent mismatch 0`) needs in order to be DECIDABLE at all.
      *

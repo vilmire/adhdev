@@ -8,22 +8,26 @@
  * and cleared last, replacing ten independently-ordered `configure*` calls.
  *
  * Arm order (each step's reason is the old boot comment it replaces):
- *   1. mesh dual-write shadow — before the parity loop (which returns null
- *      unless the shadow is active) and before any mesh ledger append (S7+).
+ *   1. mesh publisher (wiring-unification C7-1; was the dual-write shadow) —
+ *      before any mesh ledger append / meshRecord (S7+).
  *   2. mesh read model — registers no consumer until a mesh is first queried.
  *   3. fleet.status shadow, then 4. fleet.status parity (only arms over an
  *      active shadow).
  *   5. transcript projection + its bus subscriber (+ the registry's claim release).
- *   6. activate known mesh topics — needs the armed dual-write node.
- *   7. prune stale durable consumers — before the parity loop's first sweep.
+ *   6. activate known mesh topics — needs the armed publisher node. NOT a
+ *      tryStep: a known mesh whose events topic cannot be defined is a mesh
+ *      boot failure (C7-1), so the error propagates out of the stage.
+ *   7. prune stale durable consumers.
  *   8. terminal redrive — after the prune, so registration never races the GC.
- *   9. mesh parity loop.
+ *
+ * The mesh parity loop (old step 9) is no longer armed: with one write path
+ * there is no second store to compare (C7-6); its module is a C-W3 deletion.
  */
 
 import { LOG } from '../../logging/logger.js';
 import { listMeshesReadOnly } from '../../config/mesh-config.js';
 import { resolveJsonlSourcePath } from '../../providers/spec/native-history-executor.js';
-import { activateKnownMeshTopics, configureMeshDualWrite } from '../../seqscribe/mesh-dual-write.js';
+import { activateMeshTopicsAtBoot, configureMeshPublisher } from '../../seqscribe/mesh-publisher.js';
 import { configureMeshReadModel, pruneStaleConsumersAtBoot } from '../../seqscribe/mesh-read-model.js';
 import { configureFleetStatusShadow } from '../../seqscribe/fleet-status-shadow.js';
 import { configureFleetStatusParity } from '../../seqscribe/fleet-status-parity.js';
@@ -40,7 +44,6 @@ import {
     consumeRedriveEntry,
     isTerminalRedriveEnabled,
 } from '../../mesh/mesh-terminal-redrive.js';
-import { startMeshParityLoop } from '../../mesh/mesh-parity-loop.js';
 import type { Disposer } from '../daemon-components.js';
 import type { CommandPlaneStage, ProjectionsStage } from './types.js';
 
@@ -76,11 +79,10 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     step('slot');
     undo.push(['slot', () => bindSeqscribeRuntime(null)]);
 
-    // 1–4. Mesh dual-write, read model, fleet.status shadow + parity. Under the
-    // default `shadow` modes this wiring changes no read behaviour at all.
-    tryStep('Seqscribe', 'mesh dual-write', () => configureMeshDualWrite(node));
-    step('dual-write');
-    undo.push(['dual-write', () => configureMeshDualWrite(null)]);
+    // 1–4. Mesh publisher, read model, fleet.status shadow + parity.
+    tryStep('Seqscribe', 'mesh publisher', () => configureMeshPublisher(node));
+    step('publisher');
+    undo.push(['publisher', () => configureMeshPublisher(null)]);
     tryStep('Seqscribe', 'mesh read model', () => configureMeshReadModel(node));
     step('read-model');
     undo.push(['read-model', () => configureMeshReadModel(null)]);
@@ -143,13 +145,23 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     // 6. Define the events/handoff pair for meshes we already know, instead of
     // waiting for a local write — a consume-only node never makes one, and
     // without it `mutualFull` stays false and sync silently skips the topic.
-    tryStep('Seqscribe', 'boot mesh topic activation', () => {
+    // ★ Not a tryStep (C7-1): the events topic is the ONLY mesh event path, so
+    // a known mesh whose topic cannot be defined fails the boot loudly instead
+    // of running with every mesh event silently unrecorded. The arm steps taken
+    // so far are unwound first so the throw leaves no half-armed slot behind.
+    try {
         const meshIds = listMeshesReadOnly().map((m) => m.id).filter(Boolean);
-        const activated = activateKnownMeshTopics(meshIds);
+        const activated = activateMeshTopicsAtBoot(meshIds);
         if (activated > 0) {
             LOG.info('Seqscribe', `activated ${activated} known mesh topic scope(s) at boot — consumers converge without waiting for a local write`);
         }
-    });
+    } catch (error) {
+        LOG.error('Seqscribe', `mesh boot failure: ${error instanceof Error ? error.message : String(error)}`);
+        for (const [, fn] of [...undo].reverse()) {
+            try { fn(); } catch { /* noop — unwinding a failed boot */ }
+        }
+        throw error;
+    }
     step('activate-topics');
 
     // 7. GC durable cursors older builds left behind (each holds a topic's
@@ -183,13 +195,8 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
     // Unsubscribes the registrations; durable cursors persist so the next boot resumes.
     undo.push(['terminal-redrive', () => configureTerminalRedrive(null)]);
 
-    // 9. Parity loop (null unless the dual-write shadow is active).
-    let parityLoop: ReturnType<typeof startMeshParityLoop> = null;
-    tryStep('Seqscribe', 'mesh parity loop', () => { parityLoop = startMeshParityLoop(node); });
-    step('parity-loop');
-    undo.push(['parity-loop', () => (parityLoop as { stop(): void } | null)?.stop()]);
-
-    rt.attachProjections({ transcript, parityLoop });
+    // No parity loop (C7-6): one write path, nothing to compare.
+    rt.attachProjections({ transcript, parityLoop: null });
     undo.push(['attach', () => rt.attachProjections(null)]);
 
     let disarmed = false;

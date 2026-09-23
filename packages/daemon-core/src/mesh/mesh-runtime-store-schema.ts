@@ -19,6 +19,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { migrateMeshGraphSchema } from './mesh-graph-schema.js';
+import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 let loggedMigrationFailureFlag = false;
@@ -427,6 +428,11 @@ export function migrate(self: MeshRuntimeStore): void {
     migrateMeshIsolationColumns(self);
     // GRAPH-ORCHESTRATION Phase A: additive graph tables (CREATE IF NOT EXISTS only). See mesh-graph-schema.ts.
     migrateMeshGraphSchema(self.db);
+    // Wiring-unification C3: the turn-ledger tables (additive, idempotent). The
+    // destructive fold of the legacy tables is migrate-v1 — run explicitly after
+    // the store is open (MeshRuntimeStore.runTurnLedgerMigrationV1), never from
+    // here: its step 0 re-enters the store singleton.
+    ensureTurnLedgerSchema(self.db);
 }
 
 

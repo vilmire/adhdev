@@ -15,11 +15,11 @@ import { DaemonCommandRouter } from '../../src/commands/router.js';
 import { listMeshesReadOnly } from '../../src/config/mesh-config.js';
 import {
     activateKnownMeshTopics,
-    configureMeshDualWrite,
+    configureMeshPublisher,
     onTopicActivated,
-    recordMeshEventShadow,
-    __resetMeshDualWriteForTests,
-} from '../../src/seqscribe/mesh-dual-write.js';
+    publishMeshRecord,
+    __resetMeshPublisherForTests,
+} from '../../src/seqscribe/mesh-publisher.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import { meshEventsTopic, meshHandoffTopic } from '../../src/seqscribe/topics.js';
 
@@ -81,7 +81,7 @@ function openNode(
 }
 
 afterEach(async () => {
-    __resetMeshDualWriteForTests();
+    __resetMeshPublisherForTests();
     for (const handle of handles.splice(0)) {
         await handle.close().catch(() => {});
     }
@@ -203,7 +203,7 @@ describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
             touchedFiles: [],
         } as any);
 
-        configureMeshDualWrite(consumer);
+        configureMeshPublisher(consumer);
         // Exact boot result on the remote node: its isolated config directory
         // has no meshes.json, so the existing boot activation is a no-op.
         const remoteRegistryMeshIds = listMeshesReadOnly().map((mesh) => mesh.id);
@@ -263,17 +263,17 @@ describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
 
         // The writer arms its shadow leg and appends — this defines the topic on
         // the WRITER only, which is the pre-fix production state.
-        configureMeshDualWrite(writer);
-        recordMeshEventShadow(MESH_ID, entry('e1'));
-        recordMeshEventShadow(MESH_ID, entry('e2'));
-        recordMeshEventShadow(MESH_ID, entry('e3'));
+        configureMeshPublisher(writer);
+        publishMeshRecord(MESH_ID, entry('e1'));
+        publishMeshRecord(MESH_ID, entry('e2'));
+        publishMeshRecord(MESH_ID, entry('e3'));
         await waitFor(() => entryCount(writer) === 3, 'writer local appends');
 
         // ★ The consumer knows the mesh but has never written an event for it.
         // This is the call under test — without it the topic is undefined here,
         // the grant map below omits it, `mutualFull` is false forever, and no
         // WANT round is ever issued for the topic.
-        configureMeshDualWrite(consumer);
+        configureMeshPublisher(consumer);
         activateKnownMeshTopics([MESH_ID]);
 
         const [chW, chC] = channelPair();
@@ -303,7 +303,7 @@ describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
 
     it('defines the topic on a node that has appended nothing', () => {
         const consumer = openNode('define-only');
-        configureMeshDualWrite(consumer);
+        configureMeshPublisher(consumer);
 
         expect(consumer.topics.some((d) => d.topic === TOPIC)).toBe(false);
         expect(activateKnownMeshTopics([MESH_ID])).toBe(1);
@@ -315,7 +315,7 @@ describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
 
     it('is idempotent and appends nothing', async () => {
         const node = openNode('idempotent');
-        configureMeshDualWrite(node);
+        configureMeshPublisher(node);
 
         expect(activateKnownMeshTopics([MESH_ID])).toBe(1);
         // A second activation (a re-arm, or a mesh already activated by a write)
@@ -327,9 +327,9 @@ describe('mesh.<id>.events convergence to an idle (non-writing) peer', () => {
         expect(entryCount(node)).toBe(0);
     });
 
-    it('no-ops when the dual-write leg is not armed', () => {
+    it('no-ops when the publisher is not armed', () => {
         const node = openNode('unarmed');
-        __resetMeshDualWriteForTests();
+        __resetMeshPublisherForTests();
         expect(activateKnownMeshTopics([MESH_ID])).toBe(0);
         expect(node.topics.some((d) => d.topic === TOPIC)).toBe(false);
     });

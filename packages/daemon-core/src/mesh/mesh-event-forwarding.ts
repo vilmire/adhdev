@@ -1958,8 +1958,8 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
         }
     });
     // Wiring-unification B4: a lifecycle-bus subscriber (sync lane — preserves
-    // today's in-tick ordering). Components assembled without a bus (unit tests
-    // that stub instanceManager.onEvent) keep the legacy listener. TRANSITIONAL:
+    // today's in-tick ordering). The bus-less `instanceManager.onEvent` fallback
+    // is gone (B residue cleanup) — `components.bus` is required. TRANSITIONAL:
     // the body is rewritten in Phase C.
     const onProviderEvent = (event: any) => {
         // --- Coordinator idle auto-flush (fast path) ---
@@ -2137,8 +2137,8 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
         // worker-claim path). No-op when no idle coordinator is present (held for reconcile).
         flushPendingForMeshIdleCoordinators(components, routing.meshId);
     };
-    if (components.bus) {
-        return components.bus.on('provider_event', (e) => onProviderEvent(e.event), { name: 'mesh.forwarding' });
+    if (!components.bus) {
+        throw new Error('setupMeshEventForwarding requires components.bus (wiring-unification B residue cleanup removed the bus-less instanceManager.onEvent fallback)');
     }
-    return components.instanceManager.onEvent(onProviderEvent);
+    return components.bus.on('provider_event', (e) => onProviderEvent(e.event), { name: 'mesh.forwarding' });
 }

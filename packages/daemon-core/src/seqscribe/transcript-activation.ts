@@ -46,7 +46,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import { announceTopicActivated } from './mesh-dual-write.js';
+import { announceTopicActivated } from './mesh-publisher.js';
 import type { SeqscribeNodeHandle } from './node.js';
 import { sessionTranscriptPolicy, sessionTranscriptTopic } from './topics.js';
 import type { TranscriptTopicClaim, TranscriptTopicClaimRegistry } from './transcript-topic-claim.js';

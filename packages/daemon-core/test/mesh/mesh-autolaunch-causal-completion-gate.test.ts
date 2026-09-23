@@ -62,6 +62,7 @@ import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask,
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir, readLedgerEntries, appendLedgerEntry } from '../../src/mesh/mesh-ledger.js'
 import { createSessionDelivery } from '../../src/mesh/mesh-delivery-policy.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 const NODE_ID = 'node_worker_1'
 const SESSION_ID = 'auto-launch-session-1'
@@ -114,7 +115,6 @@ function seedInWindowAutoLaunchTask(meshId: string, sessionId: string, ageMs = 0
 
 // LOCAL entry point: a worker instance co-hosted on this daemon.
 function makeLocalComponents() {
-  let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: SESSION_ID,
     workspace: WORKSPACE,
@@ -122,16 +122,14 @@ function makeLocalComponents() {
   }
   const source = { category: 'cli', getState: vi.fn(() => sourceState) }
   const instanceManager = {
-    onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
     getInstance: vi.fn((id: string) => (id === SESSION_ID ? source : undefined)),
     getByCategory: vi.fn((category: string) => (category === 'cli' ? [source] : [])),
   }
+  const components = withMeshForwardingBus({ instanceManager } as any)
+  const { emit } = components
   return {
-    components: { instanceManager } as any,
-    emit: (event: any) => {
-      if (!listener) throw new Error('listener was not registered')
-      listener(event)
-    },
+    components,
+    emit,
     setMeshFor: (meshId: string) => { sourceState.settings = { meshNodeFor: meshId, meshNodeId: NODE_ID } },
   }
 }

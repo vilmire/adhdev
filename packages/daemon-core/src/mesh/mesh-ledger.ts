@@ -23,11 +23,8 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getLedgerDir, getLedgerPath, getRotatedPath, getArchivePath, getRotatedArchivePath, getArchivedTerminalKeysPath } from './mesh-ledger-paths.js';
 import { ledgerEntryTaskId, getCachedRawEntries, getCachedFilteredRawEntries, readLedgerFile, liveCacheEntry, recordLedgerAppend, invalidateLedgerCache, clearLedgerImportFlag, ensureLedgerImported, type LedgerPayloadProjection } from './mesh-ledger-read-cache.js';
 import { LOG } from '../logging/logger.js';
-// Phase 2 Stage 2 dual-write shadow. Direction is mesh/ → seqscribe/, which
-// check:boundaries allows (the forbidden edge is seqscribe/ → mesh/, which is
-// why mesh-dual-write.ts takes a structural entry shape rather than importing
-// MeshLedgerEntry).
-import { recordMeshEventShadow } from '../seqscribe/mesh-dual-write.js';
+// Replication leg → meshRecord (C3/C7-1: the publisher is the only topic writer).
+import { meshRecordEntry } from './mesh-record.js';
 import {
     coordinatorIdentityFromEmitFields,
     MESH_PROTOCOL_VERSION_V2,
@@ -1272,18 +1269,14 @@ export function appendLedgerEntry(
         recordLedgerAppend(meshId, [entry]);
         meshLedgerEvents.emit('append', meshId, entry);
 
-        // Phase 2 Stage 2: seqscribe dual-write SHADOW leg. Deliberately placed
-        // AFTER the two authoritative writes and after `return`-relevant work,
-        // so a shadow that misbehaves cannot reorder or block anything above it.
-        // The call is non-throwing and asynchronous by contract
-        // (seqscribe/mesh-dual-write.ts); the `try` here is defense in depth,
-        // not the mechanism. Entries are projected through a content-boundary
-        // allow-list before replication — the ledger payload itself, which
-        // carries agent-authored text, never crosses.
+        // mesh.record replication leg (meshRecord → mesh-publisher). After the two
+        // local writes, non-throwing and asynchronous by contract; projected
+        // through the content allow-list, so agent-authored payload text never
+        // crosses. The local writes retire with mesh_event_ledger (C3).
         try {
-            recordMeshEventShadow(meshId, entry);
+            meshRecordEntry(meshId, entry);
         } catch {
-            /* shadow leg must never affect the ledger write */
+            /* replication must never affect the ledger write */
         }
         // Fix (3) keep-latest-N: operating notes are never archived by compactLedger,
         // so cap their store footprint here. Runs only when a note (or its tombstone)

@@ -14,13 +14,18 @@
 //
 // Lanes (decided before any rule, reducer.ts classifyLane):
 //   none    — no attempt resolved
-//   stale   — evidence belongs to another generation (R27/R28: recorded only)
+//   stale   — evidence belongs to another generation (R27a adopts, R27/R28 record)
 //   current — everything else, including terminal attempts
 //
 // Ids suffixed with a letter (R0a, R3a, R6s, R17p, H2r, …) are rules the plan
 // described inside another row's prose; they are split out so every rule has
-// one target and one verdict. Owner-narrowed rows: R27 (recorded only, no
-// cancel/commit), R17/R18 (worker report is primary, later scrape recorded).
+// one target and one verdict. Owner rows: R17/R18 (worker report is primary,
+// later scrape recorded); R27/R27a (revised 2026-09-23, design §5 "What
+// changed"): a reclaim cuts g−1 first (cancel_dispatch + worker-bind revoke,
+// reducer.ts reclaim); a genuine g−1 completion that still arrives is ADOPTED
+// while g has not started (R27a: commit g−1's outcome, cancel g, one notice)
+// and RECORDED + `late_completion`-notified once g is running or done (R27 —
+// never auto-adopted: g−1 was reclaimed for a reason and g may have diverged).
 // ---------------------------------------------------------------------------
 
 import {
@@ -80,7 +85,11 @@ export type EffectTemplate =
     | { e: 'release'; reasons: readonly HoldReason[] | '*' | 'expired_hold' }
     | { e: 'commit'; outcome: TurnOutcome | 'from_report' | 'from_operator'; strength: CommitStrength; reason: TurnReason | 'from_cancel' | 'from_operator' | 'from_provider_failure' }
     | { e: 'reclaim'; reason: TurnReason | 'from_refusal' | 'from_exit_state' }
-    | { e: 'notify'; notify: NotifyKind | 'from_modal'; when?: 'candidate_once' | 'no_progress_due' }
+    | { e: 'notify'; notify: NotifyKind | 'from_modal'; when?: 'candidate_once' | 'no_progress_due'
+        /** `evidence` = the notice names the evidence's (stale) generation, not the attempt's. */
+        generation?: 'evidence' }
+    /** R27a: commit g−1's outcome onto the attempt, cutting g first. */
+    | { e: 'adopt_prev_generation' }
     | { e: 'bus'; phase: Exclude<TurnBusEvent['phase'], 'committed'> }
     | { e: 'record'; note: string | 'from_terminal_compare' | 'from_admission' }
     | { e: 'cancel_dispatch'; target: 'current' | 'evidence_session'; when?: 'not_intentional_cleanup' }
@@ -135,9 +144,17 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'record', note: 'no_attempt' },
     ] },
 
-    // ── lane stale: another generation (owner decision: record only) ────
-    { id: 'R27', lane: 'stale', from: 'any', on: ['turn_end', 'worker_report', 'transcript_final'], guard: 'prev_generation_completion', to: 'same', verdict: 'recorded', effects: [
+    // ── lane stale: another generation (owner revision 2026-09-23) ──────
+    // g has no turn_started yet (accepted/delivered): adopt g−1's genuine
+    // completion — commit it, cancel g's dispatch, one notice.
+    { id: 'R27a', lane: 'stale', from: [A, D], on: ['turn_end', 'worker_report', 'transcript_final'], guard: 'prev_generation_completion', to: 'outcome', verdict: 'applied', effects: [
+        { e: 'adopt_prev_generation' },
+    ] },
+    // g is running (or already terminal): never mutate g; record g−1's verdict
+    // and tell the coordinator, who decides whether to salvage g−1's work.
+    { id: 'R27', lane: 'stale', from: [C, G, S, F, 'completed', 'failed', 'cancelled'], on: ['turn_end', 'worker_report', 'transcript_final'], guard: 'prev_generation_completion', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'late_completion_prev_generation' },
+        { e: 'notify', notify: 'late_completion', generation: 'evidence' },
     ] },
     { id: 'R28a', lane: 'stale', from: 'any', on: ['turn_started'], guard: 'stale_session_distinct', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'stale_generation' },

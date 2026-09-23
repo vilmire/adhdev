@@ -21,21 +21,50 @@ function deepFreeze<T>(value: T): T {
 describe('generation rule — older/other-generation evidence is recorded, never applied', () => {
     const attempt = makeAttempt('delivered', { generation: 1, prevGeneration: { sessionId: 's0', consumed: false }, consumedAt: null });
 
-    it('a genuine completion from generation g−1 is recorded as late_completion_prev_generation (owner-narrowed R27)', () => {
+    it('R27a: g has not started — a genuine g−1 completion is adopted: g is cut, g−1 committed, one notice', () => {
         const late = ev('turn_end', { strength: 'genuine', summary: REF }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } });
         const result = step(attempt, late);
+        expect(result.rule).toBe('R27a');
+        expect(result.verdict).toBe('applied');
+        // Generation is monotonic: the adoption commits under g, rebinding to the g−1 session.
+        expect(result.attempt).toMatchObject({ state: 'completed', generation: 1, sessionId: 's0' });
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'genuine', reason: 'turn_end', summary: REF });
+        expect(result.effects[0]).toEqual({ kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', revokeBind: true });
+        expect(result.effects.filter((e) => e.kind === 'notify_coordinator')).toEqual([
+            { kind: 'notify_coordinator', attemptId: 'a1', generation: 1, notify: 'completed', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord', summary: REF },
+        ]);
+        expect(result.effects.filter((e) => e.kind === 'commit')).toHaveLength(1);
+    });
+
+    it('R27a adopts a g−1 worker report with its own outcome', () => {
+        const report = ev('worker_report', { outcome: 'blocked', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: undefined, source: 'worker_tool' });
+        expect(classifyLane(attempt, report)).toEqual({ lane: 'stale', effectiveGeneration: 0 });
+        const result = step(attempt, report);
+        expect(result.rule).toBe('R27a');
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'failed', strength: 'tool_report', reason: 'worker_reported' });
+    });
+
+    it('R27: g already running — the g−1 completion is recorded and a late_completion notice names g−1 with its summary', () => {
+        const running = makeAttempt('generating', { generation: 1, prevGeneration: { sessionId: 's0', consumed: true } });
+        const late = ev('turn_end', { strength: 'genuine', summary: REF }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } });
+        const result = step(running, late);
         expect(result.rule).toBe('R27');
         expect(result.verdict).toBe('recorded');
-        expect(result.attempt).toEqual(attempt);
-        expect(result.effects).toEqual([{ kind: 'record', note: 'late_completion_prev_generation' }]);
-        // Narrowed: no commit, no cancel of the redispatched run.
+        expect(result.attempt).toEqual(running);
+        expect(result.effects).toEqual([
+            { kind: 'record', note: 'late_completion_prev_generation' },
+            { kind: 'notify_coordinator', attemptId: 'a1', generation: 0, notify: 'late_completion', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord', summary: REF },
+        ]);
+        // Never auto-adopted while g runs: no commit, no cancel of g.
         expect(result.effects.some((e) => e.kind === 'commit' || e.kind === 'cancel_dispatch')).toBe(false);
     });
 
-    it('the same late completion without attemptRef is resolved to g−1 by its session', () => {
-        const late = ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: undefined, source: 'worker_tool' });
-        expect(classifyLane(attempt, late)).toEqual({ lane: 'stale', effectiveGeneration: 0 });
-        expect(step(attempt, late).rule).toBe('R27');
+    it('R27 also applies once g is terminal (still recorded + noticed, never re-committed)', () => {
+        const done = makeAttempt('completed', { generation: 1, prevGeneration: { sessionId: 's0', consumed: true } });
+        const late = ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 }, source: 'worker_tool' });
+        const result = step(done, late);
+        expect(result.rule).toBe('R27');
+        expect(result.attempt).toEqual(done);
     });
 
     it('any other stale-generation evidence is recorded (R28), including a newer generation', () => {
@@ -78,7 +107,7 @@ describe('F2 — the worker report is primary; a later scrape adds nothing', () 
         expect(reported.rule).toBe('R17');
         expect(reported.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported', summary: REF });
         expect(reported.effects.filter((e) => e.kind === 'notify_coordinator')).toEqual([
-            { kind: 'notify_coordinator', attemptId: 'a1', generation: 1, notify: 'completed', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord' },
+            { kind: 'notify_coordinator', attemptId: 'a1', generation: 1, notify: 'completed', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord', summary: REF },
         ]);
 
         for (const scrape of [
@@ -124,6 +153,18 @@ describe('reclaim', () => {
         expect(last.attempt?.terminal?.reason).toBe('reclaim_budget_exhausted');
         expect(last.holds).toEqual([]);
         expect(last.effects.map((e) => e.kind)).toContain('queue_status');
+    });
+
+    it('reclaim cuts g−1 first: cancel_dispatch of the old session with a worker-bind revoke, even from accepted', () => {
+        for (const state of ['accepted', 'delivered', 'generating'] as const) {
+            const evidence = state === 'accepted'
+                ? ev('dispatch_failed', { workerAbsent: false, reason: 'transport_error' })
+                : ev('process_exit', { exitCode: 1 });
+            const r = step(makeAttempt(state), evidence);
+            expect({ state, cancel: r.effects.find((e) => e.kind === 'cancel_dispatch') }).toEqual({
+                state, cancel: { kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', revokeBind: true },
+            });
+        }
     });
 
     it('process_exit mid-turn reclaims (session_exit) and keeps the hard ceiling; before the turn it is session_exit_before_turn', () => {

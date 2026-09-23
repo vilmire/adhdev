@@ -37,12 +37,12 @@ import {
 import { __resetMeshWorkspaceCacheForTests } from '../../src/mesh/mesh-events.js'
 import { __resetUnresolvedForwardRejectionCountsForTests, setupMeshReconcileLoop } from '../../src/mesh/mesh-reconcile-loop.js'
 import { listMeshes } from '../../src/config/mesh-config.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 // A worker that is NOT a member of the coordinator's mesh: meshNodeFor absent, no
 // workspace→mesh resolution, but it carries the coordinator daemon anchor. Its
 // completion routes through forwardUnresolvedDelegateEvent → durable outbox.
 function createUnresolvedWorker(coordinatorDaemonId = 'daemon_remote_coordinator') {
-  let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'worker-session-1',
     workspace: '/repo/worktree-worker',
@@ -54,17 +54,11 @@ function createUnresolvedWorker(coordinatorDaemonId = 'daemon_remote_coordinator
   }
   const source = { category: 'cli', getState: vi.fn(() => sourceState) }
   const instanceManager = {
-    onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
     getInstance: vi.fn((id: string) => (id === 'worker-session-1' ? source : undefined)),
     getByCategory: vi.fn((category: string) => (category === 'cli' ? [source] : [])),
   }
-  return {
-    components: { instanceManager } as any,
-    emit: (event: any) => {
-      if (!listener) throw new Error('listener not registered')
-      listener(event)
-    },
-  }
+  const components = withMeshForwardingBus({ instanceManager } as any)
+  return { components, emit: components.emit }
 }
 
 const COMPLETION = {

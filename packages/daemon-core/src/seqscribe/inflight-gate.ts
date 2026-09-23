@@ -1,7 +1,18 @@
 /**
- * Shared in-flight accounting for the fire-and-forget shadow legs.
+ * Shared in-flight accounting for the asynchronous seqscribe append legs.
  *
- * `mesh-dual-write.ts` and `fleet-status-shadow.ts` both append asynchronously
+ * Two shapes live here:
+ *
+ *   · `createInflightGate` — the fire-and-forget LOAD-SHED gate. Still used by
+ *     `fleet-status-shadow.ts`, whose records are a status tail where a skipped
+ *     tick is superseded by the next one.
+ *   · `createAwaitedSlots` — BACKPRESSURE (wiring-unification C7-1). The mesh
+ *     publisher (`mesh-publisher.ts`) never drops: a publish that finds every
+ *     slot taken WAITS for one, and the durable `turn_events` row stays
+ *     `pending` until the append resolves. There is no shed branch at all.
+ *
+ * Historical note: `mesh-dual-write.ts` (deleted, now `mesh-publisher.ts`) and
+ * `fleet-status-shadow.ts` both appended asynchronously
  * off a hot path (the ledger write / the status reporting tick) and both bound
  * themselves with a `MAX_INFLIGHT` load-shed. They hand-rolled that accounting
  * separately and grew the SAME two defects, so the counter lives here now: a
@@ -118,6 +129,73 @@ export function createInflightGate(maxInflight: number): InflightGate {
         reconfigure() {
             generation++;
             count = 0;
+        },
+    };
+}
+
+/**
+ * Awaited, bounded concurrency — C7-1's "publish waits, never drops".
+ *
+ * `acquire()` resolves with a release function once fewer than `max` holders
+ * are outstanding; waiters are served FIFO so publishes keep their order of
+ * arrival. There is no refusal path: the bound limits memory held by in-flight
+ * appends, and the queue of waiters is the caller's backpressure. Callers that
+ * cannot afford an unbounded waiter queue bound it themselves (the publisher
+ * does, with a mesh-visible ERROR rather than a silent drop).
+ *
+ * A release is idempotent (a double release cannot free a slot twice), and a
+ * `reset()` rejects nobody: outstanding holders keep their release, but it is
+ * scoped to the generation that granted it — the same exactness argument as
+ * `reconfigure()` above.
+ */
+export interface AwaitedSlots {
+    acquire(): Promise<() => void>;
+    /** Holders currently outstanding (live generation). */
+    inflight(): number;
+    /** Callers waiting for a slot. */
+    waiting(): number;
+    /** Retire the live generation: fresh zero count; waiters are carried over and served. */
+    reset(): void;
+}
+
+export function createAwaitedSlots(max: number): AwaitedSlots {
+    if (!Number.isInteger(max) || max < 1) throw new Error(`createAwaitedSlots: max must be a positive integer (got ${max})`);
+    let held = 0;
+    let generation = 0;
+    const waiters: Array<(release: () => void) => void> = [];
+
+    const grant = (): (() => void) => {
+        held++;
+        const grantedGeneration = generation;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            if (grantedGeneration === generation) held--;
+            pump();
+        };
+    };
+
+    const pump = (): void => {
+        while (held < max && waiters.length > 0) {
+            const next = waiters.shift()!;
+            next(grant());
+        }
+    };
+
+    return {
+        acquire() {
+            if (held < max && waiters.length === 0) return Promise.resolve(grant());
+            return new Promise<() => void>((resolve) => {
+                waiters.push(resolve);
+            });
+        },
+        inflight: () => held,
+        waiting: () => waiters.length,
+        reset() {
+            generation++;
+            held = 0;
+            pump();
         },
     };
 }

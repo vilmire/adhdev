@@ -46,6 +46,7 @@ import {
   __clearMeshPendingEventsForTests,
 } from '../../src/mesh/mesh-events-pending.js'
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 const MESH_ID = 'mesh-idleedge-mask-1'
 const COORD_SESSION = 'coord-session-1'
@@ -88,18 +89,15 @@ function coordinatorStub(opts: {
  * callback so a test can fire a synthetic idle edge directly.
  */
 function wireIdleEdge(coord: any): (event: Record<string, unknown>) => void {
-  let captured: ((event: any) => void) | undefined
-  const components = {
+  const components = withMeshForwardingBus({
     statusInstanceId: undefined,
     instanceManager: {
-      onEvent: (cb: (event: any) => void) => { captured = cb },
       getInstance: (id: string) => (id === COORD_SESSION ? coord : undefined),
       getByCategory: (cat: string) => (cat === 'cli' ? [coord] : []),
     },
-  } as any
+  } as any)
   setupMeshEventForwarding(components)
-  if (!captured) throw new Error('instanceManager.onEvent was never registered')
-  return captured
+  return components.emit
 }
 
 function fireIdleEdge(handler: (event: Record<string, unknown>) => void): void {
@@ -206,18 +204,15 @@ describe('coordinator idle-edge auto-flush — session isolation across siblings
   }
 
   function wireTwoCoordinators(coordA: any, coordB: any): (event: Record<string, unknown>) => void {
-    let captured: ((event: any) => void) | undefined
-    const components = {
+    const components = withMeshForwardingBus({
       statusInstanceId: undefined,
       instanceManager: {
-        onEvent: (cb: (event: any) => void) => { captured = cb },
         getInstance: (id: string) => (id === COORD_A ? coordA : id === COORD_B ? coordB : undefined),
         getByCategory: (cat: string) => (cat === 'cli' ? [coordA, coordB] : []),
       },
-    } as any
+    } as any)
     setupMeshEventForwarding(components)
-    if (!captured) throw new Error('instanceManager.onEvent was never registered')
-    return captured
+    return components.emit
   }
 
   it('does not deliver a session-targeted completion into a sibling coordinator that happens to idle first', () => {

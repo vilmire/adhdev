@@ -62,6 +62,7 @@ import { setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, insertDirectDispatch } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { withMeshForwardingBus } from './helpers/mesh-forwarding-bus-fixture.js'
 
 const NODE_ID = 'node_cursor_1'
 const SESSION_ID = 'cursor-session-1'
@@ -93,7 +94,6 @@ function mockMesh(meshId: string) {
 // makeLocalComponents). No hasLiveTurnPendingEvidence method: this gate is independent of the
 // mid-turn live-state gate under test elsewhere.
 function makeLocalComponents(meshId: string) {
-  let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: SESSION_ID,
     workspace: WORKSPACE,
@@ -105,17 +105,11 @@ function makeLocalComponents(meshId: string) {
     onEvent: vi.fn(),
   }
   const instanceManager = {
-    onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
     getInstance: vi.fn((id: string) => (id === SESSION_ID ? source : undefined)),
     getByCategory: vi.fn((category: string) => (category === 'cli' ? [source] : [])),
   }
-  return {
-    components: { instanceManager } as any,
-    emit: (event: any) => {
-      if (!listener) throw new Error('listener was not registered')
-      listener(event)
-    },
-  }
+  const components = withMeshForwardingBus({ instanceManager } as any)
+  return { components, emit: components.emit }
 }
 
 function startupGreetingCompletedEvent(overrides: Record<string, unknown> = {}) {

@@ -7,9 +7,10 @@ import {
     projectMeshLedgerEntry,
 } from '../../src/seqscribe/mesh-event-projection.js';
 import {
-    configureMeshDualWrite,
-    __resetMeshDualWriteForTests,
-} from '../../src/seqscribe/mesh-dual-write.js';
+    configureMeshPublisher,
+    __forceMeshReadPrimaryForTests,
+    __resetMeshPublisherForTests,
+} from '../../src/seqscribe/mesh-publisher.js';
 import {
     configureMeshReadModel,
     primeMeshReadModel,
@@ -86,7 +87,7 @@ async function until(predicate: () => boolean, what: string, budgetMs = 2000): P
 }
 
 afterEach(async () => {
-    __resetMeshDualWriteForTests();
+    __resetMeshPublisherForTests();
     __resetMeshReadModelForTests();
     __resetMeshReadReadinessForTests();
     for (const handle of handles.splice(0)) {
@@ -105,7 +106,10 @@ describe('read readiness — event-driven catch-up (P19)', () => {
 
         // The gate short-circuits on `mode_not_primary` before any other
         // condition, so primary mode has to be armed for condition 3 to run.
-        configureMeshDualWrite(handle, { ADHDEV_SEQSCRIBE_MESH: 'primary' });
+        configureMeshPublisher(handle);
+        // The read cut-over is retired in production (C7-2); these tests pin the
+        // gate's own logic until C-W3 deletes it.
+        __forceMeshReadPrimaryForTests(true);
         configureMeshReadModel(handle);
         reportMeshTopicGrants(null);
         primeMeshReadModel(MESH_ID);
@@ -130,7 +134,10 @@ describe('read readiness — event-driven catch-up (P19)', () => {
         const topic = meshEventsTopic(MESH_ID);
         await writeShadowRecord(handle, entry('nf-1', '2026-01-01T00:00:00.000Z'));
 
-        configureMeshDualWrite(handle, { ADHDEV_SEQSCRIBE_MESH: 'primary' });
+        configureMeshPublisher(handle);
+        // The read cut-over is retired in production (C7-2); these tests pin the
+        // gate's own logic until C-W3 deletes it.
+        __forceMeshReadPrimaryForTests(true);
         configureMeshReadModel(handle);
         reportMeshTopicGrants(null);
         primeMeshReadModel(MESH_ID);
@@ -177,7 +184,10 @@ describe('read readiness — event-driven catch-up (P19)', () => {
         const topic = meshEventsTopic(MESH_ID);
         await writeShadowRecord(handle, entry('np-1', '2026-01-01T00:00:00.000Z'));
 
-        configureMeshDualWrite(handle, { ADHDEV_SEQSCRIBE_MESH: 'primary' });
+        configureMeshPublisher(handle);
+        // The read cut-over is retired in production (C7-2); these tests pin the
+        // gate's own logic until C-W3 deletes it.
+        __forceMeshReadPrimaryForTests(true);
         configureMeshReadModel(handle);
         reportMeshTopicGrants(null);
         primeMeshReadModel(MESH_ID);
@@ -236,7 +246,10 @@ describe('read readiness — event-driven catch-up (P19)', () => {
 
         // The gate short-circuits on `mode_not_primary` before any other
         // condition, so primary mode has to be armed for condition 3 to run.
-        configureMeshDualWrite(handle, { ADHDEV_SEQSCRIBE_MESH: 'primary' });
+        configureMeshPublisher(handle);
+        // The read cut-over is retired in production (C7-2); these tests pin the
+        // gate's own logic until C-W3 deletes it.
+        __forceMeshReadPrimaryForTests(true);
         configureMeshReadModel(handle);
         reportMeshTopicGrants(null);
         primeMeshReadModel(MESH_ID);

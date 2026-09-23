@@ -2177,3 +2177,66 @@ export type { DirectDispatchRecord, SiblingDispatchTerminalizeReason, MeshToolCa
 // Pass-through that lived inside the moved block; mesh-queue-assignment.ts
 // imports it from here, so the re-export stays on this module.
 export { recordAckedHoldDispatchOutcome } from './mesh-reconcile-acked-hold.js';
+
+// ── Turn ledger (wiring-unification C2/C3, C-W2) ─────────────────────────────
+// `mesh_queue.status` is an EFFECT of a turn commit, never the reverse (C3). The
+// two entry points below are what the ledger's in-txn effect host calls; they
+// run inside the ledger's transaction on this store's handle (withQueueLock is
+// a better-sqlite3 immediate transaction, so it nests as a savepoint).
+//
+// `TerminalStatusIsLedgerEffect` is the refusal `updateTaskStatus` raises for a
+// terminal status once the integration pass retires the legacy writers (design
+// C3 "updateTaskStatus throws TerminalStatusIsLedgerEffect on terminal
+// statuses"). It is exported now so callers can be migrated against the real
+// type; the throw itself is armed in updateTaskStatus by the integration pass
+// (13 call sites, all in C-W4/C-W6 files — see the C-W2 report).
+
+/** Refusal: a terminal queue status can only be written by a turn-ledger commit. */
+export class TerminalStatusIsLedgerEffect extends Error {
+    readonly code = 'terminal_status_is_ledger_effect';
+    constructor(readonly meshId: string, readonly taskId: string, readonly status: MeshTaskStatus) {
+        super(`mesh_queue ${meshId}/${taskId} → ${status}: terminal queue statuses are an effect of a turn-ledger commit; submit evidence (ledger.observe) instead`);
+        this.name = 'TerminalStatusIsLedgerEffect';
+    }
+}
+
+export function isTerminalQueueStatus(status: MeshTaskStatus): boolean {
+    return TERMINAL_TASK_STATUSES.has(status);
+}
+
+/** Dependency cascade for a ledger-committed failed/cancelled task (same policy as updateTaskStatus). */
+export function propagateLedgerDependencyFailure(meshId: string, taskId: string, status: MeshTaskStatus): MeshWorkQueueEntry[] {
+    return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId)) : [];
+}
+
+/**
+ * The `queue_status: 'pending'` effect of a ledger reclaim (generation + 1):
+ * the row goes back to `pending` with its assignment ownership cleared and the
+ * dispatch nonce bumped, exactly like reclaimStrandedAssignedTask's requeue
+ * branch — minus the budget (the reducer owns RECLAIM_BUDGET) and minus the
+ * legacy attempt close (the ledger IS the attempt). A terminal row is never
+ * resurrected (CANCEL-STICKY-TERMINAL).
+ */
+export function requeueTaskForLedgerReclaim(meshId: string, taskId: string, reason: string, nowIso: string): MeshWorkQueueEntry | null {
+    return withQueueLock(meshId, () => {
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findQueueEntryById(meshId, taskId);
+        if (!entry || TERMINAL_TASK_STATUSES.has(entry.status)) return entry;
+        delete entry.assignedNodeId;
+        delete entry.assignedSessionId;
+        delete entry.assignedProviderType;
+        delete entry.assignedModel;
+        delete entry.dispatchTimestamp;
+        delete entry.autoLaunch;
+        delete entry.attemptId;
+        entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
+        entry.status = 'pending';
+        entry.requeuedAt = nowIso;
+        entry.requeueReason = reason;
+        entry.updatedAt = nowIso;
+        store.updateQueueEntry(entry);
+        endTaskDispatchInFlight(meshId, taskId);
+        terminalizeSiblingDispatch(meshId, taskId, 'queue_task_stranded_reclaimed');
+        return entry;
+    });
+}

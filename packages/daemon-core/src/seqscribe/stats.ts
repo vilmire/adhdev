@@ -439,6 +439,44 @@ export interface SeqscribeStatusSummary {
         /** Entries skip-and-advanced because the mesh was quarantined at the time. */
         quarantined: number;
     };
+    /**
+     * G2 transcript-transport handshake diagnostics (design §7e, 2026-09-23
+     * RCA `scratchpad/transcript-handshake-rca.md`). The RCA's own finding #5:
+     * before that investigation there was no daemon-side counter for how
+     * often a dashboard peer's seqscribe transport ("replica") is selected
+     * versus falling back to the legacy chat-tail delivery path
+     * (`session-chat-tail-controller.ts` `shouldRunLegacySubscription`), so
+     * the true production wedge rate could not be distinguished from the
+     * single 99-minute host-sleep artifact the RCA traced in one preview
+     * daemon's logs. `zombieRecovered` is the companion counter for the fix
+     * itself: how many times a dashboard peer's `RTCPeerConnection` was
+     * judged zombie (its own `state()` stale, or HELLO timing out past the
+     * threshold despite claiming `'connected'`) and handed off for daemon-
+     * side peer-connection recovery instead of being redialed forever on the
+     * dead object — see `packages/daemon-cloud/src/daemon-p2p/
+     * data-channel-router.ts` `ZOMBIE_HELLO_TIMEOUT_THRESHOLD` /
+     * `getZombiePeerRecoveryCount`.
+     *
+     * ★ LOCAL-ONLY, for the same two independent reasons as `readRouting` and
+     * `terminalRedrive` above: `zombieRecovered` is a raw monotonic counter
+     * that would defeat the deduped status-frame hash, and both fields are
+     * process-local diagnostics the server has no routing use for.
+     * `buildCloudSeqscribeSummary` (status/reporter.ts) is a fixed-key
+     * allow-list that does not name this key, and
+     * `test/status/cloud-status-content-boundary.test.ts` must keep it out —
+     * do not add it there without an explicit content-boundary review, since
+     * (unlike the other local-only fields) `replicaSelected`/`legacySelected`
+     * are session-transport-routing counts, not obviously content-free the
+     * way a bucketed backlog size is.
+     */
+    transcriptTransportSelection?: {
+        /** Times a dashboard peer's session used the seqscribe replica transport. */
+        replicaSelected: number;
+        /** Times a dashboard peer's session fell back to legacy chat-tail delivery. */
+        legacySelected: number;
+        /** Times a dashboard peer's seqscribe connection was judged zombie and recovered (see above). */
+        zombieRecovered: number;
+    };
 }
 
 export interface SummarizeOptions {
@@ -557,6 +595,22 @@ export interface SummarizeOptions {
         redelivered: number;
         skipped: number;
         quarantined: number;
+    } | null;
+    /**
+     * G2 transcript-transport selection + zombie-recovery counters — see
+     * `transcriptTransportSelection` on `SeqscribeStatusSummary` above for
+     * what these mean and why they are local-only. Only read when
+     * `includeLocalDiagnostics` is set, for the same reason as `readRouting`
+     * above. `zombieRecovered` is sourced from `packages/daemon-cloud/src/
+     * daemon-p2p/data-channel-router.ts` `getZombiePeerRecoveryCount()`,
+     * which lives outside daemon-core (the dial/redial loop it counts is
+     * daemon-cloud's), so a caller there passes it through rather than this
+     * module reading it directly.
+     */
+    transcriptTransportSelection?: {
+        replicaSelected: number;
+        legacySelected: number;
+        zombieRecovered: number;
     } | null;
 }
 
@@ -689,6 +743,15 @@ export function summarizeSeqscribeStats(
                           redelivered: opts.terminalRedrive.redelivered,
                           skipped: opts.terminalRedrive.skipped,
                           quarantined: opts.terminalRedrive.quarantined,
+                      },
+                  }
+                : {}),
+            ...(opts.transcriptTransportSelection
+                ? {
+                      transcriptTransportSelection: {
+                          replicaSelected: opts.transcriptTransportSelection.replicaSelected,
+                          legacySelected: opts.transcriptTransportSelection.legacySelected,
+                          zombieRecovered: opts.transcriptTransportSelection.zombieRecovered,
                       },
                   }
                 : {}),
