@@ -26,6 +26,24 @@ import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { COMPLETED_FINALIZATION_RETRY_MS } from '../cli-provider-instance-types.js';
+import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
+import type { TurnAttemptRef, TurnEndBlockReason } from '@adhdev/mesh-shared';
+
+/**
+ * `opts.completionDiagnostic.blockReason` (set on the weak/emit-weak path,
+ * see below) is already one of the closed `TurnEndBlockReason` members in
+ * every current producer — `getCompletedFinalizationBlock` /
+ * `decideCompletionVerdict` (completion-engine.ts) only ever set it to
+ * `missing_final_assistant | finalization_timeout | terminal_block_hard_cap |
+ * decoupled_completion`. This guard narrows the type without inventing a
+ * mapping table for values that cannot occur.
+ */
+const TURN_END_BLOCK_REASON_SET: ReadonlySet<string> = new Set([
+    'missing_final_assistant', 'finalization_timeout', 'terminal_block_hard_cap', 'decoupled_completion',
+]);
+function asTurnEndBlockReason(value: unknown): TurnEndBlockReason | undefined {
+    return typeof value === 'string' && TURN_END_BLOCK_REASON_SET.has(value) ? (value as TurnEndBlockReason) : undefined;
+}
 
 /** The narrow surface of CliProviderInstance the flush interpreter reads/writes. */
 export interface CompletionFlushHost {
@@ -273,12 +291,17 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
 
 /** The narrow surface of CliProviderInstance the completion emit reads/writes. */
 export interface CompletionEmitHost {
+    instanceId: string;
     settings: Record<string, any>;
     busyEpoch: number;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
     lastEmittedCompletion: { taskId: string; at: number; evidenceLevel?: string; weak: boolean; emittedAtEpoch: number } | null;
     pushEvent(event: any): void;
     updateSettings(newSettings: Record<string, any>): void;
+    /** Turn-evidence port (wiring-unification C5/C-W5). Null until boot wires it. */
+    turnEvidencePort?: TurnEvidencePort | null;
+    /** Live attempt ref for this session, if the mesh assignment attached one. */
+    currentAttemptRef?(): TurnAttemptRef | null;
 }
 
 export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
@@ -323,14 +346,44 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     // isWeakCompletionEvidence() the coordinator/ledger paths share, so the worker's
     // notion of "weak" cannot drift from theirs. emittedAtEpoch snapshots busyEpoch so
     // a re-arm requires a real generating→idle transition after this emit.
+    const weak = isWeakCompletionEvidence(completionEvent as Record<string, unknown>);
     host.lastEmittedCompletion = {
         taskId: typeof opts.taskId === 'string' ? opts.taskId : '',
         at: Date.now(),
         evidenceLevel: opts.evidenceLevel,
-        weak: isWeakCompletionEvidence(completionEvent as Record<string, unknown>),
+        weak,
         emittedAtEpoch: host.busyEpoch,
     };
     host.pushEvent(completionEvent);
+    // Turn-evidence (C5/C-W5): the single chokepoint. EVERY provider verdict
+    // site in status-transition.ts / completion-flush.ts / stall-rescue.ts
+    // that used to decide "genuine ⇒ done" locally now only calls this
+    // function with the fields it observed — `strength` stays on the
+    // evidence, but the reducer in mesh/turn-ledger/ (R9) is what turns
+    // "genuine" into a commit. This function itself computes NO verdict: it
+    // reuses the SAME `isWeakCompletionEvidence` classification already
+    // computed above for `lastEmittedCompletion.weak`, so the evidence's
+    // `strength` can never disagree with the wire event's own weakness.
+    if (host.turnEvidencePort) {
+        emitTurnEnd(host.turnEvidencePort, {
+            sessionId: host.instanceId,
+            observedBy: 'cli_completion_flush',
+            source: weak ? 'completion_flush_weak' : 'completion_flush_genuine',
+            attemptRef: host.currentAttemptRef?.() ?? undefined,
+            taskId: opts.taskId,
+            at: opts.timestamp,
+            strength: weak ? 'weak' : 'genuine',
+            // `summary` is a SummaryRef POINTER (topic/writer/seq), never text —
+            // omitted until W2 exposes `publishSummary(meshId, text):
+            // Promise<SummaryRef>` for the content-class `mesh.<id>.handoff`
+            // topic (brief §1a, §8 item 2). `opts.finalSummary` (plain text)
+            // still reaches the wire event above unchanged; it is NOT carried
+            // into evidence — see REQUESTED EDITS.
+            blockReason: asTurnEndBlockReason(opts.completionDiagnostic?.blockReason),
+            releasedByHardCap: opts.completionDiagnostic?.releasedByTerminalBlockHardCap === true ? true : undefined,
+            afterFinalizationTimeout: opts.completionDiagnostic?.emittedAfterFinalizationTimeout === true ? true : undefined,
+        });
+    }
     // COORDINATOR-SILENT-IDLE one-shot consume: this completion's snapshot rides the
     // armed mute (resolveMuted honors settings.silentNextIdlePush for the idle status
     // above), so the routine idle push is suppressed for THIS completion only. Clear

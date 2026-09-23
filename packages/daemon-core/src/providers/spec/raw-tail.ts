@@ -55,6 +55,15 @@ export class RawTail {
     private lineCursorPos = 0;
     /** Monotonic append counter. Bumped once per `append()` call, never reset. */
     private seqCounter = 0;
+    /**
+     * `seq` at the last `clearStrippedTail()` call. `strippedTail()` reports
+     * empty until a NEW `append()` moves `seqCounter` past this mark — the
+     * classifier-side equivalent of "drop the append-only tail so only new
+     * output can re-raise a dismissed suspicion" (the old `failureOutputTail
+     * = ''` pattern), without truncating the shared buffer `takeCompleteLines()`
+     * also reads.
+     */
+    private strippedClearedAtSeq = 0;
 
     constructor(private readonly capBytes: number = DEFAULT_CAP_BYTES) {}
 
@@ -98,7 +107,19 @@ export class RawTail {
      * competes with `takeCompleteLines()`'s cursor.
      */
     strippedTail(maxBytes: number): string {
+        if (this.seqCounter <= this.strippedClearedAtSeq) return '';
         return stripAnsi(this.buf).slice(-maxBytes);
+    }
+
+    /**
+     * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
+     * until the next `append()`. Does not touch the shared buffer or
+     * `takeCompleteLines()`'s cursor — only `strippedTail()`'s own read is
+     * affected. A classifier calls this after a dismissed live suspicion, so
+     * the SAME already-seen bytes cannot re-raise it on the next read.
+     */
+    clearStrippedTail(): void {
+        this.strippedClearedAtSeq = this.seqCounter;
     }
 
     /**

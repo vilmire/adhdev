@@ -104,6 +104,8 @@ import * as stallRescue from './completion/stall-rescue.js';
 import type { StallRescueHost } from './completion/stall-rescue.js';
 import { runStatusTransitionTick, type StatusTransitionHost } from './completion/status-transition.js';
 import type { SessionEventPort } from './provider-event-port.js';
+import type { TurnEvidencePort } from './turn-evidence-port.js';
+import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { AdapterChangeCause } from '../cli-adapter-types.js';
 import {
     armCancelledCompletionRecheck,
@@ -266,6 +268,10 @@ export class CliProviderInstance implements ProviderInstance {
     private lastInteractivePromptEventKey = '';
     // Lifecycle port (wiring-unification B2) + the tick's diff state for it.
     private lifecyclePort: SessionEventPort | null = null;
+    // Turn-evidence port (wiring-unification C5/C-W5). Null until boot wires
+    // it (setTurnEvidencePort); every producer site below guards on it the
+    // same way the lifecycle port is guarded.
+    private turnEvidencePort: TurnEvidencePort | null = null;
     private lastPromptFingerprint = '';
     private lastModalFingerprint = '';
     private autoApproveBusy = false;
@@ -436,6 +442,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.context = context;
         this.settings = context.settings || {};
         if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
+        if (!this.turnEvidencePort && context.turnEvidence) this.turnEvidencePort = context.turnEvidence;
         this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
@@ -665,7 +672,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion events silently drop because the forwarder has nothing to
      * match against.
      */
-    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
+    attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
         meshAssignment.attachMeshAssignment(this as unknown as meshAssignment.MeshAssignmentHost, assignment);
     }
 
@@ -957,8 +964,8 @@ export class CliProviderInstance implements ProviderInstance {
         }
     }
 
-    recordAcknowledgedUserInput(input: InputEnvelope | string): void {
-        runtimeMessages.recordAcknowledgedUserInput(this as unknown as runtimeMessages.RuntimeMessagesHost, input);
+    recordAcknowledgedUserInput(input: InputEnvelope | string, sourceMessageId?: string): void {
+        runtimeMessages.recordAcknowledgedUserInput(this as unknown as runtimeMessages.RuntimeMessagesHost, input, sourceMessageId);
     }
 
     /** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
@@ -2108,6 +2115,33 @@ export class CliProviderInstance implements ProviderInstance {
             this.lastPromptFingerprint = '';
             this.lastModalFingerprint = '';
         }
+    }
+
+    /** Attach (or detach with null) the turn-evidence port (wiring-unification C5). */
+    setTurnEvidencePort(port: TurnEvidencePort | null): void {
+        this.turnEvidencePort = port;
+    }
+
+    /**
+     * The live per-turn attempt for THIS session, if the mesh assignment
+     * attached one (`cli-provider-mesh-assignment.ts`'s `meshActiveAttemptId`).
+     * This is a resolution helper, not a new storage mechanism — the scalar
+     * remains the only attempt-id storage on the instance today (per the C-W5
+     * brief §2); every producer site below resolves through this ONE function
+     * rather than reading `settings.meshActiveAttemptId` directly, so a future
+     * per-turn attempt tracker (replacing the scalar) only needs to change
+     * this one method. `generation` is `meshActiveAttemptGeneration` (from the
+     * dispatch's `meshContext.attemptGeneration`), 0 when absent; the ledger's
+     * own `resolveAttempt` treats an absent/0
+     * generation as "resolve centrally" when it has better information.
+     */
+    private currentAttemptRef(): TurnAttemptRef | null {
+        return meshAssignment.currentMeshAttemptRef(this.settings);
+    }
+
+    /** The ledger's `release_attempt_ref` effect for this session (C4/C5). */
+    releaseAttemptRef(attemptId: string): boolean {
+        return meshAssignment.releaseMeshAttemptRef(this as unknown as meshAssignment.MeshAssignmentHost, attemptId);
     }
 
     private pushEvent(event: ProviderEvent): void {

@@ -50,6 +50,37 @@ import {
     promptFingerprint,
     type SessionEventPort,
 } from '../provider-event-port.js';
+import { emitTurnStarted, emitSessionError, emitSuspension, emitProcessExit, emitNoProgress, type TurnEvidencePort } from '../turn-evidence-port.js';
+import { SESSION_STATUSES, type TurnAttemptRef, type NoProgressObservedStatus } from '@adhdev/mesh-shared';
+
+/** Narrow a raw adapter status string to the closed no_progress vocabulary. */
+function toNoProgressObservedStatus(raw: string): NoProgressObservedStatus {
+    return (SESSION_STATUSES as readonly string[]).includes(raw) ? (raw as NoProgressObservedStatus) : 'unknown';
+}
+
+/**
+ * Classify the adapter's free-text `ProviderErrorReason` into the closed
+ * `SESSION_ERROR_REASONS` enum evidence carries (`provider_error |
+ * adapter_error | spawn_failed | auth_failed | billing_failed | unknown`) —
+ * evidence is content-free by construction, so the raw reason string is
+ * never carried, only its class.
+ */
+function classifySessionErrorReason(reason: ProviderErrorReason | undefined): 'provider_error' | 'adapter_error' | 'spawn_failed' | 'auth_failed' | 'billing_failed' | 'unknown' {
+    switch (reason) {
+        case 'auth_failed': return 'auth_failed';
+        case 'billing_failed': return 'billing_failed';
+        case 'spawn_error': return 'spawn_failed';
+        case 'parse_error':
+        case 'cdp_error':
+        case 'init_failed': return 'adapter_error';
+        case 'crash':
+        case 'timeout':
+        case 'disconnected':
+        case 'not_installed':
+        case 'quota_exceeded': return 'provider_error';
+        default: return 'unknown';
+    }
+}
 
 /**
  * The surface of CliProviderInstance the transition tick reads/writes. All
@@ -73,6 +104,15 @@ export interface StatusTransitionHost {
      * the tick is the single diff-and-emit point for status / modal / prompt.
      */
     lifecyclePort?: SessionEventPort | null;
+    /**
+     * Turn-evidence emit surface (wiring-unification C5/C-W5). Null until boot
+     * wires it. Sibling of `lifecyclePort` — every FSM producer site below
+     * reports what it observed through one `emit*` helper; the reducer in
+     * `mesh/turn-ledger/` decides what it means.
+     */
+    turnEvidencePort?: TurnEvidencePort | null;
+    /** Live attempt ref for this session, if the mesh assignment attached one. */
+    currentAttemptRef?(): TurnAttemptRef | null;
     /** Last emitted prompt fingerprint (promptId + multiSelect bits); '' = none. */
     lastPromptFingerprint?: string;
     /** Last emitted modal fingerprint (message + buttons); '' = none. */
@@ -172,6 +212,26 @@ function emitModalAndPromptEdges(
             : null;
         emitPrompt(port, host.instanceId, interactivePrompt ?? null, transport);
     }
+}
+
+/**
+ * `turn_started` evidence, guarded on the port and paired with every
+ * `agent:generating_started` push in this file (debounced fire, the three
+ * flush-pending-on-resume sites, and the short-gen retro start) — a pure
+ * observation, never a verdict. `retro` mirrors the wire event's own timing:
+ * true when `at` is backdated (the short-gen path), false for the debounced
+ * real-time fire.
+ */
+function emitTurnStartedEvidence(host: StatusTransitionHost, at: number, retro: boolean): void {
+    if (!host.turnEvidencePort) return;
+    emitTurnStarted(host.turnEvidencePort, {
+        sessionId: host.instanceId,
+        observedBy: 'cli_fsm',
+        source: 'fsm_edge',
+        attemptRef: host.currentAttemptRef?.() ?? undefined,
+        at,
+        retro,
+    });
 }
 
 export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause?: AdapterChangeCause | null): void {
@@ -334,6 +394,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             host.generatingDebounceTimer = setTimeout(() => {
                 if (host.generatingDebouncePending) {
                     host.pushEvent({ event: 'agent:generating_started', ...host.generatingDebouncePending });
+                    emitTurnStartedEvidence(host, host.generatingDebouncePending.timestamp, false);
                     host.generatingDebouncePending = null;
                 }
                 host.generatingDebounceTimer = null;
@@ -371,6 +432,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             if (host.generatingDebouncePending) {
                 if (host.generatingDebounceTimer) { clearTimeout(host.generatingDebounceTimer); host.generatingDebounceTimer = null; }
                 host.pushEvent({ event: 'agent:generating_started', ...host.generatingDebouncePending });
+                emitTurnStartedEvidence(host, host.generatingDebouncePending.timestamp, false);
                 host.generatingDebouncePending = null;
             }
             // Cancel any pending completed
@@ -418,6 +480,19 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     modalMessage: modal?.message,
                     modalButtons: modal?.buttons,
                 });
+                if (host.turnEvidencePort) {
+                    emitSuspension(host.turnEvidencePort, {
+                        sessionId: host.instanceId,
+                        observedBy: 'cli_fsm',
+                        source: 'fsm_edge',
+                        attemptRef: host.currentAttemptRef?.() ?? undefined,
+                        at: now,
+                        modal: 'approval',
+                        // Reuse the fingerprint already computed above (message +
+                        // buttons + approvalEntrySeq) — never recompute one.
+                        modalKey: approvalFingerprint,
+                    });
+                }
             }
         } else if (newStatus === 'waiting_choice') {
             // SUSPENDED-TURN-IS-A-TURN (post-restart completion wedge): entering
@@ -436,6 +511,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             if (host.generatingDebouncePending) {
                 if (host.generatingDebounceTimer) { clearTimeout(host.generatingDebounceTimer); host.generatingDebounceTimer = null; }
                 host.pushEvent({ event: 'agent:generating_started', ...host.generatingDebouncePending });
+                emitTurnStartedEvidence(host, host.generatingDebouncePending.timestamp, false);
                 host.generatingDebouncePending = null;
             }
             // Cancel any pending completed
@@ -501,6 +577,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // bubble appears even though the debounce suppressed the original event.
                 if (shortFinalSummary) {
                     host.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now - shortDurationMs });
+                    emitTurnStartedEvidence(host, now - shortDurationMs, true);
                 }
                 // FALSE-IDLE short-gen settle: snapshot the producing turn's start + taskId NOW,
                 // before `generatingStartedAt` is reset below — the settle-arm path (mesh sessions,
@@ -745,6 +822,16 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     errorMessage: adapterStatus.errorMessage || undefined,
                 },
             });
+            if (host.turnEvidencePort) {
+                emitSessionError(host.turnEvidencePort, {
+                    sessionId: host.instanceId,
+                    observedBy: 'cli_fsm',
+                    source: 'fsm_edge',
+                    attemptRef: host.currentAttemptRef?.() ?? undefined,
+                    at: now,
+                    reason: classifySessionErrorReason(host.errorReason),
+                });
+            }
         } else if (newStatus === 'stopped') {
             // Cancel any pending debounce
             if (host.generatingDebounceTimer) { clearTimeout(host.generatingDebounceTimer); host.generatingDebounceTimer = null; }
@@ -752,6 +839,21 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             if (host.completedDebounceTimer) { clearTimeout(host.completedDebounceTimer); host.completedDebounceTimer = null; }
             host.completedDebouncePending = null;
             host.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
+            if (host.turnEvidencePort) {
+                emitProcessExit(host.turnEvidencePort, {
+                    sessionId: host.instanceId,
+                    observedBy: 'cli_fsm',
+                    source: 'fsm_edge',
+                    attemptRef: host.currentAttemptRef?.() ?? undefined,
+                    at: now,
+                    // The FSM's 'stopped' status carries no exit code of its own
+                    // (the adapter's on_exit handler — a distinct producer site,
+                    // see cli-adapter.ts/spec/adapter.ts — is where a real
+                    // exitCode is observed); null matches the "unexplained death"
+                    // convention emitProcessExit's own doc requires.
+                    exitCode: null,
+                });
+            }
         }
         host.lastStatus = newStatus;
         // Lifecycle port (B2): the edge is emitted where it is COMMITTED (the
@@ -821,6 +923,17 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 modalMessage,
                 modalButtons,
             });
+            if (host.turnEvidencePort) {
+                emitSuspension(host.turnEvidencePort, {
+                    sessionId: host.instanceId,
+                    observedBy: 'cli_fsm',
+                    source: 'fsm_edge',
+                    attemptRef: host.currentAttemptRef?.() ?? undefined,
+                    at: now,
+                    modal: 'choice',
+                    modalKey: promptKey,
+                });
+            }
         }
     } else if (!interactivePrompt && host.lastInteractivePromptEventKey) {
         // Prompt answered / gone — reset so the next AskUserQuestion re-fires.
@@ -959,5 +1072,19 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             continue;
         }
         host.pushEvent({ event: me.type, agentKey: me.agentKey, message: me.message, elapsedSec: me.elapsedSec, timestamp: me.timestamp });
+        // Turn-evidence (C5/C-W5): only reached for non-mesh sessions (the mesh
+        // branch above `continue`s — the stall watchdog owns that evidence).
+        if (me.type === 'monitor:no_progress' && host.turnEvidencePort) {
+            emitNoProgress(host.turnEvidencePort, {
+                sessionId: host.instanceId,
+                observedBy: 'status_monitor',
+                source: 'status_monitor',
+                attemptRef: host.currentAttemptRef?.() ?? undefined,
+                at: me.timestamp,
+                stalledMs: typeof me.elapsedSec === 'number' ? me.elapsedSec * 1000 : 0,
+                observedStatus: toNoProgressObservedStatus(newStatus),
+                finalAssistantPresent: false,
+            });
+        }
     }
 }

@@ -15,6 +15,7 @@
  * 5. dispose() → kill process
  */
 
+import { currentMeshAttemptRef } from './cli-provider-mesh-assignment.js';
 import * as path from 'path';
 import { Readable, Writable } from 'stream';
 import { spawn, type ChildProcess } from 'child_process';
@@ -68,6 +69,8 @@ import {
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
+import { emitTurnStarted, emitTurnEnd, emitSuspension, emitProcessExit, type TurnEvidencePort } from './turn-evidence-port.js';
+import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
 
@@ -269,6 +272,7 @@ export class AcpProviderInstance implements ProviderInstance {
     private settings: Record<string, any> = {};
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
+    private turnEvidencePort: TurnEvidencePort | null = null;
     private monitor: StatusMonitor;
 
  // Process
@@ -331,6 +335,7 @@ export class AcpProviderInstance implements ProviderInstance {
         this.context = context;
         this.settings = context.settings || {};
         if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
+        if (!this.turnEvidencePort && context.turnEvidence) this.turnEvidencePort = context.turnEvidence;
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
@@ -1607,18 +1612,42 @@ export class AcpProviderInstance implements ProviderInstance {
             if (this.lastStatus === 'idle' && newStatus === 'generating') {
                 this.generatingStartedAt = now;
                 this.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now });
+                if (this.turnEvidencePort) {
+                    emitTurnStarted(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',
+                        attemptRef: this.currentAttemptRef() ?? undefined, at: now, retro: false,
+                    });
+                }
             } else if (newStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
                 this.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now,
                     modalMessage: this.activeToolCalls.find(t => t.status === 'running')?.name,
                 });
+                if (this.turnEvidencePort) {
+                    emitSuspension(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',
+                        attemptRef: this.currentAttemptRef() ?? undefined, at: now, modal: 'approval',
+                    });
+                }
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
                 this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, finalSummary: extractFinalSummaryFromMessages(this.messages) });
+                if (this.turnEvidencePort) {
+                    emitTurnEnd(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',
+                        attemptRef: this.currentAttemptRef() ?? undefined, at: now, strength: 'genuine',
+                    });
+                }
                 this.generatingStartedAt = 0;
             } else if (newStatus === 'stopped') {
                 this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
+                if (this.turnEvidencePort) {
+                    emitProcessExit(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',
+                        attemptRef: this.currentAttemptRef() ?? undefined, at: now, exitCode: null,
+                    });
+                }
             }
             const previousStatus = this.lastStatus;
             this.lastStatus = newStatus;
@@ -1650,6 +1679,25 @@ export class AcpProviderInstance implements ProviderInstance {
     /** Attach (or detach with null) the lifecycle port (wiring-unification B2). */
     setSessionEventPort(port: SessionEventPort | null): void {
         this.lifecyclePort = port;
+    }
+
+    /** Attach (or detach with null) the turn-evidence port (wiring-unification C5). */
+    setTurnEvidencePort(port: TurnEvidencePort | null): void {
+        this.turnEvidencePort = port;
+    }
+
+    /** Live attempt ref for this session, if a mesh assignment attached one. */
+    private currentAttemptRef(): TurnAttemptRef | null {
+        return currentMeshAttemptRef(this.settings);
+    }
+
+    /** The ledger's `release_attempt_ref` effect: stop naming `attemptId` in this session's evidence. */
+    releaseAttemptRef(attemptId: string): boolean {
+        if (!attemptId || this.settings?.meshActiveAttemptId !== attemptId) return false;
+        const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = this.settings;
+        void meshActiveAttemptId; void meshActiveAttemptGeneration;
+        this.settings = rest;
+        return true;
     }
 
     private appendSystemMessage(content: string, timestamp = Date.now()): void {

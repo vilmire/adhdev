@@ -68,6 +68,15 @@ describe('CliProviderInstance recordAcknowledgedUserInput dedup', () => {
     expect(userBubbles(instance)).toHaveLength(2)
   })
 
+  it('stamps the send-side message identity on the ack (meta.sourceMessageId), and omits it when absent', () => {
+    const instance = makeInstance()
+    instance.recordAcknowledgedUserInput('with id', 'msg_abc123')
+    instance.recordAcknowledgedUserInput('without id')
+    const [withId, withoutId] = userBubbles(instance)
+    expect(withId.message.meta).toMatchObject({ runtimeInputAck: true, sourceMessageId: 'msg_abc123' })
+    expect(withoutId.message.meta.sourceMessageId).toBeUndefined()
+  })
+
   it('records distinct bubbles for distinct content within the window', () => {
     const instance = makeInstance()
 

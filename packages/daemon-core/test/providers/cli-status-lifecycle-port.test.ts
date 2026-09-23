@@ -233,7 +233,6 @@ describe('adapter notifyChange → tick', () => {
     adapter.statusCallback = null
     adapter.changeCallback = null
     adapter.runtimeSettings = {}
-    adapter.failureOutputTail = ''
     adapter.driver = { snapshot: () => '' }
     Object.assign(adapter, extra)
     return adapter

@@ -83,7 +83,11 @@ describe('D4: adapter admits AUTH for any provider, BILLING/QUOTA for kimi only'
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: cliType, name: cliType }
-    adapter.failureOutputTail = tail
+    // RawTail replaces the old failureOutputTail string field (C6, wiring-
+    // unification) — seed the shared tail buffer directly rather than through
+    // handleEvent('pty_data'), which would also run the JSON-line/prompt
+    // detection paths this suite does not set up for.
+    adapter.rawTail.append(tail)
     adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     return adapter
