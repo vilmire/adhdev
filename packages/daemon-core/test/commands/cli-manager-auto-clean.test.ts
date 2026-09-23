@@ -17,8 +17,6 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
     const deps = {
       getInstanceManager: () => ({ getInstance: () => ({ flushMeshCompletionBeforeCleanup: flush }), removeInstance }),
       getSessionRegistry: () => ({ terminateByInstanceKey }),
-      removeAgentTracking: vi.fn(),
-      onStatusChange: vi.fn(),
     };
     const manager = Object.create(DaemonCliManager.prototype) as any;
     manager.deps = deps;
@@ -38,11 +36,12 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
     vi.advanceTimersByTime(1);
     expect(manager.adapters.has('sess')).toBe(false);
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(deps.removeAgentTracking).toHaveBeenCalledWith('sess');
     expect(terminateByInstanceKey).toHaveBeenCalledWith('sess', 'auto_clean');
     expect(removeInstance).toHaveBeenCalledWith('sess');
     expect(flush.mock.invocationCallOrder[0]).toBeLessThan(removeInstance.mock.invocationCallOrder[0]);
-    expect(deps.onStatusChange).toHaveBeenCalledTimes(1);
+    // No onStatusChange poke any more: the session registry's own
+    // `terminateByInstanceKey` emits the bus `terminated` event that both
+    // hosts subscribe to (wiring-unification B4/B5 residue cleanup).
   });
 
   it('never reclaims a session relaunched under the same key inside the grace window', () => {

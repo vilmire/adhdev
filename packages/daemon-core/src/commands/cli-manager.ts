@@ -104,13 +104,8 @@ export {
 
 
 export interface CliManagerDeps {
- /** Server connection — injected into adapter */
-    getServerConn(): any | null;
  /** P2P — PTY output transmit */
     getP2p(): { broadcastSessionOutput(key: string, data: string): void } | null;
- /** StatusReporter callback */
-    onStatusChange(): void;
-    removeAgentTracking(key: string): void;
  /** InstanceManager — register in CLI unified status */
     getInstanceManager(): ProviderInstanceManager | null;
     getSessionRegistry?(): SessionRegistry | null;
@@ -480,11 +475,9 @@ export class DaemonCliManager {
                 LOG.warn('CLI', `pre-cleanup mesh completion flush failed for ${key}: ${(e as Error)?.message || e}`);
             }
             this.adapters.delete(key);
-            this.deps.removeAgentTracking(key);
             this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key, 'auto_clean');
             instanceManager?.removeInstance(key);
             LOG.info('CLI', `🧹 Auto-cleaned ${terminalStatus} CLI: ${adapter.cliType} (session=${key})`);
-            this.deps.onStatusChange();
         }, AUTO_CLEAN_DELAY_MS);
     }
 
@@ -585,7 +578,6 @@ export class DaemonCliManager {
         const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, options);
         try {
             await instanceManager.addInstance(key, cliInstance, {
-                serverConn: this.deps.getServerConn(),
                 settings,
                 onPtyData: (data: string) => {
                     this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
@@ -883,7 +875,6 @@ export class DaemonCliManager {
                 sessionId,
                 title: provider.displayName || provider.name || normalizedType,
             });
-            this.deps.onStatusChange();
             return { runtimeSessionId: sessionId };
         }
 
@@ -1048,12 +1039,7 @@ export class DaemonCliManager {
                 throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
             }
 
-            const serverConn = this.deps.getServerConn();
-            if (serverConn && typeof adapter.setServerConn === 'function') {
-                adapter.setServerConn(serverConn);
-            }
             adapter.setOnStatusChange(() => {
-                this.deps.onStatusChange();
                 const status = adapter.getStatus?.();
                 if (status?.status === 'stopped' || status?.status === 'error') {
                     this.scheduleAutoClean(key, adapter, status.status);
@@ -1081,7 +1067,6 @@ export class DaemonCliManager {
             title: provider?.displayName || provider?.name || normalizedType,
         });
 
-        this.deps.onStatusChange();
         return {
             runtimeSessionId: key,
             providerSessionId: sessionBinding.providerSessionId,
@@ -1106,20 +1091,16 @@ export class DaemonCliManager {
             }
             // Always cleanup regardless of shutdown success
             this.adapters.delete(key);
-            this.deps.removeAgentTracking(key);
             this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key, 'stop_requested');
             this.deps.getInstanceManager()?.removeInstance(key);
             LOG.info('CLI', `🛑 Agent stopped: ${adapter.cliType} in ${adapter.workingDir}`);
-            this.deps.onStatusChange();
         } else {
             // Adapter not found — try InstanceManager direct removal
             const im = this.deps.getInstanceManager();
             if (im) {
                 this.deps.getSessionRegistry?.()?.terminateByInstanceKey(key, 'stop_requested');
                 im.removeInstance(key);
-                this.deps.removeAgentTracking(key);
                 LOG.warn('CLI', `🧹 Force-removed orphan entry: ${key}`);
-                this.deps.onStatusChange();
             }
         }
     }
@@ -1386,9 +1367,6 @@ export class DaemonCliManager {
             }
         }
 
-        if (restored > 0) {
-            this.deps.onStatusChange();
-        }
         return restored;
     }
 
@@ -1790,7 +1768,10 @@ export class DaemonCliManager {
             return { success: false, error: 'CLI instance not found', code: 'CLI_INSTANCE_NOT_FOUND' };
         }
         instance.setPresentationMode(mode);
-        this.deps.onStatusChange();
+        // No onStatusChange poke here any more: the router emits
+        // command_executed{command:'set_cli_view_mode'} and session-core's
+        // cli-view-mode-facts subscriber turns that into a daemon_facts
+        // (wiring-unification B4/B5) — see bootSessionCore.
         return { success: true, id: found.key, mode };
     }
 

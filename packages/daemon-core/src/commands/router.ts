@@ -62,7 +62,7 @@ import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { SessionRegistry } from '../sessions/registry.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import { LOG } from '../logging/logger.js';
-import { activateKnownMeshTopics } from '../seqscribe/mesh-dual-write.js';
+import { activateKnownMeshTopics } from '../seqscribe/mesh-publisher.js';
 import type { PeerHandle } from 'seqscribe';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import { logCommand } from '../logging/command-log.js';
@@ -165,6 +165,25 @@ export interface SessionHostControlPlane {
     pruneDuplicateSessions(payload?: { providerType?: string; workspace?: string; dryRun?: boolean }): Promise<any>;
     acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any>;
     releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any>;
+    /**
+     * A PTY snapshot for `sessionId` (optionally only the tail since `sinceSeq`),
+     * over the same session-host request transport as the other methods
+     * (wire type `get_snapshot`, already a supported SessionHostRequestType in
+     * @adhdev/session-host-core — see session-host-transport.ts's inline use of
+     * the raw client for the identical request shape).
+     *
+     * Implemented by `session-host/session-host-controller.ts`'s
+     * `SessionHostController` (wrapping @adhdev/session-host-core's
+     * `createSessionHostControlPlane`, wiring-unification B residue cleanup
+     * deliverable 7). Stays optional here — rather than promoted to a required
+     * member — so any other structural implementer of this LOCAL interface
+     * (e.g. a lightweight test stub that doesn't need PTY snapshots) keeps
+     * compiling without adding a no-op. The low-family spec in
+     * session-host.ts checks for the method's presence and returns a clear
+     * "unavailable" error if it is ever missing, matching every other
+     * `!ctx.deps.sessionHostControl` guard there.
+     */
+    getSnapshot?(sessionId: string, sinceSeq?: number): Promise<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number } | null>;
 }
 
 export interface CommandRouterDeps {

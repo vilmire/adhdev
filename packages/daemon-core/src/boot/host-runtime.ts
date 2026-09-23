@@ -44,6 +44,7 @@ import {
     subscribeHostCommandTopics,
     subscribeHostMeshState,
     subscribeHostModal,
+    subscribeHostSessionPurge,
     subscribeHostStatusFacts,
     subscribeHostTurnSnapshots,
     type StatusFactsEvent,
@@ -234,6 +235,7 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
             ...(transport.chatTail.flushCompleted ? { flushCompleted: (ids: ReadonlySet<string>) => transport.chatTail.flushCompleted!(ids) } : {}),
         }),
         subscribeHostModal(bus, topics),
+        subscribeHostSessionPurge(bus, topics),
         subscribeHostCommandTopics(bus, topics, transport.onCommandExecuted?.bind(transport)),
         subscribeHostMeshState(bus, topics, transport.onMeshState?.bind(transport)),
         subscribeHostTurnSnapshots(bus, {

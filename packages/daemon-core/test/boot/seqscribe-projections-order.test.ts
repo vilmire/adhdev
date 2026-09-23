@@ -12,9 +12,14 @@ const { calls, rec } = vi.hoisted(() => {
   return { calls, rec }
 })
 
-vi.mock('../../src/seqscribe/mesh-dual-write.js', () => ({
-  configureMeshDualWrite: rec('dualWrite'),
-  activateKnownMeshTopics: () => { calls.push('activateTopics'); return 0 },
+const topicActivation = vi.hoisted(() => ({ fail: false }))
+vi.mock('../../src/seqscribe/mesh-publisher.js', () => ({
+  configureMeshPublisher: rec('publisher'),
+  activateMeshTopicsAtBoot: () => {
+    calls.push('activateTopics')
+    if (topicActivation.fail) throw new Error('mesh topic activation failed for mesh.m1.events')
+    return 0
+  },
 }))
 vi.mock('../../src/seqscribe/mesh-read-model.js', () => ({
   configureMeshReadModel: rec('readModel'),
@@ -37,10 +42,7 @@ vi.mock('../../src/seqscribe/mesh-terminal-redrive-consumer.js', () => ({
 vi.mock('../../src/mesh/mesh-terminal-redrive.js', () => ({
   REDRIVE_CONSUMER: 'redrive', REDRIVE_ENV: 'X', consumeRedriveEntry: () => {}, isTerminalRedriveEnabled: () => true,
 }))
-vi.mock('../../src/mesh/mesh-parity-loop.js', () => ({
-  startMeshParityLoop: () => { calls.push('parityLoop'); return { stop: () => calls.push('parityLoop.stop'), runOnce: async () => {} } },
-}))
-vi.mock('../../src/config/mesh-config.js', () => ({ listMeshesReadOnly: () => [] }))
+vi.mock('../../src/config/mesh-config.js', () => ({ listMeshesReadOnly: () => [{ id: 'm1' }] }))
 
 import { armSeqscribeProjections } from '../../src/boot/stages/seqscribe-projections.js'
 import { seqscribeSlot } from '../../src/seqscribe/runtime-slot.js'
@@ -64,20 +66,21 @@ function stage() {
 }
 
 describe('armSeqscribeProjections', () => {
-  beforeEach(() => { calls.length = 0 })
+  beforeEach(() => { calls.length = 0; topicActivation.fail = false })
 
   it('arms in the fixed order and binds the one runtime slot first', () => {
     const { rt, s5 } = stage()
     const steps: string[] = []
     const s6 = armSeqscribeProjections(s5, { onStep: s => steps.push(s) })
     expect(steps).toEqual([
-      'arm:slot', 'arm:dual-write', 'arm:read-model', 'arm:fleet-shadow', 'arm:fleet-parity',
-      'arm:transcript', 'arm:activate-topics', 'arm:prune-consumers', 'arm:terminal-redrive', 'arm:parity-loop',
+      'arm:slot', 'arm:publisher', 'arm:read-model', 'arm:fleet-shadow', 'arm:fleet-parity',
+      'arm:transcript', 'arm:activate-topics', 'arm:prune-consumers', 'arm:terminal-redrive',
     ])
-    // Dual-write before topic activation / prune / redrive / parity loop; shadow before parity.
+    // Publisher before topic activation / prune / redrive; shadow before parity.
+    // No mesh parity loop (C7-6: one write path, nothing to compare).
     expect(calls).toEqual([
-      'dualWrite(node)', 'readModel(node)', 'fleetShadow(node)', 'fleetParity(node)',
-      'transcript(deps)', 'transcriptBus', 'activateTopics', 'prune', 'redrive(node)', 'parityLoop',
+      'publisher(node)', 'readModel(node)', 'fleetShadow(node)', 'fleetParity(node)',
+      'transcript(deps)', 'transcriptBus', 'activateTopics', 'prune', 'redrive(node)',
     ])
     expect(seqscribeSlot.current()).toBe(rt)
     expect(rt.projections()).toMatchObject({ transcript: { fake: 'service' } })
@@ -92,19 +95,30 @@ describe('armSeqscribeProjections', () => {
     steps.length = 0
     s6.disarmProjections()
     expect(steps).toEqual([
-      'disarm:attach', 'disarm:parity-loop', 'disarm:terminal-redrive', 'disarm:transcript',
-      'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:read-model', 'disarm:dual-write', 'disarm:slot',
+      'disarm:attach', 'disarm:terminal-redrive', 'disarm:transcript',
+      'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:read-model', 'disarm:publisher', 'disarm:slot',
     ])
-    // fleet parity detaches before its shadow; the parity loop stops before dual-write detaches.
+    // fleet parity detaches before its shadow; the publisher detaches last but the slot.
     expect(calls).toEqual([
-      'parityLoop.stop', 'redrive(null)', 'transcriptBus.off', 'transcript(null)',
-      'fleetParity(null)', 'fleetShadow(null)', 'readModel(null)', 'dualWrite(null)',
+      'redrive(null)', 'transcriptBus.off', 'transcript(null)',
+      'fleetParity(null)', 'fleetShadow(null)', 'readModel(null)', 'publisher(null)',
     ])
     expect(seqscribeSlot.current()).toBeNull()
     expect(rt.projections()).toBeNull()
     // Idempotent.
     s6.disarmProjections()
-    expect(steps).toHaveLength(9)
+    expect(steps).toHaveLength(8)
+  })
+
+  it('a known mesh whose events topic cannot be defined fails the stage (C7-1) and unwinds what it armed', () => {
+    const { s5 } = stage()
+    topicActivation.fail = true
+    const steps: string[] = []
+    expect(() => armSeqscribeProjections(s5, { onStep: s => steps.push(s) })).toThrow(/mesh topic activation failed/)
+    // Nothing past the failed step armed, and the slot/publisher were unwound.
+    expect(steps).not.toContain('arm:activate-topics')
+    expect(calls).toContain('publisher(null)')
+    expect(seqscribeSlot.current()).toBeNull()
   })
 
   it('without a node it arms nothing and binds no slot', () => {

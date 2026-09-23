@@ -23,6 +23,7 @@ import {
     type SessionHostPruneDuplicatesResult,
     type SessionHostRecord,
     type SessionHostRequestType,
+    type SessionHostSnapshot,
 } from '@adhdev/session-host-core';
 
 
@@ -43,7 +44,7 @@ export class SessionHostController implements SessionHostControlPlane {
         private readonly onEvent?: (event: SessionHostEvent) => void,
     ) {
         this.client = new SessionHostClient({ endpoint });
-        // The 11-method dispatch table (type strings + throw text) is shared with
+        // The 12-method dispatch table (type strings + throw text) is shared with
         // the standalone daemon via @adhdev/session-host-core. Cloud keeps the
         // reconnect/event layer here and injects a persistent-client transport.
         this.plane = createSessionHostControlPlane({
@@ -141,6 +142,10 @@ export class SessionHostController implements SessionHostControlPlane {
 
     releaseWrite(payload: ReleaseWritePayload): Promise<SessionHostRecord | null> {
         return this.plane.releaseWrite(payload);
+    }
+
+    getSnapshot(sessionId: string, sinceSeq?: number): Promise<SessionHostSnapshot | null> {
+        return this.plane.getSnapshot(sessionId, sinceSeq);
     }
 
     private async request<T>(request: {

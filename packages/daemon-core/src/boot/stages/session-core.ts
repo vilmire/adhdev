@@ -73,15 +73,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
     // CLI PTY output leaves through the fanout; the host runtime attaches the sink.
     const outputFanout = new SessionOutputFanout();
     const cliManager = new DaemonCliManager({
-        // Dead dependency (plan C16): no adapter reads the server connection.
-        getServerConn: () => null,
         getP2p: () => outputFanout,
-        // Every cli-manager poke is a registry edge now (registered / terminated,
-        // emitted by the registry itself) or the view-mode fact above; hosts
-        // subscribe to the bus instead of this callback.
-        onStatusChange: () => {},
-        // Tracking lives on the instance; both hosts passed a no-op.
-        removeAgentTracking: () => {},
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...(cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {}),

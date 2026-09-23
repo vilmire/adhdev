@@ -29,7 +29,7 @@ import type { GitCommandServices } from '../git/git-commands.js';
 import type { GitWorkspaceMonitor } from '../git/git-monitor.js';
 
 type Bus = Pick<SessionLifecycleBus, 'on'>;
-type Topics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushNow' | 'invalidate'>;
+type Topics = Pick<TopicSubscriptionRegistry, 'hasSubscriptions' | 'flushNow' | 'invalidate'> & Partial<Pick<TopicSubscriptionRegistry, 'purgeChatOutputActivity'>>;
 
 export type StatusFactsEvent =
     | EventOf<'status'>
@@ -77,6 +77,17 @@ export function subscribeHostChatTail(bus: Bus, hooks: ChatTailHooks): Unsubscri
 
 export function subscribeHostModal(bus: Bus, topics: Topics): Unsubscribe {
     return bus.on(['modal', 'prompt'], () => flushTopic(topics, 'session.modal'), { name: 'host.modal' });
+}
+
+/**
+ * `terminated` → drop the session's chat-output activity stamp eagerly (design B2
+ * registry #12: `chatOutputActiveAt` is a subscriber cache). The 8 s hot-window
+ * expiry already makes this safe to miss; this keeps the map from carrying dead ids.
+ */
+export function subscribeHostSessionPurge(bus: Bus, topics: Topics): Unsubscribe {
+    return bus.on('terminated', (e) => {
+        try { topics.purgeChatOutputActivity?.(e.sessionId); } catch (err) { swallow('purge chat output activity')(err); }
+    }, { name: 'host.session-purge' });
 }
 
 export function subscribeHostCommandTopics(
