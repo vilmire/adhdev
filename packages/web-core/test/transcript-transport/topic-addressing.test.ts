@@ -56,18 +56,23 @@ describe('topic-addressing (browser mirror of daemon-core topics.ts)', () => {
         expect(sessionTranscriptTopic('A:B')).toBe('session.a_b.transcript');
     });
 
-    it('builds a policy matching topics.ts#sessionTranscriptPolicy exactly', () => {
+    it('builds a policy matching topics.ts#sessionTranscriptPolicy exactly (G2b: full retention)', () => {
         expect(sessionTranscriptPolicy()).toEqual({
             kind: 'append',
-            retention: { mode: 'ring', size: SESSION_TRANSCRIPT_RING },
+            retention: { mode: 'full' },
             replication: 'subscribe-only',
             access: 'content',
             finalityAuthority: ADHDEV_AUTHORITY_ID,
         });
     });
 
-    it('pins the fleet-wide authority id and ring size constants', () => {
+    it('pins the fleet-wide authority id constant', () => {
         expect(ADHDEV_AUTHORITY_ID).toBe('adhdev-coordinator');
+    });
+
+    it('SESSION_TRANSCRIPT_RING is a kept historical constant, no longer used by sessionTranscriptPolicy', () => {
+        // Not referenced by the policy since G2b switched to full retention —
+        // kept only for documentary parity with daemon-core's own constant.
         expect(SESSION_TRANSCRIPT_RING).toBe(500);
     });
 });

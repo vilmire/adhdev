@@ -488,6 +488,20 @@ export class SessionChatTailController {
    */
   private replicaHealthy = false
   /**
+   * (G2) Last transport selection reported to the daemon via
+   * `report_transcript_transport` (`syncLegacySubscription`'s new side
+   * effect, `seqscribe/transcript-transport-selection.ts` on the daemon
+   * side) — `null` until the first report. Guards against re-sending an
+   * unchanged value if `syncLegacySubscription` is ever invoked without an
+   * actual health transition; the two call sites today (`applyTranscript
+   * ReplicaSnapshot`'s first-applied branch, `reportTranscriptReplicaFallback`)
+   * are already transitions, so this is defense-in-depth, not the primary
+   * dedup. Reset alongside `replicaHealthy` in `dispose()` so a recycled
+   * controller reports fresh rather than assuming the daemon still has its
+   * old counts.
+   */
+  private lastReportedTransportSelection: 'replica' | 'legacy' | null = null
+  /**
    * (§8 unit 9) Has a verified replica snapshot EVER landed on this session?
    *
    * ★ This is the strictness gate for the degradation notice, and the whole
@@ -896,7 +910,17 @@ export class SessionChatTailController {
       this.pendingDisconnectTimer = null
     }
     this.retainCount += 1
-    this.connect()
+    // (G2) `syncLegacySubscription()`, not a bare `connect()` — behaviorally
+    // identical (it still gates on `shouldRunLegacySubscription()` before
+    // calling `connect()`), but it ALSO reports the initial transport
+    // selection. Without this, a session that never sees a replica (the
+    // common shadow-daemon case — see `legacy-chat-tail-retirement.test.ts`'s
+    // own header) would retain, stay on legacy forever, and never once cross
+    // `syncLegacySubscription`'s other two call sites (both health
+    // TRANSITIONS) — undercounting `legacySelected` exactly where it matters
+    // most: the baseline population every wedge-rate percentage is measured
+    // against.
+    this.syncLegacySubscription()
     // (§8 unit 4c) 0 → 1 is the edge where this session becomes READ, which is
     // exactly when transcript interest must widen to include it. Only the edge
     // notifies: a second consumer retaining an already-read controller changes
@@ -1341,6 +1365,52 @@ export class SessionChatTailController {
     if (this.retainCount <= 0) return
     if (this.shouldRunLegacySubscription()) this.connect()
     else this.disconnect()
+    this.reportTransportSelection()
+  }
+
+  /**
+   * (G2) Report which transport this session is actually running — the
+   * seqscribe replica lane, or the legacy `session.chat_tail` push
+   * subscription — to the daemon, once per health transition. This is the
+   * ONLY place `replicaHealthy`'s value crosses the wire; everywhere else it
+   * stays browser-local state (see its own doc comment above).
+   *
+   * ── Why report, not derive ───────────────────────────────────────────────
+   * The daemon has no way to know which transport a dashboard peer is
+   * actually running — `replicaHealthy`/`shouldRunLegacySubscription()` are
+   * pure browser state. See `seqscribe/transcript-transport-selection.ts`
+   * (daemon-core) for the full reasoning and the content-boundary note: the
+   * reported value is a closed two-value enum, never free text.
+   *
+   * ── Why sendData, not sendCommand ────────────────────────────────────────
+   * This class is a plain object, not a React component — it has no
+   * `useTransport()` hook. `sendData` is already threaded through via
+   * constructor injection for the legacy subscribe/unsubscribe frames on the
+   * SAME P2P DataChannel; this reuses it with a `type:'command'` frame
+   * (`packages/daemon-cloud/src/daemon-p2p/data-channel-router.ts`
+   * `handleP2PCommand`'s frame shape) rather than adding a second transport
+   * dependency for one lightweight report. No `id` is set: this is
+   * fire-and-forget telemetry, not a request awaiting `command_result`.
+   *
+   * Best-effort: `sendData` returning false (no active P2P connection) is
+   * silently dropped, same as every other best-effort report in this file —
+   * a session with no live connection has nothing to report anyway.
+   */
+  private reportTransportSelection(): void {
+    if (!this.sendData || !this.daemonId) return
+    const selection: 'replica' | 'legacy' = this.replicaHealthy ? 'replica' : 'legacy'
+    if (this.lastReportedTransportSelection === selection) return
+    this.lastReportedTransportSelection = selection
+    try {
+      this.sendData(this.daemonId, {
+        type: 'command',
+        commandType: 'report_transcript_transport',
+        data: { selection },
+      })
+    } catch {
+      // Best-effort telemetry — a send failure here must never affect the
+      // subscription it is reporting on.
+    }
   }
 
   private connect(): void {
@@ -1381,6 +1451,10 @@ export class SessionChatTailController {
     // feeding it: a permanently empty pane. Health must be re-earned by an
     // actual snapshot after every dispose.
     this.replicaHealthy = false
+    // (G2) A recycled controller reports fresh — the daemon-side counters are
+    // process-wide anyway (see transcript-transport-selection.ts), so this
+    // guards this INSTANCE's own dedup, not anything the daemon relies on.
+    this.lastReportedTransportSelection = null
     // ★ Reset the degradation gate too. A recycled controller has no lane, so
     // it has no history of one either — otherwise the next fallback on a fresh
     // controller would claim a regression that never happened here.

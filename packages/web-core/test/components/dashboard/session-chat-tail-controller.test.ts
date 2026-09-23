@@ -264,8 +264,13 @@ describe('SessionChatTailController registry', () => {
 
     controller.retain()
 
-    expect(sendData).toHaveBeenCalledOnce()
-    const request = sendData.mock.calls[0]?.[1]
+    // (G2) `retain()` now also sends one `report_transcript_transport`
+    // command frame (transcript-transport-report.test.ts covers that
+    // reporting behavior on its own) — the subscribe frame this test cares
+    // about is still the FIRST call, unchanged in shape.
+    const subscribeCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+    expect(subscribeCalls).toHaveLength(1)
+    const request = subscribeCalls[0]?.[1]
     expect(request).toMatchObject({
       type: 'subscribe',
       topic: 'session.chat_tail',
@@ -382,14 +387,20 @@ describe('SessionChatTailController registry', () => {
         tailLimit: 60,
       })
 
+      // (G2) `retain()` also sends a `report_transcript_transport` frame —
+      // count SUBSCRIBE frames specifically, since that is what this test is
+      // actually about (no re-subscribe on release+retain), not the total
+      // frame count.
+      const subscribeFrames = () => sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+
       controller.retain()
-      expect(sendData).toHaveBeenCalledTimes(1)
+      expect(subscribeFrames()).toHaveLength(1)
 
       controller.release()
       controller.retain()
       vi.runAllTimers()
 
-      expect(sendData).toHaveBeenCalledTimes(1)
+      expect(subscribeFrames()).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
@@ -400,9 +411,18 @@ describe('SessionChatTailController registry', () => {
     vi.useFakeTimers()
     try {
       const manager = new SubscriptionManager()
-      const sendData = vi.fn()
-        .mockReturnValueOnce(false)
-        .mockReturnValueOnce(true)
+      // (G2) `retain()` now also sends a `report_transcript_transport` frame
+      // on the same `sendData` mock — a plain `mockReturnValueOnce(false)
+      // .mockReturnValueOnce(true)` would consume its two queued values
+      // across BOTH frame types (subscribe, then report), not across the two
+      // subscribe attempts this test is actually about. Make the mock
+      // type-aware instead: only the FIRST subscribe frame fails.
+      let subscribeAttempts = 0
+      const sendData = vi.fn((_daemonId: string, data: any) => {
+        if (data?.type !== 'subscribe') return true
+        subscribeAttempts += 1
+        return subscribeAttempts > 1
+      })
       const controller = getOrCreateSessionChatTailController({
         manager,
         sendData,
@@ -412,10 +432,11 @@ describe('SessionChatTailController registry', () => {
         subscriptionKey: 'daemon:daemon-1:session:session-1',
         tailLimit: 60,
       })
+      const subscribeFrames = () => sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
 
       controller.retain()
-      expect(sendData).toHaveBeenCalledTimes(1)
-      expect(sendData.mock.calls[0]?.[1]).toMatchObject({
+      expect(subscribeFrames()).toHaveLength(1)
+      expect(subscribeFrames()[0]?.[1]).toMatchObject({
         type: 'subscribe',
         topic: 'session.chat_tail',
         key: 'daemon:daemon-1:session:session-1',
@@ -423,8 +444,8 @@ describe('SessionChatTailController registry', () => {
 
       vi.advanceTimersByTime(1000)
 
-      expect(sendData).toHaveBeenCalledTimes(2)
-      expect(sendData.mock.calls[1]?.[1]).toMatchObject({
+      expect(subscribeFrames()).toHaveLength(2)
+      expect(subscribeFrames()[1]?.[1]).toMatchObject({
         type: 'subscribe',
         topic: 'session.chat_tail',
         key: 'daemon:daemon-1:session:session-1',

@@ -5,7 +5,8 @@
 // The load-bearing claims under test:
 //   ① without hooks, defining the policy throws (the gate is real, not assumed)
 //   ② with reject-all hooks, it succeeds (existence is the whole gate)
-//   ③ the ring-only interlock throws on any non-ring topic (safety)
+//   ③ the browser-safe-finality interlock accepts ring AND full+subscribe-only,
+//      but throws on full-sync (safety)
 //   ④ the browser policy's topicSchemaHash equals the DAEMON's, computed from
 //      daemon-core's own `sessionTranscriptPolicy` — if this diverges every
 //      daemon peer answers ERR_SCHEMA_MISMATCH and the whole unit is moot.
@@ -24,10 +25,10 @@ import type { SqliteWasmDbLike, TopicPolicy } from 'seqscribe'
 import { createSeqscribe, sqliteWasmHandle, topicSchemaHashOf } from 'seqscribe'
 import { describe, expect, it } from 'vitest'
 import {
-    assertRingOnlyPolicy,
+    assertBrowserSafeFinalityPolicy,
     browserRejectAuthority,
-    guardRingOnlyDefineTopic,
-    isRingOnlyPolicy,
+    guardBrowserSafeDefineTopic,
+    isBrowserSafeFinalityPolicy,
 } from '../../src/transcript-transport/browser-reject-authority.js'
 import {
     sessionTranscriptPolicy,
@@ -79,15 +80,15 @@ describe('browserRejectAuthority — defineTopic gate', () => {
         expect(Object.keys(browserRejectAuthority)).toEqual(['verifyFinality'])
         expect(browserRejectAuthority.issueWriterDirective).toBeUndefined()
         expect(browserRejectAuthority.issueTakeover).toBeUndefined()
-        // Rejects unconditionally — including a well-formed cert. Safe only
-        // because ring topics are finality-exempt (SPEC §7.9); that is what
-        // the ring-only interlock below enforces.
+        // Rejects unconditionally — including a well-formed cert. Safe on ring
+        // topics (finality-exempt, SPEC §7.9) or full+subscribe-only topics
+        // (rejection is purely local); that is what the interlock below enforces.
         expect(browserRejectAuthority.verifyFinality?.({} as never)).toBe(false)
     })
 })
 
-describe('ring-only interlock', () => {
-    const fullRetentionContentPolicy: TopicPolicy = {
+describe('browser-safe-finality interlock', () => {
+    const fullSyncContentPolicy: TopicPolicy = {
         kind: 'append',
         retention: { mode: 'full' },
         replication: 'full-sync',
@@ -95,32 +96,47 @@ describe('ring-only interlock', () => {
         finalityAuthority: 'adhdev-coordinator',
     }
 
-    it('classifies ring vs non-ring retention', () => {
-        expect(isRingOnlyPolicy(sessionTranscriptPolicy())).toBe(true)
-        expect(isRingOnlyPolicy(fullRetentionContentPolicy)).toBe(false)
-        expect(isRingOnlyPolicy(daemonConfigSettingsPolicy() as TopicPolicy)).toBe(false)
+    const ringPolicy: TopicPolicy = {
+        kind: 'append',
+        retention: { mode: 'ring', size: 50 },
+        replication: 'subscribe-only',
+        access: 'content',
+        finalityAuthority: 'adhdev-coordinator',
+    }
+
+    it('classifies ring, full+subscribe-only, and full-sync', () => {
+        // The real session transcript policy is now full+subscribe-only (G2b).
+        expect(sessionTranscriptPolicy().retention.mode).toBe('full')
+        expect(sessionTranscriptPolicy().replication).toBe('subscribe-only')
+        expect(isBrowserSafeFinalityPolicy(sessionTranscriptPolicy())).toBe(true)
+        // A ring topic (any size) is safe regardless of replication.
+        expect(isBrowserSafeFinalityPolicy(ringPolicy)).toBe(true)
+        // full-sync is never safe, ring or not.
+        expect(isBrowserSafeFinalityPolicy(fullSyncContentPolicy)).toBe(false)
+        expect(isBrowserSafeFinalityPolicy(daemonConfigSettingsPolicy() as TopicPolicy)).toBe(false)
     })
 
-    it('assertRingOnlyPolicy passes a ring policy and throws on a full one', () => {
-        expect(() => assertRingOnlyPolicy(TOPIC, sessionTranscriptPolicy())).not.toThrow()
-        expect(() => assertRingOnlyPolicy('assistant.journal', fullRetentionContentPolicy)).toThrow(
-            /refuses to define "assistant\.journal".*not "ring"/s,
+    it('assertBrowserSafeFinalityPolicy passes ring and full+subscribe-only, throws on full-sync', () => {
+        expect(() => assertBrowserSafeFinalityPolicy(TOPIC, sessionTranscriptPolicy())).not.toThrow()
+        expect(() => assertBrowserSafeFinalityPolicy('some.ring.topic', ringPolicy)).not.toThrow()
+        expect(() => assertBrowserSafeFinalityPolicy('assistant.journal', fullSyncContentPolicy)).toThrow(
+            /refuses to define "assistant\.journal"/s,
         )
     })
 
-    it('③ a node wired with reject-all hooks REFUSES to define a non-ring topic', async () => {
+    it('③ a node wired with reject-all hooks accepts the transcript topic but REFUSES full-sync', async () => {
         const node = new TranscriptWorkerNode({
-            writerId: 'browser_test_ring_guard',
+            writerId: 'browser_test_finality_guard',
             openStorage: memoryStorage,
             authority: browserRejectAuthority,
         })
         await node.open()
         try {
-            // The ring topic it exists to serve: fine.
+            // The full+subscribe-only transcript topic it exists to serve (G2b): fine.
             expect(() => node.node.defineTopic(TOPIC, sessionTranscriptPolicy())).not.toThrow()
-            // A full-retention content topic: refused BEFORE seqscribe sees it,
+            // A full-sync content topic: refused BEFORE seqscribe sees it,
             // because reject-all would silently kill its finality.
-            expect(() => node.node.defineTopic('assistant.journal', fullRetentionContentPolicy)).toThrow(
+            expect(() => node.node.defineTopic('assistant.journal', fullSyncContentPolicy)).toThrow(
                 /browserRejectAuthority refuses to define "assistant\.journal"/,
             )
             expect(() =>
@@ -138,7 +154,7 @@ describe('ring-only interlock', () => {
             storage: storage.handle,
             authority: browserRejectAuthority,
         })
-        const guarded = guardRingOnlyDefineTopic(raw)
+        const guarded = guardBrowserSafeDefineTopic(raw)
         try {
             guarded.defineTopic(TOPIC, sessionTranscriptPolicy())
             // Non-defineTopic members must still bind to the real node.

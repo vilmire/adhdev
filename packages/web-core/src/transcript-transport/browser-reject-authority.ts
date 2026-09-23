@@ -22,23 +22,50 @@
  * it fleet-wide is separately forbidden by the design doc. The policy therefore
  * stays byte-identical to the daemon's, and only the hook differs.
  *
- * ── Why reject-all is safe HERE, and only here ─────────────────────────────
+ * ── Why reject-all is safe on a RING topic, or a FULL+subscribe-only one ───
  * `verifyFinality: () => false` rejects *every* certificate, including
- * legitimate ones. On a ring-retention topic that costs nothing:
+ * legitimate ones. Two distinct, independently-sufficient reasons make that
+ * inert rather than destructive, and `isBrowserSafeFinalityPolicy` below
+ * accepts a topic when EITHER applies:
  *
- *   1. A rejected cert takes a DEFINED branch, not an invented state —
+ *   1. RING retention: certs never arrive on a ring topic at all — SPEC §7.9
+ *      exempts ring retention from finality/archive/snapshot entirely. There
+ *      is nothing for this hook to reject in the first place.
+ *   2. FULL retention + `subscribe-only` replication (G2b, landed
+ *      2026-09-24 — `session.<id>.transcript`): certs DO arrive here, but a
+ *      rejected cert takes a DEFINED branch, not an invented state —
  *      vendor/seqscribe/src/finality.ts:115-119 routes a failed verify to
- *      `emitAnomaly({ kind: 'bad_cert' })`. No throw, no wedge.
- *   2. Certs never arrive on this topic anyway: SPEC §7.9 exempts ring
- *      retention from finality/archive/snapshot entirely.
- *   3. The SUB/tail read path this node uses does not touch signatures —
- *      `vendor/seqscribe/src/subs.ts` contains zero authority references.
+ *      `emitAnomaly({ kind: 'bad_cert' })`, no throw, no wedge — and that
+ *      rejection is purely LOCAL: `verifyAndClassify` only mutates THIS
+ *      node's own `applyCert`/`getCert` state, never propagated to peers. A
+ *      `subscribe-only` leaf never re-serves what it locally rejected as
+ *      accepted to anyone else, so the browser's blanket "no" never corrupts
+ *      another peer's view of finality. `full` + `full-sync` is the case
+ *      this does NOT cover: a full-sync topic IS cross-peer canonical, so
+ *      this node's own cert handling could matter to peers syncing through
+ *      it — no topic on the browser side is full-sync today, but the guard
+ *      stays conservative rather than assume that never changes.
  *
- * The corollary is the danger: on a `full`-retention content topic (e.g.
+ * Either way, the SUB/tail read path this node uses for live delivery does
+ * not touch signatures at all — `vendor/seqscribe/src/subs.ts` contains zero
+ * authority references, ring or full.
+ *
+ * The corollary is the danger: on a `full-sync` content topic (e.g.
  * `config.settings`), reject-all would silently kill finality rather than
- * merely being inert. That is why `assertRingOnlyPolicy` below exists and why
- * `guardRingOnlyDefineTopic` is applied at the node boundary — a node wired
- * with these hooks must only ever define ring topics.
+ * merely being inert. That is why `assertBrowserSafeFinalityPolicy` below
+ * exists and why `guardBrowserSafeDefineTopic` is applied at the node
+ * boundary — a node wired with these hooks must only ever define a policy
+ * this module has actually reasoned about being safe.
+ *
+ * ── G2b (landed 2026-09-24): the vendor `tail`-view blocker is resolved ────
+ * `session.<id>.transcript` switching to `full` retention was blocked once
+ * before by `oss/vendor/seqscribe/src/subs.ts`'s `view:'tail'` throwing
+ * `ERR_UNKNOWN_VIEW` for any non-ring topic — unrelated to this file's own
+ * guard, which was already sound for the `subscribe-only` case even then.
+ * That vendor restriction is now resolved: `tail` also serves `full` +
+ * `subscribe-only` topics with identical SNAP/DELTA/Row wire shapes, so both
+ * the daemon replica store and this package's own
+ * `transcript-session-subscription.ts` keep working unmodified.
  *
  * ── Why this is NOT a secret ───────────────────────────────────────────────
  * There is no key, no HMAC, no `issue*` hook. Nothing here can produce a
@@ -65,54 +92,62 @@ import type { AuthorityHooks, TopicPolicy } from 'seqscribe';
  */
 export const browserRejectAuthority: AuthorityHooks = Object.freeze({
     // Rejects every certificate. See this file's header: on a ring topic no
-    // cert is ever produced (SPEC §7.9), and a rejected one is a defined
-    // `bad_cert` anomaly, not an error path.
+    // cert is ever produced (SPEC §7.9); on a full+subscribe-only topic a
+    // rejected cert is a defined, purely-local `bad_cert` anomaly, not an
+    // error path and never propagated to peers.
     verifyFinality: (): boolean => false,
 });
 
 /**
- * True when `policy` is one this authority may safely back — i.e. its retention
- * is a bounded ring, so finality is exempt (SPEC §7.9) and reject-all is inert.
+ * True when `policy` is one this authority may safely back — see this file's
+ * header for the two independently-sufficient reasons: bounded ring
+ * retention (finality exempt entirely, SPEC §7.9), or `full` retention with
+ * `subscribe-only` replication (this node's rejection is purely local, never
+ * propagated). `full` + `full-sync` is NOT safe and returns false.
  */
-export function isRingOnlyPolicy(policy: TopicPolicy): boolean {
-    return policy.retention.mode === 'ring';
+export function isBrowserSafeFinalityPolicy(policy: TopicPolicy): boolean {
+    if (policy.retention.mode === 'ring') return true;
+    return policy.retention.mode === 'full' && policy.replication === 'subscribe-only';
 }
 
 /**
- * Fail-closed guard: throws unless `policy` is ring-retention.
+ * Fail-closed guard: throws unless {@link isBrowserSafeFinalityPolicy} accepts `policy`.
  *
  * ★ This is the safety interlock for `browserRejectAuthority`. Rejecting all
- * certificates is harmless on a ring topic and silently destructive on a
- * `full`-retention content topic, where real finality would be dropped with no
- * symptom other than a watermark that never advances. Rather than trust future
- * callers to remember that, any node wired with these hooks refuses at
- * `defineTopic` time to define a non-ring topic.
+ * certificates is harmless on the policies `isBrowserSafeFinalityPolicy` accepts
+ * and silently destructive on a `full-sync` content topic, where real finality
+ * would be dropped with no symptom other than a watermark that never advances.
+ * Rather than trust future callers to remember that, any node wired with these
+ * hooks refuses at `defineTopic` time to define a policy this module has not
+ * reasoned about being safe.
  */
-export function assertRingOnlyPolicy(topic: string, policy: TopicPolicy): void {
-    if (isRingOnlyPolicy(policy)) return;
+export function assertBrowserSafeFinalityPolicy(topic: string, policy: TopicPolicy): void {
+    if (isBrowserSafeFinalityPolicy(policy)) return;
     throw new Error(
-        `browserRejectAuthority refuses to define "${topic}": retention "${policy.retention.mode}" is not "ring". ` +
-            'These hooks reject every finality certificate, which is inert only on ring topics (seqscribe SPEC §7.9 ' +
-            'exempts ring retention from finality); on a full-retention topic it would silently drop legitimate ' +
-            'finality. A node using browserRejectAuthority must define ring topics only.',
+        `browserRejectAuthority refuses to define "${topic}": retention "${policy.retention.mode}" + ` +
+            `replication "${policy.replication}" is not a policy these hooks can safely back. These hooks reject ` +
+            'every finality certificate, which is inert only on ring-retention topics (seqscribe SPEC §7.9 exempts ' +
+            'ring retention from finality) or full-retention subscribe-only topics (rejection never propagates to ' +
+            'peers); on a full-sync topic it would silently drop legitimate finality. A node using ' +
+            'browserRejectAuthority must define only policies isBrowserSafeFinalityPolicy accepts.',
     );
 }
 
 /** Minimal structural view of the node surface this guard wraps. */
-export interface RingOnlyDefineTopicTarget {
+export interface BrowserSafeDefineTopicTarget {
     defineTopic(topic: string, policy: TopicPolicy): void;
 }
 
 /**
- * Wrap a node so `defineTopic` enforces {@link assertRingOnlyPolicy} before
- * delegating. Applied by `TranscriptWorkerNode` whenever reject-all authority
- * hooks are supplied, so the interlock cannot be bypassed by reaching for
- * `node.defineTopic` directly.
+ * Wrap a node so `defineTopic` enforces {@link assertBrowserSafeFinalityPolicy}
+ * before delegating. Applied by `TranscriptWorkerNode` whenever reject-all
+ * authority hooks are supplied, so the interlock cannot be bypassed by
+ * reaching for `node.defineTopic` directly.
  */
-export function guardRingOnlyDefineTopic<T extends RingOnlyDefineTopicTarget>(node: T): T {
+export function guardBrowserSafeDefineTopic<T extends BrowserSafeDefineTopicTarget>(node: T): T {
     const original = node.defineTopic.bind(node);
     const guarded = (topic: string, policy: TopicPolicy): void => {
-        assertRingOnlyPolicy(topic, policy);
+        assertBrowserSafeFinalityPolicy(topic, policy);
         original(topic, policy);
     };
     return new Proxy(node, {

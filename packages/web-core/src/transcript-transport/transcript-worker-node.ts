@@ -18,7 +18,7 @@
  * attaching, subscribing, and tearing down cleanly.
  */
 import { createSeqscribe, type AuthorityHooks, type Channel, type JsonValue, type PeerHandle, type SeqscribeNodeExt, type SqliteHandle, type Subscription, type Timers } from 'seqscribe';
-import { guardRingOnlyDefineTopic } from './browser-reject-authority.js';
+import { guardBrowserSafeDefineTopic } from './browser-reject-authority.js';
 
 export interface TranscriptWorkerStorage {
     readonly handle: SqliteHandle;
@@ -87,10 +87,11 @@ export class TranscriptWorkerNode {
                 ...(this.#env.rng ? { rng: this.#env.rng } : {}),
                 ...(this.#env.authority ? { authority: this.#env.authority } : {}),
             });
-            // ★ Ring-only interlock. Arming it with the authority hooks (rather
-            // than unconditionally) keeps the constraint attached to its cause:
-            // the hooks are what make a non-ring topic unsafe here.
-            this.#node = this.#env.authority ? guardRingOnlyDefineTopic(created) : created;
+            // ★ Browser-safe-finality interlock (accepts ring OR full+subscribe-only —
+            // see browser-reject-authority.ts). Arming it with the authority hooks
+            // (rather than unconditionally) keeps the constraint attached to its
+            // cause: the hooks are what make an unsafe policy dangerous here.
+            this.#node = this.#env.authority ? guardBrowserSafeDefineTopic(created) : created;
         } catch (err) {
             await storage.dispose();
             throw err;
