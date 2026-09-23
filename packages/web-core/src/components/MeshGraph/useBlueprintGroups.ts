@@ -23,6 +23,7 @@
  */
 import { useMemo } from 'react'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { MeshTaskStatus } from '@adhdev/mesh-shared'
 import { buildTaskDag } from './taskDagViewModel'
 
 /** Terminal queue statuses — nothing in them will advance again on its own. */
@@ -96,7 +97,7 @@ export interface BlueprintTaskRow {
      * 'generating' overrides 'assigned' when the claiming session is live
      * generating — the distinction the wireframe's 0.1-second read wants.
      */
-    statusToken: 'generating' | 'assigned' | 'pending' | 'completed' | 'failed' | 'cancelled'
+    statusToken: 'generating' | MeshTaskStatus
     /** Unmet dependency ids (scheduler predicate — dep status !== completed). */
     waitingOn: string[]
     /** Referenced deps absent from the snapshot (warning badge). */
@@ -221,7 +222,7 @@ export function buildBlueprintGroups(
             kind: 'task',
             section: isTerminal ? 'history' : isBlocked ? 'blocked' : 'running',
             task,
-            statusToken: activity?.generating ? 'generating' : task.status as BlueprintTaskRow['statusToken'],
+            statusToken: activity?.generating ? 'generating' : task.status,
             waitingOn: node.waitingOn,
             missingDeps: node.missingDeps,
             ...(blockedReason ? { blockedReason } : {}),

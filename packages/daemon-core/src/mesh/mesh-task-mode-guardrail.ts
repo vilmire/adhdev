@@ -12,7 +12,8 @@
  *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
-import { MESH_TASK_MODES, isTaskReadonly, type MeshTaskMode } from './mesh-work-queue.js';
+import { isTaskReadonly, type MeshTaskMode } from './mesh-work-queue.js';
+import { isMeshTaskMode } from '@adhdev/mesh-shared';
 
 /**
  * GUARDRAIL-TEACHING-ERROR: where a forbidden keyword actually matched, so a
@@ -586,7 +587,7 @@ function detectGitMutation(message: string): { start: number; end: number } | nu
 export function normalizeMeshTaskMode(value: unknown): MeshTaskMode | undefined {
     if (typeof value !== 'string') return undefined;
     const normalized = value.trim() as MeshTaskMode;
-    return (MESH_TASK_MODES as string[]).includes(normalized) ? normalized : undefined;
+    return isMeshTaskMode(normalized) ? normalized : undefined;
 }
 
 export function validateMeshTaskModeRequest(mode: unknown, message: string, readonly?: boolean): MeshTaskModeValidationResult {

@@ -245,8 +245,12 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             ? 'stale_pending_cache_refresh'
                             : 'cold_cache_miss';
 
-                    const { getMeshQueueStats, getQueue } = await import('../../mesh/mesh-work-queue.js');
-                    const queue = getQueue(meshId);
+                    const { getMeshQueueStats, getQueue, summarizeQueueEntryInputForView } = await import('../../mesh/mesh-work-queue.js');
+                    // IPC load audit 2026-09-23: queue rows can carry a task `input` envelope
+                    // (base64 image parts) for their 30-day lifetime; the dashboard status
+                    // surface must never echo that data (it pushed mesh_status past the P2P
+                    // chunk ceiling). Summarize at the read, before anything downstream sees it.
+                    const queue = getQueue(meshId).map(summarizeQueueEntryInputForView);
                     const queueSummary = getMeshQueueStats(meshId);
 
                     // Scheduling-runtime projection — the load-balancer's live view (tie-break

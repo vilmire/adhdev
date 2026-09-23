@@ -59,6 +59,7 @@ import {
     prioritizeActiveQueueRows,
     readLedgerEntries,
     readString,
+    readTaskInput,
     reconcileDirectDispatchesFromTranscriptEvidence,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
@@ -71,12 +72,18 @@ import {
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
+// MESH-IMAGE-DISPATCH / F1: view-surface projection and worker-protocol footer
+// materialization — not (yet) re-exported through mesh-tools-internal.ts,
+// imported directly from the package like the other daemon-core symbols
+// mesh-tools-internal.ts itself imports.
+import { summarizeQueueEntryInputForView, resolveDispatchMessage, type DispatchableTask } from '@adhdev/daemon-core';
 import { buildGraphPlanShape } from './mesh-tools-graph.js';
 import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
 import type {
     MeshContext,
     MeshGraphGatePlanSpec,
     MeshTaskGraphEntrySpec,
+    MeshTaskInput,
     OrphanedPinnedTask,
     QueueViewMode,
 } from './mesh-tools-internal.js';
@@ -170,6 +177,8 @@ export function buildUntargetedCodeChangeWorktreeAdvisory(input: {
  */
 interface EnqueueTaskArgsShape {
     message: string; task_mode?: string; taskMode?: string;
+    /** MESH-IMAGE-DISPATCH: optional multipart attachment delivered with `message`. */
+    input?: unknown;
     readonly?: boolean; read_only?: boolean;
     requiredTags?: string[]; required_tags?: string[];
     targetNodeId?: string; target_node_id?: string;
@@ -188,6 +197,8 @@ interface EnqueueTaskArgsShape {
 interface NormalizedEnqueueTaskArgs {
     message: string;
     taskMode: string | undefined;
+    /** MESH-IMAGE-DISPATCH: optional multipart attachment, validated shallowly by readTaskInput. */
+    input: MeshTaskInput | undefined;
     readonly: boolean;
     requiredTags: string[];
     dependsOn: string[] | undefined;
@@ -231,6 +242,20 @@ function normalizeEnqueueTaskArgs(
             ok: false,
             code: 'invalid_message',
             error: `${callerLabel} requires a non-empty string \`message\`.`,
+        };
+    }
+    // MESH-IMAGE-DISPATCH: optional structured attachment (e.g. a screenshot). Validated
+    // at the tool boundary for the same reason `message` is above — the dispatcher performs
+    // no runtime schema validation, so a malformed envelope would otherwise surface deep in
+    // the worker daemon or be silently dropped.
+    let input: MeshTaskInput | undefined;
+    try {
+        input = readTaskInput(args.input);
+    } catch (e: any) {
+        return {
+            ok: false,
+            code: 'invalid_input',
+            error: `${callerLabel} received an unusable \`input\`: ${e?.message || e}`,
         };
     }
     const taskMode = readString(args.task_mode) || readString(args.taskMode);
@@ -311,7 +336,7 @@ function normalizeEnqueueTaskArgs(
     return {
         ok: true,
         value: {
-            message, taskMode, readonly, requiredTags, dependsOn, missionId, priority,
+            message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
             explicitTargetRaw, preferWorktree, targetNodeId,
         },
@@ -414,7 +439,7 @@ function selectEagerPushReceiver(
  */
 function eagerPushTaskToRemoteNodes(
     ctx: MeshContext,
-    task: { id: string; taskMode?: string },
+    task: DispatchableTask,
     message: string,
     targetNodeId: string | undefined,
     requiredTags: string[],
@@ -443,7 +468,11 @@ function eagerPushTaskToRemoteNodes(
         // carries this context; the enqueue-and-push path was the only dispatch missing it.
         dispatchPromises.push(
             ipcDispatchToRemoteAgent(ctx, node, {
-                message,
+                // F1: materialize the worker-protocol footer (and any relevant handoff
+                // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
+                // keep the authored `message` (see summarizeTaskMessage(message) further
+                // down, which must describe what the coordinator wrote, not the footer).
+                message: resolveDispatchMessage({ ...task, message }, ctx.mesh.id, node),
                 // ★PROVIDER-PIN-BYPASS (D2): carry the pin INTO provider resolution.
                 // selectEagerPushReceiver above only answered "could some provider on
                 // this node satisfy the pin?" — a node-level question. Without the tags
@@ -556,7 +585,7 @@ export async function meshEnqueueTask(
         return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
     }
     const {
-        message, taskMode, readonly, requiredTags, dependsOn, missionId, priority,
+        message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
         explicitTargetRaw, preferWorktree, targetNodeId,
     } = normalized.value;
@@ -614,7 +643,7 @@ export async function meshEnqueueTask(
 
     try {
         const task = enqueueTask(ctx.mesh.id, message, {
-            taskMode, ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
+            taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
             ...(priority ? { priority } : {}),
             ...(model ? { model } : {}),
             ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -892,6 +921,7 @@ export async function meshEnqueueBatch(
             ...(ref ? { ref } : {}),
             message: v.message,
             taskMode: v.taskMode,
+            ...(v.input ? { input: v.input } : {}),
             ...(v.readonly ? { readonly: true } : {}),
             requiredTags: v.requiredTags,
             dependsOn: v.dependsOn,
@@ -1248,7 +1278,11 @@ export async function meshViewQueue(
         // Compact mode: cap active rows and truncate per-row messages (a busy mesh
         // can carry dozens of multi-KB task messages → 70KB+ in the active array).
         const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
-        const visibleQueue = compact ? compactQueueResult.rows : queue;
+        // MESH-IMAGE-DISPATCH: this is a VIEW surface, so a persisted input envelope
+        // (which may carry base64 image data) must never be echoed verbatim here —
+        // only the dispatch path needs the real envelope. Replace it with a
+        // content-free summary (partCount/partTypes).
+        const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task: any) => summarizeQueueEntryInputForView(task));
         const wantActiveQueueArray = view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status));
         const wantHistoricalQueueArray = !compact && (view === 'historical' || requestedHistoricalRows);
         // activeWork carries the full task message/summary per record — the single

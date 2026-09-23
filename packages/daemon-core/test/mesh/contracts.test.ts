@@ -8,6 +8,7 @@ import {
   coordinatorIdentityKey,
   isMeshEventScope,
   isMeshTaskStatus,
+  MESH_TASK_STATUSES,
   isSupportedMeshProtocolVersion,
   meshSessionHandleKey,
   shouldDeliverPendingEventToCoordinator,
@@ -19,6 +20,7 @@ import {
   type CoordinatorIdentity,
   type PendingMeshCoordinatorEventV2,
 } from '../../src/mesh/contracts.js';
+import { MESH_TASK_STATUSES as SHARED_MESH_TASK_STATUSES } from '@adhdev/mesh-shared';
 
 const COORD_A: CoordinatorIdentity = { daemonId: 'd1', coordinatorRunId: 'run-a' };
 const COORD_B: CoordinatorIdentity = { daemonId: 'd2', coordinatorRunId: 'run-b' };
@@ -92,10 +94,14 @@ describe('protocol version + enum guards', () => {
     expect(isMeshEventScope('system')).toBe(true);
     expect(isMeshEventScope('multicast')).toBe(false);
   });
-  it('isMeshTaskStatus is strict', () => {
+  it('isMeshTaskStatus is strict and derives from the ONE mesh-shared vocabulary', () => {
     expect(isMeshTaskStatus('pending')).toBe(true);
-    expect(isMeshTaskStatus('in_progress')).toBe(true);
+    // `in_progress` was a member of the old local copy in contracts.ts; no queue
+    // row, ledger entry or dispatch ever held it as a task status (A3).
+    expect(isMeshTaskStatus('in_progress')).toBe(false);
     expect(isMeshTaskStatus('done')).toBe(false);
+    expect([...MESH_TASK_STATUSES]).toEqual([...SHARED_MESH_TASK_STATUSES]);
+    expect([...MESH_TASK_STATUSES]).toEqual(['pending', 'assigned', 'completed', 'failed', 'cancelled']);
   });
 });
 

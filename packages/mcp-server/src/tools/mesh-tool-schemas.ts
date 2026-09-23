@@ -8,6 +8,18 @@
  */
 
 import { annotateAll } from './tool-annotations.js';
+// Wiring-unification A3: every vocabulary enum is derived from the ONE tuple in
+// mesh-shared via enumOf(), so the published schema cannot drift from the code.
+// Tool-local enums (gate outcomes, mission status, key names, …) stay inline.
+import {
+    enumOf,
+    MESH_DELIVERY_MODES,
+    MESH_SESSION_CLEANUP_MODES,
+    MESH_TASK_DIFFICULTIES,
+    MESH_TASK_MODES,
+    MESH_TASK_PRIORITIES,
+    MESH_THINKING_LEVELS,
+} from '@adhdev/mesh-shared';
 
 /**
  * MESH-IMAGE-DISPATCH: optional structured input accompanying a task instruction.
@@ -96,8 +108,7 @@ export const MESH_ROUTE_PREVIEW_TOOL = {
         required: ['difficulty'],
         properties: {
             difficulty: {
-                type: 'string' as const,
-                enum: ['easy', 'medium', 'difficult', 'freeform'],
+                ...enumOf(MESH_TASK_DIFFICULTIES),
                 description: 'Hypothetical task difficulty. Classified tasks enforce the hard difficulty floor; freeform contributes zero on every difficulty score axis.',
             },
             required_tags: {
@@ -188,8 +199,8 @@ export const MESH_ENQUEUE_TASK_TOOL = {
         properties: {
             message: { type: 'string', description: 'The task instruction for the agent.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch — and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one.' },
-            taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch — and in exchange runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one busy node, no worktree needed) under a separate, larger read-only concurrency cap. Prefer it for investigation/diagnosis: it is the cheaper mode to schedule, not just the restricted one.' },
+            taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
             readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without the one-active-per-node write isolation (N read-only tasks may run in parallel on one node), is counted under the read-only safety cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Equivalent to task_mode=live_debug_readonly but composable with any task_mode.' },
             read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
             requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags that every eligible node must have, e.g. os=darwin, provider=codex-cli, gpu.' },
@@ -204,10 +215,10 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
             mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). An unresolvable id is REJECTED at enqueue (mission_not_found), never silently attached — use mesh_mission_list to get a valid full id.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-            priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
+            priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'G6 (task-level scheduling priority). Within the claim tier a high task is pulled ahead of an older normal/low task (created_at is the tie-break); low is pulled last. Defaults to normal. This is the TASK priority (which task a node pulls first) — distinct from a node\'s schedulingPriority (which node work goes to). Use high to jump an urgent fix ahead of a backlog without cancelling the queue.' },
             model: { type: 'string', description: 'Optional model override for the agent that runs this task, e.g. opus, sonnet, haiku. Best-effort: applied at launch for providers that support a model flag (claude-cli --model, ACP setConfigOption); ignored by providers that cannot honor it. Use a cheaper model for simple tasks to save tokens, a stronger one for hard work. Blank = the provider default.' },
-            thinkingLevel: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
-            difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
+            thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level for this task. Best-effort: applied at launch for providers that support it (claude-cli --effort, codex-cli reasoning effort, ACP thought_level); ignored otherwise. Use low for simple tasks (fewer tokens), high for hard reasoning.' },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty — a ROUTING HINT, not a model selector. It is matched against each node\'s capability slots so the task lands on a slot configured for that difficulty, and THAT SLOT\'s own model + thinkingLevel are what launch. It does not by itself mean a cheaper or stronger model: to change what a difficulty runs on, edit the node\'s slots (mesh_node_slots_set) rather than picking a different difficulty. Classify each task by how hard the work actually is. An explicit model/thinkingLevel above always wins.' },
             notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
             max_retries: { type: 'number', description: 'P3 (retry cap). Max automatic requeue attempts before the task auto-fails instead of returning to pending. When requeueCount reaches this, mesh_queue_requeue auto-fails the task unless force=true. Omit to use the mesh policy default (maxTaskRetries, typically 1).' },
             maxRetries: { type: 'number', description: 'CamelCase alias for max_retries.' },
@@ -254,8 +265,8 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         ref: { type: 'string', description: 'Batch-local label other entries\' depends_on may name (e.g. "investigate", "fix", "verify"). Never persisted — resolved to the generated task id at insert.' },
                         message: { type: 'string', description: 'The task instruction for the agent.' },
                         input: MESH_TASK_INPUT_SCHEMA,
-                        task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract (same semantics as mesh_enqueue_task).' },
-                        taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+                        task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract (same semantics as mesh_enqueue_task).' },
+                        taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
                         readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode); same semantics as mesh_enqueue_task.' },
                         read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
                         requiredTags: { type: 'array', items: { type: 'string' }, description: 'Optional capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli, worktree=<branch>.' },
@@ -268,10 +279,10 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         dependsOn: { type: 'array', items: { type: 'string' }, description: 'CamelCase alias for depends_on.' },
                         mission_id: { type: 'string', description: 'Per-task mission override (full/exact id); defaults to the top-level mission_id. An unresolvable id rejects the WHOLE batch (atomic).' },
                         missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-                        priority: { type: 'string', enum: ['low', 'normal', 'high'], description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
+                        priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'G6 task-level scheduling priority (same semantics as mesh_enqueue_task).' },
                         model: { type: 'string', description: 'Optional model override for the agent that runs this task (best-effort at launch).' },
-                        thinkingLevel: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Optional reasoning-effort level (best-effort at launch).' },
-                        difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED per task — routing hint matched against node capability slots (same semantics as mesh_enqueue_task).' },
+                        thinkingLevel: { ...enumOf(MESH_THINKING_LEVELS), description: 'Optional reasoning-effort level (best-effort at launch).' },
+                        difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED per task — routing hint matched against node capability slots (same semantics as mesh_enqueue_task).' },
                         not_before: { type: 'number', description: 'G7 delayed execution: hold the task pending until this time (epoch-ms, relative-ms, or ISO string).' },
                         notBefore: { type: 'number', description: 'CamelCase alias for not_before. Also accepts an ISO-8601 timestamp string.' },
                         max_retries: { type: 'number', description: 'P3 retry cap (same semantics as mesh_enqueue_task).' },
@@ -576,26 +587,25 @@ export const MESH_SEND_TASK_TOOL = {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID (from mesh_list_nodes).' },
-            session_id: { type: 'string', description: 'Agent session ID on the target node.' },
+            session_id: { type: 'string', description: 'Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull).' },
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
-            taskMode: { type: 'string', enum: ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'], description: 'CamelCase alias for task_mode.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before local or remote direct dispatch.' },
+            taskMode: { ...enumOf(MESH_TASK_MODES), description: 'CamelCase alias for task_mode.' },
             readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true the task runs without write isolation, is counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },
             read_only: { type: 'boolean', description: 'Snake-case alias for readonly.' },
             mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, the directly dispatched task is attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for an unattributed direct dispatch. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
             missionId: { type: 'string', description: 'CamelCase alias for mission_id.' },
-            difficulty: { type: 'string', enum: ['easy', 'medium', 'difficult', 'freeform'], description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty. Classify each task by how hard the work actually is. On a direct dispatch the target node/session is already chosen, so difficulty is not used to ROUTE — it is recorded on the task so scheduling analytics, mission aggregates and (critically) failure-recovery relaunch all see the same axis a queued task carries. A recovery relaunch inherits this value from the ledger, so an unclassified direct dispatch would silently downgrade its own retry.' },
             delivery_mode: {
-                type: 'string',
-                enum: ['when_idle', 'interrupt'],
+                ...enumOf(MESH_DELIVERY_MODES),
                 description: "How to deliver when the target session is BUSY. Default 'when_idle': never disturbs the running turn — the task is queued and auto-delivered the moment the session goes idle. "
                     + "★'interrupt' ABORTS the turn currently in flight by pressing the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers this task once the session settles. "
                     + 'THE WORK IN PROGRESS IS DISCARDED — whatever the agent had not yet finished is lost, and any partial edits it was mid-way through are left as they are. Use it only when the running turn is genuinely going the wrong way and finishing it is worse than losing it. '
                     + "If the target provider cannot interrupt (no stop control declared, or an empty stop key), the dispatch is REJECTED rather than quietly falling back to when_idle — so a steering attempt never reports success while the session actually runs on to completion under the old instructions. Re-send with 'when_idle' if delivery-after-completion is acceptable. "
                     + 'Has no effect on an idle session (delivered immediately either way).',
             },
-            deliveryMode: { type: 'string', enum: ['when_idle', 'interrupt'], description: 'CamelCase alias for delivery_mode.' },
+            deliveryMode: { ...enumOf(MESH_DELIVERY_MODES), description: 'CamelCase alias for delivery_mode.' },
             // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
             //
             // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
@@ -617,7 +627,9 @@ export const MESH_SEND_TASK_TOOL = {
             },
             orchestrationDecision: { type: 'object', description: 'CamelCase alias for orchestration_decision.' },
         },
-        required: ['node_id', 'session_id', 'message', 'difficulty'],
+        // session_id is deliberately NOT required: meshSendTask supports a sessionless
+        // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
+        required: ['node_id', 'message', 'difficulty'],
     },
 };
 
@@ -1041,8 +1053,7 @@ export const MESH_REMOVE_NODE_TOOL = {
         properties: {
             node_id: { type: 'string', description: 'Node ID to remove.' },
             session_cleanup_mode: {
-                type: 'string',
-                enum: ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'],
+                ...enumOf(MESH_SESSION_CLEANUP_MODES),
                 description: 'Optional override for cleanup of delegated sessions attached to this node. preserve keeps history/processes; stop stops live runtimes only; delete_stopped removes completed transcripts only; stop_and_delete stops live runtimes and deletes records.',
             },
             force: { type: 'boolean', description: 'Override the coordinator-base-node guard. Only set true to intentionally tear down this mesh; the coordinator must then be re-registered/restarted. Worktree nodes never need force.' },
@@ -1072,8 +1083,7 @@ export const MESH_CLEANUP_SESSIONS_TOOL = {
         properties: {
             node_id: { type: 'string', description: 'Node ID whose delegated sessions should be considered for cleanup.' },
             mode: {
-                type: 'string',
-                enum: ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'],
+                ...enumOf(MESH_SESSION_CLEANUP_MODES),
                 description: 'preserve = no-op; stop = release process occupancy by stopping live runtimes; delete_stopped = remove completed/stopped records while leaving live runtimes alone; stop_and_delete = stop live runtimes and delete records.',
             },
             session_ids: {

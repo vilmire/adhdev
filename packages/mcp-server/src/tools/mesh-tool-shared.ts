@@ -9,6 +9,8 @@
  * constant values.
  */
 
+import type { InputPart } from '@adhdev/daemon-core';
+
 export function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -18,10 +20,24 @@ export function readNumeric(value: unknown, fallback = 0): number {
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-/** A structured multipart input envelope as accepted by the mesh task tools. */
+/**
+ * A structured multipart input envelope as accepted by the mesh task tools.
+ * Typed against the daemon's `InputPart` union so it is assignable to the queue
+ * entry's `input` (MeshTaskInputEnvelope) and to the agent_command payload alike;
+ * `readTaskInput` only checks the parts are objects with a string `type` — the
+ * full part shape is the provider's contract (normalizeInputEnvelope daemon-side).
+ */
 export interface MeshTaskInput {
-    parts: Array<Record<string, unknown>>;
+    parts: MeshTaskInputPart[];
 }
+
+/**
+ * One part as the MCP layer sees it: a daemon `InputPart` that is also an open
+ * JSON record, so the same value satisfies both the typed queue envelope
+ * (`MeshTaskInputEnvelope.parts: InputPart[]`) and the untyped
+ * `{ parts: Record<string, unknown>[] }` the remote-dispatch helper still declares.
+ */
+export type MeshTaskInputPart = InputPart & Record<string, unknown>;
 
 /**
  * MESH-IMAGE-DISPATCH: validate the optional `input` envelope on a task tool call.
@@ -50,6 +66,7 @@ export function readTaskInput(value: unknown): MeshTaskInput | undefined {
         // carrying nothing. Refuse rather than dispatch a silently text-only task.
         throw new Error('`input.parts` is empty — omit `input` entirely for a text-only task.');
     }
+    let totalBytes = 0;
     for (const [index, part] of parts.entries()) {
         if (!part || typeof part !== 'object' || Array.isArray(part)) {
             throw new Error(`\`input.parts[${index}]\` must be an object.`);
@@ -57,8 +74,43 @@ export function readTaskInput(value: unknown): MeshTaskInput | undefined {
         if (!readString((part as { type?: unknown }).type)) {
             throw new Error(`\`input.parts[${index}].type\` is required (e.g. "text" or "image").`);
         }
+        // Size cap (IPC load audit 2026-09-23): an envelope is persisted on the queue row for
+        // up to 30 days and travels over IPC and P2P on every dispatch. Without a cap a single
+        // oversized image made dashboard mesh_status exceed the P2P chunk ceiling for as long
+        // as the row lived. The per-part cap stays under the remote-dispatch frame limit.
+        const partBytes = measurePartBytes(part as Record<string, unknown>);
+        if (partBytes > MESH_TASK_INPUT_MAX_PART_BYTES) {
+            throw new Error(
+                `\`input.parts[${index}]\` is ${formatMiB(partBytes)} — the per-part limit is `
+                + `${formatMiB(MESH_TASK_INPUT_MAX_PART_BYTES)}. Downscale or crop the image before dispatching.`,
+            );
+        }
+        totalBytes += partBytes;
     }
-    return { parts: parts as Array<Record<string, unknown>> };
+    if (totalBytes > MESH_TASK_INPUT_MAX_TOTAL_BYTES) {
+        throw new Error(
+            `\`input\` totals ${formatMiB(totalBytes)} across ${parts.length} part(s) — the envelope limit is `
+            + `${formatMiB(MESH_TASK_INPUT_MAX_TOTAL_BYTES)}. Send fewer or smaller attachments.`,
+        );
+    }
+    return { parts: parts as MeshTaskInputPart[] };
+}
+
+/** Per-part ceiling for a task input part (base64 image data dominates). */
+export const MESH_TASK_INPUT_MAX_PART_BYTES = 8 * 1024 * 1024;
+/** Whole-envelope ceiling; below the 16 MB remote-dispatch frame limit with headroom for the JSON frame. */
+export const MESH_TASK_INPUT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+
+function measurePartBytes(part: Record<string, unknown>): number {
+    // `data` (base64) and `text` carry the payload; everything else is metadata. Measuring the
+    // two fields directly avoids a JSON.stringify of a multi-megabyte object on every dispatch.
+    const data = typeof part.data === 'string' ? part.data.length : 0;
+    const text = typeof part.text === 'string' ? Buffer.byteLength(part.text, 'utf8') : 0;
+    return data + text;
+}
+
+function formatMiB(bytes: number): string {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 // ─── Large-value / ledger-field compaction (shared by queue + compact + ledger) ───

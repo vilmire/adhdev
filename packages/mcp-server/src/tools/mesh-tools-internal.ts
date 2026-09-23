@@ -121,6 +121,7 @@ import {
     buildMeshTaskModeViolationError,
 } from '@adhdev/daemon-core';
 import { readString } from './mesh-tool-shared.js';
+import type { MeshTaskInput } from './mesh-tool-shared.js';
 import {
     readSessionRecordId,
     extractStatusMetadataSessions,
@@ -1375,7 +1376,7 @@ export async function ipcDispatchToRemoteAgent(
         session_id?: string;
         message: string;
         /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded to the remote agent. */
-        input?: { parts: Array<Record<string, unknown>> };
+        input?: MeshTaskInput;
         providerType?: string;
         verifiedSession?: any;
         /**

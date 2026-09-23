@@ -25,7 +25,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     injectPendingIntoCoordinator,
-    type MeshDeliveryMode,
+    type MeshCoordinatorInjectMode,
 } from '../../src/mesh/mesh-reconcile-coordinator-drain.js';
 import type { PendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events-pending.js';
 import { isMidGenerationSplitEligible } from '../../src/mesh/mesh-event-forwarding.js';
@@ -70,7 +70,7 @@ function completionEvent(over?: Partial<PendingMeshCoordinatorEvent>): PendingMe
     } as PendingMeshCoordinatorEvent;
 }
 
-function inject(instance: unknown, pending: PendingMeshCoordinatorEvent, mode?: MeshDeliveryMode) {
+function inject(instance: unknown, pending: PendingMeshCoordinatorEvent, mode?: MeshCoordinatorInjectMode) {
     return injectPendingIntoCoordinator(instance as any, pending, mode ? { mode } : undefined);
 }
 

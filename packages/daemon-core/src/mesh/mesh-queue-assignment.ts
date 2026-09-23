@@ -1371,6 +1371,11 @@ export function tryAssignQueueTask(
                     // Handoff-note enclosure applies to the DISPATCHED body only;
                     // task.message stays the authored text (see composition above).
                     message: dispatchMessage,
+                    // MESH-IMAGE-DISPATCH: the envelope the task was enqueued with rides
+                    // to the worker exactly as the direct-dispatch path forwards it
+                    // (mesh-tools-session mesh_send_task). Spread conditionally so a
+                    // text-only task sends the byte-identical payload it always did.
+                    ...(task.input ? { input: task.input } : {}),
                     // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
                     dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:remote',
                     meshContext: {
@@ -1470,6 +1475,8 @@ export function tryAssignQueueTask(
             action: 'send_chat',
             // Same enclosure as the remote arm — one composed body, both paths.
             message: dispatchMessage,
+            // MESH-IMAGE-DISPATCH: same envelope forwarding as the remote arm.
+            ...(task.input ? { input: task.input } : {}),
             // DISPATCH-SOURCE-TRACE: call-site tag echoed in the daemon log.
             dispatchSource: 'mesh-queue-assignment:tryAssignQueueTask:local',
             meshContext: {

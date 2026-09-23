@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
+import { normalizeSessionStatus } from '@adhdev/mesh-shared'
 import { getConversationTitle } from './conversation-presenters'
 import type { ActiveConversation } from './types'
 import { IconHelp, IconInfo, IconMesh, IconRefresh, IconX } from '../Icons'
@@ -50,7 +51,7 @@ function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation
         meshId,
         nodeId,
         providerType: activeConv.agentType,
-        state: activeConv.status,
+        state: normalizeSessionStatus(activeConv.status) ?? undefined,
         chatStatus: activeConv.status,
         role: coordinatorMeshId === meshId ? 'coordinator' : 'worker',
         isSelfCoordinator: coordinatorMeshId === meshId,

@@ -29,6 +29,7 @@ import {
     DEFAULT_DELIVERY_MODE,
 } from '../../src/mesh/mesh-delivery-policy.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { MESH_DELIVERY_MODES, isBusyStatus } from '@adhdev/mesh-shared';
 
 function resetStore() {
     MeshRuntimeStore.resetForTests();
@@ -456,6 +457,58 @@ describe('mesh-delivery-policy', () => {
             // trims both sides, so the (mesh, task) consume still lands on the right row.
             expect(consumeSessionDelivery(meshId, ' sess-skew ', 'acked', 't-skew')).toBe(1);
             expect(store().taskDeliveryConsumed(meshId, 't-skew')).toBe(true);
+        });
+    });
+
+    // ── wiring-unification A3: classification derives from mesh-shared ──────
+    describe('status classification derives from the shared session-status classes', () => {
+        it('every busy spelling (working or blocked class, aliases included) queues', () => {
+            for (const spelling of ['generating', 'running', 'streaming', 'busy', 'starting', 'initializing',
+                'waiting_approval', 'waiting_choice', 'finalizing', 'working', 'loading', 'thinking', 'active',
+                'no_progress', 'long_generating', 'waiting']) {
+                expect(isBusyStatus(spelling), spelling).toBe(true);
+                const result = resolveDeliveryDecision(spelling);
+                expect(result.decision, spelling).toBe('queued');
+                expect(result.reason, spelling).toBe(`session_${spelling}_busy`);
+            }
+        });
+
+        it('approval-kind delivery reaches every blocked-class spelling, not just the two literals', () => {
+            for (const spelling of ['waiting_approval', 'waiting_choice', 'waiting']) {
+                const result = resolveDeliveryDecision(spelling, { kind: 'approval' });
+                expect(result.decision, spelling).toBe('immediate');
+                expect(result.reason, spelling).toBe(`session_${spelling}_approval_message`);
+            }
+            expect(resolveDeliveryDecision('generating', { kind: 'approval' }).decision).toBe('queued');
+        });
+
+        it('dead-class and legacy terminal spellings reject with the terminal reason', () => {
+            for (const spelling of ['stopped', 'error', 'disconnected', 'failed', 'terminated', 'exited', 'closed', 'deleted']) {
+                const result = resolveDeliveryDecision(spelling);
+                expect(result.decision, spelling).toBe('rejected');
+                expect(result.reason, spelling).toBe(`session_${spelling}_terminal`);
+            }
+        });
+
+        it('only idle and the two legacy ready spellings deliver immediately; other ready-class members stay rejected', () => {
+            for (const spelling of ['idle', 'IDLE', 'waiting_input', 'ready']) {
+                expect(resolveDeliveryDecision(spelling).decision, spelling).toBe('immediate');
+            }
+            // A session nobody monitors can never report completion — deliberately NOT
+            // promoted to immediate by the class map (see the mapping comment in src).
+            for (const spelling of ['panel_hidden', 'not_monitored']) {
+                const result = resolveDeliveryDecision(spelling);
+                expect(result.decision, spelling).toBe('rejected');
+                expect(result.reason, spelling).toBe('unrecognized_session_status');
+            }
+        });
+
+        it('delivery mode is the mesh-shared vocabulary', () => {
+            expect(MESH_DELIVERY_MODES).toContain(DEFAULT_DELIVERY_MODE);
+            for (const mode of MESH_DELIVERY_MODES) {
+                expect(normalizeDeliveryMode(mode)).toEqual({ mode });
+                expect(normalizeDeliveryMode(mode.toUpperCase())).toEqual({ mode });
+            }
         });
     });
 

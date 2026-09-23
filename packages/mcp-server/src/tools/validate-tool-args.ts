@@ -15,13 +15,23 @@
  * and the allowed key list. Rejection happens before execution, so it is
  * fail-safe — a typo can never widen a destructive operation's match set
  * again, and retrying with the corrected key always works.
+ *
+ * Required arguments (wiring-unification A3): each schema's `required` list was
+ * nominal — the dispatcher never enforced it, so a call missing `node_id` reached
+ * the handler and failed deep inside node resolution with an unrelated error
+ * ("owner unreachable", a NOT NULL crash) instead of naming the missing key.
+ * `validateMeshToolArgs` is the single pre-dispatch gate: unknown keys first,
+ * then missing required keys, where a required snake_case key is satisfied by
+ * its declared camelCase alias (task_id / taskId). The schema is the table;
+ * mesh-schema-handler-parity.test.ts asserts every handler that dereferences
+ * node_id / session_id / task_id has that key declared required.
  */
 
 import { ALL_MESH_TOOLS, MESH_CHANGE_IMPACT_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL, MESH_REFINE_CONFIG_TOOL } from './mesh-tool-schemas.js';
 
 export interface ToolSchemaLike {
     name: string;
-    inputSchema?: { properties?: Record<string, unknown> };
+    inputSchema?: { properties?: Record<string, unknown>; required?: readonly string[] };
 }
 
 // Protocol-level meta keys a client may legitimately attach; not tool
@@ -99,13 +109,17 @@ const MESH_TOOL_BY_NAME = new Map<string, ToolSchemaLike>(
 // the unified tool with `mode` injected. Validate their arguments against the
 // unified schema they forward to — its properties (mode/node_id/config) are a
 // superset of anything the pre-consolidation callers could pass.
-const MESH_ALIAS_TOOL: Record<string, ToolSchemaLike> = {
-    mesh_refine_config_schema: MESH_REFINE_CONFIG_TOOL,
-    mesh_validate_refine_config: MESH_REFINE_CONFIG_TOOL,
-    mesh_suggest_refine_config: MESH_REFINE_CONFIG_TOOL,
-    mesh_change_impact_config_schema: MESH_CHANGE_IMPACT_CONFIG_TOOL,
-    mesh_validate_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
-    mesh_suggest_change_impact_config: MESH_CHANGE_IMPACT_CONFIG_TOOL,
+//
+// `injected` names the keys the dispatcher fills in for the alias (server.ts /
+// mesh-tool-dispatch.ts inject `mode`), so the required-key check does not demand
+// from the caller what the alias exists to supply.
+const MESH_ALIAS_TOOL: Record<string, { schema: ToolSchemaLike; injected: readonly string[] }> = {
+    mesh_refine_config_schema: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
+    mesh_validate_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
+    mesh_suggest_refine_config: { schema: MESH_REFINE_CONFIG_TOOL, injected: ['mode'] },
+    mesh_change_impact_config_schema: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
+    mesh_validate_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
+    mesh_suggest_change_impact_config: { schema: MESH_CHANGE_IMPACT_CONFIG_TOOL, injected: ['mode'] },
     // E-T0: NOT in ALL_MESH_TOOLS on purpose (server.ts publishes it only when
     // the worker-MCP flag is on, so ListTools stays byte-identical when off —
     // see the tool's own doc comment in mesh-tool-schemas.ts). Registered here
@@ -113,8 +127,14 @@ const MESH_ALIAS_TOOL: Record<string, ToolSchemaLike> = {
     // names the tool explicitly, and the daemon-side handler still refuses the
     // call when the flag is off, so a harmless, always-present entry is simpler
     // than threading the flag through this file too.
-    mesh_notify_worker: MESH_NOTIFY_WORKER_TOOL,
+    mesh_notify_worker: { schema: MESH_NOTIFY_WORKER_TOOL, injected: [] },
 };
+
+function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: readonly string[] } | undefined {
+    const published = MESH_TOOL_BY_NAME.get(name);
+    if (published) return { schema: published, injected: [] };
+    return MESH_ALIAS_TOOL[name];
+}
 
 /**
  * Mesh-mode gate: error text when the call carries unknown arguments, else
@@ -122,7 +142,51 @@ const MESH_ALIAS_TOOL: Record<string, ToolSchemaLike> = {
  * existing "Unknown tool" response.
  */
 export function rejectUnknownMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
-    const tool = MESH_TOOL_BY_NAME.get(name) ?? MESH_ALIAS_TOOL[name];
+    const tool = resolveMeshTool(name);
     if (!tool) return null;
-    return unknownToolArgsError(name, tool.inputSchema?.properties, args);
+    return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args);
+}
+
+function isPresent(value: unknown): boolean {
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    return true;
+}
+
+/**
+ * Returns an error message when `args` lacks a key the schema declares
+ * `required`, else null. A required key is satisfied by any DECLARED property
+ * that normalizes to the same name (its camelCase/snake_case alias), because
+ * that is exactly how the handlers read them (`args.task_id ?? args.taskId`).
+ * An empty string counts as missing — every handler trims and rejects blanks.
+ */
+export function missingRequiredToolArgsError(
+    toolName: string,
+    schema: ToolSchemaLike['inputSchema'],
+    args: Record<string, unknown>,
+    injected: readonly string[] = [],
+): string | null {
+    const required = (schema?.required ?? []).filter(key => !injected.includes(key));
+    if (required.length === 0) return null;
+    const declared = Object.keys(schema?.properties ?? {});
+    const missing = required.filter(key => {
+        const wanted = normalizeKey(key);
+        const aliases = declared.filter(candidate => normalizeKey(candidate) === wanted);
+        const names = aliases.length > 0 ? aliases : [key];
+        return !names.some(candidate => isPresent(args[candidate]));
+    });
+    if (missing.length === 0) return null;
+    return `Missing required parameter(s) for ${toolName}: ${missing.map(key => `"${key}"`).join(', ')}. Required: ${required.join(', ')}.`;
+}
+
+/**
+ * Mesh-mode gate: unknown-key rejection followed by required-key rejection.
+ * Unknown keys are reported first so a typo'd required key ("nod_id") gets the
+ * did-you-mean suggestion rather than a bare "missing node_id".
+ */
+export function validateMeshToolArgs(name: string, args: Record<string, unknown>): string | null {
+    const tool = resolveMeshTool(name);
+    if (!tool) return null;
+    return unknownToolArgsError(name, tool.schema.inputSchema?.properties, args)
+        ?? missingRequiredToolArgsError(name, tool.schema.inputSchema, args, tool.injected);
 }
