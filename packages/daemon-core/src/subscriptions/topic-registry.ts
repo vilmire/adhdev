@@ -770,6 +770,20 @@ export class TopicSubscriptionRegistry {
     }
 
     /**
+     * Drop a terminated session's chat-output-activity entry immediately,
+     * instead of waiting out the hot-window expiry above (wiring-unification
+     * B2 item 14 / B residue cleanup). Purely an eager-cleanup optimization —
+     * the lazy expiry in {@link getRecentlyOutputActiveChatSessionIds} already
+     * makes a stale entry harmless (bounded by `activityHotMs`, default 8s),
+     * so this is safe to call from a `terminated` bus subscriber the host
+     * wires (see REQUESTED EDIT in the wiring-unification B report — this
+     * registry has no bus access itself). A no-op for an unknown sessionId.
+     */
+    purgeChatOutputActivity(sessionId: string): void {
+        this.chatOutputActiveAt.delete(sessionId);
+    }
+
+    /**
      * Per-subscription chat_tail build engine: read (daemon source) →
      * missing-session backoff bookkeeping → prepare (seq/dedup) →
      * cursor/seq/signature mutation → hooks. The caller (daemon fan-out) sends

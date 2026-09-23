@@ -192,6 +192,16 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'worker_resolve_task', 'worker_report_completion', 'worker_progress_update', 'deposit_worker_mailbox',
     'worker_drain_mailbox', 'worker_peer_context_pull', 'ensure_transcript_subscription',
     'read_transcript_replica',
+    // NOT a legacy-table migration: `get_runtime_snapshot` and `get_command_history`
+    // never lived in daemon-core's low-family tables — they were a cloud-only P2P
+    // special case in packages/daemon-cloud/src/cloud-command-transports.ts
+    // (handleP2POnlyCommand), never routed through this registry at all. Moved onto
+    // the shared registry (wiring-unification B residue cleanup, deliverable 7) so
+    // standalone gains them too; `sources: ['p2p']` on both specs preserves the
+    // original "sensitive, never relayed by the server" property. Listed here
+    // (rather than skipped) so this test's exhaustive low-family enumeration below
+    // stays accurate, with this comment as the deliberate-change record.
+    'get_runtime_snapshot', 'get_command_history',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */

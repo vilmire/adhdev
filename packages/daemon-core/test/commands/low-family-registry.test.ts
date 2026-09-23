@@ -45,6 +45,10 @@ const SESSION_HOST_CMDS = [
   'session_host_prune_duplicate_sessions',
   'session_host_acquire_write',
   'session_host_release_write',
+  // wiring-unification B residue cleanup (deliverable 7): moved off cloud's
+  // P2P-only cloud-command-transports.ts special case onto this registry;
+  // `sources: ['p2p']` on the spec preserves "never relayed by the server".
+  'get_runtime_snapshot',
 ]
 const SPEC_CMDS = [
   'get_spec_debug', 'get_spec_source', 'write_spec_source',
@@ -55,7 +59,9 @@ const REFINE_CMDS = [
   'get_mesh_change_impact_config_schema', 'validate_mesh_change_impact_config', 'suggest_mesh_change_impact_config',
 ]
 // Stage 2: LOW-family remainder extracted into the same registry.
-const DIAGNOSTICS_CMDS = ['get_logs', 'get_debug_trace']
+// `get_command_history`: same wiring-unification B move as get_runtime_snapshot
+// above, also `sources: ['p2p']`.
+const DIAGNOSTICS_CMDS = ['get_logs', 'get_debug_trace', 'get_command_history']
 const STATUS_META_CMDS = ['set_user_name', 'get_status_metadata', 'refresh_provider_quota', 'get_machine_runtime_stats', 'get_session_info']
 const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview', 'list_coordinator_prompts', 'write_coordinator_prompt']
 const NOTIFICATION_CMDS = ['mark_session_seen', 'delete_notification', 'mark_notification_unread']
@@ -83,7 +89,7 @@ const WORKER_PEER_CONTEXT_CMDS = ['worker_peer_context_pull']
 const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcript_replica']
 
 describe('low-family registry', () => {
-  it('registers all 57 LOW family commands once, no overlap', () => {
+  it('registers all 59 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,

@@ -280,8 +280,32 @@ export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
         }), (result) => summarizeSessionHostRecord(result));
         return { success: true, record };
     },
+
+    /**
+     * `get_runtime_snapshot`: a PTY snapshot for a CLI session, over the
+     * session-host control plane. Moved off cloud's `cloud-command-transports.ts`
+     * P2P-only special case (wiring-unification B residue cleanup, deliverable
+     * 7) onto the shared command registry — `sources: ['p2p']` below preserves
+     * the original "never relayed by the server" property.
+     */
+    get_runtime_snapshot: async (ctx: LowFamilyContext, args: any) => {
+        if (!ctx.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+        const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+        if (!sessionId) return { success: false, error: 'sessionId is required' };
+        if (typeof ctx.deps.sessionHostControl.getSnapshot !== 'function') {
+            return { success: false, error: 'Runtime snapshot unavailable', code: 'CLI_RUNTIME_UNAVAILABLE' };
+        }
+        const sinceSeq = typeof args?.sinceSeq === 'number' ? args.sinceSeq : undefined;
+        const result = await traceSessionHostAction('get_runtime_snapshot', args, () => ctx.deps.sessionHostControl!.getSnapshot!(sessionId, sinceSeq), (value) => ({
+            hasResult: !!value,
+            truncated: value?.truncated,
+        }));
+        if (!result) return { success: false, error: 'Runtime snapshot unavailable' };
+        return { success: true, result };
+    },
 };
 
 export const sessionHostSpecs = defineCommandSpecs('low', sessionHostHandlers, {
     session_host_restart_session: { blockedDuringMandatoryUpdate: true },
+    get_runtime_snapshot: { sources: ['p2p'] },
 });

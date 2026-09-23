@@ -1131,36 +1131,79 @@ export {
   type ProbeOptions,
   type ProbePayload,
 } from './seqscribe/probe.js';
-// Phase 2 Stage 2: the mesh ledger dual-write SHADOW leg, and the projection
-// allow-list that keeps agent-authored ledger payloads off a metadata-class
-// topic. Read paths are unchanged — Stage 4 owns the cutover.
+// Wiring-unification C7-1: the mesh PUBLISHER — the one writer of
+// `mesh.<id>.events` (turn entries awaited through bounded slots, never shed;
+// `mesh.record` for non-turn records). Replaces the Phase 2 dual-write shadow:
+// no ADHDEV_SEQSCRIBE_MESH mode flag, no parity backfill.
 export {
-  configureMeshDualWrite,
+  configureMeshPublisher,
   // Boot/runtime topic activation: without it a mesh CONSUMER never defines
   // the per-mesh events/handoff pair, so the pair never becomes mutual-full and
-  // the writer's backlog never replicates.
+  // the writer's backlog never replicates. At boot a failure is fatal (C7-1).
   activateKnownMeshTopics,
-  recordMeshEventShadow,
-  // The cross-process REPAIR path: mirrors ledger entries appended by a process
-  // with no armed shadow leg (the mcp-server). Driven by the parity loop.
-  backfillMeshEventShadow,
-  resolveMeshDualWriteMode,
-  meshDualWriteCounters,
-  meshDualWriteInflight,
-  isMeshDualWriteActive,
+  activateMeshTopicsAtBoot,
+  MeshTopicActivationError,
   // seqscribe v3.5 P14/P15: the runtime topic-activation announcement the cloud
   // transport subscribes to so a mesh created after boot is granted on every
   // LIVE peer session (defineTopic here → updateGrants there).
   onTopicActivated,
+  announceTopicActivated,
+  publishMeshTopicEntry,
+  publishMeshRecord,
+  appendMeshHandoff,
+  projectMeshRecord,
+  projectTurnTopicEntry,
+  summaryRefToEntryId,
+  flushMeshPublisher,
+  meshPublisherCounters,
+  meshPublisherInflight,
+  meshPublisherWriterId,
+  isMeshPublisherArmed,
+  __resetMeshPublisherForTests,
+  MESH_PUBLISH_SLOTS,
+  MESH_RECORD_MAX_WAITING,
+  // @deprecated aliases kept for daemon-cloud's status reporter and the root
+  // seqscribe gate tests until their callers switch (C-W2 REQUESTED EDITS).
+  // `recordMeshEventShadow` had no remaining caller once
+  // tests/seqscribe-convergence.test.mjs switched to the publisher names, and
+  // is removed.
+  configureMeshDualWrite,
+  meshDualWriteInflight,
+  meshDualWriteCounters,
+  isMeshDualWriteActive,
   isMeshReadPrimary,
-  meshDualWriteMode,
+  __forceMeshReadPrimaryForTests,
   __resetMeshDualWriteForTests,
-  MESH_DUAL_WRITE_ENV,
-  MAX_INFLIGHT,
-  type MeshDualWriteMode,
-  type MeshDualWriteCounters,
-  type MeshShadowEntry,
-} from './seqscribe/mesh-dual-write.js';
+  type MeshPublisherCounters,
+  type MeshRecordEntry,
+} from './seqscribe/mesh-publisher.js';
+// C3: the write API for every non-turn mesh event (mesh.record).
+export { meshRecord, meshRecordEntry, type MeshRecordScalars, type MeshRecordResult } from './mesh/mesh-record.js';
+// C1–C3 turn ledger (C-W2): store, one-way migration, observe() write path, wire projection.
+export {
+  createTurnLedger,
+  isAttemptTerminal,
+  type TurnLedger,
+  type TurnLedgerDeps,
+  type TurnPublisherPort,
+  type ObserveOptions,
+  type ObserveResult,
+  type ObserveVerdict,
+  type PublishReport,
+  type MeshEventNotice,
+  type TurnLedgerCounters,
+} from './mesh/turn-ledger/ledger.js';
+export { TurnStore, type TurnEventRow, type MeshOperatingNoteRow } from './mesh/turn-ledger/store.js';
+export {
+  migrateTurnLedgerV1,
+  exportLegacyTurnTables,
+  formatTurnLedgerMigrationLine,
+  type TurnLedgerMigrationReport,
+} from './mesh/turn-ledger/migrate-v1.js';
+export { TURN_LEDGER_SCHEMA_VERSION, LEGACY_TURN_TABLES } from './mesh/turn-ledger/schema.js';
+export { projectTurnWireEvent, turnWireEventName, TURN_WIRE_EVENT_NAMES, type TurnWireEvent } from './mesh/turn-ledger/bus-projection.js';
+export type { TurnLedgerPorts, TurnTxnHost, CancelDispatchRequest, TurnCompletionEnvelope } from './mesh/turn-ledger/effects.js';
+export { createMeshRuntimeTurnLedger } from './mesh/turn-ledger/runtime-ledger.js';
 // Phase 2 Stage 4A: the materialized read model and its per-mesh readiness gate.
 export {
   configureMeshReadModel,

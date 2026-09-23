@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import { getRecentLogs, getCurrentDaemonLogPath } from '../../logging/logger.js';
 import { getRecentDebugTrace } from '../../logging/debug-trace.js';
+import { getRecentCommands } from '../../logging/command-log.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
@@ -59,6 +60,20 @@ export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
             .filter((entry) => !sinceTs || entry.ts > sinceTs);
         return { success: true, trace, count: trace.length };
     },
+
+    /**
+     * `get_command_history`: the process-local command log ring buffer. Moved
+     * off cloud's `cloud-command-transports.ts` P2P-only special case
+     * (wiring-unification B residue cleanup, deliverable 7) onto the shared
+     * command registry — `sources: ['p2p']` in the specs below preserves the
+     * original "never relayed by the server" property.
+     */
+    get_command_history: async (_ctx: LowFamilyContext, args: any) => {
+        const count = parseInt(args?.count) || 50;
+        return { success: true, history: getRecentCommands(count) };
+    },
 };
 
-export const diagnosticsSpecs = defineCommandSpecs('low', diagnosticsHandlers);
+export const diagnosticsSpecs = defineCommandSpecs('low', diagnosticsHandlers, {
+    get_command_history: { sources: ['p2p'] },
+});

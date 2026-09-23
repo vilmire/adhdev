@@ -1,6 +1,7 @@
 import type {
   AcquireWritePayload,
   GetHostDiagnosticsPayload,
+  GetSnapshotPayload,
   PruneDuplicateSessionsPayload,
   ReleaseWritePayload,
   SessionHostDiagnostics,
@@ -9,8 +10,17 @@ import type {
   SessionHostRequestType,
 } from './types.js';
 
+/** Response shape of the `get_snapshot` wire request — a PTY snapshot for a session. */
+export interface SessionHostSnapshot {
+  seq: number;
+  text: string;
+  truncated: boolean;
+  cols?: number;
+  rows?: number;
+}
+
 /**
- * The 11-method session-host control-plane surface shared by the cloud and
+ * The session-host control-plane surface shared by the cloud and
  * standalone daemons. Both daemons used to carry a byte-for-byte copy of this
  * dispatch table plus the identical throw strings; this is the single source of
  * truth for that mapping. The wire `type` strings and error text here are the
@@ -28,6 +38,14 @@ export interface SessionHostControlPlane {
   pruneDuplicateSessions(payload?: PruneDuplicateSessionsPayload): Promise<SessionHostPruneDuplicatesResult>;
   acquireWrite(payload: AcquireWritePayload): Promise<SessionHostRecord | null>;
   releaseWrite(payload: ReleaseWritePayload): Promise<SessionHostRecord | null>;
+  /**
+   * A PTY snapshot for `sessionId` (optionally only the tail since `sinceSeq`),
+   * over wire type `get_snapshot`. Mirrors the shape daemon-core's local
+   * `SessionHostControlPlane` interface (`commands/router.ts`) and cloud's
+   * former `cloud-command-transports.ts` P2P-only `get_runtime_snapshot` case
+   * both already used against a raw `SessionHostClient`.
+   */
+  getSnapshot(sessionId: string, sinceSeq?: number): Promise<SessionHostSnapshot | null>;
 }
 
 /**
@@ -46,7 +64,7 @@ export interface SessionHostControlTransport {
 }
 
 /**
- * Build the shared 11-method control-plane over an injected request transport.
+ * Build the shared 12-method control-plane over an injected request transport.
  * The (type string, payload shape) pairs are verbatim what both daemons emitted
  * previously — do not reword them without matching the session-host daemon's
  * request handlers.
@@ -87,6 +105,9 @@ export function createSessionHostControlPlane(
     },
     releaseWrite(payload: ReleaseWritePayload): Promise<SessionHostRecord | null> {
       return transport.request<SessionHostRecord | null>('release_write', payload as unknown as Record<string, unknown>);
+    },
+    getSnapshot(sessionId: string, sinceSeq?: number): Promise<SessionHostSnapshot | null> {
+      return transport.request<SessionHostSnapshot | null>('get_snapshot', { sessionId, sinceSeq } as GetSnapshotPayload as unknown as Record<string, unknown>);
     },
   };
 }
