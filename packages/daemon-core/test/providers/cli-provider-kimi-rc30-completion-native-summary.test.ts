@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT (rc.30 live defect, delegated task
 // 6cd1e458-0f42-4a44-a7c3-2ec3c8a475fc / kimi session 5c4d6f0a-…):
@@ -125,9 +126,16 @@ function makeProductionKimiFlush(opts: {
 
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = () => { /* no-op: test asserts the immediate outcome */ }
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
   return {
     instance,
     emitted,
+    evidence,
+    evidenceOpts,
     setBackgroundTaskActive: (v: boolean) => { backgroundTaskActive = v },
     nativeReadCount: () => readCount,
   }
@@ -147,17 +155,18 @@ const NATIVE_MESSAGES_WITH_FINAL = [
 ]
 
 describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the native final, never the stale PTY/Todo snapshot', () => {
-  it('REGRESSION (fails pre-fix): background hold -> quiet-dwell forced emit carries the native final assistant, exactly once', () => {
-    const { instance, emitted, setBackgroundTaskActive } = makeProductionKimiFlush({
+  it('REGRESSION (fails pre-fix): background hold -> quiet-dwell forced emit carries the native final assistant, exactly once; C-W5c: no legacy agent:generating_completed wire literal', () => {
+    const { instance, evidence, evidenceOpts, setBackgroundTaskActive } = makeProductionKimiFlush({
       parsedMessages: PARSED_TODO_MESSAGES,
       nativeMessages: NATIVE_MESSAGES_WITH_FINAL,
       backgroundTaskActive: true, // bg cell bash-ykh2h2g6 still running (22:25:40Z hold)
       waitedMs: 123_760,
     })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
 
     // Flush 1: the unresolved background task HOLDS the completion (rc.28 fix preserved).
     instance.flushCompletedDebounceIfFinalized()
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(0)
+    expect(turnEnds()).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(typeof instance.completedDebouncePending.backgroundTaskHoldSince).toBe('number')
 
@@ -168,25 +177,23 @@ describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the 
     setBackgroundTaskActive(false)
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = turnEnds()
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).toBe(NATIVE_FINAL)
-    expect(completions[0].finalSummary).not.toBe(STALE_TODO)
-    expect(completions[0].completionDiagnostic).toMatchObject({
-      blockReason: 'parsed_final_assistant_quiet_dwell',
-      emittedAfterFinalizationTimeout: true,
-      maxWaitMs: 30_000,
-    })
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(NATIVE_FINAL)
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).not.toBe(STALE_TODO)
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('parsed_final_assistant_quiet_dwell')
+    expect(completions[0].afterFinalizationTimeout).toBe(true)
     expect(instance.completedDebouncePending).toBeNull()
 
     // Exactly-once: a stray timer fire after the emit is a no-op (no duplicate/reorder).
     instance.flushCompletedDebounceIfFinalized()
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
   })
 
   it('fail closed against pre-turn/stale native bubbles: a native tail predating turnStartedAt never becomes the finalSummary', () => {
     const STALE_NATIVE = 'PRIOR TURN ANSWER — not this turn'
-    const { instance, emitted } = makeProductionKimiFlush({
+    const { instance, evidence, evidenceOpts } = makeProductionKimiFlush({
       parsedMessages: PARSED_TODO_MESSAGES,
       nativeMessages: [
         { role: 'user', content: 'earlier task', timestamp: TURN_START - 500 },
@@ -197,15 +204,16 @@ describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the 
 
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = evidence.filter((e) => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).not.toBe(STALE_NATIVE)
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).not.toBe(STALE_NATIVE)
     // No fresh in-turn native final -> the pre-fix parsed fallback applies unchanged.
-    expect(completions[0].finalSummary).toBe(STALE_TODO)
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(STALE_TODO)
   })
 
   it('background still active -> no completion at all (hold preserved past the 30s cap)', () => {
-    const { instance, emitted } = makeProductionKimiFlush({
+    const { instance, evidence } = makeProductionKimiFlush({
       parsedMessages: PARSED_TODO_MESSAGES,
       nativeMessages: NATIVE_MESSAGES_WITH_FINAL,
       backgroundTaskActive: true,
@@ -214,13 +222,13 @@ describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the 
 
     instance.flushCompletedDebounceIfFinalized()
 
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(0)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(instance.completedDebouncePending.loggedBlockReason).toBe('background_task_active')
   })
 
   it('before the finalization cap the quiet-dwell hold does not promote stale PTY progress as final (no emit)', () => {
-    const { instance, emitted } = makeProductionKimiFlush({
+    const { instance, evidence } = makeProductionKimiFlush({
       parsedMessages: PARSED_TODO_MESSAGES,
       nativeMessages: NATIVE_MESSAGES_WITH_FINAL,
       waitedMs: 1_000, // well under COMPLETED_FINALIZATION_MAX_WAIT_MS
@@ -228,13 +236,13 @@ describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the 
 
     instance.flushCompletedDebounceIfFinalized()
 
-    expect(emitted.filter((e) => e.event === 'agent:generating_completed')).toHaveLength(0)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
     expect(instance.completedDebouncePending).not.toBeNull()
     expect(instance.completedDebouncePending.loggedBlockReason).toBe('parsed_final_assistant_quiet_dwell')
   })
 
   it('non-native providers are unchanged: no transcript read is attempted and the parsed summary ships as before', () => {
-    const { instance, emitted, nativeReadCount } = makeProductionKimiFlush({
+    const { instance, evidence, evidenceOpts, nativeReadCount } = makeProductionKimiFlush({
       parsedMessages: [
         { role: 'user', content: 'task', timestamp: TURN_START - 500 },
         { role: 'assistant', content: 'Done — the PTY reply.', timestamp: TURN_START + 1_000 },
@@ -247,9 +255,10 @@ describe('CliProviderInstance — kimi rc.30 forced-timeout completion uses the 
 
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = evidence.filter((e) => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).toBe('Done — the PTY reply.')
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('Done — the PTY reply.')
     expect(nativeReadCount()).toBe(0)
   })
 })
@@ -262,7 +271,7 @@ describe('CliProviderInstance — kimi rc.30 snapshot reuse (external-native evi
   // reuse THAT snapshot for finalSummary instead of taking a second, independent
   // live read that can race a wire.jsonl rewrite.
   it('forced emit after native_source_final_assistant_quiet_dwell reuses the proving snapshot (no second transcript read)', () => {
-    const { instance, emitted, nativeReadCount } = makeProductionKimiFlush({
+    const { instance, evidence, evidenceOpts, nativeReadCount } = makeProductionKimiFlush({
       parsedMessages: [], // lease-gated kimi skips the parsed short-circuit
       nativeMessages: NATIVE_MESSAGES_WITH_FINAL,
       waitedMs: 123_760,
@@ -279,13 +288,12 @@ describe('CliProviderInstance — kimi rc.30 snapshot reuse (external-native evi
 
     instance.flushCompletedDebounceIfFinalized()
 
-    const completions = emitted.filter((e) => e.event === 'agent:generating_completed')
+    const completions = evidence.filter((e) => e.kind === 'turn_end')
     expect(completions).toHaveLength(1)
-    expect(completions[0].finalSummary).toBe(NATIVE_FINAL)
-    expect(completions[0].completionDiagnostic).toMatchObject({
-      blockReason: 'native_source_final_assistant_quiet_dwell',
-      emittedAfterFinalizationTimeout: true,
-    })
+    const idx = evidence.indexOf(completions[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe(NATIVE_FINAL)
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('native_source_final_assistant_quiet_dwell')
+    expect(completions[0].afterFinalizationTimeout).toBe(true)
     // Read #1: the gate's evidence probe. Read #2: the diagnostic's evidence probe.
     // The summary comes from the cached proving snapshot — NO third live read.
     expect(nativeReadCount()).toBe(2)

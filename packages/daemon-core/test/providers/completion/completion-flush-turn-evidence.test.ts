@@ -1,21 +1,25 @@
 /**
  * completion-flush.ts's emitGeneratingCompleted — the SINGLE chokepoint every
  * verdict site in status-transition.ts / completion-flush.ts / stall-rescue.ts
- * funnels through (wiring-unification C5/C-W5, phase-C-W5 brief §1). Pins:
- * the emit* call is made exactly once per completion, `strength` never
+ * funnels through (wiring-unification C5/C-W5/C-W5c, phase-C-W5 brief §1).
+ * Pins: the emit* call is made exactly once per completion, `strength` never
  * disagrees with the wire event's own `isWeakCompletionEvidence` weakness,
- * `blockReason` narrows to the closed TurnEndBlockReason enum, and the
- * function does not throw / does not compute a second, independent verdict.
+ * `blockReason` narrows to the closed TurnEndBlockReason enum, the function
+ * does not throw / does not compute a second, independent verdict, and
+ * (C-W5c) NO legacy `agent:generating_completed` wire literal is constructed
+ * any more — the port is the sole producer, with `envelope.finalSummary`/
+ * `envelope.workerResult` carrying what that literal used to carry.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { emitGeneratingCompleted, type CompletionEmitHost } from '../../../src/providers/completion/completion-flush.js';
 import { createTurnEvidencePort } from '../../../src/providers/turn-evidence-port.js';
 import type { TurnEvidence } from '@adhdev/mesh-shared';
 
-function makeHost(overrides: Partial<CompletionEmitHost> = {}): { host: CompletionEmitHost; observed: TurnEvidence[]; pushed: any[] } {
+function makeHost(overrides: Partial<CompletionEmitHost> = {}): { host: CompletionEmitHost; observed: TurnEvidence[]; observedOpts: any[]; pushed: any[] } {
     const observed: TurnEvidence[] = [];
+    const observedOpts: any[] = [];
     const pushed: any[] = [];
-    const port = createTurnEvidencePort({ observe: (e) => { observed.push(e); } });
+    const port = createTurnEvidencePort({ observe: (e, opts) => { observed.push(e); observedOpts.push(opts); } });
     const host: CompletionEmitHost = {
         instanceId: 'sess_1',
         settings: {},
@@ -28,14 +32,19 @@ function makeHost(overrides: Partial<CompletionEmitHost> = {}): { host: Completi
         currentAttemptRef: () => ({ attemptId: 'attempt_1', generation: 3 }),
         ...overrides,
     };
-    return { host, observed, pushed };
+    return { host, observed, observedOpts, pushed };
 }
 
 describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepoint)', () => {
-    it('emits exactly one turn_end evidence per completion, genuine strength for a clean finish', () => {
-        const { host, observed, pushed } = makeHost();
+    it('C-W5c: constructs NO legacy agent:generating_completed wire event — pushEvent is never called from this path', () => {
+        const { host, pushed } = makeHost();
         emitGeneratingCompleted(host, { chatTitle: 'x', duration: 5, timestamp: 1000, taskId: 't1', finalSummary: 'done' });
-        expect(pushed).toHaveLength(1);
+        expect(pushed).toHaveLength(0);
+    });
+
+    it('emits exactly one turn_end evidence per completion, genuine strength for a clean finish', () => {
+        const { host, observed } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 5, timestamp: 1000, taskId: 't1', finalSummary: 'done' });
         expect(observed).toHaveLength(1);
         const ev = observed[0] as Extract<TurnEvidence, { kind: 'turn_end' }>;
         expect(ev.kind).toBe('turn_end');
@@ -44,6 +53,29 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
         expect(ev.attemptRef).toEqual({ attemptId: 'attempt_1', generation: 3 });
         expect(ev.taskId).toBeUndefined(); // attemptRef present -> taskId omitted (envelope rule)
         expect(ev.at).toBe(1000);
+    });
+
+    it('carries finalSummary on the envelope opt — content-free evidence body, text only in envelope', () => {
+        const { host, observed, observedOpts } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 5, timestamp: 1000, finalSummary: 'SENTINEL-final-answer' });
+        expect(observedOpts[0]?.envelope?.finalSummary).toBe('SENTINEL-final-answer');
+        expect(JSON.stringify(observed[0])).not.toContain('SENTINEL-final-answer');
+    });
+
+    it('C-W5c: parses a worker-report-shaped final summary into envelope.workerResult (graph output envelope pointer target)', () => {
+        const { host, observedOpts } = makeHost();
+        const report = { status: 'completed', changedFiles: ['a.ts'], gitStatus: 'committed', validationResults: 'ok', errors: [], nextAction: 'merge' };
+        emitGeneratingCompleted(host, {
+            chatTitle: 'x', duration: 1, timestamp: 1000,
+            finalSummary: `Done.\n\n\`\`\`json\n${JSON.stringify(report)}\n\`\`\``,
+        });
+        expect(observedOpts[0]?.envelope?.workerResult).toEqual(report);
+    });
+
+    it('omits envelope.workerResult when the final summary carries no worker-report-shaped JSON (never invents a result)', () => {
+        const { host, observedOpts } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 1000, finalSummary: 'all done, nothing structured to report' });
+        expect(observedOpts[0]?.envelope?.workerResult).toBeUndefined();
     });
 
     it('emits weak strength when evidenceLevel is weak, matching isWeakCompletionEvidence exactly', () => {
@@ -83,8 +115,6 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
     });
 
     it('never computes a verdict independent of the wire event: strength is derived from the SAME classification, not recomputed', () => {
-        // Break the coupling by constructing a host whose port spy checks the
-        // invariant directly — strength must equal weak iff lastEmittedCompletion.weak.
         const { host, observed } = makeHost();
         emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 5000, evidenceLevel: 'insufficient' });
         const ev = observed[0] as Extract<TurnEvidence, { kind: 'turn_end' }>;
@@ -92,19 +122,17 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
     });
 
     it('is a no-op on the evidence path when turnEvidencePort is null (guarded, never throws)', () => {
-        const { host, pushed } = makeHost({ turnEvidencePort: null });
+        const { host, observed } = makeHost({ turnEvidencePort: null });
         expect(() => emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 6000 })).not.toThrow();
-        expect(pushed).toHaveLength(1); // the wire event itself is unaffected
+        expect(observed).toHaveLength(0);
     });
 
-    it('a throwing sink does not prevent the wire event from being pushed', () => {
-        const pushed: any[] = [];
+    it('a throwing sink does not break emitGeneratingCompleted (guarded, never throws)', () => {
         const port = createTurnEvidencePort({ observe: () => { throw new Error('ledger down'); } });
         const host: CompletionEmitHost = {
             instanceId: 'sess_1', settings: {}, busyEpoch: 0, lastCompletionSummary: null, lastEmittedCompletion: null,
-            pushEvent: (e) => pushed.push(e), updateSettings: () => {}, turnEvidencePort: port,
+            pushEvent: () => {}, updateSettings: () => {}, turnEvidencePort: port,
         };
         expect(() => emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 7000 })).not.toThrow();
-        expect(pushed).toHaveLength(1);
     });
 });

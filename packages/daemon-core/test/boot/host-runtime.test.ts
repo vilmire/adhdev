@@ -198,10 +198,24 @@ describe('createDaemonHostRuntime', () => {
         const rt = fakeRuntime();
         const { transport, calls } = fakeTransport();
         createDaemonHostRuntime(rt.runtime, transport);
-        rt.bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed', providerType: 'codex-cli', finalSummary: 'x' } as any });
+        rt.bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:waiting_approval', providerType: 'codex-cli', finalSummary: 'x' } as any });
         expect(calls.statusEvents).toHaveLength(1);
-        expect(calls.statusEvents[0]).toMatchObject({ event: 'agent:generating_completed', providerType: 'codex-cli' });
+        expect(calls.statusEvents[0]).toMatchObject({ event: 'agent:waiting_approval', providerType: 'codex-cli' });
         expect(calls.statusEvents[0]).not.toHaveProperty('finalSummary');
+    });
+
+    it('turn{phase:committed} → the allow-listed status_event on the transport (wiring-unification C-W5 follow-up: agent:generating_completed/agent:stopped are turn-sourced only, wired end to end through createDaemonHostRuntime\'s real createStatusEventEmitter call)', () => {
+        const rt = fakeRuntime();
+        const { transport, calls } = fakeTransport();
+        createDaemonHostRuntime(rt.runtime, transport);
+        // A provider_event carrying the legacy name still exists on the bus (other
+        // consumers, e.g. mesh-event-forwarding.ts, read it) but must NOT reach
+        // status_event any more — only the turn commit does.
+        rt.bus.emit({ kind: 'provider_event', sessionId: 's1', at: 0, event: { event: 'agent:generating_completed', providerType: 'codex-cli', finalSummary: 'x' } as any });
+        expect(calls.statusEvents).toHaveLength(0);
+        rt.bus.emit({ kind: 'turn', at: 0, phase: 'committed', sessionId: 's1', attemptId: 'a1', generation: 0, outcome: 'completed', strength: 'genuine' } as any);
+        expect(calls.statusEvents).toHaveLength(1);
+        expect(calls.statusEvents[0]).toEqual({ event: 'agent:generating_completed', timestamp: 0, targetSessionId: 's1' });
     });
 
     it('D4: a turn ending in a known workspace takes the after_agent_work snapshot', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // (FALSE-IDLE short-generating settle) The "short-generating" branch of detectStatusTransition
 // fires when a generating phase lasted less than the 3s generating-debounce window (i.e.
@@ -86,8 +87,12 @@ function makeShortGenInstance(opts: {
   })
   // Capture the flush schedule — routing through settle instead of inline fire.
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { scheduledDelays.push(delayMs) }
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
-  return { instance, emitted, scheduledDelays }
+  return { instance, emitted, evidence, scheduledDelays }
 }
 
 describe('CliProviderInstance — FALSE-IDLE short-generating settle routing', () => {
@@ -140,7 +145,7 @@ describe('CliProviderInstance — FALSE-IDLE short-generating settle routing', (
   })
 
   it('a GENUINELY non-mesh short-gen dip still fires INLINE (fast-path preserved, no settle)', () => {
-    const { instance, emitted, scheduledDelays } = makeShortGenInstance({
+    const { instance, evidence, scheduledDelays } = makeShortGenInstance({
       settings: {},
       // Non-mesh + missing evidence would be SUPPRESSED (no mesh context). Give it a real
       // summary so the inline fire path is exercised and asserted.
@@ -157,8 +162,10 @@ describe('CliProviderInstance — FALSE-IDLE short-generating settle routing', (
 
     ;(instance as any).detectStatusTransition()
 
-    // Inline fire: a completion was emitted synchronously and NO settle flush was scheduled.
-    expect(emitted.filter(e => e.event === 'agent:generating_completed')).toHaveLength(1)
+    // Inline fire: a completion was emitted synchronously and NO settle flush was
+    // scheduled. C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
     expect(scheduledDelays).toHaveLength(0)
   })

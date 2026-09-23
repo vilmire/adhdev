@@ -250,21 +250,14 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     });
                 }
             } else if (agentStatus === 'idle' && (this.lastAgentStatus === 'generating' || this.lastAgentStatus === 'waiting_approval')) {
-                const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
-                this.pushEvent({
-                    event: 'agent:generating_completed',
-                    chatTitle: this.resolveChatTitle(data),
-                    duration,
-                    timestamp: now,
-                    ideType: this.ideType || this.type,
-                    agentType: this.type,
-                    agentName: this.agentName || this.provider.name,
-                    extensionId: this.extensionId || this.type,
-                    finalSummary: extractFinalSummaryFromMessages(data?.messages),
-                });
+                // C-W5c: no legacy `agent:generating_completed` wire literal —
+                // the port is the sole producer; `envelope.finalSummary` carries
+                // the same text the deleted wire event used to carry.
                 if (this.turnEvidencePort) {
+                    const finalSummary = extractFinalSummaryFromMessages(data?.messages);
                     emitTurnEnd(this.turnEvidencePort, {
                         sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, strength: 'genuine',
+                        ...(finalSummary ? { envelope: { finalSummary } } : {}),
                     });
                 }
                 this.generatingStartedAt = 0;

@@ -38,6 +38,7 @@ import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
+import type { ProviderState } from '../providers/provider-instance.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetchers/antigravity.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
@@ -1554,23 +1555,30 @@ export interface QuotaEventRefreshOptions {
 }
 
 /**
- * Events that warrant an immediate re-read of the provider's quota: a turn
- * just completed (`agent:generating_completed`), or the session ended some
- * other way (`agent:stopped` — manual stop, PTY/ACP process exit, or a
- * provider-reported error, all of which route through this single status per
- * the CLI/ACP FSMs in status-transition.ts / acp-provider-instance.ts).
+ * Every committed turn warrants an immediate re-read of the provider's quota —
+ * whether it completed genuinely/weakly (the wire's `agent:generating_completed`)
+ * or ended some other way, failed or cancelled (the wire's `agent:stopped`:
+ * manual stop, PTY/ACP process exit, or a provider-reported error, all of
+ * which route through the CLI/ACP FSMs into one `turn_end` / `process_exit`
+ * evidence kind before the reducer commits). `TurnOutcome` is the closed union
+ * `'completed' | 'failed' | 'cancelled'`, so every `phase:'committed'` bus
+ * event already qualifies — there is no separate filter to apply.
  *
- * `agent:stopped` was added 2026-08-17 after an incident where a session's
- * ONLY terminal event was `agent:stopped` (ready → generating_started ×2 →
- * stopped, `generating_completed` never fired) — the event-driven path never
- * armed, so quota fell back to the 15-minute cadence and a routing decision a
- * few minutes later used a 3-day-stale cached value. A session ending
- * abnormally is exactly when a re-read matters most: it is the last chance to
- * capture what the just-finished (or just-aborted) turn spent before the next
- * cadenced tick, and precisely the case the old completion-only filter
- * skipped.
+ * All three outcomes are covered because of an incident (2026-08-17) where a
+ * session's only terminal signal was a failed/cancelled exit — the
+ * event-driven path never armed on completion alone, so quota fell back to
+ * the 15-minute cadence and a routing decision a few minutes later used a
+ * 3-day-stale cached value. A turn ending abnormally is exactly when a
+ * re-read matters most: it is the last chance to capture what the
+ * just-finished (or just-aborted) turn spent before the next cadenced tick.
+ *
+ * Wiring-unification C-W5 follow-up (2026-09-24): migrated from the
+ * transitional `provider_event` bag (`agent:generating_completed` /
+ * `agent:stopped` object-literal matching) to the turn ledger's own
+ * `turn{phase:'committed'}` bus event — the ONE place a turn is now decided
+ * done, so this refresh can never miss a completion that fails to construct
+ * the legacy wire name, and never double-fires on one that does.
  */
-const QUOTA_REFRESH_EVENTS = new Set(['agent:generating_completed', 'agent:stopped']);
 
 /**
  * Event-driven quota refresh: re-read ONE provider's quota right after one of
@@ -1601,8 +1609,10 @@ const QUOTA_REFRESH_EVENTS = new Set(['agent:generating_completed', 'agent:stopp
  */
 export function setupQuotaEventRefresh(
     components: {
-        /** Provider events arrive as the bus's `provider_event` (wiring-unification B5). */
+        /** Turn commits arrive as the bus's `turn{phase:'committed'}` (wiring-unification C1/C5). */
         bus: Pick<SessionLifecycleBus, 'on'>;
+        /** Resolves the committing session's providerType — a `TurnBusEvent` carries only `sessionId`. */
+        instanceManager?: { getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined } | null;
         providerLoader?: {
             isMachineProviderEnabled(providerType: string): boolean;
             isMachineQuotaEnabled?(providerType: string): boolean;
@@ -1617,14 +1627,22 @@ export function setupQuotaEventRefresh(
     const now = options.now ?? Date.now;
     const lastRefreshAt = new Map<string, number>();
     let stopped = false;
-    const off = components.bus.on('provider_event', (e) => {
-        const event = e.event as { event?: unknown; providerType?: unknown };
-        if (stopped) return;
-        if (typeof event.event !== 'string' || !QUOTA_REFRESH_EVENTS.has(event.event)) return;
-        const refresher = typeof event.providerType === 'string'
-            ? REFRESHERS.find(({ provider }) => provider === event.providerType)
-            : undefined;
-        if (!refresher) return; // not a quota-reporting provider
+    const resolveProviderType = (sessionId: string): string | undefined => {
+        try {
+            const getInstance = components.instanceManager?.getInstance;
+            if (typeof getInstance !== 'function') return undefined;
+            const state = getInstance.call(components.instanceManager, sessionId)?.getState?.();
+            const type = (state as { type?: unknown } | undefined)?.type;
+            return typeof type === 'string' && type ? type : undefined;
+        } catch {
+            return undefined;
+        }
+    };
+    const off = components.bus.on('turn', (e) => {
+        if (stopped || e.phase !== 'committed') return;
+        const providerType = resolveProviderType(e.sessionId);
+        const refresher = providerType ? REFRESHERS.find(({ provider }) => provider === providerType) : undefined;
+        if (!refresher) return; // not a quota-reporting provider, or the instance is already gone
         if (isEnabled && !isEnabled(refresher.provider)) return;
         // A turn ending is the worst moment to re-hit a rate-limited quota
         // method: the owning CLI just ran its own doRefreshQuota. Leave
@@ -1636,7 +1654,7 @@ export function setupQuotaEventRefresh(
         void refreshQuotaCacheOnce([refresher], isEnabled)
             .catch((err: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${err?.message || err}`));
     }, { name: 'quota.event-refresh' });
-    LOG.info('Quota', `Event-driven quota refresh armed (${[...QUOTA_REFRESH_EVENTS].join(', ')}, ${debounceMs}ms debounce)`);
+    LOG.info('Quota', `Event-driven quota refresh armed (turn commits, ${debounceMs}ms debounce)`);
     return {
         stop() {
             stopped = true;

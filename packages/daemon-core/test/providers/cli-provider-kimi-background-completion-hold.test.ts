@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import { BACKGROUND_TASK_HOLD_MAX_MS } from '../../src/providers/cli-provider-instance-types.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // (rc.27 delegated-background-work premature completion — kimi class) A kimi mesh worker
 // launched a background exec cell, ended its model turn with progress prose, and the point-
@@ -73,8 +74,12 @@ function makeKimiFlushInstance(opts: {
 
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
-  return { instance, events, rescheduleCalls, parsed }
+  return { instance, events, evidence, rescheduleCalls, parsed }
 }
 
 describe('CliProviderInstance — kimi background-cell completion hold (rc.27)', () => {
@@ -90,27 +95,29 @@ describe('CliProviderInstance — kimi background-cell completion hold (rc.27)',
   })
 
   it('releases EXACTLY ONCE when the cell resolves and is consumed (backgroundTaskActive clears)', () => {
-    const { instance, events, parsed } = makeKimiFlushInstance({ backgroundTaskActive: true })
+    const { instance, evidence, parsed } = makeKimiFlushInstance({ backgroundTaskActive: true })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
 
     // Phase 1: cell running → held.
     ;(instance as any).flushCompletedDebounceIfFinalized()
-    expect(events).toHaveLength(0)
+    expect(turnEnds()).toHaveLength(0)
 
     // Phase 2: cell exited + result consumed into the final answer → flag clears → emit.
     delete parsed.backgroundTaskActive
     delete parsed.backgroundTaskCount
     ;(instance as any).flushCompletedDebounceIfFinalized()
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(turnEnds()).toHaveLength(1)
     expect((instance as any).completedDebouncePending).toBeNull()
 
     // Phase 3: a later flush (reconcile tick, duplicate idle sample) must NOT re-emit.
     ;(instance as any).flushCompletedDebounceIfFinalized()
-    expect(events).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
   })
 
   it('RELEASES to normal finalization once the hold cap is exceeded (a wedged cell never pins forever)', () => {
-    const { instance, events, rescheduleCalls } = makeKimiFlushInstance({
+    const { instance, evidence, rescheduleCalls } = makeKimiFlushInstance({
       backgroundTaskActive: true,
       holdSince: Date.now() - BACKGROUND_TASK_HOLD_MAX_MS - 1000,
     })
@@ -118,8 +125,7 @@ describe('CliProviderInstance — kimi background-cell completion hold (rc.27)',
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
   })
 
   it('claude-cli control: the existing background bash hold is unchanged', () => {

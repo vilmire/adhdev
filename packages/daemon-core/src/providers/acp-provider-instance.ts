@@ -1631,17 +1631,21 @@ export class AcpProviderInstance implements ProviderInstance {
                     });
                 }
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
-                const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
-                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, finalSummary: extractFinalSummaryFromMessages(this.messages) });
+                // C-W5c: no legacy `agent:generating_completed` wire literal —
+                // the port is the sole producer; `envelope.finalSummary` carries
+                // the same text the deleted wire event used to carry.
                 if (this.turnEvidencePort) {
+                    const finalSummary = extractFinalSummaryFromMessages(this.messages);
                     emitTurnEnd(this.turnEvidencePort, {
                         sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',
                         attemptRef: this.currentAttemptRef() ?? undefined, at: now, strength: 'genuine',
+                        ...(finalSummary ? { envelope: { finalSummary } } : {}),
                     });
                 }
                 this.generatingStartedAt = 0;
             } else if (newStatus === 'stopped') {
-                this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });
+                // C-W5c: no legacy `agent:stopped` wire literal — a bare ACP
+                // stop carries no text to attach.
                 if (this.turnEvidencePort) {
                     emitProcessExit(this.turnEvidencePort, {
                         sessionId: this.instanceId, observedBy: 'acp_update', source: 'fsm_edge',

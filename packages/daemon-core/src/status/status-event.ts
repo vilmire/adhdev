@@ -26,8 +26,16 @@ import type { DaemonStatusEventPayload, P2PStatusEventPayload } from '../shared-
 import type { ProviderState } from '../providers/provider-instance.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
-import { projectTurnWireEvent, type TurnWireEvent } from '../mesh/turn-ledger/bus-projection.js';
+import { TURN_WIRE_EVENT_NAMES, projectTurnWireEvent, type TurnWireEvent } from '../mesh/turn-ledger/bus-projection.js';
 import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
+
+/** The two wire names `turn-ledger/bus-projection.ts` now solely produces from a
+ *  committed turn (wiring-unification C1/C5). A `provider_event` still carrying
+ *  one of these is the legacy completion emission the C-W5 follow-up retires from
+ *  the wire, kept around only because `mesh-event-forwarding.ts` and quota refresh
+ *  have not yet fully migrated off the provider bus (see the two callers' own
+ *  comments) — `projectServerStatusEvent` must not double-push it. */
+const TURN_SOURCED_WIRE_NAMES: ReadonlySet<string> = new Set(TURN_WIRE_EVENT_NAMES);
 
 export type StatusEventHideMute = { surfaceHidden: boolean; muted: boolean };
 export type ResolveStatusEventHideMute = (sessionId: string) => StatusEventHideMute | undefined;
@@ -96,6 +104,17 @@ export function projectServerStatusEvent(
     // Provider UI effects can carry arbitrary text content and are not required
     // for server-side routing, push, or dashboard session targeting.
     if (eventName.startsWith('provider:')) {
+        return null;
+    }
+
+    // `agent:generating_completed` / `agent:stopped` are now projected SOLELY
+    // from a committed `turn` bus event (`projectTurnStatusEvent`, below). A
+    // `provider_event` still carrying one of these names is the legacy
+    // completion bag some producers still push onto the bus for other
+    // consumers (mesh evidence-building, quota refresh) that have not yet
+    // fully migrated off it — it must never also reach the wire here, or a
+    // single completion would push `status_event` twice.
+    if (TURN_SOURCED_WIRE_NAMES.has(eventName)) {
         return null;
     }
 
@@ -219,13 +238,15 @@ export interface StatusEventEmitterDeps {
     sendServer?(payload: DaemonStatusEventPayload): void;
     /**
      * Also project committed `turn` bus events (the ledger's commit) onto
-     * `status_event`. OFF by default and not enabled by either host yet: the
-     * providers still emit the legacy `agent:generating_completed` /
-     * `agent:stopped` provider events (check:turn-single-emitter baseline > 0),
-     * which the `provider_event` leg already sends — with this leg on too, a
-     * mesh worker's completion would reach the dashboard and the push server
-     * TWICE. Flip it (and drop the two names from the provider_event leg) in
-     * the same change that takes the legacy emitters to zero.
+     * `status_event`. ON by default (wiring-unification C-W5 follow-up,
+     * 2026-09-24): `agent:generating_completed` / `agent:stopped` are now
+     * projected SOLELY from here — `projectServerStatusEvent` rejects those two
+     * names when they arrive via `provider_event` (see `TURN_SOURCED_WIRE_NAMES`
+     * above), so a completion can never push `status_event` twice even though a
+     * few producers still push the legacy names onto `provider_event` for OTHER
+     * consumers (`mesh-event-forwarding.ts`'s evidence builder, quota refresh's
+     * `agent:stopped` trigger) that have not yet migrated off that bus kind. Pass
+     * `false` only for a test that wants the pre-C-W5 behaviour.
      */
     turnCommits?: boolean;
 }
@@ -255,10 +276,11 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
             }
         }
     }, { name: 'host.status-event' });
-    // Turn-ledger commits (wiring-unification C1/C5): the SOLE other source of
-    // `agent:generating_completed` / `agent:stopped` on this wire. No P2P
+    // Turn-ledger commits (wiring-unification C1/C5): the SOLE source of
+    // `agent:generating_completed` / `agent:stopped` on this wire (ON by
+    // default — see StatusEventEmitterDeps.turnCommits above). No P2P
     // enrichment applies — a committed turn carries no interactivePrompt.
-    const unsubTurn = deps.turnCommits !== true ? () => {} : bus.on('turn', (e) => {
+    const unsubTurn = deps.turnCommits === false ? () => {} : bus.on('turn', (e) => {
         const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute);
         if (!serverEvent) return;
         LOG.debug('StatusEvent', `${serverEvent.event} (turn ledger commit, session=${serverEvent.targetSessionId})`);

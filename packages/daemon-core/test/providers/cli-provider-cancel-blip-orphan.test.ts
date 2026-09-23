@@ -4,6 +4,7 @@ import {
   CANCELLED_COMPLETION_RECHECK_MS,
   CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS,
 } from '../../src/providers/cli-provider-instance-types.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // CANCEL-BLIP-ORPHAN — a continuity cancel deleted the completion arm and NOTHING ever
 // re-examined it, so a sub-second PTY blip after a genuine turn end orphaned the completion
@@ -83,8 +84,12 @@ function makeHarness(opts: {
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.markCurrentTurnStartupGraceCollapseSatisfied = () => {}
   instance.readExternalCompletionMessages = () => opts.parsedMessages
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
-  return { instance, emitted, live }
+  return { instance, emitted, evidence, live }
 }
 
 function assistantMsg(text: string, timestampMs: number) {
@@ -114,7 +119,7 @@ describe('CliProviderInstance — CANCEL-BLIP-ORPHAN completion re-verification'
       // The turn genuinely ended and a final assistant bubble is on screen, quiet well past
       // the PTY dwell — a completion is genuinely owed.
       const live = { status: 'idle', lastOutputAt: TURN_START + 787_900, busyEpoch: 8 }
-      const { instance, emitted } = makeHarness({
+      const { instance, emitted, evidence } = makeHarness({
         pending: armedPending({ busyEpochAtArm: 7 }), // epoch bumped 7→8 by the 81ms blip
         parsedMessages: [assistantMsg('done — all tests pass', TURN_START + 780_000)],
         live,
@@ -123,6 +128,7 @@ describe('CliProviderInstance — CANCEL-BLIP-ORPHAN completion re-verification'
       // First flush: the blip already bumped the epoch, so the engine cancels (unchanged).
       ;(instance as any).flushCompletedDebounceIfFinalized()
       expect(completions(emitted)).toHaveLength(0)
+      expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
       expect(instance.completedDebouncePending).toBeNull()
       // ...but the arm is no longer ORPHANED — a watch now owes it a re-check.
       expect(instance.cancelledCompletionRecheck).not.toBeNull()
@@ -132,10 +138,14 @@ describe('CliProviderInstance — CANCEL-BLIP-ORPHAN completion re-verification'
       // no new FSM edge, which is precisely why the old code lost the completion forever.
       vi.advanceTimersByTime(CANCELLED_COMPLETION_RECHECK_MS + 1)
 
-      const fired = completions(emitted)
-      expect(fired).toHaveLength(1)
-      // The recovered completion still reports the turn that actually ended, not the blip.
-      expect(fired[0].duration).toBe(788)
+      // C-W5c: the completion signal is the port's turn_end evidence (the
+      // legacy agent:generating_completed wire literal is gone).
+      const firedEvidence = evidence.filter((e) => e.kind === 'turn_end')
+      expect(firedEvidence).toHaveLength(1)
+      // The recovered completion still reports the turn that actually ended,
+      // not the blip: `at` is the pending flush's OWN `timestamp` (the turn's
+      // 788s duration mark), not the wall-clock moment the recheck fired.
+      expect(firedEvidence[0].at).toBe(TURN_START + 788_000)
       expect(instance.completedDebouncePending).toBeNull()
       expect(instance.cancelledCompletionRecheck).toBeNull()
     } finally {

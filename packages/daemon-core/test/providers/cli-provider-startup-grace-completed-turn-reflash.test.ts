@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // STANDALONE STATUS GENERATING-REFLASH (startup-grace collapse misclassification).
 //
@@ -108,17 +109,25 @@ function makeInstance(): Harness {
   instance.monitor = { check: () => [] }
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone. `agent:generating_started`
+  // is UNCHANGED (only the two completion literals were deleted).
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
 
   return {
     instance,
     events,
+    evidence,
+    evidenceOpts,
     setAdapterStatus: (status: string) => { adapterStatus = status },
     setAdapterWaiting: (waiting: boolean) => { adapterWaiting = waiting },
   }
 }
 
-function completions(events: any[]): any[] {
-  return events.filter((e) => e.event === 'agent:generating_completed')
+function completions(evidence: any[]): any[] {
+  return evidence.filter((e) => e.kind === 'turn_end')
 }
 
 function started(events: any[]): any[] {
@@ -155,10 +164,12 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     const h = makeInstance()
     driveNormalTurnToGenuineCompletion(h)
 
-    // The genuine completion landed via the real flush.
-    const genuine = completions(h.events)
+    // The genuine completion landed via the real flush. C-W5c: the completion
+    // signal is the port's turn_end evidence (the legacy agent:generating_completed
+    // wire literal is gone).
+    const genuine = completions(h.evidence)
     expect(genuine.length).toBe(1)
-    expect(genuine[0].evidenceLevel).toBe('reported') // genuine, not the weak synth
+    expect(genuine[0].strength).toBe('genuine') // genuine, not the weak synth
     expect(h.instance.generatingStartedAt).toBe(0) // consumed by the flush — the misfire precondition
     // The completed-turn guard stamped the turn as satisfied for the synth.
     expect(h.instance.fastCollapseSynthesizedTaskId).toBe('task-reflash-1')
@@ -169,10 +180,10 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     h.instance.detectStatusTransition() // idle → idle
     h.instance.detectStatusTransition() // idle → idle again
 
-    expect(completions(h.events).length).toBe(1)
+    expect(completions(h.evidence).length).toBe(1)
     expect(started(h.events).length).toBe(1)
-    expect(completions(h.events).some((e) => e.completionDiagnostic?.reason === 'startup_grace_idle_turn_collapse')).toBe(false)
-    expect(completions(h.events).some((e) => e.evidenceLevel === 'weak')).toBe(false)
+    expect(completions(h.evidence).some((e) => e.blockReason === 'decoupled_completion')).toBe(false)
+    expect(completions(h.evidence).some((e) => e.strength === 'weak')).toBe(false)
   })
 
   it('(2) PRESERVED: a never-armed genuine fast-collapse still synthesizes exactly one pair', () => {
@@ -183,10 +194,11 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     h.setAdapterStatus('idle')
     h.instance.detectStatusTransition() // idle → idle — rescue fires
 
-    const synth = completions(h.events)
+    const synth = completions(h.evidence)
     expect(synth.length).toBe(1)
-    expect(synth[0].completionDiagnostic?.reason).toBe('startup_grace_idle_turn_collapse')
-    expect(synth[0].evidenceLevel).toBe('weak')
+    const idx = h.evidence.indexOf(synth[0])
+    expect(h.evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.diagnosticReason).toBe('startup_grace_idle_turn_collapse')
+    expect(synth[0].strength).toBe('weak')
     expect(started(h.events).length).toBe(1)
     expect(h.instance.fastCollapseSynthesizedTaskId).toBe('task-reflash-1')
   })
@@ -197,7 +209,7 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     rescued.instance.detectStatusTransition()
     rescued.instance.detectStatusTransition()
     rescued.instance.detectStatusTransition()
-    expect(completions(rescued.events).length).toBe(1)
+    expect(completions(rescued.evidence).length).toBe(1)
     expect(started(rescued.events).length).toBe(1)
 
     // After a normal genuine completion: re-polls stay quiet (the reflash guard).
@@ -205,23 +217,27 @@ describe('CliProviderInstance — standalone startup-grace generating reflash', 
     driveNormalTurnToGenuineCompletion(completed)
     completed.instance.detectStatusTransition()
     completed.instance.detectStatusTransition()
-    expect(completions(completed.events).length).toBe(1)
+    expect(completions(completed.evidence).length).toBe(1)
     expect(started(completed.events).length).toBe(1)
   })
 
   it('(4) PROJECTION PROXY: the event stream a status reducer consumes ends idle (no generating_started after the completion)', () => {
     // daemon-core has no generating/idle reducer (see file header); assert the
     // projection's input stream instead — a reducer fed this stream settles
-    // idle at the completion and never re-enters generating.
+    // idle at the completion and never re-enters generating. C-W5c: the
+    // completion phase is now the port's turn_end evidence (not a pushed
+    // provider event), so "one started, one completed" splits across the two
+    // sources rather than one combined wire-event stream.
     const h = makeInstance()
     driveNormalTurnToGenuineCompletion(h)
     h.instance.detectStatusTransition()
     h.instance.detectStatusTransition()
 
-    const phaseEvents = h.events.filter(
-      (e) => e.event === 'agent:generating_started' || e.event === 'agent:generating_completed',
-    )
-    expect(phaseEvents.length).toBe(2)
-    expect(phaseEvents[phaseEvents.length - 1].event).toBe('agent:generating_completed')
+    const startedEvents = h.events.filter((e) => e.event === 'agent:generating_started')
+    const turnEnds = h.evidence.filter((e) => e.kind === 'turn_end')
+    expect(startedEvents.length).toBe(1)
+    expect(turnEnds.length).toBe(1)
+    // The completion evidence's own timestamp settles AFTER the started event's.
+    expect(turnEnds[0].at).toBeGreaterThanOrEqual(startedEvents[0].timestamp)
   })
 })

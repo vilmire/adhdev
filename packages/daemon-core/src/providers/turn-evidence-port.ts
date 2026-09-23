@@ -22,29 +22,90 @@
  * (C-W1/W2, not this file) is the only authority that turns evidence into a
  * commit. A site that used to decide "genuine ⇒ done" locally now only fills
  * in the fields it actually observed (e.g. `strength`) and submits.
+ *
+ * SOLE PRODUCER (wiring-unification C-W5c). This port is now the ONLY place
+ * a mesh-bound session's turn evidence is built — `mesh/mesh-event-forwarding.ts`'s
+ * `buildProviderEvidence` (the pre-C-W5c duplicate path over the legacy
+ * `agent:*` wire names on `provider_event`) is deleted. Two capabilities close
+ * the gap that used to force that duplicate:
+ *   - `ownerFor(sessionId)` resolves the attempt's owner daemon (this daemon,
+ *     for a coordinator-local worker; another daemon's id, for a delegate
+ *     mesh worker whose coordinator lives elsewhere) — boot-injected because
+ *     resolving it needs `mesh/` (routing, mesh config), which this file must
+ *     never import (`check:boundaries`).
+ *   - `publishText`/`appendHandoff` moves LOCAL text (final summary, modal
+ *     message, error message) to the `mesh.<id>.handoff` content topic when
+ *     the owner is a different daemon, before the (content-free) evidence is
+ *     observed with a `summary`/`error`/`prompt` `SummaryRef` pointer. When
+ *     the owner is THIS daemon (the common case), text instead rides the
+ *     `envelope` opt straight into the ledger's local-only payload column
+ *     (`turn-ledger/deliver.ts`'s `renderNotice` reads it back at deliver
+ *     time) — no publish needed, exactly mirroring what the deleted
+ *     forwarder's `observeBuilt` did for a local owner.
  */
 
-import { isTurnEvidence, type SummaryRef, type TurnAttemptRef, type TurnEvidence, type TurnEvidenceKind } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, isTurnEvidence, type SummaryRef, type TurnAttemptRef, type TurnEvidence, type TurnEvidenceKind } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
+
+/**
+ * Owner of the live attempt for a session: this daemon, or another one this
+ * daemon must forward evidence text to via handoff. Structurally identical to
+ * `mesh/turn-ledger/ledger.ts`'s `ObserveOptions['owner']` — duplicated here
+ * (not imported) because this file must stay `mesh/`-import-free.
+ */
+export interface EvidenceOwner {
+    daemonId: string;
+    meshId: string;
+}
+
+/**
+ * Local-only render context + text for a producer's evidence, structurally
+ * identical to `mesh/turn-ledger/effects.ts`'s `TurnCompletionEnvelope`
+ * (duplicated, not imported, for the same `mesh/`-import-free reason). Stored
+ * on the evidence row's local payload column, never published — `notice`'s
+ * fields are exactly what `turn-ledger/deliver.ts`'s `renderNotice` reads
+ * back (`nodeLabel`, `modalMessage`, `errorMessage`, `questions`, …).
+ */
+export interface EvidenceEnvelope {
+    finalSummary?: string;
+    workerResult?: unknown;
+    nodeId?: string;
+    providerType?: string;
+    notice?: Record<string, unknown>;
+}
+
+export interface ObserveOpts {
+    owner?: EvidenceOwner;
+    envelope?: EvidenceEnvelope;
+}
 
 /**
  * The provider-facing emit surface. `observe` is the only method a concrete
  * implementation (B4 boot stage) must supply — sync or async, since the
  * underlying ledger write may hit local storage or a seqscribe append. This
- * interface itself is pure wiring: it does not decide anything.
+ * interface itself is pure wiring: it does not decide anything. `opts.envelope`
+ * carries local-only render context (never published as-is — see
+ * `EvidenceEnvelope`); the port resolves `opts.owner` itself via
+ * `TurnEvidencePortDeps.ownerFor` when the call site didn't already pass one.
  */
 export interface TurnEvidencePort {
-    observe(evidence: TurnEvidence): void;
+    observe(evidence: TurnEvidence, opts?: ObserveOpts): void;
 }
 
 /** One dropped-evidence count per kind, exposed for tests/diagnostics. */
 export type DroppedEvidenceCounts = Readonly<Partial<Record<TurnEvidenceKind | 'unknown', number>>>;
 
+/** Evidence kinds whose body can carry a `summary: SummaryRef` pointer (C1's vocabulary). */
+const SUMMARY_REF_KINDS: ReadonlySet<TurnEvidenceKind> = new Set(['turn_end', 'transcript_final']);
+
 export interface TurnEvidencePortDeps {
     /** Underlying sink. Never throws out of `observe()` — if it does, the
      *  port's guard swallows it (a ledger failure must never break the
-     *  producer's own detection tick, same rule as `provider-event-port.ts`). */
-    observe: (evidence: TurnEvidence) => void | Promise<void>;
+     *  producer's own detection tick, same rule as `provider-event-port.ts`).
+     *  Receives the resolved `opts` (owner backfilled, envelope passed through)
+     *  so the ledger-backed implementation can store the local envelope and
+     *  route by owner exactly as `mesh/turn-ledger/ledger.ts#observe` does. */
+    observe: (evidence: TurnEvidence, opts?: ObserveOpts) => void | Promise<void>;
     /**
      * Resolve the live per-turn attempt for a session, if the caller doesn't
      * already have one on hand. Returns `null` when there is no live attempt
@@ -54,11 +115,53 @@ export interface TurnEvidencePortDeps {
      * identity resolution centrally from `(meshId, taskId)` or `sessionId`.
      */
     attemptRefFor?: (sessionId: string) => TurnAttemptRef | null;
+    /**
+     * Resolve the attempt's owner daemon for a session (C-W5c). `null` means
+     * "this daemon" (the common, coordinator-local case) — the same
+     * convention `mesh-event-forwarding.ts`'s deleted `processMeshEvent` used
+     * (owner set only when the coordinator daemon id was not equivalent to
+     * this daemon's own id, via `daemonIdsEquivalent`, never a raw compare).
+     * Boot-injected because resolving it needs `mesh/` routing, which this
+     * file must never import.
+     */
+    ownerFor?: (sessionId: string) => EvidenceOwner | null;
+    /** This daemon's id, to tell "owner resolved to myself" apart from a real
+     *  remote owner — mirrors `TurnLedger.selfDaemonId`. Required for
+     *  `ownerFor` to be useful; a port built without it treats every
+     *  `ownerFor` result as remote (safe default: never silently swallows a
+     *  same-daemon owner into "local", since a wrong "local" would drop the
+     *  cross-machine handoff a real remote owner needs). */
+    selfDaemonId?: string;
+    /**
+     * Publish local text to the mesh's content-class handoff topic
+     * (`mesh.<id>.handoff`) when the resolved owner is another daemon, so
+     * `envelope.finalSummary`/`envelope.notice.{modalMessage,errorMessage}`
+     * text never crosses machines as anything but a `SummaryRef` pointer.
+     * Boot injects `appendMeshHandoff` (`seqscribe/mesh-publisher.ts`). A
+     * missing `appendHandoff` (standalone with no seqscribe node) means text
+     * is simply dropped for a remote owner — evidence still observes with
+     * `owner` set, same fail-open behavior `observeBuilt` had.
+     */
+    appendHandoff?: (meshId: string, kind: string, payload: Record<string, unknown>) => Promise<SummaryRef>;
     /** Clock used to backfill `at` for evidence passed to `observe()` directly
      *  without one (defensive only — every `emit*` helper below already
      *  stamps `at`, so this path is for a future direct-`observe()` caller). */
     now?: () => number;
     log?: { warn: (scope: string, msg: string) => void; debug: (scope: string, msg: string) => void };
+}
+
+/** Handoff kind for evidence text moved cross-daemon (moved from the deleted `mesh-event-forwarding.ts`, C10-1). */
+export const TURN_EVIDENCE_HANDOFF_KIND = 'turn.evidence.text';
+
+/** Text worth publishing to handoff for a remote owner: the final summary, or a modal/error message on the envelope's notice bag. */
+function handoffTextOf(envelope: EvidenceEnvelope | undefined): string | undefined {
+    if (!envelope) return undefined;
+    if (envelope.finalSummary) return envelope.finalSummary;
+    const notice = envelope.notice;
+    const fromNotice = typeof notice?.modalMessage === 'string' ? notice.modalMessage
+        : typeof notice?.errorMessage === 'string' ? notice.errorMessage
+        : undefined;
+    return fromNotice || undefined;
 }
 
 let eventSeq = 0;
@@ -89,8 +192,29 @@ export function createTurnEvidencePort(deps: TurnEvidencePortDeps): TurnEvidence
     const now = deps.now ?? (() => Date.now());
     const dropped: Record<string, number> = {};
 
+    // Final call into deps.observe, guarded the same way regardless of which
+    // branch below (local / remote-with-handoff / remote-without-appendHandoff)
+    // produced the (evidence, opts) pair.
+    function runObserve(evidence: TurnEvidence, opts: ObserveOpts | undefined): void {
+        const kind = evidence.kind;
+        try {
+            const result = deps.observe(evidence, opts);
+            // A sync sink returns undefined; an async sink returns a
+            // Promise, whose rejection must also never escape — an
+            // unhandled rejection is just as much a "broke the producer's
+            // tick" failure as a synchronous throw.
+            if (result && typeof (result as Promise<void>).catch === 'function') {
+                (result as Promise<void>).catch((error: unknown) => {
+                    log.warn('TurnEvidencePort', `[TurnEvidencePort] observe(${kind}) for ${evidence.sessionId} failed (async): ${(error as Error)?.message ?? error}`);
+                });
+            }
+        } catch (error) {
+            log.warn('TurnEvidencePort', `[TurnEvidencePort] observe(${kind}) for ${evidence.sessionId} failed: ${(error as Error)?.message ?? error}`);
+        }
+    }
+
     return {
-        observe(evidence: TurnEvidence): void {
+        observe(evidence: TurnEvidence, callerOpts?: ObserveOpts): void {
             const kind = (evidence as { kind?: string } | null)?.kind ?? 'unknown';
             // Resolve attemptRef centrally when the call site didn't already
             // supply one and has a sessionId to resolve against — this is the
@@ -112,20 +236,35 @@ export function createTurnEvidencePort(deps: TurnEvidencePortDeps): TurnEvidence
                 log.debug('TurnEvidencePort', `[TurnEvidencePort] dropped invalid ${kind} for ${(evidence as { sessionId?: string })?.sessionId ?? 'unknown'} (failed isTurnEvidence)`);
                 return;
             }
-            try {
-                const result = deps.observe(withAttempt);
-                // A sync sink returns undefined; an async sink returns a
-                // Promise, whose rejection must also never escape — an
-                // unhandled rejection is just as much a "broke the producer's
-                // tick" failure as a synchronous throw.
-                if (result && typeof (result as Promise<void>).catch === 'function') {
-                    (result as Promise<void>).catch((error: unknown) => {
-                        log.warn('TurnEvidencePort', `[TurnEvidencePort] observe(${kind}) for ${withAttempt.sessionId} failed (async): ${(error as Error)?.message ?? error}`);
-                    });
-                }
-            } catch (error) {
-                log.warn('TurnEvidencePort', `[TurnEvidencePort] observe(${kind}) for ${withAttempt.sessionId} failed: ${(error as Error)?.message ?? error}`);
+
+            // Owner resolution (C-W5c): the call site's own `owner` wins (a
+            // producer that already knows it — none do today, reserved for a
+            // future direct caller); otherwise `ownerFor` resolves it from the
+            // session. `selfDaemonId` distinguishes "resolved to myself" (not
+            // remote — drop the owner tag, same as the deleted forwarder's
+            // `owner = coordinatorDaemonId !== selfDaemonId ? {...} : null`)
+            // from a genuine remote owner.
+            const resolvedOwner = callerOpts?.owner
+                ?? (deps.ownerFor ? deps.ownerFor(withAttempt.sessionId) : null)
+                ?? undefined;
+            const isRemoteOwner = !!resolvedOwner && (!deps.selfDaemonId || !daemonIdsEquivalent(resolvedOwner.daemonId, deps.selfDaemonId));
+            const owner = isRemoteOwner ? resolvedOwner : undefined;
+            const envelope = callerOpts?.envelope;
+            const opts: ObserveOpts | undefined = (owner || envelope) ? { ...(owner ? { owner } : {}), ...(envelope ? { envelope } : {}) } : undefined;
+
+            const text = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : undefined;
+            if (!text || !deps.appendHandoff) {
+                runObserve(withAttempt, opts);
+                return;
             }
+            // Remote owner + carryable text: publish to the handoff topic
+            // first, then observe with `summary` set to the returned pointer
+            // (never the raw text) — mirrors the deleted `observeBuilt`.
+            deps.appendHandoff(owner!.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text, notice: (envelope?.notice ?? {}) as Record<string, unknown> })
+                .then(
+                    (ref) => runObserve({ ...withAttempt, summary: ref } as TurnEvidence, opts),
+                    () => runObserve(withAttempt, opts),
+                );
         },
     };
 }
@@ -163,7 +302,7 @@ function makeEnvelope(
     };
 }
 
-function guardEmit(port: TurnEvidencePort | null | undefined, kind: TurnEvidenceKind, sessionId: string, build: () => TurnEvidence): void {
+function guardEmit(port: TurnEvidencePort | null | undefined, kind: TurnEvidenceKind, sessionId: string, build: () => TurnEvidence, envelope?: EvidenceEnvelope): void {
     if (!port) return;
     try {
         const evidence = build();
@@ -171,7 +310,7 @@ function guardEmit(port: TurnEvidencePort | null | undefined, kind: TurnEvidence
             LOG.debug('TurnEvidencePort', `[TurnEvidencePort] dropped invalid ${kind} for ${sessionId} (failed isTurnEvidence)`);
             return;
         }
-        port.observe(evidence);
+        port.observe(evidence, envelope ? { envelope } : undefined);
     } catch (error) {
         LOG.warn('TurnEvidencePort', `[TurnEvidencePort] emit ${kind} for ${sessionId} failed: ${(error as Error)?.message ?? error}`);
     }
@@ -185,6 +324,12 @@ export interface EmitCommonOpts {
     taskId?: string;
     /** Override the envelope clock — used for retro evidence. */
     at?: number;
+    /**
+     * Local render context + text (C-W5c). Optional on every helper: a call
+     * site with nothing to add (e.g. a bare status transition) omits it, and
+     * the evidence carries no envelope, same as before this deps addition.
+     */
+    envelope?: EvidenceEnvelope;
 }
 
 /** `turn_started` — CLI FSM debounced start, or a retroactive short-gen start
@@ -229,7 +374,7 @@ export function emitTurnEnd(
         ...(opts.releasedByHardCap !== undefined ? { releasedByHardCap: opts.releasedByHardCap } : {}),
         ...(opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {}),
         ...(opts.live ? { live: opts.live } : {}),
-    }) as TurnEvidence);
+    }) as TurnEvidence, opts.envelope);
 }
 
 /** `transcript_final` — a PTY-scrape or native-history read that LOOKS like a
@@ -326,7 +471,7 @@ export function emitProcessExit(
         kind: 'process_exit',
         exitCode: opts.exitCode,
         ...(opts.providerFailure ? { providerFailure: opts.providerFailure } : {}),
-    }) as TurnEvidence);
+    }) as TurnEvidence, opts.envelope);
 }
 
 /** `session_error` — a classified provider/adapter/spawn/auth/billing error.
@@ -341,7 +486,7 @@ export function emitSessionError(
         source: opts.source,
         kind: 'session_error',
         reason: opts.reason,
-    }) as TurnEvidence);
+    }) as TurnEvidence, opts.envelope);
 }
 
 /** `suspension` — a modal (approval/choice) is up. `modalKey` should reuse
@@ -356,7 +501,7 @@ export function emitSuspension(
         kind: 'suspension',
         modal: opts.modal,
         ...(opts.modalKey ? { modalKey: opts.modalKey } : {}),
-    }) as TurnEvidence);
+    }) as TurnEvidence, opts.envelope);
 }
 
 /** `suspension_resolved` — the modal was answered (button/auto-approve/prompt). */

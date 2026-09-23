@@ -34,7 +34,6 @@
 // relaunch (reducer R33 / R20), and report shadowing (R17/R18).
 // ---------------------------------------------------------------------------
 
-import { createHash } from 'crypto';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
@@ -47,9 +46,6 @@ import {
     sessionIdsEquivalent,
     withStatusProbeMarker,
     type MeshNodeIdentified,
-    type SummaryRef,
-    type TurnAttemptRef,
-    type TurnEvidence,
 } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
@@ -59,7 +55,6 @@ import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-tr
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
 import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler } from './mesh-graph-transition-runner.js';
-import { extractJsonObjectFromSummary } from './mesh-ledger.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
     getMeshWithCache,
@@ -75,11 +70,8 @@ import {
     readWorkerResultMetadata,
     resolveMeshSurfacedSessionPreview,
     isFalseIdleCompletion,
-    isWeakCompletionEvidence,
 } from './mesh-events-utils.js';
 import { isMeshCoordinatorEvent } from './mesh-event-classify.js';
-import type { TurnLedger } from './turn-ledger/ledger.js';
-import type { TurnCompletionEnvelope } from './turn-ledger/effects.js';
 import type { CoordinatorSessionView } from './turn-ledger/routing.js';
 import { meshNoticeRuntime, notifyMeshCoordinator, type CoordinatorNotice } from './turn-ledger/deliver.js';
 
@@ -233,6 +225,35 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
     return out;
 }
 
+/**
+ * `TurnEvidencePort`'s `ownerFor` (C-W5c): resolve the mesh worker delegate
+ * routing for a session and reduce it to the port's `{daemonId, meshId} | null`
+ * shape. Reuses `resolveWorkerDelegateRouting` (the same authority the deleted
+ * `buildProviderEvidence` path routed through via `onProviderEvent`) so a
+ * worker's owner resolves identically whether the port asks for it directly
+ * (every producer site, after C-W5c) or a caller still routes through
+ * `processMeshEvent`'s non-turn notice path.
+ *
+ * `null` = this daemon is the owner (no delegate routing, or the routing
+ * resolves a mesh but no coordinator anchor — the common coordinator-local
+ * worker case) or the session cannot be resolved at all (a cold PTY-exit
+ * whose instance already tore down; the caller's `selfDaemonId` fallback in
+ * the port then treats it as local, same as before this addition since the
+ * pre-C-W5c path only ever saw evidence for live instances).
+ */
+export function resolveEvidenceOwner(components: DaemonComponents, sessionId: string): { daemonId: string; meshId: string } | null {
+    try {
+        const routing = resolveWorkerDelegateRouting(components, sessionId, {
+            getMeshById: (meshId) => getMeshWithCache(components, meshId),
+            getMeshByWorkspace: (workspace) => getCachedMeshByWorkspace(workspace),
+        });
+        if (!routing.isDelegate || !routing.meshId || !routing.coordinatorDaemonId) return null;
+        return { daemonId: routing.coordinatorDaemonId, meshId: routing.meshId };
+    } catch {
+        return null;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cancel executor + envelope helpers (moved from the deleted suppression module)
 // ---------------------------------------------------------------------------
@@ -302,17 +323,13 @@ export function stopStaleMeshWorker(
     });
 }
 
-/** The graph output version's worker result: the structured one, else a JSON object parsed out of the summary. */
-export function resolveGraphEnvelopeWorkerResult(metadataEvent: Record<string, unknown>): Record<string, unknown> | undefined {
-    const explicit = readWorkerResultMetadata(metadataEvent);
-    if (explicit) return explicit;
-    return extractJsonObjectFromSummary(readNonEmptyString(metadataEvent.finalSummary) || undefined);
-}
-
 /**
  * KIMI-HOLLOW-COMPLETION: a completion whose producer proved a zero-byte final
  * answer with insufficient evidence and no structured report. Becomes
- * `turn_end{hollow:true}` (reducer R33 requeues once, R33f fails).
+ * `turn_end{hollow:true}` (reducer R33 requeues once, R33f fails). Kept (used
+ * by `mesh-events-coordinator.ts`) though its evidence-builder call site
+ * (`buildProviderEvidence`) is deleted with C-W5c — this classification is
+ * still needed by that other consumer.
  */
 export function isHollowCompletion(metadataEvent: Record<string, unknown>): boolean {
     const diagnostic = readRecord(metadataEvent.completionDiagnostic);
@@ -321,13 +338,6 @@ export function isHollowCompletion(metadataEvent: Record<string, unknown>): bool
     if (readWorkerResultMetadata(metadataEvent)) return false;
     if (readNonEmptyString(diagnostic.finalSummarySource) === 'tool_report') return false;
     return true;
-}
-
-/** Auth/billing failures that must not be retried blindly (process_exit → R20f). */
-export function nonRetryableProviderFailureReason(metadataEvent: Record<string, unknown>): 'auth_failed' | 'billing_failed' | null {
-    const diagnostic = readRecord(metadataEvent.completionDiagnostic);
-    const reason = readNonEmptyString(diagnostic?.reason) || readNonEmptyString(metadataEvent.errorReason);
-    return reason === 'auth_failed' || reason === 'billing_failed' ? reason : null;
 }
 
 /**
@@ -355,211 +365,23 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Evidence builder
+// 1. Evidence builder — DELETED (wiring-unification C-W5c)
 // ---------------------------------------------------------------------------
-
-/** Handoff kinds (content-class `mesh.<id>.handoff`, C10-1). */
-export const TURN_EVIDENCE_HANDOFF_KIND = 'turn.evidence.text';
-
-export interface MeshForwardingDeps {
-    ledger: Pick<TurnLedger, 'observe' | 'selfDaemonId'>;
-    /** Text for an attempt another daemon owns rides the handoff topic. */
-    appendHandoff?: (meshId: string, kind: string, payload: Record<string, unknown>) => Promise<SummaryRef>;
-}
-
-interface EvidenceBuild {
-    evidence: TurnEvidence;
-    /** Local render context + text (never published). */
-    envelope?: TurnCompletionEnvelope;
-    /** Text to move to the handoff topic when the owner is another daemon. */
-    handoffText?: string;
-}
-
-function readAttemptRef(event: Record<string, unknown>, settings: Record<string, unknown>): TurnAttemptRef | undefined {
-    for (const candidate of [event.attemptRef, settings.meshAttemptRef]) {
-        if (isTurnAttemptRef(candidate)) return candidate;
-    }
-    const attemptId = readNonEmptyString(event.attemptId) || readNonEmptyString(settings.meshActiveAttemptId);
-    const generation = typeof event.attemptGeneration === 'number' ? event.attemptGeneration
-        : typeof settings.meshActiveAttemptGeneration === 'number' ? settings.meshActiveAttemptGeneration
-        : typeof settings.meshAttemptGeneration === 'number' ? settings.meshAttemptGeneration : undefined;
-    return attemptId && typeof generation === 'number' ? { attemptId, generation } : undefined;
-}
-
-/** Deterministic eventId: the same provider event observed twice collapses on the ledger PK. */
-export function providerEvidenceEventId(sessionId: string, event: string, timestamp: number, taskId: string): string {
-    return `pe:${createHash('sha256').update(`${sessionId}|${event}|${timestamp}|${taskId}`).digest('hex').slice(0, 32)}`;
-}
-
-function modalQuestions(event: Record<string, unknown>): unknown[] | undefined {
-    const prompt = readRecord(event.interactivePrompt);
-    const questions = Array.isArray(prompt?.questions) ? prompt!.questions : Array.isArray(event.questions) ? event.questions : undefined;
-    if (!questions) return undefined;
-    return questions.map((q) => {
-        const r = readRecord(q) ?? {};
-        return {
-            ...(readNonEmptyString(r.header) ? { header: readNonEmptyString(r.header) } : {}),
-            question: readNonEmptyString(r.question),
-            ...(r.multiSelect === true ? { multiSelect: true } : {}),
-            options: (Array.isArray(r.options) ? r.options : []).map((o) => {
-                const opt = readRecord(o) ?? {};
-                return { label: readNonEmptyString(opt.label), ...(readNonEmptyString(opt.description) ? { description: readNonEmptyString(opt.description) } : {}) };
-            }),
-        };
-    });
-}
-
-/**
- * One provider event → one `TurnEvidence` (+ local envelope), or null for an
- * event that is not turn evidence (agent:ready without completion evidence —
- * a bus `input_state` fact — and the non-turn mesh events).
- */
-export function buildProviderEvidence(input: {
-    eventName: string;
-    event: Record<string, unknown>;
-    sessionId: string;
-    settings: Record<string, unknown>;
-    nodeId: string;
-    nodeLabel: string;
-    observedBy: string;
-}): EvidenceBuild | null {
-    const { eventName, event, sessionId, settings } = input;
-    const timestamp = typeof event.timestamp === 'number' && Number.isFinite(event.timestamp) ? event.timestamp : Date.now();
-    const taskId = readNonEmptyString(event.taskId) || readNonEmptyString(event.meshActiveTaskId) || readNonEmptyString(settings.meshActiveTaskId);
-    const attemptRef = readAttemptRef(event, settings);
-    const base = {
-        eventId: providerEvidenceEventId(sessionId, eventName, timestamp, taskId),
-        at: timestamp,
-        sessionId,
-        observedBy: input.observedBy,
-        ...(attemptRef ? { attemptRef } : {}),
-        ...(taskId ? { taskId } : {}),
-    };
-    const notice: Record<string, unknown> = {
-        nodeLabel: input.nodeLabel,
-        ...(readNonEmptyString(event.providerSessionId) ? { providerSessionId: readNonEmptyString(event.providerSessionId) } : {}),
-    };
-    const diagnostic = readRecord(event.completionDiagnostic);
-    switch (eventName) {
-        case 'agent:generating_started':
-            return { evidence: { ...base, source: 'fsm_edge', kind: 'turn_started', retro: false } as TurnEvidence };
-        case 'agent:waiting_approval':
-        case 'agent:waiting_choice': {
-            const modalMessage = readNonEmptyString(event.modalMessage);
-            const questions = eventName === 'agent:waiting_choice' ? modalQuestions(event) : undefined;
-            const promptId = readNonEmptyString(event.promptId) || readNonEmptyString(readRecord(event.interactivePrompt)?.promptId);
-            return {
-                evidence: { ...base, source: 'approval_gate', kind: 'suspension', modal: eventName === 'agent:waiting_approval' ? 'approval' : 'choice' } as TurnEvidence,
-                envelope: { notice: { ...notice, ...(modalMessage ? { modalMessage } : {}), ...(questions ? { questions } : {}), ...(promptId ? { promptId } : {}) } },
-            };
-        }
-        case 'agent:approval_resolved': {
-            const resolution = readNonEmptyString(event.resolution);
-            return {
-                evidence: {
-                    ...base, source: 'modal_button', kind: 'suspension_resolved',
-                    resolution: resolution === 'rejected' ? 'rejected' : resolution === 'answered' ? 'answered' : 'approved',
-                    via: readNonEmptyString(event.source) === 'auto_approve' ? 'auto_approve' : 'modal_button',
-                } as TurnEvidence,
-            };
-        }
-        case 'agent:ready':
-        case 'agent:generating_completed': {
-            const finalSummary = readNonEmptyString(event.finalSummary) || readNonEmptyString(event.summary);
-            const workerResult = resolveGraphEnvelopeWorkerResult(event);
-            // agent:ready is turn evidence only when it carries completion evidence
-            // (the legacy completed-via-ready path); otherwise it is an input_state fact.
-            if (eventName === 'agent:ready' && !finalSummary && !readWorkerResultMetadata(event)) return null;
-            const weak = isWeakCompletionEvidence(event);
-            const afterTimeout = diagnostic?.emittedAfterFinalizationTimeout === true;
-            const hollow = eventName === 'agent:generating_completed' && isHollowCompletion(event);
-            const completionMetadata = {
-                ...(readNonEmptyString(diagnostic?.reason) ? { diagnosticReason: readNonEmptyString(diagnostic?.reason) } : {}),
-                ...(typeof diagnostic?.finalAssistantPresent === 'boolean' ? { finalAssistantPresent: diagnostic.finalAssistantPresent } : {}),
-                ...(readNonEmptyString(event.evidenceLevel) ? { evidenceLevel: readNonEmptyString(event.evidenceLevel) } : {}),
-                ...(diagnostic?.finalAssistantMayBeTruncated === true ? { summaryMayBeTruncated: true } : {}),
-            };
-            return {
-                evidence: {
-                    ...base,
-                    source: weak ? 'completion_flush_weak' : 'completion_flush_genuine',
-                    kind: 'turn_end',
-                    strength: weak ? 'weak' : 'genuine',
-                    ...(afterTimeout ? { afterFinalizationTimeout: true } : {}),
-                    ...(hollow ? { hollow: true } : {}),
-                } as TurnEvidence,
-                envelope: {
-                    ...(finalSummary ? { finalSummary } : {}),
-                    ...(workerResult ? { workerResult } : {}),
-                    ...(input.nodeId ? { nodeId: input.nodeId } : {}),
-                    ...(readNonEmptyString(event.providerType) ? { providerType: readNonEmptyString(event.providerType) } : {}),
-                    notice: {
-                        ...notice,
-                        ...(event.reviewRecommended === true ? { reviewRecommended: true } : {}),
-                        ...(Object.keys(completionMetadata).length > 0 ? { completionMetadata } : {}),
-                    },
-                },
-                ...(finalSummary ? { handoffText: finalSummary } : {}),
-            };
-        }
-        case 'agent:stopped': {
-            const failure = nonRetryableProviderFailureReason(event);
-            return {
-                evidence: {
-                    ...base,
-                    source: failure ? 'provider_error' : 'pty_exit',
-                    kind: 'process_exit',
-                    exitCode: typeof event.exitCode === 'number' && Number.isSafeInteger(event.exitCode) ? event.exitCode : null,
-                    ...(failure ? { providerFailure: failure } : {}),
-                } as TurnEvidence,
-                envelope: { notice: { ...notice, ...(readNonEmptyString(event.errorMessage) ? { errorMessage: readNonEmptyString(event.errorMessage) } : {}) } },
-            };
-        }
-        case 'monitor:no_progress': {
-            const stalledMs = typeof event.stalledMs === 'number' && event.stalledMs >= 0 ? event.stalledMs : 0;
-            const observed = readNonEmptyString(event.observedStatus) || readNonEmptyString(event.status) || 'unknown';
-            return {
-                evidence: {
-                    ...base, source: 'mesh_stall_watchdog', kind: 'no_progress', stalledMs,
-                    observedStatus: observed, finalAssistantPresent: diagnostic?.finalAssistantPresent === true,
-                } as TurnEvidence,
-                envelope: { notice: { ...notice, stalledMs, observedStatus: observed } },
-            };
-        }
-        default:
-            return null;
-    }
-}
-
-/**
- * Observe one built evidence. When the attempt is owned by another daemon and
- * the event carries text, the text rides `mesh.<id>.handoff` first and the
- * evidence carries only the ref (C10-1); a handoff failure observes without it
- * (the owner then renders a pointer line, never nothing).
- */
-function observeBuilt(deps: MeshForwardingDeps, built: EvidenceBuild, owner: { daemonId: string; meshId: string } | null): void {
-    const opts = {
-        ...(owner ? { owner } : {}),
-        ...(built.envelope ? { envelope: built.envelope } : {}),
-    };
-    const run = (evidence: TurnEvidence) => {
-        try {
-            const result = deps.ledger.observe(evidence, opts);
-            if (result.verdict === 'rejected') {
-                traceMeshEventDrop('turn_evidence_rejected', { sessionId: evidence.sessionId, taskId: evidence.taskId, event: evidence.kind }, result.rejection);
-            }
-        } catch (e: any) {
-            LOG.warn('MeshEvents', `turn evidence ${evidence.kind} for session ${evidence.sessionId} failed to observe: ${e?.message || e}`);
-        }
-    };
-    const remoteOwner = owner && !daemonIdsEquivalent(owner.daemonId, deps.ledger.selfDaemonId);
-    if (!remoteOwner || !built.handoffText || !deps.appendHandoff || built.evidence.kind !== 'turn_end') {
-        run(built.evidence);
-        return;
-    }
-    deps.appendHandoff(owner!.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: built.handoffText, notice: (built.envelope?.notice ?? {}) as Record<string, unknown> })
-        .then((ref) => run({ ...built.evidence, summary: ref } as TurnEvidence), () => run(built.evidence));
-}
+// `buildProviderEvidence`/`observeBuilt` used to build a mesh session's turn
+// evidence a SECOND time from the legacy `agent:*` wire names on
+// `provider_event`, duplicating what every producer site now submits
+// directly through `TurnEvidencePort` (`providers/turn-evidence-port.ts`).
+// The port is the sole producer since C-W5c: `wireTurnEvidencePort`
+// (`boot/stages/mesh-runtime.ts`) gives it `ownerFor` (→ `resolveEvidenceOwner`
+// below, the same `resolveWorkerDelegateRouting` authority this deleted
+// builder used for `coordinatorDaemonId`) and `appendHandoff`, so a remote
+// owner's text still rides `mesh.<id>.handoff` and a local owner's text still
+// lands in the evidence row's local payload column — both exactly as this
+// deleted code did, just from the ONE producer instead of two.
+//
+// `processMeshEvent` below therefore no longer builds evidence at all; it
+// keeps only the non-turn NOTICE_EVENTS path and the queue-edge bookkeeping
+// (`applyQueueEdges`) that the reducer does not own.
 
 // ---------------------------------------------------------------------------
 // 2. Non-turn events → notices
@@ -705,8 +527,14 @@ export interface MeshEventResult {
     error?: string;
 }
 
-/** Evidence / notice / queue edges for one mesh event. Never throws. */
-export function processMeshEvent(components: DaemonComponents, deps: MeshForwardingDeps | null, input: MeshEventInput): MeshEventResult {
+/**
+ * Notice / queue edges for one mesh event. Never throws. Evidence
+ * construction is gone (C-W5c): a mesh session's `agent:*` events now reach
+ * `TurnEvidencePort` directly from the provider instance that observed them
+ * (`providers/turn-evidence-port.ts`'s `emit*` helpers), never through this
+ * bus-subscriber path — see the "1. Evidence builder — DELETED" note above.
+ */
+export function processMeshEvent(components: DaemonComponents, input: MeshEventInput): MeshEventResult {
     const { meshId, eventName, event, nodeId, sessionId } = input;
     const traceCtx = { taskId: event.taskId ?? event.meshActiveTaskId, sessionId, nodeId, meshId, event: eventName };
     const result: MeshEventResult = { success: true };
@@ -739,31 +567,12 @@ export function processMeshEvent(components: DaemonComponents, deps: MeshForward
         }
 
         applyQueueEdges(components, meshId, nodeId, eventName, event, sessionId);
-        if (!deps || !sessionId) return result;
-        const built = buildProviderEvidence({
-            eventName, event, sessionId, settings: input.settings, nodeId, nodeLabel: input.nodeLabel,
-            observedBy: deps.ledger.selfDaemonId,
-        });
-        if (!built) return result;
-        const owner = input.coordinatorDaemonId && !daemonIdsEquivalent(input.coordinatorDaemonId, deps.ledger.selfDaemonId)
-            ? { daemonId: input.coordinatorDaemonId, meshId }
-            : null;
-        observeBuilt(deps, built, owner);
-        traceMeshEventStage('observed', traceCtx, built.evidence.kind);
-        result.evidence = built.evidence.kind;
     } catch (e: any) {
         LOG.warn('MeshEvents', `mesh event ${eventName} (mesh ${meshId}, session ${sessionId || '-'}) failed: ${e?.message || e}`);
         result.success = false;
         result.error = e?.message || String(e);
     }
     return result;
-}
-
-function forwardingDepsFrom(components: DaemonComponents): MeshForwardingDeps | null {
-    const rt = meshNoticeRuntime.current();
-    const ledger = (components as { turnLedger?: TurnLedger | null }).turnLedger ?? rt?.evidence ?? null;
-    if (!ledger) return null;
-    return { ledger, ...(rt?.appendHandoff ? { appendHandoff: rt.appendHandoff } : {}) };
 }
 
 /**
@@ -798,7 +607,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     }
     const event = buildRelayMetadataEvent(payload);
     traceMeshEventStage('received', { taskId: event.taskId, sessionId: event.targetSessionId, nodeId, meshId, event: eventName });
-    return processMeshEvent(components, forwardingDepsFrom(components), {
+    return processMeshEvent(components, {
         meshId,
         eventName,
         event,
@@ -1027,7 +836,7 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
         }
         const nodeId = routing.nodeId || readNonEmptyString(event.meshNodeId) || readNonEmptyString(settings.meshNodeId);
         mirrorToDashboard(components, meshId, nodeId, eventName, event, sourceSession);
-        processMeshEvent(components, forwardingDepsFrom(components), {
+        processMeshEvent(components, {
             meshId,
             eventName,
             event,

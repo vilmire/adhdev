@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // COMPLETION-WEAK-REARM (fix1). The worker-side double-emit latch used to short-circuit
 // the three transcript re-emit paths (flushMeshCompletionBeforeCleanup, the pure-PTY and
@@ -51,7 +52,11 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
     // The evidence gate reads the native transcript; stub the turn-scoped summary so the
     // gate PASSES (a genuine turn-end) and the latch behavior is what's under test.
     instance.completionFinalSummary = () => (opts.finalSummary === undefined ? 'done: finished the turn' : opts.finalSummary)
-    return { instance, emitted }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
+    return { instance, emitted, evidence }
   }
 
   // A weak latch as production would stamp it from the CANON-C decoupled-immediate emit:
@@ -59,75 +64,80 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
   const weakLatch = { taskId: 'task-1', at: 5_000, evidenceLevel: undefined as string | undefined, weak: true, emittedAtEpoch: 0 }
 
   it('RE-ARMS: a WEAK prior emit + a genuine idle after a generating transition emits a SECOND (genuine) completion — no acked-death wait', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       lastEmittedCompletion: { ...weakLatch },
       busyEpoch: 1, // a real generating phase opened AFTER the weak emit (epoch advanced 0→1)
     })
     const result = instance.flushMeshCompletionBeforeCleanup()
     expect(result).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].event).toBe('agent:generating_completed')
-    expect(emitted[0].taskId).toBe('task-1')
-    // The genuine re-emit carries strong evidence → the coordinator fingerprint surfaces it
-    // as ::genuine (not collapsed against the ::weak first emit).
-    expect(emitted[0].evidenceLevel).toBe('reported')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const fired = evidence.filter((e) => e.kind === 'turn_end')
+    expect(fired).toHaveLength(1)
+    expect(fired[0].taskId).toBe('task-1')
+    // The genuine re-emit carries strong evidence → genuine strength (not
+    // collapsed against the ::weak first emit).
+    expect(fired[0].strength).toBe('genuine')
     // ONE-SHOT CAP: the latch is overwritten with the now-genuine (weak=false) evidence.
     expect(instance.lastEmittedCompletion.weak).toBe(false)
     expect(instance.lastEmittedCompletion.evidenceLevel).toBe('reported')
   })
 
   it('ONE-SHOT: after the weak→genuine re-emit, a further idle tick emits NOTHING (never a third emit)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       lastEmittedCompletion: { ...weakLatch },
       busyEpoch: 1,
     })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
     // First re-emit (the genuine, second overall emission).
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(true)
-    expect(emitted).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
     // A subsequent idle tick — even if the busyEpoch advances again — must NOT re-fire:
     // the latch is now genuine (weak=false) → single-shot. Re-stamp membership (the emit
     // detached the task markers) so the suppression is genuinely the latch, not detachment.
     instance.settings = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-1' }
     instance.busyEpoch = 5
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
-    expect(emitted).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
   })
 
   it('does NOT re-arm off a STATIC idle: a weak latch with NO intervening generating transition (busyEpoch unchanged) stays suppressed', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       lastEmittedCompletion: { ...weakLatch, emittedAtEpoch: 3 },
       busyEpoch: 3, // no generating phase opened since the weak emit → same frame
     })
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
-    expect(emitted).toHaveLength(0)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
   })
 
   it('GENUINE prior emit stays single-shot: a non-weak latch is never re-emitted (no spurious re-arm)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       lastEmittedCompletion: { taskId: 'task-1', at: 5_000, evidenceLevel: 'reported', weak: false, emittedAtEpoch: 0 },
       busyEpoch: 9, // even with epochs advanced, a genuine emit does not re-arm
     })
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
-    expect(emitted).toHaveLength(0)
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(0)
   })
 
   it('a FIRST sufficient (genuine) emit yields exactly ONE emission and arms a single-shot latch', () => {
-    const { instance, emitted } = makeInstance({ lastEmittedCompletion: null, busyEpoch: 1 })
+    const { instance, evidence } = makeInstance({ lastEmittedCompletion: null, busyEpoch: 1 })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
     // First flush → genuine emit (no prior latch).
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(true)
-    expect(emitted).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
     expect(instance.lastEmittedCompletion.weak).toBe(false)
     // Second flush for the same turn → suppressed by the genuine latch. Re-stamp membership
     // (the emit detached the task markers) so the latch is what suppresses. Exactly ONE total.
     instance.settings = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-1' }
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
-    expect(emitted).toHaveLength(1)
+    expect(turnEnds()).toHaveLength(1)
   })
 
   it('end-to-end sequence: weak first emit → generating → genuine idle yields exactly TWO emissions (not three)', () => {
     // Simulate the production weak first emit: drive emitGeneratingCompleted directly with the
     // CANON-C weak shape (missing_final_assistant) so the latch is stamped weak=true, at epoch 0.
-    const { instance, emitted } = makeInstance({ lastEmittedCompletion: null, busyEpoch: 0 })
+    const { instance, evidence } = makeInstance({ lastEmittedCompletion: null, busyEpoch: 0 })
+    const turnEnds = () => evidence.filter((e) => e.kind === 'turn_end')
     instance.emitGeneratingCompleted({
       chatTitle: '',
       duration: undefined,
@@ -136,7 +146,7 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
       finalSummary: undefined,
       completionDiagnostic: { blockReason: 'missing_final_assistant', finalAssistantPresent: false },
     })
-    expect(emitted).toHaveLength(1) // emission #1 (weak)
+    expect(turnEnds()).toHaveLength(1) // emission #1 (weak)
     expect(instance.lastEmittedCompletion.weak).toBe(true)
 
     // The weak emit's pushEvent detaches the task-level mesh markers (terminal event). The
@@ -148,8 +158,8 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
 
     // Genuine idle with a final assistant reaches the pre-cleanup flush → emission #2 (genuine).
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(true)
-    expect(emitted).toHaveLength(2)
-    expect(emitted[1].evidenceLevel).toBe('reported')
+    expect(turnEnds()).toHaveLength(2)
+    expect(turnEnds()[1].strength).toBe('genuine')
     // The latch is now genuine (weak=false) — the one-shot cap is armed.
     expect(instance.lastEmittedCompletion.weak).toBe(false)
 
@@ -158,6 +168,6 @@ describe('CliProviderInstance completion weak re-arm (fix1)', () => {
     instance.settings = { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-1' }
     instance.busyEpoch = 2
     expect(instance.flushMeshCompletionBeforeCleanup()).toBe(false)
-    expect(emitted).toHaveLength(2)
+    expect(turnEnds()).toHaveLength(2)
   })
 })

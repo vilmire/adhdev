@@ -22,12 +22,13 @@ import type { CompletionArmPatch, CompletionFlushDecision, CompletionPolicy, Com
 import { decideCompletionPreflight, decideCompletionVerdict } from './completion-engine.js';
 import type { CancelledCompletionReason } from './cancel-recheck.js';
 import { traceMeshEventStage } from '../../shared/mesh-event-trace.js';
+import { extractJsonObjectFromSummary } from '../../shared/worker-result-parse.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { COMPLETED_FINALIZATION_RETRY_MS } from '../cli-provider-instance-types.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
-import type { TurnAttemptRef, TurnEndBlockReason } from '@adhdev/mesh-shared';
+import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
 /**
  * `opts.completionDiagnostic.blockReason` (set on the weak/emit-weak path,
@@ -43,6 +44,11 @@ const TURN_END_BLOCK_REASON_SET: ReadonlySet<string> = new Set([
 ]);
 function asTurnEndBlockReason(value: unknown): TurnEndBlockReason | undefined {
     return typeof value === 'string' && TURN_END_BLOCK_REASON_SET.has(value) ? (value as TurnEndBlockReason) : undefined;
+}
+
+const NATIVE_TURN_OUTCOME_SET: ReadonlySet<string> = new Set(['completed', 'aborted']);
+function asNativeTurnOutcome(value: unknown): NativeTurnOutcome | undefined {
+    return typeof value === 'string' && NATIVE_TURN_OUTCOME_SET.has(value) ? (value as NativeTurnOutcome) : undefined;
 }
 
 /** The narrow surface of CliProviderInstance the flush interpreter reads/writes. */
@@ -321,15 +327,14 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     if (summary) {
         host.lastCompletionSummary = { content: summary, receivedAt: opts.timestamp };
     }
-    const completionEvent = {
-        event: 'agent:generating_completed' as const,
+    // Classification input only (NOT pushed to the wire — C-W5c deleted the
+    // legacy `agent:generating_completed` construction; `isWeakCompletionEvidence`
+    // just needs the same shape it always read).
+    const completionEvidenceInput = {
         chatTitle: opts.chatTitle,
         duration: opts.duration,
         timestamp: opts.timestamp,
-        // ARCH-REFACTOR R1: attribute to the turn captured at idle-transition.
         ...(opts.taskId ? { taskId: opts.taskId } : {}),
-        // finalSummary is always carried (value may be undefined) — every prior
-        // inline builder included the key, so downstream consumers see the same shape.
         finalSummary: opts.finalSummary,
         ...(opts.evidenceLevel !== undefined ? { evidenceLevel: opts.evidenceLevel } : {}),
         ...(opts.completionDiagnostic !== undefined ? { completionDiagnostic: opts.completionDiagnostic } : {}),
@@ -346,7 +351,7 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     // isWeakCompletionEvidence() the coordinator/ledger paths share, so the worker's
     // notion of "weak" cannot drift from theirs. emittedAtEpoch snapshots busyEpoch so
     // a re-arm requires a real generating→idle transition after this emit.
-    const weak = isWeakCompletionEvidence(completionEvent as Record<string, unknown>);
+    const weak = isWeakCompletionEvidence(completionEvidenceInput as Record<string, unknown>);
     host.lastEmittedCompletion = {
         taskId: typeof opts.taskId === 'string' ? opts.taskId : '',
         at: Date.now(),
@@ -354,16 +359,25 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
         weak,
         emittedAtEpoch: host.busyEpoch,
     };
-    host.pushEvent(completionEvent);
-    // Turn-evidence (C5/C-W5): the single chokepoint. EVERY provider verdict
-    // site in status-transition.ts / completion-flush.ts / stall-rescue.ts
-    // that used to decide "genuine ⇒ done" locally now only calls this
-    // function with the fields it observed — `strength` stays on the
-    // evidence, but the reducer in mesh/turn-ledger/ (R9) is what turns
-    // "genuine" into a commit. This function itself computes NO verdict: it
-    // reuses the SAME `isWeakCompletionEvidence` classification already
-    // computed above for `lastEmittedCompletion.weak`, so the evidence's
-    // `strength` can never disagree with the wire event's own weakness.
+    // Turn-evidence (C5/C-W5/C-W5c): the SOLE chokepoint (wiring-unification
+    // §5 C5). EVERY provider verdict site in status-transition.ts /
+    // completion-flush.ts / stall-rescue.ts that used to decide "genuine ⇒
+    // done" locally now only calls this function with the fields it
+    // observed — `strength` stays on the evidence, but the reducer in
+    // mesh/turn-ledger/ (R9) is what turns "genuine" into a commit. This
+    // function itself computes NO verdict: it reuses the SAME
+    // `isWeakCompletionEvidence` classification already computed above for
+    // `lastEmittedCompletion.weak`, so the evidence's `strength` can never
+    // disagree with the dropped wire event's own weakness.
+    //
+    // `envelope` carries the local render context (final summary, node/
+    // provider identity, review flag, completion metadata) that used to ride
+    // ONLY the deleted `agent:generating_completed` wire event — the port
+    // (`turn-evidence-port.ts`) either stores it locally (this daemon owns
+    // the attempt — the common case) or publishes it to `mesh.<id>.handoff`
+    // and swaps in the returned `SummaryRef` (a remote-owned worker), so
+    // `renderNotice` (turn-ledger/deliver.ts) reproduces the exact same
+    // coordinator text that used to come from `buildProviderEvidence`.
     if (host.turnEvidencePort) {
         emitTurnEnd(host.turnEvidencePort, {
             sessionId: host.instanceId,
@@ -373,15 +387,68 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             taskId: opts.taskId,
             at: opts.timestamp,
             strength: weak ? 'weak' : 'genuine',
-            // `summary` is a SummaryRef POINTER (topic/writer/seq), never text —
-            // omitted until W2 exposes `publishSummary(meshId, text):
-            // Promise<SummaryRef>` for the content-class `mesh.<id>.handoff`
-            // topic (brief §1a, §8 item 2). `opts.finalSummary` (plain text)
-            // still reaches the wire event above unchanged; it is NOT carried
-            // into evidence — see REQUESTED EDITS.
             blockReason: asTurnEndBlockReason(opts.completionDiagnostic?.blockReason),
             releasedByHardCap: opts.completionDiagnostic?.releasedByTerminalBlockHardCap === true ? true : undefined,
             afterFinalizationTimeout: opts.completionDiagnostic?.emittedAfterFinalizationTimeout === true ? true : undefined,
+            // A provider's own turn-terminal record (stall-rescue's wedge/idle
+            // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
+            // enum, never a free-text passthrough.
+            nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+            // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
+            // `nodeLabelFor` already falls back to the attempt's own
+            // `nodeId`/`providerType` (dispatch-time facts the ledger has),
+            // which is the same information this host has access to, so
+            // there is nothing this call site can add.
+            //
+            // `workerResult`: the graph output envelope's structured pointer
+            // target (`envelope.worker_result`, `mesh-graph-transition-runner.ts`
+            // `applyTaskTerminalInTxn`, fed by `runtime-ledger.ts`'s
+            // `graphAdvance` from `ctx.envelope`). Parsed with the SAME
+            // trailing-JSON-in-the-final-summary rule the ledger evidence
+            // record has always used (`shared/worker-result-parse.ts`, moved
+            // out of `mesh/mesh-ledger.ts` in C-W5c so this producers-side
+            // call site can use it without a `providers -> mesh` boundary
+            // violation) — without it `envelope.worker_result` is empty for
+            // every locally-completed task and documented pointers like
+            // `/worker_result/validationResults` resolve to nothing.
+            envelope: {
+                ...(opts.finalSummary ? { finalSummary: opts.finalSummary } : {}),
+                ...(() => {
+                    const workerResult = opts.finalSummary ? extractJsonObjectFromSummary(opts.finalSummary) : undefined;
+                    return workerResult ? { workerResult } : {};
+                })(),
+                ...((typeof opts.completionDiagnostic?.reason === 'string'
+                    || typeof opts.completionDiagnostic?.blockReason === 'string'
+                    || typeof opts.completionDiagnostic?.finalAssistantPresent === 'boolean'
+                    || opts.evidenceLevel
+                    || typeof opts.completionDiagnostic?.source === 'string'
+                    || typeof opts.completionDiagnostic?.wedgedObservedStatus === 'string'
+                    || typeof opts.completionDiagnostic?.nativeTurnId === 'string') ? {
+                    notice: {
+                        completionMetadata: {
+                            ...(typeof opts.completionDiagnostic?.reason === 'string' ? { diagnosticReason: opts.completionDiagnostic.reason } : {}),
+                            // `blockReason` here is the FULL diagnostic vocabulary
+                            // (e.g. 'parsed_final_assistant_quiet_dwell') — much
+                            // wider than `asTurnEndBlockReason`'s closed 4-value
+                            // evidence enum above, so it rides local text too
+                            // (never silently dropped just because it didn't
+                            // narrow into the typed field).
+                            ...(typeof opts.completionDiagnostic?.blockReason === 'string' && !asTurnEndBlockReason(opts.completionDiagnostic.blockReason)
+                                ? { diagnosticReason: opts.completionDiagnostic.blockReason } : {}),
+                            ...(typeof opts.completionDiagnostic?.finalAssistantPresent === 'boolean'
+                                ? { finalAssistantPresent: opts.completionDiagnostic.finalAssistantPresent } : {}),
+                            ...(opts.evidenceLevel ? { evidenceLevel: opts.evidenceLevel } : {}),
+                            // Diagnostic-only strings (which producer path fired,
+                            // the wedge's observed status, the provider's own
+                            // native turn id) — local render context, same
+                            // treatment the deleted wire literal gave them.
+                            ...(typeof opts.completionDiagnostic?.source === 'string' ? { source: opts.completionDiagnostic.source } : {}),
+                            ...(typeof opts.completionDiagnostic?.wedgedObservedStatus === 'string' ? { wedgedObservedStatus: opts.completionDiagnostic.wedgedObservedStatus } : {}),
+                            ...(typeof opts.completionDiagnostic?.nativeTurnId === 'string' ? { nativeTurnId: opts.completionDiagnostic.nativeTurnId } : {}),
+                        },
+                    },
+                } : {}),
+            },
         });
     }
     // COORDINATOR-SILENT-IDLE one-shot consume: this completion's snapshot rides the

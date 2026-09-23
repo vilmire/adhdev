@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // (FALSE-IDLE, Fix 1) An autonomous AUTO-APPROVING mesh worker auto-resolves a modal; the
 // engine flips straight to 'generating' and the resumed turn falls briefly silent in the
@@ -85,8 +86,13 @@ function makeFlushInstance(opts: {
 
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
 
-  return { instance, events, rescheduleCalls }
+  return { instance, events, evidence, evidenceOpts, rescheduleCalls }
 }
 
 describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)', () => {
@@ -108,7 +114,7 @@ describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)'
   })
 
   it('(2) emits normally once the grace window has lapsed (turn genuinely ended after an approval)', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, evidenceOpts, rescheduleCalls } = makeFlushInstance({
       evidencePresent: true,
       previousStatus: 'generating',
       autoApprove: true,
@@ -120,9 +126,11 @@ describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)'
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
-    expect(events[0].finalSummary).toBe('the real final answer')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone); text rides envelope.
+    const idx = evidence.findIndex(e => e.kind === 'turn_end')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('the real final answer')
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 
@@ -144,7 +152,7 @@ describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)'
   })
 
   it('(3) REGRESSION: a plain non-auto-approve mesh turn (no recent approval) emits immediately — never held', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, rescheduleCalls } = makeFlushInstance({
       evidencePresent: true,
       previousStatus: 'generating',
       autoApprove: false, // auto-approve OFF → not an autonomous auto-approving valley
@@ -156,13 +164,14 @@ describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)'
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 
   it('(3b) REGRESSION: an auto-approving worker with NO recent approval emits immediately (recency window is the gate, not the flag)', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, rescheduleCalls } = makeFlushInstance({
       evidencePresent: true,
       previousStatus: 'generating',
       autoApprove: true,
@@ -174,7 +183,9 @@ describe('CliProviderInstance — FALSE-IDLE post-approval resume grace (Fix 1)'
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 

@@ -28,6 +28,7 @@ import { subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.j
 import {
     listLocalCoordinatorSessions,
     resolveCoordinatorDrainDaemonIds,
+    resolveEvidenceOwner,
     setupMeshEventForwarding,
     stopStaleMeshWorker,
 } from '../../mesh/mesh-event-forwarding.js';
@@ -67,7 +68,7 @@ import type { SeqscribeRuntime } from '../../seqscribe/runtime.js';
 import { setupQuotaEventRefresh, setupQuotaRefreshLoop } from '../../quota/refresh.js';
 import { getMachineId } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
-import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../daemon-components.js';
 import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
 
@@ -204,14 +205,20 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     };
     const ledger = createMeshRuntimeTurnLedger({ selfDaemonId, ports });
 
-    // 2b. Provider-side evidence (C5): every instance holds this port.
-    const offEvidencePort = wireTurnEvidencePort(components, ledger);
+    // The handoff publisher (`mesh.<id>.handoff`) is built here — before 2b —
+    // because both the evidence port (a remote-owned worker's text) and the
+    // notice runtime (a coordinator notice's remote-authored text) need it.
+    const appendHandoff = rt ? (meshId: string, kind: string, payload: Record<string, unknown>) => appendMeshHandoff(meshId, kind, payload as never) : undefined;
+
+    // 2b. Provider-side evidence (C5/C-W5c): every instance holds this port,
+    // which is now the SOLE producer of a mesh session's turn evidence (the
+    // forwarder's `buildProviderEvidence` duplicate is deleted).
+    const offEvidencePort = wireTurnEvidencePort(components, ledger, { appendHandoff });
 
     // 3. Notices: producer API, deliver, MCP inbox read.
     const counters = createTurnDeliverCounters();
     const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
     const resolveHandoff = resolveHandoffOn(rt);
-    const appendHandoff = rt ? (meshId: string, kind: string, payload: Record<string, unknown>) => appendMeshHandoff(meshId, kind, payload as never) : undefined;
     // D2 (applied in C-W8): notices go through the daemon's ONE send funnel —
     // `cliManager.input` — so they share the single messageId dedupe with every
     // other origin and get the same runtime ack bubble. Notices are always
@@ -352,38 +359,27 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
 /**
  * The provider-side evidence port (C5), wired into every provider instance.
  *
- * Transitional split (wiring-unification C integration): the mesh event
- * forwarder (`mesh-event-forwarding.ts` buildProviderEvidence) still builds the
- * turn evidence of MESH-bound sessions from their provider events — with the
- * owner routing, the local render envelope and the handoff text the port's
- * evidence does not carry yet (no `publishSummary` on the emit path). Taking a
- * mesh session's `turn_end` from the port as well would let the port's
- * summary-less copy (emitted first, at the completion-flush chokepoint) commit
- * the turn before the forwarder's, and the coordinator notice would lose the
- * worker's final text. So for a mesh-bound session the port contributes only
- * the kinds the forwarder never builds (`session_error`); a plain (non-mesh)
- * session — which the forwarder ignores — takes every kind from the port.
- * Collapses to "everything from the port" once the forwarder's evidence
- * builder is deleted (C-W5 follow-up; see the design §5 C5 stamp).
+ * SOLE PRODUCER (C-W5c): the port is now the only place a mesh-bound
+ * session's turn evidence is built — `mesh-event-forwarding.ts`'s
+ * `buildProviderEvidence` (which used to build the same evidence a second
+ * time from the legacy `agent:*` wire names on `provider_event`, for the
+ * owner routing and local render envelope the port could not carry) is
+ * deleted. `ownerFor` closes that gap: it resolves the attempt's owner via
+ * `resolveEvidenceOwner` (the same `resolveWorkerDelegateRouting` authority
+ * the deleted evidence builder routed through), and the port's `observe`
+ * (`turn-evidence-port.ts`) publishes text to `mesh.<id>.handoff` for a
+ * remote owner or passes it straight through as a local envelope otherwise —
+ * every producer site's `emit*` call (unchanged) already supplies that
+ * envelope via its `notice`/`finalSummary` opt. A plain (non-mesh) session
+ * resolves no owner (`ownerFor` returns `null`) and behaves exactly as
+ * before this change.
  */
-export const PORT_KINDS_FOR_MESH_SESSIONS: ReadonlySet<TurnEvidence['kind']> = new Set(['session_error']);
-
-function isMeshBoundSession(components: DaemonComponents, sessionId: string): boolean {
-    try {
-        const state = components.instanceManager.getInstance(sessionId)?.getState?.() as { settings?: Record<string, unknown> } | undefined;
-        const settings = state?.settings;
-        return !!settings && (typeof settings.meshNodeFor === 'string' && settings.meshNodeFor.length > 0);
-    } catch {
-        return false;
-    }
-}
-
-export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnLedger): () => void {
+export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnLedger, deps: { appendHandoff?: (meshId: string, kind: string, payload: Record<string, unknown>) => Promise<SummaryRef> } = {}): () => void {
     const port = createTurnEvidencePort({
-        observe: (evidence) => {
-            if (isMeshBoundSession(components, evidence.sessionId) && !PORT_KINDS_FOR_MESH_SESSIONS.has(evidence.kind)) return;
-            ledger.observe(evidence);
-        },
+        observe: (evidence, opts) => { ledger.observe(evidence, opts); },
+        ownerFor: (sessionId) => resolveEvidenceOwner(components, sessionId),
+        selfDaemonId: ledger.selfDaemonId,
+        ...(deps.appendHandoff ? { appendHandoff: deps.appendHandoff } : {}),
         attemptRefFor: (sessionId) => {
             const attempt = ledger.openAttemptForSession(sessionId);
             return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 import { PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS } from '../../src/providers/cli-provider-instance-types.js'
 
 // FALSE-IDLE-MIDTURN-COMPLETION (mission: fix/false-idle-midturn-completion-gate).
@@ -108,7 +109,11 @@ function makeAntigravityFlush(opts: {
 
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
-  return { instance, emitted, reScheduled }
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
+  return { instance, emitted, evidence, reScheduled }
 }
 
 describe('FALSE-IDLE-MIDTURN (A) antigravity native-history: no transcript evidence must not early-fire', () => {
@@ -132,7 +137,7 @@ describe('FALSE-IDLE-MIDTURN (A) antigravity native-history: no transcript evide
   it('EMITS once the transcript probe shows a landed assistant bubble (evidence arrived)', () => {
     // The same session one retry later: the assistant answer is now written to native-history,
     // so the probe tail is an assistant reply → the gate clears and a genuine completion fires.
-    const { instance, emitted } = makeAntigravityFlush({
+    const { instance, evidence } = makeAntigravityFlush({
       externalMessages: [
         { role: 'user', content: 'the injected task', timestamp: TURN_START + 100 },
         { role: 'assistant', content: 'the real final answer', timestamp: TURN_START + 6_000 },
@@ -143,7 +148,9 @@ describe('FALSE-IDLE-MIDTURN (A) antigravity native-history: no transcript evide
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(emitted.filter(e => e.event === 'agent:generating_completed')).toHaveLength(1)
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 })
@@ -176,7 +183,11 @@ function makeCodexFlush(opts: {
 
   instance.pushEvent = (e: any) => { emitted.push(e) }
   instance.scheduleCompletedDebounceFlush = (delayMs: number) => { reScheduled.push(delayMs) }
-  return { instance, emitted, reScheduled }
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
+  return { instance, emitted, evidence, reScheduled }
 }
 
 function assistantMsg(text: string, timestampMs: number) {
@@ -204,14 +215,16 @@ describe('FALSE-IDLE-MIDTURN (B) codex PTY-parsed: partial fragment + short quie
     // Same parsed assistant, but the last PTY output is now well past the quiet dwell — the
     // turn's tail is stable. A real completion fires.
     const now = Date.now()
-    const { instance, emitted } = makeCodexFlush({
+    const { instance, evidence } = makeCodexFlush({
       parsedMessages: [assistantMsg('작업을 모두 완료했습니다.', TURN_START + 6_000)],
       lastOutputAt: now - (PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 2_000), // quiet long enough
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
-    expect(emitted.filter(e => e.event === 'agent:generating_completed')).toHaveLength(1)
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter(e => e.kind === 'turn_end')).toHaveLength(1)
     expect(instance.completedDebouncePending).toBeNull()
   })
 })

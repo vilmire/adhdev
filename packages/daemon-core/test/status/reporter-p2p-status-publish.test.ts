@@ -247,7 +247,17 @@ describe('status_event projection — bus delivery', () => {
     return { bus, dashboard, server }
   }
 
-  it('preserves provider transcript metadata on canonical status events for completion refreshes', () => {
+  it('agent:generating_completed is now turn-sourced only: a provider_event carrying it (legacy producer, still consumed elsewhere on the bus) is dropped, not relayed with its rich metadata', () => {
+    // Wiring-unification C-W5 follow-up: `agent:generating_completed` /
+    // `agent:stopped` are content-free wire names projected SOLELY from a
+    // committed `turn` bus event now (status/status-event.ts's
+    // TURN_SOURCED_WIRE_NAMES guard on projectServerStatusEvent). A
+    // provider_event still carrying this name — some producers push it for
+    // OTHER consumers (mesh-event-forwarding.ts, quota refresh) that have not
+    // migrated off provider_event — must never reach status_event with its
+    // old rich metadata (providerType/providerSessionId/workspaceName/duration):
+    // that shape only ever existed on the legacy provider_event leg, and the
+    // turn leg (below) is deliberately minimal/content-free.
     const { bus, dashboard, server } = createEmitter()
 
     bus.emit({
@@ -265,15 +275,25 @@ describe('status_event projection — bus delivery', () => {
       } as any,
     })
 
-    const expectedPayload = expect.objectContaining({
-      event: 'agent:generating_completed',
-      timestamp: 456,
-      providerType: 'hermes-cli',
-      targetSessionId: 'runtime-session-1',
-      providerSessionId: 'provider-session-1',
-      workspaceName: '/repo',
-      duration: 9,
-    })
+    expect(dashboard).toHaveLength(0)
+    expect(server).toHaveLength(0)
+  })
+
+  it('the canonical (turn-sourced) agent:generating_completed status event is content-free — no provider transcript metadata', () => {
+    const { bus, dashboard, server } = createEmitter()
+
+    bus.emit({
+      kind: 'turn',
+      at: 456,
+      phase: 'committed',
+      sessionId: 'runtime-session-1',
+      attemptId: 'a1',
+      generation: 0,
+      outcome: 'completed',
+      strength: 'genuine',
+    } as any)
+
+    const expectedPayload = { event: 'agent:generating_completed', timestamp: 456, targetSessionId: 'runtime-session-1' }
     expect(dashboard[0]).toEqual(expectedPayload)
     expect(server[0]).toEqual(expectedPayload)
   })

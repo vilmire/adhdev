@@ -233,3 +233,130 @@ describe('guarded emit* helpers', () => {
         expect(observed).toHaveLength(0);
     });
 });
+
+describe('sole producer (C-W5c) — ownerFor / appendHandoff / envelope', () => {
+    it('a local owner (ownerFor resolves selfDaemonId, or resolves nothing) observes with the envelope passed straight through — no handoff call', () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const appendHandoff = vi.fn();
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => null,
+            selfDaemonId: 'daemon_self',
+            appendHandoff,
+        });
+        emitTurnEnd(port, {
+            sessionId: 's', observedBy: 'd', source: 'completion_flush_genuine', strength: 'genuine',
+            envelope: { finalSummary: 'the final answer' },
+        });
+        expect(appendHandoff).not.toHaveBeenCalled();
+        expect(observed).toHaveLength(1);
+        expect(observed[0].opts?.owner).toBeUndefined();
+        expect(observed[0].opts?.envelope?.finalSummary).toBe('the final answer');
+        // The evidence body itself never carries the text — content-free by construction.
+        expect(JSON.stringify(observed[0].evidence)).not.toContain('the final answer');
+    });
+
+    it('ownerFor resolving to selfDaemonId is treated as local (not remote) — same as ownerFor returning null', () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const appendHandoff = vi.fn();
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => ({ daemonId: 'daemon_self', meshId: 'mesh_1' }),
+            selfDaemonId: 'daemon_self',
+            appendHandoff,
+        });
+        emitTurnEnd(port, { sessionId: 's', observedBy: 'd', source: 'completion_flush_genuine', strength: 'genuine', envelope: { finalSummary: 'x' } });
+        expect(appendHandoff).not.toHaveBeenCalled();
+        expect(observed[0].opts?.owner).toBeUndefined();
+    });
+
+    it('a remote owner with carryable text publishes to handoff first, then observes with summary set to the returned ref (never the raw text)', async () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const ref = { topic: 'mesh.m1.handoff', writer: 'w1', seq: 7 };
+        const appendHandoff = vi.fn(async () => ref);
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => ({ daemonId: 'daemon_remote', meshId: 'mesh_1' }),
+            selfDaemonId: 'daemon_self',
+            appendHandoff,
+        });
+        emitTurnEnd(port, {
+            sessionId: 's', observedBy: 'd', source: 'completion_flush_genuine', strength: 'genuine',
+            envelope: { finalSummary: 'SENTINEL-remote-text' },
+        });
+        await new Promise((r) => setImmediate(r));
+        expect(appendHandoff).toHaveBeenCalledWith('mesh_1', 'turn.evidence.text', expect.objectContaining({ text: 'SENTINEL-remote-text' }));
+        expect(observed).toHaveLength(1);
+        expect(observed[0].opts?.owner).toEqual({ daemonId: 'daemon_remote', meshId: 'mesh_1' });
+        if (observed[0].evidence.kind === 'turn_end') expect(observed[0].evidence.summary).toEqual(ref);
+        expect(JSON.stringify(observed[0].evidence)).not.toContain('SENTINEL-remote-text');
+    });
+
+    it('a remote owner with no appendHandoff dep still observes (fail-open, owner tag kept, text simply dropped)', () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => ({ daemonId: 'daemon_remote', meshId: 'mesh_1' }),
+            selfDaemonId: 'daemon_self',
+        });
+        emitTurnEnd(port, { sessionId: 's', observedBy: 'd', source: 'completion_flush_genuine', strength: 'genuine', envelope: { finalSummary: 'x' } });
+        expect(observed).toHaveLength(1);
+        expect(observed[0].opts?.owner).toEqual({ daemonId: 'daemon_remote', meshId: 'mesh_1' });
+        if (observed[0].evidence.kind === 'turn_end') expect(observed[0].evidence.summary).toBeUndefined();
+    });
+
+    it('a remote owner rejecting the handoff falls back to observing without a summary ref (never silently drops the evidence)', async () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const appendHandoff = vi.fn(async () => { throw new Error('handoff topic unavailable'); });
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => ({ daemonId: 'daemon_remote', meshId: 'mesh_1' }),
+            selfDaemonId: 'daemon_self',
+            appendHandoff,
+        });
+        emitTurnEnd(port, { sessionId: 's', observedBy: 'd', source: 'completion_flush_genuine', strength: 'genuine', envelope: { finalSummary: 'x' } });
+        await new Promise((r) => setImmediate(r));
+        expect(observed).toHaveLength(1);
+        if (observed[0].evidence.kind === 'turn_end') expect(observed[0].evidence.summary).toBeUndefined();
+    });
+
+    it('process_exit and session_error carry no summary_ref field, so a remote owner never triggers a handoff for them (only turn_end/transcript_final can)', async () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const appendHandoff = vi.fn(async () => ({ topic: 't', writer: 'w', seq: 1 }));
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor: () => ({ daemonId: 'daemon_remote', meshId: 'mesh_1' }),
+            selfDaemonId: 'daemon_self',
+            appendHandoff,
+        });
+        emitProcessExit(port, { sessionId: 's', observedBy: 'd', source: 'pty_exit', exitCode: null, envelope: { notice: { errorMessage: 'SENTINEL-error-text' } } });
+        emitSessionError(port, { sessionId: 's', observedBy: 'd', source: 'provider_error', reason: 'auth_failed', envelope: { notice: { errorMessage: 'SENTINEL-error-text' } } });
+        await new Promise((r) => setImmediate(r));
+        expect(appendHandoff).not.toHaveBeenCalled();
+        expect(observed).toHaveLength(2);
+        for (const { evidence, opts } of observed) {
+            expect(opts?.owner).toEqual({ daemonId: 'daemon_remote', meshId: 'mesh_1' });
+            // The envelope (local-only) still carries the text — it's just never
+            // published, since process_exit/session_error have nowhere on the
+            // evidence body to point a SummaryRef at.
+            expect((opts?.envelope?.notice as any)?.errorMessage).toBe('SENTINEL-error-text');
+            expect(JSON.stringify(evidence)).not.toContain('SENTINEL-error-text');
+        }
+    });
+
+    it('a caller-supplied owner on port.observe() itself wins over ownerFor', async () => {
+        const observed: Array<{ evidence: TurnEvidence; opts: any }> = [];
+        const ownerFor = vi.fn(() => ({ daemonId: 'daemon_wrong', meshId: 'mesh_wrong' }));
+        const port = createTurnEvidencePort({
+            observe: (e, opts) => { observed.push({ evidence: e, opts }); },
+            ownerFor,
+            selfDaemonId: 'daemon_self',
+        });
+        port.observe(
+            { eventId: 'e1', at: 1, sessionId: 's', observedBy: 'd', source: 'fsm_edge', kind: 'turn_started', retro: false },
+            { owner: { daemonId: 'daemon_explicit', meshId: 'mesh_explicit' } },
+        );
+        expect(ownerFor).not.toHaveBeenCalled();
+        expect(observed[0].opts?.owner).toEqual({ daemonId: 'daemon_explicit', meshId: 'mesh_explicit' });
+    });
+});

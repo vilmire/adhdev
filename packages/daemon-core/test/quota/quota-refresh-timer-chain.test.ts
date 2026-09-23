@@ -82,11 +82,31 @@ const codexFetcher = { provider: 'codex-cli' as const, fetch: fetchCodexQuota }
 const kimiFetcher = { provider: 'kimi' as const, fetch: fetchKimiQuota }
 
 function makeEventSource() {
-    // Provider events reach quota refresh as the bus's `provider_event` (B5).
+    // Turn commits reach quota refresh as the bus's `turn{phase:'committed'}`
+    // (wiring-unification C1/C5/C-W5 follow-up) — providerType is resolved via
+    // instanceManager, not carried on the bus event itself.
     const bus = createSessionLifecycleBus()
+    const providerTypeBySession = new Map<string, string>()
+    let genSeq = 0
     return {
         bus,
-        emit(event: any) { bus.emit({ kind: 'provider_event', sessionId: 's1', at: Date.now(), event }) },
+        setProviderType(sessionId: string, providerType: string) { providerTypeBySession.set(sessionId, providerType) },
+        instanceManager: {
+            getInstance(sessionId: string) {
+                const type = providerTypeBySession.get(sessionId)
+                if (!type) return undefined
+                return { getState: () => ({ type }) }
+            },
+        },
+        /** `outcome` mirrors the old event name: 'agent:generating_completed' → 'completed', 'agent:stopped' → 'failed'. */
+        emitCommit(sessionId: string, outcome: 'completed' | 'failed' | 'cancelled' = 'completed') {
+            genSeq += 1
+            bus.emit({
+                kind: 'turn', at: Date.now(), phase: 'committed',
+                sessionId, attemptId: `a${genSeq}`, generation: 0,
+                outcome, strength: outcome === 'completed' ? 'genuine' : undefined,
+            } as any)
+        },
     }
 }
 
@@ -260,7 +280,8 @@ describe('a wake never fails to come', () => {
             isEnabled: allEnabled,
         })
         const source = makeEventSource()
-        const eventHandle = setupQuotaEventRefresh({ bus: source.bus })
+        source.setProviderType('s1', 'kimi')
+        const eventHandle = setupQuotaEventRefresh({ bus: source.bus, instanceManager: source.instanceManager })
         try {
             // First wake: idle, everything fresh — the chain goes to sleep
             // until the backfill horizon.
@@ -271,7 +292,7 @@ describe('a wake never fails to come', () => {
             // A turn ends at 20min: the event-driven refresh fires and NUDGES
             // the chain.
             await vi.advanceTimersByTimeAsync(5 * 60_000)
-            source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+            source.emitCommit('s1')
             await vi.advanceTimersByTimeAsync(0)
             expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
 
@@ -282,7 +303,7 @@ describe('a wake never fails to come', () => {
             // towards.
             active = true
             await vi.advanceTimersByTimeAsync(2 * 60_000)
-            source.emit({ event: 'agent:generating_completed', providerType: 'kimi' })
+            source.emitCommit('s1')
             await vi.advanceTimersByTimeAsync(0)
             expect(fetchKimiQuota).toHaveBeenCalledTimes(2)
 

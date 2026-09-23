@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import { BACKGROUND_TASK_HOLD_MAX_MS } from '../../src/providers/cli-provider-instance-types.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // (FALSE-IDLE-BACKGROUND-CMD) claude-cli's idle/generating judgment is PTY-screen-derived and
 // blind to its own run_in_background bash jobs. When such a job is launched and the parent turn
@@ -15,6 +16,7 @@ import { BACKGROUND_TASK_HOLD_MAX_MS } from '../../src/providers/cli-provider-in
 type FlushHarness = {
   instance: any
   events: any[]
+  evidence: any[]
   rescheduleCalls: number[]
 }
 
@@ -69,8 +71,12 @@ function makeFlushInstance(opts: {
 
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the wire literal `agent:generating_completed` is no longer pushed
+  // — the port is the sole producer of the completion signal now.
+  const evidence: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) })
 
-  return { instance, events, rescheduleCalls }
+  return { instance, events, evidence, rescheduleCalls }
 }
 
 describe('CliProviderInstance — FALSE-IDLE-BACKGROUND-CMD completion hold', () => {
@@ -87,19 +93,20 @@ describe('CliProviderInstance — FALSE-IDLE-BACKGROUND-CMD completion hold', ()
   })
 
   it('EMITS once the background job clears (backgroundTaskActive false)', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({ backgroundTaskActive: false })
+    const { instance, evidence, rescheduleCalls } = makeFlushInstance({ backgroundTaskActive: false })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
+    // C-W5c: the completion signal is the port's turn_end evidence now (the
+    // legacy agent:generating_completed wire literal is gone).
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 
   it('RELEASES to normal finalization once the hold cap is exceeded (never wedges forever)', () => {
     // The background job never cleared, but the hold started longer ago than the cap.
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, rescheduleCalls } = makeFlushInstance({
       backgroundTaskActive: true,
       holdSince: Date.now() - BACKGROUND_TASK_HOLD_MAX_MS - 1000,
     })
@@ -108,8 +115,7 @@ describe('CliProviderInstance — FALSE-IDLE-BACKGROUND-CMD completion hold', ()
 
     // Cap exceeded → fall through to normal finalization (getCompletedFinalizationBlock=null → clean emit).
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
+    expect(evidence.filter((e) => e.kind === 'turn_end')).toHaveLength(1)
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 })

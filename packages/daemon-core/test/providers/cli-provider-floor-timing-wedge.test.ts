@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // FLOOR-TIMING-WEDGE — the "completed turn stuck in `generating` forever" class.
 //
@@ -54,7 +55,12 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
     // declaring nativeHistory.completionSignal). null = the provider has NOT recorded
     // this turn as over.
     instance.nativeTurnTerminalMarker = () => opts.terminalMarker ?? null
-    return { instance, emitted }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    const evidenceOpts: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
+    return { instance, emitted, evidence, evidenceOpts }
   }
 
   // Every floor-timing provider: same requiresFinalAssistantBeforeIdle chain, so the
@@ -70,7 +76,7 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
     // (1) THE WEDGE ITSELF. Pre-fix this returned false for every provider here,
     // because observedStatus was 'generating' — the state the wedge guarantees.
     it(`reconciles a wedged 'generating' turn the provider recorded as finished (${provider.type})`, () => {
-      const { instance, emitted } = makeInstance({
+      const { instance, evidence, evidenceOpts } = makeInstance({
         provider,
         terminalMarker: { receivedAt: 9_000, outcome: 'completed', summary: 'done: committed b50e91ee', turnId: 'turn-7' },
       })
@@ -78,14 +84,17 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
       const result = instance.tryReconcileTranscriptCompletionForStall('generating')
 
       expect(result).toBe(true)
-      expect(emitted).toHaveLength(1)
-      expect(emitted[0].event).toBe('agent:generating_completed')
-      expect(emitted[0].taskId).toBe('task-1')
-      expect(emitted[0].finalSummary).toBe('done: committed b50e91ee')
-      expect(emitted[0].completionDiagnostic).toMatchObject({
+      // C-W5c: the completion signal is the port's turn_end evidence (the
+      // legacy agent:generating_completed wire literal is gone). `nativeOutcome`
+      // is a real evidence field (closed enum); the rest is local envelope text.
+      const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+      expect(idx).toBeGreaterThanOrEqual(0)
+      expect(evidence[idx].taskId).toBe('task-1')
+      expect(evidence[idx].nativeOutcome).toBe('completed')
+      expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: committed b50e91ee')
+      expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
         source: 'stall_wedged_generating_native_turn_end',
         wedgedObservedStatus: 'generating',
-        nativeTurnOutcome: 'completed',
         nativeTurnId: 'turn-7',
       })
     })
@@ -112,27 +121,30 @@ describe('FLOOR-TIMING-WEDGE: stall rescue for a session wedged in generating', 
   // marker must release it on its own — otherwise the summary-less turns stay
   // wedged and the fix would only cover the easy half of the class.
   it('reconciles a marker-proven turn that carries no assistant text at all', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence, evidenceOpts } = makeInstance({
       provider: FLOOR_PROVIDERS[0],
       finalSummary: undefined,
       terminalMarker: { receivedAt: 9_000, outcome: 'completed', summary: '' },
     })
 
     expect(instance.tryReconcileTranscriptCompletionForStall('generating')).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_wedged_generating_native_turn_end' })
+    const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_wedged_generating_native_turn_end' })
   })
 
   // An aborted turn is genuinely over — it will never receive a final assistant, so
   // leaving it 'generating' is the same permanent wedge with a different cause.
   it('reconciles an aborted turn (never receives a final assistant)', () => {
-    const { instance, emitted } = makeInstance({
+    const { instance, evidence } = makeInstance({
       provider: FLOOR_PROVIDERS[0],
       terminalMarker: { receivedAt: 9_000, outcome: 'aborted', summary: '' },
     })
 
     expect(instance.tryReconcileTranscriptCompletionForStall('generating')).toBe(true)
-    expect(emitted[0].completionDiagnostic).toMatchObject({ nativeTurnOutcome: 'aborted' })
+    const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(evidence[idx].nativeOutcome).toBe('aborted')
   })
 
   // The gate was OPENED for 'generating', not removed for everything. A parked

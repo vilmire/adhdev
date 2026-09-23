@@ -18,6 +18,7 @@
  */
 
 import type { MeshTaskDifficulty } from '@adhdev/mesh-shared';
+import { extractJsonObjectFromSummary } from '../shared/worker-result-parse.js';
 import {
     coordinatorIdentityFromEmitFields,
     MESH_PROTOCOL_VERSION_V2,
@@ -567,36 +568,14 @@ function readStringArray(value: unknown): string[] {
 }
 
 /**
- * Exported for the graph output envelope (mesh-event-forwarding
- * buildGraphEnvelopeWorkerResult), which needs the SAME final-summary parse the
- * ledger evidence record has always used — otherwise `envelope.worker_result`
- * is empty for every locally-completed task and documented pointers like
- * `/worker_result/validationResults` resolve to nothing.
+ * Re-exported from `shared/worker-result-parse.ts` (moved there in
+ * wiring-unification C-W5c so `providers/completion/completion-flush.ts` —
+ * which must never import `mesh/**` — can compute the graph output
+ * envelope's `workerResult` for a LOCAL completion the same way this ledger
+ * evidence record always has, without a boundary violation). Kept as a
+ * re-export here so this file's own existing callers are unaffected.
  */
-export function extractJsonObjectFromSummary(summary?: string): Record<string, unknown> | undefined {
-    const text = readNonEmptyString(summary);
-    if (!text) return undefined;
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const candidates = [fenced?.[1], text].filter(Boolean) as string[];
-    for (const candidate of candidates) {
-        const trimmed = candidate.trim();
-        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
-        try {
-            const parsed = JSON.parse(trimmed);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                // Require at least one mesh worker result field to avoid false positives
-                // (e.g. JSON from tool call outputs or log lines in the final summary).
-                const hasWorkerShape = 'status' in parsed && (
-                    'changedFiles' in parsed || 'errors' in parsed
-                    || 'gitStatus' in parsed || 'nextAction' in parsed
-                    || 'validationResults' in parsed
-                );
-                if (hasWorkerShape) return parsed;
-            }
-        } catch { /* try next candidate */ }
-    }
-    return undefined;
-}
+export { extractJsonObjectFromSummary } from '../shared/worker-result-parse.js';
 
 function normalizeValidationResults(value: unknown): MeshValidationResultArtifact[] {
     if (!Array.isArray(value)) return [];

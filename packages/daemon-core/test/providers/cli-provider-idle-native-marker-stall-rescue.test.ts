@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // IDLE-NATIVE-MARKER-STALL-RESCUE — the "finished turn reported as a stall" class.
 //
@@ -95,7 +96,12 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
       },
       messages: [],
     }
-    return { instance, emitted, signals }
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = []
+    const evidenceOpts: any[] = []
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
+    return { instance, emitted, evidence, evidenceOpts, signals }
   }
 
   // Same floor class as the wedge suite — this is not a codex-specific patch.
@@ -108,7 +114,7 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
     // (1) THE INCIDENT ITSELF. Pre-fix this returned false — the signal said
     // "no final assistant", and the idle path never asked the marker.
     it(`reconciles an idle turn the provider recorded as finished, with no assistant text (${provider.type})`, () => {
-      const { instance, emitted, signals } = makeInstance({
+      const { instance, evidence, evidenceOpts, signals } = makeInstance({
         provider,
         finalSummary: undefined,
         signalFinalAssistantPresent: false,
@@ -117,15 +123,17 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
 
       const result = instance.tryReconcileTranscriptCompletionForStall('idle', signals)
 
-      // ★ The assertion is DELIVERY, not "did not drop": a completion event must
-      // actually be emitted for this task, which is what the coordinator consumes.
+      // ★ The assertion is DELIVERY, not "did not drop": a completion evidence
+      // record must actually be observed for this task, which is what the
+      // coordinator's evidence pipeline consumes (C-W5c: the port is the sole
+      // producer — no more legacy agent:generating_completed wire literal).
       expect(result).toBe(true)
-      expect(emitted).toHaveLength(1)
-      expect(emitted[0].event).toBe('agent:generating_completed')
-      expect(emitted[0].taskId).toBe('task-1')
-      expect(emitted[0].completionDiagnostic).toMatchObject({
+      const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+      expect(idx).toBeGreaterThanOrEqual(0)
+      expect(evidence[idx].taskId).toBe('task-1')
+      expect(evidence[idx].nativeOutcome).toBe('completed')
+      expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
         source: 'stall_idle_native_turn_end',
-        nativeTurnOutcome: 'completed',
         nativeTurnId: 'turn-11',
       })
     })
@@ -133,7 +141,7 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
     // The marker also supplies the payload when it carries text, so the
     // coordinator gets a real summary rather than an empty completion.
     it(`carries the marker's own summary into the emitted completion (${provider.type})`, () => {
-      const { instance, emitted, signals } = makeInstance({
+      const { instance, evidence, evidenceOpts, signals } = makeInstance({
         provider,
         finalSummary: undefined,
         signalFinalAssistantPresent: false,
@@ -141,7 +149,8 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
       })
 
       expect(instance.tryReconcileTranscriptCompletionForStall('idle', signals)).toBe(true)
-      expect(emitted[0].finalSummary).toBe('done: audited all drop paths')
+      const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+      expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('done: audited all drop paths')
     })
 
     // (2) THE REGRESSION GUARD, opposite direction. This is the 2026-08-18 class:
@@ -200,7 +209,7 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
   // in-turn final assistant is reconciled off the signal, as before, and keeps
   // its historical diagnostic source so traces stay comparable.
   it('still reconciles the ordinary shape path (final assistant present, no marker)', () => {
-    const { instance, emitted, signals } = makeInstance({
+    const { instance, evidence, evidenceOpts, signals } = makeInstance({
       provider: FLOOR_PROVIDERS[0],
       signalFinalAssistantPresent: true,
       terminalMarker: null,
@@ -213,8 +222,9 @@ describe('IDLE-NATIVE-MARKER-STALL-RESCUE: an idle turn the provider recorded as
     ] as any
 
     expect(instance.tryReconcileTranscriptCompletionForStall('idle', signals)).toBe(true)
-    expect(emitted).toHaveLength(1)
-    expect(emitted[0].completionDiagnostic).toMatchObject({ source: 'stall_native_source_transcript_completion' })
+    const idx = evidence.findIndex((e) => e.kind === 'turn_end')
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({ source: 'stall_native_source_transcript_completion' })
   })
 
   // daemon-owned providers get real PTY turn events; their quiet is a genuine

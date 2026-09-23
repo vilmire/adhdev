@@ -35,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { detectBackgroundTaskActive } from '../../src/providers/spec/background-task-detector.js';
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js';
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
 
 // ── wire.jsonl record builders (shape verified against live kimi sessions) ──
 
@@ -154,8 +155,12 @@ function makeFlushHarness(liveParsed: () => any) {
 
     instance.context = { emitProviderEvent: (e: any) => events.push(e) };
     instance.events = [];
+    // C-W5c: the completion signal is the port's turn_end evidence now — the
+    // legacy agent:generating_completed wire literal is gone.
+    const evidence: any[] = [];
+    instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any) => evidence.push(e) });
 
-    return { instance, events, rescheduleCalls };
+    return { instance, events, evidence, rescheduleCalls };
 }
 
 // ── the rc.29 regression ─────────────────────────────────────────────────────
@@ -235,7 +240,7 @@ describe('kimi rc.29 — loader-resolved nativeHistory survives to the backgroun
         expect(running.support).toBe('tracked');
 
         // (3) The completion flush holds on background_task_active.
-        const { instance, events, rescheduleCalls } = makeFlushHarness(() => {
+        const { instance, events, evidence, rescheduleCalls } = makeFlushHarness(() => {
             const bg = detect();
             return {
                 status: 'idle',
@@ -268,12 +273,13 @@ describe('kimi rc.29 — loader-resolved nativeHistory survives to the backgroun
         expect(detect().active).toBe(false);
 
         (instance as any).flushCompletedDebounceIfFinalized();
-        expect(events).toHaveLength(1);
-        expect(events[0].event).toBe('agent:generating_completed');
+        // C-W5c: the completion signal is the port's turn_end evidence (the
+        // legacy agent:generating_completed wire literal is gone).
+        expect(evidence.filter((e: any) => e.kind === 'turn_end')).toHaveLength(1);
         expect((instance as any).completedDebouncePending).toBeNull();
 
         // A later flush (reconcile tick, duplicate idle sample) must NOT re-emit.
         (instance as any).flushCompletedDebounceIfFinalized();
-        expect(events).toHaveLength(1);
+        expect(evidence.filter((e: any) => e.kind === 'turn_end')).toHaveLength(1);
     });
 });

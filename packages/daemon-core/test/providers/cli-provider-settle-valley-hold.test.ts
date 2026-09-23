@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 
 // (SETTLE-VALLEY) A native-history (claude-cli) mesh worker resolves an approval and falls
 // briefly idle (waiting_approval→idle) BEFORE the next approval turn resumes. The live
@@ -76,8 +77,13 @@ function makeFlushInstance(opts: {
 
   instance.context = { emitProviderEvent: (e: any) => events.push(e) }
   instance.events = []
+  // C-W5c: the completion signal is the port's turn_end evidence now — the
+  // legacy agent:generating_completed wire literal is gone.
+  const evidence: any[] = []
+  const evidenceOpts: any[] = []
+  instance.turnEvidencePort = createTurnEvidencePort({ observe: (e: any, o: any) => { evidence.push(e); evidenceOpts.push(o); } })
 
-  return { instance, events, rescheduleCalls }
+  return { instance, events, evidence, evidenceOpts, rescheduleCalls }
 }
 
 describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () => {
@@ -99,7 +105,7 @@ describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () =>
   })
 
   it('emits a GENUINE completion once the transcript final assistant arrives on a later flush', () => {
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, evidenceOpts, rescheduleCalls } = makeFlushInstance({
       evidencePresent: true,
       finalSummary: 'Verified both fixes; tests pass; 2 files changed.',
       previousStatus: 'waiting_approval',
@@ -108,14 +114,16 @@ describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () =>
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('agent:generating_completed')
-    expect(events[0].finalSummary).toBe('Verified both fixes; tests pass; 2 files changed.')
-    // Genuine: no missing-final-assistant weakness marker. Transcript-authoritative
-    // completions now carry a diagnostic describing the evidence they were judged on,
-    // so "genuine" is asserted on that evidence rather than on the diagnostic's absence.
-    expect(events[0].completionDiagnostic).toMatchObject({
-      evidenceWeak: false,
+    // C-W5c: the completion signal is the port's turn_end evidence (the
+    // legacy agent:generating_completed wire literal is gone).
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(evidenceOpts[idx]?.envelope?.finalSummary).toBe('Verified both fixes; tests pass; 2 files changed.')
+    // Genuine: no missing-final-assistant weakness marker.
+    expect(turnEnds[0].strength).toBe('genuine')
+    expect(turnEnds[0].blockReason).toBeUndefined()
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata).toMatchObject({
       finalAssistantPresent: true,
     })
     expect((instance as any).completedDebouncePending).toBeNull()
@@ -140,7 +148,7 @@ describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () =>
   it('still emits IMMEDIATELY (CANON-C unchanged) for a generating→idle background-child completion', () => {
     // previousStatus='generating' is the background-child false-idle the CANON-C decoupled
     // immediate emit was designed for — the transcript trails by a write, not a whole resume.
-    const { instance, events, rescheduleCalls } = makeFlushInstance({
+    const { instance, evidence, evidenceOpts, rescheduleCalls } = makeFlushInstance({
       evidencePresent: false,
       previousStatus: 'generating',
     })
@@ -148,10 +156,11 @@ describe('CliProviderInstance — SETTLE-VALLEY inter-approval idle hold', () =>
     ;(instance as any).flushCompletedDebounceIfFinalized()
 
     expect(rescheduleCalls).toEqual([])
-    expect(events).toHaveLength(1)
-    expect(events[0].completionDiagnostic.blockReason).toBe('missing_final_assistant')
-    expect(events[0].completionDiagnostic.finalAssistantPresent).toBe(false)
-    expect(events[0].completionDiagnostic.decoupledImmediateEmit).toBe(true)
+    const turnEnds = evidence.filter((e) => e.kind === 'turn_end')
+    expect(turnEnds).toHaveLength(1)
+    const idx = evidence.indexOf(turnEnds[0])
+    expect(turnEnds[0].blockReason).toBe('missing_final_assistant')
+    expect(evidenceOpts[idx]?.envelope?.notice?.completionMetadata?.finalAssistantPresent).toBe(false)
     expect((instance as any).completedDebouncePending).toBeNull()
   })
 
