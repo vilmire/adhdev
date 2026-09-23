@@ -81,7 +81,7 @@ import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
-import { readLedgerEntries, readLedgerEntriesByKind } from './mesh-ledger.js';
+import { readActiveWorkLedgerEntries, readRefineJobLedgerEntries } from './mesh-ledger.js';
 import { buildMeshActiveWork } from './mesh-active-work.js';
 import type { MeshActiveWorkLedgerSnapshot } from './mesh-active-work.js';
 import { buildMeshAsyncRefineJobs, summarizeMeshAsyncRefineJobs } from './mesh-refine-status.js';
@@ -239,7 +239,7 @@ export function maybeInjectIdleActiveMissionReminder(
         // a bare tail:200 window can be crowded out by unrelated mesh traffic while a
         // dispatch/terminal row for a still-active task falls out of the window, making this
         // gate wrongly conclude the mesh is fully idle.
-        const ledgerEntries = sharedLedgerSnapshot?.entries ?? readLedgerEntriesByKind(meshId, [
+        const ledgerEntries = sharedLedgerSnapshot?.entries ?? readActiveWorkLedgerEntries(meshId, [
             'task_dispatched',
             'task_completed',
             'task_failed',
@@ -289,9 +289,7 @@ export function maybeInjectIdleActiveMissionReminder(
         // the resume scanner does (router-refine-resume.ts). Filtering by kind first
         // bounds the result to the three job-lifecycle kinds rather than all traffic, so
         // an in-flight dispatch cannot be crowded out by unrelated events.
-        const refineLedgerEntries = readLedgerEntries(meshId, {
-            kind: ['task_dispatched', 'task_completed', 'task_failed'],
-        });
+        const refineLedgerEntries = readRefineJobLedgerEntries(meshId);
 
         // Async refine jobs are NOT modeled as queue/direct dispatches, so buildMeshActiveWork
         // never counts them — an accepted/running `mesh_refine_node` job (each pass runs

@@ -1,6 +1,6 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { LOG } from '../logging/logger.js';
-import { getQueue } from './mesh-work-queue.js';
+import { getQueueEntryById } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
@@ -619,7 +619,7 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
         if (oldest !== undefined) lastActionableSkipNotified.delete(oldest);
     }
     let task: MeshWorkQueueEntry | undefined;
-    try { task = getQueue(meshId).find(t => t.id === taskId); } catch { /* best-effort */ }
+    try { task = getQueueEntryById(meshId, taskId) ?? undefined; } catch { /* best-effort */ }
 
     // STALE-SCAN-BLOCKER: re-read the task's CURRENT status before paging, and drop the
     // notification when the task is no longer pending.
@@ -639,8 +639,8 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // autoLaunch. The message asserts an actionable blocker, so each one cost the
     // coordinator a diversion into diagnosing a block that did not exist.
     //
-    // `getQueue` reads through to MeshRuntimeStore (not the caller's snapshot), so this
-    // check sees the post-await truth. Deliberately fail-OPEN: an unreadable queue or a
+    // `getQueueEntryById` reads through to MeshRuntimeStore (not the caller's snapshot), so
+    // this check sees the post-await truth. Deliberately fail-OPEN: an unreadable queue or a
     // row we cannot find leaves `task` undefined and we still notify, because silently
     // swallowing a real blocker is the worse failure — the point of this fix is accuracy,
     // not suppression.
