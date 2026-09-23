@@ -5,9 +5,10 @@ import { join } from 'node:path';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshLaunchSession } from '../src/tools/mesh-tools.js';
-import { getLedgerDir, readLedgerEntries } from '@adhdev/daemon-core';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { getLedgerDir, readLocalRecords } from '@adhdev/daemon-core';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // LAUNCH-ACCOUNTING (P4) single-writer dedup: a current daemon appends the
 // `session_launched` audit entry itself in its launch_cli funnel (cli-manager) and
 // answers `ledgerLaunchRecorded: true`. mesh_launch_session must then SKIP its own
@@ -22,6 +23,7 @@ function makeCtx(meshId: string, launchResult: Record<string, unknown>) {
   };
   const launchCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
+    if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     if (command === 'get_mesh') return { success: true, mesh };
     if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true } };
@@ -54,11 +56,11 @@ function makeCtx(meshId: string, launchResult: Record<string, unknown>) {
 }
 
 function sessionLaunchedEntries(meshId: string) {
-  return readLedgerEntries(meshId, { tail: 50 }).filter((e: any) => e.kind === 'session_launched');
+  return readLocalRecords(meshId, { tail: 50 }).filter((e: any) => e.kind === 'session_launched');
 }
 
 function cleanup(meshId: string) {
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const path = join(getLedgerDir(), `${safe}.jsonl`);
   if (existsSync(path)) unlinkSync(path);

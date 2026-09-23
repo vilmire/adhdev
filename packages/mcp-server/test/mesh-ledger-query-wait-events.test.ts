@@ -4,23 +4,29 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { meshLedgerQuery } from '../src/tools/mesh-tools.js';
-import { appendLedgerEntry, getLedgerDir, loadConfig } from '@adhdev/daemon-core';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { getLedgerDir, loadConfig } from '@adhdev/daemon-core';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
+import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 
+import { seedLocalRecord } from './helpers/local-records.js';
 const SELF_MACHINE_ID = loadConfig().machineId;
 
 function makeCtx(meshId: string) {
   return {
     mesh: { id: meshId, nodes: [] },
-    transport: { command: async () => ({ success: false }) },
+    // C-W9b: meshLedgerQuery now reads via the `ledger_query` IPC command
+    // (see fake-turn-ipc-transport.ts's PENDING_C_W9A_HANDLERS — no landed
+    // daemon-side handler yet, so the fixture calls the same in-process
+    // `readLocalRecords`/`getLedgerSummary` this test seeds via `appendLedgerEntry`).
+    transport: makeFakeTurnIpcTransport(),
     localDaemonId: SELF_MACHINE_ID,
     localMachineId: SELF_MACHINE_ID,
   } as any;
 }
 
 function cleanup(meshId: string) {
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.pending-events.jsonl']) {
@@ -33,10 +39,10 @@ test('mesh_ledger_query filters by kind, node, and tail (AND-composed)', async (
   const meshId = 'mesh_ledger_query_filters';
   cleanup(meshId);
   try {
-    appendLedgerEntry(meshId, { kind: 'task_dispatched', nodeId: 'mach_alpha', payload: { i: 0 } });
-    appendLedgerEntry(meshId, { kind: 'task_failed', nodeId: 'mach_alpha', payload: { i: 1 } });
-    appendLedgerEntry(meshId, { kind: 'task_failed', nodeId: 'mach_beta', payload: { i: 2 } });
-    appendLedgerEntry(meshId, { kind: 'task_completed', nodeId: 'mach_alpha', payload: { i: 3 } });
+    seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'mach_alpha', payload: { i: 0 } });
+    seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'mach_alpha', payload: { i: 1 } });
+    seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'mach_beta', payload: { i: 2 } });
+    seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'mach_alpha', payload: { i: 3 } });
 
     // kind (comma list) + node compose as AND.
     const alphaTerminal = JSON.parse(await meshLedgerQuery(makeCtx(meshId), {
@@ -66,7 +72,7 @@ test('mesh_ledger_query clamps tail to 500 and echoes the resolved query', async
   const meshId = 'mesh_ledger_query_clamp';
   cleanup(meshId);
   try {
-    appendLedgerEntry(meshId, { kind: 'task_dispatched', payload: {} });
+    seedLocalRecord(meshId, { kind: 'task_dispatched', payload: {} });
     const res = JSON.parse(await meshLedgerQuery(makeCtx(meshId), { tail: 99999 }));
     assert.equal(res.query.tail, 500);
     // default tail when unspecified is 50.

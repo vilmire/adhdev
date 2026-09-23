@@ -5,6 +5,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshRestartDaemon, meshStatus } from '../src/tools/mesh-tools.js';
 import { extractDaemonBuildInfo } from '../src/tools/mesh-tools-internal.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 const cleanGit = {
   isGitRepo: true,
   isDirty: false,
@@ -43,7 +44,7 @@ function makeIpcCtx(responder: (daemonId: string, command: string) => unknown) {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
-  transport.command = async command => responder('daemon-coordinator-preview', command);
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {}); return responder('daemon-coordinator-preview', command); };
   transport.meshCommand = async (daemonId, command) => responder(daemonId, command);
   return {
     mesh,

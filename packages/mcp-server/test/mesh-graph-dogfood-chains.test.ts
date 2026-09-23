@@ -8,8 +8,9 @@ import {
     meshGraphGateRelease,
     meshGraphView,
 } from '../src/tools/mesh-tools.js';
-import { getQueue, __writeTaskStatusForTests, readLedgerEntries, runWorkspaceSagaTick } from '@adhdev/daemon-core';
+import { getQueue, __writeTaskStatusForTests, readLocalRecords, runWorkspaceSagaTick } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // GRAPH-ORCHESTRATION Phase G — dogfood of the FOUR REAL OBSERVED CHAINS.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -45,7 +46,8 @@ function recordingLocalTransport() {
     const commands: Array<{ cmd: string; args: any }> = [];
     return {
         commands,
-        command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+        command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         getStatus: async () => ({ sessions: [] }),
     } as any;
 }
@@ -243,7 +245,7 @@ test('G-1: implementation → refinery gate → validation — the release patch
     // Ledger provenance: the release is recorded with its outcome and a DIGEST
     // of the release payload — never the result body itself (design :737-738).
     // The replay is recorded too, marked duplicate and waking nothing.
-    const releasedEntries = readLedgerEntries(meshId, { kind: ['graph_gate_released'] } as any);
+    const releasedEntries = readLocalRecords(meshId, { kind: ['graph_gate_released'] } as any);
     assert.equal(releasedEntries.length, 2, 'the real release AND its idempotent replay are both recorded');
     const [realRelease, duplicateRelease] = releasedEntries.map(e => e.payload as any);
     assert.equal(realRelease.outcome, 'passed');
@@ -286,7 +288,7 @@ test('G-2: type fix → refinery landing → terminal deploy gate — outcomes a
     assert.equal(batch.gates.length, 2);
 
     // Enqueue provenance: one worker, two gates, digested plan (design :733-743).
-    const committed = readLedgerEntries(meshId, { kind: ['graph_enqueue_committed'] } as any);
+    const committed = readLocalRecords(meshId, { kind: ['graph_enqueue_committed'] } as any);
     assert.equal(committed.length, 1);
     assert.equal((committed[0].payload as any).taskCount, 1);
     assert.equal((committed[0].payload as any).gateCount, 2);
@@ -328,7 +330,7 @@ test('G-2: type fix → refinery landing → terminal deploy gate — outcomes a
 
     // ★ Ledger provenance for BOTH gate decisions: outcome recorded, evidence
     // recorded as a digest, evidence BODIES never copied (design :737-738).
-    const releases = readLedgerEntries(meshId, { kind: ['graph_gate_released'] } as any);
+    const releases = readLocalRecords(meshId, { kind: ['graph_gate_released'] } as any);
     assert.equal(releases.length, 2, 'both gate releases must be recorded');
     for (const entry of releases) {
         assert.equal((entry.payload as any).outcome, 'passed');
@@ -336,7 +338,7 @@ test('G-2: type fix → refinery landing → terminal deploy gate — outcomes a
     }
     assert.equal(JSON.stringify(releases).includes(landEvidenceSecret), false, 'the land evidence body stays out of the ledger');
     assert.equal(JSON.stringify(releases).includes(deployEvidenceSecret), false, 'the deploy evidence body stays out of the ledger');
-    const claims = readLedgerEntries(meshId, { kind: ['graph_gate_claimed'] } as any);
+    const claims = readLocalRecords(meshId, { kind: ['graph_gate_claimed'] } as any);
     assert.equal(claims.length, 2);
 
     // End state: the graph completed at its terminal gate.
@@ -509,7 +511,7 @@ test('G-4 pass: ci_wait released with a pass outcome runs root-bump and ends at 
     assert.equal(deployRelease.success, true, JSON.stringify(deployRelease));
 
     // Ledger: the CI gate's pass outcome is recorded with its evidence digest.
-    const releases = readLedgerEntries(meshId, { kind: ['graph_gate_released'] } as any);
+    const releases = readLocalRecords(meshId, { kind: ['graph_gate_released'] } as any);
     assert.equal(releases.length, 2);
     assert.deepEqual(releases.map(e => (e.payload as any).outcome).sort(), ['passed', 'passed']);
     for (const entry of releases) assert.ok((entry.payload as any).releaseDigest);
@@ -571,7 +573,7 @@ test('G-4 fail: ci_wait released with a FAIL outcome — root-bump never runs an
     assert.equal(earlyDeploy.code, 'gate_not_awaiting', 'a failed CI outcome must never open production deploy');
 
     // The fail outcome is on the ledger with its evidence digest.
-    const releases = readLedgerEntries(meshId, { kind: ['graph_gate_released'] } as any);
+    const releases = readLocalRecords(meshId, { kind: ['graph_gate_released'] } as any);
     assert.equal(releases.length, 1);
     assert.equal((releases[0].payload as any).outcome, 'failed');
     assert.ok((releases[0].payload as any).releaseDigest);

@@ -6,12 +6,22 @@ import { TURN_IPC_COMMANDS, TURN_IPC_PROTOCOL_VERSION } from '@adhdev/mesh-share
 import {
     TurnIpcCommandError,
     classifyTransportFailure,
+    ledgerQuery,
     meshIndexQuery,
     meshRecord,
+    missionListQuery,
     operatorStatus,
+    toolCallRecord,
     turnCancel,
     turnObserve,
     turnQuery,
+    recordLocal,
+    queueQuery,
+    queueEnqueue,
+    queueEnqueueGraph,
+    queueCancel,
+    activeWorkQuery,
+    recoveryContextQuery,
 } from '../src/ipc/turn-commands.js';
 
 /**
@@ -43,11 +53,18 @@ function throwingTransport(error: unknown) {
     } as any;
 }
 
-test('TURN_IPC_COMMANDS has exactly ten names (the C2 six + mission_* + C-W8 note_*)', () => {
-    assert.equal(TURN_IPC_COMMANDS.length, 10);
+test('TURN_IPC_COMMANDS has exactly twenty-three names (the C2 six + mission_* + C-W8 note_* + C-W9b tool_call_record/ledger_query/mission_list_query + the C-W9a store commands)', () => {
+    assert.equal(TURN_IPC_COMMANDS.length, 23);
     assert.deepEqual(
         [...TURN_IPC_COMMANDS].sort(),
-        ['mesh_index_query', 'mesh_record', 'mission_query', 'mission_upsert', 'note_forget', 'note_upsert', 'operator_status', 'turn_cancel', 'turn_observe', 'turn_query'],
+        [
+            'active_work_query', 'direct_dispatch_record', 'graph_audit_record',
+            'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
+            'note_forget', 'note_upsert', 'operator_status',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_graph', 'queue_query', 'queue_requeue',
+            'record_local', 'recovery_context_query',
+            'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
+        ],
     );
 });
 
@@ -127,6 +144,55 @@ test('meshIndexQuery: round trip with rows', async () => {
     assert.equal(res.rows.length, 1);
 });
 
+// ─── C-W9b: tool_call_record / ledger_query / mission_list_query ────────────
+
+test('toolCallRecord: sends v:1 + request, decodes a valid response', async () => {
+    let sentType = '';
+    let sentArgs: Record<string, unknown> = {};
+    const transport = fakeTransport((type, args) => {
+        sentType = type;
+        sentArgs = args;
+        return { rateLimitExceeded: true, callsInWindow: 41, advisory: 'slow down' };
+    });
+    const res = await toolCallRecord(transport, { meshId: 'm1', tool: 'mesh_status', callerRole: 'coordinator', sessionId: 's1' });
+    assert.equal(sentType, 'tool_call_record');
+    assert.equal((sentArgs as any).v, TURN_IPC_PROTOCOL_VERSION);
+    assert.equal((sentArgs as any).tool, 'mesh_status');
+    assert.equal(res.rateLimitExceeded, true);
+    assert.equal(res.callsInWindow, 41);
+    assert.equal(res.advisory, 'slow down');
+});
+
+test('ledgerQuery: round trip with entries and an optional summary', async () => {
+    const transport = fakeTransport(() => ({
+        entries: [{ id: 'e1', meshId: 'm1', timestamp: '2026-09-24T00:00:00.000Z', kind: 'task_dispatched', payload: { taskId: 't1' } }],
+        summary: {
+            meshId: 'm1', totalEntries: 1, taskDispatched: 1, taskCompleted: 0, taskFailed: 0, taskStalled: 0,
+            sessionLaunched: 0, checkpointCreated: 0, lastActivityAt: null, recentFailures: 0,
+        },
+    }));
+    const res = await ledgerQuery(transport, { meshId: 'm1', tail: 10, includeSummary: true });
+    assert.equal(res.entries.length, 1);
+    assert.equal(res.entries[0].kind, 'task_dispatched');
+    assert.equal(res.summary?.totalEntries, 1);
+});
+
+test('missionListQuery: round trip with a verbose mission row', async () => {
+    const transport = fakeTransport(() => ({
+        missions: [{
+            id: 'mission-1', meshId: 'm1', title: 'Ship it', goal: 'ship the thing', status: 'active',
+            tasks: { total: 1, pending: 1, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null },
+        }],
+        historyFold: null,
+        truncated: false,
+        matched: 1,
+    }));
+    const res = await missionListQuery(transport, { meshId: 'm1', verbose: true });
+    assert.equal(res.missions.length, 1);
+    assert.equal(res.matched, 1);
+    assert.equal(res.historyFold, null);
+});
+
 // ─── error mapping ───────────────────────────────────────────────────────────
 
 test('classifyTransportFailure: IpcTransport connection-failure messages map to daemon_required', () => {
@@ -189,4 +255,48 @@ test('turnObserve: a thrown connection failure surfaces as TurnIpcCommandError(d
             return true;
         },
     );
+});
+
+// ─── C-W9a store commands (client side) ──────────────────────────────────────
+
+test('recordLocal: blank / whitespace optional ids are OMITTED, not sent (the contract only accepts identifiers)', async () => {
+    let sentArgs: Record<string, unknown> = {};
+    const transport = fakeTransport((_type, args) => {
+        sentArgs = args;
+        return { eventId: 'e1', timestamp: 'T', storedLocally: true, published: false };
+    });
+    const res = await recordLocal(transport, { meshId: 'm1', kind: 'task_dispatched', nodeId: 'n1', sessionId: '', providerType: 'has space', taskId: null, payload: { message: 'free text' } });
+    assert.equal(res.storedLocally, true);
+    assert.deepEqual(sentArgs, { v: TURN_IPC_PROTOCOL_VERSION, meshId: 'm1', kind: 'task_dispatched', nodeId: 'n1', payload: { message: 'free text' } });
+});
+
+test('queueQuery / queueEnqueue / queueCancel: rows are JSON passthroughs keyed by id + status', async () => {
+    const row = { id: 't1', status: 'pending', message: 'x' };
+    assert.deepEqual((await queueQuery(fakeTransport(() => ({ entries: [row] })), { meshId: 'm1' })).entries, [row]);
+    assert.deepEqual((await queueEnqueue(fakeTransport(() => ({ entry: row })), { meshId: 'm1', message: 'x' })).entry, row);
+    const cancelled = await queueCancel(fakeTransport(() => ({ task: { ...row, status: 'cancelled' }, before: row })), { meshId: 'm1', taskId: 't1' });
+    assert.equal(cancelled.before?.status, 'pending');
+    // A daemon guard refusal (enqueue validation) surfaces as the typed error with its message.
+    await assert.rejects(
+        queueEnqueue(fakeTransport(() => ({ success: false, error: 'mesh task difficulty is required' })), { meshId: 'm1', message: 'x' }),
+        (e: any) => e instanceof TurnIpcCommandError && /difficulty is required/.test(e.message),
+    );
+});
+
+test('queueEnqueueGraph: a refusal is an ok:false RESULT whose fields survive the envelope unwrap', async () => {
+    // The daemon answers `{ success: true, ok: false, refusalCode, message }` — `code`/`error`
+    // would be eaten by the envelope unwrap, which is why the contract does not use them.
+    const res = await queueEnqueueGraph(
+        fakeTransport(() => ({ success: true, ok: false, refusalCode: 'unknown_dependency', message: 'unknown_dependency: …' })),
+        { meshId: 'm1', mode: 'compat', specs: [{ message: 'a' }] },
+    );
+    assert.equal(res.ok, false);
+    assert.equal(res.ok === false && res.refusalCode, 'unknown_dependency');
+});
+
+test('activeWorkQuery / recoveryContextQuery decode their computed views', async () => {
+    const aw = await activeWorkQuery(fakeTransport(() => ({ activeWork: { activeWork: [], summary: { totalActiveCount: 0 } }, records: [], directDispatches: [] })), { meshId: 'm1', includeInputs: true });
+    assert.deepEqual(aw.records, []);
+    const rc = await recoveryContextQuery(fakeTransport(() => ({ context: { consecutiveNodeFailures: 2, advice: 'retry' } })), { meshId: 'm1', nodeId: 'n1' });
+    assert.equal((rc.context as any).consecutiveNodeFailures, 2);
 });

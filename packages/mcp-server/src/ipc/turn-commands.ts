@@ -41,22 +41,59 @@ import {
     IPC_RATE_LIMITED_ERROR_CODE,
 } from '@adhdev/daemon-core';
 import {
+    decodeActiveWorkQueryResponse,
+    decodeDirectDispatchRecordResponse,
+    decodeGraphAuditRecordResponse,
+    decodeQueueCancelResponse,
+    decodeQueueEnqueueGraphResponse,
+    decodeQueueEnqueueResponse,
+    decodeQueueQueryResponse,
+    decodeQueueRequeueResponse,
+    decodeRecordLocalResponse,
+    decodeRecoveryContextQueryResponse,
+    type ActiveWorkQueryRequest,
+    type ActiveWorkQueryResponse,
+    type DirectDispatchRecordRequest,
+    type DirectDispatchRecordResponse,
+    type GraphAuditRecordRequest,
+    type GraphAuditRecordResponse,
+    type QueueCancelRequest,
+    type QueueCancelResponse,
+    type QueueEnqueueGraphRequest,
+    type QueueEnqueueGraphResponse,
+    type QueueEnqueueRequest,
+    type QueueEnqueueResponse,
+    type QueueQueryRequest,
+    type QueueQueryResponse,
+    type QueueRequeueRequest,
+    type QueueRequeueResponse,
+    type RecordLocalRequest,
+    type RecordLocalResponse,
+    type RecoveryContextQueryRequest,
+    type RecoveryContextQueryResponse,
+    decodeLedgerQueryResponse,
     decodeMeshIndexQueryResponse,
     decodeMeshRecordResponse,
+    decodeMissionListQueryResponse,
     decodeMissionQueryResponse,
     decodeMissionUpsertResponse,
     decodeNoteForgetResponse,
     decodeNoteUpsertResponse,
     decodeOperatorStatusResponse,
+    decodeToolCallRecordResponse,
     decodeTurnCancelResponse,
     decodeTurnObserveResponse,
     decodeTurnQueryResponse,
     isTurnIpcErrorCode,
     TURN_IPC_PROTOCOL_VERSION,
+    type LedgerQueryRequest,
+    type LedgerQueryResponse,
     type MeshIndexQueryRequest,
     type MeshIndexQueryResponse,
     type MeshRecordRequest,
     type MeshRecordResponse,
+    type MissionListQueryRequest,
+    type MissionListQueryResponse,
     type MissionQueryRequest,
     type MissionQueryResponse,
     type MissionUpsertRequest,
@@ -67,6 +104,8 @@ import {
     type NoteUpsertResponse,
     type OperatorStatusRequest,
     type OperatorStatusResponse,
+    type ToolCallRecordRequest,
+    type ToolCallRecordResponse,
     type TurnCancelRequest,
     type TurnCancelResponse,
     type TurnIpcCommand,
@@ -228,7 +267,7 @@ export async function turnObserve(
     return dispatch(transport, 'turn_observe', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeTurnObserveResponse);
 }
 
-/** Append one content-free scalar record to `mesh.<id>.events` (replaces `appendLedgerEntry`). */
+/** Append one content-free scalar record to `mesh.<id>.events` (topic only — see `recordLocal` for a record that keeps its full payload). */
 export async function meshRecord(
     transport: CommandTransport,
     args: Omit<MeshRecordRequest, 'v'>,
@@ -308,4 +347,155 @@ export async function noteForget(
     args: Omit<NoteForgetRequest, 'v'>,
 ): Promise<NoteForgetResponse> {
     return dispatch(transport, 'note_forget', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeNoteForgetResponse);
+}
+
+/**
+ * Bump the per-mesh-tool-call rate counter on the owning daemon and get back
+ * whether the caller is over the window (C-W9b; replaces the in-process
+ * `recordMeshToolCall`/`recordMeshCoordinatorToolCall`).
+ */
+export async function toolCallRecord(
+    transport: CommandTransport,
+    args: Omit<ToolCallRecordRequest, 'v'>,
+): Promise<ToolCallRecordResponse> {
+    return dispatch(transport, 'tool_call_record', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeToolCallRecordResponse);
+}
+
+/**
+ * Read the daemon's records (C-W9a: its `mesh_local_records` plus the turn
+ * ledger's task outcomes) with arbitrary kind/since/node filters, optionally
+ * with the record summary attached (C-W9b) — see the mesh-shared file
+ * section's CONTENT BOUNDARY note for why `entries[].payload` is an
+ * unvalidated JSON passthrough here.
+ */
+export async function ledgerQuery(
+    transport: CommandTransport,
+    args: Omit<LedgerQueryRequest, 'v'>,
+): Promise<LedgerQueryResponse> {
+    return dispatch(transport, 'ledger_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeLedgerQueryResponse);
+}
+
+/**
+ * Read the `mesh_mission_list` tool's full bounded/folded mission projection
+ * (C-W9b; replaces the in-process `listMeshMissionsForTool`). Additive sibling
+ * of `missionQuery` — see the mesh-shared file section's note on why this is a
+ * separate command rather than a widened `mission_query`.
+ */
+export async function missionListQuery(
+    transport: CommandTransport,
+    args: Omit<MissionListQueryRequest, 'v'>,
+): Promise<MissionListQueryResponse> {
+    return dispatch(transport, 'mission_list_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionListQueryResponse);
+}
+
+// ─── C-W9a: records, queue composites, active work ───────────────────────────
+// Every mcp-server access to the daemon's `mesh-runtime.db` that used to run
+// in-process (record appends, queue mutations and reads, the active-work
+// inputs, recovery hints) goes through these — executed in the daemon.
+
+/**
+ * Record one mesh event with its FULL payload kept locally on the daemon
+ * (`meshRecord(..., { local: true })`): the topic leg is the content-free
+ * projection, the local row keeps the nested/free-text payload (dispatch
+ * records, MAGI question/synthesis, checkpoint messages, reconcile evidence).
+ */
+export async function recordLocal(
+    transport: CommandTransport,
+    args: Omit<RecordLocalRequest, 'nodeId' | 'sessionId' | 'providerType' | 'taskId' | 'v'> & {
+        nodeId?: string | null;
+        sessionId?: string | null;
+        providerType?: string | null;
+        taskId?: string | null;
+    },
+): Promise<RecordLocalResponse> {
+    // An absent/blank optional id is OMITTED (the wire contract only accepts identifiers,
+    // and the retired in-process append simply stored nothing for it).
+    const id = (value: string | null | undefined): string | undefined =>
+        typeof value === 'string' && value.trim() && !/\s/.test(value) ? value : undefined;
+    const nodeId = id(args.nodeId);
+    const sessionId = id(args.sessionId);
+    const providerType = id(args.providerType);
+    const taskId = id(args.taskId);
+    return dispatch(transport, 'record_local', {
+        v: TURN_IPC_PROTOCOL_VERSION,
+        meshId: args.meshId,
+        kind: args.kind,
+        ...(nodeId ? { nodeId } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(providerType ? { providerType } : {}),
+        ...(taskId ? { taskId } : {}),
+        payload: args.payload,
+    }, decodeRecordLocalResponse);
+}
+
+/** Read queue rows (optionally status-filtered, one task, or view-projected). */
+export async function queueQuery(
+    transport: CommandTransport,
+    args: Omit<QueueQueryRequest, 'v'>,
+): Promise<QueueQueryResponse> {
+    return dispatch(transport, 'queue_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueQueryResponse);
+}
+
+/** Enqueue one task (+ its single-surface decision record) in the daemon. A daemon guard refusal throws with its message. */
+export async function queueEnqueue(
+    transport: CommandTransport,
+    args: Omit<QueueEnqueueRequest, 'v'>,
+): Promise<QueueEnqueueResponse> {
+    return dispatch(transport, 'queue_enqueue', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueEnqueueResponse);
+}
+
+/** Atomic batch enqueue (compat or graph path) with its audit trail. A domain refusal is an `ok: false` RESULT. */
+export async function queueEnqueueGraph(
+    transport: CommandTransport,
+    args: Omit<QueueEnqueueGraphRequest, 'v'>,
+): Promise<QueueEnqueueGraphResponse> {
+    return dispatch(transport, 'queue_enqueue_graph', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueEnqueueGraphResponse);
+}
+
+/** Cancel a queue task; returns the row after and before the cancel. */
+export async function queueCancel(
+    transport: CommandTransport,
+    args: Omit<QueueCancelRequest, 'v'>,
+): Promise<QueueCancelResponse> {
+    return dispatch(transport, 'queue_cancel', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueCancelResponse);
+}
+
+/** Requeue a queue task. */
+export async function queueRequeue(
+    transport: CommandTransport,
+    args: Omit<QueueRequeueRequest, 'v'>,
+): Promise<QueueRequeueResponse> {
+    return dispatch(transport, 'queue_requeue', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueRequeueResponse);
+}
+
+/** A direct dispatch's bookkeeping (task row + decision record), best-effort per step. */
+export async function directDispatchRecord(
+    transport: CommandTransport,
+    args: Omit<DirectDispatchRecordRequest, 'v'>,
+): Promise<DirectDispatchRecordResponse> {
+    return dispatch(transport, 'direct_dispatch_record', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeDirectDispatchRecordResponse);
+}
+
+/** A graph gate / node-patch provenance record, written by the daemon's allow-listed recorder. */
+export async function graphAuditRecord(
+    transport: CommandTransport,
+    args: Omit<GraphAuditRecordRequest, 'v'>,
+): Promise<GraphAuditRecordResponse> {
+    return dispatch(transport, 'graph_audit_record', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeGraphAuditRecordResponse);
+}
+
+/** Active work computed in the daemon (and/or the record + direct-dispatch inputs it reads). */
+export async function activeWorkQuery(
+    transport: CommandTransport,
+    args: Omit<ActiveWorkQueryRequest, 'v'>,
+): Promise<ActiveWorkQueryResponse> {
+    return dispatch(transport, 'active_work_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeActiveWorkQueryResponse);
+}
+
+/** The recovery context (recent failures, last dispatched task) for a node or session. */
+export async function recoveryContextQuery(
+    transport: CommandTransport,
+    args: Omit<RecoveryContextQueryRequest, 'v'>,
+): Promise<RecoveryContextQueryResponse> {
+    return dispatch(transport, 'recovery_context_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeRecoveryContextQueryResponse);
 }

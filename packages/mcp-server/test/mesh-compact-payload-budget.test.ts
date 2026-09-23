@@ -7,9 +7,10 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshStatus, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getLedgerDir } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // Budget the compact (LLM-facing) payload must stay under regardless of how many
 // worktree nodes / sessions / queued tasks a mesh has. The live regression that
 // motivated this was mesh_status ~76KB and mesh_view_queue ~73KB exceeding the MCP
@@ -42,7 +43,7 @@ const STALE_WARNING = 'Live daemon build f6b15b05 is BEHIND workspace HEAD 79d57
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {
@@ -104,7 +105,7 @@ function buildManyNodeCtx(meshId: string, nodeCount: number) {
     if (command === 'agent_command') return { success: true };
     return { success: true };
   };
-  transport.command = async (command: string) => responder(command);
+  transport.command = async (command: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(command)) return answerTurnIpc(command, __ipcArgs ?? {}); return responder(command); };
   transport.meshCommand = async (_daemonId: string, command: string) => responder(command);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'coord-host' }, mesh };
 }
@@ -184,7 +185,7 @@ function buildMachinesAndWorktreesCtx(meshId: string) {
     }
     return { success: true };
   };
-  transport.command = async (command: string, payload?: any) => responder(command, payload);
+  transport.command = async (command: string, payload?: any) => { if (isTurnIpcCommand(command)) return answerTurnIpc(command, payload ?? {} as Record<string, unknown>); return responder(command, payload); };
   transport.meshCommand = async (_daemonId: string, command: string, payload?: any) => responder(command, payload);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-0', coordinatorHostname: 'coord-host' } };
 }

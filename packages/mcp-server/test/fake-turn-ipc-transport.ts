@@ -31,7 +31,6 @@
 import { turnLedgerIpcHandlers } from '../../daemon-core/src/commands/low-family/turn-ledger-ipc.js';
 import type { LowFamilyContext } from '../../daemon-core/src/commands/low-family/types.js';
 import type { CommandTransport } from '../src/transports/mode.js';
-
 const EMPTY_LOW_FAMILY_CONTEXT: LowFamilyContext = {
     // `deps`/`getMeshForCommand` are read only by turnObserve/turnCancel/
     // operatorStatus/turnQuery (for `ctx.deps.statusInstanceId`) — mission_upsert
@@ -44,18 +43,17 @@ const EMPTY_LOW_FAMILY_CONTEXT: LowFamilyContext = {
 
 /**
  * Builds a fake `CommandTransport` whose `.command(name, args)` routes the
- * eight C-W6 commands to the real daemon-side handlers in-process, and
- * rejects any other command name (a test that needs a non-turn-ipc command
- * should stub that separately — this fixture is scoped to turn-ipc only).
+ * turn-ipc commands (C-W6 … C-W9a — every one the daemon registers) to the
+ * real daemon-side handlers in-process (`turnLedgerIpcHandlers`), and rejects
+ * any other command name (a test that needs a non-turn-ipc command should stub
+ * that separately — this fixture is scoped to turn-ipc only).
  */
 export function makeFakeTurnIpcTransport(): CommandTransport {
     const fake = {
         async command(type: string, args: Record<string, unknown> = {}): Promise<any> {
             const handler = turnLedgerIpcHandlers[type];
-            if (!handler) {
-                throw new Error(`makeFakeTurnIpcTransport: no turn-ipc handler registered for '${type}' — this fixture only serves the eight C-W6 commands`);
-            }
-            return handler(EMPTY_LOW_FAMILY_CONTEXT, args);
+            if (handler) return handler(EMPTY_LOW_FAMILY_CONTEXT, args);
+            throw new Error(`makeFakeTurnIpcTransport: no turn-ipc handler registered for '${type}'`);
         },
         async ping(): Promise<boolean> {
             return true;

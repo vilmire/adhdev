@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { meshQueueCancel } from '../src/tools/mesh-tools.js';
 import { enqueueTask, claimNextTask, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // CANCEL-STOP-TASK-SCOPE — the tool-layer half.
 //
 // The daemon can only scope its hard stop to a task if the cancel actually SENDS the task id.
@@ -41,6 +42,7 @@ function transportReturning(stopResult: any) {
   return {
     commands,
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') return stopResult;
       return { success: true };

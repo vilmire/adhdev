@@ -6,6 +6,7 @@ import { meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { enqueueTask, getQueue, __writeTaskStatusForTests, upsertMeshMission } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // G5 — mesh_enqueue_batch: atomic multi-task graph submission.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
 //   invalid difficulty rolls the batch back), (b) resolve batch-local refs to the
@@ -29,7 +30,8 @@ function recordingIpcTransport() {
   const t = {
     commands,
     meshCommands,
-    command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+    command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     meshCommand: async (daemonId: string, cmd: string, args: any) => {
       meshCommands.push({ daemonId, cmd, args });
       return { success: true, sessions: [] };
@@ -45,7 +47,8 @@ function recordingLocalTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
   return {
     commands,
-    command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+    command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     getStatus: async () => ({ sessions: [] }),
   } as any;
 }

@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getLedgerDir, upsertMeshMission } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // Compact mesh_status used to inline every live mission PLUS up to 10 history
 // missions in full (goalPreview + tasks + a per-mission stats rollup) on every
 // poll, which dominated the payload and pushed mesh_status past the MCP token
@@ -19,7 +20,7 @@ const COMPACT_BUDGET = 25_000;
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   // Missions persist in the file-backed SQLite store (not the ledger files), so
   // clear them explicitly or rows leak across test runs and inflate live counts.
@@ -45,7 +46,7 @@ function buildCtx(meshId: string) {
     return { success: true };
   };
   const transport: any = {};
-  transport.command = async (c: string) => responder(c);
+  transport.command = async (c: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, __ipcArgs ?? {}); return responder(c); };
   transport.meshCommand = async (_d: string, c: string) => responder(c);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } };
 }

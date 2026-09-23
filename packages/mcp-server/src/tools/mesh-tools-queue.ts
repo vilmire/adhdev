@@ -9,17 +9,14 @@ import {
     HISTORICAL_QUEUE_STATUSES,
     IpcTransport,
     annotateQueueStaleness,
-    appendLedgerEntry,
     buildActiveWorkPollingGuidance,
     buildCompactQueueMaintenanceReport,
     buildCompactStaleDirectWorkSummary,
-    buildMeshActiveWork,
     buildMeshNodeCapabilityTags,
     buildQueueMaintenanceReport,
     buildQueueStatusSummary,
     buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
-    cancelTask,
     collectMeshViewQueueNodesWithLiveSessionsVerified,
     compactActiveWorkRecords,
     compactQueueRow,
@@ -28,23 +25,12 @@ import {
     parseOnDependencyFailurePolicy,
     MeshGraphPolicyError,
     // GRAPH-ORCHESTRATION Phase E — batch v2 plan commit + enqueue provenance.
-    commitMeshGraphPlan,
-    MeshGraphPlanError,
     normalizeOrchestrationDecision,
-    recordGraphEnqueueCommitted,
-    recordGraphEnqueueValidationFailed,
-    recordGraphEnqueueRolledBack,
-    recordSingleEnqueueDecision,
     MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-    enqueueTask,
-    enqueueTaskGraph,
     getMeshMission,
-    MESH_TASK_GRAPH_MAX_TASKS,
     normalizeMeshTaskPriority,
     resolveNotBefore,
     filterQueueForView,
-    getActiveDirectDispatches,
-    getQueue,
     ipcDispatchToRemoteAgent,
     isLocalControlPlaneNode,
     isMeshNodeHealthLaunchable,
@@ -56,13 +42,13 @@ import {
     notifyCoordinatorOfOrphanedPins,
     buildOrphanedPinNotice,
     prioritizeActiveQueueRows,
-    readLedgerEntries,
     readString,
     readTaskInput,
     reconcileDirectDispatchesFromTranscriptEvidence,
+    readActiveWorkFromDaemon,
+    readQueueFromDaemon,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
-    requeueTask,
     resolveCoordinatorDaemonId,
     resolvePreferredWorktreeNodeId,
     sanitizeQueueStatusFilter,
@@ -77,6 +63,11 @@ import {
 // mesh-tools-internal.ts itself imports.
 import { summarizeQueueEntryInputForView, resolveDispatchMessage, type DispatchableTask } from '@adhdev/daemon-core';
 import { buildGraphPlanShape } from './mesh-tools-graph.js';
+// C-W9a: the queue and the records are the daemon's — every read and mutation
+// below goes over its IPC commands (the mcp-server never opens mesh-runtime.db).
+import { queueCancel, queueEnqueue, queueEnqueueGraph, queueQuery, queueRequeue, recordLocal } from '../ipc/turn-commands.js';
+import { MESH_TASK_GRAPH_MAX_TASKS } from '@adhdev/daemon-core';
+import type { MeshGraphPlanResult, MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import type { GraphTaskFieldsShape, GraphWorkspaceDeclarationShape } from './mesh-tools-graph.js';
 import type {
     MeshContext,
@@ -104,14 +95,14 @@ function normalizeDedupMessage(message: string): string {
  * TASKBUBBLE-DUP case); when a target IS pinned, both message AND target must match so the same
  * instruction sent to two DIFFERENT nodes is not flagged. Returns the first match or null.
  */
-function findInFlightDuplicate(
+async function findInFlightDuplicate(
     ctx: MeshContext,
     message: string,
     targetNodeId: string | undefined,
-): { id: string; status: string; assignedNodeId?: string; targetNodeId?: string } | null {
+): Promise<{ id: string; status: string; assignedNodeId?: string; targetNodeId?: string } | null> {
     const fingerprint = normalizeDedupMessage(message);
     if (!fingerprint) return null;
-    for (const task of getQueue(ctx.mesh.id)) {
+    for (const task of await readQueueFromDaemon(ctx, { statuses: ['pending', 'assigned'] })) {
         if (task.status !== 'pending' && task.status !== 'assigned') continue;
         if (normalizeDedupMessage(task.message) !== fingerprint) continue;
         // Target-scoped match: only compare targets when the NEW task pins one. An unpinned
@@ -436,14 +427,14 @@ function selectEagerPushReceiver(
  * whose dependencies are already satisfied). Returns fire-and-forget promises
  * (0 or 1 element; an array keeps both call sites' spread/concat shape).
  */
-function eagerPushTaskToRemoteNodes(
+async function eagerPushTaskToRemoteNodes(
     ctx: MeshContext,
     task: DispatchableTask,
     message: string,
     targetNodeId: string | undefined,
     requiredTags: string[],
     coordinatorDaemonId: string | undefined,
-): Promise<void>[] {
+): Promise<Promise<void>[]> {
     const dispatchPromises: Promise<void>[] = [];
     // EAGERPUSH-STATUS-RECHECK (R3): re-read the row's LIVE status immediately before
     // pushing. The caller enqueued it moments ago, but the local queue drain
@@ -453,7 +444,7 @@ function eagerPushTaskToRemoteNodes(
     // row may be eager-pushed. Anything else (assigned/completed/cancelled/failed) is
     // someone else's work now. Best-effort read: if the row is missing from the queue
     // (never expected — we just inserted it) we do not push, the fail-closed direction.
-    const liveStatus = getQueue(ctx.mesh.id).find(t => t.id === task.id)?.status;
+    const liveStatus = (await queueQuery(ctx.transport, { meshId: ctx.mesh.id, taskId: task.id }).catch(() => ({ entries: [] }))).entries[0]?.status;
     if (liveStatus !== 'pending') return dispatchPromises;
 
     const node = selectEagerPushReceiver(ctx, targetNodeId, requiredTags);
@@ -487,12 +478,12 @@ function eagerPushTaskToRemoteNodes(
                     ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
                 },
             })
-                .then(result => {
+                .then(async result => {
                     if (result.success) {
                         try {
                             const providerType = result.providerType;
                             const descriptor = summarizeTaskMessage(message);
-                            appendLedgerEntry(ctx.mesh.id, {
+                            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                                 kind: 'task_dispatched',
                                 nodeId: node.id,
                                 sessionId: result.sessionId,
@@ -523,7 +514,7 @@ function eagerPushTaskToRemoteNodes(
                         // `pending` has a stated cause — silence here would reproduce the original
                         // defect's worst property (a routing decision with no trace).
                         try {
-                            appendLedgerEntry(ctx.mesh.id, {
+                            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                                 kind: 'p2p_dispatch_failed',
                                 nodeId: node.id,
                                 payload: {
@@ -542,9 +533,9 @@ function eagerPushTaskToRemoteNodes(
                         } catch { /* best-effort */ }
                     }
                 })
-                .catch((err: any) => {
+                .catch(async (err: any) => {
                     try {
-                        appendLedgerEntry(ctx.mesh.id, {
+                        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
                             kind: 'p2p_dispatch_failed',
                             nodeId: node.id,
                             payload: {
@@ -630,7 +621,7 @@ export async function meshEnqueueTask(
     // response carries duplicateSuspect so the coordinator can notice and cancel one.
     // Blocking is opt-in (block_duplicate=true); allow_duplicate=true suppresses even the
     // warning for an intentional re-enqueue.
-    const duplicateSuspect = allowDuplicate ? null : findInFlightDuplicate(ctx, message, targetNodeId);
+    const duplicateSuspect = allowDuplicate ? null : await findInFlightDuplicate(ctx, message, targetNodeId);
     if (duplicateSuspect && blockDuplicate) {
         return JSON.stringify({
             success: false,
@@ -641,30 +632,34 @@ export async function meshEnqueueTask(
     }
 
     try {
-        const task = enqueueTask(ctx.mesh.id, message, {
-            taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
-            ...(priority ? { priority } : {}),
-            ...(model ? { model } : {}),
-            ...(thinkingLevel ? { thinkingLevel } : {}),
-            ...(difficulty ? { difficulty } : {}),
-            ...(notBefore ? { notBefore } : {}),
-            ...(maxRetries !== undefined ? { maxRetries } : {}),
-            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        });
-        // design :697-731 — recorded for the single surface the same way the batch
-        // surface records it, so batch adoption is countable without transcript
-        // scraping. Written AFTER the insert so a failed enqueue leaves no decision row.
-        recordSingleEnqueueDecision(ctx.mesh.id, {
-            taskId: task.id,
-            ...(missionId ? { missionId } : {}),
-            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-            decision: orchestration.decision,
-            ...(decisionMissing ? { decisionMissing: true } : {}),
-            ...(orchestration.declaredEligibleSingle ? { declaredEligibleSingle: true } : {}),
-            ...(orchestration.batchCapabilityAvailable
-                ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable.reportedReason }
-                : {}),
-        });
+        // C-W9a: the insert and its single-surface decision record run in the daemon
+        // (`queue_enqueue`) — the decision is written AFTER the insert there, so a
+        // failed enqueue still leaves no decision row (design :697-731), and a daemon
+        // guard refusal comes back as the same error message.
+        const task = (await queueEnqueue(ctx.transport, {
+            meshId: ctx.mesh.id,
+            message,
+            options: {
+                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
+                ...(priority ? { priority } : {}),
+                ...(model ? { model } : {}),
+                ...(thinkingLevel ? { thinkingLevel } : {}),
+                ...(difficulty ? { difficulty } : {}),
+                ...(notBefore ? { notBefore } : {}),
+                ...(maxRetries !== undefined ? { maxRetries } : {}),
+                ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+            },
+            decision: {
+                ...(missionId ? { missionId } : {}),
+                ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                decision: orchestration.decision,
+                ...(decisionMissing ? { decisionMissing: true } : {}),
+                ...(orchestration.declaredEligibleSingle ? { declaredEligibleSingle: true } : {}),
+                ...(orchestration.batchCapabilityAvailable
+                    ? { batchCapabilityAvailable: orchestration.batchCapabilityAvailable.reportedReason }
+                    : {}),
+            } as Record<string, unknown>,
+        })).entry as unknown as MeshWorkQueueEntry;
         const duplicateWarning = duplicateSuspect
             ? { duplicateSuspect: { taskId: duplicateSuspect.id, status: duplicateSuspect.status, assignedNodeId: duplicateSuspect.assignedNodeId, targetNodeId: duplicateSuspect.targetNodeId }, duplicateSuspectHint: 'An in-flight task with the same message+target already exists. This new task was enqueued anyway (warn-only). Cancel one via mesh_queue_cancel if it is an accidental re-enqueue, or pass allow_duplicate=true to silence this, or block_duplicate=true to refuse next time.' }
             : {};
@@ -724,13 +719,13 @@ export async function meshEnqueueTask(
             // true), preserving the prior eager-push behavior. The status index spans the
             // FULL queue (incl. completed) so terminal dependency states are visible.
             const dependencyStatusById = new Map(
-                getQueue(ctx.mesh.id).map(t => [t.id, t.status] as const),
+                (await readQueueFromDaemon(ctx)).map(t => [t.id, t.status] as const),
             );
             const eagerPushDeferred = !taskDependenciesSatisfied(task, dependencyStatusById);
             const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
             const dispatchPromises: Promise<void>[] = eagerPushDeferred
                 ? []
-                : eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId);
+                : await eagerPushTaskToRemoteNodes(ctx, task, message, targetNodeId, requiredTags, coordinatorDaemonId);
             // Fire-and-forget — don't block the coordinator response
             Promise.all(dispatchPromises).catch(() => {});
 
@@ -905,7 +900,7 @@ export async function meshEnqueueBatch(
         // mesh_enqueue_task). Intra-batch repeats are not flagged — sending the same
         // instruction twice within one deliberate batch is the caller's explicit choice.
         if (!allowDuplicate) {
-            const suspect = findInFlightDuplicate(ctx, v.message, v.targetNodeId);
+            const suspect = await findInFlightDuplicate(ctx, v.message, v.targetNodeId);
             if (suspect) {
                 duplicateSuspects.push({
                     taskIndex: i,
@@ -978,75 +973,51 @@ export async function meshEnqueueBatch(
         'batch',
     );
 
-    let tasks;
-    let graphPlan: ReturnType<typeof commitMeshGraphPlan> | undefined;
-    try {
-        if (useGraphPath) {
-            graphPlan = commitMeshGraphPlan({
-                meshId: ctx.mesh.id,
-                tasks: plan.tasks,
-                gates: plan.gates,
-                workspaces: plan.workspaces,
-                ...(batchIdArg ? { batchId: batchIdArg } : {}),
-                ...(batchMissionId ? { missionId: batchMissionId } : {}),
-                ...(onDependencyFailure ? { onDependencyFailure } : {}),
-                ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                enqueueSurface: 'batch',
-                orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
-            });
-            tasks = graphPlan.tasks;
-        } else {
-            tasks = enqueueTaskGraph(ctx.mesh.id, specs);
-        }
-    } catch (e: any) {
-        const message = e?.message || String(e);
-        const code = e instanceof MeshGraphPlanError
-            ? e.code
-            : BATCH_ENQUEUE_ERROR_CODES.find(c => message.includes(c));
-        // design :741-743, :752-753 — the audit record is written AFTER the failed
-        // transaction rolled back, from this catch block. Writing it inside the
-        // transaction would roll it back together with the data it describes.
-        if (useGraphPath) {
-            recordGraphEnqueueRolledBack(ctx.mesh.id, {
-                code: code ?? 'graph_plan_failed',
-                ...(batchIdArg ? { batchId: batchIdArg } : {}),
-                taskCount: specs.length,
-                error: message,
-            });
-        } else {
-            recordGraphEnqueueValidationFailed(ctx.mesh.id, {
-                code: code ?? 'batch_enqueue_failed',
-                ...(batchIdArg ? { batchId: batchIdArg } : {}),
-                taskCount: specs.length,
-            });
-        }
-        return JSON.stringify({
-            success: false,
-            ...(code ? { code } : {}),
-            error: message,
-            enqueued: 0,
-            atomic: true,
-            ...(e instanceof MeshGraphPlanError && e.extra ? e.extra : {}),
-        });
-    }
-    if (graphPlan) {
-        recordGraphEnqueueCommitted(ctx.mesh.id, {
-            graphId: graphPlan.graphId,
-            batchId: graphPlan.batchId,
-            enqueueSurface: 'batch',
-            schemaVersion: 2,
-            planDigest: graphPlan.planDigest,
+    // C-W9a: the atomic insert — either path — and its audit trail run in the
+    // daemon (`queue_enqueue_graph`): the commit record on success, and on failure
+    // the rolled-back / validation-failed record written AFTER the failed
+    // transaction (design :741-743, :752-753). A refusal comes back as a result
+    // carrying the same code / message / extra this tool always returned.
+    const committed = await queueEnqueueGraph(ctx.transport, {
+        meshId: ctx.mesh.id,
+        ...(useGraphPath
+            ? {
+                mode: 'graph' as const,
+                plan: {
+                    tasks: plan.tasks,
+                    gates: plan.gates,
+                    workspaces: plan.workspaces,
+                    ...(batchIdArg ? { batchId: batchIdArg } : {}),
+                    ...(batchMissionId ? { missionId: batchMissionId } : {}),
+                    ...(onDependencyFailure ? { onDependencyFailure } : {}),
+                    ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                    enqueueSurface: 'batch',
+                    orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
+                } as unknown as Record<string, unknown>,
+            }
+            : { mode: 'compat' as const, specs: specs as unknown as Record<string, unknown>[] }),
+        audit: {
+            ...(batchIdArg ? { batchId: batchIdArg } : {}),
             ...(batchMissionId ? { missionId: batchMissionId } : {}),
             ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-            taskCount: graphPlan.tasks.length,
-            gateCount: graphPlan.gates.length,
-            workspaceCount: graphPlan.workspaces.length,
-            dependencyEdgeCount: graphPlan.dependencyEdgeCount,
             onDependencyFailure: onDependencyFailure ?? 'block',
-            orchestrationDecision: decision.decision,
-            ...(graphPlan.replayed ? { replayed: true } : {}),
+            orchestrationDecision: decision.decision as unknown as Record<string, unknown>,
+            taskCount: specs.length,
+            errorCodes: [...BATCH_ENQUEUE_ERROR_CODES],
+        },
+    });
+    if (!committed.ok) {
+        return JSON.stringify({
+            success: false,
+            ...(committed.refusalCode ? { code: committed.refusalCode } : {}),
+            error: committed.message,
+            enqueued: 0,
+            atomic: true,
+            ...(committed.extra ?? {}),
         });
     }
+    const tasks = committed.tasks as unknown as MeshWorkQueueEntry[];
+    const graphPlan = committed.graph as unknown as Omit<MeshGraphPlanResult, 'tasks'> | undefined;
 
     // ── Post-insert (best-effort, never undoes the committed batch): mission
     //    warnings, routing advisories, queue drain, cloud eager push for roots. ──
@@ -1080,7 +1051,7 @@ export async function meshEnqueueBatch(
     // already-completed existing task still counts as satisfied.
     let eagerPushDeferredCount = 0;
     if (ctx.transport instanceof IpcTransport) {
-        const liveQueue = getQueue(ctx.mesh.id);
+        const liveQueue = await readQueueFromDaemon(ctx);
         const dependencyStatusById = new Map(liveQueue.map(t => [t.id, t.status] as const));
         // Re-read each row from the LIVE queue rather than trusting the insert-time
         // snapshot: a system block may have been applied to a row AFTER it was
@@ -1090,17 +1061,18 @@ export async function meshEnqueueBatch(
         const liveById = new Map(liveQueue.map(t => [t.id, t] as const));
         const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
         const dispatchPromises: Promise<void>[] = [];
-        tasks.forEach((snapshot, i) => {
+        for (let i = 0; i < tasks.length; i++) {
+            const snapshot = tasks[i];
             const task = liveById.get(snapshot.id) ?? snapshot;
             if (!taskDependenciesSatisfied(task, dependencyStatusById)) {
                 eagerPushDeferredCount++;
-                return;
+                continue;
             }
-            dispatchPromises.push(...eagerPushTaskToRemoteNodes(
+            dispatchPromises.push(...await eagerPushTaskToRemoteNodes(
                 ctx, task, normalizedEntries[i].message, normalizedEntries[i].targetNodeId,
                 normalizedEntries[i].requiredTags, coordinatorDaemonId,
             ));
-        });
+        }
         // Fire-and-forget — don't block the coordinator response
         Promise.all(dispatchPromises).catch(() => {});
     }
@@ -1177,7 +1149,7 @@ export async function meshViewQueue(
     ctx: MeshContext,
     args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean; refresh?: boolean },
 ): Promise<string> {
-    const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
+    const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
     // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe when
@@ -1188,7 +1160,7 @@ export async function meshViewQueue(
         await refreshMeshFromDaemon(ctx);
         const statusFilter = sanitizeQueueStatusFilter(args.status);
         const view = normalizeQueueViewMode(args.view);
-        const rawQueue = getQueue(ctx.mesh.id);
+        const rawQueue = await readQueueFromDaemon(ctx);
         // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
         const statusById = new Map(rawQueue.map(task => [task.id, task.status]));
         const depMetaById = new Map(rawQueue.map(task => [task.id, task] as const));
@@ -1211,22 +1183,17 @@ export async function meshViewQueue(
         const summary = buildQueueStatusSummary(fullQueue);
         const visibleSummary = buildQueueStatusSummary(queue);
         const maintenance = buildQueueMaintenanceReport(fullQueue);
-        let ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
-        let directDispatches = getActiveDirectDispatches(ctx.mesh.id);
-        const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, directDispatches, ledgerEntries);
+        // C-W9a: active work is computed in the daemon over the open direct dispatches
+        // (mesh_direct attempts) and its records (+ turn outcomes), for THIS view's
+        // annotated queue; the inputs come back for the transcript-reconcile pass and
+        // the dispatch-failure list below.
+        let activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
+        const directReconciliation = await reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
         if (directReconciliation.reconciled > 0) {
-            ledgerEntries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
-            directDispatches = getActiveDirectDispatches(ctx.mesh.id);
+            activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, queue: fullQueue, recordTail: 200, includeInputs: true });
         }
-        const activeWorkEvidence = buildMeshActiveWork({
-            meshId: ctx.mesh.id,
-            queue: fullQueue,
-            ledgerEntries,
-            // Always pass MeshRuntimeStore records (may be empty). buildMeshActiveWork uses them for local
-            // dispatches and falls through to ledger scan for remote P2P dispatches not in MeshRuntimeStore.
-            directDispatches,
-            nodes: liveNodes,
-        });
+        const ledgerEntries = activeWorkView.records;
+        const activeWorkEvidence = activeWorkView.activeWork!;
         const recentDispatchFailures = ledgerEntries
             .filter(e => e.kind === 'p2p_dispatch_failed')
             .slice(-20)
@@ -1391,7 +1358,10 @@ export async function meshQueueCancel(
         // already dispatched to a live worker. cancelTask overwrites status to 'cancelled'
         // but preserves assignedSessionId/Node/Provider, so the assignment fields survive —
         // only the status must be captured before the mutation.
-        const preCancel = getQueue(ctx.mesh.id).find((t: any) => t?.id === taskId) as {
+        // C-W9a: the cancel runs in the daemon (`queue_cancel`), which returns the row
+        // as it was BEFORE the mutation alongside the cancelled one.
+        const cancelled = await queueCancel(ctx.transport, { meshId: ctx.mesh.id, taskId, ...(args.reason !== undefined ? { reason: args.reason } : {}) });
+        const preCancel = (cancelled.before ?? undefined) as {
             status?: string; assignedSessionId?: string; assignedNodeId?: string; assignedProviderType?: string;
         } | undefined;
         const wasAssigned = preCancel?.status === 'assigned';
@@ -1399,7 +1369,7 @@ export async function meshQueueCancel(
         const assignedNodeId = readString(preCancel?.assignedNodeId) || undefined;
         const assignedProviderType = readString(preCancel?.assignedProviderType) || undefined;
 
-        const task = cancelTask(ctx.mesh.id, taskId, { reason: args.reason });
+        const task = cancelled.task as unknown as MeshWorkQueueEntry | null;
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
         ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
 
@@ -1614,15 +1584,20 @@ export async function meshQueueRequeue(
             return JSON.stringify({ success: true, task }, null, 2);
         }
 
-        const task = requeueTask(ctx.mesh.id, taskId, {
-            reason: args.reason,
-            targetNodeId,
-            targetSessionId,
-            clearTargetNode,
-            clearTargetSession,
-            force,
-            ...(message ? { message } : {}),
-        });
+        // C-W9a: the requeue runs in the daemon (`queue_requeue`).
+        const task = (await queueRequeue(ctx.transport, {
+            meshId: ctx.mesh.id,
+            taskId,
+            options: {
+                ...(args.reason !== undefined ? { reason: args.reason } : {}),
+                ...(targetNodeId !== undefined ? { targetNodeId } : {}),
+                ...(targetSessionId !== undefined ? { targetSessionId } : {}),
+                ...(clearTargetNode !== undefined ? { clearTargetNode } : {}),
+                ...(clearTargetSession !== undefined ? { clearTargetSession } : {}),
+                ...(force !== undefined ? { force } : {}),
+                ...(message ? { message } : {}),
+            },
+        })).task as unknown as MeshWorkQueueEntry | null;
         if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
         if (task.status === 'failed' && task.cancelReason?.startsWith('max_retries_exceeded')) {
             return JSON.stringify({

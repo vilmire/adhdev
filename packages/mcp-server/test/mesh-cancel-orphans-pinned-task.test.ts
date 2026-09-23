@@ -19,6 +19,7 @@ import {
   __clearMeshPendingEventsForTests as clearPendingMeshCoordinatorEvents,
 } from './helpers/pending-notices.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // CANCEL-ORPHANS-PINNED-TASK — the live incident (2026-08-16, reproduced in this mesh):
 //   1. Task A dispatched to worker session S → S generating.
 //   2. Task B sent to the SAME session while busy → mesh_send_task's busy branch enqueues B
@@ -48,6 +49,7 @@ function stoppingTransport() {
   return {
     commands,
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') return { success: true, stopped: true };
       return { success: true };
@@ -183,6 +185,7 @@ test('an ATTEMPTED but unconfirmed stop still notifies (the uncertain case is th
   const transport = {
     commands: [] as any[],
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       transport.commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') {
         return { success: false, error: 'no response from remote worker daemon' };

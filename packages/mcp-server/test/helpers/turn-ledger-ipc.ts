@@ -49,5 +49,6 @@ export function isTurnIpcCommand(command: string): boolean {
 /** Answer one turn IPC command through the real daemon handler. */
 export async function answerTurnIpc(command: string, args: Record<string, unknown> = {}): Promise<any> {
     const handler = (turnLedgerIpcHandlers as Record<string, (ctx: unknown, args: unknown) => Promise<unknown>>)[command];
-    return handler({ deps: { statusInstanceId: 'daemon-coordinator' } }, args);
+    if (handler) return handler({ deps: { statusInstanceId: 'daemon-coordinator' } }, args);
+    throw new Error(`answerTurnIpc: no handler registered for '${command}'`);
 }

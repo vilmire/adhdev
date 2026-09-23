@@ -4,7 +4,6 @@
 
 import {
     IpcTransport,
-    appendLedgerEntry,
     buildCoordinatorP2pRelayFailure,
     buildRemoveNodeArgs,
     collectLiveStatusProbe,
@@ -26,6 +25,7 @@ import type {
     LocalMeshNodeEntry,
     MeshContext,
 } from './mesh-tools-internal.js';
+import { recordLocal } from '../ipc/turn-commands.js';
 
 export async function meshGitStatus(
     ctx: MeshContext,
@@ -301,9 +301,10 @@ export async function meshCheckpoint(
         includeUntracked: true,
     });
 
-    // Record checkpoint in ledger
+    // Record the checkpoint (C-W9a: the daemon keeps the free-text message in its
+    // local records; only the content-free projection reaches the events topic).
     try {
-        appendLedgerEntry(ctx.mesh.id, {
+        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
             kind: 'checkpoint_created',
             nodeId: args.node_id,
             payload: {

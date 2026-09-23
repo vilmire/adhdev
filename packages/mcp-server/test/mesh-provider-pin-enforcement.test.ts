@@ -13,7 +13,9 @@ import {
   buildMeshNodeCapabilityTags,
   nodeSatisfiesRequiredTags,
 } from '@adhdev/daemon-core';
+import { readLocalRecords } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // ★PROVIDER-PIN-BYPASS (D2) — `required_tags: ["provider=X"]` was silently bypassed on
 // the enqueue-and-push (`via: p2p_direct`) path.
 //
@@ -69,7 +71,7 @@ function recordingIpcTransport(sessions: any[] = []) {
   const meshCommands: Array<{ daemonId: string; cmd: string; args: any }> = [];
   const t = {
     meshCommands,
-    command: async () => ({ success: true }),
+    command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
     meshCommand: async (daemonId: string, cmd: string, args: any) => {
       meshCommands.push({ daemonId, cmd, args });
       if (cmd === 'get_status_metadata') return { success: true, sessions };
@@ -115,14 +117,9 @@ function makeCtx(meshId: string, transport: any, nodes: any[]) {
   return { mesh: { id: meshId, nodes }, transport } as any;
 }
 
+// C-W9a: the records live in the daemon's mesh_local_records (the JSONL mirror retired).
 function ledgerEntries(meshId: string): any[] {
-  const p = join(getLedgerDir(), `${meshId}.jsonl`);
-  if (!existsSync(p)) return [];
-  return readFileSync(p, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map(l => { try { return JSON.parse(l); } catch { return null; } })
-    .filter(Boolean);
+  return readLocalRecords(meshId, { turnTerminals: false });
 }
 
 test.after(() => {

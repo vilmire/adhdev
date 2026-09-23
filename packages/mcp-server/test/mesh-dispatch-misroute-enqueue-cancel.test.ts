@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { meshEnqueueTask, meshQueueCancel, meshSendTask } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getQueue, claimNextTask, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // MESH-DISPATCH-MISROUTE — mcp-server tool-layer fixes.
 //   Fix 1 (enqueue): a `target_node` / `targetNode` alias must resolve to a HARD targetNodeId
 //     (previously only target_node_id / targetNodeId were read, so `target_node` was silently
@@ -29,7 +30,8 @@ function recordingTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
   return {
     commands,
-    command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+    command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     getStatus: async () => ({ sessions: [] }),
   } as any;
 }
@@ -197,6 +199,7 @@ test('false-positive fix: a confirmed stop reflects stopped:true', async () => {
   const transport = {
     commands: [] as any[],
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       transport.commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') return { success: true, stopped: true };
       return { success: true };
@@ -219,6 +222,7 @@ test('false-positive fix: an unreached worker reports stopped:false + reason (no
   const transport = {
     commands: [] as any[],
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       transport.commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') {
         return { success: false, error: 'no response from remote worker daemon' };
@@ -244,6 +248,7 @@ test('best-effort: a thrown stop never fails the cancel', async () => {
   const transport = {
     commands: [] as any[],
     command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
       transport.commands.push({ cmd, args });
       if (cmd === 'agent_command' && args?.action === 'stop') throw new Error('transport boom');
       return { success: true };

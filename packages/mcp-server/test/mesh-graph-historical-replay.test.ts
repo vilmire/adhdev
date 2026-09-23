@@ -11,6 +11,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
 import { getQueue, __writeTaskStatusForTests, taskDependenciesSatisfied } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // GRAPH-ORCHESTRATION Phase G — historical replay + backward compatibility.
 //
 //   Design SoT: docs/design/2026-08-18-graph-orchestration-full.md
@@ -35,7 +36,8 @@ function recordingLocalTransport() {
     const commands: Array<{ cmd: string; args: any }> = [];
     return {
         commands,
-        command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+        command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         getStatus: async () => ({ sessions: [] }),
     } as any;
 }
@@ -46,7 +48,8 @@ function recordingIpcTransport() {
     const t = {
         commands,
         meshCommands,
-        command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+        command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         meshCommand: async (daemonId: string, cmd: string, args: any) => {
             meshCommands.push({ daemonId, cmd, args });
             return { success: true, sessions: [] };

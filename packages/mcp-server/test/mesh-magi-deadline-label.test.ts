@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { meshMagiCollect, synthesizeMagiResponses } from '../src/tools/mesh-tools.js';
 import { enqueueTask, getLedgerDir } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // ─── MAGI-DEADLINE-MISLABEL ───────────────────────────────────────────────────
 //
 // A live 3-replica fan-out measured kimi taking 16m09s to answer against the then
@@ -33,7 +34,7 @@ const MESH_ID = 'mesh-magi-deadline-label-test';
 
 function cleanupMesh(meshId: string): void {
     __clearMeshQueueForTests(meshId);
-    __clearMeshLedgerForTests(meshId);
+    __clearLocalRecordsForTests(meshId);
     __clearMeshPendingEventsForTests(meshId);
     try { MeshRuntimeStore.getInstance().clearMissionsForMesh(meshId); } catch { /* fresh store */ }
     const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -58,7 +59,7 @@ function buildCtx(meshId: string, readChatResponder: (args: any) => any) {
         return { success: true };
     };
     const transport: any = {};
-    transport.command = async (c: string, a: any) => responder(c, a);
+    transport.command = async (c: string, a: any) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {} as Record<string, unknown>); return responder(c, a); };
     transport.meshCommand = async (_d: string, c: string, a: any) => responder(c, a);
     return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } as any };
 }

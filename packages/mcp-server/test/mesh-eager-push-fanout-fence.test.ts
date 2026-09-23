@@ -8,6 +8,7 @@ import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { enqueueTask, getQueue, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // EAGERPUSH-FANOUT-FENCE — mcp-server R1 + R3.
 //
 //   R1 (fan-out fence). The cloud "enqueue-and-push" path (IpcTransport) eagerly
@@ -50,7 +51,8 @@ function recordingIpcTransport() {
   const t = {
     commands,
     meshCommands,
-    command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+    command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     meshCommand: async (daemonId: string, cmd: string, args: any) => {
       meshCommands.push({ daemonId, cmd, args });
       return { success: true, sessions: [] };
@@ -192,6 +194,7 @@ test('R3: an ALREADY-ASSIGNED task is not eager-pushed (0 injections)', async ()
   // trigger (trigger_mesh_queue, issued by meshEnqueueTask before the push) is where
   // that really happens, so hook it to move the freshly-inserted row out of `pending`.
   transport.command = async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>);
     transport.commands.push({ cmd, args });
     if (cmd === 'trigger_mesh_queue') {
       const row = getQueue(meshId).find(t => t.status === 'pending');

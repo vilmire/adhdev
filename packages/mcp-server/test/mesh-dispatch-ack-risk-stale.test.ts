@@ -8,7 +8,7 @@ import { computeIdleDispatchAckRisk, meshSendTask } from '../src/tools/mesh-tool
 import { getActiveDirectDispatches, getLedgerDir } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { answerTurnIpc, armTestTurnLedger, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
-import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
+import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // DISPATCH-ACK-RISK-STALE regression coverage.
@@ -23,7 +23,7 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 function cleanupMesh(meshId: string): void {
   __clearMeshQueueForTests(meshId);
-  __clearMeshLedgerForTests(meshId);
+  __clearLocalRecordsForTests(meshId);
   __clearMeshPendingEventsForTests(meshId);
   const safe = meshId.replace(/[^a-zA-Z0-9_-]/g, '_');
   for (const suffix of ['.jsonl', '.queue.json', '.queue.lock', '.pending-events.jsonl']) {

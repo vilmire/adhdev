@@ -21,6 +21,7 @@ import { meshEnqueueTask, meshSendTask } from '../src/tools/mesh-tools.js';
 import { MESH_ENQUEUE_TASK_TOOL, MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas.js';
 import { getQueue } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 const NODE = 'node_diff_base';
 
 function makeCtx(meshId: string) {
@@ -32,7 +33,7 @@ function makeCtx(meshId: string) {
     },
     localDaemonId: 'daemon_base',
     transport: {
-      command: async () => ({ success: true }),
+      command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
       getStatus: async () => ({ sessions: [] }),
     },
   } as any;
@@ -144,8 +145,10 @@ test('MAGI fan-out stamps the fixed freeform sentinel — it is not exempted fro
     new URL('../src/tools/mesh-tools-magi.ts', import.meta.url),
     'utf8',
   );
-  const call = src.slice(src.indexOf('enqueueTask(ctx.mesh.id, prompt, {'));
-  const body = call.slice(0, call.indexOf('});'));
+  // C-W9a: the replica enqueue goes over IPC (`queueEnqueue`); its options object is
+  // built right before the call, so the pin reads that object literal.
+  const call = src.slice(src.indexOf('const replicaOptions = {'));
+  const body = call.slice(0, call.indexOf('};'));
   assert.match(body, /difficulty: 'freeform'/, 'MAGI must stamp the freeform sentinel');
   // And it must NOT be wired to a caller-supplied value — exposing a difficulty knob on
   // mesh_magi_review would imply it influences replica placement, which it does not.

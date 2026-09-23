@@ -8,6 +8,7 @@ import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { enqueueTask, getQueue, __writeTaskStatusForTests, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // DEPENDSON-GATE-SYMMETRY — mcp-server Fix A.
 //   The cloud "enqueue-and-push" path (IpcTransport) eagerly P2P-dispatches a freshly
 //   enqueued task to a remote idle session, BYPASSING the queue claim. Before the fix it
@@ -37,7 +38,8 @@ function recordingIpcTransport() {
   const t = {
     commands,
     meshCommands,
-    command: async (cmd: string, args: any) => { commands.push({ cmd, args }); return { success: true }; },
+    command: async (cmd: string, args: any) => {
+    if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     meshCommand: async (daemonId: string, cmd: string, args: any) => {
       meshCommands.push({ daemonId, cmd, args });
       return { success: true, sessions: [] };

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { getQueue, getLedgerDir } from '@adhdev/daemon-core';
 
+import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 // MESH-PRIMITIVES-GAPS WT-C / G4 — enqueue duplicate detection.
 //   TASKBUBBLE-DUP structural defense: enqueueing a task whose (normalized message +
 //   resolved target) matches an in-flight (pending/assigned) task is flagged. Default is
@@ -25,7 +26,7 @@ function nextMeshId(): string {
 
 function recordingTransport() {
   return {
-    command: async () => ({ success: true }),
+    command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
     getStatus: async () => ({ sessions: [] }),
   } as any;
 }
