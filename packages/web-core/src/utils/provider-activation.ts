@@ -1,4 +1,11 @@
-export type LaunchableProviderCategory = 'ide' | 'cli' | 'acp'
+import type { ProviderCategory } from '@adhdev/daemon-core'
+
+// Wiring-unification A4: daemon-core's dist/index.d.ts (what web-core resolves
+// types from) predates the LaunchableProviderCategory export, so it is derived
+// locally from the already-exported ProviderCategory rather than imported
+// directly. Once daemon-core is rebuilt and re-exports it, this can switch to
+// a plain `import type { LaunchableProviderCategory } from '@adhdev/daemon-core'`.
+export type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>
 
 export interface ProviderActivationSnapshot {
   category?: string

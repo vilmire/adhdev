@@ -136,7 +136,6 @@ describe('CliProviderInstance provider patch state', () => {
           { role: 'assistant', content: 'REMOTE-MESH-OK', bubbleState: 'streaming', meta: { streaming: true } },
         ],
       }),
-      getPartialResponse: () => '',
       isProcessing: () => false,
       getRuntimeMetadata: () => null,
     }
@@ -169,7 +168,6 @@ describe('CliProviderInstance provider patch state', () => {
           { role: 'assistant', content: 'still working', bubbleState: 'streaming', meta: { streaming: true } },
         ],
       }),
-      getPartialResponse: () => 'still working',
       isProcessing: () => true,
       getRuntimeMetadata: () => null,
     }

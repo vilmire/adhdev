@@ -12,6 +12,9 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
 import type { InteractivePrompt } from '../interactive-prompt/types'
+// Type-only: web-core must never VALUE-import the daemon-core barrel (it would
+// drag Node builtins into the browser bundle).
+import type { CompactSessionEntry as CoreCompactSessionEntry } from '@adhdev/daemon-core'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData } from '../utils/session-entry-merge'
@@ -162,55 +165,46 @@ const IdentityCtx = createContext<BaseDaemonIdentityValue>({
 // ./ides-reconcile. Only Provider/compact-expansion code remains below.
 
 /**
- * expandCompactDaemons — server compact format → flat DaemonData[]
- * standalone/cloud shared
+ * Core `CompactSessionEntry` fields that the daemon guarantees but the compact
+ * wire seen by the dashboard may omit. The wire arrives from several producers
+ * (standalone WS, UserSessionDO's stored `toCompactSession` projection and the
+ * P2P snapshot — some of them older daemons), so `expandCompactDaemons` /
+ * `normalizeCompactSession` already default every one of these:
+ *   parentId → null · providerName → providerType · status → 'idle'/'online'
+ *   · title → providerName/providerType · workspace → null/''.
+ * Keeping them optional here is therefore a deliberate statement of what the
+ * expander tolerates, not a leftover. `id` / `providerType` / `kind` /
+ * `transport` stay required: the expander routes on them and has no default.
  */
-export interface CompactSessionEntry {
-    id: string
-    parentId?: string | null
-    providerType: string
-    providerName?: string
-    providerSessionId?: string
-    kind: SessionEntry['kind']
-    transport: SessionEntry['transport']
-    status?: SessionEntry['status'] | 'online'
-    title?: string
-    workspace?: string | null
-    activeChat?: DaemonData['activeChat']
-    capabilities?: string[]
-    cdpConnected?: boolean
-    runtimeKey?: string
-    runtimeDisplayName?: string
-    runtimeWorkspaceLabel?: string
-    runtimeWriteOwner?: DaemonData['runtimeWriteOwner']
-    runtimeAttachedClients?: DaemonData['runtimeAttachedClients']
-    lastMessagePreview?: string
-    lastMessageRole?: string
-    lastMessageAt?: number
-    lastMessageHash?: string
-    lastUpdated?: number
-    unread?: boolean
-    lastSeenAt?: number
-    inboxBucket?: DaemonData['inboxBucket']
-    completionMarker?: string
-    seenCompletionMarker?: string
-    surfaceHidden?: boolean
-    muted?: boolean
-    controlValues?: DaemonData['controlValues']
-    providerControls?: DaemonData['providerControls']
-    summaryMetadata?: DaemonData['summaryMetadata']
-    activeInteractivePrompt?: InteractivePrompt | null
-    /**
-     * True owning-daemon id for a session that a coordinator synthesises into its own
-     * snapshot (mesh delegated sessions). When present, the expanded entry is attributed
-     * to this daemon instead of the snapshot daemon so the dashboard shows the worker
-     * machine, not the coordinator.
-     */
-    ownerDaemonId?: string
-    /** True owning-machine display name fallback when the owning daemon is not aggregated. */
-    ownerMachineName?: string
-    settings?: Record<string, any>
-}
+type CompactSessionLenientKeys = 'parentId' | 'providerName' | 'status' | 'title' | 'workspace'
+
+/**
+ * expandCompactDaemons input — the daemon-core `CompactSessionEntry` (type-only
+ * import, so a field added to the core type is visible here without a hand
+ * edit) plus the view-only extras below.
+ *
+ * Wiring-unification A4: this used to be a second hand-written interface with
+ * the same name as the core type and a drifting field list.
+ */
+export type CompactSessionViewEntry =
+    Omit<CoreCompactSessionEntry, CompactSessionLenientKeys>
+    & Partial<Pick<CoreCompactSessionEntry, Exclude<CompactSessionLenientKeys, 'status'>>>
+    & {
+        /** `'online'` is the pre-normalization placeholder some producers send; normalized to 'idle'. */
+        status?: CoreCompactSessionEntry['status'] | 'online'
+        /** Rich chat payload — P2P only; the server projection never carries it. */
+        activeChat?: DaemonData['activeChat']
+        activeInteractivePrompt?: InteractivePrompt | null
+        /**
+         * True owning-daemon id for a session that a coordinator synthesises into its own
+         * snapshot (mesh delegated sessions). When present, the expanded entry is attributed
+         * to this daemon instead of the snapshot daemon so the dashboard shows the worker
+         * machine, not the coordinator.
+         */
+        ownerDaemonId?: string
+        /** True owning-machine display name fallback when the owning daemon is not aggregated. */
+        ownerMachineName?: string
+    }
 
 export interface CompactDaemon {
     id: string
@@ -236,10 +230,10 @@ export interface CompactDaemon {
     terminalBackend?: DaemonData['terminalBackend']
     detectedIdes?: DaemonData['detectedIdes']
     availableProviders?: DaemonData['availableProviders']
-    sessions?: CompactSessionEntry[]
+    sessions?: CompactSessionViewEntry[]
 }
 
-function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
+function normalizeCompactSession(session: CompactSessionViewEntry): SessionEntry {
     const rawStatus = session.status
     const normalizedStatus: SessionEntry['status'] = !rawStatus || rawStatus === 'online'
         ? 'idle'
@@ -329,7 +323,6 @@ export function expandCompactDaemons(
                 parentSessionId: ide.parentId ?? null,
                 sessionKind: ide.kind,
                 transport: ide.transport,
-                sessionCapabilities: ide.capabilities,
                 type: ide.providerType,
                 status: ide.status || 'online',
                 daemonId: d.id,
@@ -367,7 +360,6 @@ export function expandCompactDaemons(
                 parentSessionId: cli.parentId ?? null,
                 sessionKind: cli.kind,
                 transport: cli.transport,
-                sessionCapabilities: cli.capabilities,
                 type: cli.providerType,
                 agentType: cli.providerType,
                 status: cli.status || 'online',
@@ -416,7 +408,6 @@ export function expandCompactDaemons(
                 parentSessionId: acp.parentId ?? null,
                 sessionKind: acp.kind,
                 transport: acp.transport,
-                sessionCapabilities: acp.capabilities,
                 type: acp.providerType,
                 agentType: acp.providerType,
                 status: acp.status || 'online',

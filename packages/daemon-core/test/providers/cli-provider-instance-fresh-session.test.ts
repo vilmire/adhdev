@@ -822,7 +822,6 @@ describe('CliProviderInstance lightweight hot chat state', () => {
         getStatus: () => ({ status, activeModal: null, messages: [] }),
         isProcessing: () => status === 'generating',
         getScriptParsedStatus: () => ({ status: parsedStatus, title: 'Antigravity', messages: nativeMessages }),
-        getPartialResponse: () => (status === 'generating' ? '⣾ Working...' : ''),
         getRuntimeMetadata: () => null,
       }
       instance.recordAcknowledgedUserInput('Update README')

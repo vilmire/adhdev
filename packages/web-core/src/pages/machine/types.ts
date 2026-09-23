@@ -6,6 +6,7 @@ import type { SessionEntry, RuntimeWriteOwner, RuntimeAttachedClient, AvailableP
 // Type-only, from the dependency-free mesh-shared leaf — never a value import
 // from the daemon-core barrel, which would drag Node builtins into the browser.
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
+import type { ProviderCategory } from '@adhdev/daemon-core'
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
@@ -74,7 +75,10 @@ export interface ProviderSettingsEntry {
     values: Record<string, unknown>;
 }
 
-export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'
+/** The launchable provider categories — everything but `extension`, which is
+ *  a CDP webview inside an IDE and has no launch surface of its own. Derived
+ *  from the shared ProviderCategory so it cannot drift from daemon-core. */
+export type WorkspaceLaunchKind = Exclude<ProviderCategory, 'extension'>
 
 export type TabId = 'workspace' | 'overview' | 'session-host' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
 
@@ -83,7 +87,7 @@ export type ProviderInfo = AvailableProviderInfo
 export interface MachineRecentLaunch {
     id: string
     label: string
-    kind: 'ide' | 'cli' | 'acp'
+    kind: WorkspaceLaunchKind
     providerType?: string
     providerSessionId?: string
     subtitle?: string

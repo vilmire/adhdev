@@ -55,7 +55,7 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 // Local import for use in Managed*Entry types below
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
-import type { AutoApproveModesConfig, ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
+import type { AutoApproveModesConfig, LaunchableProviderCategory, ProviderCategory, ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
 import type {
     GitCompactSummary,
     GitDiffSummary,
@@ -566,7 +566,7 @@ export interface VersionUpdatePolicy {
 export interface AvailableProviderInfo {
     type: string;
     name: string;
-    category: 'ide' | 'extension' | 'cli' | 'acp';
+    category: ProviderCategory;
     displayName: string;
     icon: string;
     installed?: boolean;
@@ -737,7 +737,7 @@ export interface RecentLaunchEntry {
     id: string;
     providerType: string;
     providerName: string;
-    kind: 'ide' | 'cli' | 'acp';
+    kind: LaunchableProviderCategory;
     providerSessionId?: string;
     title?: string;
     workspace?: string | null;

@@ -93,7 +93,7 @@ export interface ChatMessage {
 }
 
 // Re-export from contracts for convenience
-import type { MessagePart, ToolCallInfo } from './providers/contracts.js';
+import type { MessagePart, ProviderCategory, ToolCallInfo } from './providers/contracts.js';
 
 // ── Extension Info ──
 
@@ -116,7 +116,7 @@ export interface CommandResult {
 
 export interface ProviderConfig {
   id: string;
-  type: 'ide' | 'extension' | 'cli' | 'acp';
+  type: ProviderCategory;
   name: string;
  /** Capabilities */
   capabilities?: string[];

@@ -129,7 +129,6 @@ export class SpecCliAdapter implements CliAdapter {
     private statusCallback: (() => void) | null = null;
     private approvalResolvedCallback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
-    private partialResponse = '';
     private activeInteractivePrompt: InteractivePrompt | null = null;
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
     private claudeTuiPromptCaptureInFlight = false;
@@ -519,6 +518,11 @@ export class SpecCliAdapter implements CliAdapter {
             state: this.latestState,
             modal: this.latestModal,
             readySeen: () => this.driver?.hasSeenReady?.(),
+            // A5-3: cheap reads of latched driver counters — no snapshot, no
+            // re-evaluation — so the watchdog's getStatus({ allowParse: false })
+            // poll stays a pure read and cannot itself move the clocks.
+            lastOutputAt: this.driver?.getLastOutputAt?.(),
+            lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
         });
     }
 
@@ -619,10 +623,6 @@ export class SpecCliAdapter implements CliAdapter {
         } catch {
             return { active: false, count: 0, ids: [], support: 'unknown' };
         }
-    }
-
-    getPartialResponse(): string {
-        return this.partialResponse;
     }
 
     shutdown(): void {

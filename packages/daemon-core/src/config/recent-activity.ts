@@ -10,13 +10,14 @@
 import * as path from 'path';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { RecentSessionBucket, SessionEntry } from '../shared-types.js';
+import type { LaunchableProviderCategory } from '../providers/contracts.js';
 import type { DaemonState } from './state-store.js';
 import { expandPath } from './workspaces.js';
 import { normalizePersistedSummaryMetadata } from '../providers/summary-metadata.js';
 
 export interface RecentActivityEntry {
     id: string;
-    kind: 'ide' | 'cli' | 'acp';
+    kind: LaunchableProviderCategory;
     providerType: string;
     providerName: string;
     providerSessionId?: string;

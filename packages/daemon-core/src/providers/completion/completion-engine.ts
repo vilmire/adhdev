@@ -86,9 +86,8 @@ export interface CompletionSignalReader {
     lastOutputAt(): number | undefined;
     adapterWaitingForResponse(): boolean;
     adapterTurnScopeActive(): boolean;
-    /** hasAdapterPendingResponse(): waitingForResponse || turnScope || isProcessing || partial. */
+    /** hasAdapterPendingResponse(): waitingForResponse || turnScope || isProcessing. */
     adapterAnyPending(): boolean;
-    partialResponsePending(): boolean;
     /** getScriptParsedStatus() — ok:false carries the throw message (parse_error block). */
     parsedStatus(): { ok: true; status: string; modalActive: boolean; messages: unknown } | { ok: false; error: string };
     /** shouldSuppressStaleParsedBusyStatus() for the current parsed/adapter pair. */
@@ -246,10 +245,6 @@ export function evaluateFinalizationBlock(
     // re-runs the resume guards, and the grace lapses on its own.
     if (!approvalResolvedIdle && reader.inApprovalResumeGrace()) {
         return { block: { reason: 'approval_resume_grace', terminal: false }, evidencePatch };
-    }
-
-    if (reader.partialResponsePending()) {
-        return { block: { reason: 'partial_response_pending', terminal: true }, evidencePatch };
     }
 
     const parsed = reader.parsedStatus();

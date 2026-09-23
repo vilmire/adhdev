@@ -260,7 +260,6 @@ describe('expandCompactDaemons', () => {
               messages: [],
               activeModal: null,
             },
-            capabilities: ['read_chat', 'send_message'],
             providerControls,
             controlValues,
           },
@@ -281,7 +280,6 @@ describe('expandCompactDaemons', () => {
               messages: [],
               activeModal: null,
             },
-            capabilities: ['read_chat', 'send_message'],
             providerControls,
             controlValues,
             providerSessionId: 'sess-1',
@@ -296,7 +294,6 @@ describe('expandCompactDaemons', () => {
             status: 'idle',
             title: 'Claude Code',
             workspace: '/repo',
-            capabilities: ['read_chat'],
             providerControls,
             controlValues,
           },
@@ -310,7 +307,6 @@ describe('expandCompactDaemons', () => {
         transport: 'cdp-page',
         providerControls,
         controlValues,
-        sessionCapabilities: ['read_chat', 'send_message'],
       }),
       expect.objectContaining({
         id: 'machine-2:cli:cli-1',
@@ -320,7 +316,6 @@ describe('expandCompactDaemons', () => {
         providerSessionId: 'sess-1',
         providerControls,
         controlValues,
-        sessionCapabilities: ['read_chat', 'send_message'],
         _isCli: true,
       }),
       expect.objectContaining({
@@ -330,7 +325,6 @@ describe('expandCompactDaemons', () => {
         agentType: 'claude-code',
         providerControls,
         controlValues,
-        sessionCapabilities: ['read_chat'],
         _isAcp: true,
       }),
     ]))

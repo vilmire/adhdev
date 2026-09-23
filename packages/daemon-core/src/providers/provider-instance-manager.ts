@@ -9,6 +9,7 @@
  */
 
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, HotChatSessionState, SessionModalState } from './provider-instance.js';
+import type { ProviderCategory } from './contracts.js';
 import { LOG } from '../logging/logger.js';
 
 function projectHotChatSessionStatesFromProviderState(state: ProviderState): HotChatSessionState[] {
@@ -65,7 +66,7 @@ export class ProviderInstanceManager {
     }
 
     removeByCategory(
-        category: 'cli' | 'ide' | 'extension' | 'acp',
+        category: ProviderCategory,
         options: { dispose?: boolean } = {},
     ): number {
         const dispose = options.dispose !== false;
@@ -95,7 +96,7 @@ export class ProviderInstanceManager {
  /**
  * Per-category Instance list
  */
-    getByCategory(category: 'cli' | 'ide' | 'extension' | 'acp'): ProviderInstance[] {
+    getByCategory(category: ProviderCategory): ProviderInstance[] {
         return [...this.instances.values()].filter(i => i.category === category);
     }
 
@@ -197,7 +198,7 @@ export class ProviderInstanceManager {
  /**
  * Per-category status collect
  */
-    collectStatesByCategory(category: 'cli' | 'ide' | 'extension' | 'acp'): ProviderState[] {
+    collectStatesByCategory(category: ProviderCategory): ProviderState[] {
         return this.collectAllStates().filter(s => s.category === category);
     }
 

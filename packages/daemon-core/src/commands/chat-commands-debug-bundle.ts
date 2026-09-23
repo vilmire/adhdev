@@ -221,7 +221,6 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
         : null;
     const cliParsedMessageCount = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages.length : undefined;
     const readChatReturnedMessages = Array.isArray(readChat.messagesTail) ? readChat.messagesTail.length : undefined;
-    const cliPartialResponse = typeof cli?.partialResponse === 'string' ? cli.partialResponse : '';
     const readChatStatus = typeof readChat.status === 'string' ? readChat.status : '';
     const cliStatus = typeof cli?.status === 'string' ? cli.status : '';
     const cliParsedStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status : '';
@@ -238,7 +237,6 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
         cliParsedStatus: cliParsedStatus || undefined,
         cliMessageCount: cli?.messageCount,
         cliParsedMessageCount,
-        cliPartialResponseChars: cliPartialResponse.length,
         parserAdapterStatusMismatch: Boolean(cliStatus && cliParsedStatus && cliStatus !== cliParsedStatus),
         parserReadChatStatusMismatch: Boolean(readChatStatus && cliParsedStatus && readChatStatus !== cliParsedStatus),
         readChatDebug: Object.keys(debugReadChat).length ? {
@@ -374,12 +372,10 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
     let adapterStatus: unknown = null;
     let parsedStatus: unknown = null;
     let adapterDebugSnapshot: unknown = null;
-    let partialResponse = '';
     if (adapter) {
         try { adapterStatus = adapter.getStatus?.(); } catch (error: any) { adapterStatus = { error: error?.message || String(error) }; }
         try { parsedStatus = typeof adapter.getScriptParsedStatus === 'function' ? parseMaybeJson(adapter.getScriptParsedStatus()) : null; } catch (error: any) { parsedStatus = { error: error?.message || String(error) }; }
         try { adapterDebugSnapshot = typeof adapter.getDebugSnapshot === 'function' ? adapter.getDebugSnapshot() : null; } catch (error: any) { adapterDebugSnapshot = { error: error?.message || String(error) }; }
-        try { partialResponse = adapter.getPartialResponse?.() || ''; } catch { partialResponse = ''; }
     }
 
     let instanceState: unknown = null;
@@ -451,7 +447,6 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
             messageCount: Array.isArray((adapterStatus as any)?.messages) ? (adapterStatus as any).messages.length : undefined,
             messagesTail: Array.isArray((adapterStatus as any)?.messages) ? (adapterStatus as any).messages.slice(-20) : undefined,
             parsedStatus,
-            partialResponse,
             ready: typeof adapter.isReady === 'function' ? adapter.isReady() : undefined,
             processing: typeof adapter.isProcessing === 'function' ? adapter.isProcessing() : undefined,
             debugSnapshot: adapterDebugSnapshot,
