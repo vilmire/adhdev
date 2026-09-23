@@ -940,34 +940,84 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
                 promptId: heldPrompt.promptId,
             };
         }
-        const surfacedModal = targetState?.activeChat?.activeModal && Array.isArray(targetState.activeChat.activeModal.buttons)
-            && targetState.activeChat.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
-            ? targetState.activeChat.activeModal
-            : null;
-        const statusModal = status?.activeModal && Array.isArray(status.activeModal.buttons)
-            && status.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
-            ? status.activeModal
-            : null;
-        const parsedStatus = !statusModal && !surfacedModal && typeof adapter.getScriptParsedStatus === 'function'
-            ? (() => {
-                try {
-                    return parseMaybeJson(adapter.getScriptParsedStatus());
-                } catch {
-                    return null;
-                }
-            })()
-            : null;
-        const parsedModal = parsedStatus?.status === 'waiting_approval'
-            && parsedStatus?.activeModal
-            && Array.isArray(parsedStatus.activeModal.buttons)
-            && parsedStatus.activeModal.buttons.some((candidate: unknown) => typeof candidate === 'string' && candidate.trim())
-            ? parsedStatus.activeModal
-            : null;
-        const effectiveModal = statusModal || surfacedModal || parsedModal;
-        const effectiveStatus = status?.status === 'waiting_approval' || targetState?.activeChat?.status === 'waiting_approval' || parsedStatus?.status === 'waiting_approval'
-            ? 'waiting_approval'
-            : status?.status;
-        LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} parsedModal=${parsedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
+        // The three modal sources the gate consults, derived together so the whole
+        // read can be REPEATED after a live re-parse (APPROVE-LATCH-STALE below).
+        // `st`/`ts` are passed in rather than closed over precisely so the second
+        // pass reads fresh values instead of the pre-refresh snapshot.
+        const readModals = (
+            st: typeof status,
+            ts: typeof targetState,
+        ) => {
+            const surfacedModal = ts?.activeChat?.activeModal && Array.isArray(ts.activeChat.activeModal.buttons)
+                && ts.activeChat.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
+                ? ts.activeChat.activeModal
+                : null;
+            const statusModal = st?.activeModal && Array.isArray(st.activeModal.buttons)
+                && st.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
+                ? st.activeModal
+                : null;
+            const parsedStatus = !statusModal && !surfacedModal && typeof adapter.getScriptParsedStatus === 'function'
+                ? (() => {
+                    try {
+                        return parseMaybeJson(adapter.getScriptParsedStatus());
+                    } catch {
+                        return null;
+                    }
+                })()
+                : null;
+            const parsedModal = parsedStatus?.status === 'waiting_approval'
+                && parsedStatus?.activeModal
+                && Array.isArray(parsedStatus.activeModal.buttons)
+                && parsedStatus.activeModal.buttons.some((candidate: unknown) => typeof candidate === 'string' && candidate.trim())
+                ? parsedStatus.activeModal
+                : null;
+            const effectiveStatus = st?.status === 'waiting_approval' || ts?.activeChat?.status === 'waiting_approval' || parsedStatus?.status === 'waiting_approval'
+                ? 'waiting_approval'
+                : st?.status;
+            return {
+                surfacedModal,
+                statusModal,
+                parsedModal,
+                effectiveModal: statusModal || surfacedModal || parsedModal,
+                effectiveStatus,
+            };
+        };
+        const logGate = (pass: string, m: ReturnType<typeof readModals>) => {
+            LOG.info('Command', `[resolveAction] CLI PTY gate${pass} target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(m.effectiveStatus || '')} statusModal=${m.statusModal ? 'yes' : 'no'} surfacedModal=${m.surfacedModal ? 'yes' : 'no'} parsedModal=${m.parsedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
+        };
+
+        let modals = readModals(status, targetState);
+        logGate('', modals);
+
+        // APPROVE-LATCH-STALE (live defect, 2026-09-23, win32 + antigravity 3/3):
+        // status says waiting_approval but NO source has a modal. That combination
+        // is not a contradiction — it is a STALE LATCH. The adapter's modal is
+        // refreshed only when the FSM driver emits, the driver emits only on a PTY
+        // frame or an armed wake timer, and an approval state whose exits are pure
+        // content guards arms no timer (scheduleWakeForState: nothing finite to
+        // wake for; the stall watchdog is `generating`-only). A focus-event TUI
+        // (antigravity's `agy`) then draws the modal once and goes silent, so the
+        // latch freezes at whatever the ENTRY frame parsed — and a priority-90
+        // `busy→approval-timeout` / `signing_in→approval-timeout` entry has no
+        // modal anchor at all, so that frame legitimately latches null.
+        //
+        // Ask the adapter to re-parse the CURRENT screen once, then re-read. This
+        // re-reads the MODAL only; status stays FSM-derived, so the
+        // adapter-status-projection.ts:81-84 rule ("never infer status from
+        // whether a modal parsed") is untouched. Cost is bounded: only a frame
+        // that was about to hard-fail pays for the extra parse.
+        let refreshAttempted = false;
+        if (!modals.effectiveModal
+            && modals.effectiveStatus === 'waiting_approval'
+            && typeof adapter.refreshModalNow === 'function') {
+            refreshAttempted = true;
+            const refreshed = adapter.refreshModalNow();
+            LOG.info('Command', `[resolveAction] CLI PTY → modal latch was empty at waiting_approval; forced live re-parse (modalNowLatched=${refreshed ? 'yes' : 'no'})`);
+            modals = readModals(adapter.getStatus(), targetInstance?.getState?.() as typeof targetState);
+            logGate(' (post-refresh)', modals);
+        }
+
+        const { effectiveModal, effectiveStatus } = modals;
         if (!effectiveModal) {
             // APPROVAL Defect-B (live re-probe race): the modal is gone because the worker
             // already resolved this very approval moments ago (delegated auto-approve fired,
@@ -979,6 +1029,24 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             if (typeof adapter.isApprovalRecentlyResolved === 'function' && adapter.isApprovalRecentlyResolved()) {
                 LOG.info('Command', `[resolveAction] CLI PTY → already_resolved (modal gone, resolved within cooldown)`);
                 return { success: true, alreadyResolved: true, status: 'already_resolved' };
+            }
+            // APPROVE-LATCH-STALE fix ③ — two very different failures used to share
+            // one message. 'Not in approval state' read as a flat contradiction of the
+            // waiting_approval that mesh_status/notifications report (they key off the
+            // status string alone), which sent a coordinator hunting for a nonexistent
+            // status bug. Say which one actually happened.
+            if (effectiveStatus === 'waiting_approval') {
+                return {
+                    success: false,
+                    approvalModalUnavailable: true,
+                    refreshAttempted,
+                    error: 'Session status IS waiting_approval, but no approval modal could be read'
+                        + (refreshAttempted ? ' even after forcing a live re-parse of the screen' : '')
+                        + '. The status is not wrong — there are simply no buttons to press from here. '
+                        + 'This happens when the state was entered by a timeout rather than by a modal '
+                        + 'appearing, or when the screen has since moved on. Read the terminal to see what '
+                        + 'is actually on it; if a prompt is visible, drive it with send_keys rather than retrying approve.',
+                };
             }
             return { success: false, error: 'Not in approval state' };
         }

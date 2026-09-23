@@ -106343,6 +106343,13 @@ trust_level = "trusted"
           /** Timer that re-runs evaluate() when a time-condition would flip true
            *  with no PTY frame to trigger it. */
           wakeTimer = null;
+          /** APPROVE-LATCH-STALE: how many times reevaluate() has run. The single
+           *  observable that distinguishes "the latch is fresh" from "the latch is
+           *  whatever the entry frame parsed" — a stale latch is invisible in every
+           *  other debug field, because getFsmDebug() re-derives its verdict live and
+           *  so always LOOKS current even when the adapter's latch is minutes old.
+           *  That blind spot is why this defect reached production. Read-only. */
+          evalCount = 0;
           /** Boot-prompt dismissal (CliSpecV4.startup_dismiss — OPENCODE-UPDATE-MODAL
            *  class). Config normalized once at start(); the shared decision engine
            *  bounds writes by spawn window + attempt cap + per-snapshot dedupe. */
@@ -106706,7 +106713,8 @@ trust_level = "trusted"
               // the caret on screen" readout, and the guard-frame rebase is an
               // internal coordinate shift that would read as a bogus row number.
               cursor: viewportCursor,
-              transitions: ev.transitions
+              transitions: ev.transitions,
+              evalCount: this.evalCount
             };
           }
           getStateHistory() {
@@ -106965,6 +106973,7 @@ trust_level = "trusted"
             }
           }
           reevaluate(forceEmit = false) {
+            this.evalCount += 1;
             const now = Date.now();
             const screen = this.adapter.snapshot();
             this.maybeDismissStartupPrompt(screen, now);
@@ -107223,12 +107232,18 @@ trust_level = "trusted"
               const condRemain = t.cond ? t.cond.remainingMs ?? Infinity : Infinity;
               if (Number.isFinite(condRemain) && condRemain > 0) soonest = Math.min(soonest, condRemain);
             }
+            const st = stateById(this.spec, this.currentStateId);
+            if (st && statusForState(st) === "approval") {
+              soonest = Math.min(soonest, _FsmDriver.APPROVAL_LATCH_REFRESH_FLOOR_MS);
+            }
             if (!Number.isFinite(soonest)) return;
             this.wakeTimer = setTimeout(() => {
               this.wakeTimer = null;
               this.reevaluate();
             }, Math.max(soonest + 30, 50));
           }
+          /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
+          static APPROVAL_LATCH_REFRESH_FLOOR_MS = 2e3;
           // ── Focus-gated stall watchdog (refocus_when_stalled_ms) ──────────────────
           //
           // A focus-event TUI (antigravity's `agy`) freezes its render loop the moment
@@ -107399,6 +107414,14 @@ trust_level = "trusted"
           /** ENTER-LOSS layer ③ — see ISpecDriver.snapshotWithScrollback. */
           snapshotWithScrollback() {
             return this.adapter.snapshotWithScrollback();
+          }
+          /** APPROVE-LATCH-STALE — see ISpecDriver.refreshNow for the full rationale.
+           *  forceEmit so a re-parse that yields the SAME CurrentEval still re-emits:
+           *  the adapter's latch is refreshed via the state_changed listener, and a
+           *  `changed`-gated emit would skip exactly the null→null case we need to
+           *  distinguish from null→buttons. */
+          refreshNow() {
+            this.reevaluate(true);
           }
           /** The agent's current coarse status, derived from the FSM node we're in. */
           currentStatus() {
@@ -113488,6 +113511,33 @@ ${text}` : text;
               modal: this.latestModal,
               readySeen: () => this.driver?.hasSeenReady?.()
             });
+          }
+          /**
+           * APPROVE-LATCH-STALE (live defect, 2026-09-23): force ONE FSM re-evaluation
+           * against the current screen so `latestModal` stops being whatever the state
+           * ENTRY frame happened to parse, then report whether a modal is now latched.
+           *
+           * Called only from the mesh_approve / resolve_action gate, and only on the
+           * failing shape (status says waiting_approval but no modal is latched
+           * anywhere). A healthy approve — modal already latched — never reaches here,
+           * so the cost is one extra parse on a frame that was about to hard-fail.
+           *
+           * Deliberately does NOT touch status: the FSM state remains authoritative
+           * (adapter-status-projection.ts:81-84). This re-reads the MODAL only.
+           *
+           * Returns false when the driver exposes no refresh (test doubles, out-of-tree
+           * drivers) or when the re-read still finds nothing — the caller distinguishes
+           * those from a successful recovery via getStatus().activeModal.
+           */
+          refreshModalNow() {
+            try {
+              if (typeof this.driver.refreshNow !== "function") return false;
+              this.driver.refreshNow();
+            } catch (e) {
+              LOG.warn("SpecAdapter", `[${this.cliType}] refreshModalNow failed: ${e?.message ?? e}`);
+              return false;
+            }
+            return !!this.latestModal && (this.latestModal.buttons?.length ?? 0) > 0;
           }
           maybeRefreshNativeHistory() {
           }
@@ -154612,23 +154662,52 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             promptId: heldPrompt.promptId
           };
         }
-        const surfacedModal = targetState?.activeChat?.activeModal && Array.isArray(targetState.activeChat.activeModal.buttons) && targetState.activeChat.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? targetState.activeChat.activeModal : null;
-        const statusModal = status?.activeModal && Array.isArray(status.activeModal.buttons) && status.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? status.activeModal : null;
-        const parsedStatus = !statusModal && !surfacedModal && typeof adapter.getScriptParsedStatus === "function" ? (() => {
-          try {
-            return parseMaybeJson(adapter.getScriptParsedStatus());
-          } catch {
-            return null;
-          }
-        })() : null;
-        const parsedModal = parsedStatus?.status === "waiting_approval" && parsedStatus?.activeModal && Array.isArray(parsedStatus.activeModal.buttons) && parsedStatus.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? parsedStatus.activeModal : null;
-        const effectiveModal = statusModal || surfacedModal || parsedModal;
-        const effectiveStatus = status?.status === "waiting_approval" || targetState?.activeChat?.status === "waiting_approval" || parsedStatus?.status === "waiting_approval" ? "waiting_approval" : status?.status;
-        LOG.info("Command", `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || "")} rawStatus=${String(status?.status || "")} effectiveStatus=${String(effectiveStatus || "")} statusModal=${statusModal ? "yes" : "no"} surfacedModal=${surfacedModal ? "yes" : "no"} parsedModal=${parsedModal ? "yes" : "no"} instance=${targetInstance ? "yes" : "no"}`);
+        const readModals = (st, ts2) => {
+          const surfacedModal = ts2?.activeChat?.activeModal && Array.isArray(ts2.activeChat.activeModal.buttons) && ts2.activeChat.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? ts2.activeChat.activeModal : null;
+          const statusModal = st?.activeModal && Array.isArray(st.activeModal.buttons) && st.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? st.activeModal : null;
+          const parsedStatus = !statusModal && !surfacedModal && typeof adapter.getScriptParsedStatus === "function" ? (() => {
+            try {
+              return parseMaybeJson(adapter.getScriptParsedStatus());
+            } catch {
+              return null;
+            }
+          })() : null;
+          const parsedModal = parsedStatus?.status === "waiting_approval" && parsedStatus?.activeModal && Array.isArray(parsedStatus.activeModal.buttons) && parsedStatus.activeModal.buttons.some((candidate) => typeof candidate === "string" && candidate.trim()) ? parsedStatus.activeModal : null;
+          const effectiveStatus2 = st?.status === "waiting_approval" || ts2?.activeChat?.status === "waiting_approval" || parsedStatus?.status === "waiting_approval" ? "waiting_approval" : st?.status;
+          return {
+            surfacedModal,
+            statusModal,
+            parsedModal,
+            effectiveModal: statusModal || surfacedModal || parsedModal,
+            effectiveStatus: effectiveStatus2
+          };
+        };
+        const logGate = (pass, m) => {
+          LOG.info("Command", `[resolveAction] CLI PTY gate${pass} target=${String(args?.targetSessionId || "")} rawStatus=${String(status?.status || "")} effectiveStatus=${String(m.effectiveStatus || "")} statusModal=${m.statusModal ? "yes" : "no"} surfacedModal=${m.surfacedModal ? "yes" : "no"} parsedModal=${m.parsedModal ? "yes" : "no"} instance=${targetInstance ? "yes" : "no"}`);
+        };
+        let modals = readModals(status, targetState);
+        logGate("", modals);
+        let refreshAttempted = false;
+        if (!modals.effectiveModal && modals.effectiveStatus === "waiting_approval" && typeof adapter.refreshModalNow === "function") {
+          refreshAttempted = true;
+          const refreshed = adapter.refreshModalNow();
+          LOG.info("Command", `[resolveAction] CLI PTY \u2192 modal latch was empty at waiting_approval; forced live re-parse (modalNowLatched=${refreshed ? "yes" : "no"})`);
+          modals = readModals(adapter.getStatus(), targetInstance?.getState?.());
+          logGate(" (post-refresh)", modals);
+        }
+        const { effectiveModal, effectiveStatus } = modals;
         if (!effectiveModal) {
           if (typeof adapter.isApprovalRecentlyResolved === "function" && adapter.isApprovalRecentlyResolved()) {
             LOG.info("Command", `[resolveAction] CLI PTY \u2192 already_resolved (modal gone, resolved within cooldown)`);
             return { success: true, alreadyResolved: true, status: "already_resolved" };
+          }
+          if (effectiveStatus === "waiting_approval") {
+            return {
+              success: false,
+              approvalModalUnavailable: true,
+              refreshAttempted,
+              error: "Session status IS waiting_approval, but no approval modal could be read" + (refreshAttempted ? " even after forcing a live re-parse of the screen" : "") + ". The status is not wrong \u2014 there are simply no buttons to press from here. This happens when the state was entered by a timeout rather than by a modal appearing, or when the screen has since moved on. Read the terminal to see what is actually on it; if a prompt is visible, drive it with send_keys rather than retrying approve."
+            };
           }
           return { success: false, error: "Not in approval state" };
         }

@@ -230,6 +230,26 @@ export interface CliAdapter {
     resolveModalMatched?(buttonIndex: number): boolean;
     isApprovalRecentlyResolved?(): boolean;
     /**
+     * APPROVE-LATCH-STALE (live defect, 2026-09-23): force one live re-parse of
+     * the approval modal from the CURRENT screen and report whether a modal with
+     * buttons is now latched.
+     *
+     * Exists because the latched modal can be arbitrarily stale in a quiet TUI:
+     * the FSM latch is refreshed only by a driver emit, an emit happens only on a
+     * PTY frame or an armed wake timer, and a modal state whose exits are pure
+     * content guards arms no timer. A `busy→approval-timeout` entry (no modal
+     * anchor in the transition) can therefore latch `activeModal: null` while the
+     * status is authoritatively waiting_approval — and mesh_approve refuses a
+     * session that is really sitting at a drawn picker.
+     *
+     * Contract: refreshes the MODAL only. It must never be used to derive or
+     * change status — see adapter-status-projection.ts:81-84.
+     *
+     * Optional: legacy/non-FSM adapters and test doubles omit it, and callers
+     * typeof-guard and fall through to the latched value.
+     */
+    refreshModalNow?(): boolean;
+    /**
      * TX-FSM Stage 0 (shadow): receive the daemon-normalized transcript signal
      * observation (SignalSnapshot envelope, providers/spec/signal-envelope.ts).
      * Optional — only the spec-driven FSM adapter implements it; callers must

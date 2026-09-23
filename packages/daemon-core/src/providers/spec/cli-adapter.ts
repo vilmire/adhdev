@@ -521,6 +521,34 @@ export class SpecCliAdapter implements CliAdapter {
         });
     }
 
+    /**
+     * APPROVE-LATCH-STALE (live defect, 2026-09-23): force ONE FSM re-evaluation
+     * against the current screen so `latestModal` stops being whatever the state
+     * ENTRY frame happened to parse, then report whether a modal is now latched.
+     *
+     * Called only from the mesh_approve / resolve_action gate, and only on the
+     * failing shape (status says waiting_approval but no modal is latched
+     * anywhere). A healthy approve — modal already latched — never reaches here,
+     * so the cost is one extra parse on a frame that was about to hard-fail.
+     *
+     * Deliberately does NOT touch status: the FSM state remains authoritative
+     * (adapter-status-projection.ts:81-84). This re-reads the MODAL only.
+     *
+     * Returns false when the driver exposes no refresh (test doubles, out-of-tree
+     * drivers) or when the re-read still finds nothing — the caller distinguishes
+     * those from a successful recovery via getStatus().activeModal.
+     */
+    refreshModalNow(): boolean {
+        try {
+            if (typeof this.driver.refreshNow !== 'function') return false;
+            this.driver.refreshNow();
+        } catch (e: any) {
+            LOG.warn('SpecAdapter', `[${this.cliType}] refreshModalNow failed: ${e?.message ?? e}`);
+            return false;
+        }
+        return !!this.latestModal && (this.latestModal.buttons?.length ?? 0) > 0;
+    }
+
     private maybeRefreshNativeHistory(): void {
         // Native history is now sourced by daemon's chat-history pipeline
         // (which calls provider.scripts.readNativeHistory wired by
