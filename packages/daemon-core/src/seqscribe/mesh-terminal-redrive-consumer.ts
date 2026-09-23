@@ -47,6 +47,18 @@ export interface RedriveEntryEnvelope {
         providerType?: string | null;
         taskId?: string | null;
         payload: Record<string, string | number | boolean>;
+        /**
+         * The seqscribe writer id and sequence number of the RAW log entry
+         * that carried this projected record — distinct from the ledger
+         * payload above. Content-free (fixed writer-id shape + a monotonic
+         * integer), sourced from `LogEntry.writer`/`LogEntry.seq`. Threaded
+         * through so a redelivery can be logged against a stable
+         * (writer, seq) coordinate, not just the ledger entry id (2026-09-23
+         * usage audit finding #1 — "why it was missing" needs a durable
+         * position to point at).
+         */
+        writer?: string;
+        seq?: number;
     };
 }
 
@@ -128,6 +140,11 @@ export function ensureTerminalRedriveConsumer(meshId: string): boolean {
                     payload: record.payload && typeof record.payload === 'object'
                         ? (record.payload as Record<string, string | number | boolean>)
                         : {},
+                    // From the RAW LogEntry, not the projected ledger record —
+                    // this is the seqscribe position, logged for observability
+                    // only (never forwarded to the server; see stats.ts).
+                    writer: typeof entry.writer === 'string' ? entry.writer : undefined,
+                    seq: typeof entry.seq === 'number' ? entry.seq : undefined,
                 },
             });
         });

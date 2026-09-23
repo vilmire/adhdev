@@ -417,6 +417,28 @@ export interface SeqscribeStatusSummary {
          */
         collectFailed: number;
     };
+    /**
+     * Terminal-redrive re-arm outcomes (`mesh/mesh-terminal-redrive.ts`), named
+     * following the `dualWrite*` style (2026-09-23 usage audit finding #1): the
+     * seqscribe-only re-arm backstop redelivered 35 of 295 completion/stop
+     * notifications since 09-16 with NO trace anywhere but a `source` field on
+     * the resulting pending-event payload. This is the counter half of that fix
+     * — the log half is the per-redelivery INFO line at the call site.
+     *
+     * ★ LOCAL-ONLY, for the same reason as `projectionCarry`/`readRouting`
+     * above: raw monotonic counters that would defeat the deduped status-frame
+     * hash, and the server has no routing use for a redelivery count.
+     * `buildCloudSeqscribeSummary` (status/reporter.ts) does not name this key,
+     * and `test/status/cloud-status-content-boundary.test.ts` keeps it out.
+     */
+    terminalRedrive?: {
+        /** Entries successfully re-armed into the pending queue (dedup may still collapse them). */
+        redelivered: number;
+        /** Entries skipped as non-terminal or unusable (not a failure — see mesh-terminal-redrive.ts). */
+        skipped: number;
+        /** Entries skip-and-advanced because the mesh was quarantined at the time. */
+        quarantined: number;
+    };
 }
 
 export interface SummarizeOptions {
@@ -525,6 +547,17 @@ export interface SummarizeOptions {
      * status frame.
      */
     transcriptLatency?: TranscriptLatencyDetail | null;
+    /**
+     * Terminal-redrive counters (`getTotalRedriveInjected()` /
+     * `getTotalQuarantineSkips()` / a `skipped` total from
+     * mesh/mesh-terminal-redrive.ts). Only read when `includeLocalDiagnostics`
+     * is set, for the same reason as `readRouting` above.
+     */
+    terminalRedrive?: {
+        redelivered: number;
+        skipped: number;
+        quarantined: number;
+    } | null;
 }
 
 export function summarizeSeqscribeStats(
@@ -647,6 +680,15 @@ export function summarizeSeqscribeStats(
                           fromReplica: routing.fromReplica,
                           fromLedger: routing.fromLedger,
                           fallbacks: { ...routing.fallbacks },
+                      },
+                  }
+                : {}),
+            ...(opts.terminalRedrive
+                ? {
+                      terminalRedrive: {
+                          redelivered: opts.terminalRedrive.redelivered,
+                          skipped: opts.terminalRedrive.skipped,
+                          quarantined: opts.terminalRedrive.quarantined,
                       },
                   }
                 : {}),

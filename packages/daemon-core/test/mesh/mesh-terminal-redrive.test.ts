@@ -49,10 +49,14 @@ vi.mock('../../src/config/config.js', async (importOriginal) => {
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { queuePendingMeshCoordinatorEvent } from '../../src/mesh/mesh-events-pending.js';
 import { buildMeshSystemMessage } from '../../src/mesh/mesh-events-utils.js';
+import { LOG } from '../../src/logging/logger.js';
 import {
     buildRedriveInjection,
     consumeRedriveEntry,
     getRedriveState,
+    getTotalRedriveInjected,
+    getTotalRedriveSkipped,
+    getTotalQuarantineSkips,
     __resetTerminalRedriveForTests,
     QUARANTINE_FAILURE_THRESHOLD,
     QUARANTINE_COOLDOWN_MS,
@@ -359,6 +363,118 @@ describe('terminal redrive — dual drive against the real pending queue (Stage 
             expect(queuedRowsFor(taskId)).toBe(1);
             expect(getRedriveState(MESH)!.consecutiveFailures).toBe(0);
             expect(isMeshQuarantined(MESH, afterCooldown)).toBe(false);
+        });
+    });
+
+    // 2026-09-23 usage audit finding #1: redrive redelivered 35 of 295
+    // completion/stop notifications since 09-16 with NO trace anywhere but a
+    // `source` field buried in the resulting pending-event payload. These
+    // pin the fix: a successful redelivery must log at INFO with enough to
+    // find it (mesh, task, event, writer/seq) and must move the counter that
+    // feeds `SeqscribeStatusSummary.terminalRedrive` (seqscribe/stats.ts).
+    describe('redelivery observability (2026-09-23 usage audit finding #1)', () => {
+        it('logs an INFO line naming mesh, task, event and writer/seq on a successful redelivery', () => {
+            const taskId = nextTaskId();
+            const infoSpy = vi.spyOn(LOG, 'info');
+            try {
+                const entry = projectedTerminal(taskId);
+                entry.writer = 'adhdev-writertest01';
+                entry.seq = 42;
+
+                expect(consumeRedriveEntry(MESH, entry)).toBe('injected');
+
+                const redriveLines = infoSpy.mock.calls.filter(
+                    (call) => call[0] === 'MeshRedrive' && typeof call[1] === 'string' && call[1].includes('redelivered'),
+                );
+                expect(redriveLines.length).toBe(1);
+                const [, message] = redriveLines[0]!;
+                expect(message).toContain(`mesh=${MESH}`);
+                expect(message).toContain(`task=${taskId}`);
+                expect(message).toContain('event=agent:generating_completed');
+                expect(message).toContain('writer=adhdev-writertest01');
+                expect(message).toContain('seq=42');
+            } finally {
+                infoSpy.mockRestore();
+            }
+        });
+
+        it('increments the redelivered/skipped counters that feed the stats.ts terminalRedrive summary', () => {
+            __resetTerminalRedriveForTests();
+            const before = {
+                injected: getTotalRedriveInjected(),
+                skipped: getTotalRedriveSkipped(),
+                quarantineSkips: getTotalQuarantineSkips(),
+            };
+
+            expect(consumeRedriveEntry(MESH, projectedTerminal(nextTaskId()))).toBe('injected');
+            expect(consumeRedriveEntry(MESH, projectedTerminal(nextTaskId(), { kind: 'task_dispatched' })))
+                .toBe('skipped');
+
+            expect(getTotalRedriveInjected()).toBe(before.injected + 1);
+            expect(getTotalRedriveSkipped()).toBe(before.skipped + 1);
+            expect(getTotalQuarantineSkips()).toBe(before.quarantineSkips);
+        });
+
+        it('does not log the redelivery INFO line for a skip (non-terminal entry)', () => {
+            const infoSpy = vi.spyOn(LOG, 'info');
+            try {
+                expect(consumeRedriveEntry(MESH, projectedTerminal(nextTaskId(), { kind: 'task_dispatched' })))
+                    .toBe('skipped');
+                const redriveLines = infoSpy.mock.calls.filter(
+                    (call) => call[0] === 'MeshRedrive' && typeof call[1] === 'string' && call[1].includes('redelivered'),
+                );
+                expect(redriveLines).toEqual([]);
+            } finally {
+                infoSpy.mockRestore();
+            }
+        });
+    });
+
+    // 2026-09-23 usage audit finding #2: the quarantine message pointed at the
+    // turn outbox, which Stage 5c-1 deleted (mesh-event-forwarding.ts:633-652).
+    // A quarantined mesh has no other re-arm path — the correct recovery is the
+    // half-open probe after QUARANTINE_COOLDOWN_MS. This pins the corrected
+    // message and the WARN level (already WARN; asserted so a future edit
+    // cannot silently downgrade the operator-visible alert).
+    describe('quarantine message points at the real recovery path (2026-09-23 usage audit finding #2)', () => {
+        it('logs WARN with the mesh id, reason, and the auto-resolving cooldown — never the deleted outbox', () => {
+            const meshId = `mesh-quarantine-msg-${randomUUID().slice(0, 8)}`;
+            const store = MeshRuntimeStore.getInstance();
+            const spy = vi.spyOn(store, 'insertPendingEvent')
+                .mockImplementation(() => { throw new Error('simulated persist failure'); });
+            const warnSpy = vi.spyOn(LOG, 'warn');
+            try {
+                for (let i = 0; i < QUARANTINE_FAILURE_THRESHOLD; i++) {
+                    expect(() => consumeRedriveEntry(meshId, projectedTerminal(nextTaskId()))).toThrow();
+                }
+                expect(isMeshQuarantined(meshId)).toBe(true);
+
+                // The entry logged when quarantine TRIPS.
+                const tripLines = warnSpy.mock.calls.filter(
+                    (call) => call[0] === 'MeshRedrive' && typeof call[1] === 'string' && call[1].includes('entering quarantine'),
+                );
+                expect(tripLines.length).toBe(1);
+
+                warnSpy.mockClear();
+                const outcome = consumeRedriveEntry(meshId, projectedTerminal(nextTaskId()));
+                expect(outcome).toBe('quarantined');
+
+                const skipLines = warnSpy.mock.calls.filter(
+                    (call) => call[0] === 'MeshRedrive' && typeof call[1] === 'string' && call[1].includes('redrive quarantined'),
+                );
+                expect(skipLines.length).toBe(1);
+                const [, message] = skipLines[0]!;
+                expect(message).toContain(`mesh=${meshId}`);
+                // The deleted outbox must never be named as a live recovery path.
+                expect(message).not.toContain('legacy outbox');
+                expect(message).not.toContain('outbox drain remains the redelivery path');
+                // The real recovery path: the auto-resolving half-open probe.
+                expect(message).toContain(String(QUARANTINE_COOLDOWN_MS));
+                expect(message).toContain('half-open probe');
+            } finally {
+                spy.mockRestore();
+                warnSpy.mockRestore();
+            }
         });
     });
 });
