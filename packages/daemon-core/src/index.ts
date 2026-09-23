@@ -920,6 +920,19 @@ export {
   type IpcCommandResult,
   type IpcStatusPayload,
 } from './ipc/local-ipc-server.js';
+// IPC load guards (audit #12): per-connection in-flight cap + probe-verb token
+// bucket, shared so daemon-cloud's own local IPC WS server enforces the SAME
+// limits as this module's LocalIpcServer instead of a second hand-rolled copy.
+export { IpcConnectionLoadGuard, type IpcGuardRejection } from './ipc/ipc-load-guards.js';
+export {
+    IPC_MAX_PAYLOAD_BYTES,
+    IPC_MAX_INFLIGHT_PER_CONNECTION,
+    IPC_BUSY_ERROR_CODE,
+    IPC_PROBE_RATE_LIMIT_WINDOW_MS,
+    IPC_PROBE_RATE_LIMIT_MAX_CALLS,
+    IPC_RATE_LIMITED_ERROR_CODE,
+    IPC_PROBE_RATE_LIMITED_COMMANDS,
+} from './ipc-protocol.js';
 
 // ── CLI Spec (adhdev:cli/spec@4) ──
 export { createNativeHistoryDispatcher } from './providers/native-history/index.js';
@@ -1204,6 +1217,7 @@ export {
   consumeRedriveEntry,
   getRedriveState,
   getTotalRedriveInjected,
+  getTotalRedriveSkipped,
   __resetTerminalRedriveForTests,
   // Stage 5a-4: quarantine — auto-resolving skip-and-advance for a redrive
   // leg that has failed QUARANTINE_FAILURE_THRESHOLD times in a row, so a

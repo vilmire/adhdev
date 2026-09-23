@@ -90,6 +90,7 @@ export const MESH_STATUS_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
+            refresh: { type: 'boolean', description: 'Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL — mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false.' },
             _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
             includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
             includeSessions: { type: 'boolean', description: 'Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node.' },
@@ -525,6 +526,7 @@ export const MESH_VIEW_QUEUE_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
+            refresh: { type: 'boolean', description: 'Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL — mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false.' },
             status: {
                 type: 'array',
                 items: { type: 'string' },

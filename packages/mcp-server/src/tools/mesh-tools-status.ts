@@ -109,10 +109,15 @@ export function summarizePendingEventProtocolMetrics(
 
 // ─── Tool Implementations ───────────────────────
 
-export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean } = {}): Promise<string> {
+export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
     const rateResult = recordMeshCoordinatorToolCall(ctx, 'mesh_status');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
     const compact = args.verbose === true ? false : (args.compact ?? true);
+    // Audit #7 (P7): bypass the shared get_status_metadata probe cache/dedupe
+    // (mesh-tools-internal.ts probeStatusMetadataForNode) when the caller explicitly
+    // asks for a fresh read — e.g. right after a launch/dispatch where a <=5s-old
+    // cached probe would still show the pre-change state.
+    const probeOpts = args.refresh === true ? { refresh: true } : undefined;
 
     await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
@@ -341,7 +346,7 @@ export async function meshStatus(ctx: MeshContext, args: { includeStaleDirectWor
         const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
-        const statusProbe = await collectLiveStatusProbe(ctx, node);
+        const statusProbe = await collectLiveStatusProbe(ctx, node, probeOpts);
         const liveSessions = statusProbe.sessions;
         // Per-node daemon build stamp (commit/version of the running daemon).
         // Compact mode folds these per-daemonId at the response level, but the
