@@ -425,7 +425,7 @@ describe('③ a tall modal whose anchor scrolled above the viewport still transi
 // ④ The stall watchdog must not reap a worker waiting on a person
 // ════════════════════════════════════════════════════════════════════════════
 
-function stallHost(observedStatus: string): MeshStallHost & { events: Record<string, unknown>[] } {
+function stallHost(observedStatus: string, approvalResolvedAt = 0, lastOutputAt = 1_000): MeshStallHost & { events: Record<string, unknown>[] } {
     const events: Record<string, unknown>[] = [];
     return {
         events,
@@ -436,7 +436,8 @@ function stallHost(observedStatus: string): MeshStallHost & { events: Record<str
             isAlive: () => true,
             // allowParse:false status read — the ONLY liveness fact that survives
             // a broken event path, which is the whole point of fix ④.
-            getStatus: () => ({ lastOutputAt: 1_000, status: observedStatus }),
+            getStatus: () => ({ lastOutputAt, status: observedStatus }),
+            getLastApprovalResolvedAt: () => approvalResolvedAt,
         },
         meshStallAnchorAt: 1_000,
         meshStallEmittedForAnchor: false,
@@ -485,5 +486,17 @@ describe('④ stall watchdog vetoes on a live prompt, with no ledger row require
         const host = stallHost('idle');
         runMeshStallTick(host, WAY_PAST_THRESHOLD);
         expect(host.events.map(e => e.event)).toContain('monitor:no_progress');
+    });
+
+    it('fires when a successful approval decision is newer than the stale waiting_approval latch', () => {
+        const host = stallHost('waiting_approval', 2_000, 1_000);
+        runMeshStallTick(host, WAY_PAST_THRESHOLD);
+        expect(host.events.map(e => e.event)).toContain('monitor:no_progress');
+    });
+
+    it('still protects a new genuine approval rendered after the previous resolution', () => {
+        const host = stallHost('waiting_approval', 2_000, 3_000);
+        runMeshStallTick(host, WAY_PAST_THRESHOLD);
+        expect(host.events.map(e => e.event)).not.toContain('monitor:no_progress');
     });
 });

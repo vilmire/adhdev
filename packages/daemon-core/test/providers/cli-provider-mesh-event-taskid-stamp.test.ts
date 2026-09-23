@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { withMinimalSpec } from '../helpers/minimal-spec.js'
 
 // TASKIDLESS regression: the mesh consumer (updateDirectDispatchStatus) keys on
 // task_id (CANON-B), but the producer — pushEvent in CliProviderInstance — never
@@ -63,5 +64,36 @@ describe('CliProviderInstance.pushEvent mesh taskId stamping', () => {
     instance.pushEvent({ event: 'agent:generating_started', timestamp: 5, taskId: 'task-explicit' })
     expect(emitted).toHaveLength(1)
     expect(emitted[0].taskId).toBe('task-explicit')
+  })
+
+  it('wires successful approve and reject modal decisions into task-addressed resolution events', async () => {
+    const callbacks: Array<(event: { resolvedAt: number; buttonLabel?: string }) => void> = []
+    const emitted: any[] = []
+    const instance = new CliProviderInstance(withMinimalSpec({
+      type: 'test-cli', category: 'cli', name: 'Test CLI', command: '/bin/true',
+    } as any), '/work/repo', [], 'sess-instance-1') as any
+    instance.adapter = {
+      updateRuntimeSettings() {},
+      setOnStatusChange() {},
+      setOnApprovalResolved(callback: (event: { resolvedAt: number; buttonLabel?: string }) => void) { callbacks.push(callback) },
+      setInApprovalResumeGraceProbe() {},
+      setNativeFinalAssistantProbe() {},
+      async spawn() {},
+      getRuntimeMetadata: () => null,
+      currentTurnTaskId: 'task-resolution-1',
+    }
+
+    await instance.init({
+      settings: { meshNodeFor: 'mesh-abc', meshNodeId: 'node-1', meshActiveTaskId: 'task-resolution-1' },
+      emitProviderEvent: (event: any) => emitted.push(event),
+    })
+    expect(callbacks).toHaveLength(1)
+
+    callbacks[0]({ resolvedAt: 100, buttonLabel: 'Yes' })
+    callbacks[0]({ resolvedAt: 200, buttonLabel: 'Reject' })
+    expect(emitted).toEqual([
+      expect.objectContaining({ event: 'agent:approval_resolved', timestamp: 100, resolution: 'approved', taskId: 'task-resolution-1' }),
+      expect.objectContaining({ event: 'agent:approval_resolved', timestamp: 200, resolution: 'rejected', taskId: 'task-resolution-1' }),
+    ])
   })
 })

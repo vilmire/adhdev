@@ -320,7 +320,7 @@ export type MeshInjectOutcome =
 export function injectPendingIntoCoordinator(
     coordinator: LiveCoordinator['instance'],
     pending: PendingMeshCoordinatorEvent,
-    opts?: { forceOverride?: boolean; mode?: MeshDeliveryMode },
+    opts?: { forceOverride?: boolean; mode?: MeshDeliveryMode; nodes?: any[] },
 ): MeshInjectOutcome {
     const mode: MeshDeliveryMode = opts?.mode ?? 'idle-turn';
     if (!coordinator) return { delivered: false, reason: 'no_coordinator' };
@@ -368,7 +368,7 @@ export function injectPendingIntoCoordinator(
     // taskId prefixes, status enums and counts only, never taskTitle (which is
     // summarizeMessage'd free text from the task message).
     if (shouldForceInjectMeshEvent(pending.event)) {
-        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
+        const statusLine = buildMeshStatusLineForNotification(pending.meshId, undefined, opts?.nodes);
         if (statusLine) coordinatorMessage = `${coordinatorMessage}\n\n${statusLine}`;
     }
     // NOTIF-IMMEDIACY: `mid-generation-split` hands the body to the CLI's OWN input
@@ -708,6 +708,7 @@ export function drainAndInjectIntoTargets(
     localDaemonId: string | undefined,
     targetCoordinators: LiveCoordinator[],
     logLabel: string,
+    nodes?: any[],
 ): number {
     let pendingEvents: PendingMeshCoordinatorEvent[] = [];
     try {
@@ -752,11 +753,11 @@ export function drainAndInjectIntoTargets(
                 holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
                 continue;
             }
-            for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
+            for (const c of matched) injectPendingIntoCoordinator(c.instance, pending, { nodes });
             continue;
         }
         for (const c of targetCoordinators) {
-            injectPendingIntoCoordinator(c.instance, pending);
+            injectPendingIntoCoordinator(c.instance, pending, { nodes });
         }
     }
     return pendingEvents.length;
@@ -790,7 +791,7 @@ function isApprovalNudgeResolved(meshId: string, pending: PendingMeshCoordinator
         return false; // best-effort — a read failure never blocks delivery
     }
     return entries.some(e => {
-        if (e.kind !== 'task_completed' && e.kind !== 'task_failed') return false;
+        if (e.kind !== 'task_completed' && e.kind !== 'task_failed' && e.kind !== 'task_approval_resolved') return false;
         if (queuedAt > 0) {
             const t = new Date(e.timestamp).getTime();
             if (Number.isFinite(t) && t < queuedAt) return false; // terminal predates the nudge
@@ -822,6 +823,7 @@ export function drainAndDeliverApprovalNudges(
     drainDaemonIds: string[],
     localDaemonId: string | undefined,
     meshCoordinators: LiveCoordinator[],
+    nodes?: any[],
 ): number {
     // O(1) guard: only touch the queue when an approval event is actually present.
     let peeked: readonly PendingMeshCoordinatorEvent[];
@@ -868,7 +870,7 @@ export function drainAndDeliverApprovalNudges(
             ? meshCoordinators.filter(c => sessionIdsEquivalent(c.sessionId, wantSession))
             : meshCoordinators;
         if (targets.length === 0) continue;
-        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false });
+        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false, nodes });
         delivered++;
         LOG.info('MeshReconcile', `Delivered approval nudge (level) for mesh ${meshId} (${pending.nodeLabel}) → ${targets.length} coordinator(s) without waiting for an idle edge`);
     }
@@ -1077,4 +1079,3 @@ export function holdOrExpireStrictUnmatchedEvent(
         LOG.warn('MeshReconcile', `Failed to ledger-expire strict-unmatched ${pending.event} for mesh ${meshId}: ${e?.message || e}`);
     }
 }
-

@@ -56,6 +56,41 @@ describe('SpecCliAdapter.isApprovalRecentlyResolved (AUTOAPPROVE-FLAP signal2)',
         expect(adapter.isApprovalRecentlyResolved()).toBe(true);
     });
 
+    it('emits the approval-resolved callback only after the button was actually dispatched', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-09-23T01:02:03.000Z'));
+        const adapter = makeAdapter({ status: 'approval' });
+        const resolved = vi.fn();
+        adapter.setOnApprovalResolved(resolved);
+
+        expect(adapter.resolveModalMatched(0)).toBe(true);
+        expect(resolved).toHaveBeenCalledWith({
+            resolvedAt: new Date('2026-09-23T01:02:03.000Z').getTime(),
+            buttonLabel: 'Yes',
+        });
+        expect(adapter.getLastApprovalResolvedAt()).toBe(new Date('2026-09-23T01:02:03.000Z').getTime());
+    });
+
+    it('emits the same callback for rejection, but not for a picker or a missed press', () => {
+        const rejected = makeAdapter({ status: 'approval' });
+        const rejectedCallback = vi.fn();
+        rejected.setOnApprovalResolved(rejectedCallback);
+        expect(rejected.resolveModalMatched(1)).toBe(true);
+        expect(rejectedCallback).toHaveBeenCalledWith(expect.objectContaining({ buttonLabel: 'No' }));
+
+        const picker = makeAdapter({ status: 'picker', kind: 'picker' });
+        const pickerCallback = vi.fn();
+        picker.setOnApprovalResolved(pickerCallback);
+        expect(picker.resolveModalMatched(0)).toBe(true);
+        expect(pickerCallback).not.toHaveBeenCalled();
+
+        const missed = makeAdapter({ status: 'approval' });
+        const missedCallback = vi.fn();
+        missed.setOnApprovalResolved(missedCallback);
+        expect(missed.resolveModalMatched(9)).toBe(false);
+        expect(missedCallback).not.toHaveBeenCalled();
+    });
+
     it('reports true within the cooldown and false once it elapses', () => {
         vi.useFakeTimers();
         const adapter = makeAdapter({ status: 'approval' });

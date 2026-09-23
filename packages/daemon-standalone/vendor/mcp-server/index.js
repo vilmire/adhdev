@@ -55721,6 +55721,9 @@ ${lines.join("\n")}
           "agent:generating_started",
           "agent:generating_completed",
           "agent:waiting_approval",
+          // Silent LEVEL retraction. It is routed through the same provider-event
+          // pipeline as the assertion, but never creates a coordinator notification.
+          "agent:approval_resolved",
           // A worker parked on an AskUserQuestion multi-choice prompt. DISTINCT from
           // agent:waiting_approval (a yes/no tool-consent modal): a question is answered
           // with mesh_answer_question, never mesh_approve (mission f1d25e11). Carries the
@@ -55743,6 +55746,7 @@ ${lines.join("\n")}
         EVENT_TO_LEDGER_KIND = {
           "agent:generating_completed": "task_completed",
           "agent:waiting_approval": "task_approval_needed",
+          "agent:approval_resolved": "task_approval_resolved",
           "agent:waiting_choice": "task_question_pending",
           "agent:stopped": "task_failed",
           "monitor:no_progress": "task_stalled"
@@ -55937,6 +55941,9 @@ ${lines.join("\n")}
         ]);
         COORDINATOR_ALERT_EVENTS = /* @__PURE__ */ new Set([
           "mesh:dispatch_blocked",
+          // Silent approval-level retraction. It must reach the coordinator that owns
+          // the task ledger, but is not itself a terminal task event/notification.
+          "agent:approval_resolved",
           // WORKER-MCP F3: a worker's mid-task progress note. Unicast for the same
           // reason a terminal event is — it reports on work ONE coordinator dispatched,
           // and broadcasting it would page every coordinator on the daemon about a task
@@ -65551,7 +65558,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return readProjectedEntries(meshId, { tail });
     }
     function readApprovalResolutionEntries(meshId) {
-      return readProjectedEntriesByKind(meshId, ["task_completed", "task_failed"]);
+      return readProjectedEntriesByKind(meshId, ["task_completed", "task_failed", "task_approval_resolved"]);
     }
     function hasMatchingTaskDispatchedEntry(meshId, taskId, sessionId) {
       const entries = readProjectedEntriesByKind(meshId, ["task_dispatched"]);
@@ -75279,6 +75286,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           "task_stalled",
           "task_reclaimed",
           "task_approval_needed",
+          "task_approval_resolved",
           "task_question_pending",
           "p2p_dispatch_failed",
           "dispatch_failed",
@@ -79037,7 +79045,7 @@ ${rendered}`, "utf-8");
         bucket2 = { real: [], approval: [] };
         buckets.set(key2, bucket2);
       }
-      (terminal.entry.kind === "task_approval_needed" ? bucket2.approval : bucket2.real).push(terminal);
+      (terminal.entry.kind === "task_approval_needed" || terminal.entry.kind === "task_approval_resolved" ? bucket2.approval : bucket2.real).push(terminal);
     }
     function pushTerminalQuery(queries, key2, query) {
       if (!key2) return;
@@ -79050,6 +79058,11 @@ ${rendered}`, "utf-8");
       if (!b) return a;
       return a.order <= b.order ? a : b;
     }
+    function laterTransition(a, b) {
+      if (!a) return b;
+      if (!b) return a;
+      return a.order >= b.order ? a : b;
+    }
     function buildMeshActiveWorkLedgerSnapshot(ledgerEntries, options = {}) {
       const timestampByEntry = /* @__PURE__ */ new Map();
       for (const entry of ledgerEntries) timestampByEntry.set(entry, new Date(entry.timestamp).getTime());
@@ -79059,7 +79072,7 @@ ${rendered}`, "utf-8");
       const nodeBuckets = /* @__PURE__ */ new Map();
       let order = 0;
       for (const entry of entries) {
-        if (!TERMINAL_LEDGER_KINDS2.has(entry.kind) && entry.kind !== "task_approval_needed") continue;
+        if (!TERMINAL_LEDGER_KINDS2.has(entry.kind) && entry.kind !== "task_approval_needed" && entry.kind !== "task_approval_resolved") continue;
         const timestampMs = timestampByEntry.get(entry);
         if (!Number.isFinite(timestampMs)) continue;
         const indexed = { entry, timestampMs, order: order++ };
@@ -79108,9 +79121,22 @@ ${rendered}`, "utf-8");
           resolve36(taskQueries, taskBuckets, "real", realByDispatch);
           resolve36(sessionQueries, sessionBuckets, "real", realByDispatch);
           resolve36(nodeQueries, nodeBuckets, "real", realByDispatch);
-          resolve36(taskQueries, taskBuckets, "approval", approvalByDispatch);
-          resolve36(sessionQueries, sessionBuckets, "approval", approvalByDispatch);
-          resolve36(nodeQueries, nodeBuckets, "approval", approvalByDispatch);
+          const resolveLatestApproval = (queries, buckets) => {
+            for (const [key2, bucketQueries] of queries) {
+              const transitions = buckets.get(key2)?.approval;
+              const candidate = transitions?.[transitions.length - 1];
+              if (!candidate) continue;
+              for (const query of bucketQueries) {
+                options.onTerminalProbe?.();
+                if (candidate.timestampMs >= query.timestampMs) {
+                  approvalByDispatch.set(query.dispatch, laterTransition(approvalByDispatch.get(query.dispatch), candidate));
+                }
+              }
+            }
+          };
+          resolveLatestApproval(taskQueries, taskBuckets);
+          resolveLatestApproval(sessionQueries, sessionBuckets);
+          resolveLatestApproval(nodeQueries, nodeBuckets);
           const result = /* @__PURE__ */ new Map();
           for (const dispatch of sortedDispatches) {
             const selected = realByDispatch.get(dispatch) || approvalByDispatch.get(dispatch);
@@ -79205,6 +79231,7 @@ ${rendered}`, "utf-8");
     }
     function statusFromTerminal(entry) {
       if (entry.kind === "task_approval_needed") return "awaiting_approval";
+      if (entry.kind === "task_approval_resolved") return "idle";
       if (entry.kind === "task_question_pending") return "awaiting_choice";
       if (entry.kind === "task_completed") return "idle";
       return "failed";
@@ -79634,7 +79661,7 @@ ${rendered}`, "utf-8");
 ${lines.join("\n")}
 The mesh has no work in flight. For each mission, decide its outcome: continue it (enqueue/dispatch the remaining work) or close it with mesh_mission_upsert(mission_id, status: "completed" | "abandoned"). Do not leave a finished mission in 'active'. This is a one-time reminder.`;
     }
-    function maybeInjectIdleActiveMissionReminder(meshId, coordinator, policy, now = Date.now(), instanceManager, sharedLedgerSnapshot) {
+    function maybeInjectIdleActiveMissionReminder(meshId, coordinator, policy, now = Date.now(), instanceManager, sharedLedgerSnapshot, nodes) {
       try {
         if (!coordinator) return false;
         if (policy?.idleActiveMissionReminder === false) return false;
@@ -79646,6 +79673,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           "task_failed",
           "task_stalled",
           "task_approval_needed",
+          "task_approval_resolved",
           "task_question_pending",
           "session_stopped"
         ]);
@@ -79655,6 +79683,7 @@ The mesh has no work in flight. For each mission, decide its outcome: continue i
           directDispatches: getActiveDirectDispatches3(meshId),
           ledgerEntries,
           ledgerSnapshot: sharedLedgerSnapshot,
+          nodes,
           now
         }).summary;
         if (summary.totalActiveCount !== 0 || summary.generatingCount !== 0) return false;
@@ -89722,7 +89751,7 @@ ${cleanBody}`;
       if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
       return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
     }
-    function buildMeshStatusLineForNotification(meshId, now) {
+    function buildMeshStatusLineForNotification(meshId, now, nodes) {
       if (!meshId) return null;
       try {
         const built = buildMeshActiveWork3({
@@ -89730,6 +89759,7 @@ ${cleanBody}`;
           queue: getQueue3(meshId),
           directDispatches: getActiveDirectDispatches3(meshId),
           ledgerEntries: readLedgerEntriesByKind(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+          nodes,
           now: now ?? Date.now()
         });
         return renderMeshStatusLine({
@@ -89762,6 +89792,7 @@ ${cleanBody}`;
           "task_failed",
           "task_stalled",
           "task_approval_needed",
+          "task_approval_resolved",
           "task_question_pending",
           "session_stopped"
         ];
@@ -89864,7 +89895,7 @@ ${cleanBody}`;
         LOG.warn("MeshReconcile", `Lazily synthesized missing coordinatorMessage for ${pending.event} (mesh ${pending.meshId}) at inject time \u2014 a queued terminal event arrived message-less`);
       }
       if (shouldForceInjectMeshEvent(pending.event)) {
-        const statusLine = buildMeshStatusLineForNotification(pending.meshId);
+        const statusLine = buildMeshStatusLineForNotification(pending.meshId, void 0, opts?.nodes);
         if (statusLine) coordinatorMessage = `${coordinatorMessage}
 
 ${statusLine}`;
@@ -90046,7 +90077,7 @@ ${statusLine}`;
       }
       return out;
     }
-    function drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, logLabel) {
+    function drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, logLabel, nodes) {
       let pendingEvents = [];
       try {
         pendingEvents = drainPendingMeshCoordinatorEvents3(
@@ -90075,11 +90106,11 @@ ${statusLine}`;
             holdOrExpireStrictUnmatchedEvent(pending, wantSession, meshId);
             continue;
           }
-          for (const c of matched) injectPendingIntoCoordinator(c.instance, pending);
+          for (const c of matched) injectPendingIntoCoordinator(c.instance, pending, { nodes });
           continue;
         }
         for (const c of targetCoordinators) {
-          injectPendingIntoCoordinator(c.instance, pending);
+          injectPendingIntoCoordinator(c.instance, pending, { nodes });
         }
       }
       return pendingEvents.length;
@@ -90097,7 +90128,7 @@ ${statusLine}`;
         return false;
       }
       return entries.some((e) => {
-        if (e.kind !== "task_completed" && e.kind !== "task_failed") return false;
+        if (e.kind !== "task_completed" && e.kind !== "task_failed" && e.kind !== "task_approval_resolved") return false;
         if (queuedAt > 0) {
           const t = new Date(e.timestamp).getTime();
           if (Number.isFinite(t) && t < queuedAt) return false;
@@ -90107,7 +90138,7 @@ ${statusLine}`;
         return nodeMatch || sessionMatch;
       });
     }
-    function drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators) {
+    function drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators, nodes) {
       let peeked;
       try {
         peeked = getPendingMeshCoordinatorEvents(meshId, drainDaemonIds.length > 0 ? drainDaemonIds : void 0);
@@ -90142,7 +90173,7 @@ ${statusLine}`;
         const wantSession = readNonEmptyString(pending.targetCoordinatorSessionId);
         const targets = wantSession ? meshCoordinators.filter((c) => sessionIdsEquivalent(c.sessionId, wantSession)) : meshCoordinators;
         if (targets.length === 0) continue;
-        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false });
+        for (const c of targets) injectPendingIntoCoordinator(c.instance, pending, { forceOverride: false, nodes });
         delivered++;
         LOG.info("MeshReconcile", `Delivered approval nudge (level) for mesh ${meshId} (${pending.nodeLabel}) \u2192 ${targets.length} coordinator(s) without waiting for an idle edge`);
       }
@@ -90392,7 +90423,8 @@ ${statusLine}`;
         reason: readNonEmptyString(payload.reason),
         stopReason: readNonEmptyString(payload.stopReason),
         cleanupReason: readNonEmptyString(payload.cleanupReason),
-        source: readNonEmptyString(payload.source)
+        source: readNonEmptyString(payload.source),
+        resolution: readNonEmptyString(payload.resolution)
       };
     }
     function flushPendingForMeshIdleCoordinators(components, meshId) {
@@ -90422,6 +90454,8 @@ ${statusLine}`;
         return;
       }
       if (idleCoordinators.length === 0 && busyCoordinators.length === 0) return;
+      const cachedSnapshotNodes = components.router?.aggregateMeshStatusCache?.get(meshId)?.snapshot?.nodes;
+      const nodes = Array.isArray(cachedSnapshotNodes) ? cachedSnapshotNodes : void 0;
       const drainDaemonIds = resolveCoordinatorDrainDaemonIds(components);
       let pendingEvents;
       try {
@@ -90450,7 +90484,8 @@ ${statusLine}`;
                 bodyLength: pending.coordinatorMessage.length
               });
               const outcome = injectPendingIntoCoordinator(c.instance, pending, {
-                mode: splitEligible ? "mid-generation-split" : "next-turn-queue"
+                mode: splitEligible ? "mid-generation-split" : "next-turn-queue",
+                nodes
               });
               if (outcome.delivered) busyDelivered++;
             }
@@ -92304,6 +92339,10 @@ ${statusLine}`;
               // ledger with a review flag, matching what buildMeshSystemMessage already
               // surfaced to the coordinator off the same metadataEvent mutation.
               ...args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {},
+              ...ledgerKind === "task_approval_resolved" ? {
+                resolution: readNonEmptyString(args.metadataEvent.resolution) || "approved",
+                source: readNonEmptyString(args.metadataEvent.source) || void 0
+              } : {},
               // WEAK-SNAPSHOT-FOR-REDRIVE (Stage 5a-1): the function-entry frozen verdict,
               // carried on the ledger entry so the seqscribe projection can expose it and the
               // Stage 5a-2 redrive consumer can rebuild the SAME pending-event fingerprint
@@ -92450,7 +92489,7 @@ ${statusLine}`;
         worktreeHasQueuedTask
       });
       if (!messageText) {
-        const isSilentClaimRelevantEvent = args.event === "agent:ready" || args.event === "agent:generating_started";
+        const isSilentClaimRelevantEvent = args.event === "agent:ready" || args.event === "agent:generating_started" || args.event === "agent:approval_resolved";
         const coordinatorIsRemote = !!workerCoordinatorDaemonId && !resolveCoordinatorDrainDaemonIds(components).includes(workerCoordinatorDaemonId);
         if (!(isSilentClaimRelevantEvent && coordinatorIsRemote)) {
           return { success: false, error: "unsupported mesh event" };
@@ -92664,7 +92703,12 @@ ${statusLine}`;
                         flushSource,
                         getMesh(coordinatorMeshId)?.policy,
                         void 0,
-                        components.instanceManager
+                        components.instanceManager,
+                        void 0,
+                        (() => {
+                          const cached5 = components.router?.aggregateMeshStatusCache?.get(coordinatorMeshId)?.snapshot?.nodes;
+                          return Array.isArray(cached5) ? cached5 : void 0;
+                        })()
                       );
                     }
                   } catch (e) {
@@ -96415,6 +96459,7 @@ ${statusLine}`;
         "task_failed",
         "task_stalled",
         "task_approval_needed",
+        "task_approval_resolved",
         "task_question_pending"
       ]));
       const result = pruneStaleDirectDispatches3({
@@ -99211,12 +99256,14 @@ ${statusLine}`;
         else byMesh.set(c.meshId, [c]);
       }
       for (const [meshId, meshCoordinators] of byMesh) {
+        const cachedSnapshotNodes = components.router?.aggregateMeshStatusCache?.get(meshId)?.snapshot?.nodes;
+        const nodes = Array.isArray(cachedSnapshotNodes) ? cachedSnapshotNodes : void 0;
         const idleCoordinators = meshCoordinators.filter((c) => c.idle);
         const generatingCoordinators = meshCoordinators.filter((c) => !c.idle && !c.modalParked);
         const modalParkedCoordinators = meshCoordinators.filter((c) => !c.idle && c.modalParked);
         const targetCoordinators = idleCoordinators;
         if (targetCoordinators.length === 0) {
-          drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators);
+          drainAndDeliverApprovalNudges(meshId, drainDaemonIds, localDaemonId, meshCoordinators, nodes);
           if (store) {
             try {
               if (store.pendingEventCount(meshId) === 0) continue;
@@ -99312,7 +99359,7 @@ ${statusLine}`;
                 const escapeTargets = reconfirmGenuinelyIdleCoordinators(generatingCoordinators);
                 if (escapeTargets.length > 0) {
                   LOG.info("MeshReconcile", `Reconcile age-escape \u2192 generating-hold: held terminal event(s) for mesh ${meshId} aged ${Math.round(heldAgeMs / 1e3)}s (\u2265 ${Math.round(escalateMs / 1e3)}s) and ${escapeTargets.length} coordinator(s) re-confirmed genuinely idle on the raw adapter \u2014 draining once`);
-                  const drained = drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, escapeTargets, "age-escape");
+                  const drained = drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, escapeTargets, "age-escape", nodes);
                   if (drained > 0) continue;
                 }
               }
@@ -99345,14 +99392,15 @@ ${statusLine}`;
                 getMesh(meshId)?.policy,
                 void 0,
                 components.instanceManager,
-                activeWorkLedgerSnapshots.get(meshId)
+                activeWorkLedgerSnapshots.get(meshId),
+                nodes
               );
               continue;
             }
           } catch {
           }
         }
-        drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, "idle");
+        drainAndInjectIntoTargets(meshId, drainDaemonIds, localDaemonId, targetCoordinators, "idle", nodes);
       }
     }
     function setupMeshReconcileLoop(components) {
@@ -113202,6 +113250,7 @@ ${text}` : text;
           latestState = null;
           latestModal = null;
           statusCallback = null;
+          approvalResolvedCallback = null;
           ptyDataCallback = null;
           partialResponse = "";
           activeInteractivePrompt = null;
@@ -113795,9 +113844,20 @@ ${text}` : text;
             const target = buttonIndex >= 0 && buttonIndex < buttons.length ? buttons[buttonIndex].index : buttonIndex + 1;
             const pressed = this.driver.clickModalButton(target);
             if (pressed && this.latestState?.status === "approval") {
-              this.lastApprovalResolvedAt = Date.now();
+              const resolvedAt = Date.now();
+              this.lastApprovalResolvedAt = resolvedAt;
+              this.approvalResolvedCallback?.({
+                resolvedAt,
+                buttonLabel: buttons[buttonIndex]?.label
+              });
             }
             return pressed;
+          }
+          setOnApprovalResolved(callback) {
+            this.approvalResolvedCallback = callback;
+          }
+          getLastApprovalResolvedAt() {
+            return this.lastApprovalResolvedAt;
           }
           async resolveAction(data) {
             const args = data && typeof data === "object" ? data : {};
@@ -116572,7 +116632,13 @@ ${buttons.join("\n")}`;
       const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS2 : MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
       const stalledMs = now - host.meshStallAnchorAt;
       if (stalledMs < threshold) return;
-      if (observedStatus === "waiting_approval" || observedStatus === "waiting_choice") {
+      let staleResolvedApprovalLatch = false;
+      try {
+        const resolvedAt = host.adapter.getLastApprovalResolvedAt?.() ?? 0;
+        staleResolvedApprovalLatch = observedStatus === "waiting_approval" && Number.isFinite(resolvedAt) && resolvedAt > 0 && resolvedAt > lastOutputAt;
+      } catch {
+      }
+      if (observedStatus === "waiting_approval" && !staleResolvedApprovalLatch || observedStatus === "waiting_choice") {
         traceMeshEventDrop(
           "mesh_worker_stall_waiting_on_human",
           host.meshTraceCtx("monitor:no_progress"),
@@ -116591,7 +116657,7 @@ ${buttons.join("\n")}`;
       });
       if (turnPresentation.authority === "turn_reducer" && turnPresentation.stage) {
         const stage = turnPresentation.stage;
-        if (stage === "waiting_approval" || stage === "waiting_choice" || stage === "finalizing" || isTerminalTurnStage(stage)) {
+        if (stage === "waiting_approval" && !staleResolvedApprovalLatch || stage === "waiting_choice" || stage === "finalizing" || isTerminalTurnStage(stage)) {
           host.meshStallAnchorAt = now;
           host.meshStallEmittedForAnchor = false;
           return;
@@ -119216,6 +119282,15 @@ ${buttons.join("\n")}`;
             }
             this.adapter.setOnStatusChange(() => {
               this.detectStatusTransition();
+            });
+            this.adapter.setOnApprovalResolved?.(({ resolvedAt, buttonLabel }) => {
+              const resolution = isNegativeApprovalLabel(String(buttonLabel || "")) ? "rejected" : "approved";
+              this.pushEvent({
+                event: "agent:approval_resolved",
+                timestamp: resolvedAt,
+                resolution,
+                source: "modal_button"
+              });
             });
             if (typeof this.adapter.setInApprovalResumeGraceProbe === "function") {
               this.adapter.setInApprovalResumeGraceProbe(() => this.inApprovalResumeGrace());

@@ -272,6 +272,21 @@ describe('injectPendingIntoCoordinator — status line append', () => {
     expect(text).toContain('[Mesh] active 1: 1 generating (bbbb222)')
     expect(text).not.toContain('active 5')
     // And the snapshot was taken for this event's own mesh.
-    expect(statusLineMock.buildMeshStatusLineForNotification).toHaveBeenCalledWith('mesh-alpha')
+    expect(statusLineMock.buildMeshStatusLineForNotification).toHaveBeenCalledWith('mesh-alpha', undefined, undefined)
+  })
+
+  it('passes the caller-provided live node snapshot into the status-line collector', () => {
+    const nodes = [{ id: 'node-1', sessions: [{ id: 'sess-1', status: 'generating' }] }]
+    statusLineMock.buildMeshStatusLineForNotification.mockReturnValue('[Mesh] active 1: 1 generating')
+    const coordinator = makeCoordinator()
+
+    injectPendingIntoCoordinator(
+      coordinator as any,
+      makePending('agent:generating_completed'),
+      { nodes },
+    )
+
+    expect(statusLineMock.buildMeshStatusLineForNotification)
+      .toHaveBeenCalledWith('mesh-alpha', undefined, nodes)
   })
 })

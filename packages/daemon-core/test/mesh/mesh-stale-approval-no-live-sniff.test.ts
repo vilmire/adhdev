@@ -12,7 +12,7 @@
  * task_question_pending), a live-session status that is not itself blocked wins
  * over the stale ledger row. But that guard requires `live.status`, which comes
  * from `sessionStatusFromNodes(opts.nodes, ...)` — and two of the five
- * buildMeshActiveWork call sites pass NO `nodes` at all:
+ * buildMeshActiveWork call sites passed NO `nodes` at all before this fix:
  *
  *   - mesh-notification-status-line.ts (buildMeshStatusLineForNotification)
  *   - mesh-idle-reminder.ts
@@ -53,6 +53,7 @@ const FOLLOW_UP_TASK_ID = 'task_next'
 const DISPATCH_AT = '2026-09-12T10:00:00.000Z'
 const APPROVAL_AT = '2026-09-12T10:30:00.000Z'
 const TERMINAL_AT = '2026-09-12T10:35:00.000Z'
+const RESOLVED_AT = '2026-09-12T10:31:00.000Z'
 const NOW = new Date('2026-09-12T10:41:00.000Z').getTime()
 
 function ledger(
@@ -114,6 +115,59 @@ const DISPATCH_AND_APPROVAL = [
 ]
 
 describe('stale approval pinned with no live sniff available', () => {
+    it('retires an approval explicitly even when the live status latch is still awaiting_approval', () => {
+        const { activeWork, summary } = buildMeshActiveWork({
+            meshId: 'mesh_test',
+            queue: [] as any,
+            ledgerEntries: [
+                ...DISPATCH_AND_APPROVAL,
+                ledger('task_approval_resolved', RESOLVED_AT, { resolution: 'approved' }),
+            ],
+            directDispatches: [] as any,
+            // Core reproduction: both legacy contradiction paths are blocked by
+            // this present-but-stale latch. The explicit retraction must still win.
+            nodes: [{ id: NODE_ID, nodeId: NODE_ID, sessions: [{ id: SESSION_ID, status: 'awaiting_approval' }] }] as any,
+            now: NOW,
+        })
+
+        expect(collectPendingApprovals(activeWork)).toEqual([])
+        expect(activeWork.find(r => r.taskId === TASK_ID)).toBeUndefined()
+        expect(summary.awaitingApprovalCount).toBe(0)
+    })
+
+    it('uses latest-transition-wins semantics when a later approval re-asserts the level', () => {
+        const secondApprovalAt = '2026-09-12T10:32:00.000Z'
+        const { activeWork } = buildWithoutLiveSniff([
+            ...DISPATCH_AND_APPROVAL,
+            ledger('task_approval_resolved', RESOLVED_AT, { resolution: 'approved' }),
+            ledger('task_approval_needed', secondApprovalAt),
+        ])
+
+        const approvals = collectPendingApprovals(activeWork)
+        expect(approvals).toHaveLength(1)
+        expect(approvals[0].waitingSince).toBe(secondApprovalAt)
+    })
+
+    it('passes supplied live nodes through the real notification collector', () => {
+        const meshId = `mesh_live_nodes_banner_${Date.now()}`
+        try {
+            appendLedgerEntry(meshId, {
+                kind: 'task_dispatched', timestamp: DISPATCH_AT, nodeId: NODE_ID, sessionId: SESSION_ID,
+                providerType: 'claude-cli',
+                payload: { taskId: TASK_ID, source: 'direct', via: 'mesh_send_task', message: 'waiting' },
+            } as any)
+            appendLedgerEntry(meshId, {
+                kind: 'task_approval_needed', timestamp: APPROVAL_AT, nodeId: NODE_ID, sessionId: SESSION_ID,
+                providerType: 'claude-cli', payload: { taskId: TASK_ID, event: 'agent:waiting_approval' },
+            } as any)
+
+            const nodes = [{ id: NODE_ID, nodeId: NODE_ID, sessions: [{ id: SESSION_ID, status: 'idle' }] }] as any
+            expect(buildMeshStatusLineForNotification(meshId, NOW, nodes)).toBeNull()
+        } finally {
+            __clearMeshLedgerForTests(meshId)
+        }
+    })
+
     it('retires the approval once a later task on the SAME session completes', () => {
         // The worker answered the modal, finished that turn, and took a follow-up
         // task which completed. The blocked task emits no terminal of its own — the

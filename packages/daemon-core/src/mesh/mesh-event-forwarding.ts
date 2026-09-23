@@ -1406,6 +1406,12 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     // ledger with a review flag, matching what buildMeshSystemMessage already
                     // surfaced to the coordinator off the same metadataEvent mutation.
                     ...(args.metadataEvent.reviewRecommended === true ? { reviewRecommended: true } : {}),
+                    ...(ledgerKind === 'task_approval_resolved'
+                        ? {
+                            resolution: readNonEmptyString(args.metadataEvent.resolution) || 'approved',
+                            source: readNonEmptyString(args.metadataEvent.source) || undefined,
+                        }
+                        : {}),
                     // WEAK-SNAPSHOT-FOR-REDRIVE (Stage 5a-1): the function-entry frozen verdict,
                     // carried on the ledger entry so the seqscribe projection can expose it and the
                     // Stage 5a-2 redrive consumer can rebuild the SAME pending-event fingerprint
@@ -1628,7 +1634,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         // coordinator daemon id: a co-located worker already ran the claim on the right
         // daemon, and a coordinator processing a *pulled* event has no sourceSession so
         // workerCoordinatorDaemonId is empty — neither re-queues, so there is no loop.
-        const isSilentClaimRelevantEvent = args.event === 'agent:ready' || args.event === 'agent:generating_started';
+        // approval_resolved is also silent, but unlike ready/generating it exists
+        // to replicate a LEVEL retraction to a remote coordinator's ledger. A
+        // co-located coordinator already received the append above; a pulled copy
+        // has no workerCoordinatorDaemonId and therefore cannot loop.
+        const isSilentClaimRelevantEvent = args.event === 'agent:ready'
+            || args.event === 'agent:generating_started'
+            || args.event === 'agent:approval_resolved';
         const coordinatorIsRemote = !!workerCoordinatorDaemonId
             && !resolveCoordinatorDrainDaemonIds(components).includes(workerCoordinatorDaemonId);
         if (!(isSilentClaimRelevantEvent && coordinatorIsRemote)) {
@@ -2035,6 +2047,11 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
                                         getMesh(coordinatorMeshId)?.policy,
                                         undefined,
                                         components.instanceManager,
+                                        undefined,
+                                        (() => {
+                                            const cached = components.router?.aggregateMeshStatusCache?.get(coordinatorMeshId)?.snapshot?.nodes;
+                                            return Array.isArray(cached) ? cached : undefined;
+                                        })(),
                                     );
                                 }
                             } catch (e: any) {

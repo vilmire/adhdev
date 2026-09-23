@@ -72,3 +72,17 @@ describe('agent:waiting_choice classification (mission f1d25e11)', () => {
     expect(message).toMatch(/Do NOT use mesh_approve/i);
   });
 });
+
+describe('agent:approval_resolved classification', () => {
+  it('is a silent coordinator event mapped to the approval-level retraction kind', () => {
+    expect(isMeshCoordinatorEvent('agent:approval_resolved')).toBe(true);
+    expect(shouldForceInjectMeshEvent('agent:approval_resolved')).toBe(false);
+    expect(isMeshApprovalEvent('agent:approval_resolved')).toBe(false);
+    expect(EVENT_TO_LEDGER_KIND['agent:approval_resolved']).toBe('task_approval_resolved');
+    expect(buildMeshSystemMessage({
+      event: 'agent:approval_resolved',
+      nodeLabel: 'node_worker',
+      metadataEvent: { taskId: 'task-1' },
+    })).toBe('');
+  });
+});

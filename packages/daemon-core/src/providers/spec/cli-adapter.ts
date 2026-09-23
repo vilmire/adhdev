@@ -127,6 +127,7 @@ export class SpecCliAdapter implements CliAdapter {
     private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
+    private approvalResolvedCallback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
     private partialResponse = '';
     private activeInteractivePrompt: InteractivePrompt | null = null;
@@ -939,9 +940,22 @@ export class SpecCliAdapter implements CliAdapter {
         // NOT arm the approval cooldown. A silent miss (pressed=false) leaves the modal
         // unresolved, so it must not stamp either.
         if (pressed && this.latestState?.status === 'approval') {
-            this.lastApprovalResolvedAt = Date.now();
+            const resolvedAt = Date.now();
+            this.lastApprovalResolvedAt = resolvedAt;
+            this.approvalResolvedCallback?.({
+                resolvedAt,
+                buttonLabel: buttons[buttonIndex]?.label,
+            });
         }
         return pressed;
+    }
+
+    setOnApprovalResolved(callback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null): void {
+        this.approvalResolvedCallback = callback;
+    }
+
+    getLastApprovalResolvedAt(): number {
+        return this.lastApprovalResolvedAt;
     }
 
     async resolveAction(data: unknown): Promise<void> {
