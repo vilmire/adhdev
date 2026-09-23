@@ -87,7 +87,8 @@ import {
 } from '@adhdev/mesh-shared';
 
 import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provider-failure-classifier.js';
-import { appendAuthTail, authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
+import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
+import { RawTail } from './raw-tail.js';
 
 export { detectProviderFailure, type ProviderFailure };
 
@@ -193,11 +194,13 @@ export class SpecCliAdapter implements CliAdapter {
      * forever — the choice-resolve-stuck bug.
      */
     private interactivePromptLostAt: number | null = null;
-    private jsonLineTail = '';
+    /** ONE raw PTY tail (C6): strippedTail() (auth classifier) / takeCompleteLines()
+     *  (JSON-line prompt detector) replace the old failureOutputTail/jsonLineTail
+     *  pair — see raw-tail.ts. Lazy like `liveAuth` (Object.create-built suites skip field init). */
+    private rawTailBuf?: RawTail;
+    private get rawTail(): RawTail { return (this.rawTailBuf ??= new RawTail()); }
     private exited = false;
     private spawned = false;
-    /** Bounded merged PTY output tail used only for provider-failure classification. */
-    private failureOutputTail = '';
     private providerFailure: ProviderFailure | null = null;
     /** Live-match suspicion state — policy in live-auth-advisory.ts. Lazy: tests build adapters without the constructor. */
     private liveAuth?: LiveAuthState;
@@ -1343,6 +1346,10 @@ export class SpecCliAdapter implements CliAdapter {
                 this.notifyChange('fsm_state');
                 return;
             case 'pty_data':
+                // C6: ONE append, before either reader — strippedTail() and
+                // takeCompleteLines() below both read the same buffer with
+                // independent cursors/views (see the `rawTail` field doc).
+                this.rawTail.append(ev.chunk);
                 this.observeProviderFailureOutput(ev.chunk);
                 this.detectInteractivePromptFromPtyChunk(ev.chunk);
                 this.maybeClearResolvedClaudeTuiPrompt();
@@ -1405,8 +1412,11 @@ export class SpecCliAdapter implements CliAdapter {
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
     private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
         if (this.providerFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth))) return false;
-        if (chunk) this.failureOutputTail = appendAuthTail(this.failureOutputTail, chunk);
-        const failure = classifyAuthBillingOutput(this.cliType, this.failureOutputTail, exitCode);
+        // `chunk` is already appended into `rawTail` by handleEvent's 'pty_data'
+        // case (C6, one append before any reader) — this reads a fresh,
+        // ANSI-stripped view, replacing the former appendAuthTail accumulator.
+        void chunk;
+        const failure = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES), exitCode);
         if (!failure) return false;
         if (exitCode === undefined && !this.exited) {
             noteLiveAuthMatch((this.liveAuth ??= createLiveAuthState()), this.liveAuthContext(), failure);
@@ -1435,9 +1445,9 @@ export class SpecCliAdapter implements CliAdapter {
             // FSM status is idle | generating | approval — anything but idle is mid-turn.
             midTurn: !!this.latestState && this.latestState.status !== 'idle',
             readScreen: () => (typeof this.driver?.snapshot === 'function' ? this.driver.snapshot() : ''),
-            tail: this.failureOutputTail,
+            tail: this.rawTail.strippedTail(TAIL_BYTES),
         });
-        if (outcome.clearTail) this.failureOutputTail = '';
+        if (outcome.clearTail) this.rawTail.clearStrippedTail();
         if (outcome.advisory) this.reportSignal(outcome.advisory);
         if (outcome.latch) this.latchAuthBillingFailure(outcome.latch, 'exitCode=pending; confirmed on-screen at turn boundary');
     }
@@ -1493,10 +1503,11 @@ export class SpecCliAdapter implements CliAdapter {
 
     private detectInteractivePromptFromPtyChunk(chunk: string): void {
         if (this.interactivePromptScheme() !== 'claude_tui' || !chunk) return;
-        this.jsonLineTail += chunk;
-        if (this.jsonLineTail.length > 64 * 1024) this.jsonLineTail = this.jsonLineTail.slice(-64 * 1024);
-        const lines = this.jsonLineTail.split(/\r?\n/);
-        this.jsonLineTail = lines.pop() || '';
+        // `chunk` is already appended into `rawTail` by handleEvent's 'pty_data'
+        // case (C6, one append before any reader) — this reads complete lines
+        // off its OWN cursor, independent of the auth reader's `strippedTail()`
+        // view over the same buffer. Replaces the former `jsonLineTail` field.
+        const lines = this.rawTail.takeCompleteLines();
         for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed.startsWith('{') || !trimmed.includes('AskUserQuestion')) continue;

@@ -142,6 +142,7 @@ export function mergeRuntimeChatMessages(
 export function recordAcknowledgedUserInput(
     host: RuntimeMessagesHost,
     input: InputEnvelope | string,
+    sourceMessageId?: string,
 ): void {
     // (IMAGE-TRIPLE-BUBBLE ③) The ack DESCRIBES the send, it must not re-perform
     // it: running the delivery prompt builder here re-materialized every base64
@@ -196,6 +197,10 @@ export function recordAcknowledgedUserInput(
             runtimeInputAck: true,
             provider: host.type,
             workspace: host.workingDir,
+            // D1/D2: the send-side identity (`mintMessageId`) of the message this
+            // ack echoes, so the dashboard reconciles its optimistic bubble with
+            // the ack by id instead of by content.
+            ...(typeof sourceMessageId === 'string' && sourceMessageId.trim() ? { sourceMessageId: sourceMessageId.trim() } : {}),
         },
     } as ChatMessage), dedupKey);
 }

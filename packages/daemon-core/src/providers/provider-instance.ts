@@ -14,6 +14,7 @@ import type { MessageInputSupport } from './provider-input-support.js';
 import type { ChatMessage } from '../types.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
 import type { SessionEventPort } from '../sessions/session-port.js';
+import type { TurnEvidencePort } from './turn-evidence-port.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
 
@@ -201,6 +202,14 @@ export interface InstanceContext {
      * until then it is optional and unused by the built-in instances.
      */
     lifecycle?: SessionEventPort;
+    /**
+     * Turn-evidence emit surface (wiring-unification C5/C-W5). Injected by the
+     * instance manager once boot has attached a port
+     * (`ProviderInstanceManager.setTurnEvidencePort`). Sibling of `lifecycle`:
+     * same nullable/guarded shape, same "instances call one emit* helper per
+     * producer site" rule — see `providers/turn-evidence-port.ts`.
+     */
+    turnEvidence?: TurnEvidencePort;
 }
 
 export interface ProviderInstance {
@@ -218,6 +227,13 @@ export interface ProviderInstance {
      * it through `InstanceContext.lifecycle`. Optional; implemented in B2.
      */
     setSessionEventPort?(port: SessionEventPort | null): void;
+
+    /**
+     * Late attach / detach of the turn-evidence port (wiring-unification C5),
+     * mirroring `setSessionEventPort`. New instances get it through
+     * `InstanceContext.turnEvidence`. Optional; implemented in C-W5.
+     */
+    setTurnEvidencePort?(port: TurnEvidencePort | null): void;
 
  /** Tick — periodic status refresh (IDE: readChat, Extension: stream collection) */
     onTick(): Promise<void>;

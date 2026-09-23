@@ -93,7 +93,6 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: 'kimi', name: 'Kimi Code' }
-    adapter.failureOutputTail = ''
     adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     adapter.ptyDataCallback = null
@@ -133,7 +132,6 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       adapter.activeInteractivePrompt = null
       adapter.providerSessionId = undefined
       adapter.spec = { id: 'claude-cli', name: 'Claude Code' }
-      adapter.failureOutputTail = ''
       adapter.providerFailure = null
       adapter.liveAuth = undefined
       adapter.owningSessionId = 'sess_live'
@@ -279,7 +277,6 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.activeInteractivePrompt = null
     adapter.providerSessionId = undefined
     adapter.spec = { id: 'kimi', name: 'Kimi Code' }
-    adapter.failureOutputTail = ''
     adapter.providerFailure = null
     adapter.statusCallback = vi.fn()
     adapter.ptyDataCallback = null
@@ -311,7 +308,8 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       adapter.activeInteractivePrompt = null
       adapter.providerSessionId = undefined
       adapter.spec = { id: cliType, name: cliType }
-      adapter.failureOutputTail = 'Your membership is inactive. Payment required.'
+      // RawTail replaces the old failureOutputTail string field (C6, wiring-unification).
+      adapter.rawTail.append('Your membership is inactive. Payment required.')
       adapter.providerFailure = null
       adapter.statusCallback = vi.fn()
       return adapter

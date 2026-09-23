@@ -34,7 +34,7 @@ meshTaskAttachmentHistory: MeshTaskAttachment[];
 adapter: { updateRuntimeSettings?: (settings: Record<string, any>) => void };
 }
 
-export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
+export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
     if (!assignment?.meshId) return;
     // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
     // attach so injectedTaskHasStartedGenerating() can require the producing turn to
@@ -64,12 +64,46 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
         // proposals to (taskId, attemptId, session). Cleared with meshActiveTaskId on
         // detach so a later unrelated turn never re-echoes a prior attempt.
         ...(assignment.attemptId ? { meshActiveAttemptId: assignment.attemptId } : {}),
+        // C4/C5: the attempt's ledger generation (absent → 0 in currentAttemptRef).
+        // A new assignment without one must not inherit the previous attempt's.
+        ...(assignment.attemptId && typeof assignment.attemptGeneration === 'number' ? { meshActiveAttemptGeneration: assignment.attemptGeneration } : {}),
         ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
         // Session-level routing anchor: the originating coordinator session, so this
         // worker's completion events route back to the exact session that dispatched it.
         ...(assignment.coordinatorSessionId ? { meshCoordinatorSessionId: assignment.coordinatorSessionId } : {}),
     };
+    if (assignment.attemptId && typeof assignment.attemptGeneration !== 'number') delete host.settings.meshActiveAttemptGeneration;
     host.adapter.updateRuntimeSettings?.(host.settings);
+}
+
+/**
+ * The live attempt ref this session's turn evidence carries
+ * (`settings.meshActiveAttemptId` + `meshActiveAttemptGeneration`), or null.
+ * An absent generation reads as 0 (a pre-C dispatch carried none).
+ */
+export function currentMeshAttemptRef(settings: Record<string, any> | undefined): { attemptId: string; generation: number } | null {
+    const attemptId = settings?.meshActiveAttemptId;
+    if (typeof attemptId !== 'string' || !attemptId.trim()) return null;
+    const generation = settings?.meshActiveAttemptGeneration;
+    return { attemptId, generation: typeof generation === 'number' && Number.isInteger(generation) && generation >= 0 ? generation : 0 };
+}
+
+/**
+ * The ledger's `release_attempt_ref` effect (wiring-unification C4/C5): the
+ * attempt this session was echoing is no longer live here (reclaimed,
+ * re-delivered elsewhere, or terminal), so later evidence from this session
+ * must stop naming it. Clears ONLY the attempt identity — the task/node
+ * binding is the queue's to detach. Returns whether anything was released
+ * (a different/absent attempt is left untouched: releases are addressed).
+ */
+export function releaseMeshAttemptRef(host: MeshAssignmentHost, attemptId: string): boolean {
+    if (!attemptId || host.settings?.meshActiveAttemptId !== attemptId) return false;
+    const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
+    void meshActiveAttemptId; void meshActiveAttemptGeneration;
+    host.settings = rest;
+    host.adapter.updateRuntimeSettings?.(host.settings);
+    LOG.info('MeshDispatch', `[${host.instanceId}] released attempt ref ${attemptId}`);
+    return true;
 }
 
 /**
@@ -102,14 +136,14 @@ export function detachMeshAssignment(host: MeshAssignmentHost): void { // WORKER
     if (host.settings.launchedByCoordinator === true) {
         if (!host.settings.meshActiveTaskId) return;
         // REDRIVE-DUP: clear the task-level dispatch nonce with the task marker.
-        const { meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = host.settings;
-        void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
+        const { meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
+        void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId; void meshActiveAttemptGeneration;
         host.settings = mergePendingMeshTaskAttachment(rest, pending);
         host.adapter.updateRuntimeSettings?.(host.settings);
         return;
     }
-    const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, ...rest } = host.settings;
-    void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId;
+    const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
+    void meshNodeFor; void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId; void meshActiveAttemptGeneration;
     // WTCLAIM (A): clear the active binding but PRESERVE the last bound node id
     // (meshLastNodeId) so a later sessionless dispatch can re-adopt this idle
     // session ONLY for the node it last served. Carry the id being cleared, or

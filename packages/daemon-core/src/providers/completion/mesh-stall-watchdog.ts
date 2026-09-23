@@ -25,6 +25,14 @@ import { resolveSessionTurnPresentation } from '../../mesh/mesh-turn-presentatio
 import { isTerminalTurnStage } from '../../mesh/mesh-turn-ledger.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
+import { emitNoProgress } from '../turn-evidence-port.js';
+import type { TurnEvidencePort } from '../turn-evidence-port.js';
+import { SESSION_STATUSES, type TurnAttemptRef, type NoProgressObservedStatus } from '@adhdev/mesh-shared';
+
+/** Narrow a raw adapter status string to the closed no_progress vocabulary. */
+function toNoProgressObservedStatus(raw: string): NoProgressObservedStatus {
+    return (SESSION_STATUSES as readonly string[]).includes(raw) ? (raw as NoProgressObservedStatus) : 'unknown';
+}
 
 export const MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 180_000;
 export const MESH_WORKER_STALL_TURN_THRESHOLD_MS = 360_000;
@@ -58,6 +66,10 @@ export interface MeshStallHost {
     meshTraceCtx(event?: string): Record<string, unknown>;
     completingTurnTaskId(): string | undefined;
     pushEvent(event: Record<string, unknown>): void;
+    /** Turn-evidence port (wiring-unification C5/C-W5). Null until boot wires it. */
+    turnEvidencePort?: TurnEvidencePort | null;
+    /** Live attempt ref for this session, if the mesh assignment attached one. */
+    currentAttemptRef?(): TurnAttemptRef | null;
 }
 
 /** Drop the entire stall episode (session no longer a mesh worker / PTY dead). */
@@ -338,4 +350,20 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         observedStatus,
         taskId: host.completingTurnTaskId(),
     });
+    // Turn-evidence (C5/C-W5): a pure observation, mirroring the provider event
+    // above — this watchdog does not decide "stalled" is terminal, the ledger's
+    // admission/reducer does. `finalAssistantPresent` is false here: had a final
+    // assistant already been observed, tryReconcileTranscriptCompletionForStall
+    // above would have reconciled to a completion and returned before this point.
+    if (host.turnEvidencePort) {
+        emitNoProgress(host.turnEvidencePort, {
+            sessionId: host.instanceId,
+            observedBy: 'mesh_stall_watchdog',
+            source: 'mesh_stall_watchdog',
+            attemptRef: host.currentAttemptRef?.() ?? undefined,
+            stalledMs,
+            observedStatus: toNoProgressObservedStatus(observedStatus),
+            finalAssistantPresent: false,
+        });
+    }
 }

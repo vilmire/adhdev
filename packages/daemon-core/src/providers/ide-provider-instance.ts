@@ -15,6 +15,7 @@ import { flattenContent, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
 import { ExtensionProviderInstance, type ExtensionParentContext } from './extension-provider-instance.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
+import { emitTurnStarted, emitTurnEnd, emitSuspension, type TurnEvidencePort } from './turn-evidence-port.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -67,6 +68,7 @@ export class IdeProviderInstance implements ProviderInstance {
     private settings: Record<string, any> = {};
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
+    private turnEvidencePort: TurnEvidencePort | null = null;
     private tickErrorCount = 0;
 
  // Cached status
@@ -105,6 +107,7 @@ export class IdeProviderInstance implements ProviderInstance {
         this.context = context;
         this.settings = context.settings || {};
         if (!this.lifecyclePort && context.lifecycle) this.setSessionEventPort(context.lifecycle);
+        if (!this.turnEvidencePort && context.turnEvidence) this.setTurnEvidencePort(context.turnEvidence);
  // Sync Monitor config
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
@@ -288,6 +291,7 @@ export class IdeProviderInstance implements ProviderInstance {
         });
         ext.onEvent('extension_connected', { ideType: this.type });
         ext.setSessionEventPort(this.lifecyclePort, this.extensionParentContext);
+        ext.setTurnEvidencePort?.(this.turnEvidencePort);
         this.extensions.set(provider.type, ext);
         LOG.info('IdeInstance', `[IdeInstance:${this.type}] Extension added: ${provider.type}`);
     }
@@ -481,6 +485,11 @@ export class IdeProviderInstance implements ProviderInstance {
             if (lastStatus === 'idle' && agentStatus === 'generating') {
                 this.generatingStartedAt.set(agentKey, now);
                 this.pushEvent({ event: 'agent:generating_started', chatTitle, timestamp: now, ideType: this.type });
+                if (this.turnEvidencePort) {
+                    emitTurnStarted(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, retro: false,
+                    });
+                }
             } else if (agentStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt.has(agentKey)) this.generatingStartedAt.set(agentKey, now);
                 const msg = chatData.activeModal?.message;
@@ -489,10 +498,20 @@ export class IdeProviderInstance implements ProviderInstance {
                     modalMessage: msg,
                     modalButtons: chatData.activeModal?.buttons,
                 });
+                if (this.turnEvidencePort) {
+                    emitSuspension(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval',
+                    });
+                }
             } else if (agentStatus === 'idle' && (lastStatus === 'generating' || lastStatus === 'waiting_approval')) {
                 const startedAt = this.generatingStartedAt.get(agentKey);
                 const duration = startedAt ? Math.round((now - startedAt) / 1000) : 0;
                 this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, ideType: this.type, finalSummary: extractFinalSummaryFromMessages(chatData?.messages) });
+                if (this.turnEvidencePort) {
+                    emitTurnEnd(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, strength: 'genuine',
+                    });
+                }
                 this.generatingStartedAt.delete(agentKey);
             }
 
@@ -539,6 +558,12 @@ export class IdeProviderInstance implements ProviderInstance {
     setSessionEventPort(port: SessionEventPort | null): void {
         this.lifecyclePort = port;
         for (const ext of this.extensions.values()) ext.setSessionEventPort(port, this.extensionParentContext);
+    }
+
+    /** Attach (or detach with null) the turn-evidence port; child extensions follow. */
+    setTurnEvidencePort(port: TurnEvidencePort | null): void {
+        this.turnEvidencePort = port;
+        for (const ext of this.extensions.values()) ext.setTurnEvidencePort?.(port);
     }
 
     /** Read lazily: the workspace is set after the extensions are added. */

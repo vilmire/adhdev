@@ -26,6 +26,8 @@ import type { DaemonStatusEventPayload, P2PStatusEventPayload } from '../shared-
 import type { ProviderState } from '../providers/provider-instance.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
+import { projectTurnWireEvent, type TurnWireEvent } from '../mesh/turn-ledger/bus-projection.js';
+import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
 
 export type StatusEventHideMute = { surfaceHidden: boolean; muted: boolean };
 export type ResolveStatusEventHideMute = (sessionId: string) => StatusEventHideMute | undefined;
@@ -151,6 +153,41 @@ export function projectServerStatusEvent(
 }
 
 /**
+ * Project a committed `turn` bus event onto `status_event` (wiring-unification
+ * C1/C5). `agent:generating_completed` / `agent:stopped` are no longer events
+ * anyone emits directly — `bus-projection.ts`'s `projectTurnWireEvent` is the
+ * SOLE place those two literals are produced from a ledger commit, and this is
+ * the only consumer that turns that projection into the wire payload. Unlike
+ * `projectServerStatusEvent` (an allow-list over an untyped `Record`),
+ * `TurnWireEvent` is already a closed, content-free shape by construction — no
+ * modalMessage/modalButtons exist on it, so there is nothing to drop.
+ *
+ * Returns null for a non-`committed` phase (started/suspended/resumed/progress
+ * travel as their own bus kinds — input_state, modal, … — not status_event).
+ */
+export function projectTurnStatusEvent(
+    event: TurnBusEvent,
+    at: number,
+    resolveHideMute?: ResolveStatusEventHideMute,
+): DaemonStatusEventPayload | null {
+    const wire: TurnWireEvent | null = projectTurnWireEvent(event, at);
+    if (!wire) return null;
+    const payload: DaemonStatusEventPayload = {
+        event: wire.event,
+        timestamp: wire.timestamp,
+        targetSessionId: wire.sessionId,
+    };
+    if (resolveHideMute) {
+        const hideMute = resolveHideMute(wire.sessionId);
+        if (hideMute) {
+            payload.surfaceHidden = hideMute.surfaceHidden;
+            payload.muted = hideMute.muted;
+        }
+    }
+    return payload;
+}
+
+/**
  * Enrich the dashboard copy with the structured AskUserQuestion payload. The
  * dashboard hydrates `activeInteractivePrompt` from these fields (web-core
  * EventManager.hydrateInteractivePromptFromEvent) so the STRUCTURED picker
@@ -180,6 +217,17 @@ export interface StatusEventEmitterDeps {
     sendDashboard(payload: P2PStatusEventPayload): void;
     /** Server delivery (push / webhook / audit). Cloud only; standalone has no server leg. */
     sendServer?(payload: DaemonStatusEventPayload): void;
+    /**
+     * Also project committed `turn` bus events (the ledger's commit) onto
+     * `status_event`. OFF by default and not enabled by either host yet: the
+     * providers still emit the legacy `agent:generating_completed` /
+     * `agent:stopped` provider events (check:turn-single-emitter baseline > 0),
+     * which the `provider_event` leg already sends — with this leg on too, a
+     * mesh worker's completion would reach the dashboard and the push server
+     * TWICE. Flip it (and drop the two names from the provider_event leg) in
+     * the same change that takes the legacy emitters to zero.
+     */
+    turnCommits?: boolean;
 }
 
 /**
@@ -189,7 +237,7 @@ export interface StatusEventEmitterDeps {
  */
 export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, deps: StatusEventEmitterDeps): Unsubscribe {
     const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager);
-    return bus.on('provider_event', (e) => {
+    const unsubProviderEvent = bus.on('provider_event', (e) => {
         const raw = e.event as unknown as Record<string, unknown>;
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
         if (!serverEvent) return;
@@ -207,4 +255,28 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
             }
         }
     }, { name: 'host.status-event' });
+    // Turn-ledger commits (wiring-unification C1/C5): the SOLE other source of
+    // `agent:generating_completed` / `agent:stopped` on this wire. No P2P
+    // enrichment applies — a committed turn carries no interactivePrompt.
+    const unsubTurn = deps.turnCommits !== true ? () => {} : bus.on('turn', (e) => {
+        const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute);
+        if (!serverEvent) return;
+        LOG.debug('StatusEvent', `${serverEvent.event} (turn ledger commit, session=${serverEvent.targetSessionId})`);
+        try {
+            deps.sendDashboard(serverEvent as P2PStatusEventPayload);
+        } catch (error) {
+            LOG.warn('StatusEvent', `dashboard delivery failed: ${(error as Error)?.message ?? error}`);
+        }
+        if (deps.sendServer) {
+            try {
+                deps.sendServer(serverEvent);
+            } catch (error) {
+                LOG.warn('StatusEvent', `server delivery failed: ${(error as Error)?.message ?? error}`);
+            }
+        }
+    }, { name: 'host.status-event.turn' });
+    return () => {
+        unsubProviderEvent();
+        unsubTurn();
+    };
 }

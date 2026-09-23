@@ -13,8 +13,7 @@ import type { ProviderCategory } from './contracts.js';
 import { LOG } from '../logging/logger.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { SessionEventPort } from '../sessions/session-port.js';
-
-export type ProviderEventListener = (event: ProviderEvent & { providerType: string }) => void;
+import type { TurnEvidencePort } from './turn-evidence-port.js';
 
 function projectHotChatSessionStatesFromProviderState(state: ProviderState): HotChatSessionState[] {
     const project = (item: ProviderState): HotChatSessionState => ({
@@ -41,6 +40,7 @@ export class ProviderInstanceManager {
     private tickInterval = 5_000; // default 5seconds
     private bus: SessionLifecycleBus | null = null;
     private sessionEventPort: SessionEventPort | null = null;
+    private turnEvidencePort: TurnEvidencePort | null = null;
 
  // ─── Instance manage ──────────────────────────────
 
@@ -56,6 +56,7 @@ export class ProviderInstanceManager {
         await instance.init({
             ...context,
             ...(this.sessionEventPort ? { lifecycle: this.sessionEventPort } : {}),
+            ...(this.turnEvidencePort ? { turnEvidence: this.turnEvidencePort } : {}),
             emitProviderEvent: (event) => this.emitProviderEvent(instance.type, id, event),
         });
     }
@@ -271,6 +272,22 @@ export class ProviderInstanceManager {
     }
 
     /**
+     * Port injected as `InstanceContext.turnEvidence` into instances added from
+     * now on, and handed to already-live instances through their optional
+     * setter (wiring-unification C5, mirrors `setSessionEventPort`).
+     */
+    setTurnEvidencePort(port: TurnEvidencePort | null): void {
+        this.turnEvidencePort = port;
+        for (const [id, instance] of this.instances) {
+            try {
+                instance.setTurnEvidencePort?.(port);
+            } catch (e) {
+                LOG.warn('InstanceMgr', `[InstanceManager] setTurnEvidencePort failed for ${id}: ${(e as Error)?.message ?? e}`);
+            }
+        }
+    }
+
+    /**
      * Publish one enriched provider event on the bus (the transitional
      * `provider_event`). Every consumer is a bus subscriber since B5 — the
      * status-event emitter, mesh forwarding, quota refresh, dev SSE — each
@@ -341,7 +358,7 @@ export class ProviderInstanceManager {
      *  REBIND its turn-ledger attempt onto the real worker instead of cancelling the
      *  attempt — the guard already resolved that instance, so surfacing it here keeps
      *  the caller from having to parse it back out of an error string. */
-    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string; holderSessionId?: string } {
+    attachMeshAssignmentToInstance(instanceId: string, assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): { stamped: boolean; reason?: string; holderSessionId?: string } {
         const inst = this.instances.get(instanceId);
         if (!inst || typeof inst.attachMeshAssignment !== 'function') {
             LOG.warn('MeshDispatch', `attachMeshAssignment skipped: instance ${instanceId} ${inst ? 'has no attach method' : 'not found'}`);

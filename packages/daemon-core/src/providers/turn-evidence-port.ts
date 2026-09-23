@@ -207,7 +207,7 @@ export function emitTurnEnd(
     port: TurnEvidencePort | null | undefined,
     opts: EmitCommonOpts & {
         source: TurnEvidence['source'];
-        strength: TurnEvidence extends { kind: 'turn_end' } ? TurnEvidence['strength'] : never;
+        strength: Extract<TurnEvidence, { kind: 'turn_end' }>['strength'];
         summary?: SummaryRef;
         afterFinalizationTimeout?: boolean;
         hollow?: boolean;

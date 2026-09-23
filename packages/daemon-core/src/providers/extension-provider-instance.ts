@@ -15,6 +15,7 @@ import { mergeProviderPatchState, resolveProviderStateSurface } from './provider
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
+import { emitTurnStarted, emitTurnEnd, emitSuspension, type TurnEvidencePort } from './turn-evidence-port.js';
 
 /** What an extension's events are enriched with from its parent IDE instance. */
 export interface ExtensionParentContext {
@@ -31,6 +32,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private settings: Record<string, any> = {};
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
+    private turnEvidencePort: TurnEvidencePort | null = null;
     private parentContext: (() => ExtensionParentContext) | null = null;
 
  // status
@@ -71,6 +73,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.context = context;
         this.settings = context.settings || {};
         if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
+        if (!this.turnEvidencePort && context.turnEvidence) this.turnEvidencePort = context.turnEvidence;
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             noProgressAlert: (this.settings.noProgressAlert ?? this.settings.longGeneratingAlert) !== false,
@@ -223,6 +226,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     agentName: this.agentName || this.provider.name,
                     extensionId: this.extensionId || this.type,
                 });
+                if (this.turnEvidencePort) {
+                    emitTurnStarted(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, retro: false,
+                    });
+                }
             } else if (agentStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
                 this.pushEvent({
@@ -236,6 +244,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     modalMessage: data?.activeModal?.message,
                     modalButtons: data?.activeModal?.buttons,
                 });
+                if (this.turnEvidencePort) {
+                    emitSuspension(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval',
+                    });
+                }
             } else if (agentStatus === 'idle' && (this.lastAgentStatus === 'generating' || this.lastAgentStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
                 this.pushEvent({
@@ -249,6 +262,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     extensionId: this.extensionId || this.type,
                     finalSummary: extractFinalSummaryFromMessages(data?.messages),
                 });
+                if (this.turnEvidencePort) {
+                    emitTurnEnd(this.turnEvidencePort, {
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, strength: 'genuine',
+                    });
+                }
                 this.generatingStartedAt = 0;
             }
             this.lastAgentStatus = agentStatus;
@@ -293,6 +311,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
     setSessionEventPort(port: SessionEventPort | null, parentContext?: () => ExtensionParentContext): void {
         this.lifecyclePort = port;
         if (parentContext) this.parentContext = parentContext;
+    }
+
+    /** Attach (or detach with null) the turn-evidence port (wiring-unification C5). */
+    setTurnEvidencePort(port: TurnEvidencePort | null): void {
+        this.turnEvidencePort = port;
     }
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {

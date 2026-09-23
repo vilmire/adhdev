@@ -79,10 +79,14 @@
  */
 
 import { LOG } from '../../logging/logger.js';
-import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provider-failure-classifier.js';
+import { detectProviderFailure, type ProviderFailure } from './provider-failure-classifier.js';
 import type { SignalDetection } from './signal-rules.js';
 
-const TAIL_BYTES = 16 * 1024;
+/** Exported so `cli-adapter.ts` can pass the same window to `RawTail.strippedTail()`
+ *  (C6, wiring-unification) — the auth/billing classifier's read window is
+ *  unchanged; only where the tail bytes live moved (one shared `RawTail`, not
+ *  a private accumulator this module used to own via `appendAuthTail`). */
+export const TAIL_BYTES = 16 * 1024;
 const STUCK_BUSY_ESCAPE_MS = 60_000;
 /** A just-submitted prompt sits in the composer for ~1-2s while the FSM still
  *  reads idle (standalone live check 2026-09-21: a prompt that merely MENTIONED
@@ -117,10 +121,6 @@ export interface LiveAuthContext {
     cliType: string;
     sessionLabel: string;
     isCoordinator: boolean;
-}
-
-export function appendAuthTail(tail: string, chunk: string): string {
-    return `${tail}${stripAnsi(chunk)}`.slice(-TAIL_BYTES);
 }
 
 /** Classify, admitting only the AUTH axis for non-kimi providers (see D4 above). */
