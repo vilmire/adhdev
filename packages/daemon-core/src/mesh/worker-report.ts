@@ -51,6 +51,7 @@ import {
     WORKER_REPORT_OUTCOMES,
     isWorkerReportOutcome,
     sessionIdsEquivalent,
+    touchedFilesOutsideOwnership,
     type WorkerBranchState,
     type WorkerReportOutcome,
 } from '@adhdev/mesh-shared';
@@ -64,6 +65,7 @@ import { storeHandoffNote } from './worker-handoff-notes.js';
 import { queueWorkerProgressNotice } from './worker-progress-notify.js';
 import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runner.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
+import { meshRecord } from './mesh-record.js';
 import {
     exchangeWorkerSessionBind,
     verifyWorkerTaskToken,
@@ -508,6 +510,14 @@ export type WorkerReportResult =
         handoffNoteRecorded: boolean;
         /** Why the note did not persist, when `handoffNoteRecorded` is false. */
         handoffNoteError?: string;
+        /**
+         * H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-wiring-
+         * unification.md §7c): present only when the task carried a declared `owned_paths`
+         * AND `report.touchedFiles` touched something outside it. Surfaced as EVIDENCE, never
+         * a rejection — the completion above still commits unconditionally. Absent when the
+         * task declared no owned_paths (opt-out) or every touched file was covered.
+         */
+        ownedPathsMismatch?: { declared: string[]; touched: string[]; undeclaredTouched: string[] };
     }
     | { accepted: false; refusal: WorkerReportRefusal; detail?: string };
 
@@ -773,6 +783,42 @@ export function acceptWorkerCompletionReport(
         return { accepted: false, refusal: 'unknown_task', detail: `no queue row for task ${identity.taskId}` };
     }
 
+    // H1 (path ownership): compare the worker's reported touchedFiles against the
+    // task's declared owned_paths (if any). Best-effort and purely additive — a
+    // lookup/parse failure here must never turn an otherwise-accepted completion
+    // into a refusal, so any error just omits the mismatch field.
+    let ownedPathsMismatch: { declared: string[]; touched: string[]; undeclaredTouched: string[] } | undefined;
+    try {
+        const taskEntry = store.findQueueEntryById(identity.meshId, identity.taskId);
+        const owned = taskEntry?.ownedPaths;
+        if (owned && owned.paths.length > 0) {
+            const touched = [...(report.touchedFiles || []), ...(report.handoffNotes?.touchedFiles || [])];
+            const { undeclaredTouched } = touchedFilesOutsideOwnership(touched, owned);
+            if (undeclaredTouched.length > 0) {
+                ownedPathsMismatch = {
+                    declared: owned.paths.map(p => p.subtree ? `${p.path}/**` : p.path),
+                    touched,
+                    undeclaredTouched: [...undeclaredTouched],
+                };
+                // Scalars only (task id, counts) — never the path text itself, matching
+                // the server content-boundary discipline this module's evidence rows
+                // already follow (see the "content-free" notes above).
+                try {
+                    meshRecord(identity.meshId, 'ownership_violation', {
+                        ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+                        ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+                        payload: {
+                            taskId: identity.taskId,
+                            declaredCount: ownedPathsMismatch.declared.length,
+                            touchedCount: ownedPathsMismatch.touched.length,
+                            undeclaredTouchedCount: ownedPathsMismatch.undeclaredTouched.length,
+                        },
+                    }, { local: true });
+                } catch { /* diagnostics must never break an accepted report */ }
+            }
+        }
+    } catch { /* best-effort — see comment above */ }
+
     LOG.info(
         'WorkerReport',
         `Accepted ${report.outcome} report for task ${identity.taskId}`
@@ -793,6 +839,7 @@ export function acceptWorkerCompletionReport(
         // trade a small loss for a large one. But the worker is TOLD, so it can
         // put the context somewhere else rather than believing it was filed.
         ...(handoffNoteError ? { handoffNoteError } : {}),
+        ...(ownedPathsMismatch ? { ownedPathsMismatch } : {}),
     };
 }
 

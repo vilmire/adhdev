@@ -20,6 +20,7 @@ import { deriveDependencyFailures } from './mesh-graph-derived-failure.js';
 import { computeMeshMissionStats, type MeshMissionStats } from './mesh-task-stats.js';
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
+import { normalizeMissionBrief, type MissionBrief } from '@adhdev/mesh-shared';
 
 /**
  * Max chars of mission goal text written into a ledger entry payload. Mission
@@ -66,6 +67,14 @@ export interface MeshMissionRecord {
      * regular upsert. See summarizeMissionTasks / maybeEmitMissionCloseCandidate.
      */
     closeCandidateEmittedAt?: string;
+    /**
+     * H2 (mission brief, wiring-unification Phase H — docs/design/2026-09-23-wiring-
+     * unification.md §7c): optional structured brief (goal/constraints/doneCriteria/
+     * handoffNotes/ownedPaths), rendered into every task dispatched under this mission's
+     * worker-protocol footer (see renderMissionBriefBlock, @adhdev/mesh-shared). Distinct
+     * from `goal` above — see that field's own doc comment. Absent = no brief attached.
+     */
+    brief?: MissionBrief;
     createdAt: string;
     updatedAt: string;
 }
@@ -144,12 +153,33 @@ function normalizeMissionSource(value: unknown): MeshMissionSource | undefined {
     return value === 'magi' || value === 'coordinator' ? value : undefined;
 }
 
+/** H2: parse a stored `brief_json` column value back into a `MissionBrief`. Never throws —
+ *  a corrupt/legacy value degrades to "no brief" rather than breaking the read path. */
+function parseStoredMissionBrief(briefJson: string | undefined): MissionBrief | undefined {
+    if (!briefJson) return undefined;
+    try {
+        const parsed = JSON.parse(briefJson);
+        // Re-run through normalizeMissionBrief so a hand-edited/legacy row can never
+        // hand a reader an unshaped object — same discipline as every other stored field.
+        return normalizeMissionBrief(parsed).brief ?? undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export function upsertMeshMission(meshId: string, input: {
     id?: string;
     title: string;
     goal?: string;
     status?: string;
     source?: MeshMissionSource;
+    /**
+     * H2: raw caller input, normalized via `normalizeMissionBrief`. `undefined` = caller
+     * did not touch the brief (preserve whatever the mission already has). A goal-less
+     * object also normalizes to "no brief" per `normalizeMissionBrief`'s own contract —
+     * see `upsertMission`'s `briefJson` doc for how that reaches storage.
+     */
+    brief?: unknown;
 }): MeshMissionRecord {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (!title) throw new Error('mission_title_required: a mission needs a non-empty title');
@@ -177,6 +207,13 @@ export function upsertMeshMission(meshId: string, input: {
     const existing = requestedId ? store.getMission(meshId, id) : null;
     const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
     const prevGoal = existing?.goal ?? '';
+    // H2: `undefined` (field omitted) preserves the existing brief — see
+    // upsertMission's briefJson doc. A goal-less object normalizes to `brief: null`
+    // (normalizeMissionBrief's "no usable goal ⇒ no brief" contract), which we then
+    // treat as an explicit CLEAR only when the caller actually supplied `brief` —
+    // omitting the field entirely must not clear a previously-stored brief.
+    const normalizedBrief = input.brief === undefined ? undefined : normalizeMissionBrief(input.brief).brief;
+    const briefJson = input.brief === undefined ? undefined : (normalizedBrief ? JSON.stringify(normalizedBrief) : null);
     const record = {
         id,
         meshId,
@@ -187,6 +224,7 @@ export function upsertMeshMission(meshId: string, input: {
         // store COALESCEs it against the existing value, so a later status/goal
         // upsert that omits source never clears a previously-stamped tag.
         ...(input.source ? { source: input.source } : {}),
+        briefJson,
     };
     store.upsertMission(record);
     const saved = store.getMission(meshId, id)!;
@@ -194,6 +232,7 @@ export function upsertMeshMission(meshId: string, input: {
         ...saved,
         status: normalizeMissionStatus(saved.status),
         source: normalizeMissionSource(saved.source),
+        brief: parseStoredMissionBrief(saved.briefJson),
     };
 
     // Mission audit trail: record this mutation in the mesh ledger so mission
@@ -266,12 +305,12 @@ function appendMissionLedgerEntries(
 
 export function getMeshMissions(meshId: string, statuses?: MeshMissionStatus[]): MeshMissionRecord[] {
     return MeshRuntimeStore.getInstance().getMissions(meshId, statuses)
-        .map(m => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source) }));
+        .map(m => ({ ...m, status: normalizeMissionStatus(m.status), source: normalizeMissionSource(m.source), brief: parseStoredMissionBrief(m.briefJson) }));
 }
 
 export function getMeshMission(meshId: string, missionId: string): MeshMissionRecord | null {
     const record = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-    return record ? { ...record, status: normalizeMissionStatus(record.status), source: normalizeMissionSource(record.source) } : null;
+    return record ? { ...record, status: normalizeMissionStatus(record.status), source: normalizeMissionSource(record.source), brief: parseStoredMissionBrief(record.briefJson) } : null;
 }
 
 /** Aggregate task statuses for a mission at query time (no stored progress). */

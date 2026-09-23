@@ -391,6 +391,11 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     //     completion event carries, and that mesh_status is never for progress. ──
     sections.push(WORKERS_SECTION);
 
+    // ── Path Ownership & Mission Briefs (H1/H2) — rides immediately after
+    //     Workers: both are enqueue/dispatch-time instructions read at the same
+    //     moment a coordinator is about to call mesh_enqueue_*/mesh_mission_upsert. ──
+    sections.push(OWNERSHIP_AND_BRIEF_SECTION);
+
     // ── Tool Exposure Preflight ──
     sections.push(TOOL_EXPOSURE_PREFLIGHT_SECTION);
 
@@ -454,6 +459,7 @@ function readUserPromptFile(cliType: string | undefined, suffix: string): string
  *   {{operatingNotes}}  — accumulated operating notes section (empty when none)
  *   {{policy}}          — full policy section
  *   {{tools}}           — the canonical tools table
+ *   {{ownershipAndBrief}} — the H1/H2 path-ownership + mission-brief paragraph
  *   {{workflow}}        — the canonical orchestration workflow
  *   {{quota}}           — the quota-awareness section
  *   {{onboarding}}      — the guided init/reinit onboarding section
@@ -486,6 +492,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
         tools: TOOLS_SECTION,
         workers: WORKERS_SECTION,
+        ownershipAndBrief: OWNERSHIP_AND_BRIEF_SECTION,
         workflow: rulesLayer.workflow,
         quota: QUOTA_SECTION,
         onboarding: ONBOARDING_SECTION,
@@ -1148,6 +1155,26 @@ const TOOLS_SECTION = `## Available Tools
 // by mesh-shared next to the footer every dispatched task carries so the two
 // halves cannot drift. Rendered once at module load — the section is static.
 const WORKERS_SECTION = renderCoordinatorWorkerSection();
+
+// WIRING-UNIFICATION H (docs/design/2026-09-23-wiring-unification.md §7c): the
+// coordinator-facing half of H1 (path ownership) + H2 (mission brief). Kept as
+// its OWN paragraph rather than folded into WORKERS_SECTION (mesh-shared,
+// which already names the H1 claim-time enforcement mechanics for the worker's
+// benefit — see renderCoordinatorWorkerSection's owned_paths line) because this
+// is an ENQUEUE-TIME instruction (declare owned_paths, attach a brief), not a
+// dispatch-contract fact; it belongs beside the mission tool rows a coordinator
+// reads right before calling mesh_enqueue_batch / mesh_mission_upsert, which
+// WORKERS_SECTION is not. F1's own audit finding (a rule living only in a tool
+// description is a rule the coordinator never reads) is why this is literal
+// prompt text rather than left to the mesh_enqueue_task/mesh_mission_upsert
+// tool-schema descriptions alone.
+const OWNERSHIP_AND_BRIEF_SECTION = [
+    '## Path Ownership & Mission Briefs',
+    '',
+    '- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a refactor split across tasks), declare `owned_paths` on each — repo-relative files/dirs it will touch (`src/foo.ts`, or `src/mesh/**` for a subtree). A second `code_change` task whose `owned_paths` overlaps an already-claimed one is refused at claim time (`owned_paths_conflict`) instead of silently racing it — cheaper than discovering the collision in a merge conflict later. It is opt-in: omitting it performs no check, so declare it whenever a collision is plausible.',
+    '- After a worker reports, check the response for `ownedPathsMismatch` — it means `touched_files` included paths outside the task\'s declared `owned_paths`. This is evidence, not a rejection (the completion already committed): read it to decide whether the task drifted in scope or your declaration was too narrow, not to re-run anything.',
+    '- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session — a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission\'s worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one.',
+].join('\n');
 
 // GRAPH-ORCHESTRATION Phase F (design "Required tool-discovery instruction").
 // The enqueue-discovery paragraph is deliberately the FIRST thing in this section,

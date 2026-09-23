@@ -52,7 +52,12 @@ export type MeshClaimRefusalReason =
      *  pins a node here indefinitely and silently blocks every later claim. The bounded
      *  `reclaimStrandedAssignedTask` net is what recovers it; this reason is what makes the
      *  condition visible while it persists. */
-    | 'node_busy_with_active_assignment';
+    | 'node_busy_with_active_assignment'
+    /** H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-wiring-
+     *  unification.md §7c): a `code_change` candidate's declared `owned_paths` overlaps
+     *  another in-flight (`assigned`) task's declared `owned_paths` on the same node.
+     *  Opt-in — a candidate or in-flight task with no declaration never triggers this. */
+    | 'owned_paths_conflict';
 
 /** Sink passed in by a caller that wants to know why a claim returned null; mutated in place
  *  by `claimNextQueueTask`. Omitting it preserves the exact prior behavior. */

@@ -111,6 +111,14 @@ export function migrate(self: MeshRuntimeStore): void {
             -- re-completion can nudge again. Never drives a status transition — the
             -- coordinator/human still decides via mesh_mission_upsert.
             close_candidate_emitted_at TEXT,
+            -- H2 (wiring-unification Phase H, mission brief -- docs/design/2026-09-23-
+            -- wiring-unification.md section 7c): nullable JSON-encoded MissionBrief
+            -- (mesh-shared normalizeMissionBrief) -- goal/constraints/doneCriteria/
+            -- handoffNotes/ownedPaths, rendered into a dispatched task's worker-protocol
+            -- footer under this mission. Distinct from the free-text goal column above:
+            -- goal is the short mission-record summary, brief_json is the longer
+            -- structured packet a worker actually reads. NULL = no brief attached.
+            brief_json TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -228,6 +236,12 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
         //     all-terminal detection after this migration emits once, then marks it.
         if (!missionCols.has('close_candidate_emitted_at')) {
             self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN close_candidate_emitted_at TEXT`);
+        }
+        // 3c. mesh_missions.brief_json (H2): nullable structured mission brief. Pre-existing
+        //     rows keep it NULL — treated as "no brief attached" (normalizeMissionBrief's own
+        //     null-is-absent contract), never an empty object.
+        if (!missionCols.has('brief_json')) {
+            self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN brief_json TEXT`);
         }
 
         // 4 / 4b. (C-W8) The legacy pending-event inbox envelope columns and the `input`

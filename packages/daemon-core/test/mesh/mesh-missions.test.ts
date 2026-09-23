@@ -79,6 +79,73 @@ describe('M3 — mission persistence', () => {
         expect(getMeshMission(meshId, created.id)?.title).toBe('No id supplied');
     });
 
+    // H2 (mission brief, wiring-unification Phase H — docs/design/2026-09-23-
+    // wiring-unification.md §7c).
+    describe('H2 — mission brief round-trip', () => {
+        it('stores and reads back a full brief', () => {
+            const created = upsertMeshMission(meshId, {
+                title: 'Brief-carrying mission',
+                brief: {
+                    goal: 'Land the H1/H2 wiring end to end',
+                    constraints: ['do not touch daemon-core providers/**'],
+                    doneCriteria: ['claim gate refuses overlap', 'brief renders in dispatched tasks'],
+                    handoffNotes: ['see the design doc §7c'],
+                    ownedPaths: ['oss/packages/daemon-core/src/mesh/**'],
+                },
+            });
+            expect(created.brief).toEqual({
+                goal: 'Land the H1/H2 wiring end to end',
+                constraints: ['do not touch daemon-core providers/**'],
+                doneCriteria: ['claim gate refuses overlap', 'brief renders in dispatched tasks'],
+                handoffNotes: ['see the design doc §7c'],
+                ownedPaths: ['oss/packages/daemon-core/src/mesh/**'],
+            });
+
+            // Read back via getMeshMission and getMeshMissions — both paths, not just
+            // the upsert's own echo (which could theoretically diverge from storage).
+            expect(getMeshMission(meshId, created.id)?.brief).toEqual(created.brief);
+            expect(getMeshMissions(meshId, ['active']).find(m => m.id === created.id)?.brief).toEqual(created.brief);
+        });
+
+        it('a goal-less brief object normalizes to "no brief" rather than an empty stored object', () => {
+            const created = upsertMeshMission(meshId, {
+                title: 'No-goal brief',
+                brief: { constraints: ['irrelevant without a goal'] } as any,
+            });
+            expect(created.brief).toBeUndefined();
+        });
+
+        it('omitting brief on a later upsert PRESERVES the previously stored brief', () => {
+            const created = upsertMeshMission(meshId, {
+                title: 'Preserve test',
+                brief: { goal: 'original goal' },
+            });
+            expect(created.brief?.goal).toBe('original goal');
+
+            // A status-only update, brief field entirely omitted.
+            const updated = upsertMeshMission(meshId, { id: created.id, title: 'Preserve test', status: 'paused' });
+            expect(updated.status).toBe('paused');
+            expect(updated.brief?.goal).toBe('original goal');
+        });
+
+        it('an explicit null brief CLEARS a previously stored brief', () => {
+            const created = upsertMeshMission(meshId, {
+                title: 'Clear test',
+                brief: { goal: 'will be cleared' },
+            });
+            expect(created.brief?.goal).toBe('will be cleared');
+
+            const cleared = upsertMeshMission(meshId, { id: created.id, title: 'Clear test', brief: null });
+            expect(cleared.brief).toBeUndefined();
+            expect(getMeshMission(meshId, created.id)?.brief).toBeUndefined();
+        });
+
+        it('a mission created with no brief at all has brief undefined, not an empty object', () => {
+            const created = upsertMeshMission(meshId, { title: 'No brief ever' });
+            expect(created.brief).toBeUndefined();
+        });
+    });
+
     it('rejects empty titles and invalid statuses', () => {
         expect(() => upsertMeshMission(meshId, { title: '  ' })).toThrow(/mission_title_required/);
         expect(() => upsertMeshMission(meshId, { title: 'ok', status: 'bogus' })).toThrow(/invalid_mission_status/);
