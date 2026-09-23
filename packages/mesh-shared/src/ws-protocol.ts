@@ -1,110 +1,56 @@
 /**
- * ws-protocol — shared string-literal unions for the daemon↔server WS surface
- * and the daemon↔dashboard P2P DataChannel surface.
+ * ws-protocol — name-only aliases for the daemon↔server WS surface and the
+ * daemon↔dashboard P2P DataChannel surface, plus the `auth_ok.payload.limits`
+ * contract.
  *
- * Fragmentation audit: these message types existed as a TypeScript union in
- * exactly ONE package (the proprietary daemon-cloud's server-connection.ts),
- * which is a leaf CONSUMER — the other two participants (the Workers server
- * and OSS daemon-core, which is the primary `status_report` producer) matched
- * bare string literals by hand. Renaming `auth_ok` server-side would compile
- * everywhere and leave the daemon reconnecting forever. Pure literals, zero
- * runtime deps — the textbook mesh-shared leaf.
- *
- * SCOPE HONESTY: this file declares the OSS-visible protocol surface. The
- * proprietary repo's server-connection.ts remains the authority for the full
- * ServerToDaemon command set; it should adopt these unions and extend them
- * (`ServerToDaemonMsg | <proprietary extras>`) rather than re-declaring the
- * shared members. Members here are the ones OSS daemon-core itself produces
- * or matches.
+ * Wiring-unification Phase A2: the typed frame unions now live in ./protocol
+ * (one file per link, payloads included). This file keeps the symbols that
+ * pre-dated them — `DaemonToServerWsMsg`, `ServerToDaemonWsMsg`,
+ * `P2PSignalingWsMsg`, `DashboardP2PMessageKind` and the two name arrays —
+ * DERIVED from the protocol unions rather than re-declared, so they cannot
+ * drift again. Before this derivation the list here said `offer|answer|ice`
+ * while the wire said `p2p_offer|p2p_answer|p2p_ice`, declared a `log` frame
+ * nothing sent or handled, omitted `daemon_mesh_command` (sent by a raw
+ * `ws.send`), and listed 12 of the ~27 P2P kinds — and nothing imported the
+ * drifted members, so nothing noticed.
  */
 
-/** Messages the daemon sends UP to the Workers server over the WS bridge. */
-export type DaemonToServerWsMsg =
-    | 'auth'
-    | 'status_report'
-    | 'status_heartbeat'
-    | 'status_event'
-    | 'command_result'
-    | 'error'
-    | 'agent_event'
-    | 'log'
-    /**
-     * seqscribe Beacon vectors (design §7.1). ONE daemon-initiated frame carries
-     * both directions — `op: 'put'` stores this node's content-free vector
-     * report, `op: 'get'` asks for the board — because the server has no way to
-     * wake itself: `DaemonConnectionDO` has neither an alarm nor a timer, and
-     * adding one would hit the most request-quota-pressured axis in the system.
-     */
-    | 'beacon_vectors';
+import {
+    DAEMON_TO_SERVER_TYPES,
+    SERVER_TO_DAEMON_CONTROL_TYPES,
+    isDaemonToServerType,
+    isServerToDaemonControlType,
+    type DaemonToServerType,
+    type ServerToDaemonControlType,
+    type P2PSignalType,
+    type MeshP2PSignalType,
+    type DashboardToDaemonP2PType,
+    type DaemonToDashboardP2PType,
+} from './protocol';
 
-/** Server→daemon control messages the OSS engine reacts to. */
-export type ServerToDaemonWsMsg =
-    | 'auth_ok'
-    | 'auth_error'
-    | 'machine_evicted'
-    | 'force_disconnect'
-    | 'token_revoked'
-    | 'version_mismatch'
-    | 'force_update_required'
-    | 'command'
-    | 'agent_command'
-    | 'resolve_action'
-    /**
-     * Reply to a `beacon_vectors` GET, correlated by `requestId`. A PUT is
-     * fire-and-forget and gets no reply at all — the beacon is advisory, so a
-     * lost report costs one debounce cycle of prediction accuracy and nothing
-     * else, which is not worth an ack round trip.
-     */
-    | 'beacon_vectors_result';
-
-/** P2P signaling relayed through the server WS. */
-export type P2PSignalingWsMsg =
-    | 'p2p_ready'
-    | 'offer'
-    | 'answer'
-    | 'ice'
-    | 'mesh_p2p_ready'
-    | 'mesh_p2p_offer'
-    | 'mesh_p2p_answer'
-    | 'mesh_p2p_ice';
+/** Messages the daemon sends UP to the Workers server over the WS bridge (see protocol/daemon-server.ts). */
+export type DaemonToServerWsMsg = DaemonToServerType;
 
 /**
- * Dashboard↔daemon P2P DataChannel JSON message kinds. Previously matched as
- * hand-synced literals on both ends with NO shared symbol anywhere —
- * `p2p_evicted` had exactly two occurrences repo-wide (emit + handle).
+ * Server→daemon CONTROL messages (see protocol/daemon-server.ts). The server
+ * additionally relays an open command namespace as the frame `type`
+ * (`ServerDirectCommandMsg`), which is deliberately not a member here.
  */
-export type DashboardP2PMessageKind =
-    | 'ping'
-    | 'pong'
-    | 'status_report'
-    | 'status_event'
-    | 'p2p_evicted'
-    | 'command'
-    | 'command_result'
-    | 'command_result_chunk'
-    | 'screenshot_start'
-    | 'screenshot_stop'
-    | 'pty_input'
-    | 'pty_resize';
+export type ServerToDaemonWsMsg = ServerToDaemonControlType;
 
-export const DAEMON_TO_SERVER_WS_MSGS: readonly DaemonToServerWsMsg[] = [
-    'auth', 'status_report', 'status_heartbeat', 'status_event', 'command_result', 'error', 'agent_event', 'log',
-    'beacon_vectors',
-];
+/** P2P signaling relayed through the server WS — the `p2p_`/`mesh_p2p_` spellings the wire actually uses. */
+export type P2PSignalingWsMsg = P2PSignalType | MeshP2PSignalType;
 
-export const SERVER_TO_DAEMON_WS_MSGS: readonly ServerToDaemonWsMsg[] = [
-    'auth_ok', 'auth_error', 'machine_evicted', 'force_disconnect', 'token_revoked',
-    'version_mismatch', 'force_update_required', 'command', 'agent_command', 'resolve_action',
-    'beacon_vectors_result',
-];
+/** Every dashboard↔daemon P2P DataChannel JSON kind, both directions (see protocol/dashboard-daemon-p2p.ts). */
+export type DashboardP2PMessageKind = DashboardToDaemonP2PType | DaemonToDashboardP2PType;
 
-export function isDaemonToServerWsMsg(value: unknown): value is DaemonToServerWsMsg {
-    return typeof value === 'string' && (DAEMON_TO_SERVER_WS_MSGS as readonly string[]).includes(value);
-}
+export const DAEMON_TO_SERVER_WS_MSGS: readonly DaemonToServerWsMsg[] = DAEMON_TO_SERVER_TYPES;
 
-export function isServerToDaemonWsMsg(value: unknown): value is ServerToDaemonWsMsg {
-    return typeof value === 'string' && (SERVER_TO_DAEMON_WS_MSGS as readonly string[]).includes(value);
-}
+export const SERVER_TO_DAEMON_WS_MSGS: readonly ServerToDaemonWsMsg[] = SERVER_TO_DAEMON_CONTROL_TYPES;
+
+export const isDaemonToServerWsMsg: (value: unknown) => value is DaemonToServerWsMsg = isDaemonToServerType;
+
+export const isServerToDaemonWsMsg: (value: unknown) => value is ServerToDaemonWsMsg = isServerToDaemonControlType;
 
 /**
  * `auth_ok.payload.limits` — the plan-limit contract the server sends DOWN to
