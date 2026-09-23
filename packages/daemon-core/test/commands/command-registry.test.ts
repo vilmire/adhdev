@@ -192,6 +192,15 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'worker_resolve_task', 'worker_report_completion', 'worker_progress_update', 'deposit_worker_mailbox',
     'worker_drain_mailbox', 'worker_peer_context_pull', 'ensure_transcript_subscription',
     'read_transcript_replica',
+    // NOT a legacy-table migration: G2 transcript-transport selection
+    // reporting (wiring-unification G2b, 2026-09-24,
+    // commands/low-family/transcript-transport-report.ts). The dashboard
+    // reports which transport (replica vs legacy) it actually used, once per
+    // subscription health transition, over the same P2P `type:'command'`
+    // frame every other low-family command uses — see
+    // `seqscribe/transcript-transport-selection.ts`'s header. Listed here so
+    // this test's exhaustive low-family enumeration stays accurate.
+    'report_transcript_transport',
     // NOT a legacy-table migration: `get_runtime_snapshot` and `get_command_history`
     // never lived in daemon-core's low-family tables — they were a cloud-only P2P
     // special case in packages/daemon-cloud/src/cloud-command-transports.ts
@@ -214,6 +223,11 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
     'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
     'graph_audit_record', 'active_work_query', 'recovery_context_query',
+    // C-W9c: the graph/stats/prune commands (mesh-graph-ipc.ts) — the last
+    // mcp-server in-process daemon-core paths: graph gates/plan/patch, task/mission
+    // stats, one prune audit, orphaned-pin notify. IPC-only too.
+    'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
+    'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
@@ -225,6 +239,9 @@ const TURN_LEDGER_IPC_COMMANDS = [
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
     'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
     'graph_audit_record', 'active_work_query', 'recovery_context_query',
+    // C-W9c: the graph/stats/prune commands (mesh-graph-ipc.ts).
+    'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
+    'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ];
 
 /** med-family/index.ts medFamilyRegistry keys. */
