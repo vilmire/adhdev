@@ -77,6 +77,8 @@ interface DashboardOverlaysProps {
         onClose: () => void
     }
     interactivePrompt?: UseInteractivePromptResult
+    /** Mobile chat mounts a modal scoped to its own local conversation selection. */
+    suppressInteractivePrompt?: boolean
 }
 
 export default function DashboardOverlays({
@@ -87,6 +89,7 @@ export default function DashboardOverlays({
     toastOverlay,
     onboarding,
     interactivePrompt,
+    suppressInteractivePrompt = false,
 }: DashboardOverlaysProps) {
     return (
         <>
@@ -153,13 +156,15 @@ export default function DashboardOverlays({
                 onClickToast={toastOverlay.onClick}
             />
 
-            <InteractivePromptModal
-                promptSession={interactivePrompt?.promptSession ?? null}
-                isSubmitting={interactivePrompt?.isSubmitting ?? false}
-                error={interactivePrompt?.responseError ?? null}
-                onSubmit={interactivePrompt?.submit ?? (async () => {})}
-                onCancel={interactivePrompt?.cancel ?? (() => {})}
-            />
+            {!suppressInteractivePrompt && (
+                <InteractivePromptModal
+                    promptSession={interactivePrompt?.promptSession ?? null}
+                    isSubmitting={interactivePrompt?.isSubmitting ?? false}
+                    error={interactivePrompt?.responseError ?? null}
+                    onSubmit={interactivePrompt?.submit ?? (async () => {})}
+                    onCancel={interactivePrompt?.cancel ?? (() => {})}
+                />
+            )}
 
             {onboarding.open && <OnboardingModal onClose={onboarding.onClose} standalone={onboarding.standalone} />}
         </>

@@ -9,6 +9,9 @@ import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
 import { getConversationTitle } from './conversation-presenters'
+import InteractivePromptModal from '../interactive-prompt/InteractivePromptModal'
+import { useInteractivePrompt } from '../../hooks/useInteractivePrompt'
+import { getInteractivePromptScopeId } from './ApprovalBanner'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
@@ -49,6 +52,10 @@ export default function DashboardMobileChatRoom({
     onSetCliViewMode,
 }: DashboardMobileChatRoomProps) {
     const terminalRef = useRef<CliTerminalHandle | null>(null)
+    // Mobile chat owns a local selection that intentionally does not update the
+    // desktop Dockview group selection. Scope the modal to that same local
+    // conversation id used by PaneGroupContent's ApprovalBanner.
+    const interactivePrompt = useInteractivePrompt(getInteractivePromptScopeId(selectedConversation))
     const isCli = isCliConv(selectedConversation) && !isAcp
     const isCliTerminal = isCli && cliViewMode === 'terminal'
     const meshGraphAvailable = !!selectedConversation.daemonId
@@ -134,6 +141,13 @@ export default function DashboardMobileChatRoom({
                     userName={userName}
                 />
             </div>
+            <InteractivePromptModal
+                promptSession={interactivePrompt.promptSession}
+                isSubmitting={interactivePrompt.isSubmitting}
+                error={interactivePrompt.responseError}
+                onSubmit={interactivePrompt.submit}
+                onCancel={interactivePrompt.cancel}
+            />
         </>
     )
 }

@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 //
-// Behavioural coverage for the prompt surface a dashboard shell mounts —
-// i.e. what `useInteractivePrompt(selectedSessionId)` actually resolves to.
+// Behavioural coverage for interactive-prompt scope, including the ACTUAL
+// mobile chat composition: DashboardMobileChatRoom + PaneGroupContent's
+// ApprovalBanner + the room-owned InteractivePromptModal mounted together.
 //
-// WHY THIS FILE EXISTS: the selector `findInteractivePromptSession` was already
-// unit-tested and green while the standalone gate was live-broken, because
-// nothing tested the *hook* the gate calls. The selector tests passed the scope
-// explicitly; the gate passed nothing at all. That gap is the whole defect, so
-// these assertions go through the hook rather than the selector.
+// WHY THE COMPOSITION TEST MATTERS: hook-only scope tests were green while the
+// mobile screen was live-broken. Its banner used the mobile-local selection,
+// but the only modal lived in DashboardOverlays and used the desktop Dockview
+// selection. A useful regression must click the real banner CTA and observe the
+// real modal opening for that same mobile session; isolated hook probes cannot
+// prove the two surfaces are wired together.
 //
 // Two live defects are locked down here:
 //   1. an unscoped gate rendered the FIRST prompt-bearing session in `ides`
@@ -18,10 +20,15 @@
 //      `includeHidden` are separate axes on the selector contract.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useInteractivePrompt } from '../../src/hooks/useInteractivePrompt'
+import DashboardMobileChatRoom from '../../src/components/dashboard/DashboardMobileChatRoom'
 import type { DaemonData } from '../../src/types'
+import type { ActiveConversation } from '../../src/components/dashboard/types'
+
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 // The hook pulls entries from BaseDaemonContext and a sender from
 // TransportContext; neither is under test here, so both are stubbed.
@@ -37,6 +44,15 @@ vi.mock('../../src/context/TransportContext', () => ({
 
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({ t: (_k: string, o?: { defaultValue?: string }) => o?.defaultValue ?? _k }),
+}))
+
+// Keep the mobile composition real through PaneGroupContent, ApprovalBanner,
+// useInteractivePrompt and InteractivePromptModal. Only the heavyweight pane
+// bodies and their live modal subscription are irrelevant to this regression.
+vi.mock('../../src/components/dashboard/ChatPane', () => ({ default: () => null }))
+vi.mock('../../src/components/dashboard/CliTerminalPane', () => ({ default: () => null }))
+vi.mock('../../src/hooks/useSessionModalSubscription', () => ({
+    useSessionModalSubscription: () => ({}),
 }))
 
 function promptFor(promptId: string) {
@@ -123,5 +139,90 @@ describe('interactive prompt gate scoping', () => {
         ides.push(sessionEntry('hidden-worker', { surfaceHidden: true }))
 
         expect(resolveVia(null)).toBeNull()
+    })
+})
+
+function mobileConversation(sessionId: string): ActiveConversation {
+    return {
+        routeId: `daemon-1:cli:${sessionId}`,
+        daemonId: 'daemon-1',
+        sessionId,
+        transport: 'acp',
+        agentName: 'Claude',
+        agentType: 'claude-cli',
+        status: 'waiting_choice',
+        title: `Session ${sessionId}`,
+        messages: [],
+        workspaceName: 'workspace',
+        displayPrimary: 'Claude',
+        displaySecondary: 'workspace',
+        streamSource: 'agent-stream',
+        tabKey: `tab-${sessionId}`,
+        modalMessage: `Question from prompt-${sessionId}`,
+        modalButtons: ['Yes', 'No'],
+    }
+}
+
+function mobileCommands() {
+    return {
+        handleModalButton: vi.fn(),
+        handleRelaunch: vi.fn(),
+        handleSendChat: vi.fn(async () => true),
+        handleSendNowQueued: vi.fn(async () => true),
+        handleCancelQueued: vi.fn(async () => true),
+        isSendingChat: false,
+        sendFeedbackMessage: null,
+        pendingLocalMessage: null,
+        pendingLocalMessages: [],
+        retireEchoedPendingMessages: vi.fn(),
+        handleFocusAgent: vi.fn(),
+        isFocusingAgent: false,
+    } as any
+}
+
+describe('mobile chat interactive prompt composition', () => {
+    it('opens the selected session modal from the banner CTA in the same mobile room', () => {
+        // Preserve the incident shape: another prompt-bearing session comes
+        // first, while the mobile-local selection is wsA.
+        ides.push(sessionEntry('e2e-ws'), sessionEntry('wsA'))
+
+        act(() => root.render(
+            <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <DashboardMobileChatRoom
+                    selectedConversation={mobileConversation('wsA')}
+                    isAcp
+                    isStandalone={false}
+                    actionLogs={[]}
+                    commands={mobileCommands()}
+                    onBack={() => {}}
+                    onOpenNativeConversation={() => {}}
+                    onOpenMachine={() => {}}
+                    onOpenHistory={() => {}}
+                    onOpenRemote={() => {}}
+                    cliViewMode={null}
+                    onSetCliViewMode={() => {}}
+                />
+            </MemoryRouter>,
+        ))
+
+        let dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+        expect(dialog).not.toBeNull()
+        expect(dialog?.textContent).toContain('Question from prompt-wsA')
+        expect(dialog?.textContent).not.toContain('Question from prompt-e2e-ws')
+        expect(document.body.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+
+        // The hook eagerly presents an undismissed prompt, so the banner CTA is
+        // behind the already-open modal in a healthy composition. Drive that
+        // real CTA anyway: without the room-owned modal (the live regression),
+        // this same click leaves the document with zero dialogs.
+        const answerButton = Array.from(document.body.querySelectorAll('button'))
+            .find(button => button.textContent?.includes('Answer the question'))
+        expect(answerButton).not.toBeUndefined()
+        act(() => (answerButton as HTMLButtonElement).click())
+
+        dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+        expect(dialog).not.toBeNull()
+        expect(dialog?.textContent).toContain('Question from prompt-wsA')
+        expect(document.body.querySelectorAll('[role="dialog"]')).toHaveLength(1)
     })
 })

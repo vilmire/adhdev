@@ -16,6 +16,11 @@ interface Props {
     onModalButton: (btnText: string) => void;
 }
 
+/** One scope contract shared by the banner CTA and its owning modal surface. */
+export function getInteractivePromptScopeId(activeConv: Pick<ActiveConversation, 'sessionId' | 'routeId'>): string {
+    return activeConv.sessionId ?? activeConv.routeId;
+}
+
 // Normalize button text: strip Mac symbols AND Windows shortcut labels.
 // \b-anchored so a shortcut word inside a real label (e.g. "Escalate",
 // "Tabulate") is left intact — matching only the whole word.
@@ -62,7 +67,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     // never take over this banner. `hasActivePrompt` stays true after a dismiss,
     // which is the point: this is the reopen affordance for a prompt the user
     // closed and now needs back.
-    const { hasActivePrompt, promptSession, reopen } = useInteractivePrompt(activeConv.sessionId ?? activeConv.routeId);
+    const { hasActivePrompt, promptSession, reopen } = useInteractivePrompt(getInteractivePromptScopeId(activeConv));
 
     // Reset pending on modal status change (approval complete or new approval)
     useEffect(() => {
