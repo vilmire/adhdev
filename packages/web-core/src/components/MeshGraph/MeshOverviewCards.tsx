@@ -26,7 +26,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
-import { nodeDisplayName, sessionElapsedLabel, sessionRoleLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { nodeDisplayName, sessionElapsedLabel, sessionRoleLabel, sessionStatusLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 
 /**
@@ -90,16 +90,6 @@ const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
 function shortSessionId(sessionId: string): string {
     if (sessionId.length <= 18) return sessionId
     return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
-}
-
-function sessionStatusLabel(session: MeshGraphSessionDetail): string {
-    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
-    if (!raw) return 'unknown'
-    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-    if (normalized.includes('approval')) return 'awaiting approval'
-    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
-    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
-    return normalized.replace(/_/g, ' ')
 }
 
 function sessionStatusTone(label: string): Tone {

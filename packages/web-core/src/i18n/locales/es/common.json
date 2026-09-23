@@ -3092,7 +3092,9 @@
                 "soleCopyLabel": "copia única",
                 "soleCopyTooltip": "Esta máquina podría tener la única copia de {{entries}} entradas en {{count}} tema(s). Los pares no las han confirmado.",
                 "deferredLabel": "no determinable",
-                "deferredTooltip": "La verificación de copia única se aplazó: el tablero de pares se truncó, así que las máquinas comparadas son solo parte de la flota."
+                "deferredTooltip": "La verificación de copia única se aplazó: el tablero de pares se truncó, así que las máquinas comparadas son solo parte de la flota.",
+                "lastSyncedTooltip": "Última sincronización hace {{minutes}} min{{behindPart}}.",
+                "lastSyncedBehindPart": ", {{count}} entradas por detrás en {{topic}}"
             },
             "fleetPeer": {
                 "label": "par seqscribe",

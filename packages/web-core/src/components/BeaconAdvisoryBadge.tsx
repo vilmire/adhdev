@@ -36,6 +36,17 @@
  * an age recomputed per report would make every status frame unique and defeat
  * the payload-hash dedup — see `toBeaconDiagnosticsSummary`. Render time is the
  * right place to turn the instant into "how old", and it is also more accurate.
+ *
+ * ── "Last synced N min ago" (C7-5/B5/E) ────────────────────────────────────
+ * Appended to the badge tooltip once the badge is already rendering (a badge
+ * only shows when there is something worth reporting — see the early-return
+ * below), never as its own separate chip: the badge's own doc comment already
+ * decided a drill-down panel is out of scope, and a bare "last synced" line
+ * with nothing behind/deferred to explain would be noise. `worstPeer`'s
+ * `lastSeen` is the instant this daemon's board last saw ANY peer report — the
+ * same staleness axis `boardAt`/`BOARD_STALE_AFTER_MS` already gates the whole
+ * badge on, computed the same way (render-time elapsed, never carried as a
+ * pre-computed age — see the note above).
  */
 
 import { useTranslation } from 'react-i18next'
@@ -72,11 +83,32 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
     if (stale || (behind === 0 && soleCopies.length === 0 && !deferred)) return null
 
     const worstPeer = beacon.peers[0]
+    const worstTopic = worstPeer?.topics[0]?.topic
+    // `lastSeen` is a stable ISO instant (see the file-header note) — same
+    // render-time elapsed computation as `boardAgeMs` above, on the same axis
+    // (this daemon's own board), so "last synced" always agrees with whether
+    // the badge is stale enough to have been suppressed already.
+    const lastSeenMs = worstPeer?.lastSeen ? Date.parse(worstPeer.lastSeen) : Number.NaN
+    const lastSyncedMinutes = Number.isNaN(lastSeenMs) ? null : Math.max(0, Math.round((Date.now() - lastSeenMs) / 60_000))
+    const lastSyncedTooltip =
+        lastSyncedMinutes === null
+            ? null
+            : t('machine.card.beacon.lastSyncedTooltip', {
+                  minutes: lastSyncedMinutes,
+                  // Sub-interpolation: only name a topic/count when there is an
+                  // actual lag to report — a "last synced Nm ago" line with a
+                  // trailing ", 0 entries behind on" would be worse than saying
+                  // nothing about lag at all.
+                  behindPart:
+                      behind > 0 && worstTopic
+                          ? t('machine.card.beacon.lastSyncedBehindPart', { count: behind, topic: worstTopic })
+                          : '',
+              })
     const tooltip = [
         behind > 0
             ? t('machine.card.beacon.behindTooltip', {
                   count: behind,
-                  topic: worstPeer?.topics[0]?.topic ?? '',
+                  topic: worstTopic ?? '',
               })
             : null,
         soleCopies.length > 0
@@ -88,6 +120,7 @@ export function BeaconAdvisoryBadge({ beacon, className }: BeaconAdvisoryBadgePr
         // ★ The deferral is explained, not hidden: a user who sees "can't tell"
         // deserves to know it is a truncated board, not a broken machine.
         deferred ? t('machine.card.beacon.deferredTooltip') : null,
+        lastSyncedTooltip,
     ]
         .filter(Boolean)
         .join('\n')

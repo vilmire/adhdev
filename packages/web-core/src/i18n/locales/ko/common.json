@@ -3087,7 +3087,9 @@
                 "soleCopyLabel": "유일 보유 가능",
                 "soleCopyTooltip": "이 머신이 {{count}}개 토픽의 {{entries}}건을 유일하게 보유 중일 수 있습니다. 피어가 아직 확인하지 않았습니다.",
                 "deferredLabel": "판정 보류",
-                "deferredTooltip": "피어 보드가 잘려서(truncated) 유일 보유 판정을 보류했습니다 — 비교 대상이 플릿 전체가 아닙니다."
+                "deferredTooltip": "피어 보드가 잘려서(truncated) 유일 보유 판정을 보류했습니다 — 비교 대상이 플릿 전체가 아닙니다.",
+                "lastSyncedTooltip": "{{minutes}}분 전 마지막 동기화{{behindPart}}.",
+                "lastSyncedBehindPart": ", {{topic}}에서 {{count}}건 뒤처짐"
             },
             "fleetPeer": {
                 "label": "seqscribe 피어",

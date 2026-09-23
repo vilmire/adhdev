@@ -9,6 +9,7 @@ import type {
 // (A VALUE import from the @adhdev/daemon-core barrel would drag Node builtins
 // into the browser bundle and break the dashboard — types only from there.)
 import { canonicalDaemonId } from '@adhdev/mesh-shared'
+import { normalizeSessionStatus } from '@adhdev/mesh-shared'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from '../types'
 import type { MeshGraphSessionDetail } from '../../../utils/mesh-visualization'
@@ -132,14 +133,77 @@ export function sessionTone(state: string | null | undefined): 'default' | 'good
     }
 }
 
-export function sessionStatusLabel(session: MeshGraphSessionDetail): string {
+/**
+ * Session status buckets shared by every MeshGraph surface that renders a
+ * human-facing status label/tone for a session (graph nodes, the side panel,
+ * overview cards, the health panel). Single source for what used to be four
+ * independently drifting copies of the same substring-matching function.
+ *
+ * Normalization order:
+ *   1. Read the mesh-tool-reported fields in the same precedence every caller
+ *      used: `chatStatus || state || lifecycle` (see
+ *      oss/packages/mcp-server/src/tools/mesh-tools-status.ts session mapping —
+ *      these three are the raw spellings a session entry can carry).
+ *   2. Canonicalize the raw spelling through mesh-shared's
+ *      `normalizeSessionStatus`, which already knows every alias this class of
+ *      status field emits (`running`/`busy`/`streaming`/… → `generating`,
+ *      `waiting` → `waiting_approval`, etc.) — see session-status.ts.
+ *   3. Fall back to the pre-unification substring heuristic for spellings
+ *      `normalizeSessionStatus` does not recognize (older daemons, ad hoc
+ *      status-lane strings), so no previously-classified value regresses to
+ *      "unknown" only because it is missing from the mesh-shared alias table.
+ *
+ * `'failed'` is its own bucket only for display coloring/labels (tone = rose);
+ * it is not part of the mesh-shared behavioural CLASS vocabulary (which only
+ * distinguishes working/blocked/ready/dead) because callers here need the raw
+ * word back for the label text, not just a class.
+ */
+export type SessionStatusBucket = 'awaiting_approval' | 'generating' | 'failed' | 'idle' | 'other'
+
+export function classifySessionStatusBucket(session: MeshGraphSessionDetail): { bucket: SessionStatusBucket; normalized: string } {
     const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
-    if (!raw) return 'unknown'
-    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-    if (normalized.includes('approval')) return 'awaiting approval'
-    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
-    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
-    return normalized.replace(/_/g, ' ')
+    if (!raw) return { bucket: 'other', normalized: '' }
+    const canonical = normalizeSessionStatus(raw)
+    const normalized = canonical ?? raw.toLowerCase().replace(/[\s-]+/g, '_')
+    if (normalized.includes('approval')) return { bucket: 'awaiting_approval', normalized }
+    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return { bucket: 'generating', normalized }
+    if (normalized.includes('failed') || normalized === 'error' || normalized.includes('stopped') || normalized.includes('interrupted')) return { bucket: 'failed', normalized }
+    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return { bucket: 'idle', normalized }
+    return { bucket: 'other', normalized }
+}
+
+/** Plain-English label — used where the UI renders literal strings, not i18n keys. */
+export function sessionStatusLabel(session: MeshGraphSessionDetail): string {
+    const { bucket, normalized } = classifySessionStatusBucket(session)
+    if (!normalized && bucket === 'other') return 'unknown'
+    switch (bucket) {
+        case 'awaiting_approval': return 'awaiting approval'
+        case 'generating': return 'generating'
+        case 'idle': return 'idle'
+        default: return normalized.replace(/_/g, ' ')
+    }
+}
+
+/**
+ * i18n-keyed label — used by surfaces that render through `t()` instead of
+ * literal English (MeshGraphPanel). Callers pass their own `t` and the
+ * mesh.panel.status* keys they already had; non-bucketed statuses still fall
+ * back to the raw normalized word (there is no per-raw-value i18n key for
+ * those, matching prior behavior).
+ */
+export function sessionStatusLabelKey(
+    session: MeshGraphSessionDetail,
+    t: (key: string) => string,
+    keys: { approval: string; generating: string; idle: string },
+): string {
+    const { bucket, normalized } = classifySessionStatusBucket(session)
+    if (!normalized && bucket === 'other') return 'unknown'
+    switch (bucket) {
+        case 'awaiting_approval': return t(keys.approval)
+        case 'generating': return t(keys.generating)
+        case 'idle': return t(keys.idle)
+        default: return normalized.replace(/_/g, ' ')
+    }
 }
 
 export function sessionRoleLabel(session: MeshGraphSessionDetail): string {

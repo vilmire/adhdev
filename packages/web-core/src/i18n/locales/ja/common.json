@@ -3087,7 +3087,9 @@
                 "soleCopyLabel": "唯一保持の可能性",
                 "soleCopyTooltip": "このマシンが {{count}} 個のトピックの {{entries}} 件を唯一保持している可能性があります。ピアは未確認です。",
                 "deferredLabel": "判定保留",
-                "deferredTooltip": "ピアボードが切り詰められたため、唯一保持の判定を保留しました — 比較対象がフリート全体ではありません。"
+                "deferredTooltip": "ピアボードが切り詰められたため、唯一保持の判定を保留しました — 比較対象がフリート全体ではありません。",
+                "lastSyncedTooltip": "{{minutes}}分前に最終同期{{behindPart}}。",
+                "lastSyncedBehindPart": "、{{topic}} で {{count}} 件遅延"
             },
             "fleetPeer": {
                 "label": "seqscribe ピア",

@@ -121,6 +121,80 @@ describe('BeaconAdvisoryBadge — ①wake-up lag', () => {
     })
 })
 
+describe('BeaconAdvisoryBadge — "last synced N min ago" (C7-5/B5/E)', () => {
+    it('appends "last synced N min ago, N entries behind on <topic>" to the tooltip', () => {
+        render(
+            beaconFixture({
+                maxBehind: 42,
+                peers: [
+                    {
+                        node: 'adhdev-2222222222222222',
+                        behind: 42,
+                        topics: [
+                            { node: 'adhdev-2222222222222222', topic: 'mesh.mesh_abc.events', behind: 42 },
+                        ],
+                        lastSeen: new Date(Date.now() - 5 * 60_000).toISOString(),
+                    },
+                ],
+            }),
+        )
+
+        const tooltip = container.querySelector('[title]')!.getAttribute('title')!
+        expect(tooltip).toContain('5')
+        expect(tooltip).toContain('42')
+        expect(tooltip).toContain('mesh.mesh_abc.events')
+    })
+
+    it('omits the trailing "entries behind" clause when there is no lag to report (deferred-only case)', () => {
+        render(
+            beaconFixture({
+                truncated: 1,
+                soleCopyDeferred: true,
+                peers: [
+                    {
+                        node: 'adhdev-2222222222222222',
+                        behind: 0,
+                        topics: [],
+                        lastSeen: new Date(Date.now() - 2 * 60_000).toISOString(),
+                    },
+                ],
+                soleCopy: [
+                    {
+                        topic: 'a.b.c', writer: 'adhdev-1111111111111111',
+                        localSeq: 3, bestPeerSeq: null, unreplicated: 0,
+                        verdict: 'unknown', unknownReason: 'truncated',
+                    },
+                ],
+            }),
+        )
+
+        const tooltip = container.querySelector('[title]')!.getAttribute('title')!
+        expect(tooltip).toContain('2')
+        // No dangling "0 entries behind on" clause — the sub-interpolation must
+        // be entirely absent, not rendered with a zero count.
+        expect(tooltip).not.toContain('0 entries')
+    })
+
+    it('is silent about "last synced" when there is no peer to derive it from', () => {
+        // A sole-copy-only board with no peers array entry has nothing to
+        // compute lastSeen from — the tooltip must not render a bogus "NaN
+        // min ago" or similar.
+        render(
+            beaconFixture({
+                soleCopy: [
+                    {
+                        topic: 'mesh.mesh_abc.events', writer: 'adhdev-1111111111111111',
+                        localSeq: 20, bestPeerSeq: 12, unreplicated: 8, verdict: 'sole-copy',
+                    },
+                ],
+            }),
+        )
+
+        const tooltip = container.querySelector('[title]')!.getAttribute('title')!
+        expect(tooltip.toLowerCase()).not.toContain('nan')
+    })
+})
+
 describe('BeaconAdvisoryBadge — ③sole-copy awareness', () => {
     const soleCopy = beaconFixture({
         soleCopy: [

@@ -67,6 +67,16 @@ const GRAPH_AUTO_REVALIDATE_INTERVAL_MS = 7000
 // this — an already-slow cloud safety net can back off further when stable.
 const GRAPH_PUSH_FALLBACK_INTERVAL_MS = 45000
 
+// P-II item 4: on cloud (features.meshStatePushRefresh), useMeshStateRevisionRefresh
+// is the PRIMARY trigger — every daemon.metadata push observation (advance or not)
+// resets a liveness clock. The interval above is retired in favor of a much slower
+// WARN-only reconciliation tick: it only fires a background refresh (and logs) when
+// no push has been observed for this long, i.e. there is actual evidence the event
+// path went quiet. A healthy push channel means this backstop never refreshes at
+// all. Standalone has no revision-counter push equivalent, so it keeps the original
+// fast poll + backoff untouched.
+const GRAPH_PUSH_BACKSTOP_STALE_MS = 5 * 60 * 1000
+
 // ─── Main page ───────────────────────────────────────────────────
 
 export default function RepoMesh() {
@@ -594,6 +604,15 @@ export default function RepoMesh() {
         setPollIntervalMs(resolvePollIntervalMs(pollBackoffRef.current, fastPollIntervalMs))
     }, [meshGraphStatus, fastPollIntervalMs])
 
+    // Wall-clock time this instance last OBSERVED a meshStateRevisions push for the
+    // viewed mesh (advance or not) — the liveness signal the cloud backstop below
+    // gates on. Reset on mesh/daemon-set change so a switch doesn't inherit a stale
+    // "channel is alive" verdict from the previous mesh.
+    const lastPushObservedAtRef = useRef<number | null>(null)
+    useEffect(() => {
+        lastPushObservedAtRef.current = null
+    }, [selectedMeshId, resolvedActiveDaemonId])
+
     // Event-driven refresh: re-fetch mesh_status the moment the daemon reports the
     // viewed mesh's state advanced, instead of waiting out the poll interval. No-op
     // on standalone (revision counters absent → hook never fires) and harmless when
@@ -609,11 +628,35 @@ export default function RepoMesh() {
             if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
             refreshGraphInBackground.current()
         },
+        onRevisionObserved: () => {
+            lastPushObservedAtRef.current = Date.now()
+        },
     })
 
     useEffect(() => {
         if (!selectedMeshId || !resolvedActiveDaemonId) return
         if (typeof document === 'undefined') return
+
+        // Cloud: the revision-push hook above is the primary trigger. This tick only
+        // exists to WARN and refresh when there is EVIDENCE the push path went quiet
+        // (no observation — advance or not — within GRAPH_PUSH_BACKSTOP_STALE_MS),
+        // matching the safety-net policy applied elsewhere in this program (flush
+        // only on evidence of a missed event, never unconditionally). Standalone has
+        // no push equivalent, so it keeps the original always-refresh poll below.
+        if (features.meshStatePushRefresh) {
+            const meshIdForWarn = selectedMeshId
+            const timer = setInterval(() => {
+                if (document.visibilityState !== 'visible') return
+                const lastObserved = lastPushObservedAtRef.current
+                const staleMs = lastObserved === null ? Infinity : Date.now() - lastObserved
+                if (staleMs < GRAPH_PUSH_BACKSTOP_STALE_MS) return
+                console.warn(
+                    `[repo-mesh] mesh_state push backstop firing for mesh ${meshIdForWarn}: no revision push observed in ${Math.round(staleMs / 1000)}s — refreshing via poll fallback`,
+                )
+                refreshGraphInBackground.current()
+            }, GRAPH_PUSH_BACKSTOP_STALE_MS)
+            return () => clearInterval(timer)
+        }
 
         let timer: ReturnType<typeof setInterval> | null = null
 
@@ -643,7 +686,7 @@ export default function RepoMesh() {
             stop()
             document.removeEventListener('visibilitychange', onVisibilityChange)
         }
-    }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs])
+    }, [selectedMeshId, resolvedActiveDaemonId, pollIntervalMs, features.meshStatePushRefresh])
 
     // Auto-load queue on mesh selection (both platforms). The dedicated Queue
     // settings section is gone, but meshQueue still feeds per-node assignment

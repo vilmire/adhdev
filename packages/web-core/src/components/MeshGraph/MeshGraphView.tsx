@@ -51,7 +51,7 @@ import {
 } from './meshGraphLayout'
 import { getMeshGraphDataFingerprint, getMeshGraphLayoutFingerprint } from './meshGraphMemo'
 import { formatMeshConnectionRtt, formatMeshConnectionTransport } from '../../utils/mesh-visualization'
-import { sessionElapsedLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { sessionElapsedLabel, sessionStatusLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { IconGitBranch } from '../Icons'
 import { requestOpenSessionChat } from '../../utils/session-nav'
 
@@ -253,16 +253,10 @@ function formatHealth(health: MeshGraphNode['health']): string {
     return health.replace(/_/g, ' ')
 }
 
-function formatSessionStatusLabel(session: MeshGraphNode['sessionDetails'][number]): string {
-    const raw = (session.chatStatus || session.state || session.lifecycle || '').trim()
-    if (!raw) return 'unknown'
-    const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-    if (normalized.includes('approval')) return 'awaiting approval'
-    if (normalized.includes('generating') || normalized.includes('running') || normalized.includes('busy')) return 'generating'
-    if (normalized.includes('failed') || normalized.includes('stopped') || normalized.includes('interrupted')) return normalized.replace(/_/g, ' ')
-    if (normalized.includes('idle') || normalized.includes('ready') || normalized.includes('waiting_input')) return 'idle'
-    return normalized.replace(/_/g, ' ')
-}
+// Thin alias: this file's session status rows render through the shared
+// meshSurfaceHelpers bucket logic (see that file for the failed/stopped/
+// interrupted branch, which folds into the same fallback here as before).
+const formatSessionStatusLabel = sessionStatusLabel
 
 function hasGeneratingSession(node: MeshGraphNode): boolean {
     return node.sessionDetails?.some(s => formatSessionStatusLabel(s) === 'generating') ?? false
