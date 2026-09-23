@@ -8,7 +8,7 @@ import {
     meshGraphGateRelease,
     meshGraphView,
 } from '../src/tools/mesh-tools.js';
-import { getQueue, updateTaskStatus, readLedgerEntries, runWorkspaceSagaTick } from '@adhdev/daemon-core';
+import { getQueue, __writeTaskStatusForTests, readLedgerEntries, runWorkspaceSagaTick } from '@adhdev/daemon-core';
 
 // GRAPH-ORCHESTRATION Phase G — dogfood of the FOUR REAL OBSERVED CHAINS.
 //
@@ -166,7 +166,7 @@ test('G-1: implementation → refinery gate → validation — the release patch
 
     // ★ Upstream completion alone does NOT wake the downstream — the gate opens
     // and HOLDS the validation worker.
-    updateTaskStatus(meshId, taskId(batch, 'implement'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'implement'), 'completed');
     const held = queueRow(meshId, taskId(batch, 'validate'));
     assert.equal(held.status, 'pending');
     assert.equal(held.blockedReason, `coordinator_gate:${gateId(batch, 'refine')}`);
@@ -258,7 +258,7 @@ test('G-1: implementation → refinery gate → validation — the release patch
     );
 
     // End state: validation completes and the whole graph rolls up.
-    updateTaskStatus(meshId, taskId(batch, 'validate'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'validate'), 'completed');
     const end = await viewGraph(ctx, batch.graphId);
     assert.equal(end.status, 'completed');
     assert.deepEqual(end.nodeStates, { completed: 2, released: 1 });
@@ -293,7 +293,7 @@ test('G-2: type fix → refinery landing → terminal deploy gate — outcomes a
     assert.ok((committed[0].payload as any).planDigest);
 
     // The deploy gate must not open before the landing it follows.
-    updateTaskStatus(meshId, taskId(batch, 'fix'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'fix'), 'completed');
     const earlyDeploy = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId(batch, 'deploy') }));
     assert.equal(earlyDeploy.success, false);
     assert.equal(earlyDeploy.code, 'gate_not_awaiting', 'a terminal gate still waits for its own predecessor');
@@ -404,7 +404,7 @@ test('G-3: investigation → approval gate → fix on a delayed workspace_ref (i
 
     // Investigation completes with a structured output. The approval gate opens;
     // the fix stays gate-held and its message carries NOTHING bound yet.
-    updateTaskStatus(meshId, taskId(batch, 'investigate'), 'completed', {
+    __writeTaskStatusForTests(meshId, taskId(batch, 'investigate'), 'completed', {
         envelope: { workerResult: { root_cause: rootCause } },
     } as any);
     const gatedFix = queueRow(meshId, taskId(batch, 'fix'));
@@ -449,7 +449,7 @@ test('G-3: investigation → approval gate → fix on a delayed workspace_ref (i
     assert.equal(fix.targetNodeId, 'node_ws_fix_ws', 'the delayed workspace_ref is the dispatch target');
 
     // End state: the fix lands on its prepared worktree and the graph completes.
-    updateTaskStatus(meshId, taskId(batch, 'fix'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'fix'), 'completed');
     const end = await viewGraph(ctx, batch.graphId);
     assert.equal(end.status, 'completed');
     assert.deepEqual(end.nodeStates, { completed: 2, released: 1 });
@@ -478,7 +478,7 @@ test('G-4 pass: ci_wait released with a pass outcome runs root-bump and ends at 
 
     // Root-bump does NOT wake on the bump completing alone — CI is an
     // intentional stop; nor can the deploy gate open early.
-    updateTaskStatus(meshId, taskId(batch, 'bump'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'bump'), 'completed');
     assert.equal(queueRow(meshId, taskId(batch, 'root_bump')).blockedReason, `coordinator_gate:${gateId(batch, 'ci')}`);
     const earlyDeploy = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId(batch, 'deploy') }));
     assert.equal(earlyDeploy.code, 'gate_not_awaiting');
@@ -496,7 +496,7 @@ test('G-4 pass: ci_wait released with a pass outcome runs root-bump and ends at 
     assert.equal(queueRow(meshId, taskId(batch, 'root_bump')).blockedReason, undefined);
 
     // Root-bump runs and completes, which OPENS the terminal deploy gate.
-    updateTaskStatus(meshId, taskId(batch, 'root_bump'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'root_bump'), 'completed');
     const awaiting = await viewGraph(ctx, batch.graphId);
     assert.equal(awaiting.gates.find((g: any) => g.ref === 'deploy').state, 'awaiting_coordinator');
 
@@ -540,7 +540,7 @@ test('G-4 fail: ci_wait released with a FAIL outcome — root-bump never runs an
     } as any));
     assert.equal(batch.success, true, JSON.stringify(batch));
 
-    updateTaskStatus(meshId, taskId(batch, 'bump'), 'completed');
+    __writeTaskStatusForTests(meshId, taskId(batch, 'bump'), 'completed');
     const ciClaim = await claimGate(ctx, gateId(batch, 'ci'));
 
     // ★ CI FAILED. The fenced release carries the fail outcome and patches the
@@ -626,7 +626,7 @@ test('admission-time inputs_from/run_if against a GATE ref materializes off the 
         } as any));
         assert.equal(batch.success, true, JSON.stringify(batch));
 
-        updateTaskStatus(meshId, taskId(batch, 'work'), 'completed');
+        __writeTaskStatusForTests(meshId, taskId(batch, 'work'), 'completed');
         const claim = await claimGate(ctx, gateId(batch, 'gate'));
         const release = await releaseGate(ctx, claim, {
             idempotency_key: 'rel-1',

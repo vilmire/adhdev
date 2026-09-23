@@ -11,7 +11,7 @@ import {
     ALL_MESH_TOOLS,
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { getQueue, updateTaskStatus, readLedgerEntries } from '@adhdev/daemon-core';
+import { getQueue, __writeTaskStatusForTests, readLedgerEntries } from '@adhdev/daemon-core';
 
 // GRAPH-ORCHESTRATION Phase E — the MCP exposure of the phase-C2 gate contract
 // and the batch v2 plan surface.
@@ -125,7 +125,7 @@ test('E-1: full gate lifecycle through the MCP tools — declared → awaiting �
     assert.equal(early.code, 'gate_not_awaiting');
 
     // Completing the predecessor OPENS the gate and blocks downstream.
-    updateTaskStatus(meshId, buildTaskId, 'completed');
+    __writeTaskStatusForTests(meshId, buildTaskId, 'completed');
     const deployBlocked = getQueue(meshId).find(t => t.id === deployTaskId)!;
     assert.equal(deployBlocked.status, 'pending');
     assert.ok(deployBlocked.blockedReason, 'the gate must hold its downstream task');
@@ -164,7 +164,7 @@ test('E-1: a stale fence can never release (design :417)', async () => {
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
 
     const wrongToken = JSON.parse(await meshGraphGateRelease(ctx, {
@@ -203,7 +203,7 @@ test('E-1: replayed release is a no-op success; the same key with a different pa
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
 
     const payload = {
@@ -232,7 +232,7 @@ test('E-1: a foreign live lease blocks a second claimant (design :407)', async (
     const ctxB = makeCtx(meshId, recordingLocalTransport(), 'sess-B');
     const batch = await enqueueGatedBatch(ctxA);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const claimA = JSON.parse(await meshGraphGateClaim(ctxA, { gate_id: gateId }));
     assert.equal(claimA.claimed, true);
@@ -445,7 +445,7 @@ test('E-3: the view reports node states, the waiting gate, and the next coordina
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const view = JSON.parse(await meshGraphView(ctx, {}));
     assert.equal(view.success, true);
@@ -527,7 +527,7 @@ test('E-4: gate claim and release are recorded; the release records the outcome,
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
     const evidenceSecret = `evidence-body-${randomUUID()}`;
@@ -615,7 +615,7 @@ test('E-4: abandoning a stranded gate cancels downstream and lets the graph go t
     const buildTaskId = batch.tasks.find((t: any) => t.ref === 'build').taskId;
     const deployTaskId = batch.tasks.find((t: any) => t.ref === 'deploy').taskId;
 
-    updateTaskStatus(meshId, buildTaskId, 'completed');
+    __writeTaskStatusForTests(meshId, buildTaskId, 'completed');
     // The gate is open and holding deploy — and it has no deadline, so nothing
     // in the system will ever close it on its own.
     const before = JSON.parse(await meshGraphView(ctx, { graph_id: batch.graphId }));
@@ -647,7 +647,7 @@ test('E-4: an abandoned gate can never then be claimed or released through the t
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
 
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
     assert.equal(claim.claimed, true);
@@ -677,7 +677,7 @@ test('E-4: a RELEASED gate is refused, and re-abandoning is a safe no-op', async
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
     const gateId = batch.gates[0].gateId;
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     const claim = JSON.parse(await meshGraphGateClaim(ctx, { gate_id: gateId }));
     await meshGraphGateRelease(ctx, {
         gate_id: gateId, fencing_token: claim.fencingToken, lease_generation: claim.leaseGeneration,
@@ -691,7 +691,7 @@ test('E-4: a RELEASED gate is refused, and re-abandoning is a safe no-op', async
     // A second graph, abandoned twice.
     const ctx2 = makeCtx(nextMeshId(), recordingLocalTransport());
     const b2 = await enqueueGatedBatch(ctx2);
-    updateTaskStatus(ctx2.mesh.id, b2.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(ctx2.mesh.id, b2.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     const first = JSON.parse(await meshGraphGateAbandon(ctx2, { gate_id: b2.gates[0].gateId, reason: 'once' }));
     assert.equal(first.duplicate, false);
     const second = JSON.parse(await meshGraphGateAbandon(ctx2, { gate_id: b2.gates[0].gateId, reason: 'twice' }));
@@ -703,7 +703,7 @@ test('E-4: the abandon is recorded in the ledger, distinctly from a release', as
     const meshId = nextMeshId();
     const ctx = makeCtx(meshId, recordingLocalTransport());
     const batch = await enqueueGatedBatch(ctx);
-    updateTaskStatus(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
+    __writeTaskStatusForTests(meshId, batch.tasks.find((t: any) => t.ref === 'build').taskId, 'completed');
     await meshGraphGateAbandon(ctx, { gate_id: batch.gates[0].gateId, reason: 'branch dropped' });
 
     const kinds = readLedgerEntries(meshId, { limit: 200 }).map((e: any) => e.kind);

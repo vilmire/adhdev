@@ -16,7 +16,6 @@ import {
     buildMeshNodeCapabilityTags,
     classifyP2pRelayFailure,
     meshNodeIdMatches,
-    serializeV2EnvelopeToWire,
 } from '@adhdev/daemon-core';
 import { isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
 import {
@@ -1041,12 +1040,6 @@ export function buildMeshForwardPayloadFromPendingEvent(event: any): Record<stri
         ...(readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {}),
         ...(readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {}),
         ...(readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}),
-        // T4 (B3b): carry the v2 envelope across the P2P relay so a remote worker's
-        // completion pulled by an MCP/LLM coordinator re-forwards with its ORIGINAL
-        // eventId (idempotency) and unicast routing intact, matching the reconcile-loop
-        // relay path (buildForwardPayloadFromPending). Spread LAST so the authoritative
-        // envelope always wins. Empty for a v1 event (version-skew safe).
-        ...serializeV2EnvelopeToWire(event as any),
     };
 }
 

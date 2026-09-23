@@ -9,7 +9,7 @@ import {
 } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { hasWorkerProtocolFooter, stripWorkerProtocolFooter } from '@adhdev/mesh-shared';
-import { getQueue, updateTaskStatus, taskDependenciesSatisfied } from '@adhdev/daemon-core';
+import { getQueue, __writeTaskStatusForTests, taskDependenciesSatisfied } from '@adhdev/daemon-core';
 
 // GRAPH-ORCHESTRATION Phase G — historical replay + backward compatibility.
 //
@@ -245,7 +245,7 @@ async function replayLegacyBatch(fixture: LegacyBatchFixture) {
         }
         assert.ok(claimableRefs().includes(ref), `'${ref}' must be claimable at its recorded step`);
 
-        updateTaskStatus(meshId, idByRef.get(ref)!, 'completed');
+        __writeTaskStatusForTests(meshId, idByRef.get(ref)!, 'completed');
         const after = getQueue(meshId);
         assert.equal(after.length, fixture.tasks.length, 'completion never requeues or duplicates a row');
         const doneRow = after.find(t => t.id === idByRef.get(ref))!;

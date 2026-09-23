@@ -10,10 +10,14 @@ import {
   getQueue,
   claimNextTask,
   getLedgerDir,
-  getPendingMeshCoordinatorEvents,
-  clearPendingMeshCoordinatorEvents,
   findTasksOrphanedBySessionStop,
 } from '@adhdev/daemon-core';
+// The dispatch_blocked page is a coordinator notice (turn.notify on a booted
+// daemon); this helper captures notices on the daemon-core instance the tool uses.
+import {
+  getPendingMeshCoordinatorEvents,
+  __clearMeshPendingEventsForTests as clearPendingMeshCoordinatorEvents,
+} from './helpers/pending-notices.js';
 
 // CANCEL-ORPHANS-PINNED-TASK — the live incident (2026-08-16, reproduced in this mesh):
 //   1. Task A dispatched to worker session S → S generating.

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueBatch } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
-import { enqueueTask, getQueue, updateTaskStatus, upsertMeshMission } from '@adhdev/daemon-core';
+import { enqueueTask, getQueue, __writeTaskStatusForTests, upsertMeshMission } from '@adhdev/daemon-core';
 
 // G5 — mesh_enqueue_batch: atomic multi-task graph submission.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
@@ -215,7 +215,7 @@ test('IpcTransport: only ROOTS are eager-pushed; dependents are deferred (gate s
 test('a dependency on an already-COMPLETED existing task counts as satisfied for the push gate', async () => {
   const meshId = nextMeshId();
   const done = enqueueTask(meshId, 'already finished prerequisite', { difficulty: 'easy' });
-  updateTaskStatus(meshId, done.id, 'completed');
+  __writeTaskStatusForTests(meshId, done.id, 'completed');
 
   const transport = recordingIpcTransport();
   const ctx = makeCtx(meshId, transport);

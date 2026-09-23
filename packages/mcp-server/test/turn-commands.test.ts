@@ -43,11 +43,11 @@ function throwingTransport(error: unknown) {
     } as any;
 }
 
-test('TURN_IPC_COMMANDS has exactly six names (the C2 command list)', () => {
-    assert.equal(TURN_IPC_COMMANDS.length, 6);
+test('TURN_IPC_COMMANDS has exactly eight names (the C2 six + mission_upsert / mission_query)', () => {
+    assert.equal(TURN_IPC_COMMANDS.length, 8);
     assert.deepEqual(
         [...TURN_IPC_COMMANDS].sort(),
-        ['mesh_index_query', 'mesh_record', 'operator_status', 'turn_cancel', 'turn_observe', 'turn_query'],
+        ['mesh_index_query', 'mesh_record', 'mission_query', 'mission_upsert', 'operator_status', 'turn_cancel', 'turn_observe', 'turn_query'],
     );
 });
 

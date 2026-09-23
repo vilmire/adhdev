@@ -245,7 +245,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // previous instruction is overwritten).
   mesh_queue_requeue: DESTRUCTIVE_LOCAL,
   // Restores held events back to pending. Explicitly documented as lossless.
-  mesh_requeue_held_events: WRITE_LOCAL_SAFE,
 
   // ── Mesh: graph gates ────────────────────────────────────────────────
   // Takes/releases a lease. Lease-guarded and convergent, not destructive.

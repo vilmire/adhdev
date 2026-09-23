@@ -9,7 +9,7 @@ import { meshSendTask, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, readLedgerEntries } from '@adhdev/daemon-core';
 import { __clearDirectDispatchesForTests, __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // GRAPH-MEASUREMENT-DIRECT — the direct dispatch surface's decision record.
 //

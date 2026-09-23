@@ -6,7 +6,7 @@ import { meshReadChat } from '../src/tools/mesh-tools.js';
 import { readChat } from '../src/tools/read-chat.js';
 import { slimTurnPresentation, compactChatPayload } from '../src/tools/chat-compact.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // STAGE6-CANARY follow-up: the daemon's read_chat already attaches the
 // authoritative Stage 6 turn projection (`turn` block), but the MCP slim

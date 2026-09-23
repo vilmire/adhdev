@@ -8,7 +8,7 @@ import { meshSendTask } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, getQueue } from '@adhdev/daemon-core';
 import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-queue.js';
 import { __clearMeshLedgerForTests } from '../../daemon-core/src/mesh/mesh-ledger.js';
-import { __clearMeshPendingEventsForTests } from '../../daemon-core/src/mesh/mesh-events-pending.js';
+import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 // MESH-IMAGE-DISPATCH busy path (wiring-unification A5-2).
 //
